@@ -11,6 +11,8 @@
 use std::collections::BTreeMap;
 
 use crate::CacheKind;
+use crate::observation::{Observation, Source};
+use crate::observed::Observed;
 use crate::processor_set::ProcessorSet;
 
 /// The identity of one logical processor: its group and its number within
@@ -89,14 +91,32 @@ pub enum DomainKind {
     /// A memory locality domain -- a NUMA node modelled as a memory domain
     /// that may contain no processors at all (D-5), because CXL expanders,
     /// persistent memory, HBM tiers, and coherent GPU memory all present that
-    /// way. `memory_bytes` is `None` when the size is not known: Windows's
-    /// own enumeration (`GetLogicalProcessorInformationEx`) does not report a
-    /// NUMA node's capacity at all, so a domain discovered by this crate
-    /// always has `memory_bytes: None`; a hand-written or fed-in description
-    /// may supply it.
+    /// way.
     Memory {
-        /// The domain's memory capacity, if known.
-        memory_bytes: Option<u64>,
+        /// The domain's memory capacity.
+        ///
+        /// [`Observed::NotObserved`] from `discover`: Windows's own enumeration
+        /// (`GetLogicalProcessorInformationEx`) does not report a NUMA node's
+        /// capacity at all, so this crate never learns it. A hand-written or
+        /// fed-in description may supply one.
+        ///
+        /// # Why this is an `Observed` and not an `Option`
+        ///
+        /// So that a description **omitting** the field and one writing
+        /// `"memory_bytes": null` stop being the same value: the first is
+        /// `NotObserved` (nobody addressed it) and the second is `Absent` (the
+        /// writer addressed it and had no value). Both still mean "the capacity
+        /// is unknown" to a planner, so the distinction is one of **provenance
+        /// of the description**, not of planning -- recorded plainly because
+        /// `M5+.2` framed it as more than that.
+        ///
+        /// The distinction that actually matters was already available and is
+        /// preserved: `Known(0)` is a node with genuinely no memory -- the
+        /// CXL-expander shape [D-5](../DESIGN-NOTES.md) exists to represent --
+        /// and is not confusable with an unknown capacity. That is
+        /// [D-11](../DESIGN-NOTES.md)'s point, and it is why `Some(0)` was
+        /// rejected as a stand-in in the first place.
+        memory_bytes: Observed<u64>,
     },
     /// A domain kind this crate does not have a name for, carrying its raw
     /// name and whatever attributes came with it, so a description this
@@ -149,10 +169,15 @@ pub enum AttributeValue {
 /// already violate assumptions like that, and Linux's own levels do not form
 /// a strict hierarchy either.
 ///
-/// With the `serde` feature, serializes as `{"kind": <string>, "id": <u32>,
-/// "processors": [...], ...fields specific to that kind}` -- an internally
-/// tagged shape, implemented by hand rather than derived, because `kind` is
-/// open (D-4) and an unrecognised one must still round-trip its attributes.
+/// With the `serde` feature, serializes as `{"kind": <string>, "processors":
+/// [...], ...fields specific to that kind}` -- an internally tagged shape,
+/// implemented by hand rather than derived, because `kind` is open (D-4) and
+/// an unrecognised one must still round-trip its attributes.
+///
+/// An `"id"` is written when the relationship walk labelled this relation, and
+/// is **optional on read and discarded**. It carries no model meaning: a label
+/// belongs to the observation that issued it (D-15), and a file cannot
+/// establish which source observed anything (D-12).
 ///
 /// **This JSON shape is explicitly not covered by this crate's semver
 /// contract (D-8 in `DESIGN-NOTES.md`).** The Rust API above (`Domain`,
@@ -166,37 +191,50 @@ pub enum AttributeValue {
 pub struct Domain {
     /// What this domain represents.
     pub kind: DomainKind,
-    /// An identifier for this domain, unique among domains of the same
-    /// `kind`. Where Windows reports a natural number (a NUMA node number, a
-    /// group number) that number is used; otherwise domains are numbered in
-    /// the order they were discovered.
-    pub id: u32,
+
     /// The logical processors this domain covers. Empty for a memory-only
     /// domain (D-5).
     pub processors: ProcessorSet,
+    /// Which sources reported this relation, and what each called it.
+    ///
+    /// Empty for a relation nobody reported -- one built by hand, which is
+    /// honest rather than a gap: no platform API said anything about it. A
+    /// relation both Windows APIs describe carries **two** observations, which
+    /// is what makes agreement visible without either label being discarded
+    /// (D-15, D-19).
+    pub observations: Vec<Observation>,
 }
 
-/// A scalar relative-distance matrix over one domain kind.
-///
-/// Deliberately not the HMAT attributed-relation model (per-initiator,
-/// per-target read/write latency and bandwidth): that was considered and
-/// declined for now, see D-9 in `DESIGN-NOTES.md`. Windows exposes no
-/// user-mode SLIT reader, so a [`crate::Topology`] this crate discovers never
-/// populates this; it exists for a fed-in description sourced from a system
-/// that does report it.
-#[derive(Clone, Debug, PartialEq, Eq)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-pub struct Distances {
-    /// Which domain kind the matrix's rows and columns index. Kept as a
-    /// plain string, naming a [`DomainKind`] the way its JSON `kind` tag
-    /// reads (with the `serde` feature), because domain kinds are themselves
-    /// open (D-4).
-    pub over: String,
-    /// The distance matrix, in the order those domains appear in
-    /// [`crate::Topology::domains`] filtered to `over`. Square;
-    /// `matrix[i][i]` is conventionally `10`, Windows's and ACPI SLIT's own
-    /// "local" value.
-    pub matrix: Vec<Vec<u32>>,
+impl Domain {
+    /// What `source` called this relation, if `source` reported it.
+    ///
+    /// The replacement for the removed `id` field, and it takes a source
+    /// because there is no single answer without one: the two Windows APIs
+    /// agree on the core partition while labelling it `[0, 2, 4, ..., 14]` and
+    /// `[0, 1, ..., 7]`, so "the id" was never well defined once both were
+    /// consulted (D-15).
+    ///
+    /// A caller wanting a *stable* handle for grouping should use the
+    /// relation's position in [`MachineMemoryTopology::domains`][domains]
+    /// instead: an observation label is meaningful only to the source that
+    /// issued it, and a relation may have none at all.
+    ///
+    /// [domains]: crate::MachineMemoryTopology::domains
+    #[must_use]
+    pub fn label_from(&self, source: Source) -> Option<u32> {
+        self.observations
+            .iter()
+            .find(|observation| observation.source == source)
+            .map(|observation| observation.label)
+    }
+
+    /// Whether `source` reported this relation.
+    #[must_use]
+    pub fn observed_by(&self, source: Source) -> bool {
+        self.observations
+            .iter()
+            .any(|observation| observation.source == source)
+    }
 }
 
 /// Manual `Serialize`/`Deserialize` for the open-kinded types.
@@ -313,9 +351,16 @@ mod serde_impl {
             AttributeValue::SignedInteger(n) => {
                 u64::try_from(n).map_err(|_| E::custom("expected a non-negative whole number"))
             }
-            AttributeValue::Float(n)
-                if n.fract() == 0.0 && (0.0..=u64::MAX as f64).contains(&n) =>
-            {
+            // **Exclusive at the top, and that is not a style choice.**
+            // `u64::MAX as f64` rounds *up* to 2^64, which is one greater than
+            // any `u64`. An inclusive bound therefore admitted exactly 2^64,
+            // and `n as u64` saturates it to `u64::MAX` -- so a description
+            // carrying 18446744073709551616 was silently read as a different
+            // number. Excluding the bound rejects it instead, and costs
+            // nothing: the largest `f64` below 2^64 is 2^64 - 2048, which is a
+            // representable `u64` and still accepted. Raised in the PR #56
+            // review.
+            AttributeValue::Float(n) if n.fract() == 0.0 && (0.0..u64::MAX as f64).contains(&n) => {
                 Ok(n as u64)
             }
             _ => Err(E::custom("expected a non-negative whole number")),
@@ -337,8 +382,14 @@ mod serde_impl {
             AttributeValue::UnsignedInteger(n) => {
                 i64::try_from(n).map_err(|_| E::custom("expected a whole number"))
             }
+            // Exclusive at the top for the reason `as_u64` gives, and found by
+            // sweeping for the same shape rather than reported: `i64::MAX as
+            // f64` rounds up to 2^63, which no `i64` can hold, and the cast
+            // would saturate it to `i64::MAX`. The *lower* bound stays
+            // inclusive because `i64::MIN as f64` is -2^63 exactly -- it is a
+            // power of two and representable, so it converts back losslessly.
             AttributeValue::Float(n)
-                if n.fract() == 0.0 && (i64::MIN as f64..=i64::MAX as f64).contains(&n) =>
+                if n.fract() == 0.0 && (i64::MIN as f64..i64::MAX as f64).contains(&n) =>
             {
                 Ok(n as i64)
             }
@@ -423,6 +474,15 @@ mod serde_impl {
             .ok_or_else(|| E::custom(format!("domain is missing required field \"{key}\"")))
     }
 
+    /// Every kind name this crate decodes into a named [`DomainKind`].
+    ///
+    /// **Must list exactly the arms the deserializer matches before its
+    /// `other =>` fallback**, and `every_well_known_name_decodes_to_a_named_kind`
+    /// asserts that it does rather than leaving the two to drift.
+    pub(super) const WELL_KNOWN_KIND_NAMES: &[&str] = &[
+        "group", "package", "die", "module", "core", "cache", "memory",
+    ];
+
     impl Serialize for Domain {
         fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
             let mut map = serializer.serialize_map(None)?;
@@ -434,10 +494,43 @@ mod serde_impl {
                 DomainKind::Core { .. } => "core",
                 DomainKind::Cache { .. } => "cache",
                 DomainKind::Memory { .. } => "memory",
-                DomainKind::Other { name, .. } => name.as_str(),
+                DomainKind::Other { name, .. } => {
+                    // The same rule as the attribute-name collision check
+                    // below, for the same reason and by the same remedy.
+                    //
+                    // `Other` exists so a description this crate cannot fully
+                    // interpret "still round-trips losslessly", and a name this
+                    // crate *does* interpret breaks exactly that: the document
+                    // would say `"kind": "group"`, and reading it back yields
+                    // `DomainKind::Group`, not the `Other` that was written.
+                    // `Group`, `Package`, `Die` and `Module` carry no fields,
+                    // so that substitution succeeds silently and the attributes
+                    // are dropped on the floor; `core`, `cache` and `memory`
+                    // fail loudly on a missing field, or -- worse -- succeed as
+                    // a different kind when the attributes happen to match.
+                    //
+                    // Refused rather than escaped or renamed, because both of
+                    // those would change a name the caller chose. Raised in the
+                    // PR #56 review.
+                    if WELL_KNOWN_KIND_NAMES.contains(&name.as_str()) {
+                        return Err(S::Error::custom(format!(
+                            "domain kind name \"{name}\" collides with a kind this crate names \
+                             itself, so the document would deserialize as that kind rather than \
+                             as `Other`"
+                        )));
+                    }
+                    name.as_str()
+                }
             };
             map.serialize_entry("kind", kind_name)?;
-            map.serialize_entry("id", &self.id)?;
+            // The wire shape keeps an "id" because a description is written by
+            // hand and a human-meaningful number is worth having. It is the
+            // relationship walk's label where there is one -- not "the id",
+            // which stopped being well defined once two sources labelled the
+            // same relation differently (D-15).
+            if let Some(label) = self.label_from(crate::observation::Source::RelationshipWalk) {
+                map.serialize_entry("id", &label)?;
+            }
             map.serialize_entry("processors", &self.processors)?;
             match &self.kind {
                 DomainKind::Core {
@@ -464,8 +557,18 @@ mod serde_impl {
                     map.serialize_entry("cache_type", cache_type)?;
                 }
                 DomainKind::Memory { memory_bytes } => {
-                    if let Some(bytes) = memory_bytes {
-                        map.serialize_entry("memory_bytes", bytes)?;
+                    // Three states, three wire shapes: a number, an explicit
+                    // `null` for "addressed and unknown", and omission for
+                    // "nobody said". Writing `null` for both would put the
+                    // ambiguity back on the wire that the type just removed.
+                    match memory_bytes {
+                        crate::observed::Observed::Known(bytes) => {
+                            map.serialize_entry("memory_bytes", bytes)?;
+                        }
+                        crate::observed::Observed::Absent => {
+                            map.serialize_entry("memory_bytes", &Option::<u64>::None)?;
+                        }
+                        crate::observed::Observed::NotObserved => {}
                     }
                 }
                 DomainKind::Other { attributes, .. } => {
@@ -496,8 +599,29 @@ mod serde_impl {
                 AttributeValue::String(s) => s,
                 _ => return Err(D::Error::custom("domain \"kind\" must be a string")),
             };
-            let id = as_u32(take::<D::Error>(&mut fields, "id")?)?;
+            // Read and discarded, and OPTIONAL. The wire "id" is one source's
+            // label; a file cannot establish which source observed the relation
+            // (D-12), so it never becomes an observation. Since it carries no
+            // model meaning, requiring it would reject a description that is
+            // otherwise complete -- including one this crate itself writes for a
+            // relation no source labelled.
+            let _ = fields.remove("id");
             let processors = processors_from_value(take::<D::Error>(&mut fields, "processors")?)?;
+            // A described relation carries NO platform observation, and the
+            // wire shape does not encode them.
+            //
+            // This is the same downgrade `Provenance::downgraded_to` performs
+            // one level up (D-12): a file saying "the relationship walk
+            // observed this" cannot establish that it did, so the claim is not
+            // carried across the boundary. Serializing observations faithfully
+            // would carry exactly the claim D-12 refuses.
+            //
+            // Nor is a `Source::Description` observation synthesized here. That
+            // would restate what the object already says -- a deserialized
+            // topology's `Provenance` is capped at `Restored` -- and D-22 has
+            // just established these two are different questions that should
+            // not duplicate each other.
+            let observations = Vec::new();
 
             let kind = match kind_name.as_str() {
                 "group" => DomainKind::Group,
@@ -520,10 +644,15 @@ mod serde_impl {
                 },
                 "memory" => DomainKind::Memory {
                     memory_bytes: match fields.remove("memory_bytes") {
-                        None | Some(AttributeValue::Null) => None,
-                        Some(value) => Some(as_u64(value)?),
+                        None => crate::observed::Observed::NotObserved,
+                        Some(AttributeValue::Null) => crate::observed::Observed::Absent,
+                        Some(value) => crate::observed::Observed::Known(as_u64(value)?),
                     },
                 },
+                // Every arm above must appear in `WELL_KNOWN_KIND_NAMES`, or
+                // `Serialize` would let an `Other` claim that name and the
+                // document would decode as the named kind instead. The test
+                // named on that constant is what enforces it.
                 other => DomainKind::Other {
                     name: other.to_string(),
                     attributes: fields,
@@ -532,11 +661,81 @@ mod serde_impl {
 
             Ok(Domain {
                 kind,
-                id,
                 processors,
+                observations,
             })
         }
     }
+}
+
+/// Everything this crate knows about one processor, with each absence named.
+///
+/// Produced by [`MachineMemoryTopology::shard_set`](crate::MachineMemoryTopology::shard_set). Deliberately **not** a
+/// second copy of [`Processor`]: that type is the platform's own record, while
+/// this is the assembled answer to "may this processor host work, and where
+/// does it allocate from" -- gathered from both Win32 sources plus the derived
+/// relations.
+///
+/// # No sentinels, anywhere
+///
+/// Every optional field is an [`Observed`], so "the platform said zero" and
+/// "nobody asked" are different values rather than the same one. The field
+/// this exists to replace, [`Processor::capacity`], spells three facts as `0`
+/// -- offline, in no core, and efficiency class zero -- and the third is every
+/// processor on every non-hybrid machine.
+#[derive(Clone, Debug, PartialEq)]
+pub struct ProcessorFacts<'a> {
+    /// The processor's identity, always `(group, number)` and never flattened
+    /// (D-7): a Windows affinity is a `GROUP_AFFINITY`, so a bare index names a
+    /// different processor in every group.
+    pub id: ProcessorId,
+    /// Whether the slot is active. An offline slot exists and counts toward its
+    /// group's maximum, so planning work onto one is planning a thread that
+    /// cannot run.
+    pub online: bool,
+    /// The core relation this processor belongs to, if any names it.
+    ///
+    /// `None` is a firmware gap the crate tolerates by design, not a
+    /// contradiction -- see [`Self::efficiency_class`], which is
+    /// [`Observed::NotObserved`] in exactly that case rather than `0`.
+    pub core: Option<&'a Domain>,
+    /// Whether the owning core has more than one logical processor.
+    pub simultaneous_multithreading: Observed<bool>,
+    /// The scheduler's efficiency class for the owning core.
+    ///
+    /// [`Observed::NotObserved`] when no core names this processor -- which is
+    /// the distinction `Processor::capacity` cannot make. On a hybrid part
+    /// Windows orders class `0` as the *least* performant, so an unknown
+    /// processor reported as `0` is indistinguishable from an efficiency core:
+    /// a policy excluding efficiency cores silently drops a possible
+    /// performance core, and one tiering them mis-tiers it. Neither fails a
+    /// functional test.
+    pub efficiency_class: Observed<u8>,
+    /// Whether the scheduler is currently avoiding this processor.
+    ///
+    /// [`Observed::NotObserved`] when the CPU-set enumeration was not
+    /// consulted, which is any topology not produced by
+    /// [`MachineMemoryTopology::discover`](crate::MachineMemoryTopology::discover). Parked is **not** offline: the
+    /// processor is active and the scheduler is merely avoiding it.
+    pub parked: Observed<bool>,
+    /// Whether this processor is allocated to *this* process.
+    ///
+    /// A planner ignoring it places work on processors the process may not use,
+    /// which is a wrong plan rather than a slow one.
+    ///
+    /// **Measured to carry no information on Windows 11 25H2** (D-23): the
+    /// whole `AllFlags` byte reads `0x00` for every processor even after CPU
+    /// sets are successfully allocated to this process, so `Known(false)` here
+    /// reports a byte the kernel did not write.
+    ///
+    /// It also does not mean what its name suggests -- allocation is the
+    /// explicit `SetProcessDefaultCpuSets` kind, not "may we run here". Do not
+    /// branch on it; see [`CpuSet::allocated_to_target_process`](crate::CpuSet::allocated_to_target_process).
+    pub allocated_to_this_process: Observed<bool>,
+    /// The memory domain this processor allocates from, or
+    /// [`Observed::NotObserved`] for the **unplaced** case, which has no honest
+    /// fallback -- see [`MachineMemoryTopology::memory_domain_of`](crate::MachineMemoryTopology::memory_domain_of).
+    pub memory_domain: Observed<&'a Domain>,
 }
 
 #[cfg(test)]

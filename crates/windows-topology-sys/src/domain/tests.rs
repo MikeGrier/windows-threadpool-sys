@@ -25,16 +25,16 @@ fn a_memory_domain_may_have_no_processors() {
     // discovery.
     let domain = Domain {
         kind: DomainKind::Memory {
-            memory_bytes: Some(64 * 1024 * 1024 * 1024),
+            memory_bytes: Observed::Known(64 * 1024 * 1024 * 1024),
         },
-        id: 9,
         processors: ProcessorSet::empty(),
+        observations: Vec::new(),
     };
     assert!(domain.processors.is_empty());
     let DomainKind::Memory { memory_bytes } = domain.kind else {
         panic!("expected Memory")
     };
-    assert_eq!(memory_bytes, Some(64 * 1024 * 1024 * 1024));
+    assert_eq!(memory_bytes, Observed::Known(64 * 1024 * 1024 * 1024));
 }
 
 #[test]
@@ -43,14 +43,16 @@ fn a_discovered_memory_domain_has_no_known_size() {
     // node memory capacity at all, so that arm must stay `None` rather than
     // guessing `Some(0)`, which would be indistinguishable from "no memory".
     let domain = Domain {
-        kind: DomainKind::Memory { memory_bytes: None },
-        id: 0,
+        kind: DomainKind::Memory {
+            memory_bytes: Observed::NotObserved,
+        },
         processors: ProcessorSet::empty(),
+        observations: Vec::new(),
     };
     let DomainKind::Memory { memory_bytes } = domain.kind else {
         panic!("expected Memory")
     };
-    assert_eq!(memory_bytes, None);
+    assert_eq!(memory_bytes, Observed::NotObserved);
 }
 
 #[test]
@@ -62,8 +64,8 @@ fn an_unrecognised_domain_kind_carries_its_attributes() {
             name: "power".to_string(),
             attributes: attributes.clone(),
         },
-        id: 0,
         processors: ProcessorSet::empty(),
+        observations: Vec::new(),
     };
     let DomainKind::Other {
         name,
@@ -88,20 +90,6 @@ fn attribute_value_supports_nested_structures() {
     );
 }
 
-#[test]
-fn distances_is_expected_to_be_square() {
-    let distances = Distances {
-        over: "memory".to_string(),
-        matrix: vec![vec![10, 21], vec![21, 10]],
-    };
-    assert!(
-        distances
-            .matrix
-            .iter()
-            .all(|row| row.len() == distances.matrix.len())
-    );
-}
-
 // --- serde (M3.3) ---
 
 #[cfg(feature = "serde")]
@@ -109,6 +97,7 @@ mod serde_tests {
     use std::collections::BTreeMap;
 
     use super::super::*;
+    use crate::observed::Observed;
     use crate::processor_set::ProcessorSet;
 
     fn round_trip(domain: &Domain) -> Domain {
@@ -120,8 +109,8 @@ mod serde_tests {
     fn a_group_domain_round_trips() {
         let domain = Domain {
             kind: DomainKind::Group,
-            id: 0,
             processors: ProcessorSet::from_group_mask(0, 0b11),
+            observations: Vec::new(),
         };
         assert_eq!(round_trip(&domain), domain);
     }
@@ -133,8 +122,8 @@ mod serde_tests {
                 simultaneous_multithreading: true,
                 efficiency_class: 7,
             },
-            id: 3,
             processors: ProcessorSet::from_group_mask(0, 0b1),
+            observations: Vec::new(),
         };
         assert_eq!(round_trip(&domain), domain);
     }
@@ -149,8 +138,8 @@ mod serde_tests {
                 size_bytes: 32 * 1024 * 1024,
                 cache_type: CacheKind::Unified,
             },
-            id: 0,
             processors: ProcessorSet::from_group_mask(0, 0b1111),
+            observations: Vec::new(),
         };
         assert_eq!(round_trip(&domain), domain);
     }
@@ -165,8 +154,8 @@ mod serde_tests {
                 size_bytes: 32 * 1024,
                 cache_type: CacheKind::Other(99),
             },
-            id: 0,
             processors: ProcessorSet::from_group_mask(0, 0b1),
+            observations: Vec::new(),
         };
         let json = serde_json::to_string(&domain).expect("serialize");
         assert!(
@@ -189,8 +178,8 @@ mod serde_tests {
                 size_bytes: 32 * 1024,
                 cache_type: CacheKind::Other(-7),
             },
-            id: 0,
             processors: ProcessorSet::from_group_mask(0, 0b1),
+            observations: Vec::new(),
         };
         let json = serde_json::to_string(&domain).expect("serialize");
         assert!(
@@ -206,10 +195,10 @@ mod serde_tests {
         // no processors at all.
         let domain = Domain {
             kind: DomainKind::Memory {
-                memory_bytes: Some(64 * 1024 * 1024 * 1024),
+                memory_bytes: Observed::Known(64 * 1024 * 1024 * 1024),
             },
-            id: 9,
             processors: ProcessorSet::empty(),
+            observations: Vec::new(),
         };
         let json = serde_json::to_string(&domain).expect("serialize");
         assert!(
@@ -222,9 +211,11 @@ mod serde_tests {
     #[test]
     fn a_memory_domain_with_unknown_size_omits_memory_bytes_rather_than_writing_null() {
         let domain = Domain {
-            kind: DomainKind::Memory { memory_bytes: None },
-            id: 0,
+            kind: DomainKind::Memory {
+                memory_bytes: Observed::NotObserved,
+            },
             processors: ProcessorSet::empty(),
+            observations: Vec::new(),
         };
         let json = serde_json::to_string(&domain).expect("serialize");
         assert!(!json.contains("memory_bytes"), "unexpected JSON: {json}");
@@ -241,8 +232,8 @@ mod serde_tests {
                 name: "power".to_string(),
                 attributes,
             },
-            id: 2,
             processors: ProcessorSet::empty(),
+            observations: Vec::new(),
         };
         assert_eq!(round_trip(&domain), domain);
     }
@@ -270,8 +261,8 @@ mod serde_tests {
                 name: "precision".to_string(),
                 attributes,
             },
-            id: 3,
             processors: ProcessorSet::empty(),
+            observations: Vec::new(),
         };
         let restored = round_trip(&domain);
         assert_eq!(restored, domain);
@@ -296,16 +287,16 @@ mod serde_tests {
         let precise: u64 = (1u64 << 53) + 1;
         let domain = Domain {
             kind: DomainKind::Memory {
-                memory_bytes: Some(precise),
+                memory_bytes: Observed::Known(precise),
             },
-            id: 4,
             processors: ProcessorSet::empty(),
+            observations: Vec::new(),
         };
         let restored = round_trip(&domain);
         let DomainKind::Memory { memory_bytes } = restored.kind else {
             panic!("expected Memory")
         };
-        assert_eq!(memory_bytes, Some(precise));
+        assert_eq!(memory_bytes, Observed::Known(precise));
     }
 
     #[test]
@@ -318,12 +309,84 @@ mod serde_tests {
                     name: "power".to_string(),
                     attributes,
                 },
-                id: 2,
                 processors: ProcessorSet::empty(),
+                observations: Vec::new(),
             };
             serde_json::to_string(&domain).expect_err(&format!(
                 "an attribute named {reserved:?} must not silently overwrite the reserved field"
             ));
+        }
+    }
+
+    #[test]
+    fn an_unrecognised_domain_kind_named_after_a_known_one_is_refused() {
+        // The sibling of the attribute-name check above, and the same hazard
+        // one level up: `Other` promises that a description this crate cannot
+        // interpret round-trips losslessly, and a name this crate *does*
+        // interpret breaks that promise outright. Written as `"kind": "group"`,
+        // the document reads back as `DomainKind::Group` -- a different kind,
+        // with the attributes silently gone. Raised in the PR #56 review.
+        for known in [
+            "group", "package", "die", "module", "core", "cache", "memory",
+        ] {
+            let mut attributes = BTreeMap::new();
+            attributes.insert("watts".to_string(), AttributeValue::UnsignedInteger(15));
+            let domain = Domain {
+                kind: DomainKind::Other {
+                    name: known.to_string(),
+                    attributes,
+                },
+                processors: ProcessorSet::empty(),
+                observations: Vec::new(),
+            };
+            serde_json::to_string(&domain).expect_err(&format!(
+                "an unrecognised kind named {known:?} must not be written as that known kind"
+            ));
+        }
+    }
+
+    #[test]
+    fn an_unrecognised_domain_kind_with_its_own_name_still_round_trips() {
+        // The complement, so the refusal above cannot be satisfied by refusing
+        // every `Other`: a genuinely unknown name is exactly what the variant
+        // is for and must still survive the round trip intact.
+        let mut attributes = BTreeMap::new();
+        attributes.insert("watts".to_string(), AttributeValue::UnsignedInteger(15));
+        let domain = Domain {
+            kind: DomainKind::Other {
+                name: "power".to_string(),
+                attributes,
+            },
+            processors: ProcessorSet::empty(),
+            observations: Vec::new(),
+        };
+        let restored = round_trip(&domain);
+        assert_eq!(restored, domain);
+    }
+
+    #[test]
+    fn every_well_known_name_decodes_to_a_named_kind() {
+        // Binds the constant the serializer refuses on to the arms the
+        // deserializer actually matches, so the two cannot drift apart. A name
+        // listed but no longer decoded would make the refusal above spurious;
+        // a name decoded but not listed would let an `Other` claim it, which is
+        // the defect this pair of tests exists to prevent. Derived from the
+        // constant rather than restating it, so adding a kind to one place and
+        // not the other fails here.
+        for name in crate::domain::serde_impl::WELL_KNOWN_KIND_NAMES {
+            let json = format!(
+                r#"{{"kind":"{name}","id":0,"processors":[],
+                     "simultaneous_multithreading":false,"efficiency_class":0,
+                     "level":1,"associativity":8,"line_size":64,"size_bytes":32768,
+                     "cache_type":"unified","memory_bytes":0}}"#
+            );
+            let domain: Domain = serde_json::from_str(&json)
+                .unwrap_or_else(|e| panic!("{name:?} must decode as a named kind: {e}"));
+            assert!(
+                !matches!(domain.kind, DomainKind::Other { .. }),
+                "{name:?} is listed as well known but decoded as `Other`, so the \
+                 serializer refuses a name nothing actually reserves"
+            );
         }
     }
 
@@ -338,12 +401,15 @@ mod serde_tests {
             "memory_bytes": 549755813888
         }"#;
         let domain: Domain = serde_json::from_str(json).expect("parse");
-        assert_eq!(domain.id, 5);
+        // The wire "id" is read as the relationship walk's label, since that is
+        // what serialization writes there. It is not evidence the walk observed
+        // this -- deserialization records no observation at all (D-12).
+        assert!(domain.observations.is_empty());
         assert!(domain.processors.is_empty());
         assert_eq!(
             domain.kind,
             DomainKind::Memory {
-                memory_bytes: Some(549_755_813_888)
+                memory_bytes: Observed::Known(549_755_813_888)
             }
         );
     }
@@ -399,4 +465,321 @@ mod serde_tests {
             "error should name the missing field: {error}"
         );
     }
+
+    // --- float-to-integer coercion (mutation-testing gap) ---
+    //
+    // `as_u64`/`as_i64` accept a JSON float only when it is a whole number
+    // inside the target's range. That guard was added as a PR #20 review
+    // response, specifically to stop the silent precision loss the older
+    // f64-for-everything encoding had -- and a `cargo mutants` run found that
+    // *every* operator in it survives mutation. Replacing the whole guard with
+    // `true` or `false`, flipping `==` to `!=`, or `&&` to `||`, all left the
+    // suite green, because no test ever fed a float into an integer field.
+    //
+    // A correction made in response to review, never verified, is the worst
+    // case of this: the reasoning is on record and the behaviour is not.
+    //
+    // These matter for a hand-written or fed-in description, which is the whole
+    // reason the schema is open: JSON has one number type, so a generator that
+    // emits 4.0 for a count is entirely ordinary, and one that emits 4.5 is a
+    // defect that must be refused rather than truncated.
+
+    /// A memory domain whose `memory_bytes` is written as the given JSON number
+    /// literal, which is the shortest path to `as_u64`.
+    fn memory_domain_with(bytes_literal: &str) -> Result<Domain, serde_json::Error> {
+        let json = format!(
+            r#"{{"kind": "memory", "id": 0, "processors": [], "memory_bytes": {bytes_literal}}}"#
+        );
+        serde_json::from_str(&json)
+    }
+
+    #[test]
+    fn a_whole_number_float_is_accepted_as_an_unsigned_field() {
+        let domain = memory_domain_with("1024.0").expect("4.0 is a whole number");
+        assert_eq!(
+            domain.kind,
+            DomainKind::Memory {
+                memory_bytes: Observed::Known(1024)
+            },
+            "a generator emitting a whole number as a float is ordinary JSON"
+        );
+    }
+
+    #[test]
+    fn a_fractional_float_is_refused_rather_than_truncated() {
+        // The precision-loss case the guard exists for. Truncating to 1024
+        // would be silent data corruption in a field describing a machine.
+        assert!(
+            memory_domain_with("1024.5").is_err(),
+            "a fractional byte count must be refused, not rounded"
+        );
+    }
+
+    #[test]
+    fn a_negative_float_is_refused_for_an_unsigned_field() {
+        assert!(
+            memory_domain_with("-1.0").is_err(),
+            "a negative count is out of range for an unsigned field"
+        );
+    }
+
+    #[test]
+    fn a_float_beyond_the_unsigned_range_is_refused() {
+        // Above u64::MAX. `n as u64` would saturate silently, which is exactly
+        // the conversion the range half of the guard prevents.
+        assert!(
+            memory_domain_with("1e300").is_err(),
+            "a float larger than u64::MAX must be refused, not saturated"
+        );
+    }
+
+    #[test]
+    fn zero_is_accepted_at_the_bottom_of_the_unsigned_range() {
+        // The boundary the range check includes. A guard written with an
+        // exclusive bound would wrongly refuse this.
+        let domain = memory_domain_with("0.0").expect("zero is in range");
+        assert_eq!(
+            domain.kind,
+            DomainKind::Memory {
+                memory_bytes: Observed::Known(0)
+            }
+        );
+    }
+
+    #[test]
+    fn an_integer_literal_still_parses_unchanged() {
+        // The common path, asserted beside the float ones so a guard that
+        // refused everything could not pass this group.
+        let domain = memory_domain_with("4096").expect("plain integers parse");
+        assert_eq!(
+            domain.kind,
+            DomainKind::Memory {
+                memory_bytes: Observed::Known(4096)
+            }
+        );
+    }
+
+    /// A cache domain whose `cache_type` carries a raw signed code, which is
+    /// the path to `as_i64`.
+    fn cache_domain_with_other_type(code_literal: &str) -> Result<Domain, serde_json::Error> {
+        let json = format!(
+            r#"{{"kind": "cache", "id": 0, "processors": [],
+                 "level": 2, "associativity": 8, "line_size": 64,
+                 "size_bytes": 1024, "cache_type": {{"other": {code_literal}}}}}"#
+        );
+        serde_json::from_str(&json)
+    }
+
+    #[test]
+    fn a_whole_number_float_is_accepted_as_a_signed_field() {
+        let domain = cache_domain_with_other_type("9.0").expect("9.0 is a whole number");
+        let DomainKind::Cache { cache_type, .. } = domain.kind else {
+            panic!("expected a cache domain");
+        };
+        assert_eq!(cache_type, CacheKind::Other(9));
+    }
+
+    #[test]
+    fn a_negative_whole_float_is_accepted_as_a_signed_field() {
+        // The signed range genuinely extends below zero -- a raw
+        // PROCESSOR_CACHE_TYPE is an i32 and is not guaranteed non-negative --
+        // so this is the case that distinguishes `as_i64`'s guard from
+        // `as_u64`'s rather than duplicating it.
+        let domain = cache_domain_with_other_type("-3.0").expect("-3.0 is a whole number");
+        let DomainKind::Cache { cache_type, .. } = domain.kind else {
+            panic!("expected a cache domain");
+        };
+        assert_eq!(cache_type, CacheKind::Other(-3));
+    }
+
+    #[test]
+    fn a_fractional_float_is_refused_for_a_signed_field() {
+        assert!(
+            cache_domain_with_other_type("-3.5").is_err(),
+            "a fractional cache-type code must be refused, not truncated"
+        );
+    }
+
+    #[test]
+    fn a_float_beyond_the_signed_range_is_refused() {
+        assert!(
+            cache_domain_with_other_type("-1e300").is_err(),
+            "a float below i64::MIN must be refused, not saturated"
+        );
+    }
+    // -----------------------------------------------------------------------
+    // Rejection.
+    //
+    // Every test above round-trips a value this crate serialized, so the
+    // deserializer only ever sees well-formed input and its refusal paths are
+    // never taken. A mutation run replaced `as_bool` with a constant `true` and
+    // loosened the cache-object guard, and neither could fail against input
+    // that was already valid.
+    //
+    // These start from hand-written JSON instead.
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn a_false_flag_survives_the_round_trip_as_false() {
+        // `as_bool -> Ok(true)` survived because every serde test above used
+        // `simultaneous_multithreading: true`. With only that value in the
+        // suite, a deserializer that ignored its input and always answered
+        // `true` was indistinguishable from one that read it.
+        let domain = Domain {
+            kind: DomainKind::Core {
+                simultaneous_multithreading: false,
+                efficiency_class: 0,
+            },
+            processors: ProcessorSet::from_group_mask(0, 0b1),
+            observations: Vec::new(),
+        };
+
+        let restored = round_trip(&domain);
+        assert_eq!(restored, domain);
+        let DomainKind::Core {
+            simultaneous_multithreading,
+            ..
+        } = restored.kind
+        else {
+            panic!("a core domain must deserialize as one");
+        };
+        assert!(
+            !simultaneous_multithreading,
+            "a machine without SMT must not be reported as having it"
+        );
+    }
+
+    #[test]
+    fn a_non_boolean_smt_flag_is_refused_rather_than_read_as_true() {
+        // The other half: a constant `true` accepts input that is not a boolean
+        // at all. Anything that decodes to a different `AttributeValue` reaches
+        // the refusal, so a string and a number are both tried.
+        // The well-formed shape is asserted first, so a later failure is
+        // attributable to the flag rather than to the rest of the description.
+        // Written after exactly that mistake: an ad-hoc `processors` literal
+        // made the refusals happen for an unrelated reason.
+        let well_formed = r#"{"kind": "core", "id": 1, "processors": [],
+                 "simultaneous_multithreading": false, "efficiency_class": 0}"#;
+        serde_json::from_str::<Domain>(well_formed)
+            .expect("the fixture must parse when only the flag is changed");
+
+        for bad in [r#""yes""#, "1", "null"] {
+            let json = well_formed.replace("false", bad);
+            let error = serde_json::from_str::<Domain>(&json)
+                .expect_err("{bad} is not a boolean and must not be read as one");
+            assert!(
+                error.to_string().contains("boolean"),
+                "the refusal must say what was expected: {error}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_cache_type_object_carrying_more_than_the_other_key_is_refused() {
+        // The `map.len() == 1` guard survived being replaced with `true`, which
+        // would accept an object with extra keys and silently ignore them. That
+        // matters more than it looks: the object form exists to carry a raw
+        // `PROCESSOR_CACHE_TYPE` this crate does not recognise, so a reader
+        // sending a *newer* shape must be told it was not understood rather
+        // than have the parts we recognise quietly taken.
+        //
+        // Built from the same helper as the accepted case below, which is what
+        // makes the refusal attributable: an ad-hoc JSON literal here was
+        // rejected for a malformed `processors` field instead, and would have
+        // passed this assertion while testing nothing about the guard.
+        let json = r#"{"kind": "cache", "id": 0, "processors": [],
+                 "level": 2, "associativity": 8, "line_size": 64,
+                 "size_bytes": 1024, "cache_type": {"other": 99, "extra": 1}}"#;
+
+        let outcome: Result<Domain, _> = serde_json::from_str(json);
+        let error = outcome.expect_err("an object with a second key must be refused");
+        assert!(
+            error.to_string().contains("cache_type"),
+            "the refusal must name the field that was not understood, or a \
+             reader cannot tell which part of their description was rejected: {error}"
+        );
+    }
+
+    #[test]
+    fn a_cache_type_object_with_exactly_the_other_key_is_accepted() {
+        // The positive case, so the test above cannot be satisfied by a guard
+        // that refuses every object -- or, as it first was, by a fixture that
+        // never reached the guard at all.
+        let domain =
+            cache_domain_with_other_type("99").expect("the single-key form is the one we emit");
+        let DomainKind::Cache { cache_type, .. } = domain.kind else {
+            panic!("a cache domain must deserialize as one");
+        };
+        assert_eq!(cache_type, CacheKind::Other(99));
+    }
+}
+
+// --- M5+.2: omitted and explicit-null stop being the same value ---
+
+#[cfg(feature = "serde")]
+#[test]
+fn an_omitted_memory_bytes_and_an_explicit_null_are_different_values() {
+    // The defect: both used to parse to `None`, so a description that never
+    // addressed the field and one that addressed it and had no answer were
+    // indistinguishable.
+    let omitted: Domain =
+        serde_json::from_str(r#"{"kind": "memory", "id": 0, "processors": []}"#).expect("parse");
+    let explicit_null: Domain = serde_json::from_str(
+        r#"{"kind": "memory", "id": 0, "processors": [], "memory_bytes": null}"#,
+    )
+    .expect("parse");
+
+    let DomainKind::Memory {
+        memory_bytes: from_omission,
+    } = omitted.kind
+    else {
+        panic!("memory");
+    };
+    let DomainKind::Memory {
+        memory_bytes: from_null,
+    } = explicit_null.kind
+    else {
+        panic!("memory");
+    };
+
+    assert_eq!(from_omission, Observed::NotObserved, "nobody addressed it");
+    assert_eq!(from_null, Observed::Absent, "addressed, and no value");
+    assert_ne!(from_omission, from_null);
+}
+
+#[cfg(feature = "serde")]
+#[test]
+fn the_three_memory_bytes_states_round_trip_distinctly() {
+    // A wire format that collapsed any two would put the ambiguity back where
+    // the type just removed it.
+    for state in [
+        Observed::Known(4096_u64),
+        Observed::Absent,
+        Observed::NotObserved,
+    ] {
+        let domain = Domain {
+            kind: DomainKind::Memory {
+                memory_bytes: state,
+            },
+            processors: ProcessorSet::empty(),
+            observations: Vec::new(),
+        };
+        let json = serde_json::to_string(&domain).expect("serialize");
+        let back: Domain = serde_json::from_str(&json).expect("deserialize");
+        let DomainKind::Memory { memory_bytes } = back.kind else {
+            panic!("memory");
+        };
+        assert_eq!(memory_bytes, state, "round trip changed {json}");
+    }
+}
+
+#[test]
+fn a_node_with_genuinely_no_memory_is_known_zero_not_an_absence() {
+    // D-11's point, preserved: `Known(0)` is the CXL-shaped node that really
+    // has no memory, and it must not be confusable with an unknown capacity.
+    // This was already true of `Some(0)`; the change must not lose it.
+    let zero = Observed::Known(0_u64);
+    assert!(zero.was_observed());
+    assert_ne!(zero, Observed::Absent);
+    assert_ne!(zero, Observed::NotObserved);
 }

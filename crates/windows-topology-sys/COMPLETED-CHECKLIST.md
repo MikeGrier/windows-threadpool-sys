@@ -87,3 +87,773 @@ This file is append-only; new completed groups are added at the bottom.
 > **-> CROSS-COMPONENT HANDOFF:** with M4 complete this crate serves
 > [windows-ioring-sys](../windows-ioring-sys/CHECKLIST.md) -> `M7` (`ring-copy`, the topology-aligned
 > sample), which was blocked on this milestone and carries the reciprocal prerequisite callout.
+
+## Moved 2026-09-03 -- the MachineMemoryTopology reshape (MMT-*), M1 through M5
+
+The plan that gated PR #56's merge, complete: 25 items across five milestones. It replaced the
+ladder-of-levels model with **observed connectivity** -- relations carried as a set with per-relation
+provenance, presence and observation represented as facts rather than inferred, and the pairwise
+queries derived from an ordered partitioning rather than restated. Five items turned out to assert
+gaps the crate did not have and were closed as already-satisfied or re-planned rather than
+implemented; the notes below record which, and why.
+
+Design record: [DESIGN-NOTES.md](DESIGN-NOTES.md) `D-13` through `D-23`, and
+DESIGN-SESSION-2026-09-02-cache-locality-model.md.
+
+The context the milestones were written against, preserved because the items refer to it:
+## What this is for
+
+This crate publishes a **refined view of what the platform publishes**
+([D-21](DESIGN-NOTES.md#d-21)). The current model does that badly: it describes a machine as a list
+of domains and answers questions with one global projection (`outermost_partitioning_cache`) that
+three consumers have independently re-derived, two of them differently. It cannot say whether a fact
+was observed or merely absent, it cannot answer anything about a *pair* of processors, and it
+collapses a seven-kind, any-depth locality graph onto a single cache boundary.
+
+The reshape has one governing idea, settled with the engineer: **model the observed connectivity.**
+Presence and observation are facts to represent, not shapes to infer from.
+
+**The scope test is "is this a refinement of what Windows reports?"** -- never "does the planner need
+it?". [D-20](DESIGN-NOTES.md#d-20) draws the lower bound (the crate does not go below the Win32
+topology APIs); D-21 draws the upper one. A planner requirement with no platform correspondence is
+the **adapter's** problem and must not be filed here as a gap.
+
+## Where this stands
+
+| Milestone | State | What it is waiting on |
+|---|---|---|
+| M1 settle what is still open | **5 of 5 done** | nothing -- complete |
+| M2 the granularity model | **6 of 6 done** | nothing -- complete |
+| M3 observation and provenance | **4 of 4 done** | nothing -- complete |
+| M4 the queries | **5 of 5 done** | nothing -- complete |
+| M5 the defects this subsumes | **5 of 5 done** | nothing -- complete |
+
+**M1 was decision work, not implementation**, and it is complete. Each item was a question the
+session left open, and each would have changed the shape of everything below it.
+
+**M2 onward is implementation, and it is in scope for PR #56.** Per
+[D-21](DESIGN-NOTES.md#d-21) the reshape is self-justified as the refined view rather than waiting on
+a consumer, so nothing here is gated on the planner. Taking it into the current PR means
+`windows-topology-sys` 0.2.0 ships the shape once, instead of publishing a surface already known to
+be wrong and breaking again later.
+
+
+## M1: settle what is still open
+
+- [x] **MMT-1.1** -- **Are several observations of one relation held as a set, or reduced on insert
+  with the reduction recorded?** No longer speculative: `GetLogicalProcessorInformationEx` and
+  `GetSystemCpuSetInformation` both report a processor's core, NUMA node and efficiency class, from
+  different kernel paths, and both are read today. A set is honest and pushes adjudication onto every
+  caller; reducing on insert is convenient and throws away the disagreement, which is the one thing a
+  second observer is for.
+  **Done, as [D-15](DESIGN-NOTES.md#d-15): a set -- but the reason is not the one above.** Measured
+  rather than argued. The two sources **agree exactly** on the core partition (eight groups each) and
+  **label it completely differently** (`[0, 2, 4, ..., 14]` against `[0, 1, ..., 7]`). So the
+  disagreement a reduction would resolve is between *dictionaries*, not about the machine.
+  That makes **a relation identified by `(kind, membership)`**, with a source's label an attribute of
+  the *observation*. Reduce-on-insert is then not merely lossy but **arbitrary** -- it would pick
+  between two correct labels by coin toss, while the fact that mattered needed no reduction because
+  the sources agreed. And a set costs nothing in the common case: agreement is one relation with two
+  observations, not two competing relations.
+  **Honest about the evidence:** only the core comparison is strong. NUMA is one group here so it
+  matches under almost any bug, and efficiency class is zero everywhere -- which is both trivially
+  matchable and the exact value `Processor::capacity`'s sentinel is indistinguishable from, so that
+  row confirms nothing. A hybrid, multi-node machine would test all three; none is available.
+
+- [x] **MMT-1.2** -- **What a query returns when observations differ.** ~~And there are three cases,
+  not two~~ -- **the third case dissolved.** [D-14](DESIGN-NOTES.md#d-14) found that CPU Sets reports
+  one last-level-cache group where the derivation reports eight L2 partitions, neither wrong because
+  they answer **different questions**, and this item was going to have to invent vocabulary for it.
+  [D-15](DESIGN-NOTES.md#d-15) removes the need: under `(kind, membership)` identity, different
+  memberships at different kinds are simply **different relations**, so they never meet to disagree.
+  **What remains is narrower**: two sources claiming the same *kind* over overlapping-but-unequal
+  memberships -- a real contradiction about the machine. Decide what a query returns then: a value
+  plus a conflict marker, or the conflict itself, forcing the caller to adjudicate.
+  Note the detection machinery partly exists. Overlapping-but-unequal sets at one kind is exactly
+  what `are_pairwise_disjoint` checks for cache domains today -- though only at *query* time, inside
+  `outermost_partitioning_cache`, and `Core` and `Memory` domains are never validated at all.
+
+  ### The specifics, since "observations differ" is too vague to decide on
+
+  **Where it arises:** `discover()`, populating a `MachineMemoryTopology`. It makes **two separate,
+  sequential Win32 calls** -- `relation::discover()` then `cpu_set::enumerate()` -- and nothing
+  compares their results.
+
+  **Two shapes of conflict, not one.** The item above describes only the first:
+
+  - **A, partition conflict:** same kind, memberships overlap without being equal. GLPIE says a core
+    is `{0,1}`, CPU Sets groups `{0,1,2}` under one `CoreIndex`. `(kind, membership)` identity
+    from [D-15](DESIGN-NOTES.md#d-15) makes this detectable.
+  - **B, attribute conflict:** same processor, same attribute, **different scalar**. GLPIE's
+    `Core { efficiency_class }` against CPU Sets' `EfficiencyClass`. This is not a membership
+    question and D-15 does not reach it, which the item as first written did not notice.
+
+  **A third case: `discover()`'s two calls are not atomic.** Raised, then twice mis-corrected, then
+  wrongly retired, and finally **answered by [D-16](DESIGN-NOTES.md#d-16): collect again.** The whole
+  path is kept because the wrong turns are instructive.
+
+  If the incoherence is detectable and harmful, **re-initiate collection**. Both calls are
+  whole-machine enumerations and trivially inexpensive, so a retry costs almost nothing, and more
+  than a couple of passes failing to find a coherent set is not plausible.
+
+  **Retry is also the discriminator this item twice claimed could not exist.** The assertion was that
+  a transient inconsistency and a genuine one are indistinguishable *from a single observation* --
+  true, and the conclusion that the model must therefore tolerate the ambiguity does not follow. Stop
+  using a single observation: transience resolves on the next pass, and what survives is *proved*
+  genuine. So only what has already been classified reaches the representation question below.
+
+  The earlier missteps, kept short:
+
+  - **It is not a torn read.** Nothing tears -- each call returns a self-consistent snapshot and the
+    buffers are process-private. The accurate term is a *non-atomic composite*.
+  - **Parking cannot cause it**, which was the example first given. Parking changes a CPU-Sets-only
+    field; GLPIE does not report parked state, and none of the three overlapping facts move when a
+    core parks -- `CoreIndex` and `NumaNodeIndex` are unchanged, `EfficiencyClass` is static.
+  - **And then it was retired for proving too much** -- on the grounds that even an atomic
+    `discover()` returns a topology stale the instant it returns, so the two-call window is only a
+    larger instance of an unavoidable problem. True, and **not a reason to do nothing**: the two are
+    not equally addressable. Staleness after the fact is the executor's to validate, and is already
+    owned as `M-inf.1` in topology-planner.
+    Incoherence *during* collection is ours, detectable, and cheap to fix.
+
+  The framing is what caused the miss. Asking "what do we **store** when sources disagree" admits
+  refuse, record, or prefer -- and quietly excludes "ask again", which is the standard shape every
+  compare-exchange loop in this workspace already uses.
+
+  ### What is left to decide
+
+  Retry removes the transient cases, so what reaches representation is proved genuine. Remaining:
+
+  1. ~~What is compared, to call a collection coherent.~~ **Not a decision -- an inventory, and it
+     falls out of the implementation.** What *can* be compared is fixed by the data: whatever both
+     sources report about the same thing, which is the processor sets naming each other, the core and
+     NUMA groupings, and per-processor efficiency class. The one trap -- comparing *labels* rather than
+     memberships, which would flag `[0, 2, 4, ...]` against `[0, 1, 2, ...]` as a conflict when the
+     sources fully agree -- is already closed by [D-15](DESIGN-NOTES.md#d-15).
+     And under [D-16](DESIGN-NOTES.md#d-16) a *partial* comparison is actively wrong: an incoherence in
+     an uncompared fact survives the retry and is never classified, defeating the mechanism. So retry
+     forces comparing everything, which makes the scope determined rather than chosen.
+     It was listed as a decision while the question was still "detect or not, and how much", where
+     scope would genuinely have been a knob. `D-16` removed the knob.
+
+  2. **The bound**, and what exhausting it *means* -- not a failure to collect, but the **conclusion**
+     that the disagreement is genuine, and the point at which the partition and attribute shapes
+     apply. The *meaning* is settled by [D-16](DESIGN-NOTES.md#d-16); only the number is open, and it
+     is small -- a couple of passes failing to find a coherent set is not plausible.
+
+  3. **How a topology records its coherence.** *Records*, not reports -- an earlier draft of this item
+     said "precisely enough to file a bug", which put a downstream concern in the crate that states
+     facts, the same layering error as `outermost_partitioning_cache`.
+     What is required is what each source said, kept rather than collapsed, so a reader can tell how
+     far the parts may be **correlated** -- a different question from whether any one part is accurate.
+     Turning that into something actionable, with the identifying provenance an actionable report
+     needs, is the probe tools' job and is tracked as **M7** in
+     CHECKLIST-placement-tool.md.
+     > **-> CROSS-COMPONENT HANDOFF:** the reporting half is `PT-7.1` and `PT-7.2` in
+     > CHECKLIST-placement-tool.md. That tool already carries the
+     > review this needs -- the runner sees real values before sending (`PT-4.5`), the README lists what
+     > is collected (`PT-4.3`), and suppression is recorded rather than merely absent.
+     Only possible because [D-15](DESIGN-NOTES.md#d-15) keeps both observations: a disagreement cannot
+     be reported after it has been collapsed.
+
+  4. **The attribute shape has no representation.** `(kind, membership)` identity does not reach a
+     per-processor scalar disagreement, and that gap is untouched by any of the above.
+
+  ### Closed by [D-18](DESIGN-NOTES.md#d-18)
+
+  **The attribute shape (4):** an observation is `(subject, claim, source)`, and a **subject** is either a relation
+  identity `(kind, membership)` or a processor attribute `(processor, attribute)`. The mechanism above
+  it is unchanged -- observations of one subject are a set, agreement is one subject observed twice,
+  disagreement is a set with more than one distinct claim. So the second shape needs no second
+  mechanism. D-15 had simply described the subject too narrowly, having been derived from the one case
+  that was measurable at the time.
+
+  **Recording coherence (3):** two facts, one derivable and one not. *That* collection concluded
+  incoherently is a fact about the process -- the retry ran, the bound was exhausted, the sources still
+  disagreed -- and nothing in the data says so, so it is recorded. *Which* subjects disagreed is
+  derivable, and is recorded anyway: leaving it to be re-derived is exactly the arrangement `SH-16.9`
+  documents going wrong three times in two different ways. A rendered report is **not** recorded; per
+  [D-17](DESIGN-NOTES.md#d-17) that belongs to the probe tools.
+
+  **The bound (2):** a small documented constant, cheap even when exhausted, since a persistently
+  inconsistent machine pays only a few extra whole-machine enumerations. Its meaning was already
+  settled by [D-16](DESIGN-NOTES.md#d-16) -- exhaustion is the **conclusion** that the disagreement is
+  genuine, not a failure to collect, and `discover()` still returns a topology.
+
+  **What made this closable** was not one insight but the arsenal accumulating: D-15 gave the identity,
+  D-16 removed the transient cases so only proved-genuine ones needed representing, D-17 moved
+  reporting out of the crate, and D-18 widened D-15's subject. Three of the item's four questions
+  dissolved rather than being answered -- one already covered by a prior decision, one forced by the
+  retry mechanism, one a constant with a rationale.
+
+  Refusing outright remains rejected on its own merits: a genuine inconsistency is something a caller
+  would rather be told about and route around than be unable to run at all.
+
+  **A finding that came out of checking it:** `online` (GLPIE, from `active_processors`) and `parked`
+  (CPU Sets) are **complementary, not overlapping**. Parked is not offline -- a parked processor is
+  active and the scheduler is merely avoiding it. So the two sources together give a *fuller*
+  availability picture than either alone, which is an argument for consuming both that has nothing to
+  do with conflict.
+
+  **And a fourth, within a single source:** a processor named by two `Core` domains, from malformed
+  firmware or a hand-built description. Unchecked today.
+
+  Two questions this block used to ask are now answered and are not repeated: whether `discover()`
+  detects at populate time (**yes** -- it must, in order to retry), and whether it may prefer a source
+  (**no** -- [D-15](DESIGN-NOTES.md#d-15) rejected reduce-on-insert, and preferring is that by another
+  name). What remains is listed above.
+
+- [x] **MMT-1.3** -- **What a consumer does when a needed fact was not observed**, given the bar that
+  the model answers without further measurement. Degrade to a documented weaker policy, refuse, or
+  answer with an explicit "chosen without knowing X" marker.
+  **Narrowed by [D-19](DESIGN-NOTES.md#d-19), then resolved as not-this-crate's by
+  [D-21](DESIGN-NOTES.md#d-21).** D-19 removed two thirds of it: a contested subject is one the
+  unified view does not cover, which is D-13's not-observed, so there is one degradation path rather
+  than one per reason a fact is missing.
+  D-21 then places the remainder. This crate publishes a **refined view of what the platform
+  publishes**; what a consumer *does* with an unobserved fact is not a question about that view. The
+  model owes only that the absence be **representable and distinguishable** -- which is
+  [D-13](DESIGN-NOTES.md#d-13), implemented by **M2+.5**. The behavioural decision is the consumer's
+  and stays with `EP-1.4`.
+  **This item was gating M2, and through it M3, M4 and M5** -- a decision that was never the model's
+  to make was holding the whole reshape. Recorded as a planning defect rather than quietly fixed: it
+  landed in a "decisions that shape everything below" milestone because it *looked* foundational, and
+  foundational-looking is not the same as being about this component.
+  > **-> CROSS-COMPONENT HANDOFF:** the behavioural half is `EP-1.4` in
+  > topology-planner. It no longer has a counterpart here, so it
+  > is that component's decision alone rather than a joint one.
+
+- [x] **MMT-1.4** -- **Does `distances` survive at all?** The two-component architecture says the
+  *synthesizer* measures, with the caller's permission, for its own scenario -- so a measured number
+  is its working state and its justification for a choice, not a property of the machine. That
+  reverses this session's earlier conclusion that measured facts must live in the model, which
+  assumed a single component. If it holds, `distances` is **deleted rather than filled**, which is
+  the opposite of what the release checklist proposed. Decide before removing anything.
+  **Decided by the engineer, and the ruling is a scope boundary rather than a judgement about the
+  field: this crate does not go below the Win32 topology APIs, so if they do not provide distance
+  data, we do not have distance data.** Recorded as [D-20](DESIGN-NOTES.md#d-20). `distances` is
+  deleted.
+  **What the check found:** zero read sites. `render_node_distances` in `windows-platform-probes`
+  reads the *probe's own* measured `Observation`, not this field, so the one thing that looked like a
+  consumer is not one. Removal is spawned as **M5+.5** and is not gated on the reshape.
+
+- [x] **MMT-1.5** -- **Does the synthesizer live in this crate, and therefore what is this crate
+  called?** Recorded as open rather than settled: see
+  topology-planner/COMPONENT.md. The naming follows
+  the merge rather than leading it -- while this crate is only a Win32 wrapper, `-sys` is correct
+  for it; if it gains a synthesizer that measures, it stops being one and the name should change
+  then.
+  **Answered by the engineer's architectural shift, recorded as
+  EP-D-4: no.** The planner is a separate
+  component named **`topology-planner`** -- with no `windows-` prefix, because it plans against an
+  abstracted idealized machine and emits a platform-neutral plan. So this crate does not gain the
+  synthesizer, remains a pure Win32 wrapper, and **keeps its name**.
+  What settles it is not a naming preference but the shift's second half: the planner queries an
+  *abstract* model through traits, and **adapters** bridge this crate's objects to those traits. A
+  crate that is one side of an adapter boundary is exactly what `-sys` names.
+  [D-20](DESIGN-NOTES.md#d-20) reinforces it from the other direction -- a crate whose scope is
+  "what the Win32 topology APIs report" is a `-sys` crate by construction.
+
+## M2: the granularity model
+
+**Ready.** M1 is closed, and [D-21](DESIGN-NOTES.md#d-21) makes every item here a refinement of what
+Windows reports rather than something a planner asked for.
+
+**Re-planned 2026-09-03, on execution.** Checking these six against the code they reshape found two
+that already describe the status quo and three that are one deliverable. Recorded rather than
+quietly worked around, per the re-plan rule.
+
+- [x] **M2+.1** -- Model **observed sharing relations**, not a ladder of levels with optional rungs.
+  A machine with no L3 has no L3 relation, which is an observation rather than a missing value.
+  **Already satisfied; this item described the existing design.** `Domain` *is* a relation over a
+  `ProcessorSet`; `DomainKind` is open with seven kinds (D-4); `Cache { level: u8 }` has no fixed
+  rungs; and `cache_levels()` is documented as "derived from what the topology actually contains
+  rather than from a fixed ceiling", with a regression test guarding the exact hazard this item
+  names. A machine with no L3 simply has no `Cache { level: 3 }` domain today.
+  Not absorbed silently: separating *relation identity* `(kind, membership)` from the **label**
+  `Domain::id`, which [D-15](DESIGN-NOTES.md#d-15) requires, is real remaining work -- but it is
+  observation work and belongs to **M3**, not here.
+
+- [x] **M2+.2** -- Derive the order from **observed set inclusion**, never from firmware level
+  numbers. Inclusion is checkable; numbering is asserted, and this crate has been bitten by asserted
+  structure before -- the ARM64 host with no L3, and the guard test against a consumer sweeping
+  `1..=4`.
+  **The concrete target:** `cache_levels()` sorts by firmware `level`, and
+  `outermost_partitioning_cache()` walks it with `.rev()` -- so today's only ordering *is* firmware
+  numbering, which is what this item forbids.
+
+- [x] **M2+.3** -- Give the order an explicit **top** ("the machine"), so a pairwise query is total.
+  Two processors always share one address space, one scheduler and one memory system; without a top,
+  every caller writes the same empty-case branch for a cross-node pair.
+
+- [x] **M2+.4** -- Represent **incomparable** granularities. An inclusion order is partial, so two
+  granularities may not nest, and the honest answer to "tightest shared" is then a set of minimal
+  elements -- almost always one, but not by construction.
+
+  > **M2+.2, M2+.3 and M2+.4 are one deliverable and land in one commit citing all three.** They are
+  > not independently implementable: an inclusion-derived order cannot be defined without deciding
+  > what its top is and what happens when two elements do not nest, and a type that answered only one
+  > of the three would not compile into anything coherent. This is the acknowledged-coupling case,
+  > named rather than disguised by splitting the commits.
+  >
+  > **Shape:** the order is over *relations*, compared by processor-set inclusion, with a synthetic
+  > `Machine` top that is **not** inserted into `domains` -- putting it there would claim the platform
+  > observed it. The operation the order exists to support is "the minimal relations containing this
+  > set of processors", which returns a `Vec` precisely because M2+.4 says minimality need not be
+  > unique. The *pairwise* query built on it, with membership and the upper-bound flag, is `M4+.1`.
+  >
+  > **Done.** `src/granularity.rs` -- `Granularity::{Relation, Machine}`,
+  > `MachineMemoryTopology::{machine_processors, minimal_shared, is_finer_than}`, on a new
+  > `ProcessorSet::is_subset`. 21 tests.
+  > **The top is a fallback, not a competitor**: `Machine` is returned exactly when no reported
+  > relation covers the query, so it never appears beside an observed relation. The alternative --
+  > treating it as an ordinary element -- was rejected on measurement of its consequence: on a machine
+  > whose group domain spans every processor, every answer would carry a redundant second element,
+  > which is systematic noise rather than M2+.4's "almost always one".
+  > **Totality is over processors the topology knows.** A query naming an unknown processor answers
+  > *empty*, not `Machine`, because claiming the machine contains a processor it has never heard of
+  > would be an invention.
+  > **Sabotage-verified, and it found a real gap.** Removing the strictness from minimality failed 10
+  > of 20 tests. Breaking `is_subset` failed only **one**, incidentally -- the new primitive the whole
+  > order rests on had no direct tests, and every granularity test used group 0 alone, so the
+  > multi-group path was untested. Seven `is_subset` tests and a cross-group order test took that from
+  > 1 detection to 4, two of which name the defect directly.
+
+- [x] **M2+.5** -- Make absence first-class per [D-13](DESIGN-NOTES.md#d-13): **not observed**,
+  **observed and absent**, and **a negative result** are three different facts that an `Option`
+  spells identically. Per [D-19](DESIGN-NOTES.md#d-19) this also carries the contested case -- a
+  subject the sources genuinely disagreed on is one the unified view does not cover, which is *not
+  observed*, so no fourth state is added.
+  **Deliverable: the vocabulary type**, which `M5+.2` and `M5+.4` then consume -- M5+.4 already says
+  "M2+.5 gives it the vocabulary to accept one". Independent of M2+.2/.3/.4, so it lands separately.
+  **Done.** `src/observed.rs` -- `Observed<T>` with `Known`, `Absent`, `NotObserved`, plus `known()`,
+  `was_observed()`, `map()`, and a `Default` of `NotObserved` (D-12's reasoning: forgetting a field
+  must not assert something about the machine). 9 tests.
+  **Two variants, not three, and the omission is deliberate.** The *negative result* is not an
+  absence -- it is a computed answer whose value happens to be "no" -- so giving it a variant would
+  re-create the conflation the type removes. It stays an ordinary value, or an `Option` documented as
+  meaning exactly that.
+  **Sabotage-verified:** making `was_observed()` treat `Absent` as a gap -- the precise conflation
+  this type exists to prevent -- is caught by the test named for that claim.
+  Not yet *applied* to any field: `M5+.2` (`memory_bytes` from a description) and `M5+.4` (the probe
+  refusing a partially-covering cache level) are the sites, and both are M5 items.
+
+- [x] **M2+.6** -- **Relations carry attributes, not only memberships.** Required by
+  [D-19](DESIGN-NOTES.md#d-19): once the relation set *is* the unified model,
+  `DomainKind::Memory { memory_bytes }` and `Core { efficiency_class, simultaneous_multithreading }`
+  have nowhere to live unless a relation holds a payload alongside its processor set.
+  **Already satisfied, and the premise was wrong.** `DomainKind` has carried per-kind attributes
+  since D-4: `Memory { memory_bytes }`, `Core { simultaneous_multithreading, efficiency_class }`,
+  `Cache { level, associativity, line_size, size_bytes, cache_type }`, and `Other { name, attributes
+  }` for a kind this crate cannot interpret. Nothing had "nowhere to live".
+  The item was written from the abstract `(kind, membership)` framing while recording D-19, without
+  checking it against the type -- which had solved this two decisions earlier. Kept rather than
+  deleted because it is the second time in this milestone that an item asserted a gap the code did
+  not have, and once is a slip while twice is a method problem: **check the item against the code
+  before planning work from it.**
+
+## M3: observation and provenance
+
+**Ready.** M1 is closed.
+
+**Re-planned 2026-09-03, before implementing.** Checking these against the code found `M3+.3`'s
+premise wrong in the same way `M2+.6`'s was, and found work this milestone had been assigned but
+never given an item. Recorded rather than absorbed silently -- this is the third item in the reshape
+to assert a gap the crate does not have, and the pattern is what the M2 re-plan named: **check the
+item against the code before planning work from it.**
+
+- [x] **M3+.1** -- Provenance is **per relation**, not per source. Per-relation subsumes per-source
+  by repetition, and the reverse fails on the case that matters: two sources describing the *same*
+  relation.
+  **What that means concretely, which the item did not say.** "The case that matters" does not exist
+  in the code yet: `domains` is built from `GetLogicalProcessorInformationEx` alone, and `cpu_sets`
+  sits beside it as a parallel list, so no relation is currently described by two sources. Satisfying
+  this item therefore means **unifying the two sources into one relation set keyed by
+  `(kind, membership)`** per [D-15](DESIGN-NOTES.md#d-15), with each relation recording which sources
+  observed it. That is the heart of [D-19](DESIGN-NOTES.md#d-19)'s unified view, and it does not
+  exist yet.
+  **It absorbs the `Domain::id` work rather than leaving it a separate item.** D-15 requires the
+  *label* to move from the relation to the observation, and unification forces it: the two sources
+  agree on the core partition while labelling it `[0, 2, 4, ..., 14]` against `[0, 1, ..., 7]`, so a
+  single unified relation cannot carry one `id`. The two are the same change.
+  *(The M2 re-plan said this work "belongs to M3" without filing it anywhere, so until now it was
+  owned by no item at all.)*
+  **Split into three sub-steps on execution**, because `Domain::id` turns out to have **14 uses
+  across three other crates** -- `windows-ioring-sys`' `ring_copy` example, `windows-placement-probe`,
+  and `windows-platform-probes` -- plus a hand-written JSON shape. Doing this as one commit would mix
+  an additive change, a behavioural one, and a cross-crate breaking one. Each sub-step below compiles
+  and is testable on its own, and the breaking change is last and isolated.
+
+  - [x] **M3+.1.1** -- Introduce `Source` and `Observation`, and give `Domain` its observations,
+    populated by `from_relations` with the label it currently puts in `id`. **Additive**: `id` stays,
+    nothing downstream changes, and the unified view has somewhere to record what it unifies.
+    **"Nothing downstream changes" was wrong** -- the fourth item in this reshape to assert something
+    the code contradicts. `Domain` has public fields and is not `#[non_exhaustive]`, so a new field
+    breaks every struct literal: **59 of them across five crates**, 17 outside this one. rustc
+    enumerated each site; test literals take `Vec::new()` (a hand-built relation nobody reported,
+    which is honest) and the seven real builders in `from_relations` take a genuine
+    `Source::RelationshipWalk` observation carrying the label they already used.
+    **Deserialization drops platform observations, and that is the point.** The wire shape does not
+    encode them and no `Description` observation is synthesized. Carrying "the relationship walk
+    observed this" out of a file would be exactly the forgery [D-12](DESIGN-NOTES.md#d-12) refuses,
+    and synthesizing `Description` would restate what the object's `Provenance::Restored` already
+    says -- which [D-22](DESIGN-NOTES.md#d-22) had just finished separating. Twelve round-trip tests
+    failed on this and were right to: the question was real, not a test defect.
+
+  - [x] **M3+.1.2** -- Fold CPU Sets into the relation set. For a `Core` or `Memory` membership that
+    matches an existing relation, add an observation; otherwise add a relation observed only by CPU
+    Sets. **This is where the unified view comes into being** -- today `discover` builds `domains`
+    from the relationship walk alone and leaves `cpu_sets` beside it, so the two sources have never
+    met.
+    Deliberately *not* folded: `LastLevelCacheIndex`. Per [D-14](DESIGN-NOTES.md#d-14) it answers a
+    different question from the derived cache partitioning -- one LLC group where the derivation finds
+    eight L2 partitions -- so under [D-15](DESIGN-NOTES.md#d-15) it is a **different relation**, not a
+    second observation of the same one. `EfficiencyClass` is likewise a per-processor attribute rather
+    than a membership, and belongs to [D-18](DESIGN-NOTES.md#d-18)'s other subject kind.
+    **Done, and measured rather than asserted.** On this host the fold produces 44 relations, **9
+    doubly observed** and 0 CPU-sets-only: the eight cores carry `walk#N` beside `cpuSets#2N`, which
+    is D-15's `[0,1,...,7]` against `[0,2,...,14]` with both labels now kept, plus the single NUMA
+    node. Caches carry walk observations only, per D-14.
+    `cpu_sets` is still kept verbatim beside the folded view -- D-19's unified model is presented *in
+    addition to* the individual ones, not instead of them.
+    **A fabrication caught before it shipped.** The first version defaulted a CPU-sets-only core's
+    `efficiency_class` to `0`, which would have reinvented the `Processor::capacity` sentinel this
+    reshape exists to remove, since `0` is a legitimate class. It now takes the value from the records
+    themselves.
+    **Sabotage found a second host-shaped test gap.** Weakening the match from equal membership to
+    containment passed all 169 tests, because every membership on this machine is *exactly* equal so
+    the two rules coincide. Four synthetic fold tests -- built to disagree on purpose -- now catch it,
+    and the sabotage had to be injected in the semantically plausible direction to be meaningful.
+
+  - [x] **M3+.1.3** -- Remove `Domain::id`, now that observations carry the labels, and update the
+    three downstream crates and the wire shape. **Breaking**, and correct: there is no single
+    canonical id once two sources label the same relation differently -- measured as
+    `[0, 2, 4, ..., 14]` against `[0, 1, ..., 7]` -- and a relation observed only by CPU Sets has no
+    walk label at all. Keeping `id` beside the observations would be two statements of one fact, which
+    is the restatement drift this repository has a rule about.
+    **Done.** `Domain::label_from(source)` and `observed_by(source)` replace it; the accessor takes a
+    source *because there is no answer without one*. 59 literals and 14 call sites across four crates,
+    all located by rustc rather than by a regex guessing at them.
+    The wire `"id"` survives as an informational field: written when the walk labelled the relation,
+    and **optional on read and discarded**, since a file cannot establish which source observed
+    anything (D-12). Making it optional was forced by the change -- serialization stops writing it for
+    a relation no source labelled, so requiring it would have rejected descriptions this crate itself
+    produces.
+    **A real bug, caught by the tests and not by review.** Replacing `domain.id` with a positional
+    index in `windows-placement-probe` is fine for the cache and core maps, which only need an
+    equivalence class -- but `numa_of`'s value reaches **`VirtualAllocExNuma`**, so a position would
+    allocate on the wrong node on any machine whose nodes are not numbered `0..n`. It now takes the
+    walk's label, which is the real node number. The fixture's nodes happen to be `0` and `1`, so the
+    NUMA assertion passed by coincidence and only the cache assertion failed -- the bug was one
+    coincidence away from shipping.
+
+  - [x] **M3+.1.4** -- **Record a per-processor attribute conflict**, which relation unification
+    cannot reach. `M3+.1.2` matches relations by `(kind, membership)`, so two sources describing one
+    core agree on *that* even if they disagree about its `efficiency_class` -- and the unified
+    relation keeps the walk's value while the CPU-sets value goes unrecorded.
+    This is [MMT-1.2](COMPLETED-CHECKLIST.md)'s **attribute shape** and [D-18](DESIGN-NOTES.md#d-18)'s second
+    subject kind: an observation whose subject is `(processor, attribute)` rather than
+    `(kind, membership)`. Filed as its own item because the fold's doc comments cite it, and a rule
+    cited in code but scheduled nowhere is exactly the orphaning the "design notes are not a work
+    queue" rule exists to stop.
+    **Not observable on this host** -- every efficiency class reads `0` here -- so it is testable only
+    synthetically, per [D-17](DESIGN-NOTES.md#d-17).
+    **Done.** `ProcessorAttribute`, `AttributeObservation`, and
+    `MachineMemoryTopology::{processor_attributes, attribute_conflicts}`. The walk's claim is fanned
+    out from each core to its processors rather than left for a consumer to re-derive -- that
+    reconstruction is what this model exists to stop.
+    **Reported, never resolved.** `attribute_conflicts` names the contested subjects and both claims
+    stay: picking a winner would destroy the disagreement, and on a hybrid part the choice decides
+    whether a processor is treated as a performance or an efficiency core.
+    Five tests, four of them synthetic, plus one that asserts *this host has no conflict* -- measured
+    rather than standing in for the conflicting case. Sabotage-verified: making agreement count as a
+    conflict fails three of them.
+
+- [x] **M3+.2** -- Keep two properties of the old `Provenance` **because they re-derive**, not
+  because they were there: the default is the untrusted value (a *stronger* argument per-relation,
+  since there are more places to forget), and trust never upgrades (a file still cannot establish it
+  describes the machine you are on).
+  **Done, and both turned out to be already satisfied by `M3+.1.1` rather than needing new
+  mechanism** -- which is the item's own claim vindicated: they *re-derive*.
+  The untrusted default is an **empty** observation list. A relation nobody reported says exactly
+  that, rather than defaulting to a source and asserting something no API said; nothing fills it in
+  on a caller's behalf.
+  Never-upgrade is deserialization dropping platform observations, so a description claiming the
+  relationship walk observed something cannot establish that it did. Both now have named tests
+  asserting them at the relation level, beside the object-level ones D-12 already had.
+
+- [x] **M3+.3** -- ~~Supersede the whole-object `Provenance` **without replacing it with another
+  whole-object scalar**. With trust per relation, an object-level scalar can only be the minimum --
+  ninety-nine measured relations and one synthetic reading `SYNTHETIC` -- or the maximum, which is
+  dishonest. Trust belongs to an *answer*.~~
+  **Rewritten. The premise is wrong, recorded as [D-22](DESIGN-NOTES.md#d-22).** `Provenance` is not
+  an aggregate of anything: it records **how the object was obtained** -- `discover()` stamps
+  `Measured`, deserialization is capped at `Restored`, hand construction defaults to `Synthetic`. That
+  is a fact about the construction *act*, and no per-relation value can express it. The mixed
+  "ninety-nine measured and one synthetic" case cannot arise from collection at all; it needs someone
+  to hand-insert a relation into a discovered topology, which is exactly what per-relation provenance
+  makes **visible** rather than a reason to delete the object-level fact.
+  It also has a real consumer that wants precisely it: `windows-placement-probe`'s
+  `Record::is_trustworthy` gates on `is_measured()` to decide whether a measurement counts, and its
+  record schema carries the value at the top level deliberately so a collector need not reach into
+  the fingerprint.
+  **Revised deliverable:** keep the type, and make its documentation say what it actually means --
+  the construction act, orthogonal to per-relation provenance -- so the next reader does not repeat
+  this item's mistake.
+  **Done.** `Provenance`'s documentation now opens with "what this records: the construction act",
+  states the orthogonality, and names the superseded argument so it is not re-proposed. No type or
+  behaviour change: the correct outcome here was *not* changing the code.
+
+- [x] **M3+.4** -- Carry both observers without merging, per MMT-1.1's decision. `Topology::cpu_sets`
+  already lands this way; this item is whether that stays a parallel list or becomes observations
+  attached to relations.
+  **Answered by [D-19](DESIGN-NOTES.md#d-19): both.** The question presented the two as alternatives,
+  and they are not. Observations attach to relations, which is what makes the *unified* view exist at
+  all; the raw per-source list stays for a caller that wants what one source said, verbatim. That is
+  what "a unified model in addition to the individual ones" means concretely. No implementation is
+  owed here -- M2+.6 and M4 carry the surface -- so this item is closed as a decision, not as code.
+
+## M4: the queries
+
+Parked on M2 and M3.
+
+**Each is a refinement of what Windows reports**, per [D-21](DESIGN-NOTES.md#d-21) -- not a planner
+requirement, which is how they were first justified. The change matters because it changes what is
+in scope: a query the platform's data supports belongs here whether or not any planner wants it, and
+a planner requirement with no platform correspondence belongs to the adapter.
+
+Read on their own terms, most of these were never planner-shaped. `M4+.2` and `M4+.3` are ordinary
+facts about processors and memory stated without sentinels; `M4+.4` fixes a rule the **probes** have
+restated three times in two crates. Only `M4+.1`'s pairwise helper is consumer-flavoured, and the
+ordered collection it derives from is what stops that restatement recurring.
+
+They remain cross-referenced to topology-planner as
+**evidence** the shape is right rather than as its justification -- stating those requirements found
+the `Processor::capacity` sentinel collision that reviewing the model alone had not.
+
+- [x] **M4+.1** -- **The ordered relations are the query surface; pairwise proximity is a method on
+  them.** The requirement arrived from EP-D-2 as a
+  *pairwise* query returning the minimal shared granularities, **their membership**, and whether a
+  finer granularity went **unobserved** so the answer can be an upper bound and say so. All three
+  requirements stand. The **shape** does not, and the requirement says so itself: it asks the answer
+  to carry the whole block containing both processors, "or the planner asks O(n^2) times and
+  reconstructs the grouping". An answer that must carry the block is not about the pair -- the pair is
+  an index into a partition.
+  Everything the planner does is an operation on the partitions: choosing domain granularity is
+  *selecting one*, sizing an MPSC fan-in is *a block's cardinality*, choosing a channel is *the finest
+  block containing both*. Pairwise is three lines over that. The reverse is derivable too, but only by
+  union-find over O(n^2) queries -- which is exactly the reconstruction `SH-16.9` records three
+  consumers performing, two of them differently. Building pairwise as the primary surface would ship
+  the stated requirement and re-create the defect one level up.
+  Both are provided; **the collection is primary and the pairwise helper is derived from it**, so
+  there is one implementation of the grouping.
+  *Terminology:* it is a **poset with a top**, not a lattice -- M2+.4's incomparable granularities
+  mean meets need not be unique, which is also why a pairwise function has to return a *set* and is
+  an awkward face on an ordered collection.
+  **Done.** `Proximity { shared, finer_unobserved }` and
+  `MachineMemoryTopology::proximity(&[ProcessorId])`, whose body is `minimal_shared` plus the
+  coverage check -- so there is one implementation of the grouping, not one per caller.
+  Generalised past a pair, because nothing in the query is specific to two: the same call sizes an
+  MPSC fan-in over a whole block.
+  **The third requirement is the one that needed building.** `finer_unobserved` says the answer is an
+  **upper bound**: some kind the machine reports covers one of these processors in no instance, so the
+  platform has said nothing about whether they share it. The distinction that makes it honest is
+  [D-13](DESIGN-NOTES.md#d-13)'s -- absence of a *kind* describes a machine without it, while absence
+  of a processor *from* a kind that exists is a gap. `Memory` is excluded because a processor in no
+  memory domain is `M4+.3`'s unplaced case, which has its own answer.
+  `Proximity::only()` returns `None` on a tie rather than taking the first, so a caller that cannot
+  handle M2+.4's multi-element answer has to say so.
+  Sabotage-verified: dropping the kind-exists guard -- which would make a machine with no caches look
+  incomplete -- fails three tests, including the D-13 conflation case.
+
+- [x] **M4+.2** -- The **shard-set** surface (EP-D-1): identity as `(group, number)`, online, core
+  membership and SMT, efficiency class **without a sentinel**, and availability.
+  **Done.** `ProcessorFacts` and `MachineMemoryTopology::shard_set()`. Every optional field is an
+  `Observed`, so "the platform said zero" and "nobody asked" are different values -- which is the
+  `M5+.1` collision fixed from the other side, since `Processor::capacity` spells offline, in-no-core,
+  and class-zero as the same `0` and the third is every processor on every non-hybrid machine.
+  **It states availability and does not judge it.** A `usable()` helper was written and then removed:
+  which of online, parked and allocation disqualifies a processor is a **policy**, and per
+  [D-21](DESIGN-NOTES.md#d-21) this crate states facts -- baking the judgement in is exactly what
+  `outermost_partitioning_cache` was criticised for. It would also have been wrong, which is how the
+  next item was found.
+
+- [x] **M4+.3** -- **Residency** (EP-D-3): processor to memory domain, with the unplaced case
+  distinguishable rather than defaulted -- an unknown cache domain costs an optimisation, an unknown
+  memory domain has no honest fallback.
+  **Done.** `memory_domain_of(processor) -> Observed<&Domain>` and `unplaced_processors()`. The
+  unplaced case is `NotObserved`, never node zero: the pool has to be allocated somewhere, and
+  guessing means quietly allocating remote memory for the life of the process. `Observed::Absent` is
+  never returned -- a memory domain covering no processors is a real shape (D-5), but a processor
+  belonging to no node is a gap in what the firmware said, not a statement that it has no memory.
+
+- [x] **M4+.4** -- Reduce `outermost_partitioning_cache` to a **named projection** over the order --
+  "the coarsest granularity with more than one group" -- so it is a query rather than a rule, and
+  cannot be restated wrongly because there is nothing to restate.
+  **Note on what "over the order" can and cannot mean here.** M2's order is over *relations*, and a
+  partition is a *set* of relations, so the projection needs both: a **grouping** key to say which
+  relations form one candidate partition, and an **order** to say which candidate is coarsest. Level
+  is used for the first and must not be used for the second -- grouping by level reads what the
+  source said, whereas ordering by level asserts that a higher number is always coarser, which is the
+  structure `M2+.2` forbids and this host's ARM64 sibling disproves.
+  **Done.** The projection now collects every level that forms a partition, then picks the one no
+  other **refines** -- checkable against the memberships Windows reported, where "a higher number is
+  coarser" is asserted.
+  **Every pre-existing test passed under both rules**, so the change would have been invisible: the
+  discriminating case is a machine whose *lower* level forms the *coarser* partition, which no
+  fixture built from real hardware has. Reverting to the old `.rev()` over level numbers now fails
+  exactly one test, and it is the one written for that case.
+
+**Overlap noticed on reading, not deferred:** `M4+.2`'s "efficiency class **without a sentinel**" and
+`M5+.1`'s `Processor::capacity` collision are the same defect from two sides. They land together, in
+`M4+.2`, and `M5+.1` records that rather than repeating the work.
+
+- [x] **M4+.5** -- **Verify the CPU-set flag bit positions against the SDK**, which `M4+.2`'s
+  measurement gave evidence are wrong. `allocated_to_this_process` reads **false for every processor**
+  on the development host -- for a process plainly running on them, which is not a credible answer.
+  `parked` reads false everywhere too, so neither has ever been observed true and nothing distinguishes
+  "the bit is clear" from "we are reading the wrong bit".
+  The positions in `cpu_set::flags` are transcribed from the SDK's bitfield order and the module's own
+  doc calls changing them a breaking change -- but transcription is exactly the **asserted structure**
+  this reshape exists to distrust, and it has never been checked against a machine where the answer
+  would differ.
+  **Until it is verified, no behaviour may depend on these flags.** That is why `M4+.2` ships the
+  values as facts and no judgement over them; a `usable()` helper written against them refused every
+  processor on this machine.
+  **Investigated, and the answer is neither of the two the item expected.** Recorded as
+  [D-23](DESIGN-NOTES.md#d-23).
+  The bit positions are **not** wrong -- and cannot be shown right either. The whole `AllFlags` byte
+  reads `0x00` for every processor, so no bit has ever been observed set and nothing distinguishes a
+  correct transcription from a wrong one. They stand on the SDK's declared order alone.
+  The byte is **not populated on this build**, which is the actual finding and was established by
+  experiment rather than argued: `SetProcessDefaultCpuSets` succeeded, `GetProcessDefaultCpuSets`
+  confirmed the allocation stuck (`[0x100, 0x101]`), and the byte still read zero -- under a null
+  handle, the pseudo-handle, and a real `OpenProcess` handle alike. Windows 11 25H2
+  (10.0.26200.9168, AMD64).
+  **And the field's own documentation was wrong**, which the experiment exposed on the way:
+  `allocated_to_target_process` does not mean "may we run here". It means the CPU set was explicitly
+  allocated via `SetProcessDefaultCpuSets`, which an ordinary process never does -- so `false` is the
+  ordinary answer for a processor it is entirely free to run on. The old doc said the opposite.
+  A regression test pins the measurement, so a build that *does* populate the byte is noticed rather
+  than silently changing what these fields mean. That build is also the only thing that could finish
+  verifying the bit positions.
+
+## M5: the defects this subsumes
+
+Parked on M4, **except M5+.5, which is independent and ready now**. Each of the others already
+exists as a defect that the reshape is what fixes, so they are listed here rather than fixed
+separately and then re-fixed.
+
+- [x] **M5+.1** -- `Processor::capacity` uses `0` as both a legitimate efficiency class and a "not
+  known" sentinel, and the two collide on **every non-hybrid machine**. Worse than an ambiguous
+  `Option`: a colliding sentinel cannot be distinguished even by a careful caller.
+  **Subsumed by `M4+.2`, which is where the sentinel-free answer lives**: `ProcessorFacts` reports
+  `efficiency_class: Observed<u8>`, so class zero and "no core names this processor" are different
+  values. `Processor::capacity` itself is left in place and its documentation already warns against
+  it -- removing a published field is a second breaking change with no additional benefit once the
+  honest answer exists beside it.
+
+- [x] **M5+.2** -- `DomainKind::Memory::memory_bytes` is unambiguous from `discover` but ambiguous
+  from a **description**, where "the field was omitted" and "this node's capacity is unknown" are the
+  same value. The [D-13](DESIGN-NOTES.md#d-13) audit found this and documentation cannot fix it.
+  **Done**: the field is now `Observed<u64>`, and serde carries all three states distinctly -- a
+  number for `Known`, an explicit `null` for `Absent` ("this node has no memory of its own"), and
+  **omission** for `NotObserved`. The two that used to collide are now different bytes on the wire,
+  so a description round-trips through the distinction rather than losing it.
+
+- [x] **M5+.3** -- The partitioning rule is stated **three times in two crates**, and two of the
+  three differ: `windows-platform-probes` omits the pairwise-disjointness check this crate requires.
+  M4+.4 removes the reason to restate it.
+  **Done, and by M4+.4 the restatement had drifted in a second way**: it also ordered candidates by
+  **level number**, which this crate stopped doing. `Observation` now captures
+  `partitioning_cache_level` from `MachineMemoryTopology::outermost_partitioning_cache` at survey
+  time and looks the summary up, so there is one implementation of the rule.
+  **An existing platform-probes test then caught a real regression in M4+.4** -- and it was right to.
+  On this host L1 and L2 split the machine into the **same** eight pairs, so neither refines the
+  other and the first-wins tie-break answered `L1`, naming the inner cache for a boundary the outer
+  one also owns. Ties between *identical* partitions now take the higher level, which reads the
+  source's own labelling of one boundary rather than ordering distinct partitions by number.
+
+- [x] **M5+.4** -- `windows-placement-probe` **refuses a partially-covering cache level** that this
+  crate deliberately hands back, failing an entire measurement run over a topology this crate
+  considers describable. M2+.5 gives it the vocabulary to accept one.
+  **Done**: `ProcessorPlace::cache_domain` is `Observed<u32>`, the `MissingPlacement::CacheDomain`
+  refusal is gone, and an uncovered processor reports `NotObserved` -- which is neither `Absent`
+  ("no level partitions this machine", the ordinary single-domain case) nor a fabricated domain.
+  **The hazard the refusal existed to prevent is closed one level down instead**:
+  `Slice::same_cache_domain` answers `None` when any participant is `NotObserved`, so two uncovered
+  processors are never reported as sharing a cache. Verified by sabotage -- deleting that guard turns
+  the answer into `Some(true)` and exactly one test goes red.
+
+- [x] **M5+.5** -- **Delete `MachineMemoryTopology::distances` and the `Distances` type**, per
+  [D-20](DESIGN-NOTES.md#d-20). **Not gated on M4**: the reshape does not fix this one, deletion
+  does, so it does not wait for the rest of M5.
+  A **breaking change to a published crate** (0.1.0), so the commit takes the Conventional Commits
+  `!` marker. It is not a *parse* break -- the crate does not `deny_unknown_fields`, so a description
+  carrying `"distances"` still deserializes and the field is ignored.
+  Two things to do rather than skip: keep the Linux-shaped description test, retargeted to assert the
+  field is now **ignored** rather than deleting the evidence that such a description parses; and note
+  in the doc comment that round-tripping such a description no longer preserves it, since that is a
+  real if small behaviour change and a silent drop is exactly what this crate has objected to
+  elsewhere.
+  **Done.** Field, type, and re-export removed; three call sites in `windows-placement-probe`'s
+  fingerprint fixtures updated. The Linux-shaped test survives as
+  `a_linux_shaped_description_parses_and_its_distances_are_ignored`, keeping the **populated** matrix
+  so what it proves is that an existing description still parses, and gaining an assertion that the
+  value does **not** reappear on re-serialize -- the silent drop asserted rather than assumed.
+  `distances_is_expected_to_be_square` was deleted with the type it tested (125 tests to 124).
+  Two stale statements sweeps found and fixed: the [D-13](DESIGN-NOTES.md#d-13) audit row, and the
+  Linux-comparison summary, which had recorded optional distances as a decision that *held up* --
+  sound about the schema, and reversed by a ruling about scope.
+
+## Moved 2026-09-04 -- M6: one record walk, per D-24
+
+## M6: one record walk, per D-24
+
+Opened 2026-09-03 by the PR #56 diff review (`SH-3.1.1`), which found the crate''s two record
+decoders internally coherent and mutually opposite. [D-24](DESIGN-NOTES.md#d-24) is the ruling this
+milestone implements: **one shared walk, no panic, incoherence recorded in the returned data, and no
+trust boundary** -- the OS is trusted for structural validity, and the careful walk is simply how
+variable-length records are traversed correctly.
+
+**All five landed in one commit, and the split was wrong.** M6.1 produces anomalies, so it cannot
+compile without M6.2''s type; neither can be warning-free until M6.3/M6.4 give them a consumer; and
+M6.4 changes `enumerate`''s signature, which is what M6.5 surfaces. They are one coupled change and
+are recorded as such rather than teased into a fiction of five commits.
+
+**One measurement changed the design.** The obvious minimum record size for the relationship walk is
+`size_of::<SYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX>()` -- and it is **wrong**. That struct is 80
+bytes because its union is as large as `GROUP_RELATIONSHIP` (72), while a real processor-core record
+is 8 + 40 = 48. Using it would have rejected every processor, cache and NUMA record on every machine.
+The minimum is the 8-byte header, and each body bounds its own reads instead.
+
+**The amplification is closed by construction and witnessed, not argued.** With a 48-byte record
+flush against a `PAGE_NOACCESS` page and `GroupCount = 65535`, the unbounded read raises `0xC0000005`
+and the record-bounded one returns cleanly.
+
+- [x] **M6.1** -- **A shared, self-bounding record walk.** New private module: an iterator over a
+  `Size`-chained record list, parameterised by the offset of the `Size` field and the minimum record
+  size, yielding a **record view bounded by its own `Size`**. The view''s read accessor returns
+  nothing when the read would leave the record, so a trailing array cannot be read past the record
+  that declares it -- the `GroupCount` amplification closes *by construction*, not by a separate
+  check. Built first and unused; `walk.rs` and `cpu_set.rs` adopt it in M6.3/M6.4.
+
+- [x] **M6.2** -- **Vocabulary for a record that did not fit, and somewhere for it to live.** A public
+  anomaly type carrying the [`Source`](src/observation.rs) that was being read, the byte offset, and
+  what was wrong, plus a new `MachineMemoryTopology` field to carry them. Breaking (the struct has
+  public fields and is deliberately hand-constructible, so it does not take `#[non_exhaustive]`),
+  which is free on this branch. `serde(default)` so an existing description still deserializes.
+
+- [x] **M6.3** -- **Port `cpu_set::decode` to the shared walk.** Its existing checks become the shared
+  ones; its silent `break` becomes a recorded anomaly. Behaviour for well-formed input is unchanged,
+  which its five malformed-input tests should confirm without being rewritten.
+
+- [x] **M6.4** -- **Port `walk::decode` to the shared walk, and delete the `assert!`.** This is the
+  item with the actual defect in it: a zero `Size` currently panics, `offset + size` is never checked
+  against the buffer, and `read_group_affinities` reads `GroupCount` x 16 bytes unbounded. All three
+  resolve into the shared walk. Add the malformed-input tests this file has never had.
+  Verify the amplification is closed the way `cpu_set`''s was -- a guard-page harness, since the
+  decoded output is identical either way and no ordinary test can witness it.
+
+- [x] **M6.5** -- **Surface the anomalies through `discover()`**, and state the policy where a reader
+  will meet it: the module docs of both walks, which currently say opposite things about trust.
