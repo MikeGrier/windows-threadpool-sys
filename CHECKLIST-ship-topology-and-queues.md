@@ -658,6 +658,37 @@ that previously stood in the way are gone:
   to the level number that happens to be L3 on today''s hardware. The fix renames the policy as well
   as changing it, since `byl3` is a user-facing CLI value that would no longer describe what it does.
 
+- [ ] **SH-4.13** -- **`ProcessorSet` cannot represent every `u8` processor id, and the public API
+  cannot uphold both "every processor" and "no abort".** Raised by Copilot across three unresolved
+  review threads -- `topology.rs:100`, `topology.rs:946` and `granularity.rs:94` -- which share one
+  root and are recorded once here. The reviewer''s own phrasing on the third is the clearest statement
+  of the problem and is quoted deliberately.
+  `MachineMemoryTopology` and `Processor::id` are **public and constructible**, and the derived
+  deserializer accepts `number: 255` under `processors` even though `ProcessorSet` rejects the same id
+  under `domains`. Such a topology then **panics** in `machine_processors()`, and on a 32-bit target a
+  processor number of 40 panics in `granularity`''s `insert` before the argument guard can answer.
+  **Not fixable site by site**: validating each lookup closes the path that was reported and leaves
+  the next one open, because the gap is between what a `Processor` may say and what a `ProcessorSet`
+  can hold. The decision is which of the two moves -- widen `ProcessorSet` to the full `u8` range, or
+  make invalid topology data *reportable* rather than fatal (the `Observed`/anomaly shape this crate
+  already uses for "the platform said something we cannot represent").
+  **Precedent, and the reason this is not theoretical:** the proximity panic fixed in `c072a8a` was
+  the same family -- a panic reachable from public, constructible input -- and it was real.
+  Whichever way it goes, add the malformed-description case to the deserialization tests, which is the
+  path that currently has no coverage at all.
+
+- [ ] **SH-4.14** -- **`probe-long-path-aware` builds without its manifest on `windows-gnu`.** Raised
+  by Copilot at `crates/windows-platform-probes/build.rs:29`. The resource is embedded only for MSVC,
+  so on a GNU target the "aware" and "unaware" binaries measure the **same** configuration while their
+  names and their reports claim opposite intent.
+  That is worse than failing to build: the pair exists to isolate one variable, and a report stating a
+  conclusion the binary did not test is a wrong measurement rather than a missing one. **Fail clearly
+  on non-MSVC** is the preferred answer over embedding the resource for GNU, since the experiment is
+  meaningless unless the two halves genuinely differ.
+  **Gated on CI, deliberately.** This workspace builds MSVC targets only, so a GNU fix would ship
+  unexercised -- the honest sequencing is to add the target to CI first and then make this fail
+  against it, rather than writing a guard nothing runs.
+
 - [ ] **SH-4.9** -- **`tools/check-publishable.ps1`: three findings with one root.** Its checks are
   **text searches standing in for structural facts**, which is how a check goes quietly vacuous.
   An unanchored pattern is satisfied by a *commented-out* assignment, so CI would believe the
