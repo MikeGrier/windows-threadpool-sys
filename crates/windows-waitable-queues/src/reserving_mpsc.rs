@@ -121,7 +121,7 @@ use core::cell::{Cell, UnsafeCell};
 use core::fmt;
 use core::marker::PhantomData;
 use core::mem::MaybeUninit;
-use core::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicUsize, Ordering};
+use core::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::io;
 use std::os::windows::io::{BorrowedHandle, OwnedHandle};
 use std::sync::Arc;
@@ -146,6 +146,28 @@ const POSITION_BITS: u32 = 32;
 
 /// Isolates the position half of the claim word.
 const POSITION_MASK: u64 = (1 << POSITION_BITS) - 1;
+
+/// The position after `position`, wrapping at the width the packing gives it.
+///
+/// **Centralised because the width is no longer the type's.** A position is
+/// carried in a `u64` but is only [`POSITION_BITS`] wide, so it wraps where the
+/// packing says rather than where `u64` would. Spelling that as
+/// `wrapping_add(1) & POSITION_MASK` at each of the dozen sites that need it
+/// would be a dozen chances to omit the mask, and an omitted mask is not a
+/// compile error -- it is a position that escapes its half of the claim word
+/// and silently corrupts the reservation count beside it.
+const fn advance(position: u64) -> u64 {
+    position.wrapping_add(1) & POSITION_MASK
+}
+
+/// How far `position` leads `head`, in the modular arithmetic the position
+/// width defines.
+///
+/// Masked for [`advance`]'s reason. When the position was a `u32` the type
+/// supplied this wrap for free; it no longer does.
+const fn distance(position: u64, head: u64) -> u64 {
+    position.wrapping_sub(head) & POSITION_MASK
+}
 
 /// What this shape accepts as a capacity.
 ///
@@ -236,8 +258,8 @@ const _: () = {
 };
 
 /// Reads the position out of a claim word.
-const fn position_of(word: u64) -> u32 {
-    (word & POSITION_MASK) as u32
+const fn position_of(word: u64) -> u64 {
+    word & POSITION_MASK
 }
 
 /// Reads the outstanding-reservation count out of a claim word.
@@ -263,8 +285,8 @@ const fn reserved_of(word: u64) -> u32 {
 /// them apart. `|` is kept because it says "these are separate fields" where the
 /// others say "these are numbers"; the equivalence is recorded here so it is not
 /// investigated again.
-const fn claim_word(reserved: u32, position: u32) -> u64 {
-    ((reserved as u64) << POSITION_BITS) | position as u64
+const fn claim_word(reserved: u32, position: u64) -> u64 {
+    ((reserved as u64) << POSITION_BITS) | (position & POSITION_MASK)
 }
 
 /// Creates a reserving multi-producer, single-consumer bounded array queue.
@@ -346,7 +368,7 @@ fn build<T>(
             // first serves, so the consumer sees it as unpublished. The
             // position's own value is the natural choice and matches the state
             // the slot returns to on every later lap.
-            sequence: AtomicU32::new(index as u32),
+            sequence: AtomicU64::new(index as u64),
             value: UnsafeCell::new(MaybeUninit::uninit()),
         });
     }
@@ -357,7 +379,7 @@ fn build<T>(
         slots: slots.into_boxed_slice(),
         mask: capacity - 1,
         capacity,
-        head: CacheAligned(AtomicU32::new(0)),
+        head: CacheAligned(AtomicU64::new(0)),
         claim: CacheAligned(AtomicU64::new(claim_word(0, 0))),
         producers: AtomicUsize::new(1),
         consumer_live: AtomicBool::new(true),
@@ -389,7 +411,7 @@ struct Slot<T> {
     /// that position anyway, to count free slots for the reservations -- so
     /// nothing ever stores a "free again" value and the consumer's `pop` is one
     /// store shorter than `slotwise_mpsc`'s.
-    sequence: AtomicU32,
+    sequence: AtomicU64,
     value: UnsafeCell<MaybeUninit<T>>,
 }
 
@@ -410,7 +432,7 @@ struct Shared<T> {
     /// twice over: unlike `slotwise_mpsc`, *every* producer reads this on *every* push,
     /// so letting the claim word share the line would put the consumer's writes
     /// directly in their path.
-    head: CacheAligned<AtomicU32>,
+    head: CacheAligned<AtomicU64>,
     /// The outstanding-reservation count and the claim position, packed.
     ///
     /// One word because they must be claimed together; see the [module
@@ -454,9 +476,9 @@ impl<T> Shared<T> {
     /// The capacity as the width the positions are counted in.
     ///
     /// Lossless by construction: [`BOUNDS`] caps the capacity at 2^31.
-    fn capacity_u32(&self) -> u32 {
+    fn capacity_u64(&self) -> u64 {
         debug_assert!(self.capacity <= BOUNDS_MAX);
-        self.capacity as u32
+        self.capacity as u64
     }
 
     /// Whether a *best-effort* claim may take the slot at `position`, given the
@@ -475,14 +497,14 @@ impl<T> Shared<T> {
     /// pair of readings that never coexisted. Callers therefore treat a `false`
     /// as provisional and re-read the claim before reporting it (see
     /// [`Producer::push`]).
-    fn has_room_beyond_reservations(&self, position: u32, reserved: u32) -> bool {
-        let capacity = self.capacity_u32();
+    fn has_room_beyond_reservations(&self, position: u64, reserved: u32) -> bool {
+        let capacity = self.capacity_u64();
         debug_assert!(
-            reserved <= capacity,
+            u64::from(reserved) <= capacity,
             "reservations may never exceed the capacity they are claimed from"
         );
-        let occupied = position.wrapping_sub(self.head.0.load(Ordering::Acquire));
-        occupied < capacity - reserved
+        let occupied = distance(position, self.head.0.load(Ordering::Acquire));
+        occupied < capacity - u64::from(reserved)
     }
 
     /// Items currently held, as a snapshot.
@@ -499,7 +521,7 @@ impl<T> Shared<T> {
     fn len(&self) -> usize {
         let position = position_of(self.claim.0.load(Ordering::Relaxed));
         let head = self.head.0.load(Ordering::Acquire);
-        (position.wrapping_sub(head) as usize).min(self.capacity)
+        (distance(position, head) as usize).min(self.capacity)
     }
 
     /// How many further items a best-effort push could still place, as a
@@ -520,9 +542,9 @@ impl<T> Shared<T> {
     fn remaining(&self) -> usize {
         let word = self.claim.0.load(Ordering::Relaxed);
         let head = self.head.0.load(Ordering::Acquire);
-        let capacity = self.capacity_u32();
-        let occupied = position_of(word).wrapping_sub(head).min(capacity);
-        let spoken_for = occupied.saturating_add(reserved_of(word));
+        let capacity = self.capacity_u64();
+        let occupied = distance(position_of(word), head).min(capacity);
+        let spoken_for = occupied.saturating_add(u64::from(reserved_of(word)));
         capacity.saturating_sub(spoken_for) as usize
     }
 
@@ -543,7 +565,7 @@ impl<T> Shared<T> {
         // the load mean, at this point in the source, what it appears to mean.
         let position = self.head.0.load(Ordering::Acquire);
         let slot = &self.slots[position as usize & self.mask];
-        slot.sequence.load(Ordering::Acquire) == position.wrapping_add(1)
+        slot.sequence.load(Ordering::Acquire) == advance(position)
     }
 
     /// Give up one unit of the producer count, signalling if it was the last.
@@ -580,7 +602,7 @@ impl<T> Shared<T> {
     /// The caller must have claimed `position` by advancing the claim word, and
     /// must not have published it already. A position is claimed by exactly one
     /// producer, so this is the only writer of the slot.
-    unsafe fn publish(&self, position: u32, item: T) {
+    unsafe fn publish(&self, position: u64, item: T) {
         // Gated, matching `slotwise_mpsc`: untracked, this costs one predictable
         // branch on a field written once at construction, and the shared `head`
         // line is not touched at all.
@@ -645,12 +667,12 @@ impl<T> Shared<T> {
         // invariant makes the condition already true in modification order --
         // this waits to *see* it, not for it to *become* true.
         let mut head = self.head.0.load(Ordering::Acquire);
-        while position.wrapping_sub(head) >= self.capacity_u32() {
+        while distance(position, head) >= self.capacity_u64() {
             std::hint::spin_loop();
             head = self.head.0.load(Ordering::Acquire);
         }
         if self.metrics.tracks_high_water() {
-            let depth = position.wrapping_sub(head).wrapping_add(1) as usize;
+            let depth = (distance(position, head) + 1) as usize;
             // **The clamp is unreachable from here, and is kept deliberately.**
             // The wait above exits only once `position - head < capacity`, so
             // `depth <= capacity` already holds and `min` never binds. It was
@@ -691,8 +713,7 @@ impl<T> Shared<T> {
         // and this is what forbids the compiler and the processor from moving it
         // earlier. Until it lands, the consumer sees the slot as
         // claimed-but-empty and skips it.
-        slot.sequence
-            .store(position.wrapping_add(1), Ordering::Release);
+        slot.sequence.store(advance(position), Ordering::Release);
 
         // After the publication, never before: the doorbell says "there is
         // something to take", and that must not become true before the item is
@@ -724,7 +745,7 @@ impl<T> Drop for Shared<T> {
         let tail = position_of(*self.claim.0.get_mut());
         let mut position = head;
         while position != tail {
-            let published = position.wrapping_add(1);
+            let published = advance(position);
             let slot = &mut self.slots[position as usize & mask];
             if *slot.sequence.get_mut() == published {
                 // SAFETY: the slot's sequence says the producer finished writing
@@ -734,7 +755,7 @@ impl<T> Drop for Shared<T> {
                 let item = unsafe { slot.value.get_mut().assume_init_read() };
                 self.teardown.dispose(item);
             }
-            position = position.wrapping_add(1);
+            position = advance(position);
         }
     }
 }
@@ -812,7 +833,7 @@ impl<T> Producer<T> {
             // than have its increment silently overwritten.
             match self.shared.claim.0.compare_exchange_weak(
                 word,
-                claim_word(reserved, position.wrapping_add(1)),
+                claim_word(reserved, advance(position)),
                 Ordering::Relaxed,
                 Ordering::Relaxed,
             ) {
@@ -1032,7 +1053,7 @@ impl<T> Reservation<T> {
 
             match self.shared.claim.0.compare_exchange_weak(
                 word,
-                claim_word(reserved - 1, position.wrapping_add(1)),
+                claim_word(reserved - 1, advance(position)),
                 Ordering::Relaxed,
                 Ordering::Relaxed,
             ) {
@@ -1136,7 +1157,7 @@ impl<T> Consumer<T> {
         let slot = &self.shared.slots[position as usize & self.shared.mask];
         // Acquire: pairs with the producer's release store, so an item it
         // published is visible here.
-        if slot.sequence.load(Ordering::Acquire) != position.wrapping_add(1) {
+        if slot.sequence.load(Ordering::Acquire) != advance(position) {
             return None;
         }
 
@@ -1158,7 +1179,7 @@ impl<T> Consumer<T> {
         self.shared
             .head
             .0
-            .store(position.wrapping_add(1), Ordering::Release);
+            .store(advance(position), Ordering::Release);
         Some(item)
     }
 

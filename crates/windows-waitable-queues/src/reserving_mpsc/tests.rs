@@ -13,8 +13,8 @@
 //! slot -- so the interesting cases all put the queue under pressure first.
 
 use super::{
-    BOUNDS_MAX, Consumer, Producer, Reservation, bounded, bounded_with, claim_word, position_of,
-    reserved_of,
+    BOUNDS_MAX, Consumer, MAX_RESERVED, POSITION_MASK, Producer, Reservation, advance, bounded,
+    bounded_with, claim_word, position_of, reserved_of,
 };
 use crate::race_hooks;
 use crate::{Disposal, Options};
@@ -63,8 +63,14 @@ fn fill<T: Clone>(producer: &Producer<T>, item: T) -> usize {
 
 #[test]
 fn the_claim_word_round_trips_both_halves() {
-    for &reserved in &[0_u32, 1, 2, 1000, u32::MAX - 1, u32::MAX] {
-        for &position in &[0_u32, 1, 2, 1000, u32::MAX - 1, u32::MAX] {
+    // Written against the split's own constants rather than against `u32`'s
+    // extremes, because the position is no longer 32 bits by definition: it is
+    // carried in a `u64` and bounded by `POSITION_MASK`. Spelling the edges as
+    // `u32::MAX` would have quietly stopped testing the edges the moment the
+    // apportionment changed, while still passing.
+    let max_reserved = MAX_RESERVED as u32;
+    for &reserved in &[0_u32, 1, 2, 1000, max_reserved - 1, max_reserved] {
+        for &position in &[0_u64, 1, 2, 1000, POSITION_MASK - 1, POSITION_MASK] {
             let word = claim_word(reserved, position);
             assert_eq!(
                 (reserved_of(word), position_of(word)),
@@ -79,14 +85,14 @@ fn the_claim_word_round_trips_both_halves() {
 fn the_two_halves_do_not_bleed_into_each_other() {
     // The mistake packing invites: a position that wraps must not carry into
     // the reservation count, and a count must not appear as a position.
-    let word = claim_word(0, u32::MAX);
+    let word = claim_word(0, POSITION_MASK);
     assert_eq!(
         reserved_of(word),
         0,
         "a maximal position leaves the count at zero"
     );
 
-    let word = claim_word(u32::MAX, 0);
+    let word = claim_word(MAX_RESERVED as u32, 0);
     assert_eq!(
         position_of(word),
         0,
@@ -96,7 +102,7 @@ fn the_two_halves_do_not_bleed_into_each_other() {
     // And an increment of the position at its maximum wraps within its own half
     // rather than incrementing the count, which is what the queue relies on
     // every time a position laps.
-    let wrapped = claim_word(7, u32::MAX.wrapping_add(1));
+    let wrapped = claim_word(7, advance(POSITION_MASK));
     assert_eq!((reserved_of(wrapped), position_of(wrapped)), (7, 0));
 }
 
@@ -1360,7 +1366,10 @@ fn publish_waits_for_a_head_that_has_freed_the_slot() {
 
     // `send` claims position 0, so this leaves `position - head == 11` on a
     // four-slot queue: a view in which the slot is not free.
-    tx.shared.head.0.store(u32::MAX - 10, Ordering::Release);
+    tx.shared
+        .head
+        .0
+        .store(POSITION_MASK - 10, Ordering::Release);
 
     // `Arc<AtomicBool>` rather than a `static`, for the reason `DropCounter`
     // gives: tests share a process, so a module-scope flag would be visible to
