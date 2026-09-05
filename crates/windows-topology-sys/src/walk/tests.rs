@@ -1,7 +1,7 @@
 // Copyright (c) 2026 Mike Grier
 use super::*;
 
-/// The records a buffer decodes to, discarding anomalies -- most tests are
+/// The records that a buffer decodes to, discarding anomalies -- most tests are
 /// about well-formed input and assert the anomaly list separately.
 fn decode_records(base: *const u8, length: u32) -> Vec<Record> {
     // SAFETY: the caller passes a buffer of `length` initialized bytes.
