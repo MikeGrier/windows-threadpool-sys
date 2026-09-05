@@ -82,28 +82,38 @@ review. That reasoning expired: `mikegrier/waitable-queues` has no pull request
 open, so there is no review to disturb, and the `u64` layouts need no new
 dependency at all -- only 64/64 does, which is `CW-2.3`.
 
-- [ ] **CW-2.1** -- Decouple the reservation ceiling from the capacity, and
-  derive `BOUNDS_MAX` from both constraints rather than the ring bound alone.
+- [ ] **CW-2.1** -- Introduce the layout as a compile-time parameter, widen the
+  position to 64 bits, and decouple the reservation ceiling from the capacity.
 
-  Deriving the ceiling from both constraints is not sufficient on its own: a
-  16-bit `reserved` half would cap the capacity at 65535. What makes an
-  asymmetric split usable is capping *outstanding reservations* at
-  `MAX_RESERVED` while the capacity stays bounded only by the ring.
+  **Merged from two items during execution, because they cannot be verified
+  apart.** Decoupling the ceiling is numerically invisible at 32/32:
+  `MAX_RESERVED` is 2^32-1 while `BOUNDS_MAX` is 2^31, so a cap on outstanding
+  reservations can never bind and no test can reach it. It becomes observable
+  only once a layout makes the reservation half narrow. Landing them separately
+  would have meant committing a branch nothing could exercise and calling it
+  done.
+
+  The three parts:
+
+  - Cap *outstanding reservations* at `MAX_RESERVED` in `reserve`, and drop the
+    `BOUNDS_MAX <= MAX_RESERVED` const assertion that ties the capacity to the
+    reservation field. `BOUNDS_MAX` then follows from ring arithmetic and the
+    crate-wide bound alone.
+  - Widen `position`, `head`, and the per-slot `sequence` to 64 bits for every
+    layout, since a position of more than 32 bits cannot be read out through
+    `position_of`'s `u32`. Uniform 64-bit metadata is measured-safe rather than
+    assumed: `CW-1.4` compared 32/32 with 32-bit metadata against 16/48 with
+    64-bit metadata and found no difference, and for a `u64` payload the slot is
+    16 bytes either way once alignment is applied.
+  - Add the layout parameter with a default preserving today's behaviour.
+    Generic defaults are permitted on types but not on functions, so `bounded`
+    keeps its signature and returns the defaulted types, and a second entry
+    point names a layout explicitly.
 
   **This is a contract change**: the shipping shape promises every slot may be
   reserved at once, and this replaces that with a fixed reservation ceiling. A
   different promise rather than a broken one, but it must be stated, not slipped
   in.
-
-- [ ] **CW-2.2** -- Introduce the layout as a compile-time parameter with named
-  layouts, keeping `head` and the per-slot `sequence` at 64 bits for every
-  layout. Uniform 64-bit metadata is measured-safe rather than assumed:
-  `CW-1.4` compared 32/32 with 32-bit metadata against 16/48 with 64-bit
-  metadata and found no difference, and for a `u64` payload the slot is 16 bytes
-  either way once alignment is applied.
-
-  Generic defaults are permitted on types but not on functions, so the entry
-  points need deciding rather than assuming.
 
 - [ ] **CW-2.3** -- Decide whether a 128-bit claim word ships at all, and
   therefore whether `portable-atomic` becomes a dependency of a published crate.
