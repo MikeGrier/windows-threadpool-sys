@@ -5,7 +5,10 @@
 //! about what Win32 accepts and how its failures classify, not about any
 //! abstraction this crate layers on top.
 
+use std::ffi::OsString;
 use std::path::{Path, PathBuf};
+
+use wtf_string::Wtf16String;
 
 use super::{DirectoryHandle, OpenFailure, VolumeIdentity};
 
@@ -88,7 +91,11 @@ fn opens_a_directory_whose_name_is_not_ascii() {
 #[test]
 fn opens_a_directory_with_a_trailing_separator() {
     let dir = TempDir::new("open-trailing");
-    let with_sep = format!("{}\\", dir.path().display());
+    // Composed rather than formatted: the separator is what this test is about,
+    // and routing the rest of the path through `display()` could change it on
+    // the way past.
+    let mut with_sep = dir.path().as_os_str().to_os_string();
+    with_sep.push("\\");
     assert!(DirectoryHandle::open(Path::new(&with_sep)).is_ok());
     dir.cleanup();
 }
@@ -511,13 +518,18 @@ fn case_sensitivity_is_read_from_the_directory_rather_than_assumed() {
     );
 
     let sensitive = TempDir::new("case-sensitive");
+    // The path goes to `Command` as an `OsStr`, not through `display()`.
+    // `Command` takes `AsRef<OsStr>` and passes the bytes to Windows unchanged,
+    // whereas `display().to_string()` is documented to replace invalid
+    // sequences with U+FFFD -- which would point `fsutil` at a *different*
+    // directory than the one this test then opens, on exactly the paths D-85
+    // exists to protect. Argument-by-argument rather than one array, because
+    // the array's elements must share a type.
     let marked = std::process::Command::new("fsutil.exe")
-        .args([
-            "file",
-            "setCaseSensitiveInfo",
-            &sensitive.path().display().to_string(),
-            "enable",
-        ])
+        .arg("file")
+        .arg("setCaseSensitiveInfo")
+        .arg(sensitive.path())
+        .arg("enable")
         .output();
 
     let enabled = matches!(&marked, Ok(output) if output.status.success());
@@ -632,9 +644,14 @@ fn a_caller_supplied_verbatim_prefix_is_forwarded_and_honoured() {
     let dir = TempDir::new("verbatim-prefixed");
     let expected = identity_of(dir.path());
 
-    let prefixed = format!(r"\\?\{}", dir.path().display());
+    // Composed rather than formatted, for the reason this test exists: D-85
+    // promises the caller's own bytes are forwarded unchanged, and
+    // `Path::display` is documented to replace invalid sequences with U+FFFD --
+    // so building the fixture through it could hand `open` a path the caller
+    // never wrote, and the test would be guarding the wrong thing.
+    let (prefixed, _) = verbatim(dir.path());
     let handle = DirectoryHandle::open(Path::new(&prefixed))
-        .expect("a caller's own `\\?\\` path must be forwarded unchanged and open");
+        .expect(r"a caller's own `\\?\` path must be forwarded unchanged and open");
     assert_eq!(
         handle.identity(),
         expected,
@@ -661,16 +678,20 @@ fn canonical_path_grows_its_buffer_when_the_path_does_not_fit() {
 
     let dir = TempDir::new("canonical-long");
     let mut deep = dir.path().to_path_buf();
-    while format!(r"\\?\{}", deep.display()).len() < 560 {
+    // Grown by UTF-16 units, because 560 is being compared against a buffer
+    // measured in them. The two sites below assert in units as well, so a byte
+    // count here would let the fixture stop short of the overflow it exists to
+    // cause -- on exactly the hosts where the difference is invisible locally.
+    while verbatim(&deep).1 < 560 {
         deep.push("segment-0123456789abcdef");
     }
     // Created through an explicitly prefixed string, so the fixture does not
     // depend on any library prefixing on its behalf.
-    let prefixed = format!(r"\\?\{}", deep.display());
+    let (prefixed, _) = verbatim(&deep);
     std::fs::create_dir_all(&prefixed).expect("create the deep directory");
 
     let handle = DirectoryHandle::open(Path::new(&prefixed))
-        .expect("a caller's own `\\?\\` path opens past MAX_PATH (D-85)");
+        .expect(r"a caller's own `\\?\` path opens past MAX_PATH (D-85)");
     let reported = handle.canonical_path().expect("canonical path");
 
     let units = reported.as_os_str().encode_wide().count();
@@ -688,6 +709,142 @@ fn canonical_path_grows_its_buffer_when_the_path_does_not_fit() {
     let _ = std::fs::remove_dir_all(&prefixed);
     dir.cleanup();
 }
+/// The `\\?\` spelling of `path`, and its length **in UTF-16 code units**.
+///
+/// **Two separate corrections live in this one helper**, and the tests below go
+/// through it rather than formatting the prefix themselves.
+///
+/// *The unit.* `MAX_PATH` and every buffer length in this module count UTF-16
+/// code units; `str::len` counts UTF-8 bytes. The two agree for ASCII and
+/// diverge for anything else, so a fixture "sized to 511 units" by byte length
+/// is mis-sized the moment a temp directory contains a non-ASCII character --
+/// which would move the boundary these tests exist to pin, and do it silently.
+/// [`Wtf16String`] holds the string in the encoding Windows uses, so its `len`
+/// is the number under test rather than a conversion of one.
+///
+/// *The lossiness.* [`Path::display`] is documented to replace invalid
+/// sequences with `U+FFFD`, so building the path through `format!("{}",
+/// p.display())` can hand `create_dir_all` a *different path* than the one
+/// measured. Composing `OsString`s keeps the caller's bytes intact, which is
+/// also what this crate promises callers under D-85.
+fn verbatim(path: &Path) -> (OsString, usize) {
+    let mut spelling = OsString::from(r"\\?\");
+    spelling.push(path.as_os_str());
+    let units = Wtf16String::from_os_str(&spelling).len();
+    (spelling, units)
+}
+
+#[test]
+fn verbatim_counts_utf16_units_rather_than_bytes() {
+    // **Nothing else here can catch this.** Every fixture below is built under
+    // a temp directory, and on an ASCII temp path the byte count and the unit
+    // count agree exactly -- so reverting `verbatim` to `str::len` would leave
+    // the whole suite green on this machine and on CI, and mis-size the
+    // boundary fixtures only for someone whose `%TEMP%` contains a non-ASCII
+    // character. This asserts the property directly instead.
+    let ascii = Path::new(r"C:\Temp\watch");
+    let (spelling, units) = verbatim(ascii);
+    assert_eq!(
+        units,
+        spelling.len(),
+        "the two counts must agree for ASCII, or the divergence below proves nothing"
+    );
+    assert_eq!(
+        units,
+        r"\\?\C:\Temp\watch".len(),
+        "the prefix is counted too"
+    );
+
+    // `U+00E9` is one UTF-16 unit and two UTF-8 bytes; `U+4E2D` is one and
+    // three. Bytes therefore *over*-count, which is the dangerous direction: a
+    // fixture would stop growing before it reached the length it claims, and a
+    // test pinning a buffer boundary would stop testing the boundary.
+    for name in ["caf\u{00e9}", "\u{4e2d}\u{6587}"] {
+        let path = Path::new(r"C:\Temp").join(name);
+        let (spelling, units) = verbatim(&path);
+
+        assert!(
+            units < spelling.len(),
+            "{name} must expose the divergence: {units} units vs {} bytes",
+            spelling.len()
+        );
+        assert_eq!(
+            units,
+            r"\\?\C:\Temp\".chars().count() + name.chars().count(),
+            "every character here is one UTF-16 unit, so units equal characters"
+        );
+    }
+}
+
+#[test]
+fn unprefixed_strips_the_verbatim_prefix_even_from_a_non_utf8_path() {
+    use std::os::windows::ffi::OsStringExt;
+
+    // **The case `to_str()` could not handle.** `0xD800` is an unpaired
+    // surrogate: legal in a Windows path, representable in `OsString`, and not
+    // valid UTF-8 -- so `to_str()` answers `None` and the old implementation
+    // left the prefix in place, after which `verbatim` added a second one.
+    //
+    // Nothing else in this file can catch that: every fixture is built under a
+    // temp directory whose path is ASCII, so the two implementations agree on
+    // every path the suite actually uses.
+    let mut units: Vec<u16> = r"\\?\C:\dir\".encode_utf16().collect();
+    units.push(0xD800);
+    let prefixed = PathBuf::from(OsString::from_wide(&units));
+    assert!(
+        prefixed.to_str().is_none(),
+        "the fixture must not be valid UTF-8, or it proves nothing"
+    );
+
+    let stripped = unprefixed(&prefixed);
+
+    // The prefix is gone, the unpaired surrogate survived, and re-adding the
+    // prefix returns exactly what we started with -- so `verbatim` and
+    // `unprefixed` are inverses on a path neither can round-trip through `str`.
+    let (round_tripped, _) = verbatim(&stripped);
+    assert_eq!(
+        Wtf16String::from_os_str(&round_tripped).as_units(),
+        &units[..],
+        "verbatim(unprefixed(p)) must reproduce p"
+    );
+    assert_eq!(
+        Wtf16String::from_os_str(stripped.as_os_str()).as_units(),
+        &units[4..],
+        "exactly the four prefix units are removed"
+    );
+}
+
+#[test]
+fn unprefixed_leaves_a_path_that_has_no_prefix_alone() {
+    let plain = Path::new(r"C:\dir\file");
+
+    assert_eq!(unprefixed(plain), plain);
+}
+
+/// `path` with a leading `\\?\` removed, if it has one.
+///
+/// **The inverse of [`verbatim`], and unit-based for the same reason.** An
+/// earlier version stripped the prefix with `to_str().and_then(strip_prefix)`,
+/// which makes the answer depend on UTF-8 validity: a path holding an unpaired
+/// surrogate -- the case `Wtf16String` exists for, and the reason nothing here
+/// goes through `display()` -- returns `None` from `to_str`, so the prefix
+/// survived and `verbatim` then added a *second* one. The fixture would be
+/// built at `\\?\\\?\C:\...`, mis-sized by four units, and the boundary
+/// assertions it feeds would fail for a reason nothing in them names.
+///
+/// Comparing the encoded units answers the same question without ever asking
+/// whether the path is valid UTF-8, which it need not be.
+fn unprefixed(path: &Path) -> PathBuf {
+    /// `\\?\`, as the UTF-16 code units it is made of.
+    const VERBATIM_PREFIX: [u16; 4] = [b'\\' as u16, b'\\' as u16, b'?' as u16, b'\\' as u16];
+
+    let wide = Wtf16String::from_os_str(path.as_os_str());
+    match wide.as_units().strip_prefix(&VERBATIM_PREFIX[..]) {
+        Some(rest) => PathBuf::from(OsString::from(Wtf16String::from_wide(rest))),
+        None => path.to_path_buf(),
+    }
+}
+
 /// A directory whose `\\?\` spelling is exactly `target` UTF-16 units, built by
 /// padding the final component. Components stay well under the 255-unit limit.
 ///
@@ -703,12 +860,9 @@ fn deep_dir_of_prefixed_len(base: &Path, target: usize) -> PathBuf {
     // `canonicalize` already returns the `\\?\` form on Windows, and the caller
     // re-adds that prefix when it measures, so strip it here rather than
     // counting it twice.
-    let mut path = match canonical.to_str().and_then(|s| s.strip_prefix(r"\\?\")) {
-        Some(stripped) => PathBuf::from(stripped),
-        None => canonical.clone(),
-    };
+    let mut path = unprefixed(&canonical);
     loop {
-        let current = format!(r"\\?\{}", path.display()).len();
+        let (_, current) = verbatim(&path);
         assert!(
             current + 2 <= target,
             "the base path is already too long to hit {target}"
@@ -734,8 +888,12 @@ fn canonical_path_is_exact_on_both_sides_of_its_first_buffer() {
     let dir = TempDir::new("canon-bound");
     for target in 508..=516 {
         let deep = deep_dir_of_prefixed_len(dir.path(), target);
-        let prefixed = format!(r"\\?\{}", deep.display());
-        assert_eq!(prefixed.len(), target, "the fixture must be exactly sized");
+        let (prefixed, units) = verbatim(&deep);
+        // In UTF-16 units, matching what the assertion below measures and what
+        // the buffer boundary is expressed in. Comparing byte length here would
+        // let the fixture drift from the length it claims on any non-ASCII
+        // temp path, while still reading as though it had been checked.
+        assert_eq!(units, target, "the fixture must be exactly sized");
         std::fs::create_dir_all(&prefixed).expect("create the sized directory");
 
         let handle = DirectoryHandle::open(Path::new(&prefixed)).expect("open the sized directory");

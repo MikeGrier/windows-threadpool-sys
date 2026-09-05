@@ -205,15 +205,26 @@ fn many_senders_can_enqueue_concurrently() {
     }
     drop(sender);
 
-    // Bounded, for the reason `assert_stream_ended` exists: an unbounded drain
-    // loop ends only when the last sender's drop wakes the receiver, so a
-    // broken wake turns this into an infinite loop rather than a failure. It
-    // was the last such loop in this file, and the one that kept the
-    // `Drop for Sender` mutants costing a full mutation deadline apiece.
+    // **Drained by count, then ended explicitly**, which is the pairing
+    // `assert_stream_ended` exists for. A `while let Some(..) = recv_timeout(..)`
+    // loop reads as though it drains until the stream ends, and does not:
+    // `recv_timeout` answers `None` both for "the stream ended" and for
+    // "nothing arrived in time", so the loop also exits when the final drop
+    // never woke the receiver. Every notification has arrived by then, so the
+    // count assertions below still pass -- and the teardown wake, which is the
+    // property this file cares most about, goes untested while looking tested.
+    //
+    // Splitting it says the two things separately: `next` proves each of the
+    // `SENDERS * EACH` notifications arrived, and `assert_stream_ended` proves
+    // the stream then *ended* rather than merely going quiet -- it pairs the
+    // timeout with `is_disconnected`, which a stalled wake fails.
     let mut per_watch = std::collections::HashMap::<u64, usize>::new();
-    while let Some(item) = receiver.recv_timeout(Duration::from_secs(5)) {
+    for _ in 0..(SENDERS as usize * EACH) {
+        let item = next(&receiver, "a notification from one of the senders");
         *per_watch.entry(item.watch().get()).or_default() += 1;
     }
+    assert_stream_ended(&receiver, "after every sender finished and dropped");
+
     assert_eq!(per_watch.len(), SENDERS as usize);
     for id in 0..SENDERS {
         assert_eq!(per_watch[&id], EACH, "watch {id} lost notifications");
@@ -246,9 +257,16 @@ fn order_is_preserved_per_sender_under_concurrency() {
     a.join().expect("a");
     b.join().expect("b");
 
+    // Drained by count and then ended explicitly, for the reason given in
+    // `many_senders_can_enqueue_concurrently`: a `recv_timeout` drain loop
+    // cannot distinguish a finished stream from a receiver that was never
+    // woken, so it would let a broken teardown pass here as well. Both senders
+    // were moved into the threads above and are dropped by the joins, so the
+    // stream must have ended by this point.
     let mut seen_a = Vec::new();
     let mut seen_b = Vec::new();
-    while let Some(item) = receiver.recv_timeout(Duration::from_secs(5)) {
+    for _ in 0..(2 * EACH) {
+        let item = next(&receiver, "a notification from either producer");
         let name = names(&item).remove(0);
         if item.watch() == WatchId::from_raw(1) {
             seen_a.push(name);
@@ -256,6 +274,8 @@ fn order_is_preserved_per_sender_under_concurrency() {
             seen_b.push(name);
         }
     }
+    assert_stream_ended(&receiver, "after both producers finished and dropped");
+
     let expected_a: Vec<String> = (0..EACH).map(|i| format!("a-{i}")).collect();
     let expected_b: Vec<String> = (0..EACH).map(|i| format!("b-{i}")).collect();
     assert_eq!(seen_a, expected_a);
@@ -604,34 +624,46 @@ fn next(receiver: &Receiver, expected: &str) -> Notification {
 /// Assert that the stream has ended, without hanging if it has not.
 ///
 /// The companion to [`next`], and a separate function because `recv_timeout`
-/// cannot express this: it returns `None` both for "the stream ended" and for
-/// "nothing arrived in time", so it cannot tell a correct disconnection from
-/// the exact bug this is checking for. The blocking `recv` *can* -- it returns
-/// only on a real end -- so the wait has to happen on another thread with the
-/// deadline enforced here.
+/// cannot express this on its own: it answers `None` both for "the stream
+/// ended" and for "nothing arrived in time". Pairing it with
+/// [`Receiver::is_disconnected`], which reads the sender count under the
+/// `items` lock, separates those -- nothing more arrived *and* the queue agrees
+/// there is nobody left to send.
 ///
 /// Borrows rather than consuming, and uses no thread. A first attempt moved the
-/// receiver onto a worker so the blocking `recv` could be abandoned on failure;
+/// receiver onto a worker so a blocking `recv` could be abandoned on failure;
 /// that does work, but it cannot be used where something else already borrows
-/// the receiver -- the doorbell test, for one -- and the two assertions below
-/// are strictly more informative anyway.
+/// the receiver -- the doorbell test, for one.
 ///
-/// The pair is what makes this unambiguous. `recv_timeout` alone cannot express
-/// "the stream ended", because it answers `None` both for that and for "nothing
-/// arrived in time". Pairing it with [`Receiver::is_disconnected`] separates
-/// them: a real end satisfies both, a broken wake satisfies neither.
+/// # What this does not establish
+///
+/// **It does not prove the teardown wake fired**, and an earlier version of
+/// this comment claimed it did ("a broken wake satisfies neither"). That is
+/// false, and measured to be: breaking the last-sender wake -- `let last =
+/// false` in `Drop for Sender` -- leaves every caller of this helper passing,
+/// because by the time they reach it the queue is already drained and `senders`
+/// is already zero, so `recv_timeout` reports the end without ever blocking and
+/// `is_disconnected` reads the count directly.
+///
+/// The wake is covered, by the two tests written for it:
+/// `a_blocked_receiver_is_woken_by_the_last_sender_dropping` and
+/// `disconnection_signals_the_doorbell`. Both fail under that sabotage. Do not
+/// reach for this helper to cover a wake -- it answers a different question,
+/// and treating it as though it answered that one is how a gap gets filed as
+/// closed. Raised in the PR #57 review after the same conclusion was reached by
+/// measurement here.
 #[track_caller]
 fn assert_stream_ended(receiver: &Receiver, what: &str) {
     assert!(
         receiver.recv_timeout(Duration::from_secs(5)).is_none(),
-        "{what}: a notification arrived where the stream should have ended, or \
-         the receiver was never woken -- either way this is not a finished stream"
+        "{what}: a notification arrived where the stream should have ended, so \
+         more was delivered than this test accounted for"
     );
     assert!(
         receiver.is_disconnected(),
-        "{what}: nothing arrived within 5s but the queue does not report \
-         disconnection, so the receiver was never woken rather than the stream \
-         having ended"
+        "{what}: nothing arrived within 5s, but the queue still reports senders, \
+         so the stream has not ended -- either a sender outlived the point this \
+         test expected it to drop, or nothing was delivered in time"
     );
 }
 
@@ -949,7 +981,11 @@ fn dropping_an_unused_standing_slot_returns_its_capacity() {
 }
 
 #[test]
-#[cfg(debug_assertions)]
+// **Not `cfg(debug_assertions)`.** It was, correctly, while the tripwire was a
+// `debug_assert!` -- a test for an assertion the release build does not contain
+// would fail there. Now that the assertion is unconditional the gate would do
+// the opposite: leave the release configuration, the one where a silent
+// violation actually costs something, as the only one nothing checks.
 #[should_panic(expected = "must release the reservation under the `items` lock")]
 fn a_hold_that_outlives_its_entry_while_the_queue_is_alive_trips_the_tripwire() {
     // `StandingHold::drop` is not a release path. Reaching its body means an

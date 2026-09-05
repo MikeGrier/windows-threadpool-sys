@@ -580,14 +580,16 @@ fn a_path_based_reopen_that_collides_with_another_watched_directory_migrates_rou
     // original path resolves to dir_a's identity -- the same collision a
     // real "reopened path was replaced by a junction" scenario produces.
     std::fs::remove_dir_all(dir_b.path()).expect("delete dir_b");
+    // The paths go as `OsStr`s rather than through `display()`, which is
+    // documented to replace invalid sequences with U+FFFD -- so a formatted
+    // path could point `mklink` at a different directory than the one this test
+    // then watches, and the junction would be built somewhere else entirely.
     let status = std::process::Command::new("cmd")
-        .args([
-            "/C",
-            "mklink",
-            "/J",
-            &dir_b.path().display().to_string(),
-            &dir_a.path().display().to_string(),
-        ])
+        .arg("/C")
+        .arg("mklink")
+        .arg("/J")
+        .arg(dir_b.path())
+        .arg(dir_a.path())
         .status()
         .expect("run mklink");
     assert!(status.success(), "mklink /J failed to create the junction");

@@ -18,7 +18,23 @@ use crate::queue::{Notification, Outcome, Receiver, WatchId};
 use crate::testing::TempDir;
 
 /// Upper bound for waiting on a change the kernel really should report.
-const NOTIFY_TIMEOUT: Duration = Duration::from_secs(30);
+///
+/// **5s, matching the measured bound in `watcher/tests.rs`.** That module states
+/// the evidence -- on a mutant that breaks delivery, 93.6s at 30s (killed by
+/// cargo-mutants' deadline, and so filed as `timeout` rather than `caught`)
+/// against 31.8s at 5s (a clean red test) -- and this copy was left at 30s when
+/// the others were lowered, which put this module back in the case that
+/// measurement exists to avoid.
+///
+/// It matters more here than the count of waits suggests: [`Drain::wait_for`]
+/// spends this budget *per notification it is still looking for*, so a broken
+/// delivery path pays it repeatedly on the way to failing.
+///
+/// The same residual risk applies as there: 5s is ~10x the structural outlier
+/// measured on one 12-core developer machine, and a much slower runner is
+/// unmeasured. If this flakes, that is the reason, and the answer is to raise
+/// it -- in both places, together -- rather than to conclude the tests are wrong.
+const NOTIFY_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// The subscription this notification tagged, if it reports `name` as added.
 fn added_by(item: &Notification, name: &str) -> Option<WatchId> {
