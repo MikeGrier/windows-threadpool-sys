@@ -148,6 +148,55 @@ fn key_paths(value: &serde_json::Value) -> BTreeSet<String> {
     paths
 }
 
+/// As [`key_paths`], but only the paths that carry *content*: a `null` and an
+/// empty list contribute nothing.
+///
+/// The distinction [`key_paths`] structurally cannot make, and the one the
+/// fixture guard below needs. No field in this record carries
+/// `skip_serializing_if`, so a `None` serializes as an explicit `null` whose key
+/// is present -- and [`key_paths`] inserts a field's path before it looks at the
+/// value, so a containment check against it passes whether the fixture
+/// populated the field or left it unset. Raised in the PR #63 review.
+#[cfg(feature = "serde")]
+fn populated_paths(value: &serde_json::Value) -> BTreeSet<String> {
+    fn walk(value: &serde_json::Value, prefix: &str, into: &mut BTreeSet<String>) {
+        match value {
+            serde_json::Value::Object(fields) => {
+                for (name, child) in fields {
+                    if child.is_null() {
+                        continue;
+                    }
+                    let path = if prefix.is_empty() {
+                        name.clone()
+                    } else {
+                        format!("{prefix}.{name}")
+                    };
+                    into.insert(path.clone());
+                    walk(child, &path, into);
+                }
+            }
+            serde_json::Value::Array(items) => {
+                // An empty list yields no element paths, so the fixture would
+                // archive a golden describing less than the record can emit --
+                // the second half of the hazard, and the one that actually
+                // removes paths rather than merely nulling them.
+                if items.is_empty() {
+                    return;
+                }
+                let path = format!("{prefix}[]");
+                into.insert(path.clone());
+                for item in items {
+                    walk(item, &path, into);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    let mut paths = BTreeSet::new();
+    walk(value, "", &mut paths);
+    paths
+}
 #[test]
 #[cfg(feature = "serde")]
 fn the_records_shape_matches_the_archived_schema_for_its_version() {
@@ -204,8 +253,20 @@ fn every_field_of_a_fully_populated_record_is_present_in_the_json() {
     // left `None` here, it would be omitted from the JSON and would never enter
     // the golden, so the guard above would pass while describing less than the
     // record can emit.
+    //
+    // Over `populated_paths`, not `key_paths`, and that is the whole test. No
+    // field here carries `skip_serializing_if`, so a `None` is emitted as an
+    // explicit `null` and its key IS present -- the old assertion held whether
+    // the fixture populated the field or not, which made it unable to fail.
+    // Confirmed by sabotage: with `cpu_model: None` it still passed. Raised in
+    // the PR #63 review.
+    //
+    // The list now also covers the two shapes that genuinely drop paths, which
+    // are the ones the fixture's own comments promise and nothing checked: the
+    // field-carrying `Coherence` variant, and each measurement list being
+    // non-empty.
     let value = serde_json::to_value(fully_populated()).expect("must serialize");
-    let paths = key_paths(&value);
+    let paths = populated_paths(&value);
 
     for required in [
         "machine.cpu_model",
@@ -214,10 +275,18 @@ fn every_field_of_a_fully_populated_record_is_present_in_the_json() {
         "build.commit",
         "build.dirty",
         "host.partitioning_cache_level",
+        "placements[].memory_node",
+        "placements[].requested_memory_node",
+        "node_hops[].memory_node",
+        "by_class[].memory_node",
+        "topology_coherence.disagreed.walk_only[].number",
+        "topology_coherence.disagreed.cpu_sets_only[].number",
+        "topology_coherence.disagreed.attempts",
     ] {
         assert!(
             paths.contains(required),
-            "{required} is absent, so the fixture leaves an optional field unset"
+            "{required} is absent or empty, so the fixture leaves part of the \
+             record's shape out of the golden"
         );
     }
 }
@@ -289,10 +358,32 @@ fn the_timestamp_renders_known_instants_correctly() {
     assert_eq!(iso8601_utc(1_788_177_600), "2026-08-31T12:00:00Z");
 }
 
+/// The inverse of [`civil_from_days`], for the round trip below.
+///
+/// Howard Hinnant's `days_from_civil`, the counterpart of the algorithm under
+/// test rather than a reimplementation of it: it runs the era arithmetic in the
+/// opposite direction, so agreement between the two is evidence about the
+/// conversion and not about a copy of it.
+fn days_from_civil(year: i64, month: u32, dom: u32) -> i64 {
+    let year = year - i64::from(month <= 2);
+    let era = year.div_euclid(400);
+    let year_of_era = year - era * 400;
+    let shifted_month = if month > 2 { month - 3 } else { month + 9 };
+    let day_of_year = (153 * i64::from(shifted_month) + 2) / 5 + i64::from(dom) - 1;
+    let day_of_era = year_of_era * 365 + year_of_era / 4 - year_of_era / 100 + day_of_year;
+    era * 146_097 + day_of_era - 719_468
+}
 #[test]
 fn the_civil_conversion_round_trips_across_a_long_span() {
     // A property rather than a fixture: every day for eighty years must convert
     // to a real date, and consecutive days must differ by exactly one day.
+    //
+    // The round trip is what establishes the second half. This test used to
+    // assert only that no date REPEATED, which is much weaker than it reads:
+    // a conversion that skipped a day, or shifted every date by one, produces
+    // no repeat at all and passed. Confirmed by sabotage -- `days + 1` in
+    // `civil_from_days` left the old assertion green. Raised in the PR #63
+    // review.
     let mut previous: Option<(i64, u32, u32)> = None;
     for day in 0..(80 * 365 + 20) {
         let (year, month, dom) = civil_from_days(day);
@@ -300,6 +391,12 @@ fn the_civil_conversion_round_trips_across_a_long_span() {
         assert!((1..=31).contains(&dom), "day {day} gave day-of-month {dom}");
         assert!((1970..2060).contains(&year), "day {day} gave year {year}");
 
+        assert_eq!(
+            days_from_civil(year, month, dom),
+            day,
+            "day {day} converted to {year}-{month:02}-{dom:02}, which is a \
+             different day"
+        );
         if let Some(prev) = previous {
             assert_ne!(prev, (year, month, dom), "day {day} repeated a date");
         }

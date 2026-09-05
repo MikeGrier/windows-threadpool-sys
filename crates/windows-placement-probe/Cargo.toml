@@ -22,9 +22,9 @@ name = "windows-placement-probe"
 # record is from last week or last year. `0.1.0` answered neither.
 version = "2026.902.0"
 # **Never published to a registry.** Reversed from "yes, but not yet" on
-# 2026-09-02; see PT-5.3 in CHECKLIST-placement-tool.md and DESIGN-NOTES.md for
-# both reasons. The short form: `cargo install` reaches a *subset* of the people
-# a downloadable binary reaches, because the binary needs no Rust toolchain --
+# 2026-09-02, under work item PT-5.3; see DESIGN-NOTES.md for both reasons.
+# The short form: `cargo install` reaches a *subset* of the people a
+# downloadable binary reaches, because the binary needs no Rust toolchain --
 # so crates.io would have added no reach while making the weakest-provenance
 # path the most discoverable one.
 #
@@ -77,7 +77,7 @@ required-features = ["serde"]
 # it is in the layers below. The feature exists so the measurement code can be
 # used without it, not so the record can.
 default = ["serde"]
-serde = ["dep:serde", "windows-topology-sys/serde"]
+serde = ["dep:serde", "dep:serde_json", "windows-topology-sys/serde"]
 
 [dependencies]
 # Path-only, with no `version`, because this crate is never published **to a
@@ -97,7 +97,16 @@ serde = { version = "1.0", features = ["derive"], optional = true }
 # The tool emits the record itself, so a serializer is not a test-only concern.
 # It is also what derives the schema golden: the archived shape comes from
 # serializing a record and walking the result, never from a hand-kept list.
-serde_json = "1.0"
+#
+# Optional, and carried by the `serde` feature rather than declared
+# unconditionally. `serde_json` depends on serde, so leaving it unconditional
+# meant `--no-default-features` still built the whole serde stack -- the feature
+# switched off this crate's own derives while the dependency it was supposed to
+# avoid came in through the side door. Every use of it is already behind
+# `cfg(feature = "serde")`, in `paste_json`, `submission`, and the record's own
+# serialization tests, so nothing outside the feature loses anything. Raised in
+# the PR #63 review.
+serde_json = { version = "1.0", optional = true }
 
 [dependencies.windows-sys]
 version = "0.61.2"

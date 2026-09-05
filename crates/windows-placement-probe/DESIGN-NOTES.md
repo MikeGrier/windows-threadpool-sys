@@ -298,11 +298,10 @@ the suite red. The mirror-image claim, that an *opted-in* field is present, is
 deliberately not sabotaged there, because it depends on what the host will
 answer.
 
-Engineer's decision, 2026-09-04. Queued as `M36.2` in
-[CHECKLIST-placement-tool.md](../../CHECKLIST-placement-tool.md); `M36.3` states
-in the README what redaction costs, and `M36.4` asks for an unredacted record
-privately when the topology's sources disagreed -- the one case where the context
-matters most.
+Engineer's decision, 2026-09-04, as work item `M36.2`; `M36.3` states in
+[README.md](README.md) what redaction costs, and `M36.4` asks for an
+unredacted record privately when the topology's sources disagreed -- the one
+case where the context matters most.
 
 ## A disagreement is reported where it happens, and the ask attached to it is an offer
 
@@ -394,8 +393,8 @@ them individually and says so. Naming them in the report is the rest of
 `PT-7.1`, which wants what each source claimed; counts are what M36.4 needs to
 make "a mismatch" a concrete thing rather than a word.
 
-Engineer's decision on the wording, 2026-09-04. Queued as `M36.4` in
-[CHECKLIST-placement-tool.md](../../CHECKLIST-placement-tool.md), completing M36.
+Engineer's decision on the wording, 2026-09-04, as work item `M36.4`,
+completing M36.
 Three of the nine sabotages in [sabotage.json](sabotage.json) cover this section:
 printing it on every run, dropping its closing release, and advising
 `--include-metadata` to a record that already carries it.
