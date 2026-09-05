@@ -16,6 +16,7 @@ use super::{
     BOUNDS_MAX, Balanced, ClaimLayout, Consumer, Enduring, Perpetual, Producer, Reservation,
     advance, bounded, bounded_as, bounded_with, claim_word, position_of, reserved_of,
 };
+use crate::error::TryRecvError;
 
 /// The default layout's constants, named once so the packing tests read as
 /// prose rather than as turbofish.
@@ -28,7 +29,6 @@ use crate::{Disposal, Options};
 // `Consumer` type, and only its `drain` method is wanted here. That the two can
 // coexist is the point made in `traits`: the trait is named for the role and the
 // handle is named for the role, and a caller who wants only the methods says so.
-use crate::Consumer as _;
 use crate::{Bounded, PushError, RecvError, Reserving};
 use std::rc::Rc;
 use std::sync::Arc;
@@ -248,7 +248,7 @@ fn the_consumer_can_see_that_something_was_promised_even_with_nothing_queued() {
         1,
         "one redeemed, one still out"
     );
-    assert_eq!(rx.pop(), Some(7));
+    assert_eq!(rx.pop(), Ok(7));
     assert_eq!(
         rx.outstanding_reservations(),
         1,
@@ -278,7 +278,7 @@ fn a_redeemed_reservation_does_not_also_release_its_slot() {
             0,
             "redeeming releases the claim exactly once"
         );
-        assert_eq!(rx.pop(), Some(round));
+        assert_eq!(rx.pop(), Ok(round));
     }
     assert_eq!(
         fill(&tx, 0),
@@ -315,8 +315,8 @@ fn a_full_queue_refuses_a_best_effort_push_and_hands_the_item_back() {
         Err(PushError::Full(returned)) => assert_eq!(returned, 3),
         other => panic!("expected Full, got {other:?}"),
     }
-    assert_eq!(rx.pop(), Some(1));
-    assert_eq!(rx.pop(), Some(2));
+    assert_eq!(rx.pop(), Ok(1));
+    assert_eq!(rx.pop(), Ok(2));
 }
 
 #[test]
@@ -480,7 +480,7 @@ fn an_outstanding_reservation_keeps_the_stream_open() {
         rx.is_disconnected(),
         "and redeeming the last one does end the stream"
     );
-    assert_eq!(rx.pop(), Some(7), "with the promised item still owed");
+    assert_eq!(rx.pop(), Ok(7), "with the promised item still owed");
 }
 
 #[test]
@@ -568,7 +568,7 @@ fn an_abandoned_reservation_leaves_the_queue_usable() {
     tx.push(1).expect("room");
     tx.push(2).expect("room");
     assert!(tx.push(3).is_err());
-    assert_eq!(rx.pop(), Some(1));
+    assert_eq!(rx.pop(), Ok(1));
 }
 
 // ---------------------------------------------------------------------------
@@ -594,7 +594,7 @@ fn the_ring_wraps_many_times_without_losing_order() {
     let (tx, rx) = bounded::<usize>(4).expect("a power-of-two capacity");
     for round in 0..2000 {
         tx.push(round).expect("the previous item was taken");
-        assert_eq!(rx.pop(), Some(round));
+        assert_eq!(rx.pop(), Ok(round));
     }
     assert!(rx.is_empty());
 }
@@ -608,12 +608,12 @@ fn a_partly_full_ring_wraps_correctly_with_a_reservation_held_throughout() {
 
     for round in 0..500 {
         tx.push(round).expect("three slots remain unreserved");
-        assert_eq!(rx.pop(), Some(round));
+        assert_eq!(rx.pop(), Ok(round));
         assert_eq!(tx.outstanding_reservations(), 1, "round {round}");
     }
 
     slot.send(99).expect("still ours after five hundred laps");
-    assert_eq!(rx.pop(), Some(99));
+    assert_eq!(rx.pop(), Ok(99));
 }
 
 #[test]
@@ -623,9 +623,9 @@ fn zero_sized_items_round_trip() {
     tx.push(()).expect("room");
     assert!(matches!(tx.push(()), Err(PushError::Full(()))));
     slot.send(()).expect("the room was ours");
-    assert_eq!(rx.pop(), Some(()));
-    assert_eq!(rx.pop(), Some(()));
-    assert_eq!(rx.pop(), None);
+    assert_eq!(rx.pop(), Ok(()));
+    assert_eq!(rx.pop(), Ok(()));
+    assert_eq!(rx.pop(), Err(TryRecvError::Empty));
 }
 
 #[test]
@@ -713,9 +713,9 @@ fn polling_never_creates_a_kernel_object() {
     let (tx, rx) = bounded::<u32>(4).expect("4 is a valid capacity");
     let slot = tx.reserve().expect("room");
     slot.send(1).expect("the room was ours");
-    while rx.pop().is_some() {}
+    while rx.pop().is_ok() {}
     drop(tx);
-    while rx.pop().is_some() {}
+    while rx.pop().is_ok() {}
 
     assert!(
         !rx.shared.doorbell.is_armed(),
@@ -815,7 +815,7 @@ fn a_push_whose_claim_goes_stale_retries_instead_of_reporting_full() {
     );
     assert_eq!(
         rx.pop(),
-        Some(99),
+        Ok(99),
         "the item the retry claimed must actually be in the queue"
     );
     assert_eq!(
@@ -837,7 +837,7 @@ fn a_reservation_whose_claim_goes_stale_retries_instead_of_failing() {
 
     let reservation = reservation.expect("the queue is empty when the claim is made");
     reservation.send(7).expect("the consumer is still here");
-    assert_eq!(rx.pop(), Some(7));
+    assert_eq!(rx.pop(), Ok(7));
 }
 
 #[test]
@@ -856,7 +856,7 @@ fn a_genuinely_full_queue_still_reports_full_through_the_window() {
         "a full queue must still refuse, and hand the item back: {outcome:?}"
     );
     assert_eq!(tx.refused(), 1, "a real refusal is still counted");
-    assert_eq!(rx.pop(), Some(1));
+    assert_eq!(rx.pop(), Ok(1));
 }
 // ---------------------------------------------------------------------------
 // Through the traits, which is where this shape and `slotwise_mpsc` visibly differ.
@@ -880,7 +880,7 @@ fn the_shape_is_usable_through_the_reserving_trait() {
 
     let (tx, rx) = bounded::<u32>(4).expect("4 is a valid capacity");
     assert!(reserve_and_send(&tx, 7));
-    assert_eq!(rx.pop(), Some(7));
+    assert_eq!(rx.pop(), Ok(7));
 }
 
 /// The one operation the [`Reserving`] trait deliberately does not name.
@@ -1161,7 +1161,7 @@ fn high_water_records_the_peak_when_asked_for() {
     }
     assert_eq!(tx.high_water(), Some(5));
 
-    while rx.pop().is_some() {}
+    while rx.pop().is_ok() {}
     assert_eq!(rx.high_water(), Some(5));
 }
 
@@ -1350,7 +1350,7 @@ fn the_gauges_are_exact_when_the_two_loads_agree() {
     assert_eq!(tx.len(), 2);
     assert_eq!(tx.remaining(), 2);
     assert!(!tx.is_full());
-    assert_eq!(rx.pop(), Some(1));
+    assert_eq!(rx.pop(), Ok(1));
     assert_eq!(tx.len(), 1);
     assert_eq!(tx.remaining(), 3);
 }
@@ -1418,7 +1418,7 @@ fn publish_waits_for_a_head_that_has_freed_the_slot() {
         "observing the freeing store must end the wait"
     );
 
-    assert_eq!(rx.pop(), Some(7), "the item itself must be unaffected");
+    assert_eq!(rx.pop(), Ok(7), "the item itself must be unaffected");
 }
 
 #[test]
@@ -1437,7 +1437,7 @@ fn the_high_water_mark_still_reaches_a_genuine_peak() {
         Some(4),
         "the queue was filled, so the peak is its capacity"
     );
-    assert_eq!(rx.pop(), Some(0));
+    assert_eq!(rx.pop(), Ok(0));
 }
 
 #[test]
@@ -1496,7 +1496,7 @@ fn a_layout_may_hold_more_slots_than_it_can_reserve() {
     }
     assert!(tx.is_full(), "all 1024 slots hold an item");
     for expected in 0..capacity as u32 {
-        assert_eq!(rx.pop(), Some(expected));
+        assert_eq!(rx.pop(), Ok(expected));
     }
 }
 
@@ -1550,9 +1550,9 @@ fn a_reservation_on_a_deep_layout_still_delivers_its_message() {
     tx.push(1).expect("room beyond the reservation");
     slot.send(99).expect("the consumer is still here");
 
-    assert_eq!(rx.pop(), Some(1));
-    assert_eq!(rx.pop(), Some(99));
-    assert_eq!(rx.pop(), None);
+    assert_eq!(rx.pop(), Ok(1));
+    assert_eq!(rx.pop(), Ok(99));
+    assert_eq!(rx.pop(), Err(TryRecvError::Empty));
 }
 
 // ---------------------------------------------------------------------------
@@ -1621,9 +1621,9 @@ mod dwcas {
         tx.push(1).expect("room beyond the reservation");
         slot.send(99).expect("the consumer is still here");
 
-        assert_eq!(rx.pop(), Some(1));
-        assert_eq!(rx.pop(), Some(99));
-        assert_eq!(rx.pop(), None);
+        assert_eq!(rx.pop(), Ok(1));
+        assert_eq!(rx.pop(), Ok(99));
+        assert_eq!(rx.pop(), Err(TryRecvError::Empty));
     }
 
     #[test]
@@ -1635,9 +1635,9 @@ mod dwcas {
             tx.push(3).is_err(),
             "a full queue refuses rather than overwriting, whatever the word's width"
         );
-        assert_eq!(rx.pop(), Some(1));
+        assert_eq!(rx.pop(), Ok(1));
         tx.push(3).expect("the popped slot is free again");
-        assert_eq!(rx.pop(), Some(2));
-        assert_eq!(rx.pop(), Some(3));
+        assert_eq!(rx.pop(), Ok(2));
+        assert_eq!(rx.pop(), Ok(3));
     }
 }

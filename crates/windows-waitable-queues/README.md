@@ -274,15 +274,22 @@ blocking receivers use rather than treating the handle as a readiness
 predicate. That protocol has **four** steps, and the fourth is the one that is
 easy to leave out:
 
-1. take everything available;
+1. take everything available -- `pop` until it reports `Empty`, and stop
+   outright if it reports `Disconnected` instead;
 2. `arm()`, and if it returns `false`, start again -- something arrived;
-3. **check `is_disconnected()`, and if the producers are gone, take one last
-   time and stop.** `arm()` reports only whether a later *push* can be missed,
-   so on a queue with no producers left it still returns `true` -- having just
-   cleared the single doorbell ring their drop left behind. Waiting on the
-   strength of that `true` never wakes. The last take is not belt-and-braces
-   either: a producer may push *and then* drop between step 1 and this check;
+3. **`pop` once more, and stop if it reports `Disconnected`.** `arm()` reports
+   only whether a later *push* can be missed, so on a queue with no producers
+   left it still returns `true` -- having just cleared the single doorbell ring
+   their drop left behind. Waiting on the strength of that `true` never wakes.
+   This step is not belt-and-braces either: a producer may push *and then* drop
+   between step 1 and here, and that item is delivered rather than discarded
+   because `pop` reports `Disconnected` only once the queue is genuinely empty;
 4. only now, wait on the handle.
+
+Step 3 used to read "check `is_disconnected()`, and if the producers are gone,
+take one last time" -- two calls whose order the caller had to get right,
+because a `pop` returning `None` could not say which situation it was in.
+`TryRecvError` collapses that into one question with the ordering built in.
 
 `recv` already does all four. The steps matter when driving the handle
 yourself -- through a `ThreadpoolWait`, or a `WaitForMultipleObjects` across

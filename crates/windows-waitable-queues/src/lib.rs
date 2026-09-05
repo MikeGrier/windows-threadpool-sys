@@ -374,7 +374,9 @@ pub mod traits;
 #[cfg(windows)]
 pub use disposal::Disposal;
 #[cfg(windows)]
-pub use error::{CapacityError, Disconnected, PushError, RecvError, RecvTimeoutError};
+pub use error::{
+    CapacityError, Disconnected, PushError, RecvError, RecvTimeoutError, TryRecvError,
+};
 #[cfg(windows)]
 pub use options::Options;
 #[cfg(windows)]

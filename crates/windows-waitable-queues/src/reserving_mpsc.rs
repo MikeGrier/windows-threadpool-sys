@@ -149,7 +149,9 @@ use crate::blocking::{self, Parked};
 use crate::capacity::{Bounds, MAX_ADMISSIBLE_CAPACITY, WRAPPING_MAX_CAPACITY, validate_capacity};
 use crate::disposal::Teardown;
 use crate::doorbell::Doorbell;
-use crate::error::{CapacityError, Disconnected, PushError, RecvError, RecvTimeoutError};
+use crate::error::{
+    CapacityError, Disconnected, PushError, RecvError, RecvTimeoutError, TryRecvError,
+};
 use crate::metrics::Metrics;
 use crate::options::Options;
 
@@ -673,8 +675,8 @@ fn claim_word<L: ClaimLayout>(reserved: u32, position: u64) -> L::Word {
 /// // And the reservation is still honoured, on a queue that is otherwise full.
 /// slot.send(99).expect("the room was already ours");
 ///
-/// assert_eq!(rx.pop(), Some(1));
-/// assert_eq!(rx.pop(), Some(99));
+/// assert_eq!(rx.pop(), Ok(1));
+/// assert_eq!(rx.pop(), Ok(99));
 /// # Ok::<(), windows_waitable_queues::CapacityError>(())
 /// ```
 pub fn bounded<T>(capacity: usize) -> Result<Pair<T>, CapacityError> {
@@ -700,7 +702,7 @@ pub fn bounded<T>(capacity: usize) -> Result<Pair<T>, CapacityError> {
 /// // 2^56 pushes rather than 2^32.
 /// let (tx, rx) = reserving_mpsc::bounded_as::<u32, Perpetual>(4)?;
 /// tx.push(1).expect("an empty queue has room");
-/// assert_eq!(rx.pop(), Some(1));
+/// assert_eq!(rx.pop(), Ok(1));
 /// # Ok::<(), windows_waitable_queues::CapacityError>(())
 /// ```
 ///
@@ -1563,14 +1565,29 @@ pub struct Consumer<T, L: ClaimLayout = Balanced> {
 }
 
 impl<T, L: ClaimLayout> Consumer<T, L> {
-    /// Takes the oldest item, or `None` if there is none right now.
+    /// Takes the oldest item.
     ///
-    /// `None` does not mean the queue is finished, and here it does not even
-    /// mean the queue is empty: a producer may have claimed the next position
-    /// and not yet published it. Order is claim order, so waiting is the only
-    /// correct answer -- and the producer signals when it publishes, so waiting
-    /// is not a gamble.
-    pub fn pop(&self) -> Option<T> {
+    /// # Errors
+    ///
+    /// [`TryRecvError::Empty`] when nothing is queued right now, and
+    /// [`TryRecvError::Disconnected`] when every producer is gone *and* the
+    /// queue has been drained -- in that order, so the tail of a stream whose
+    /// producers have already departed is still delivered. See
+    /// [`Consumer::pop`](crate::Consumer::pop) for why that ordering is a
+    /// guarantee rather than an implementation detail.
+    pub fn pop(&self) -> Result<T, TryRecvError> {
+        match self.take() {
+            Some(item) => Ok(item),
+            // Only on the empty path, so a successful take never pays for this
+            // load. The queue must be observed empty *before* disconnection is
+            // reported, which is exactly what this ordering enforces.
+            None if self.is_disconnected() => Err(TryRecvError::Disconnected),
+            None => Err(TryRecvError::Empty),
+        }
+    }
+
+    /// The take itself, without the disconnection question.
+    fn take(&self) -> Option<T> {
         // Acquire, matching every other load of `head`. Sole-writer coherence
         // would suffice to read this thread's own latest value, but `head` also
         // carries the release store below, and a relaxed load mixed onto such an
@@ -1645,6 +1662,30 @@ impl<T, L: ClaimLayout> Consumer<T, L> {
     #[must_use]
     pub fn remaining(&self) -> usize {
         self.shared.remaining()
+    }
+
+    /// Whether a further best-effort push would be refused for want of room.
+    ///
+    /// The consumer's view of the question the producer answers, so a caller
+    /// holding only this handle need not import [`Bounded`](crate::Bounded).
+    #[must_use]
+    pub fn is_full(&self) -> bool {
+        crate::Bounded::is_full(self)
+    }
+
+    /// Takes items until the queue is momentarily empty.
+    ///
+    /// The inherent form of [`Consumer::drain`](crate::Consumer::drain), so it
+    /// works without importing the trait.
+    pub fn drain(&self) -> crate::Drain<'_, Self> {
+        crate::Consumer::drain(self)
+    }
+
+    /// Takes items until the queue is momentarily empty.
+    ///
+    /// An alias for [`Self::drain`] under the name most of the ecosystem uses.
+    pub fn try_iter(&self) -> crate::Drain<'_, Self> {
+        crate::Consumer::drain(self)
     }
 
     /// Whether every producer and every outstanding reservation is gone.
@@ -1726,7 +1767,7 @@ impl<T, L: ClaimLayout> Consumer<T, L> {
     /// real and narrow: a producer may push *and then* drop in the window
     /// between a receive's first `pop` and its disconnection check.
     fn finish(&self) -> Option<T> {
-        self.pop()
+        self.take()
     }
 
     /// Takes the oldest item, blocking until one arrives.
@@ -1755,7 +1796,7 @@ impl<T, L: ClaimLayout> Parked for Consumer<T, L> {
     type Item = T;
 
     fn pop(&self) -> Option<T> {
-        Self::pop(self)
+        Self::take(self)
     }
 
     fn finish(&self) -> Option<T> {
@@ -1837,7 +1878,7 @@ impl<T, L: ClaimLayout> crate::Reserving for Producer<T, L> {
 impl<T, L: ClaimLayout> crate::Consumer for Consumer<T, L> {
     type Item = T;
 
-    fn pop(&self) -> Option<T> {
+    fn pop(&self) -> Result<T, TryRecvError> {
         Self::pop(self)
     }
 

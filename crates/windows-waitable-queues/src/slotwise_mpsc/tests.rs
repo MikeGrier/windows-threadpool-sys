@@ -15,6 +15,8 @@
 //! and evidence of nothing either way.
 
 use super::{BOUNDS, Consumer, Producer, bounded, bounded_with, validate_capacity};
+use crate::Bounded;
+use crate::error::TryRecvError;
 use crate::race_hooks;
 use crate::{Disposal, Options};
 use crate::{PushError, RecvError, RecvTimeoutError};
@@ -62,13 +64,13 @@ fn push_spinning<T>(producer: &Producer<T>, mut item: T) {
 fn a_pushed_item_comes_back_out() {
     let (tx, rx) = bounded::<u32>(4).expect("a power-of-two capacity");
     tx.push(42).expect("a fresh queue has room");
-    assert_eq!(rx.pop(), Some(42));
+    assert_eq!(rx.pop(), Ok(42));
 }
 
 #[test]
 fn an_empty_queue_pops_nothing() {
     let (_tx, rx) = bounded::<u32>(4).expect("a power-of-two capacity");
-    assert_eq!(rx.pop(), None);
+    assert_eq!(rx.pop(), Err(TryRecvError::Empty));
     assert!(rx.is_empty());
     assert_eq!(rx.len(), 0);
 }
@@ -79,7 +81,7 @@ fn items_come_out_in_the_order_they_went_in() {
     for value in 0..8 {
         tx.push(value).expect("room for eight");
     }
-    let drained: Vec<u32> = std::iter::from_fn(|| rx.pop()).collect();
+    let drained: Vec<u32> = rx.try_iter().collect();
     assert_eq!(drained, (0..8).collect::<Vec<_>>());
 }
 
@@ -103,8 +105,8 @@ fn a_full_queue_refuses_and_hands_the_item_back() {
     }
 
     // And the refusal did not disturb what was already there.
-    assert_eq!(rx.pop(), Some(1));
-    assert_eq!(rx.pop(), Some(2));
+    assert_eq!(rx.pop(), Ok(1));
+    assert_eq!(rx.pop(), Ok(2));
 }
 
 #[test]
@@ -117,11 +119,11 @@ fn the_smallest_capacity_holds_exactly_two() {
     tx.push(2).expect("room for two");
     assert!(matches!(tx.push(3), Err(PushError::Full(3))));
 
-    assert_eq!(rx.pop(), Some(1));
+    assert_eq!(rx.pop(), Ok(1));
     tx.push(3).expect("the slot was freed");
-    assert_eq!(rx.pop(), Some(2));
-    assert_eq!(rx.pop(), Some(3));
-    assert_eq!(rx.pop(), None);
+    assert_eq!(rx.pop(), Ok(2));
+    assert_eq!(rx.pop(), Ok(3));
+    assert_eq!(rx.pop(), Err(TryRecvError::Empty));
 }
 
 #[test]
@@ -134,7 +136,7 @@ fn the_ring_wraps_many_times_without_losing_order() {
     let (tx, rx) = bounded::<usize>(4).expect("a power-of-two capacity");
     for round in 0..1000 {
         tx.push(round).expect("the previous item was taken");
-        assert_eq!(rx.pop(), Some(round));
+        assert_eq!(rx.pop(), Ok(round));
     }
     assert!(rx.is_empty());
 }
@@ -150,7 +152,7 @@ fn a_partly_full_ring_wraps_correctly() {
     for round in 2..500 {
         tx.push(round)
             .expect("room, because one is taken each round");
-        assert_eq!(rx.pop(), Some(round - 2));
+        assert_eq!(rx.pop(), Ok(round - 2));
         assert_eq!(rx.len(), 2);
     }
 }
@@ -178,9 +180,9 @@ fn zero_sized_items_round_trip() {
     tx.push(()).expect("room");
     tx.push(()).expect("room");
     assert!(matches!(tx.push(()), Err(PushError::Full(()))));
-    assert_eq!(rx.pop(), Some(()));
-    assert_eq!(rx.pop(), Some(()));
-    assert_eq!(rx.pop(), None);
+    assert_eq!(rx.pop(), Ok(()));
+    assert_eq!(rx.pop(), Ok(()));
+    assert_eq!(rx.pop(), Err(TryRecvError::Empty));
 }
 
 #[test]
@@ -290,7 +292,7 @@ fn every_power_of_two_capacity_from_the_floor_up_is_accepted() {
         assert_eq!(tx.capacity(), capacity);
         assert_eq!(rx.capacity(), capacity, "both handles agree");
         tx.push(shift).expect("a fresh queue has room");
-        assert_eq!(rx.pop(), Some(shift));
+        assert_eq!(rx.pop(), Ok(shift));
     }
 }
 
@@ -405,9 +407,9 @@ fn a_producer_that_is_gone_leaves_the_queued_items_takeable() {
     drop(second);
 
     assert!(rx.is_disconnected());
-    assert_eq!(rx.pop(), Some(1), "a dropped producer does not discard");
-    assert_eq!(rx.pop(), Some(2));
-    assert_eq!(rx.pop(), None);
+    assert_eq!(rx.pop(), Ok(1), "a dropped producer does not discard");
+    assert_eq!(rx.pop(), Ok(2));
+    assert_eq!(rx.pop(), Err(TryRecvError::Disconnected));
 }
 
 #[test]
@@ -500,8 +502,8 @@ fn a_clone_pushes_into_the_same_queue() {
     second.push(2).expect("room");
 
     assert_eq!(rx.len(), 2, "one queue, not two");
-    assert_eq!(rx.pop(), Some(1));
-    assert_eq!(rx.pop(), Some(2));
+    assert_eq!(rx.pop(), Ok(1));
+    assert_eq!(rx.pop(), Ok(2));
 }
 
 #[test]
@@ -568,8 +570,8 @@ fn a_producer_can_be_moved_to_another_thread_and_cloned() {
     .expect("the pushing thread");
     tx.push(8).expect("room");
 
-    assert_eq!(rx.pop(), Some(7));
-    assert_eq!(rx.pop(), Some(8));
+    assert_eq!(rx.pop(), Ok(7));
+    assert_eq!(rx.pop(), Ok(8));
 }
 
 #[test]
@@ -589,7 +591,7 @@ fn items_cross_a_thread_boundary_intact() {
 
     let mut received = 0_usize;
     while received < COUNT {
-        if let Some(item) = rx.pop() {
+        if let Ok(item) = rx.pop() {
             assert_eq!(*item, received, "items must arrive in order and intact");
             received += 1;
         } else {
@@ -598,7 +600,7 @@ fn items_cross_a_thread_boundary_intact() {
     }
 
     producer.join().expect("the producer thread");
-    assert_eq!(rx.pop(), None);
+    assert_eq!(rx.pop(), Err(TryRecvError::Disconnected));
 }
 
 // ---------------------------------------------------------------------------
@@ -639,10 +641,10 @@ fn polling_never_creates_a_kernel_object() {
             second.push(value).expect("there is room");
         }
     }
-    while rx.pop().is_some() {}
+    while rx.pop().is_ok() {}
     drop(tx);
     drop(second);
-    while rx.pop().is_some() {}
+    while rx.pop().is_ok() {}
 
     assert!(
         !rx.shared.doorbell.is_armed(),
@@ -704,7 +706,7 @@ fn arm_reports_safe_to_wait_when_empty() {
         doorbell_is_lit(&rx),
         "the doorbell must be lit before a test of clearing it can mean anything"
     );
-    assert_eq!(rx.pop(), Some(1));
+    assert_eq!(rx.pop(), Ok(1));
 
     assert!(
         rx.arm().expect("arming must succeed"),
@@ -724,7 +726,7 @@ fn arm_relights_the_doorbell_for_a_later_push() {
     rx.doorbell().expect("the doorbell must be creatable");
     tx.push(1).expect("there is room");
     assert!(doorbell_is_lit(&rx), "the first push must light it");
-    assert_eq!(rx.pop(), Some(1));
+    assert_eq!(rx.pop(), Ok(1));
     assert!(rx.arm().expect("arming must succeed"));
 
     // The signal that must never be skipped: the doorbell was cleared, so the
@@ -1202,7 +1204,7 @@ fn high_water_records_the_peak_when_asked_for() {
     }
     assert_eq!(tx.high_water(), Some(5));
 
-    while rx.pop().is_some() {}
+    while rx.pop().is_ok() {}
     assert_eq!(
         rx.high_water(),
         Some(5),
@@ -1271,7 +1273,7 @@ fn a_poll_only_consumer_rings_no_doorbells() {
     for value in 0..4 {
         tx.push(value).expect("room");
     }
-    while rx.pop().is_some() {}
+    while rx.pop().is_ok() {}
     assert_eq!(rx.doorbell_rings(), 0);
 }
 
@@ -1341,6 +1343,114 @@ fn len_is_exact_when_the_two_loads_agree() {
 
     assert_eq!(tx.len(), 2);
     assert_eq!(crate::Bounded::remaining(&tx), 2);
-    assert_eq!(rx.pop(), Some(1));
+    assert_eq!(rx.pop(), Ok(1));
     assert_eq!(tx.len(), 1);
+}
+
+// ---------------------------------------------------------------------------
+// The public surface added after comparing this crate against the published
+// queue crates: `pop` distinguishing empty from disconnected, `is_full` on the
+// `Bounded` trait, and the iterator aliases.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn an_empty_queue_is_distinguishable_from_a_finished_one() {
+    // **The distinction `pop` exists to make.** Under an `Option` return these
+    // two situations were the same value, and telling them apart needed a
+    // second call in an order the caller had to remember.
+    let (tx, rx) = bounded::<u32>(4).expect("4 is a valid capacity");
+    assert_eq!(
+        rx.pop(),
+        Err(TryRecvError::Empty),
+        "empty with a producer alive is a reason to try again"
+    );
+
+    drop(tx);
+    assert_eq!(
+        rx.pop(),
+        Err(TryRecvError::Disconnected),
+        "empty with every producer gone is a reason to stop"
+    );
+}
+
+#[test]
+fn a_departed_producers_items_are_delivered_before_the_disconnection() {
+    // **The ordering guarantee, which is the whole reason this is not two
+    // separate questions.** A producer may push and then drop, so a queue can
+    // be disconnected and still owe items. Reporting the disconnection while
+    // items remain would lose the tail of the stream.
+    let (tx, rx) = bounded::<u32>(4).expect("4 is a valid capacity");
+    tx.push(1).expect("an empty queue has room");
+    tx.push(2).expect("one item does not fill four slots");
+    drop(tx);
+
+    assert_eq!(rx.pop(), Ok(1), "the items come first");
+    assert_eq!(rx.pop(), Ok(2));
+    assert_eq!(
+        rx.pop(),
+        Err(TryRecvError::Disconnected),
+        "and only then the end of the stream"
+    );
+}
+
+#[test]
+fn is_full_agrees_across_the_trait_and_both_handles() {
+    // `is_full` was an inherent method on the producer and nowhere else, so
+    // generic code could not ask it and a consumer could not either.
+    let (tx, rx) = bounded::<u32>(2).expect("2 is a valid capacity");
+    assert!(!tx.is_full());
+    assert!(!rx.is_full());
+
+    tx.push(1).expect("an empty queue has room");
+    tx.push(2).expect("one slot remains");
+
+    assert!(tx.is_full(), "the producer sees a full queue");
+    assert!(rx.is_full(), "and so does the consumer");
+    assert!(
+        Bounded::is_full(&tx),
+        "and so does a caller generic over the trait"
+    );
+    assert!(Bounded::is_full(&rx));
+
+    assert_eq!(rx.pop(), Ok(1));
+    assert!(
+        !tx.is_full(),
+        "and it is no longer full once a slot is freed"
+    );
+}
+
+#[test]
+fn try_iter_is_drain_under_the_name_the_ecosystem_uses() {
+    let (tx, rx) = bounded::<u32>(8).expect("8 is a valid capacity");
+    for value in 0..4u32 {
+        tx.push(value).expect("four items fit in eight slots");
+    }
+
+    // Both are inherent, so neither needs the trait imported -- which was the
+    // other half of this gap.
+    let taken: Vec<u32> = rx.try_iter().collect();
+    assert_eq!(taken, vec![0, 1, 2, 3]);
+
+    for value in 4..6u32 {
+        tx.push(value).expect("room remains");
+    }
+    let taken: Vec<u32> = rx.drain().collect();
+    assert_eq!(taken, vec![4, 5], "drain is the same iterator");
+}
+
+#[test]
+fn the_iterators_stop_at_empty_rather_than_at_the_end_of_the_stream() {
+    // A statement about this instant, not about the stream: the iterator ends
+    // when nothing is queued *right now*, and a later push is still delivered.
+    let (tx, rx) = bounded::<u32>(4).expect("4 is a valid capacity");
+    tx.push(1).expect("an empty queue has room");
+
+    assert_eq!(rx.try_iter().collect::<Vec<_>>(), vec![1]);
+
+    tx.push(2).expect("the queue drained, so there is room");
+    assert_eq!(
+        rx.try_iter().collect::<Vec<_>>(),
+        vec![2],
+        "the iterator is reusable because it does not consume the handle"
+    );
 }

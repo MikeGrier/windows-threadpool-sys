@@ -351,9 +351,9 @@ where
     assert!(!consumer.is_empty());
     assert_eq!(consumer.remaining(), capacity - 2);
 
-    assert_eq!(consumer.pop(), Some(1));
+    assert_eq!(consumer.pop(), Ok(1));
     assert_eq!(consumer.len(), 1, "and sees the depth fall as it drains");
-    assert_eq!(consumer.pop(), Some(2));
+    assert_eq!(consumer.pop(), Ok(2));
     assert!(consumer.is_empty(), "drained back to empty");
     assert_eq!(consumer.remaining(), capacity);
 }
@@ -474,7 +474,7 @@ fn the_reserving_shape_is_usable_through_the_reserving_trait() {
     // The released slot is genuinely usable again, so `outstanding_reservations`
     // reporting zero is not merely a constant that happens to read right.
     tx.push(7).expect("the released slot is available");
-    assert_eq!(rx.pop(), Some(7));
+    assert_eq!(rx.pop(), Ok(7));
 }
 
 #[test]
@@ -603,11 +603,11 @@ fn a_generic_caller_can_claim_check_and_redeem() {
 
     let (spsc_tx, spsc_rx) = spsc::bounded::<u32>(4).expect("4 is valid");
     claim_and_send(&spsc_tx, 7).expect("delivery must succeed");
-    assert_eq!(spsc_rx.pop(), Some(7));
+    assert_eq!(spsc_rx.pop(), Ok(7));
 
     let (res_tx, res_rx) = reserving_mpsc::bounded::<u32>(4).expect("4 is valid");
     claim_and_send(&res_tx, 9).expect("delivery must succeed");
-    assert_eq!(res_rx.pop(), Some(9));
+    assert_eq!(res_rx.pop(), Ok(9));
 
     // And the failure path is reachable generically too, which it was not
     // before: a claim held past the consumer's exit reports it and hands the

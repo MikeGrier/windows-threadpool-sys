@@ -8,6 +8,7 @@
 //! that a reservation holds room back without occupying a position, and that an
 //! overdrawn permit count is always restored.
 
+use crate::error::TryRecvError;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::thread;
@@ -53,13 +54,13 @@ fn a_capacity_above_the_maximum_is_refused() {
 fn an_item_pushed_is_the_item_popped() {
     let (tx, rx) = bounded::<u32>(4).expect("a valid capacity");
     tx.push(7).expect("room");
-    assert_eq!(rx.pop(), Some(7));
+    assert_eq!(rx.pop(), Ok(7));
 }
 
 #[test]
 fn popping_an_empty_queue_reports_nothing() {
     let (_tx, rx) = bounded::<u32>(4).expect("a valid capacity");
-    assert_eq!(rx.pop(), None);
+    assert_eq!(rx.pop(), Err(TryRecvError::Empty));
 }
 
 #[test]
@@ -69,9 +70,9 @@ fn items_come_back_in_the_order_they_went_in() {
         tx.push(value).expect("room");
     }
     for value in 0..8 {
-        assert_eq!(rx.pop(), Some(value));
+        assert_eq!(rx.pop(), Ok(value));
     }
-    assert_eq!(rx.pop(), None);
+    assert_eq!(rx.pop(), Err(TryRecvError::Empty));
 }
 
 #[test]
@@ -110,7 +111,7 @@ fn a_refusal_leaves_the_permit_count_intact() {
         assert!(tx.push(99).is_err());
     }
     for value in 0..4 {
-        assert_eq!(rx.pop(), Some(value));
+        assert_eq!(rx.pop(), Ok(value));
     }
     // Every slot came back.
     for value in 0..4 {
@@ -139,7 +140,7 @@ fn a_concurrent_refusal_storm_leaves_the_permit_count_intact() {
         }
     });
     for value in 0..4 {
-        assert_eq!(rx.pop(), Some(value));
+        assert_eq!(rx.pop(), Ok(value));
     }
     for value in 0..4 {
         tx.push(value).expect("room after draining");
@@ -154,9 +155,9 @@ fn the_ring_is_reused_across_many_laps() {
     let (tx, rx) = bounded::<u32>(4).expect("a valid capacity");
     for value in 0..10_000 {
         tx.push(value).expect("room");
-        assert_eq!(rx.pop(), Some(value));
+        assert_eq!(rx.pop(), Ok(value));
     }
-    assert_eq!(rx.pop(), None);
+    assert_eq!(rx.pop(), Err(TryRecvError::Empty));
 }
 
 #[test]
@@ -185,9 +186,9 @@ fn a_reservation_delivers_even_when_the_queue_is_otherwise_full() {
     reservation.send(42).expect("the consumer is still here");
     assert_eq!(rx.len(), 4);
     for value in 0..3 {
-        assert_eq!(rx.pop(), Some(value));
+        assert_eq!(rx.pop(), Ok(value));
     }
-    assert_eq!(rx.pop(), Some(42));
+    assert_eq!(rx.pop(), Ok(42));
 }
 
 #[test]
@@ -213,11 +214,11 @@ fn an_outstanding_reservation_does_not_block_the_consumer() {
     let reservation = tx.reserve().expect("room");
     tx.push(1).expect("room");
     tx.push(2).expect("room");
-    assert_eq!(rx.pop(), Some(1));
-    assert_eq!(rx.pop(), Some(2));
-    assert_eq!(rx.pop(), None);
+    assert_eq!(rx.pop(), Ok(1));
+    assert_eq!(rx.pop(), Ok(2));
+    assert_eq!(rx.pop(), Err(TryRecvError::Empty));
     reservation.send(3).expect("the consumer is still here");
-    assert_eq!(rx.pop(), Some(3));
+    assert_eq!(rx.pop(), Ok(3));
 }
 
 #[test]
@@ -231,7 +232,7 @@ fn every_reservation_the_capacity_allows_can_be_taken_at_once() {
             .expect("the consumer is still here");
     }
     for value in 0..4 {
-        assert_eq!(rx.pop(), Some(value));
+        assert_eq!(rx.pop(), Ok(value));
     }
 }
 
@@ -320,7 +321,7 @@ fn many_producers_deliver_every_item_exactly_once() {
         }
         let mut taken = 0;
         while taken < PRODUCERS * EACH {
-            if let Some(value) = rx.pop() {
+            if let Ok(value) = rx.pop() {
                 seen[value as usize] += 1;
                 taken += 1;
             } else {
@@ -361,7 +362,7 @@ fn the_queue_never_admits_more_claimants_than_it_has_slots() {
             let _ = rx.pop();
         }
     });
-    while rx.pop().is_some() {}
+    while rx.pop().is_ok() {}
 }
 
 #[test]

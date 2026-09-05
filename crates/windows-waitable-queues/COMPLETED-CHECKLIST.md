@@ -1,3 +1,9 @@
+# Completed checklists: windows-waitable-queues
+
+Append-only. Newest groups at the bottom.
+
+## Moved 2026-09-05 -- public API surface, closed against eight published queue crates
+
 # Checklist: public API surface
 
 Closes the gaps found by comparing this crate's public surface against the eight
@@ -24,7 +30,7 @@ zero again.
 
 ## M1: the surface
 
-- [ ] **API-1** -- Make `pop` distinguish an empty queue from a departed
+- [x] **API-1** -- Make `pop` distinguish an empty queue from a departed
   producer, by returning `Result<T, TryRecvError>` with `Empty` and
   `Disconnected` variants rather than `Option<T>`.
 
@@ -45,7 +51,7 @@ zero again.
   cannot lose an item."* That is a `TryRecvError` written as prose, and prose
   cannot be enforced.
 
-- [ ] **API-2** -- Put `is_full` on the `Bounded` trait, so it is reachable
+- [x] **API-2** -- Put `is_full` on the `Bounded` trait, so it is reachable
   generically and from a consumer.
 
   Every concrete `Producer` answers `is_full` as an inherent method, but the
@@ -59,7 +65,7 @@ zero again.
   method to each `Consumer` for the same reason the other accessors are
   inherent: a caller should not need an import to ask.
 
-- [ ] **API-3** -- Add `try_iter` and `IntoIterator` on the consumers, keeping
+- [x] **API-3** -- Add `try_iter` and `IntoIterator` on the consumers, keeping
   `drain` as the name that describes the semantics.
 
   `drain` is exactly `try_iter` -- take what is there, stop at the first empty
