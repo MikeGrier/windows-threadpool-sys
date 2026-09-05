@@ -22,6 +22,13 @@ suite, restores the source, and records whether the suite noticed.
 
 It exits 0 only when every sabotage behaved as the manifest declared.
 
+Runs on **Windows PowerShell 5.1 and PowerShell 7 alike**, like the other
+scripts in this directory, and the full sweep is verified on both. Worth stating
+because the two differ in ways that bite here specifically: 5.1 rejects
+PowerShell 7 syntax at parse time, and it reports a `Start-Process -PassThru`
+exit code as `$null` unless the handle is held -- which this script would read
+as "the phase failed", making every sabotage look caught while proving nothing.
+
 **This is an occasional instrument, not a CI gate.** Every sabotage forces a
 rebuild, and any that is caught *as a hang* costs the full test timeout. The
 waitable-queues manifest takes about three minutes. Run it when a guard is

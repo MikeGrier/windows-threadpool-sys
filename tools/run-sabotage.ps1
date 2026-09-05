@@ -187,8 +187,33 @@ function Invoke-Bounded {
         -RedirectStandardOutput $TranscriptPath `
         -RedirectStandardError "$TranscriptPath.err"
 
+    # Reading .Handle before waiting, and discarding it, is load bearing on
+    # Windows PowerShell 5.1. A Process object from `Start-Process -PassThru`
+    # there does not cache the native handle; once the process exits the handle
+    # is released and .ExitCode comes back $null -- for a process that exited 0
+    # exactly as for one that failed. Every phase would then classify as
+    # 'failed', so the baseline could never pass, and if it somehow did, every
+    # sabotage would read as 'caught': a clean bill of health that proves
+    # nothing, which is the one result this harness exists to make impossible.
+    # Touching .Handle keeps it alive so the exit code survives the wait.
+    #
+    # Measured, not assumed: under 5.1 a `cmd /c exit 0` reports ExitCode $null
+    # without this line and 0 with it. A no-op on PowerShell 7, which caches the
+    # handle itself. Found by running the suite under 5.1 after the PR #64
+    # review flagged the ternary on the line below -- fixing only that would
+    # have turned a loud parse error into a silent wrong answer.
+    $null = $process.Handle
+
     if ($process.WaitForExit($Seconds * 1000)) {
-        return [pscustomobject]@{ Outcome = ($process.ExitCode -eq 0 ? 'passed' : 'failed'); Code = $process.ExitCode }
+        # Spelled as an if/else rather than a ternary on purpose: `? :` is
+        # PowerShell 7 syntax, and this is a PARSE error under Windows
+        # PowerShell 5.1 -- so a single ternary anywhere makes the whole script
+        # unrunnable on the shell that `powershell.exe` still starts by default,
+        # failing before the first line executes rather than at this line. The
+        # three sibling scripts in this directory are 5.1-clean; this one stays
+        # that way too. Raised in the PR #64 review.
+        $outcome = if ($process.ExitCode -eq 0) { 'passed' } else { 'failed' }
+        return [pscustomobject]@{ Outcome = $outcome; Code = $process.ExitCode }
     }
 
     Stop-Tree -ProcessId $process.Id
