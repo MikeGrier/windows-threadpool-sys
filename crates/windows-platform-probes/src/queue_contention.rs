@@ -328,7 +328,7 @@ fn time_isolated_mpsc(producers: usize) -> Repetition {
     let refusals = tx.refused();
     // Drain before dropping: teardown would otherwise walk every slot, and that
     // is not part of what is being timed.
-    while rx.pop().is_some() {}
+    while rx.pop().is_ok() {}
     (elapsed, refusals)
 }
 
@@ -353,7 +353,7 @@ fn time_isolated_reserving(producers: usize) -> Repetition {
     });
     let elapsed = started.elapsed().as_nanos() as f64;
     let refusals = tx.refused();
-    while rx.pop().is_some() {}
+    while rx.pop().is_ok() {}
     (elapsed, refusals)
 }
 
@@ -384,7 +384,7 @@ fn time_isolated_permit(producers: usize) -> Repetition {
     });
     let elapsed = started.elapsed().as_nanos() as f64;
     let refusals = tx.refused();
-    while rx.pop().is_some() {}
+    while rx.pop().is_ok() {}
     (elapsed, refusals)
 }
 
@@ -408,10 +408,10 @@ fn time_drained_mpsc(producers: usize) -> Repetition {
         // Spin rather than park: the doorbell's cost is `doorbell_cost`'s
         // question, and parking here would measure that instead of the claim.
         while !consumer_done.load(Ordering::Relaxed) {
-            while rx.pop().is_some() {}
+            while rx.pop().is_ok() {}
             std::hint::spin_loop();
         }
-        while rx.pop().is_some() {}
+        while rx.pop().is_ok() {}
         rx.refused()
     });
 
@@ -468,10 +468,10 @@ fn time_drained_reserving(producers: usize) -> Repetition {
     let consumer = thread::spawn(move || {
         consumer_gate.wait();
         while !consumer_done.load(Ordering::Relaxed) {
-            while rx.pop().is_some() {}
+            while rx.pop().is_ok() {}
             std::hint::spin_loop();
         }
-        while rx.pop().is_some() {}
+        while rx.pop().is_ok() {}
         rx.refused()
     });
 
@@ -520,10 +520,10 @@ fn time_drained_permit(producers: usize) -> Repetition {
     let consumer = thread::spawn(move || {
         consumer_gate.wait();
         while !consumer_done.load(Ordering::Relaxed) {
-            while rx.pop().is_some() {}
+            while rx.pop().is_ok() {}
             std::hint::spin_loop();
         }
-        while rx.pop().is_some() {}
+        while rx.pop().is_ok() {}
         rx.refused()
     });
 
@@ -589,7 +589,7 @@ fn time_isolated_layout<L: ClaimLayout>(producers: usize) -> Repetition {
     });
     let elapsed = started.elapsed().as_nanos() as f64;
     let refusals = tx.refused();
-    while rx.pop().is_some() {}
+    while rx.pop().is_ok() {}
     (elapsed, refusals)
 }
 
@@ -609,10 +609,10 @@ fn time_drained_layout<L: ClaimLayout + 'static>(producers: usize) -> Repetition
     let consumer = thread::spawn(move || {
         consumer_gate.wait();
         while !consumer_done.load(Ordering::Relaxed) {
-            while rx.pop().is_some() {}
+            while rx.pop().is_ok() {}
             std::hint::spin_loop();
         }
-        while rx.pop().is_some() {}
+        while rx.pop().is_ok() {}
         rx.refused()
     });
 

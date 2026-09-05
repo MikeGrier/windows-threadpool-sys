@@ -42,7 +42,7 @@ use crate::disposal::Disposal;
 ///
 /// tx.push(1).expect("a fresh queue has room");
 /// tx.push(2).expect("a fresh queue has room");
-/// assert_eq!(rx.pop(), Some(1));
+/// assert_eq!(rx.pop(), Ok(1));
 ///
 /// // `len` is the depth right now; `high_water` is the peak it reached.
 /// assert_eq!(rx.len(), 1);

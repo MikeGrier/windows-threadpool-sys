@@ -35,12 +35,25 @@
 //! }
 //! ```
 //!
-//! **They have since shipped, and they kept those signatures.**
-//! [`slotwise_mpsc`](crate::slotwise_mpsc) was written against this sketch and matched it, which
-//! is the validation [D-3](../DESIGN-NOTES.md#d-3) demanded before any trait
-//! was allowed to exist. The sketch is left here because it is the artefact
-//! that made the check possible: what [`crate::traits`] says now is what this
-//! comment said before either type existed.
+//! **They have since shipped, and this is the sketch as written -- not as the
+//! traits ended up.** [`slotwise_mpsc`](crate::slotwise_mpsc) was written
+//! against it and matched it, which is the validation
+//! [D-3](../DESIGN-NOTES.md#d-3) demanded before any trait was allowed to
+//! exist. The sketch is left unamended because that is the whole of its value:
+//! updating it would turn a record of what was predicted into a copy of what
+//! was built, and the check it made possible could not be re-run.
+//!
+//! Two things have moved since, and [`crate::traits`] is authoritative for
+//! both:
+//!
+//! - **[`Consumer::pop`](crate::Consumer::pop) returns
+//!   `Result<Self::Item, TryRecvError>`**, not `Option`. An empty queue and a
+//!   finished one are different answers demanding opposite reactions, and the
+//!   sketch could not say so. [`Consumer`](crate::Consumer) also grew `drain`
+//!   and `try_iter`.
+//! - **[`Bounded`](crate::Bounded) also carries `remaining` and `is_full`.**
+//!
+//! [`Producer`](crate::Producer) is unchanged from the sketch.
 //!
 //! # Why the operations take `&self`
 //!
@@ -78,7 +91,9 @@ use crate::blocking::{self, Parked};
 use crate::capacity::{Bounds, MAX_ADMISSIBLE_CAPACITY, validate_capacity};
 use crate::disposal::Teardown;
 use crate::doorbell::Doorbell;
-use crate::error::{CapacityError, Disconnected, PushError, RecvError, RecvTimeoutError};
+use crate::error::{
+    CapacityError, Disconnected, PushError, RecvError, RecvTimeoutError, TryRecvError,
+};
 use crate::metrics::Metrics;
 use crate::options::Options;
 
@@ -111,12 +126,12 @@ const BOUNDS: Bounds = Bounds {
 /// # Examples
 ///
 /// ```
-/// use windows_waitable_queues::spsc;
+/// use windows_waitable_queues::{spsc, TryRecvError};
 ///
 /// let (tx, rx) = spsc::bounded::<u32>(2)?;
 /// tx.push(7).expect("a fresh queue has room");
-/// assert_eq!(rx.pop(), Some(7));
-/// assert_eq!(rx.pop(), None);
+/// assert_eq!(rx.pop(), Ok(7));
+/// assert_eq!(rx.pop(), Err(TryRecvError::Empty));
 /// # Ok::<(), windows_waitable_queues::CapacityError>(())
 /// ```
 pub fn bounded<T>(capacity: usize) -> Result<(Producer<T>, Consumer<T>), CapacityError> {
@@ -663,13 +678,29 @@ pub struct Consumer<T> {
 }
 
 impl<T> Consumer<T> {
-    /// Takes the oldest item, or `None` if there is none right now.
+    /// Takes the oldest item.
     ///
-    /// `None` does not mean the queue is finished. Pair it with
-    /// [`Self::is_disconnected`] to distinguish "empty for now" from "empty for
-    /// good"; the order matters, and [`Self::is_disconnected`] documents which
-    /// way round.
-    pub fn pop(&self) -> Option<T> {
+    /// # Errors
+    ///
+    /// [`TryRecvError::Empty`] when nothing is queued right now, and
+    /// [`TryRecvError::Disconnected`] when every producer is gone *and* the
+    /// queue has been drained -- in that order, so the tail of a stream whose
+    /// producers have already departed is still delivered. See
+    /// [`Consumer::pop`](crate::Consumer::pop) for why that ordering is a
+    /// guarantee rather than an implementation detail.
+    pub fn pop(&self) -> Result<T, TryRecvError> {
+        match self.take() {
+            Some(item) => Ok(item),
+            // Only on the empty path, so a successful take never pays for this
+            // load. The queue must be observed empty *before* disconnection is
+            // reported, which is exactly what this ordering enforces.
+            None if self.is_disconnected() => Err(TryRecvError::Disconnected),
+            None => Err(TryRecvError::Empty),
+        }
+    }
+
+    /// The take itself, without the disconnection question.
+    fn take(&self) -> Option<T> {
         // Acquire, matching every other load of `head`. Sole-writer coherence
         // would suffice here, but `head` also carries the release store below;
         // see `push` for why the two disciplines are not mixed on one atomic.
@@ -716,14 +747,40 @@ impl<T> Consumer<T> {
         self.len() == 0
     }
 
+    /// Whether a further best-effort push would be refused for want of room.
+    ///
+    /// The consumer's view of the question the producer answers, so a caller
+    /// holding only this handle need not import [`Bounded`](crate::Bounded).
+    #[must_use]
+    pub fn is_full(&self) -> bool {
+        crate::Bounded::is_full(self)
+    }
+
+    /// Takes items until the queue is momentarily empty.
+    ///
+    /// The inherent form of [`Consumer::drain`](crate::Consumer::drain), so it
+    /// works without importing the trait.
+    pub fn drain(&self) -> crate::Drain<'_, Self> {
+        crate::Consumer::drain(self)
+    }
+
+    /// Takes items until the queue is momentarily empty.
+    ///
+    /// An alias for [`Self::drain`] under the name most of the ecosystem uses.
+    pub fn try_iter(&self) -> crate::Drain<'_, Self> {
+        crate::Consumer::drain(self)
+    }
+
     /// Whether the producer has been dropped.
     ///
-    /// **Check this only after [`Self::pop`] has returned `None`.** A producer
-    /// may push and then drop, so a queue can be disconnected and still hold
-    /// items; testing this first would discard them. Draining to empty and
-    /// then finding the producer gone is the only order that cannot lose an
-    /// item, and the release store in the producer's `Drop` is what makes the
-    /// preceding pushes visible to a consumer that observes it.
+    /// **A queue can be disconnected and still hold items**, because a producer
+    /// may push and then drop -- so this alone does not mean the stream is
+    /// finished, and acting on it while items remain would discard them.
+    /// [`Self::pop`] answers the composite question in the only order that
+    /// cannot lose the tail, and is what a drain loop should use.
+    ///
+    /// The release store in the producer's `Drop` is what makes its preceding
+    /// pushes visible to a consumer that observes this.
     #[must_use]
     pub fn is_disconnected(&self) -> bool {
         !self.shared.producer_live.load(Ordering::Acquire)
@@ -749,29 +806,34 @@ impl<T> Consumer<T> {
     /// whether waiting is safe, or the wait can miss an item and block forever:
     ///
     /// ```no_run
-    /// # use windows_waitable_queues::spsc;
+    /// # use windows_waitable_queues::{spsc, TryRecvError};
     /// # use windows_sys::Win32::System::Threading::{WaitForSingleObject, INFINITE};
     /// # use std::os::windows::io::AsRawHandle;
     /// # fn demo(rx: &spsc::Consumer<u32>) -> std::io::Result<()> {
     /// loop {
-    ///     while let Some(item) = rx.pop() {
-    ///         let _ = item;
+    ///     // Take everything available. The drain ends by saying *why*, so the
+    ///     // end of the stream cannot be missed by forgetting to ask.
+    ///     loop {
+    ///         match rx.pop() {
+    ///             Ok(item) => { let _ = item; }
+    ///             Err(TryRecvError::Disconnected) => return Ok(()),
+    ///             // Empty for now. A wildcard because `TryRecvError` is
+    ///             // `#[non_exhaustive]`, as every error type here is.
+    ///             Err(_) => break,
+    ///         }
     ///     }
     ///     if !rx.arm()? {
     ///         continue; // Something arrived; waiting now would be wrong.
     ///     }
-    ///     // The end of the stream, which arming does not report. Without
-    ///     // this the wait below never returns: the last producer's drop rang
-    ///     // the doorbell once and `arm` has just cleared that ring.
-    ///     //
-    ///     // The final `pop` is not belt-and-braces -- a producer may push and
-    ///     // then drop between the drain above and this check, and skipping it
-    ///     // discards an item that was successfully sent.
-    ///     if rx.is_disconnected() {
-    ///         while let Some(item) = rx.pop() {
-    ///             let _ = item;
-    ///         }
-    ///         return Ok(());
+    ///     // Ask once more, because `arm` has just cleared the doorbell --
+    ///     // including the single ring the last producer's drop made, which is
+    ///     // not coming again. Skipping this blocks forever on a finished
+    ///     // stream, and a producer that pushed *and then* dropped in the
+    ///     // window above is also caught here rather than discarded.
+    ///     match rx.pop() {
+    ///         Ok(item) => { let _ = item; continue; }
+    ///         Err(TryRecvError::Disconnected) => return Ok(()),
+    ///         Err(_) => {}
     ///     }
     ///     let handle = rx.doorbell()?;
     ///     // SAFETY: a live event handle borrowed for the call.
@@ -861,7 +923,7 @@ impl<T> Consumer<T> {
     /// successfully sent. Being a separate function is what lets a test reach
     /// it directly instead of hoping to schedule that window.
     fn finish(&self) -> Option<T> {
-        self.pop()
+        self.take()
     }
 
     /// Takes the oldest item, blocking until one arrives.
@@ -897,7 +959,7 @@ impl<T> Parked for Consumer<T> {
     type Item = T;
 
     fn pop(&self) -> Option<T> {
-        Self::pop(self)
+        Self::take(self)
     }
 
     fn finish(&self) -> Option<T> {
@@ -949,7 +1011,7 @@ impl<T> crate::Producer for Producer<T> {
 impl<T> crate::Consumer for Consumer<T> {
     type Item = T;
 
-    fn pop(&self) -> Option<T> {
+    fn pop(&self) -> Result<T, TryRecvError> {
         Self::pop(self)
     }
 

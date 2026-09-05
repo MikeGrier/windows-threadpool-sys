@@ -8,6 +8,7 @@
 //! that a reservation holds room back without occupying a position, and that an
 //! overdrawn permit count is always restored.
 
+use crate::error::TryRecvError;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::thread;
@@ -53,13 +54,13 @@ fn a_capacity_above_the_maximum_is_refused() {
 fn an_item_pushed_is_the_item_popped() {
     let (tx, rx) = bounded::<u32>(4).expect("a valid capacity");
     tx.push(7).expect("room");
-    assert_eq!(rx.pop(), Some(7));
+    assert_eq!(rx.pop(), Ok(7));
 }
 
 #[test]
 fn popping_an_empty_queue_reports_nothing() {
     let (_tx, rx) = bounded::<u32>(4).expect("a valid capacity");
-    assert_eq!(rx.pop(), None);
+    assert_eq!(rx.pop(), Err(TryRecvError::Empty));
 }
 
 #[test]
@@ -69,9 +70,9 @@ fn items_come_back_in_the_order_they_went_in() {
         tx.push(value).expect("room");
     }
     for value in 0..8 {
-        assert_eq!(rx.pop(), Some(value));
+        assert_eq!(rx.pop(), Ok(value));
     }
-    assert_eq!(rx.pop(), None);
+    assert_eq!(rx.pop(), Err(TryRecvError::Empty));
 }
 
 #[test]
@@ -110,7 +111,7 @@ fn a_refusal_leaves_the_permit_count_intact() {
         assert!(tx.push(99).is_err());
     }
     for value in 0..4 {
-        assert_eq!(rx.pop(), Some(value));
+        assert_eq!(rx.pop(), Ok(value));
     }
     // Every slot came back.
     for value in 0..4 {
@@ -139,7 +140,7 @@ fn a_concurrent_refusal_storm_leaves_the_permit_count_intact() {
         }
     });
     for value in 0..4 {
-        assert_eq!(rx.pop(), Some(value));
+        assert_eq!(rx.pop(), Ok(value));
     }
     for value in 0..4 {
         tx.push(value).expect("room after draining");
@@ -154,9 +155,9 @@ fn the_ring_is_reused_across_many_laps() {
     let (tx, rx) = bounded::<u32>(4).expect("a valid capacity");
     for value in 0..10_000 {
         tx.push(value).expect("room");
-        assert_eq!(rx.pop(), Some(value));
+        assert_eq!(rx.pop(), Ok(value));
     }
-    assert_eq!(rx.pop(), None);
+    assert_eq!(rx.pop(), Err(TryRecvError::Empty));
 }
 
 #[test]
@@ -185,9 +186,9 @@ fn a_reservation_delivers_even_when_the_queue_is_otherwise_full() {
     reservation.send(42).expect("the consumer is still here");
     assert_eq!(rx.len(), 4);
     for value in 0..3 {
-        assert_eq!(rx.pop(), Some(value));
+        assert_eq!(rx.pop(), Ok(value));
     }
-    assert_eq!(rx.pop(), Some(42));
+    assert_eq!(rx.pop(), Ok(42));
 }
 
 #[test]
@@ -213,11 +214,11 @@ fn an_outstanding_reservation_does_not_block_the_consumer() {
     let reservation = tx.reserve().expect("room");
     tx.push(1).expect("room");
     tx.push(2).expect("room");
-    assert_eq!(rx.pop(), Some(1));
-    assert_eq!(rx.pop(), Some(2));
-    assert_eq!(rx.pop(), None);
+    assert_eq!(rx.pop(), Ok(1));
+    assert_eq!(rx.pop(), Ok(2));
+    assert_eq!(rx.pop(), Err(TryRecvError::Empty));
     reservation.send(3).expect("the consumer is still here");
-    assert_eq!(rx.pop(), Some(3));
+    assert_eq!(rx.pop(), Ok(3));
 }
 
 #[test]
@@ -231,7 +232,7 @@ fn every_reservation_the_capacity_allows_can_be_taken_at_once() {
             .expect("the consumer is still here");
     }
     for value in 0..4 {
-        assert_eq!(rx.pop(), Some(value));
+        assert_eq!(rx.pop(), Ok(value));
     }
 }
 
@@ -320,7 +321,7 @@ fn many_producers_deliver_every_item_exactly_once() {
         }
         let mut taken = 0;
         while taken < PRODUCERS * EACH {
-            if let Some(value) = rx.pop() {
+            if let Ok(value) = rx.pop() {
                 seen[value as usize] += 1;
                 taken += 1;
             } else {
@@ -361,7 +362,7 @@ fn the_queue_never_admits_more_claimants_than_it_has_slots() {
             let _ = rx.pop();
         }
     });
-    while rx.pop().is_some() {}
+    while rx.pop().is_ok() {}
 }
 
 #[test]
@@ -424,4 +425,210 @@ fn a_refused_redemption_gives_the_room_back() {
     // Both slots are free again, so both may be reserved.
     assert!(tx.reserve().is_ok(), "the refused slot must be reusable");
     assert!(tx.reserve().is_ok(), "and the queue's other slot with it");
+}
+
+// ---------------------------------------------------------------------------
+// The consumer's own accessors, and the disconnection question `pop` answers.
+//
+// A mutation run found every one of these uncovered: `capacity`, `is_empty`,
+// `refused` and `is_disconnected` could each be replaced by a constant with the
+// suite still passing. This shape is experimental, but a caller who enables the
+// feature gets the same surface as the shipping shapes and is entitled to the
+// same evidence that it works.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn the_consumer_reports_the_capacity_it_was_built_with() {
+    let (_tx, rx) = bounded::<u32>(8).expect("8 is a valid capacity");
+    assert_eq!(rx.capacity(), 8);
+
+    let (_tx, rx) = bounded::<u32>(2).expect("2 is a valid capacity");
+    assert_eq!(
+        rx.capacity(),
+        2,
+        "a second capacity, so a constant cannot satisfy both"
+    );
+}
+
+#[test]
+fn the_consumer_sees_the_queue_fill_and_empty() {
+    let (tx, rx) = bounded::<u32>(4).expect("4 is a valid capacity");
+    assert!(rx.is_empty(), "a fresh queue holds nothing");
+    assert_eq!(rx.len(), 0);
+
+    tx.push(1).expect("an empty queue has room");
+    assert!(!rx.is_empty(), "and not once an item is pushed");
+    assert_eq!(rx.len(), 1);
+
+    assert_eq!(rx.pop(), Ok(1));
+    assert!(rx.is_empty(), "and empty again once it is taken");
+    assert_eq!(rx.len(), 0);
+}
+
+#[test]
+fn the_consumer_counts_refusals() {
+    let (tx, rx) = bounded::<u32>(2).expect("2 is a valid capacity");
+    assert_eq!(rx.refused(), 0, "nothing has been refused yet");
+
+    tx.push(1).expect("an empty queue has room");
+    tx.push(2).expect("one slot remains");
+    assert!(tx.push(3).is_err(), "the third does not fit");
+
+    assert_eq!(rx.refused(), 1, "and the refusal is counted");
+    assert!(tx.push(4).is_err());
+    assert_eq!(rx.refused(), 2, "and counted again, rather than latched");
+}
+
+#[test]
+fn the_consumer_learns_when_every_producer_is_gone() {
+    let (tx, rx) = bounded::<u32>(4).expect("4 is a valid capacity");
+    let second = tx.clone();
+    assert!(!rx.is_disconnected(), "two producers are alive");
+
+    drop(tx);
+    assert!(
+        !rx.is_disconnected(),
+        "and one still is -- disconnection is every producer, not any"
+    );
+
+    drop(second);
+    assert!(rx.is_disconnected(), "now none are");
+}
+
+#[test]
+fn an_empty_queue_is_distinguishable_from_a_finished_one() {
+    let (tx, rx) = bounded::<u32>(4).expect("4 is a valid capacity");
+    assert_eq!(rx.pop(), Err(TryRecvError::Empty));
+
+    drop(tx);
+    assert_eq!(rx.pop(), Err(TryRecvError::Disconnected));
+}
+
+#[test]
+fn a_departed_producers_items_are_delivered_before_the_disconnection() {
+    let (tx, rx) = bounded::<u32>(4).expect("4 is a valid capacity");
+    tx.push(1).expect("an empty queue has room");
+    drop(tx);
+
+    assert_eq!(rx.pop(), Ok(1), "the item comes first");
+    assert_eq!(
+        rx.pop(),
+        Err(TryRecvError::Disconnected),
+        "and only then the end of the stream"
+    );
+}
+
+#[test]
+fn a_dropped_producer_that_was_not_the_last_leaves_the_stream_open() {
+    // The `Drop` impl decrements a count and only signals at zero. A mutation
+    // run found both the decrement and its `== 1` test uncovered, so this
+    // asserts the boundary from both sides rather than only that dropping
+    // everything eventually disconnects.
+    let (tx, rx) = bounded::<u32>(4).expect("4 is a valid capacity");
+    let second = tx.clone();
+    let third = tx.clone();
+
+    drop(second);
+    drop(third);
+    assert!(
+        !rx.is_disconnected(),
+        "two of three gone is not the end of the stream"
+    );
+    assert_eq!(rx.pop(), Err(TryRecvError::Empty));
+
+    drop(tx);
+    assert!(rx.is_disconnected(), "the last one is");
+    assert_eq!(rx.pop(), Err(TryRecvError::Disconnected));
+}
+
+#[test]
+fn a_dropped_reservation_releases_its_hold_on_the_stream() {
+    // A reservation counts as a producer, so dropping the last *handle* while a
+    // reservation is outstanding must not end the stream -- and dropping the
+    // reservation afterwards must.
+    let (tx, rx) = bounded::<u32>(4).expect("4 is a valid capacity");
+    let slot = tx.reserve().expect("an empty queue has room");
+    drop(tx);
+    assert!(
+        !rx.is_disconnected(),
+        "a reservation is a promise of a message still to come"
+    );
+
+    drop(slot);
+    assert!(
+        rx.is_disconnected(),
+        "and releasing it without sending ends the stream"
+    );
+}
+
+#[test]
+fn only_the_last_producer_to_leave_rings_the_doorbell() {
+    // **The count and the signal are separate consequences of the same drop,
+    // and only the count is visible through the public surface.** This shape
+    // exposes no `doorbell`, `arm` or `recv`, so a test written against
+    // `is_disconnected` alone cannot see whether the signal happened -- a
+    // mutation run proved it, surviving `==` -> `!=` here while every such test
+    // passed. The ring is what a waiting consumer would depend on, so it is
+    // asserted directly through the shared state rather than left unobserved.
+    let (tx, rx) = bounded::<u32>(4).expect("4 is a valid capacity");
+    let second = tx.clone();
+    // **The handle must be requested first, or the signal is a no-op.** The
+    // doorbell does nothing until a handle exists, and this shape exposes no
+    // way to ask for one -- so through its public surface the ring is
+    // unobservable, which is precisely why the mutation survived. Asking
+    // through the shared state makes the signalling testable now, and is the
+    // behaviour the shape needs to already be correct if it ever gains the
+    // waitable surface its siblings have.
+    let _handle = rx
+        .shared
+        .doorbell
+        .handle()
+        .expect("the event can be created");
+    let before = rx.shared.doorbell.rings();
+
+    drop(second);
+    assert_eq!(
+        rx.shared.doorbell.rings(),
+        before,
+        "a producer leaving while another remains has ended nothing, so waking a consumer \
+         would be a spurious wakeup"
+    );
+
+    drop(tx);
+    assert_eq!(
+        rx.shared.doorbell.rings(),
+        before + 1,
+        "the last one to leave ends the stream, and a consumer parked on the doorbell has to \
+         be told or it waits forever"
+    );
+}
+
+#[test]
+fn only_the_last_reservation_to_leave_rings_the_doorbell() {
+    // A reservation counts as a producer, so the same boundary applies to it,
+    // and it has its own `Drop` impl -- which a mutation run also found
+    // unobserved.
+    let (tx, rx) = bounded::<u32>(4).expect("4 is a valid capacity");
+    let slot = tx.reserve().expect("an empty queue has room");
+    // As above: no handle, no signal.
+    let _handle = rx
+        .shared
+        .doorbell
+        .handle()
+        .expect("the event can be created");
+    let before = rx.shared.doorbell.rings();
+
+    drop(tx);
+    assert_eq!(
+        rx.shared.doorbell.rings(),
+        before,
+        "the handle went but the reservation still promises a message"
+    );
+
+    drop(slot);
+    assert_eq!(
+        rx.shared.doorbell.rings(),
+        before + 1,
+        "and releasing it unsent is what finally ends the stream"
+    );
 }

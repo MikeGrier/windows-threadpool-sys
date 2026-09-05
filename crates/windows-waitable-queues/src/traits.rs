@@ -44,7 +44,7 @@
 use std::io;
 use std::os::windows::io::{BorrowedHandle, OwnedHandle};
 
-use crate::error::{Disconnected, PushError};
+use crate::error::{Disconnected, PushError, TryRecvError};
 
 /// The writing end of a queue.
 pub trait Producer {
@@ -75,31 +75,58 @@ pub trait Consumer {
     /// What this queue carries.
     type Item;
 
-    /// Takes the oldest item, or `None` if there is none right now.
+    /// Takes the oldest item.
     ///
-    /// `None` does not mean the queue is finished. Pair it with
-    /// [`Consumer::is_disconnected`], and in that order: a producer may push
-    /// and then drop, so a queue can be disconnected and still hold items.
-    fn pop(&self) -> Option<Self::Item>;
+    /// # Errors
+    ///
+    /// [`TryRecvError::Empty`] when nothing is queued right now, which is a
+    /// statement about this instant rather than about the stream, and
+    /// [`TryRecvError::Disconnected`] when every producer is gone *and* the
+    /// queue has been drained.
+    ///
+    /// **The order of those two is a guarantee, not an implementation
+    /// detail.** A producer may push and then drop, so a queue can be
+    /// disconnected and still hold items; reporting disconnection before the
+    /// items are handed over would lose the tail of the stream. An earlier
+    /// version of this trait returned `Option` and asked the caller to pair it
+    /// with [`Consumer::is_disconnected`] in that order. Settling it here
+    /// removes a protocol nothing could enforce.
+    fn pop(&self) -> Result<Self::Item, TryRecvError>;
 
     /// Whether every producer is gone.
     ///
-    /// **Ask only after [`Consumer::pop`] has returned `None`.** Draining to
-    /// empty and then finding the producers gone is the only order that cannot
-    /// lose an item.
+    /// **A queue can be disconnected and still hold items**, so this alone does
+    /// not mean the stream is finished. [`Consumer::pop`] answers the composite
+    /// question directly, and is what a drain loop should use.
     fn is_disconnected(&self) -> bool;
 
     /// Takes items until the queue is momentarily empty.
     ///
-    /// Ends when a [`Consumer::pop`] returns `None`, which is a statement about
-    /// this instant and not about the stream: a producer may push again
+    /// Ends at the first [`TryRecvError`] of either kind, which is a statement
+    /// about this instant and not about the stream: a producer may push again
     /// immediately afterwards. It is the "take everything available" step of
     /// the arming protocol, not a way to consume a queue to its end.
+    ///
+    /// Named for what it does. [`Consumer::try_iter`] is the same iterator
+    /// under the name most of the ecosystem uses.
     fn drain(&self) -> Drain<'_, Self>
     where
         Self: Sized,
     {
         Drain { consumer: self }
+    }
+
+    /// Takes items until the queue is momentarily empty.
+    ///
+    /// An alias for [`Consumer::drain`], because `try_iter` is the name
+    /// `crossbeam-channel`, `flume`, `std::sync::mpsc`, and `concurrent-queue`
+    /// all use for this, and a reader arriving from any of them should not have
+    /// to discover that this crate spells it differently.
+    fn try_iter(&self) -> Drain<'_, Self>
+    where
+        Self: Sized,
+    {
+        self.drain()
     }
 }
 
@@ -115,7 +142,7 @@ impl<C: Consumer> Iterator for Drain<'_, C> {
     type Item = C::Item;
 
     fn next(&mut self) -> Option<Self::Item> {
-        self.consumer.pop()
+        self.consumer.pop().ok()
     }
 }
 
@@ -154,6 +181,17 @@ pub trait Bounded {
     /// commitments.
     fn remaining(&self) -> usize {
         self.capacity().saturating_sub(self.len())
+    }
+
+    /// Whether a further best-effort push would be refused for want of room.
+    ///
+    /// Derived from [`remaining`](Self::remaining) rather than declared, so a
+    /// shape that overrides `remaining` -- as every [`Reserving`] one must --
+    /// gets a consistent answer without restating it. Reservations therefore
+    /// count as occupancy here, which is the useful reading: a queue whose every
+    /// slot is spoken for is full whether or not the items have arrived yet.
+    fn is_full(&self) -> bool {
+        self.remaining() == 0
     }
 }
 /// A claimed slot, which is redeemed or released but never ignored.

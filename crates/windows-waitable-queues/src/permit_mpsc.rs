@@ -19,7 +19,7 @@
 //! `reserving_mpsc` decides "there is room" by reading the consumer's `head`,
 //! and then compare-exchanges a claim word that does not contain `head`. The
 //! decision and the operation that acts on it are separate, which is
-//! [SH-14.1](../../../CHECKLIST-ship-topology-and-queues.md): a producer stalled
+//! the recurrence hazard described in the crate documentation: a producer stalled
 //! between them resumes after the position field has recurred, its exchange
 //! succeeds against a numerically equal but generations-later value, and it
 //! writes a slot whose freedom was decided long ago.
@@ -71,7 +71,7 @@ use std::sync::Arc;
 use crate::CacheAligned;
 use crate::capacity::{Bounds, MAX_ADMISSIBLE_CAPACITY, validate_capacity};
 use crate::doorbell::Doorbell;
-use crate::error::{CapacityError, Disconnected, PushError};
+use crate::error::{CapacityError, Disconnected, PushError, TryRecvError};
 use crate::metrics::Metrics;
 
 /// A ticket, and the slot sequence numbers compared against one.
@@ -537,8 +537,37 @@ impl<T> Drop for Consumer<T> {
 }
 
 impl<T> Consumer<T> {
-    /// Takes the next item, if one has been published.
-    pub fn pop(&self) -> Option<T> {
+    /// Takes the oldest item.
+    ///
+    /// # Errors
+    ///
+    /// [`TryRecvError::Empty`] when nothing is queued right now, and
+    /// [`TryRecvError::Disconnected`] when every producer is gone *and* the
+    /// queue has been drained.
+    pub fn pop(&self) -> Result<T, TryRecvError> {
+        match self.take() {
+            Some(item) => Ok(item),
+            // Only on the empty path, so a successful take never pays for it.
+            None if self.is_disconnected() => Err(TryRecvError::Disconnected),
+            None => Err(TryRecvError::Empty),
+        }
+    }
+
+    /// Whether every producer is gone.
+    ///
+    /// **A queue can be disconnected and still hold items**, because a producer
+    /// may push and then drop. [`Self::pop`] answers the composite question in
+    /// the order that cannot lose the tail of the stream.
+    ///
+    /// Acquire, so the release in the last producer's `Drop` makes every
+    /// producer's preceding pushes visible to a consumer that observes zero.
+    #[must_use]
+    pub fn is_disconnected(&self) -> bool {
+        self.shared.producers.load(Ordering::Acquire) == 0
+    }
+
+    /// The take itself, without the disconnection question.
+    fn take(&self) -> Option<T> {
         // Relaxed: this thread is the only writer of `head`.
         let position = self.shared.head.0.load(Ordering::Relaxed);
         let slot = &self.shared.slots[position as usize & self.shared.mask];

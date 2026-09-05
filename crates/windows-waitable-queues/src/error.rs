@@ -224,10 +224,10 @@ impl core::error::Error for CapacityError {}
 /// change**: every caller's exhaustive `match` would need the wildcard it does
 /// not have. Free before the first publish, and a major bump after it.
 ///
-/// The concrete reason to keep the room open is
-/// [M32.3](../../CHECKLIST-io-domains.md), the open decision on whether a
-/// producer can *wait* for capacity rather than only being refused it. If that
-/// lands, the send side may need to report something this enum cannot express
+/// The concrete reason to keep the room open is the expected future work on
+/// letting a producer *wait* for capacity rather than only being refused it --
+/// see the crate documentation. If that lands, the send side may need to
+/// report something this enum cannot express
 /// today. The crate's own precedent suggests a separate error type instead --
 /// [`RecvError`] and [`RecvTimeoutError`] are distinct rather than one extended
 /// enum -- so a new variant here may never be needed. Deciding that under time
@@ -308,6 +308,45 @@ impl<T> fmt::Display for Disconnected<T> {
 }
 
 impl<T: fmt::Debug> core::error::Error for Disconnected<T> {}
+
+/// Why a non-blocking take found nothing.
+///
+/// **The two variants demand opposite reactions**, which is the whole reason
+/// this is not an `Option`: [`TryRecvError::Empty`] means try again, and
+/// [`TryRecvError::Disconnected`] means stop. A caller that cannot tell them
+/// apart either spins on a stream that has ended or abandons one that has not.
+///
+/// This mirrors [`PushError`] on the sending side, where `Full` and
+/// `Disconnected` are likewise distinguished for the same reason.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum TryRecvError {
+    /// Nothing is queued **right now**.
+    ///
+    /// A statement about this instant and not about the stream: a producer may
+    /// push immediately afterwards.
+    Empty,
+    /// Every producer is gone *and* the queue has been drained.
+    ///
+    /// Reported only in that order, never merely because the producers went
+    /// away: a producer may push and then drop, and those items are still owed
+    /// to the consumer. Getting that order wrong loses the tail of the stream,
+    /// which is why it is settled here rather than left to each caller.
+    Disconnected,
+}
+
+impl fmt::Display for TryRecvError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Empty => f.write_str("the queue is empty"),
+            Self::Disconnected => {
+                f.write_str("every producer is gone and the queue has been drained")
+            }
+        }
+    }
+}
+
+impl core::error::Error for TryRecvError {}
 
 /// Why a blocking receive gave up.
 ///

@@ -236,7 +236,7 @@ fn time_real_spsc() -> Sample {
     });
     let mut taken = 0;
     while taken < ITEMS {
-        if rx.pop().is_some() {
+        if rx.pop().is_ok() {
             taken += 1;
         } else {
             std::hint::spin_loop();
