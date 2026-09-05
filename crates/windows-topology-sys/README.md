@@ -12,7 +12,11 @@ codebase; Server 2022 is not, despite the adjacent version numbers.)
 **Windows only.** The crate does not build on other platforms, and is not
 intended to: an earlier version of this line claimed it degraded to an empty
 shell elsewhere, which was never true and was never built in CI (raised in
-PR #56 review).
+PR #56 review). That correction reached the prose but not the code -- two
+modules stayed ungated, so the crate really did build for a Linux target and
+hand back a two-type API -- and a `compile_error!` now enforces what this
+paragraph says (raised in PR #61 review). Depend on it under
+`[target.'cfg(windows)'.dependencies]`.
 
 ## Example
 

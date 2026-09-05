@@ -199,17 +199,29 @@ impl MachineMemoryTopology {
         // exist here". That is the conflation `Observed` exists to remove,
         // arriving by a different door.
         let mut set = ProcessorSet::empty();
+        let mut representable = Vec::new();
         let mut unrepresentable = Vec::new();
         for id in processors {
             if ProcessorSet::can_represent(id.number) {
                 set.insert(id.group, id.number);
+                representable.push(*id);
             } else {
                 unrepresentable.push(*id);
             }
         }
         Proximity {
             shared: self.minimal_shared(&set),
-            finer_unobserved: processors
+            // Over the representable ids only. `ProcessorSet::contains`
+            // answers `false` for an out-of-range number, which is
+            // indistinguishable from "the platform never placed this
+            // processor in a relation of this kind" -- so an unrepresentable
+            // id would report a coverage gap at *every* reported kind at
+            // once, on a machine that described all of its processors fully.
+            //
+            // That would restate a defect in the query as a gap in the
+            // platform's reporting, when the defect is already named in
+            // `unrepresentable`. Raised in the PR #61 review.
+            finer_unobserved: representable
                 .iter()
                 .any(|id| !self.kinds_covering(*id).is_empty()),
             unrepresentable,
@@ -305,13 +317,12 @@ pub struct Proximity<'a> {
     /// processors appears in *no* instance of, so the platform has said nothing
     /// about whether they share it.
     ///
-    /// This is the third of [EP-D-2]'s requirements, and the one a naive design
+    /// This is the third of `EP-D-2`'s requirements, and the one a naive design
     /// drops. A caller told "the tightest shared thing is L3" when in truth L2
     /// was never reported for this processor would choose a slower channel than
     /// the machine can support and never learn why -- and under this crate's own
     /// bar it cannot go and measure to find out.
     ///
-    /// [EP-D-2]: ../../topology-planner/DESIGN-NOTES.md
     pub finer_unobserved: bool,
     /// Processors the query named that this platform cannot express, and which
     /// therefore took no part in [`Self::shared`].
