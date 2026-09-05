@@ -22,9 +22,9 @@ name = "windows-placement-probe"
 # record is from last week or last year. `0.1.0` answered neither.
 version = "2026.902.0"
 # **Never published to a registry.** Reversed from "yes, but not yet" on
-# 2026-09-02; see PT-5.3 in CHECKLIST-placement-tool.md and DESIGN-NOTES.md for
-# both reasons. The short form: `cargo install` reaches a *subset* of the people
-# a downloadable binary reaches, because the binary needs no Rust toolchain --
+# 2026-09-02, under work item PT-5.3; see DESIGN-NOTES.md for both reasons.
+# The short form: `cargo install` reaches a *subset* of the people a
+# downloadable binary reaches, because the binary needs no Rust toolchain --
 # so crates.io would have added no reach while making the weakest-provenance
 # path the most discoverable one.
 #
