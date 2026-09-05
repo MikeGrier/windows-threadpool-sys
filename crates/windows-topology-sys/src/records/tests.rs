@@ -52,8 +52,8 @@ fn well_formed_records_are_walked_in_order_with_no_anomaly() {
 #[test]
 fn a_zero_size_record_is_reported_rather_than_looping_or_panicking() {
     // The case that used to `assert!` in `walk.rs`.
-    let storage = chain(&[8]);
-    let base = storage.as_ptr().cast::<u8>().cast_mut();
+    let mut storage = chain(&[8]);
+    let base = storage.as_mut_ptr().cast::<u8>();
     // SAFETY: writing the first record's `Size` field, inside the buffer.
     unsafe { base.cast::<u32>().write_unaligned(0) };
     let mut w = walk(&storage, 8);
@@ -67,8 +67,8 @@ fn a_zero_size_record_is_reported_rather_than_looping_or_panicking() {
 
 #[test]
 fn a_record_overrunning_the_buffer_is_reported_and_earlier_ones_survive() {
-    let storage = chain(&[8, 8]);
-    let base = storage.as_ptr().cast::<u8>().cast_mut();
+    let mut storage = chain(&[8, 8]);
+    let base = storage.as_mut_ptr().cast::<u8>();
     // Second record claims more than the buffer holds.
     // SAFETY: offset 8 is the second record's `Size`, inside the buffer.
     unsafe { base.add(8).cast::<u32>().write_unaligned(4096) };

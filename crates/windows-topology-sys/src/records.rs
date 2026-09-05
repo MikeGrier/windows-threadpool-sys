@@ -191,7 +191,27 @@ impl Iterator for RecordWalk {
         // A record must at least carry its own `Size` field to be walkable at
         // all. Running out here is the ordinary end of the buffer, not an
         // anomaly, when nothing is left over.
-        let header_end = self.offset + self.size_offset + size_of::<u32>();
+        //
+        // Checked, to match the `size` arithmetic below. `offset` is bounded
+        // by `length`, itself a `u32`, so on a 64-bit target this cannot
+        // overflow; on `i686-pc-windows-msvc` -- which D-18 keeps supported --
+        // `usize` and `u32` are the same width, so a buffer near `u32::MAX`
+        // would wrap the sum and make the bounds check below *pass* on an
+        // offset past the end. Windows' 32-bit user address space is far too
+        // small for a caller to satisfy `new`'s safety contract for such a
+        // buffer, so this is unreachable rather than a live overrun -- but an
+        // unchecked add guarding an `unsafe` read should not depend on an
+        // argument made two layers away. Raised in the PR #61 review.
+        let header = self.size_offset.saturating_add(size_of::<u32>());
+        let Some(header_end) = self.offset.checked_add(header) else {
+            self.anomaly = Some(EnumerationAnomaly::overruns(
+                self.source,
+                self.offset,
+                header,
+                self.length - self.offset,
+            ));
+            return None;
+        };
         if header_end > self.length {
             if self.offset < self.length {
                 self.anomaly = Some(EnumerationAnomaly::trailing_bytes(

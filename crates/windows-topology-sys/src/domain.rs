@@ -351,8 +351,7 @@ mod serde_impl {
             AttributeValue::SignedInteger(n) => {
                 u64::try_from(n).map_err(|_| E::custom("expected a non-negative whole number"))
             }
-            AttributeValue::Float(n)
-                // **Exclusive at the top, and that is not a style choice.**
+            // **Exclusive at the top, and that is not a style choice.**
             // `u64::MAX as f64` rounds *up* to 2^64, which is one greater than
             // any `u64`. An inclusive bound therefore admitted exactly 2^64,
             // and `n as u64` saturates it to `u64::MAX` -- so a description
@@ -361,8 +360,7 @@ mod serde_impl {
             // nothing: the largest `f64` below 2^64 is 2^64 - 2048, which is a
             // representable `u64` and still accepted. Raised in the PR #56
             // review.
-            if n.fract() == 0.0 && (0.0..u64::MAX as f64).contains(&n) =>
-            {
+            AttributeValue::Float(n) if n.fract() == 0.0 && (0.0..u64::MAX as f64).contains(&n) => {
                 Ok(n as u64)
             }
             _ => Err(E::custom("expected a non-negative whole number")),
@@ -384,14 +382,14 @@ mod serde_impl {
             AttributeValue::UnsignedInteger(n) => {
                 i64::try_from(n).map_err(|_| E::custom("expected a whole number"))
             }
-            AttributeValue::Float(n)
-                // Exclusive at the top for the reason `as_u64` gives, and found by
+            // Exclusive at the top for the reason `as_u64` gives, and found by
             // sweeping for the same shape rather than reported: `i64::MAX as
             // f64` rounds up to 2^63, which no `i64` can hold, and the cast
             // would saturate it to `i64::MAX`. The *lower* bound stays
             // inclusive because `i64::MIN as f64` is -2^63 exactly -- it is a
             // power of two and representable, so it converts back losslessly.
-            if n.fract() == 0.0 && (i64::MIN as f64..i64::MAX as f64).contains(&n) =>
+            AttributeValue::Float(n)
+                if n.fract() == 0.0 && (i64::MIN as f64..i64::MAX as f64).contains(&n) =>
             {
                 Ok(n as i64)
             }

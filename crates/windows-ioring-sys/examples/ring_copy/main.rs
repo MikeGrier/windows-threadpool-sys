@@ -261,11 +261,16 @@ fn main() -> io::Result<()> {
             .find(|node| matches!(node, plan::RemoteNode::LocalUnknown))
         {
             *unknown
-        } else if classified
+        } else if let Some(remote) = classified
             .iter()
-            .any(|node| matches!(node, plan::RemoteNode::Other(_)))
+            .find(|node| matches!(node, plan::RemoteNode::Other(_)))
         {
-            plan::RemoteNode::Other(0)
+            // The node actually observed, not `Other(0)`. The payload is
+            // unused just below, but a fabricated id in a value that carries
+            // one is a trap for the next reader -- and inventing node 0 is
+            // indistinguishable from observing it. Raised in the PR #61
+            // review.
+            *remote
         } else {
             plan::RemoteNode::SameAsLocal
         };
@@ -290,18 +295,18 @@ fn main() -> io::Result<()> {
                 ));
                 std::process::exit(2);
             }
-            plan::RemoteNode::SameAsLocal | plan::RemoteNode::Other(_) => {
-                let any_remote = classified
-                    .iter()
-                    .any(|node| matches!(node, plan::RemoteNode::Other(_)));
-                if !any_remote {
-                    report.line(format_args!(
-                        "note: no domain has a NUMA node other than its own, so there is nothing \
-                         remote to place on; --placement remote measures the same placement as \
-                         --placement local on this machine"
-                    ));
-                }
+            // `SameAsLocal` *is* "no domain had another node" -- it is only
+            // reached when the search above found no `Other`. The recomputed
+            // `any_remote` this replaces asked the same question a second
+            // time, which the fabricated `Other(0)` had made look necessary.
+            plan::RemoteNode::SameAsLocal => {
+                report.line(format_args!(
+                    "note: no domain has a NUMA node other than its own, so there is nothing \
+                     remote to place on; --placement remote measures the same placement as \
+                     --placement local on this machine"
+                ));
             }
+            plan::RemoteNode::Other(_) => {}
         }
     }
 

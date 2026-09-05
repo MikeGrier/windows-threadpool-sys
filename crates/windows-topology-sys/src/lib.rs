@@ -19,7 +19,11 @@
 //!   platforms: this crate is Windows-only and does not build elsewhere. An
 //!   earlier version of these docs said it degraded to an empty shell on other
 //!   targets, which was never true and never built in CI -- raised in PR #56
-//!   review.
+//!   review. That correction reached the prose but not the code, leaving two
+//!   modules ungated and the crate genuinely buildable off Windows with a
+//!   two-type API; a `compile_error!` now enforces the claim -- raised in
+//!   PR #61 review. Depend on it under
+//!   `[target.'cfg(windows)'.dependencies]`.
 //!
 //! [gpi]: https://learn.microsoft.com/windows/win32/api/sysinfoapi/nf-sysinfoapi-getlogicalprocessorinformationex
 //! [`examples/print_topology.rs`]: https://github.com/MikeGrier/windows-threadpool-sys/blob/main/crates/windows-topology-sys/examples/print_topology.rs
@@ -81,6 +85,23 @@
 
 #![warn(missing_docs)]
 
+// The docs above claim this crate does not build off Windows. Until now that
+// was prose only: every module was `cfg(windows)` except `observed` and
+// `provenance`, so the crate really did build for a Linux target and hand back
+// a two-type API. Confirmed by building it, not by reading it.
+//
+// Enforced here rather than by gating those two modules, because gating alone
+// would leave a crate that compiles to nothing on other targets -- which is
+// the "empty shell" description a PR #56 review round already rejected as
+// false. A crate that will not build is the claim actually being made, so the
+// compiler should be the one making it. Raised in the PR #61 review.
+#[cfg(not(windows))]
+compile_error!(
+    "windows-topology-sys is Windows-only: it enumerates Windows processor, cache, and \
+     memory topology and has no meaning on another platform. Gate it in your manifest \
+     with [target.'cfg(windows)'.dependencies]."
+);
+
 #[cfg(windows)]
 mod anomaly;
 
@@ -93,10 +114,12 @@ mod granularity;
 #[cfg(windows)]
 mod observation;
 /// Absence with its reason attached.
+#[cfg(windows)]
 mod observed;
 #[cfg(windows)]
 mod processor_set;
 /// Where a topology's content came from.
+#[cfg(windows)]
 mod provenance;
 
 #[cfg(windows)]
@@ -118,9 +141,11 @@ pub use domain::{AttributeValue, Domain, DomainKind, Processor, ProcessorFacts, 
 pub use granularity::{Granularity, Proximity};
 #[cfg(windows)]
 pub use observation::{AttributeObservation, Observation, ProcessorAttribute, Source};
+#[cfg(windows)]
 pub use observed::Observed;
 #[cfg(windows)]
 pub use processor_set::ProcessorSet;
+#[cfg(windows)]
 pub use provenance::Provenance;
 #[cfg(windows)]
 pub use relation::{

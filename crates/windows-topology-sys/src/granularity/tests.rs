@@ -517,12 +517,48 @@ fn a_processor_number_too_wide_for_this_platform_is_reported_not_panicked() {
 }
 
 #[test]
+fn an_unrepresentable_id_is_not_evidence_of_an_unobserved_finer_granularity() {
+    // `finer_unobserved` reports a gap in what the PLATFORM said. An id this
+    // platform cannot express is a defect in the QUERY, and it is already
+    // named in `unrepresentable`.
+    //
+    // The two meet because `ProcessorSet::contains` answers `false` for an
+    // out-of-range number at every kind, which is indistinguishable from "the
+    // platform never placed this processor in one". Counting it would report a
+    // coverage gap at every reported kind at once, on a machine that in fact
+    // described all of its processors -- the same conflation `Observed` exists
+    // to remove, arriving by a third door. Raised in the PR #61 review.
+    let t = topology(2, vec![core(&[0, 1])]);
+    let impossible = ProcessorId {
+        group: 0,
+        number: 255,
+    };
+
+    let answer = t.proximity(&[id(0), id(1), impossible]);
+
+    assert_eq!(
+        answer.unrepresentable,
+        vec![impossible],
+        "the bad id must still be named"
+    );
+    assert!(
+        !answer.finer_unobserved,
+        "a defect in the query must not be reported as a gap in the platform's \
+         reporting: {answer:?}"
+    );
+}
+
+#[test]
 fn an_unrepresentable_processor_does_not_corrupt_the_answer_for_the_others() {
     // The complement: the representable processors must still be answered
     // about. Skipping the bad id and saying nothing would answer a question
     // about fewer processors than were asked, and a caller comparing two
     // processors would read "nothing shared" from an argument it got wrong.
-    let topology = topology(2, Vec::new());
+    //
+    // The topology carries a core deliberately: with no domains at all every
+    // kind is absent, `finer_unobserved` is false whatever the query, and the
+    // test would pass without exercising the field it claims to protect.
+    let topology = topology(2, vec![core(&[0, 1])]);
     let real = ProcessorId {
         group: 0,
         number: 0,
@@ -538,6 +574,10 @@ fn an_unrepresentable_processor_does_not_corrupt_the_answer_for_the_others() {
     assert!(
         mixed.unrepresentable.contains(&impossible),
         "the bad id must be reported"
+    );
+    assert_eq!(
+        mixed.finer_unobserved, alone.finer_unobserved,
+        "the bad id must not change what is claimed about the good one: {mixed:?}"
     );
     assert_eq!(
         mixed.shared.len(),

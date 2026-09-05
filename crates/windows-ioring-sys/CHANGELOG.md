@@ -1,5 +1,28 @@
 # Changelog
 
+## [0.3.0](https://github.com/MikeGrier/windows-threadpool-sys/compare/windows-ioring-sys-v0.2.0...windows-ioring-sys-v0.3.0) (2026-09-05)
+
+
+### ⚠ BREAKING CHANGES
+
+* **topology:** reshape the topology model around observed domains
+
+### Features
+
+* **topology:** reshape the topology model around observed domains ([a775600](https://github.com/MikeGrier/windows-threadpool-sys/commit/a77560054ba35c2ca8eb6ea46d7a3efc2390674f))
+
+
+### Bug Fixes
+
+* **topology:** write test buffers through as_mut_ptr, keep the observed node id ([0f49ab6](https://github.com/MikeGrier/windows-threadpool-sys/commit/0f49ab690cff8b28e9b9ffe7cb21d7fd8957f026))
+
+
+### Dependencies
+
+* The following workspace dependencies were updated
+  * dev-dependencies
+    * windows-topology-sys bumped from 0.1.0 to 0.2.0
+
 ## [0.2.0](https://github.com/MikeGrier/windows-threadpool-sys/compare/windows-ioring-sys-v0.1.2...windows-ioring-sys-v0.2.0) (2026-08-30)
 
 
