@@ -860,7 +860,7 @@ asserts that a cancelled slot's queued question **still arrives**. There is no
 discard to fall back from.
 
 So the body is gone and an assertion stands in its place, phrased as
-`debug_assert!(std::thread::panicking(), ...)` -- which is the true statement
+`assert!(std::thread::panicking(), ...)` -- which is the true statement
 rather than a bare `false`. The only way to reach it today is an unwind out of
 `take` between the pop and `resolved` being set, and there the original panic is
 the real diagnostic and must be left to propagate rather than turned into an abort
@@ -868,6 +868,17 @@ by a second one. Any *other* arrival is a new discard path that has not settled
 its reservation, and it fires. **The contract it encodes: a discard must release
 the reservation under the `items` lock it already holds, exactly as `take` does --
 never by delegating to a hold's `Drop`.**
+
+**Unconditional, not `debug_assert!`, corrected 2026-09-05 after the PR #57
+review.** It shipped as a `debug_assert!`, which meant the tripwire did not exist
+in release builds -- so the violation it guards, a future discard path that
+forgets to settle its reservation, would have corrupted the capacity accounting
+silently in exactly the configuration where that costs something. Nothing is
+traded away by making it unconditional: the "do not raise a second panic during
+an unwind" property comes from the *predicate* being `std::thread::panicking()`,
+not from the assertion's flavour, so an in-flight panic still passes through
+untouched. Its test lost `#[cfg(debug_assertions)]` with it, that gate having
+been correct for the old form and inverted by the new one.
 
 Two transferable points. First, "unreachable" and "harmless" are different
 claims, and the second does not follow from the first: this body was unreachable

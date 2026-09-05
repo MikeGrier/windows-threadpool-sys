@@ -585,6 +585,12 @@ unwind out of `take`: body live -> **hung past 90s**; `Drop` short-circuited -> 
 `dropping_a_standing_slot_while_its_message_is_still_queued_releases_capacity_once` asserts that a cancelled
 slot's queued question **still arrives**.
 
+> **Later changed, 2026-09-05:** the assertion below shipped as a `debug_assert!` and is now an
+> unconditional `assert!`, because a tripwire compiled out of release builds is not one. The sentence
+> that follows is left as written -- this file records what was *done*, and that is what landed --
+> with the current form and its reasoning in
+> [DESIGN-NOTES.md](DESIGN-NOTES.md#dead-code-that-could-not-have-run).
+
 **What landed.** The body is replaced by `debug_assert!(std::thread::panicking(), ...)` -- the true
 statement rather than a bare `false`, so the one way to arrive today (an unwind out of `take` between the
 pop and `resolved`) lets the original panic propagate instead of becoming an abort from a second one, while
