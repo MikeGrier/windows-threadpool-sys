@@ -245,7 +245,6 @@ dependencies = [
 name = "windows-platform-probes"
 version = "0.0.0"
 dependencies = [
- "portable-atomic",
  "windows-namespace-request-sys",
  "windows-placement-probe",
  "windows-sys",

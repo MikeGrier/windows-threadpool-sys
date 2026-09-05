@@ -116,9 +116,11 @@ windows-namespace-request-sys = { path = "../windows-namespace-request-sys" }
 # on the same host, in the same run, by the same harness.
 windows-waitable-queues = { path = "../windows-waitable-queues", features = [
 	"experimental-permit-claim",
+	# So the probe can instantiate the 128-bit layout. The 64-bit ones need no
+	# feature; this is the only one that costs the queue crate a dependency.
+	"dwcas",
 ] }
 wtf-string = { path = "../wtf-string" }
-portable-atomic = { version = "1.15.0", default-features = false }
 
 [dependencies.windows-sys]
 version = "0.61.2"

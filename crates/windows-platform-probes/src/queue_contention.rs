@@ -54,7 +54,7 @@ use std::time::Instant;
 
 use windows_waitable_queues::{permit_mpsc, reserving_mpsc, slotwise_mpsc};
 
-use crate::claim_layout;
+use windows_waitable_queues::reserving_mpsc::{Balanced, ClaimLayout, Enduring, Perpetual, Wide};
 
 /// How many pushes each producer thread performs in one timed run.
 const PUSHES_PER_PRODUCER: usize = 50_000;
@@ -92,16 +92,18 @@ pub mod shapes {
     pub const PERMIT_MPSC: &str = "permit_mpsc";
     /// The uncontended-atomic floor the queues are measured against.
     pub const BASELINE_FETCH_ADD: &str = "baseline_fetch_add";
-    /// The reserving claim word as it ships: a `u64` split 32 / 32.
+    /// `reserving_mpsc` on its default layout: a `u64` split 32 / 32.
     ///
-    /// Measured beside [`RESERVING_MPSC`] rather than assumed equal to it: it
-    /// is a duplicated implementation, so a divergence between the two is
-    /// evidence the duplicate is not standing in faithfully.
-    pub const CLAIM_NARROW: &str = "claim_32_32";
-    /// The reserving claim word split 16 / 48, still one `u64` exchange.
-    pub const CLAIM_DEEP: &str = "claim_16_48";
-    /// The reserving claim word widened to a `u128` split 64 / 64.
-    pub const CLAIM_WIDE: &str = "claim_64_64";
+    /// The same configuration as [`RESERVING_MPSC`], run again under its own
+    /// name so the layout comparison reads without a reader having to know
+    /// which layout the default is.
+    pub const CLAIM_NARROW: &str = "reserving(32/32)";
+    /// `reserving_mpsc` on `Enduring`: a `u64` split 16 / 48.
+    pub const CLAIM_DEEP: &str = "reserving(16/48)";
+    /// `reserving_mpsc` on `Perpetual`: a `u64` split 8 / 56.
+    pub const CLAIM_PERPETUAL: &str = "reserving(8/56)";
+    /// `reserving_mpsc` on `Wide`: a `u128` split 64 / 64.
+    pub const CLAIM_WIDE: &str = "reserving(64/64)";
 }
 /// One configuration's result.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -187,23 +189,29 @@ pub fn measure() -> Observation {
         }));
 
         isolated.push(median_run(shapes::CLAIM_NARROW, producers, |count| {
-            time_isolated_claim_narrow(count)
+            time_isolated_layout::<Balanced>(count)
         }));
         isolated.push(median_run(shapes::CLAIM_DEEP, producers, |count| {
-            time_isolated_claim_deep(count)
+            time_isolated_layout::<Enduring>(count)
+        }));
+        isolated.push(median_run(shapes::CLAIM_PERPETUAL, producers, |count| {
+            time_isolated_layout::<Perpetual>(count)
         }));
         isolated.push(median_run(shapes::CLAIM_WIDE, producers, |count| {
-            time_isolated_claim_wide(count)
+            time_isolated_layout::<Wide>(count)
         }));
 
         drained.push(median_run(shapes::CLAIM_NARROW, producers, |count| {
-            time_drained_claim_narrow(count)
+            time_drained_layout::<Balanced>(count)
         }));
         drained.push(median_run(shapes::CLAIM_DEEP, producers, |count| {
-            time_drained_claim_deep(count)
+            time_drained_layout::<Enduring>(count)
+        }));
+        drained.push(median_run(shapes::CLAIM_PERPETUAL, producers, |count| {
+            time_drained_layout::<Perpetual>(count)
         }));
         drained.push(median_run(shapes::CLAIM_WIDE, producers, |count| {
-            time_drained_claim_wide(count)
+            time_drained_layout::<Wide>(count)
         }));
     }
 
@@ -545,30 +553,34 @@ fn time_drained_permit(producers: usize) -> Repetition {
     (elapsed, refusals)
 }
 
-/// The shipping 32 / 32 claim word, in the regime that isolates the claim.
+/// One claim-word layout, in the regime that isolates the claim.
 ///
-/// A line-for-line twin of [`time_isolated_reserving`] with the duplicated
-/// layout substituted, and duplicated again for each of the three layouts for
-/// the reason [`time_isolated_permit`] gives: a generic over the layouts would
-/// put an indirection that might not inline identically inside the timed
-/// region, in a measurement whose whole output is a difference of a few
-/// nanoseconds per push.
-fn time_isolated_claim_narrow(producers: usize) -> Repetition {
-    let queue = Arc::new(claim_layout::narrow::Queue::with_capacity(capacity_for(
-        producers,
-    )));
+/// **Generic over the layout, where [`time_isolated_permit`] is deliberately
+/// duplicated, and the difference is the point.** That twin compares two
+/// *different types*, which a generic could only unify behind a trait, putting
+/// an indirection that might not inline identically inside the timed region.
+/// These are the *same type* at different layout parameters, so this
+/// monomorphises to exactly the code a hand-written copy would produce -- there
+/// is nothing left to dispatch.
+///
+/// Measures `reserving_mpsc` itself rather than a stand-in. An earlier form of
+/// this probe carried its own duplicated implementation of the claim protocol,
+/// built so the layouts could be compared before the shipping crate had them;
+/// it drifted from the original twice while doing so. The shipping type takes
+/// the layout as a parameter now, so the duplicate is gone.
+fn time_isolated_layout<L: ClaimLayout>(producers: usize) -> Repetition {
+    let (tx, rx) =
+        reserving_mpsc::bounded_as::<u64, L>(capacity_for(producers)).expect("a valid capacity");
     let gate = start_barrier(producers);
     let started = thread::scope(|scope| {
         for producer in 0..producers {
-            let queue = Arc::clone(&queue);
+            let tx = tx.clone();
             let gate = Arc::clone(&gate);
             scope.spawn(move || {
                 gate.wait();
                 for index in 0..PUSHES_PER_PRODUCER {
-                    assert!(
-                        queue.push((producer * PUSHES_PER_PRODUCER + index) as u64),
-                        "the run fits in the capacity"
-                    );
+                    tx.push((producer * PUSHES_PER_PRODUCER + index) as u64)
+                        .expect("the run fits in the capacity");
                 }
             });
         }
@@ -576,101 +588,47 @@ fn time_isolated_claim_narrow(producers: usize) -> Repetition {
         Instant::now()
     });
     let elapsed = started.elapsed().as_nanos() as f64;
-    while queue.pop().is_some() {}
-    (elapsed, 0)
+    let refusals = tx.refused();
+    while rx.pop().is_some() {}
+    (elapsed, refusals)
 }
 
-/// The 16 / 48 claim word, in the regime that isolates the claim.
-fn time_isolated_claim_deep(producers: usize) -> Repetition {
-    let queue = Arc::new(claim_layout::deep::Queue::with_capacity(capacity_for(
-        producers,
-    )));
-    let gate = start_barrier(producers);
-    let started = thread::scope(|scope| {
-        for producer in 0..producers {
-            let queue = Arc::clone(&queue);
-            let gate = Arc::clone(&gate);
-            scope.spawn(move || {
-                gate.wait();
-                for index in 0..PUSHES_PER_PRODUCER {
-                    assert!(
-                        queue.push((producer * PUSHES_PER_PRODUCER + index) as u64),
-                        "the run fits in the capacity"
-                    );
-                }
-            });
-        }
-        gate.wait();
-        Instant::now()
-    });
-    let elapsed = started.elapsed().as_nanos() as f64;
-    while queue.pop().is_some() {}
-    (elapsed, 0)
-}
-
-/// The 64 / 64 claim word, in the regime that isolates the claim.
-fn time_isolated_claim_wide(producers: usize) -> Repetition {
-    let queue = Arc::new(claim_layout::wide::Queue::with_capacity(capacity_for(
-        producers,
-    )));
-    let gate = start_barrier(producers);
-    let started = thread::scope(|scope| {
-        for producer in 0..producers {
-            let queue = Arc::clone(&queue);
-            let gate = Arc::clone(&gate);
-            scope.spawn(move || {
-                gate.wait();
-                for index in 0..PUSHES_PER_PRODUCER {
-                    assert!(
-                        queue.push((producer * PUSHES_PER_PRODUCER + index) as u64),
-                        "the run fits in the capacity"
-                    );
-                }
-            });
-        }
-        gate.wait();
-        Instant::now()
-    });
-    let elapsed = started.elapsed().as_nanos() as f64;
-    while queue.pop().is_some() {}
-    (elapsed, 0)
-}
-
-/// The shipping 32 / 32 claim word, against a continuously draining consumer.
-fn time_drained_claim_narrow(producers: usize) -> Repetition {
-    let queue = Arc::new(claim_layout::narrow::Queue::with_capacity(DRAINED_CAPACITY));
-    let refusals = Arc::new(AtomicU64::new(0));
+/// One claim-word layout, against a continuously draining consumer.
+///
+/// Generic for [`time_isolated_layout`]'s reason.
+fn time_drained_layout<L: ClaimLayout + 'static>(producers: usize) -> Repetition {
+    let (tx, rx) =
+        reserving_mpsc::bounded_as::<u64, L>(DRAINED_CAPACITY).expect("a valid capacity");
     let done = Arc::new(AtomicBool::new(false));
-    let gate = start_barrier(producers + 1);
-
-    let consumer_queue = Arc::clone(&queue);
     let consumer_done = Arc::clone(&done);
+    // The consumer joins the gate for the reason its twins do: a run whose
+    // opening is undrained is not the regime being measured.
+    let gate = start_barrier(producers + 1);
     let consumer_gate = Arc::clone(&gate);
+
     let consumer = thread::spawn(move || {
         consumer_gate.wait();
         while !consumer_done.load(Ordering::Relaxed) {
-            while consumer_queue.pop().is_some() {}
+            while rx.pop().is_some() {}
             std::hint::spin_loop();
         }
-        while consumer_queue.pop().is_some() {}
+        while rx.pop().is_some() {}
+        rx.refused()
     });
 
     let started = thread::scope(|scope| {
         for producer in 0..producers {
-            let queue = Arc::clone(&queue);
+            let tx = tx.clone();
             let gate = Arc::clone(&gate);
-            let refusals = Arc::clone(&refusals);
             scope.spawn(move || {
                 gate.wait();
-                let mut refused = 0u64;
                 for index in 0..PUSHES_PER_PRODUCER {
-                    let item = (producer * PUSHES_PER_PRODUCER + index) as u64;
-                    while !queue.push(item) {
-                        refused += 1;
+                    let mut item = (producer * PUSHES_PER_PRODUCER + index) as u64;
+                    while let Err(error) = tx.push(item) {
+                        item = error.into_inner();
                         std::hint::spin_loop();
                     }
                 }
-                refusals.fetch_add(refused, Ordering::Relaxed);
             });
         }
         gate.wait();
@@ -678,98 +636,6 @@ fn time_drained_claim_narrow(producers: usize) -> Repetition {
     });
     let elapsed = started.elapsed().as_nanos() as f64;
     done.store(true, Ordering::Relaxed);
-    consumer.join().expect("the consumer did not panic");
-    (elapsed, refusals.load(Ordering::Relaxed))
-}
-
-/// The 16 / 48 claim word, against a continuously draining consumer.
-fn time_drained_claim_deep(producers: usize) -> Repetition {
-    let queue = Arc::new(claim_layout::deep::Queue::with_capacity(DRAINED_CAPACITY));
-    let refusals = Arc::new(AtomicU64::new(0));
-    let done = Arc::new(AtomicBool::new(false));
-    let gate = start_barrier(producers + 1);
-
-    let consumer_queue = Arc::clone(&queue);
-    let consumer_done = Arc::clone(&done);
-    let consumer_gate = Arc::clone(&gate);
-    let consumer = thread::spawn(move || {
-        consumer_gate.wait();
-        while !consumer_done.load(Ordering::Relaxed) {
-            while consumer_queue.pop().is_some() {}
-            std::hint::spin_loop();
-        }
-        while consumer_queue.pop().is_some() {}
-    });
-
-    let started = thread::scope(|scope| {
-        for producer in 0..producers {
-            let queue = Arc::clone(&queue);
-            let gate = Arc::clone(&gate);
-            let refusals = Arc::clone(&refusals);
-            scope.spawn(move || {
-                gate.wait();
-                let mut refused = 0u64;
-                for index in 0..PUSHES_PER_PRODUCER {
-                    let item = (producer * PUSHES_PER_PRODUCER + index) as u64;
-                    while !queue.push(item) {
-                        refused += 1;
-                        std::hint::spin_loop();
-                    }
-                }
-                refusals.fetch_add(refused, Ordering::Relaxed);
-            });
-        }
-        gate.wait();
-        Instant::now()
-    });
-    let elapsed = started.elapsed().as_nanos() as f64;
-    done.store(true, Ordering::Relaxed);
-    consumer.join().expect("the consumer did not panic");
-    (elapsed, refusals.load(Ordering::Relaxed))
-}
-
-/// The 64 / 64 claim word, against a continuously draining consumer.
-fn time_drained_claim_wide(producers: usize) -> Repetition {
-    let queue = Arc::new(claim_layout::wide::Queue::with_capacity(DRAINED_CAPACITY));
-    let refusals = Arc::new(AtomicU64::new(0));
-    let done = Arc::new(AtomicBool::new(false));
-    let gate = start_barrier(producers + 1);
-
-    let consumer_queue = Arc::clone(&queue);
-    let consumer_done = Arc::clone(&done);
-    let consumer_gate = Arc::clone(&gate);
-    let consumer = thread::spawn(move || {
-        consumer_gate.wait();
-        while !consumer_done.load(Ordering::Relaxed) {
-            while consumer_queue.pop().is_some() {}
-            std::hint::spin_loop();
-        }
-        while consumer_queue.pop().is_some() {}
-    });
-
-    let started = thread::scope(|scope| {
-        for producer in 0..producers {
-            let queue = Arc::clone(&queue);
-            let gate = Arc::clone(&gate);
-            let refusals = Arc::clone(&refusals);
-            scope.spawn(move || {
-                gate.wait();
-                let mut refused = 0u64;
-                for index in 0..PUSHES_PER_PRODUCER {
-                    let item = (producer * PUSHES_PER_PRODUCER + index) as u64;
-                    while !queue.push(item) {
-                        refused += 1;
-                        std::hint::spin_loop();
-                    }
-                }
-                refusals.fetch_add(refused, Ordering::Relaxed);
-            });
-        }
-        gate.wait();
-        Instant::now()
-    });
-    let elapsed = started.elapsed().as_nanos() as f64;
-    done.store(true, Ordering::Relaxed);
-    consumer.join().expect("the consumer did not panic");
-    (elapsed, refusals.load(Ordering::Relaxed))
+    let refusals = consumer.join().expect("the consumer must not panic");
+    (elapsed, refusals)
 }

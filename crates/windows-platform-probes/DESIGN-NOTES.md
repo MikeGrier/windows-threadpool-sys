@@ -765,3 +765,42 @@ without reopening `D-18`'s i686 question.
 So the candidates worth considering are **12/52 and 8/56**, not the 16/48 first
 sketched here: 16/48's 12.7 days at the conservative floor is still reachable by
 a busy long-lived process, and 12/52 is the first row that is not.
+
+### Re-measured on the shipping type, and the duplicate had understated the wide word
+
+`CW-1.6` deleted the duplicated protocol in this crate once
+`windows-waitable-queues` took the layout as a parameter, so the probe now
+instantiates the real type at each layout. The numbers below supersede the ones
+above, which were taken from the stand-in.
+
+| producers | 16/48 vs 32/32 | 8/56 vs 32/32 | 64/64 vs 32/32 |
+|---|---|---|---|
+| 1 | 1.02x | 0.98x | 1.45x |
+| 4 | 1.04x | 1.01x | 1.33x |
+| 8 | 1.05x | 1.05x | 1.59x |
+| 16 | 1.21x | 1.21x | **3.83x** |
+| 32 | 1.05x | 1.13x | **3.99x** |
+
+**The finding about apportionment survives contact with the real type.** Both
+`u64` re-apportionments track the default within noise, including `Perpetual`'s
+8/56 -- so buying twenty years of headroom really is free, and it is now
+measured on the code that ships rather than on something resembling it.
+
+**The finding about width did not survive unchanged.** The duplicate reported
+the 128-bit exchange at 2.37x and 2.99x at sixteen and thirty-two producers; the
+real type reports 3.83x and 3.99x. The stand-in was *understating* the cost of
+the layout it was built to evaluate, and by the widest margin exactly where the
+decision is most sensitive. The conclusion is unaltered in direction and firmer
+in degree.
+
+**The residual offset is gone, which is the point of the deletion.** The
+duplicate ran about 1.26x slower than `reserving_mpsc` at high producer counts,
+an error that had to be carried as a caveat on every figure. Running the same
+configuration twice through the shipping type now agrees within noise -- 50.3 ns
+against 52.1 ns at thirty-two producers -- because both rows are the same code.
+
+The general lesson is worth keeping even though the duplicate is gone:
+**a stand-in is only evidence about the thing it stands in for while something
+checks that it still does.** This one was checked, which is how the missing
+cache padding was caught; but the checking only ever bounded the error, and the
+bound was loose enough to hide a third of the wide word's cost.

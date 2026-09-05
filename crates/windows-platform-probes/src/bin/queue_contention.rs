@@ -169,7 +169,15 @@ fn render() -> String {
     let _ = writeln!(out, "\n  3. claim-word layout\n");
     let _ = writeln!(
         out,
-        "     32/32 is what ships; 16/48 is the same u64 exchange with the bits"
+        "     Four apportionments of reserving_mpsc's claim word, measured on"
+    );
+    let _ = writeln!(
+        out,
+        "     the shipping type itself rather than on a stand-in. 32/32 is the"
+    );
+    let _ = writeln!(
+        out,
+        "     default; 16/48 and 8/56 are the same u64 exchange with the bits"
     );
     let _ = writeln!(
         out,
@@ -177,19 +185,19 @@ fn render() -> String {
     );
     let _ = writeln!(
         out,
-        "     32/32 and 16/48 issue the SAME instruction, so a difference"
+        "     The three u64 rows issue the SAME instruction, so a difference"
     );
     let _ = writeln!(
         out,
-        "     between them prices the wider head and per-slot sequence the"
+        "     between them is noise or slot-metadata density, not the claim."
     );
     let _ = writeln!(
         out,
-        "     deeper position forces, not the claim. 64/64 vs 32/32 prices the"
+        "     64/64 vs 32/32 prices the double-width exchange -- what removing"
     );
     let _ = writeln!(
         out,
-        "     double-width exchange -- the cost of removing the wrap entirely.\n"
+        "     the recurrence outright costs, against 8/56 merely deferring it.\n"
     );
     for (label, regime) in [
         ("isolated", &observation.isolated),
@@ -198,21 +206,31 @@ fn render() -> String {
         let _ = writeln!(out, "     -- {label} --");
         let _ = writeln!(
             out,
-            "     {:<12} {:>12} {:>12} {:>12} {:>12} {:>12}",
-            "producers", "32/32 ns", "16/48 ns", "64/64 ns", "16/48 vs", "64/64 vs"
+            "     {:<10} {:>11} {:>11} {:>11} {:>11} {:>10} {:>10} {:>10}",
+            "producers",
+            "32/32 ns",
+            "16/48 ns",
+            "8/56 ns",
+            "64/64 ns",
+            "16/48 vs",
+            "8/56 vs",
+            "64/64 vs"
         );
         for &producers in PRODUCER_COUNTS {
             let narrow = observation.find(regime, shapes::CLAIM_NARROW, producers);
             let deep = observation.find(regime, shapes::CLAIM_DEEP, producers);
+            let perpetual = observation.find(regime, shapes::CLAIM_PERPETUAL, producers);
             let wide = observation.find(regime, shapes::CLAIM_WIDE, producers);
             let _ = writeln!(
                 out,
-                "     {:<12} {:>12} {:>12} {:>12} {:>12} {:>12}",
+                "     {:<10} {:>11} {:>11} {:>11} {:>11} {:>10} {:>10} {:>10}",
                 producers,
                 format_nanos(narrow),
                 format_nanos(deep),
+                format_nanos(perpetual),
                 format_nanos(wide),
                 format_ratio(deep, narrow),
+                format_ratio(perpetual, narrow),
                 format_ratio(wide, narrow)
             );
         }
@@ -220,25 +238,24 @@ fn render() -> String {
     }
     let _ = writeln!(
         out,
-        "     the shipping reserving_mpsc row above is the control: 32/32 here"
+        "     the 32/32 row and the reserving_mpsc row above are the same"
     );
     let _ = writeln!(
         out,
-        "     is a duplicate of it, so the two should agree. They will not match"
+        "     configuration run twice, so they should agree within noise. They"
     );
     let _ = writeln!(
         out,
-        "     exactly -- the duplicate carries no metrics, doorbell, or"
+        "     are no longer a control against a duplicated implementation: the"
     );
     let _ = writeln!(
         out,
-        "     disconnection checks -- but a large gap means the duplicate is not"
+        "     shipping type takes the layout as a parameter, so there is nothing"
     );
     let _ = writeln!(
         out,
-        "     standing in faithfully and the comparison below is not trustworthy."
+        "     left that could drift away from what callers actually run."
     );
-
     let _ = writeln!(
         out,
         "\n  CAUTION: the drained regime has ONE consumer, because that is what"

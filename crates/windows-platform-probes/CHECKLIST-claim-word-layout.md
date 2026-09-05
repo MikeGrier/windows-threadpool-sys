@@ -188,7 +188,7 @@ dependency at all -- only 64/64 does, which is `CW-2.3`.
 
 ## M3: retire the duplicate
 
-- [ ] **CW-1.6** -- Delete the duplicated *implementation* in
+- [x] **CW-1.6** -- Delete the duplicated *implementation* in
   [claim_layout.rs](src/claim_layout.rs), keeping only what `CW-2.3` leaves no
   other way to measure.
 
