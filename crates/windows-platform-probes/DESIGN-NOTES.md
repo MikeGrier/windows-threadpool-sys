@@ -660,3 +660,71 @@ change. **It passed everything.** Against the suite now, three tests fail. That 
 seam bought, and it is why the existing `ProcessorPlace` fixtures were kept rather than treated as
 sufficient: they encode what a test author assumed the conversion produces, which is precisely the
 thing that cannot catch the conversion being wrong.
+
+## The claim word's width costs 2-3x in isolation and much less in use
+
+Measured by `probe-queue-contention` for
+[CHECKLIST-claim-word-layout.md](CHECKLIST-claim-word-layout.md) `CW-1.4`, on
+one host, `x86_64-pc-windows-msvc`. Three apportionments of `reserving_mpsc`'s
+claim word, built as duplicates in [claim_layout.rs](src/claim_layout.rs) so the
+shipping crate was not disturbed: 32/32 and 16/48 over `AtomicU64`, and 64/64
+over `AtomicU128`.
+
+`AtomicU128::is_always_lock_free()` is **true** on this target and
+`cfg(target_feature = "cmpxchg16b")` is enabled by default, so the 128-bit
+exchange is a compile-time-guaranteed native instruction here and no CPUID
+branch was measured as though it were the algorithm.
+
+| producers | 16/48 vs 32/32 (isolated) | 64/64 vs 32/32 (isolated) | 64/64 vs 32/32 (drained) |
+|---|---|---|---|
+| 1 | 1.14x | 2.05x | 1.05x |
+| 4 | 1.21x | 1.37x | 1.12x |
+| 8 | 1.00x | 2.33x | 1.07x |
+| 16 | 0.88x | 2.37x | 1.00x |
+| 32 | 0.98x | 2.99x | 1.11x |
+
+**Re-apportioning the bits is free.** 16/48 tracks 32/32 within noise in both
+regimes, which is the expected result and worth stating as a confirmed
+prediction rather than a discovery: both issue the same `lock cmpxchg` on the
+same `u64`, so only the shift and mask constants differ. The 48-bit position
+does force `head` and the per-slot `sequence` to 64 bits, and that cost does not
+show up either. What this buys is the recurrence moving from 2^32 to 2^48 --
+from about 37 seconds of sustained maximum-rate pushing to about 28 days.
+
+**Widening the word is not free, and how much it costs depends entirely on the
+regime.** Isolated, where the claim is the only thing happening, `cmpxchg16b`
+costs 2-3x and the penalty *grows* with contention. Drained, with a consumer
+running, it is 5-12%.
+
+### The drained regime flatters the slower layout, and the refusal counts say so
+
+The two regimes must not be averaged, and the drained one must not be read as
+the answer on its own. **A slower producer is less backpressured**, so it earns
+fewer refusals, and refusal retries are inside the timed region. At eight
+producers the 64/64 layout took 12,149 refusals against 32/32's 74,181 -- so
+part of what makes its per-push number look close is that it spent less time
+being turned away. The drained figures are therefore an *understatement* of the
+128-bit word's cost, not a measurement of it under load.
+
+The isolated regime is the clean measurement of the claim itself; the drained
+one shows that in a queue doing real work the claim is not the dominant cost. A
+real application sits between them, nearer the drained end the more
+consumer-bound it is.
+
+### What the control caught
+
+The first run reported 3.7x against the shipping shape and a completely
+different scaling curve. The cause was that the duplicate had not padded `head`
+and the claim word onto separate cache lines, which `reserving_mpsc` does
+deliberately -- every producer reads `head` on every push, so sharing a line
+puts the consumer's writes in their path. Aligned, the duplicate tracks the
+shipping shape's curve.
+
+A residual gap remains: the duplicate runs about 1.26x slower than
+`reserving_mpsc` at high producer counts. That offset applies equally to all
+three layouts, so the ratios above stand, but it means these figures are **not**
+absolute numbers for the shipping shape and must not be quoted as such.
+
+**Comparing a duplicate against the original it stands in for is what made both
+of these visible.** A run of three layouts that agreed with each other and
+disagreed with reality would have looked entirely healthy.

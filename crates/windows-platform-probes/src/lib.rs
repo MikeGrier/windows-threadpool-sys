@@ -110,6 +110,7 @@
 #![warn(missing_docs)]
 
 pub mod cancel_io;
+pub mod claim_layout;
 pub mod completion_port;
 pub mod device_map;
 pub mod doorbell_cost;

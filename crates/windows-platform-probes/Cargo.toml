@@ -118,6 +118,7 @@ windows-waitable-queues = { path = "../windows-waitable-queues", features = [
 	"experimental-permit-claim",
 ] }
 wtf-string = { path = "../wtf-string" }
+portable-atomic = { version = "1.15.0", default-features = false }
 
 [dependencies.windows-sys]
 version = "0.61.2"

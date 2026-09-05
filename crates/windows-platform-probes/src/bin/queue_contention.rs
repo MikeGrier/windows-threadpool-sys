@@ -165,6 +165,80 @@ fn render() -> String {
         "     one; above 1.00 and closing the hole costs throughput."
     );
 
+    // Question 3: what does the claim word's apportionment and width cost?
+    let _ = writeln!(out, "\n  3. claim-word layout\n");
+    let _ = writeln!(
+        out,
+        "     32/32 is what ships; 16/48 is the same u64 exchange with the bits"
+    );
+    let _ = writeln!(
+        out,
+        "     apportioned differently; 64/64 is a u128 exchange (cmpxchg16b)."
+    );
+    let _ = writeln!(
+        out,
+        "     32/32 and 16/48 issue the SAME instruction, so a difference"
+    );
+    let _ = writeln!(
+        out,
+        "     between them prices the wider head and per-slot sequence the"
+    );
+    let _ = writeln!(
+        out,
+        "     deeper position forces, not the claim. 64/64 vs 32/32 prices the"
+    );
+    let _ = writeln!(
+        out,
+        "     double-width exchange -- the cost of removing the wrap entirely.\n"
+    );
+    for (label, regime) in [
+        ("isolated", &observation.isolated),
+        ("drained", &observation.drained),
+    ] {
+        let _ = writeln!(out, "     -- {label} --");
+        let _ = writeln!(
+            out,
+            "     {:<12} {:>12} {:>12} {:>12} {:>12} {:>12}",
+            "producers", "32/32 ns", "16/48 ns", "64/64 ns", "16/48 vs", "64/64 vs"
+        );
+        for &producers in PRODUCER_COUNTS {
+            let narrow = observation.find(regime, shapes::CLAIM_NARROW, producers);
+            let deep = observation.find(regime, shapes::CLAIM_DEEP, producers);
+            let wide = observation.find(regime, shapes::CLAIM_WIDE, producers);
+            let _ = writeln!(
+                out,
+                "     {:<12} {:>12} {:>12} {:>12} {:>12} {:>12}",
+                producers,
+                format_nanos(narrow),
+                format_nanos(deep),
+                format_nanos(wide),
+                format_ratio(deep, narrow),
+                format_ratio(wide, narrow)
+            );
+        }
+        let _ = writeln!(out);
+    }
+    let _ = writeln!(
+        out,
+        "     the shipping reserving_mpsc row above is the control: 32/32 here"
+    );
+    let _ = writeln!(
+        out,
+        "     is a duplicate of it, so the two should agree. They will not match"
+    );
+    let _ = writeln!(
+        out,
+        "     exactly -- the duplicate carries no metrics, doorbell, or"
+    );
+    let _ = writeln!(
+        out,
+        "     disconnection checks -- but a large gap means the duplicate is not"
+    );
+    let _ = writeln!(
+        out,
+        "     standing in faithfully and the comparison below is not trustworthy."
+    );
+
     let _ = writeln!(
         out,
         "\n  CAUTION: the drained regime has ONE consumer, because that is what"
