@@ -22,6 +22,20 @@ suite, restores the source, and records whether the suite noticed.
 
 It exits 0 only when every sabotage behaved as the manifest declared.
 
+| Exit | Meaning |
+|---|---|
+| 0 | Every sabotage behaved as declared. |
+| 1 | The sweep ran and at least one sabotage did not behave as declared. |
+| 2 | Nothing was swept: the manifest or the invocation is wrong. |
+| 3 | A target could not be restored -- see Safety below, and act on it. |
+
+A bad manifest is always the reported exit 2 with a message naming the file and
+the field, never a raw PowerShell error: the tool is a diagnostic instrument, so
+its own failures must not need diagnosing, and must not take a calling script
+down with them. Missing file, invalid JSON, absent `package` or `sabotages`, an
+empty `sabotages`, an unresolvable `root`, a missing per-sabotage field, and an
+`expect` that is neither `caught` nor `survives` are each reported this way.
+
 Runs on **Windows PowerShell 5.1 and PowerShell 7 alike**, like the other
 scripts in this directory, and the full sweep is verified on both. Worth stating
 because the two differ in ways that bite here specifically: 5.1 rejects

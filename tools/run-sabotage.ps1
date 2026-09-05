@@ -333,16 +333,114 @@ if (-not $repoRootPrefix.EndsWith([System.IO.Path]::DirectorySeparatorChar)) {
     $repoRootPrefix += [System.IO.Path]::DirectorySeparatorChar
 }
 
+# Reading the manifest, with every failure REPORTED rather than thrown.
+#
+# This script sets $ErrorActionPreference = 'Stop', so an unguarded
+# Resolve-Path or ConvertFrom-Json failure raises a terminating error that
+# propagates out and takes the caller's session with it -- exactly what
+# Exit-WithMessage exists to avoid, and stated in its own comment above. It also
+# surfaces as a PowerShell stack frame naming a line of this script, when the
+# thing that is wrong is the manifest. A diagnostic tool whose own failure mode
+# needs diagnosing is not doing its job. Raised in the PR #64 review.
+#
+# Every path below therefore exits 2, the code this script already uses for "the
+# manifest or the invocation is wrong", as distinct from 1 for "a sabotage did
+# not behave as declared".
+if (-not (Test-Path -LiteralPath $Manifest)) {
+    Exit-WithMessage "No manifest at: $Manifest" 2
+}
 $manifestPath = (Resolve-Path -LiteralPath $Manifest).Path
 $manifestDir = Split-Path -Parent $manifestPath
-$spec = Get-Content -LiteralPath $manifestPath -Raw | ConvertFrom-Json
+
+try {
+    $spec = Get-Content -LiteralPath $manifestPath -Raw | ConvertFrom-Json
+}
+catch {
+    Exit-WithMessage (@(
+            "This manifest is not valid JSON:"
+            "  $manifestPath"
+            "The parser said:"
+            "  $($_.Exception.Message)"
+        ) -join "`n") 2
+}
+
+# The manifest's shape, checked before anything reads it.
+#
+# Each field below is documented as required in README-sabotage.md. Under
+# Set-StrictMode a missing one otherwise surfaces as "The property 'x' cannot be
+# found on this object", naming a line of this script rather than the manifest
+# and the field. Verified against both shipped manifests, which satisfy all of
+# it, so this rejects nothing that already works.
+if (-not ($spec.PSObject.Properties.Name -contains 'sabotages') -or $null -eq $spec.sabotages) {
+    Exit-WithMessage (@(
+            "This manifest declares no 'sabotages' array:"
+            "  $manifestPath"
+        ) -join "`n") 2
+}
+if (@($spec.sabotages).Count -eq 0) {
+    # Distinguished from "the -Name filter matched nothing", which is reported
+    # separately below: an empty manifest is a manifest problem, and saying
+    # "no sabotage matches '*'" about it sends the reader to look at the filter.
+    Exit-WithMessage (@(
+            "This manifest's 'sabotages' array is empty, so there is nothing to run:"
+            "  $manifestPath"
+        ) -join "`n") 2
+}
+
+$hasTestArgs = ($spec.PSObject.Properties.Name -contains 'testArgs') -and $spec.testArgs
+if (-not $hasTestArgs -and -not (($spec.PSObject.Properties.Name -contains 'package') -and $spec.package)) {
+    Exit-WithMessage (@(
+            "This manifest declares no 'package':"
+            "  $manifestPath"
+            "It is required unless 'testArgs' supplies the cargo command instead."
+            "Without it the sweep would run 'cargo test -p  --locked' and fail on"
+            "an empty package name well after the baseline started."
+        ) -join "`n") 2
+}
+
+$position = 0
+foreach ($entry in @($spec.sabotages)) {
+    $position++
+    foreach ($field in @('name', 'file', 'expect', 'why', 'find', 'replace')) {
+        if (-not ($entry.PSObject.Properties.Name -contains $field)) {
+            $label = if ($entry.PSObject.Properties.Name -contains 'name') {
+                "'$($entry.name)'"
+            }
+            else { "at position $position" }
+            Exit-WithMessage (@(
+                    "The sabotage $label is missing the required field '$field'."
+                    "See the manifest format table in tools/README-sabotage.md."
+                ) -join "`n") 2
+        }
+    }
+    if (@('caught', 'survives') -notcontains $entry.expect) {
+        # Checked because an unrecognised value is not inert: `expect` is
+        # compared for equality when scoring, so anything else can never match
+        # and the entry would be reported as misbehaving on every run, whatever
+        # the suite actually did.
+        Exit-WithMessage (@(
+                "The sabotage '$($entry.name)' declares expect = '$($entry.expect)'."
+                "It must be 'caught' or 'survives'."
+            ) -join "`n") 2
+    }
+}
 
 # Each sabotage's `file` is resolved against the manifest's own directory, which
 # is what a manifest sitting in the crate it sabotages wants. An optional `root`
 # redirects that, for a manifest kept somewhere other than the code it patches.
 $sourceRoot = $manifestDir
 if ($spec.PSObject.Properties.Name -contains 'root' -and $spec.root) {
-    $sourceRoot = (Resolve-Path -LiteralPath (Join-Path $manifestDir $spec.root)).Path
+    $rootCandidate = Join-Path $manifestDir $spec.root
+    if (-not (Test-Path -LiteralPath $rootCandidate)) {
+        Exit-WithMessage (@(
+                "This manifest's 'root' does not exist:"
+                "  $($spec.root)"
+                "which resolves to:"
+                "  $rootCandidate"
+                "'root' is relative to the manifest's own directory."
+            ) -join "`n") 2
+    }
+    $sourceRoot = (Resolve-Path -LiteralPath $rootCandidate).Path
 }
 
 if (-not $OutputDirectory) { $OutputDirectory = Join-Path $repoRoot '.scratch\sabotage' }
@@ -373,7 +471,11 @@ if ($leftover.Count -gt 0) {
         ) -join "`n") 2
 }
 
-$package = $spec.package
+# Read through the property check rather than directly: validation above allows
+# `package` to be absent when `testArgs` supplies the command, and under
+# Set-StrictMode reading an absent property throws.
+$package = $null
+if ($spec.PSObject.Properties.Name -contains 'package') { $package = $spec.package }
 $testArgs = @('test', '-p', $package, '--locked')
 if ($spec.PSObject.Properties.Name -contains 'testArgs' -and $spec.testArgs) {
     # The manifest may write the vector either way -- with the `test` subcommand
