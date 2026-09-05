@@ -659,3 +659,28 @@ fn the_disagreement_points_at_the_repository_rather_than_the_results_thread() {
         "both routes are offered so the reader picks one: {text}"
     );
 }
+
+#[test]
+fn the_ordering_caveat_is_separated_from_whatever_precedes_it() {
+    // Not about prose, per this module's header, but about structure: the
+    // caveat is a distinct statement and must not run into the paragraph above
+    // it. The separating `writeln!` was swallowed by the trailing `//` of the
+    // comment explaining it, so the blank line never printed on any run, in
+    // either branch. Raised in the PR #63 review.
+    //
+    // Asserted in both branches, because the marked path prints an extra
+    // paragraph before this one and only that path made the join visible.
+    for record in [fully_populated(), coherent()] {
+        let text = render(&record);
+        let caveat = text
+            .find("  What this does NOT establish")
+            .unwrap_or_else(|| panic!("the caveat is always printed: {text}"));
+
+        assert!(
+            text[..caveat].ends_with("\n\n"),
+            "the caveat must be preceded by a blank line, not run on from the \
+             text above it: {:?}",
+            &text[caveat.saturating_sub(120)..caveat]
+        );
+    }
+}

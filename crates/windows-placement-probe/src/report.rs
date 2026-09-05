@@ -384,7 +384,8 @@ fn render_origin(out: &mut String, record: &SubmissionRecord) {
     }
 
     // Stated on every run, not only marked ones. A long clean run is exactly
-    // when someone is most tempted to read more into it than it says.    let _ = writeln!(out);
+    // when someone is most tempted to read more into it than it says.
+    let _ = writeln!(out);
     let _ = writeln!(
         out,
         "  What this does NOT establish: anything about memory ordering. These"
