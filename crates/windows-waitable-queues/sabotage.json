@@ -1,0 +1,575 @@
+{
+  "package": "windows-waitable-queues",
+  "description": "Sabotages for the SPSC ring, the two MPSC shapes, the doorbell they share, and the blocking receive loop they share. Run with tools/run-sabotage.ps1; see tools/README-sabotage.md for the format and for why the results are read the way they are.",
+  "notCoveredHere": "The two SeqCst fences in doorbell.rs are deliberately ABSENT from this manifest, and their absence is not an oversight. Removing either leaves every test green, because the defect they prevent is a store-buffer reordering that no amount of stress testing reliably produces -- it is a fact about the memory model, not about any interleaving a scheduler will hand you. Adding them here with expect:'caught' would fail the sweep; adding them with expect:'survives' would assert they are harmless, which is false and far worse. They are verifiable only under a model checker, and are the named target of checklist item M31.6.",
+  "sabotages": [
+    {
+      "name": "push does not signal the doorbell",
+      "file": "src/spsc.rs",
+      "expect": "caught",
+      "why": "A producer that never rings the bell leaves a parked consumer asleep on a queue with items in it. Caught as a hang, which is the correct shape for this defect.",
+      "find": [
+        "        self.doorbell.signal();",
+        "    }",
+        "}",
+        "",
+        "impl<T> Drop for Shared<T> {"
+      ],
+      "replace": [
+        "    }",
+        "}",
+        "",
+        "impl<T> Drop for Shared<T> {"
+      ]
+    },
+    {
+      "name": "producer drop does not signal",
+      "file": "src/spsc.rs",
+      "expect": "caught",
+      "why": "Disconnection is a wakeup, and the only one no other party can deliver. Without it a blocked consumer waits forever for an item that can no longer be sent: the queue stays correct and the program still hangs. NOTE the shape of this patch -- it deletes the live call. An earlier version inserted unreachable code beside it, which changed the file without changing behaviour, and the resulting pass was misread as a hole in the tests.",
+      "find": [
+        "        self.shared.doorbell.signal();",
+        "    }",
+        "}",
+        "",
+        "/// A slot claimed in advance"
+      ],
+      "replace": [
+        "    }",
+        "}",
+        "",
+        "/// A slot claimed in advance"
+      ]
+    },
+    {
+      "name": "arm checks emptiness before clearing",
+      "file": "src/spsc.rs",
+      "expect": "caught",
+      "why": "The lost wakeup itself, and the whole reason Consumer::arm exists. A push landing between the check and the clear both signals and has its signal erased, so the consumer sleeps on a queue that is not empty and will never be signalled again. This is the order that reads more naturally, which is exactly why it has to be proven wrong rather than assumed to be. MEASURED: this entry was caught in only one run of three while the sole deterministic test exercised a hand-written COPY of the reversed order rather than the real `arm` -- detection depended on two threads interleaving inside a window tens of nanoseconds wide. The `ARM_RACE_HOOK` in spsc.rs now drives the real `arm` through that window on one thread, and this is caught every run.",
+      "find": [
+        "        self.shared.doorbell.clear();",
+        "        #[cfg(test)]",
+        "        crate::race_hooks::ARM.run();",
+        "        Ok(self.is_empty())"
+      ],
+      "replace": [
+        "        let empty = self.is_empty();",
+        "        self.shared.doorbell.clear();",
+        "        #[cfg(test)]",
+        "        crate::race_hooks::ARM.run();",
+        "        Ok(empty)"
+      ]
+    },
+    {
+      "name": "arm does not create the doorbell before checking",
+      "file": "src/spsc.rs",
+      "expect": "caught",
+      "why": "Lazy creation is the same hazard a third time: a producer running while no event exists skips signalling, so the emptiness check has to come after the event exists to catch what that skip left behind.",
+      "find": [
+        "        self.shared.doorbell.handle()?;",
+        "        self.shared.doorbell.clear();"
+      ],
+      "replace": [
+        "        self.shared.doorbell.clear();"
+      ]
+    },
+    {
+      "name": "the final drain returns nothing",
+      "file": "src/spsc.rs",
+      "expect": "caught",
+      "why": "A producer may push and then drop in the window between a receive's first pop and its disconnection check. Reporting the disconnection without one last take silently discards an item that was successfully sent. This guard was originally unreachable from any test, and this sabotage is what found that out.",
+      "find": [
+        "    fn finish(&self) -> Option<T> {",
+        "        self.pop()",
+        "    }"
+      ],
+      "replace": [
+        "    fn finish(&self) -> Option<T> {",
+        "        None",
+        "    }"
+      ]
+    },
+    {
+      "name": "clear resets the event but not the mirror flag",
+      "file": "src/doorbell.rs",
+      "expect": "caught",
+      "why": "The mirror flag lets a redundant signal skip its syscall. If clear leaves it set, the next push believes the doorbell is already lit and skips the one signal that actually mattered.",
+      "find": [
+        "        self.signalled.store(false, Ordering::Release);"
+      ],
+      "replace": [
+        ""
+      ]
+    },
+    {
+      "name": "clear does not reset the event",
+      "file": "src/doorbell.rs",
+      "expect": "caught",
+      "why": "Distinct from the mirror-flag sabotage below it: this leaves the flag correct and the kernel object wrong, so a consumer's wait returns immediately, forever. Added after a code review found that the two tests named for this property both asserted it vacuously -- they pushed before the event existed, so the doorbell was never lit and 'arming clears it' held trivially. Both now light the doorbell first, and this entry is what keeps them honest.",
+      "find": [
+        "        unsafe {",
+        "            ResetEvent(event.as_raw_handle());",
+        "        }"
+      ],
+      "replace": [
+        "        let _ = event;"
+      ]
+    },
+    {
+      "name": "previous_valid is not clamped to the shape's bound",
+      "file": "src/error.rs",
+      "expect": "caught",
+      "why": "Rounding a request down to the nearest power of two gives 2^63 for anything at or above it, which exceeds the largest representable capacity. The suggestion exists so a caller can correct the call, and one that is itself refused is worse than none.",
+      "find": [
+        "                let clamped = rounded.min(self.largest_power_of_two_within_bound());",
+        "                (clamped >= self.min_valid).then_some(clamped)"
+      ],
+      "replace": [
+        "                Some(rounded)"
+      ]
+    },
+    {
+      "name": "next_valid is not clamped to the shape's bound",
+      "file": "src/error.rs",
+      "expect": "caught",
+      "why": "A request that is merely not a power of two can still sit between the largest valid power of two and the bound, and rounding it up overshoots. Found by the test written for previous_valid, which the review had not flagged -- the reviewer checked next_valid only on the TooLarge path.",
+      "find": [
+        "        (rounded >= self.min_valid && rounded <= self.max_valid).then_some(rounded)"
+      ],
+      "replace": [
+        "        Some(rounded)"
+      ]
+    },
+    {
+      "name": "recv_timeout computes its deadline with the panicking add",
+      "file": "src/blocking.rs",
+      "expect": "caught",
+      "why": "`Instant + Duration` panics when the sum is not representable, and Duration::MAX is an ordinary way to spell 'effectively forever'. The rest of the function is careful about exactly this class of problem, which is what made the panicking operator easy to miss. Moved here from src/spsc.rs when the blocking receive loop was extracted so both shapes bind to one copy of the arming protocol; there is now exactly one site, and both shapes' suites indict it.",
+      "find": [
+        "    let Some(deadline) = Instant::now().checked_add(timeout) else {"
+      ],
+      "replace": [
+        "    let Some(deadline) = Some(Instant::now() + timeout) else {"
+      ]
+    },
+    {
+      "name": "the event is auto-reset instead of manual-reset",
+      "file": "src/doorbell.rs",
+      "expect": "caught",
+      "why": "An auto-reset event is an edge, not a level, and it does not count signals. A wait that reports one of several signalled handles would consume the queue's only notification while ignoring it. This exact mistake hung the crate's own doorbell probe for four hundred seconds.",
+      "find": [
+        "CreateEventW(ptr::null(), TRUE, FALSE, ptr::null())"
+      ],
+      "replace": [
+        "CreateEventW(ptr::null(), FALSE, FALSE, ptr::null())"
+      ]
+    },
+    {
+      "name": "the event is created already signalled",
+      "file": "src/doorbell.rs",
+      "expect": "caught",
+      "why": "A doorbell must not claim readiness before anything is pushed, or the first wait returns immediately and the consumer spins.",
+      "find": [
+        "CreateEventW(ptr::null(), TRUE, FALSE, ptr::null())"
+      ],
+      "replace": [
+        "CreateEventW(ptr::null(), TRUE, TRUE, ptr::null())"
+      ]
+    },
+    {
+      "name": "signal always syscalls, skipping the flag optimisation",
+      "file": "src/doorbell.rs",
+      "expect": "caught",
+      "why": "**This entry changed sides in M31.4, and the reason is the point of the milestone.** It was a CONTROL expecting 'survives': skipping a redundant SetEvent is an optimisation, so removing it changed no observable behaviour and the suite had to stay green. R9 asks for a count of doorbells actually rung precisely so that the skip rule becomes MEASURABLE rather than assumed -- and once the ring count is observable, disabling the skip is observable too, which is what 'disabling the skip must change the number' means. So the same patch that had to survive now has to be caught, by the tests asserting one ring for four pushes. If this is ever reported as survived again, the ring count has stopped counting syscalls.",
+      "find": [
+        "        if self.signalled.swap(true, Ordering::AcqRel) {"
+      ],
+      "replace": [
+        "        self.signalled.store(true, Ordering::Release);",
+        "        if false {"
+      ]
+    },
+    {
+      "name": "clear clears the mirror flag before resetting the event",
+      "file": "src/doorbell.rs",
+      "expect": "caught",
+      "why": "The historical order, and a lost wakeup. A producer signalling between the two lines finds a clear flag, sets it, and issues a real SetEvent; the ResetEvent that follows erases that signal and leaves the flag set, so the doorbell is dark while claiming to be lit and every later signal skips its syscall. It survived review and a whole sabotage sweep because the argument for it -- 'the caller's re-check sees the racing producer's item' -- is true for spsc and false for slotwise_mpsc, whose re-check asks only whether the HEAD slot is published. Found by a sabotage BASELINE hanging once in a run that was otherwise green six times over. The race_hooks::CLEAR hook drives the real clear through its own window on one thread, so this is caught every run rather than occasionally.",
+      "find": [
+        "        unsafe {",
+        "            ResetEvent(event.as_raw_handle());",
+        "        }",
+        "        #[cfg(test)]",
+        "        crate::race_hooks::CLEAR.run();",
+        "        self.signalled.store(false, Ordering::Release);"
+      ],
+      "replace": [
+        "        self.signalled.store(false, Ordering::Release);",
+        "        #[cfg(test)]",
+        "        crate::race_hooks::CLEAR.run();",
+        "        unsafe {",
+        "            ResetEvent(event.as_raw_handle());",
+        "        }"
+      ]
+    },
+    {
+      "name": "slotwise_mpsc push does not signal the doorbell",
+      "file": "src/slotwise_mpsc.rs",
+      "expect": "caught",
+      "why": "A producer that never rings the bell leaves a parked consumer asleep on a queue with items in it. Caught as a hang, which is the correct shape for this defect.",
+      "find": [
+        "        self.shared.doorbell.signal();",
+        "        Ok(())"
+      ],
+      "replace": [
+        "        Ok(())"
+      ]
+    },
+    {
+      "name": "slotwise_mpsc: the last producer's drop does not signal",
+      "file": "src/slotwise_mpsc.rs",
+      "expect": "caught",
+      "why": "Disconnection is a wakeup, and the only one no other party can deliver. Without it a blocked consumer waits forever for an item that can no longer be sent. NOTE the shape of this patch -- it deletes the live call rather than inserting unreachable code beside it, because a sabotage that does not sabotage retires a question that was never asked.",
+      "find": [
+        "        self.shared.doorbell.signal();",
+        "    }",
+        "}",
+        "",
+        "/// The reading half"
+      ],
+      "replace": [
+        "    }",
+        "}",
+        "",
+        "/// The reading half"
+      ]
+    },
+    {
+      "name": "CONTROL: slotwise_mpsc signals on every producer's departure, not only the last",
+      "file": "src/slotwise_mpsc.rs",
+      "expect": "survives",
+      "why": "A control, not a defect. Ringing when a non-final producer leaves is a SPURIOUS wakeup: the consumer wakes, finds nothing, sees producers still alive, and parks again. The contract says a wakeup may be spurious, so the suite MUST stay green. If this is ever reported as caught, a test has started asserting that no extra wakeups occur -- which is asserting the implementation -- and that test is the thing to fix. Note this is NOT the same as the entry above: that one deletes the last producer's signal, which is a lost wakeup and a hang.",
+      "find": [
+        "        if self.shared.producers.fetch_sub(1, Ordering::AcqRel) != 1 {",
+        "            return;",
+        "        }"
+      ],
+      "replace": [
+        "        let _ = self.shared.producers.fetch_sub(1, Ordering::AcqRel);"
+      ]
+    },
+    {
+      "name": "slotwise_mpsc arm checks readiness before clearing",
+      "file": "src/slotwise_mpsc.rs",
+      "expect": "caught",
+      "why": "The lost wakeup itself, in the second shape. A push landing between the check and the clear both signals and has its signal erased, so the consumer sleeps on a queue that is not empty and will never be signalled again. Driven deterministically through the REAL arm by the shared ARM_RACE hook rather than through a copy of it, which is what makes this caught every run rather than one in three.",
+      "find": [
+        "        self.shared.doorbell.clear();",
+        "        #[cfg(test)]",
+        "        crate::race_hooks::ARM.run();",
+        "        // Deliberately not `is_empty`. The question is whether `pop` would find",
+        "        // something, and a slot that a producer has claimed but not published",
+        "        // is not something `pop` can find -- see `Shared::has_ready_item`.",
+        "        Ok(!self.shared.has_ready_item())"
+      ],
+      "replace": [
+        "        let ready = self.shared.has_ready_item();",
+        "        self.shared.doorbell.clear();",
+        "        #[cfg(test)]",
+        "        crate::race_hooks::ARM.run();",
+        "        Ok(!ready)"
+      ]
+    },
+    {
+      "name": "slotwise_mpsc arm does not create the doorbell before checking",
+      "file": "src/slotwise_mpsc.rs",
+      "expect": "caught",
+      "why": "Lazy creation is the same hazard a third time: a producer running while no event exists skips signalling, so the readiness check has to come after the event exists to catch what that skip left behind.",
+      "find": [
+        "        self.shared.doorbell.handle()?;",
+        "        self.shared.doorbell.clear();"
+      ],
+      "replace": [
+        "        self.shared.doorbell.clear();"
+      ]
+    },
+    {
+      "name": "slotwise_mpsc frees a slot one short of the next lap",
+      "file": "src/slotwise_mpsc.rs",
+      "expect": "caught",
+      "why": "The sequence protocol's whole arithmetic in one line. A slot freed at `pos + capacity - 1` is never equal to the position that next claims it, so every producer reads a negative difference and reports Full for ever: the queue works for exactly one lap and then wedges. An off-by-one here is invisible to any test that never wraps, which is why the wrap tests run a thousand rounds through four slots.",
+      "find": [
+        "            position.wrapping_add(self.shared.capacity as Position),"
+      ],
+      "replace": [
+        "            position.wrapping_add(self.shared.capacity as Position - 1),"
+      ]
+    },
+    {
+      "name": "slotwise_mpsc cloning a producer does not count it",
+      "file": "src/slotwise_mpsc.rs",
+      "expect": "caught",
+      "why": "The count is what makes multi-producer disconnection work, and a clone that does not register makes the FIRST departure look like the last. The consumer then ends the stream while producers are still pushing into it.",
+      "find": [
+        "        self.shared.producers.fetch_add(1, Ordering::Relaxed);"
+      ],
+      "replace": [
+        ""
+      ]
+    },
+    {
+      "name": "slotwise_mpsc accepts a capacity of one",
+      "file": "src/slotwise_mpsc.rs",
+      "expect": "caught",
+      "why": "With one slot, 'published at position p' and 'free again at position p + capacity' are the SAME number, so a producer reads the sequence of the item it just pushed, concludes the slot is free, and overwrites an item the consumer has not read. spsc accepts one, which is exactly why the minimum belongs to the shape rather than to the crate -- and why it is asserted rather than assumed.",
+      "find": [
+        "const BOUNDS: Bounds = Bounds {",
+        "    min: 2,",
+        "    max: MAX_ADMISSIBLE_CAPACITY,",
+        "};"
+      ],
+      "replace": [
+        "const BOUNDS: Bounds = Bounds {",
+        "    min: 1,",
+        "    max: MAX_ADMISSIBLE_CAPACITY,",
+        "};"
+      ]
+    },
+    {
+      "name": "reserving_mpsc: a best-effort push may take a reserved slot",
+      "file": "src/reserving_mpsc.rs",
+      "expect": "caught",
+      "why": "The reservation guarantee itself. If the best-effort path ignores the outstanding count, the slot a reservation was promised gets taken by an ordinary push and the redemption overwrites a live item. Note this sabotage keeps the room check but drops the reservations from it, which is exactly the mistake an optimiser-minded reader would make: the count looks like bookkeeping until you ask who is holding the slot it accounts for.",
+      "find": [
+        "        occupied < capacity - reserved"
+      ],
+      "replace": [
+        "        let _ = reserved;",
+        "        occupied < capacity"
+      ]
+    },
+    {
+      "name": "reserving_mpsc: reserve does not check for room",
+      "file": "src/reserving_mpsc.rs",
+      "expect": "caught",
+      "why": "A reservation handed out over a full queue is a promise that cannot be kept, which is worse than a refusal: the caller has already been told it may proceed. Reserve is the CHEAP place to fail -- no work has started -- and removing the check moves that failure to the one place the design exists to keep it away from.",
+      "find": [
+        "            if !self.shared.has_room_beyond_reservations(position, reserved) {",
+        "                // Provisional for the reason `push`'s matching check is: a",
+        "                // stale `word` and a freshly-read `head` need not describe the",
+        "                // same instant, and once `head` passes a stale `position` the",
+        "                // subtraction wraps and an empty queue refuses a reservation.",
+        "                let current = self.shared.claim.0.load(Ordering::Relaxed);",
+        "                if current != word {",
+        "                    word = current;",
+        "                    continue;",
+        "                }",
+        "                return None;",
+        "            }"
+      ],
+      "replace": []
+    },
+    {
+      "name": "reserving_mpsc: redeeming does not release the reservation",
+      "file": "src/reserving_mpsc.rs",
+      "expect": "caught",
+      "why": "Redeeming must decrement the count as it advances the position, in ONE exchange. Leaving the count up permanently withdraws a slot from the best-effort path on every send, so the queue's usable capacity bleeds away to zero over time. Caught quickly because a capacity-2 queue stops accepting anything after its first reserved send.",
+      "find": [
+        "                claim_word(reserved - 1, position.wrapping_add(1)),"
+      ],
+      "replace": [
+        "                claim_word(reserved, position.wrapping_add(1)),"
+      ]
+    },
+    {
+      "name": "reserving_mpsc: dropping a reservation does not return the slot",
+      "file": "src/reserving_mpsc.rs",
+      "expect": "caught",
+      "why": "An abandoned reservation must give its capacity back. Without this the queue leaks a slot per dropped reservation and eventually refuses everything, which is the same bleed as the entry above reached by the other path.",
+      "find": [
+        "                claim_word(reserved - 1, position_of(word)),"
+      ],
+      "replace": [
+        "                claim_word(reserved, position_of(word)),"
+      ]
+    },
+    {
+      "name": "reserving_mpsc: an outstanding reservation does not hold the stream open",
+      "file": "src/reserving_mpsc.rs",
+      "expect": "caught",
+      "why": "A reservation is a promise of a message still to come, so it must count as a producer. Without this the consumer is told the stream ended while a reservation is outstanding, and then handed an item afterwards -- losing exactly the message the reservation existed to protect. This is the defect the feature is FOR, so a test suite that missed it would be asserting the mechanism and not the purpose.",
+      "find": [
+        "                    self.shared.producers.fetch_add(1, Ordering::Relaxed);"
+      ],
+      "replace": [
+        ""
+      ]
+    },
+    {
+      "name": "reserving_mpsc: send leaks the shared state via mem::forget",
+      "file": "src/reserving_mpsc.rs",
+      "expect": "caught",
+      "why": "The real defect this shape shipped with for one test run. `mem::forget` suppresses the double-release correctly but also leaks the Arc the reservation holds, so the shared state is never dropped and every item still in the ring leaks with it. Caught by the drop-counting test rather than by review, which is why that test counts drops instead of merely checking the queue still works.",
+      "find": [
+        "        let this = core::mem::ManuallyDrop::new(self);",
+        "        // SAFETY: `this` is a `ManuallyDrop`, so its own destructor never runs",
+        "        // and the field is not read again after this move.",
+        "        let shared = unsafe { core::ptr::read(&this.shared) };",
+        "        shared.release_producer();"
+      ],
+      "replace": [
+        "        let shared = Arc::clone(&self.shared);",
+        "        core::mem::forget(self);",
+        "        shared.release_producer();"
+      ]
+    },
+    {
+      "name": "high-water records the latest depth rather than the peak",
+      "file": "src/metrics.rs",
+      "expect": "caught",
+      "why": "A high-water mark that follows the depth down is not a high-water mark; it is `len` with extra steps, and a caller sizing a queue from it would read whatever the depth happened to be when they looked. Caught deterministically rather than by a race, because the sabotage removes the comparison as well as the fetch_max.",
+      "find": [
+        "        if depth > high_water.load(Ordering::Relaxed) {",
+        "            high_water.fetch_max(depth, Ordering::Relaxed);",
+        "        }"
+      ],
+      "replace": [
+        "        high_water.store(depth, Ordering::Relaxed);"
+      ]
+    },
+    {
+      "name": "high-water is tracked even when nobody asked",
+      "file": "src/metrics.rs",
+      "expect": "caught",
+      "why": "Tracking must be genuinely off by default, because it is the one metric that costs the push path something -- on slotwise_mpsc it makes the producer read the consumer's position, which is the shared line that shape exists to avoid. If the default silently tracked, every slotwise_mpsc user would be paying for an answer they never asked for, and the only visible symptom would be a number appearing where None belongs.",
+      "find": [
+        "            high_water: if track_high_water {"
+      ],
+      "replace": [
+        "            high_water: if true {"
+      ]
+    },
+    {
+      "name": "CONTROL: slotwise_mpsc reads head unconditionally, skipping the tracking guard",
+      "file": "src/slotwise_mpsc.rs",
+      "expect": "survives",
+      "why": "A control, and the replacement for the one M31.4 converted into a defect. The guard around slotwise_mpsc's `head` load is an OPTIMISATION, not a correctness device -- `record_depth` already returns early when tracking is off, so reading head regardless changes no observable behaviour and the suite MUST stay green. What it changes is the cost, which is the whole reason the guard is there. If this is ever reported as caught, a test has started asserting the implementation rather than the contract.",
+      "find": [
+        "        if self.shared.metrics.tracks_high_water() {"
+      ],
+      "replace": [
+        "        if true {"
+      ]
+    },
+    {
+      "name": "teardown ignores the disposal sink and destroys in place",
+      "file": "src/disposal.rs",
+      "expect": "caught",
+      "why": "The whole mechanism in one line. If the policy always takes the default path, every queue silently reverts to running arbitrary destructors on whichever thread released the last handle -- which is the hazard, and it is invisible from any test that only counts survivors rather than observing where they were destroyed.",
+      "find": [
+        "        let Some(disposal) = self.disposal.as_mut() else {"
+      ],
+      "replace": [
+        "        let Some(disposal) = Option::<&mut Disposal<T>>::None else {"
+      ]
+    },
+    {
+      "name": "a panicking sink is not contained",
+      "file": "src/disposal.rs",
+      "expect": "caught",
+      "why": "The sink is caller code running inside a destructor. Letting a panic escape abandons every item not yet disposed -- exactly the handles this mechanism exists to account for -- and during an unwind it aborts the process outright. Caught by the test that panics on the fourth of ten items and requires the other nine to be disposed anyway.",
+      "find": [
+        "        let _ = catch_unwind(AssertUnwindSafe(|| (disposal.sink)(item)));"
+      ],
+      "replace": [
+        "        (disposal.sink)(item);"
+      ]
+    },
+    {
+      "name": "spsc teardown destroys survivors instead of handing them over",
+      "file": "src/spsc.rs",
+      "expect": "caught",
+      "why": "Each shape walks its own layout to find survivors, so the routing has to be asserted once per shape -- covering one says nothing about the others, which is the same lesson M31.2's sweep taught about the reservation guarantee.",
+      "find": [
+        "            let item = unsafe { (*self.slots[pos & mask].get()).assume_init_read() };",
+        "            self.teardown.dispose(item);"
+      ],
+      "replace": [
+        "            unsafe { (*self.slots[pos & mask].get()).assume_init_drop() };"
+      ]
+    },
+    {
+      "name": "slotwise_mpsc teardown destroys survivors instead of handing them over",
+      "file": "src/slotwise_mpsc.rs",
+      "expect": "caught",
+      "why": "As for spsc, and this walk differs: it consults each slot's sequence rather than assuming the whole resident range is published.",
+      "find": [
+        "                let item = unsafe { slot.value.get_mut().assume_init_read() };",
+        "                self.teardown.dispose(item);"
+      ],
+      "replace": [
+        "                unsafe { slot.value.get_mut().assume_init_drop() };"
+      ]
+    },
+    {
+      "name": "reserving_mpsc teardown destroys survivors instead of handing them over",
+      "file": "src/reserving_mpsc.rs",
+      "expect": "caught",
+      "why": "The shape where it matters most: a reservation is taken because its message must not be lost, so a redeemed message abandoned at teardown would be lost after all -- just later and more quietly.",
+      "find": [
+        "                let item = unsafe { slot.value.get_mut().assume_init_read() };",
+        "                self.teardown.dispose(item);"
+      ],
+      "replace": [
+        "                unsafe { slot.value.get_mut().assume_init_drop() };"
+      ]
+    },
+    {
+      "name": "spsc: a best-effort push may take a reserved slot",
+      "file": "src/spsc.rs",
+      "expect": "caught",
+      "why": "The same guarantee on the single-producer shape, where the mechanism is a plain counter rather than a packed word. Worth its own entry precisely because the two implementations share nothing: a test that only covered the slotwise_mpsc path would leave this one unguarded.",
+      "find": [
+        "        if tail.wrapping_sub(head) + reserved >= self.shared.capacity {",
+        "            // Report disconnection in preference to fullness"
+      ],
+      "replace": [
+        "        if tail.wrapping_sub(head) >= self.shared.capacity {",
+        "            // Report disconnection in preference to fullness"
+      ]
+    },
+    {
+      "name": "spsc: dropping a reservation does not return the slot",
+      "file": "src/spsc.rs",
+      "expect": "caught",
+      "why": "As for reserving_mpsc: an abandoned reservation must give its capacity back, or the queue bleeds a slot per drop until it refuses everything.",
+      "find": [
+        "        self.producer",
+        "            .shared",
+        "            .reserved",
+        "            .store(reserved - 1, Ordering::Relaxed);"
+      ],
+      "replace": [
+        "        let _ = reserved;"
+      ]
+    },
+    {
+      "name": "slotwise_mpsc reports Full for a full queue whose consumer is gone",
+      "file": "src/slotwise_mpsc.rs",
+      "expect": "caught",
+      "why": "Full invites a retry and Disconnected does not, and a full queue with no consumer will never drain -- so reporting Full here is telling the caller to spin forever. The preference has to be stated at the fullness branch specifically, because that branch returns before the general disconnection check below it is ever reached.",
+      "find": [
+        "                if !self.shared.consumer_live.load(Ordering::Acquire) {",
+        "                    // Not counted as a refusal: this is the end of the stream,",
+        "                    // not backpressure.",
+        "                    return Err(PushError::Disconnected(item));",
+        "                }",
+        "                self.shared.metrics.record_refusal();",
+        "                return Err(PushError::Full(item));"
+      ],
+      "replace": [
+        "                self.shared.metrics.record_refusal();",
+        "                return Err(PushError::Full(item));"
+      ]
+    }
+  ]
+}

@@ -1,0 +1,112 @@
+// Copyright (c) Mike Grier.
+
+//! Test-only: hooks that drive a two-statement sequence through its own race
+//! window, deterministically and on one thread.
+//!
+//! # Why these exist at all
+//!
+//! Three places in this crate consist of statements whose *order* -- or whose
+//! freshness -- is the whole correctness argument, and whose wrong form is a
+//! permanent hang or a wrong answer rather than an occasional stall:
+//! `Consumer::arm`, [`Doorbell::clear`], and the reserving queue's claim loop.
+//! Proving such an order is load-bearing means placing a racing operation
+//! strictly between the statements, and that is not an interleaving a scheduler
+//! can be asked for -- the window is tens of nanoseconds wide.
+//!
+//! # Why a hook rather than a hand-written copy of the code
+//!
+//! The first attempt at proving `arm` was a duplicate of it with the two
+//! statements swapped, driven deterministically. It could only ever show that
+//! *a* reversed order is wrong; it was structurally incapable of noticing the
+//! **real** `arm` being reversed, which left that case covered only by
+//! whatever interleavings the scheduler happened to produce. Measured:
+//! sabotaging the real `arm` was then caught in one run out of three.
+//!
+//! A second copy of a rule is a check of the copy, not of the rule. So the real
+//! code carries the hook, and a test drives the real code through the exact
+//! window.
+//!
+//! # Why one facility for both
+//!
+//! Giving each site its own thread-local would reintroduce, one layer down, the
+//! duplication this file exists to avoid. The hooks are thread-local, so two
+//! suites running concurrently in one process cannot see each other's.
+//!
+//! [`Doorbell::clear`]: crate::doorbell::Doorbell::clear
+
+use core::cell::RefCell;
+use std::thread::LocalKey;
+
+mod tests;
+
+type Slot = RefCell<Option<Box<dyn FnMut()>>>;
+
+thread_local! {
+    static ARM_HOOK: Slot = const { RefCell::new(None) };
+    static CLEAR_HOOK: Slot = const { RefCell::new(None) };
+    static CLAIM_HOOK: Slot = const { RefCell::new(None) };
+}
+
+/// One named race window.
+pub(crate) struct Hook(&'static LocalKey<Slot>);
+
+/// Fires inside `Consumer::arm`, between clearing the doorbell and checking
+/// whether anything is takeable.
+pub(crate) const ARM: Hook = Hook(&ARM_HOOK);
+
+/// Fires inside [`Doorbell::clear`](crate::doorbell::Doorbell::clear), between
+/// resetting the event and clearing the flag that mirrors it.
+pub(crate) const CLEAR: Hook = Hook(&CLEAR_HOOK);
+
+/// Fires inside the reserving queue's claim loop, between reading the claim
+/// word and testing whether that claim leaves room.
+///
+/// The window this opens is not an ordering one: the two readings the room test
+/// combines -- a position from the claim word, and `head` -- are taken at
+/// different instants, so a claim that goes stale here makes the test answer
+/// about a state that never existed. Firing a racing producer and consumer in
+/// this window is what makes that reachable on one thread.
+pub(crate) const CLAIM: Hook = Hook(&CLAIM_HOOK);
+
+impl Hook {
+    /// Runs the installed hook, if any. Called from the code under test.
+    pub(crate) fn run(&self) {
+        self.0.with(|hook| {
+            // Taken out for the call rather than held borrowed across it, so a
+            // hook that re-enters this window cannot trip a `RefCell`
+            // re-entrancy panic.
+            let taken = hook.borrow_mut().take();
+            if let Some(mut race) = taken {
+                race();
+                *hook.borrow_mut() = Some(race);
+            }
+        });
+    }
+
+    /// Installs a hook for the duration of a closure.
+    ///
+    /// **The removal is a guard rather than a statement after `body`**, so an
+    /// unwind takes the hook with it. A test that installs a hook and then
+    /// fails an assertion is the ordinary case, not an exotic one, and a hook
+    /// surviving that would fire inside whatever ran next on this thread --
+    /// turning one failure into an unrelated second one, in a facility the
+    /// crate's central correctness argument rests on.
+    pub(crate) fn with<R>(&self, race: impl FnMut() + 'static, body: impl FnOnce() -> R) -> R {
+        self.0
+            .with(|hook| *hook.borrow_mut() = Some(Box::new(race)));
+        let _installed = Installed(self.0);
+        body()
+    }
+}
+
+/// Removes a hook when it goes out of scope, however that happens.
+struct Installed(&'static LocalKey<Slot>);
+
+impl Drop for Installed {
+    fn drop(&mut self) {
+        // `try_with`, not `with`: a hook can outlive its thread-local during
+        // thread teardown, and panicking there would replace whatever unwind is
+        // already in progress.
+        let _ = self.0.try_with(|hook| *hook.borrow_mut() = None);
+    }
+}

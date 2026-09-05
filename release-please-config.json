@@ -51,6 +51,10 @@
             "package-name": "windows-topology-sys",
             "component": "windows-topology-sys"
         },
+        "crates/windows-waitable-queues": {
+            "package-name": "windows-waitable-queues",
+            "component": "windows-waitable-queues"
+        },
         "crates/wtf-string": {
             "package-name": "wtf-string",
             "component": "wtf-string"
