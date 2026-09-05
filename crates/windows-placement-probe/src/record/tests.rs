@@ -197,6 +197,7 @@ fn populated_paths(value: &serde_json::Value) -> BTreeSet<String> {
     walk(value, "", &mut paths);
     paths
 }
+
 #[test]
 #[cfg(feature = "serde")]
 fn the_records_shape_matches_the_archived_schema_for_its_version() {
@@ -373,6 +374,7 @@ fn days_from_civil(year: i64, month: u32, dom: u32) -> i64 {
     let day_of_era = year_of_era * 365 + year_of_era / 4 - year_of_era / 100 + day_of_year;
     era * 146_097 + day_of_era - 719_468
 }
+
 #[test]
 fn the_civil_conversion_round_trips_across_a_long_span() {
     // A property rather than a fixture: every day for eighty years must convert
@@ -397,6 +399,7 @@ fn the_civil_conversion_round_trips_across_a_long_span() {
             "day {day} converted to {year}-{month:02}-{dom:02}, which is a \
              different day"
         );
+
         if let Some(prev) = previous {
             assert_ne!(prev, (year, month, dom), "day {day} repeated a date");
         }

@@ -659,6 +659,7 @@ fn the_disagreement_points_at_the_repository_rather_than_the_results_thread() {
         "both routes are offered so the reader picks one: {text}"
     );
 }
+
 #[test]
 fn the_ordering_caveat_is_separated_from_whatever_precedes_it() {
     // Not about prose, per this module's header, but about structure: the
