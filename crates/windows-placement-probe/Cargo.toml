@@ -1,0 +1,130 @@
+# Copyright (c) 2026 Mike Grier
+
+[package]
+name = "windows-placement-probe"
+# **Calendar-versioned: `YYYY.MMDD.N`.** Today's date, plus a fourth-digit
+# counter for a second release on the same day. Leading zeros are illegal in a
+# semver numeric identifier, so September 2 is `902` rather than `0902`; that
+# still orders correctly within a year, since January 5 is `105` and December 25
+# is `1225`.
+#
+# Semver would be the wrong scheme here, not merely an unhelpful one. Semver
+# communicates *compatibility*, and this crate has no compatibility surface for
+# it to describe: nothing depends on it as a library (see below), it is never
+# published to a registry, and the one thing that genuinely is a compatibility
+# surface -- the record's shape -- has its own `SCHEMA_VERSION` that moves
+# independently. A semver here could only ever be arbitrary, which in practice
+# means it is bumped on a whim or never bumped at all.
+#
+# What a reader of a record actually needs from this field is *which build
+# produced it*. The commit already answers that precisely and is stamped
+# alongside; the date answers it legibly, and tells them at a glance whether the
+# record is from last week or last year. `0.1.0` answered neither.
+version = "2026.902.0"
+# **Never published to a registry.** Reversed from "yes, but not yet" on
+# 2026-09-02; see PT-5.3 in CHECKLIST-placement-tool.md and DESIGN-NOTES.md for
+# both reasons. The short form: `cargo install` reaches a *subset* of the people
+# a downloadable binary reaches, because the binary needs no Rust toolchain --
+# so crates.io would have added no reach while making the weakest-provenance
+# path the most discoverable one.
+#
+# The distribution that matters is the CI-built binary attached to a GitHub
+# release, because the download is the provenance: a binary built there is
+# traceable to the commit that produced it in a way a local build of identical
+# source is not.
+publish = false
+authors.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+description = "Measures what thread placement costs on a Windows machine -- SMT siblings, cache domains, efficiency classes and NUMA hops -- and produces one structured record to send back."
+readme = "README.md"
+
+# What versioning covers here, stated because the two halves differ sharply --
+# and this split is the reason the crate version itself is a date rather than a
+# semver.
+#
+# **The record's schema is a compatibility surface** the moment anyone stores a
+# result, and it has its own versioning that does not move with the crate's:
+# `SCHEMA_VERSION` plus an append-only golden per version in `schema/`. A stored
+# record can be validated against the version it declares years later, which is
+# the property that matters when the records live in a discussion thread and
+# cannot be regenerated.
+#
+# **The measurement code is not a compatibility surface.** It is an instrument,
+# not a library to build on, and its types will change whenever a better
+# measurement needs them to. Nothing should depend on this crate as a library.
+
+[lib]
+path = "src/lib.rs"
+
+# One binary, deliberately. A stranger doing a favour must not be asked to run
+# three things and collate them; the internal probes in windows-platform-probes
+# stay separate because a development loop wants the opposite.
+[[bin]]
+name = "placement-probe"
+path = "src/bin/placement_probe/main.rs"
+# The binary's whole output is the serialized record wrapped in fences and a
+# checksum, so it cannot exist without the feature. Declared rather than left
+# implicit: without this, `--no-default-features` tried to build the binary and
+# failed with an unresolved import instead of simply not building it.
+required-features = ["serde"]
+
+[features]
+# The submission record is the product, so serialization is not optional the way
+# it is in the layers below. The feature exists so the measurement code can be
+# used without it, not so the record can.
+default = ["serde"]
+serde = ["dep:serde", "windows-topology-sys/serde"]
+
+[dependencies]
+# Path-only, with no `version`, because this crate is never published **to a
+# registry**. It is still distributed: the tool ships as a CI-built binary
+# attached to a GitHub release, which is its canonical distribution and needs no
+# `version` here at all. Only a crates.io package would, and that was decided
+# against -- see `publish = false` above and DESIGN-NOTES.md.
+#
+# A `version` beside a `path` is consulted only when the depending crate is
+# packaged, but cargo requires the path crate's own version to satisfy it at
+# every build regardless. So a pin left behind by a bump breaks the whole
+# workspace's resolution rather than only this crate's: `windows-topology-sys`
+# at 0.2.0 against a "0.1.0" pin here fails `cargo metadata` outright.
+windows-topology-sys = { path = "../windows-topology-sys" }
+windows-waitable-queues = { path = "../windows-waitable-queues" }
+serde = { version = "1.0", features = ["derive"], optional = true }
+# The tool emits the record itself, so a serializer is not a test-only concern.
+# It is also what derives the schema golden: the archived shape comes from
+# serializing a record and walking the result, never from a hand-kept list.
+serde_json = "1.0"
+
+[dependencies.windows-sys]
+version = "0.61.2"
+default-features = false
+features = [
+    "Win32_Foundation",
+    # Thread affinity: this crate pins both ends of a handoff to chosen
+    # processors, and a run whose pinning silently failed would measure the
+    # scheduler's preferences instead of the placement it claims to.
+    "Win32_System_Threading",
+    # The machine-description fields that travel with a submission, so a
+    # result can be read months later without asking its sender anything.
+    "Win32_System_SystemInformation",
+    # Those fields are read from the registry rather than from the version and
+    # CPUID APIs: `GetVersionEx` is shimmed and lies to an unmanifested process
+    # about the major version, and CPUID's brand string does not exist on
+    # ARM64. The registry is truthful on both counts and on both architectures.
+    "Win32_System_Registry",
+    # The ring's slots are placed on a chosen NUMA node with VirtualAllocExNuma,
+    # and the node they actually landed on is read back with QueryWorkingSetEx.
+    # Asking is not the same as achieving, and the record reports the second.
+    "Win32_System_Memory",
+    "Win32_System_ProcessStatus",
+    # `MoveFileExW` *without* MOVEFILE_REPLACE_EXISTING, which is the only way to
+    # publish the backup record atomically without ever making its final name
+    # visible half-written. `std::fs::rename` cannot express it: on Windows it
+    # always passes MOVEFILE_REPLACE_EXISTING, so it would clobber a record a
+    # concurrent run had already placed.
+    "Win32_Storage_FileSystem",
+]
