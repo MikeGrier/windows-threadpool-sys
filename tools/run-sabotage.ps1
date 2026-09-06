@@ -863,11 +863,7 @@ $testArgs = Add-CargoFlag -CargoArgs $testArgs -Flag @('--target-dir', $sweepTar
 # Targets are addressed in the copy from here on. The manifest still resolves
 # them against the real tree -- that is where its `root` and `file` mean
 # something -- and each is then re-based onto the copy by its path relative to
-# the repository root.
-$treeRootPrefix = [System.IO.Path]::GetFullPath($treeRoot)
-if (-not $treeRootPrefix.EndsWith([System.IO.Path]::DirectorySeparatorChar)) {
-    $treeRootPrefix += [System.IO.Path]::DirectorySeparatorChar
-}
+# the repository root, using $repoRootPrefix at the point of use.
 
 # Clear the transcripts this run may write -- and only those.
 #
