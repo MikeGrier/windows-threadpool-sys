@@ -134,6 +134,15 @@
 .PARAMETER List
     Print the manifest's sabotages and exit without running anything.
 
+.PARAMETER CargoCommand
+    The executable each phase runs, defaulting to `cargo`. Exists so this
+    script's own tests can substitute a stub that exits, fails, or hangs on
+    demand: without it every test of the timeout, kill, classification and
+    transcript logic would have to pay a real cargo build, which is the
+    difference between a suite that runs in seconds and one nobody runs. It also
+    lets a manifest sweep something whose tests are not `cargo test`, given a
+    `testArgs` that spells the whole command.
+
 .OUTPUTS
     Exits 0 only if every sabotage matched its declared expectation.
 #>
@@ -154,13 +163,19 @@ param(
 
     [string] $OutputDirectory,
 
-    [switch] $List
+    [switch] $List,
+
+    [string] $CargoCommand = 'cargo'
 )
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
 $utf8NoBom = [System.Text.UTF8Encoding]::new($false)
+
+# Script scope so Invoke-Bounded reads it without threading it through three
+# call layers that have no other reason to know about it.
+$script:CargoExecutable = $CargoCommand
 
 # The single output sink. Every message this tool emits goes through here, so
 # the destination and the formatting stay separable from the call sites that
@@ -235,7 +250,7 @@ function Invoke-Bounded {
         [int] $Seconds
     )
 
-    $process = Start-Process -FilePath 'cargo' -ArgumentList $CargoArgs `
+    $process = Start-Process -FilePath $script:CargoExecutable -ArgumentList $CargoArgs `
         -WorkingDirectory $WorkingDirectory -PassThru -NoNewWindow `
         -RedirectStandardOutput $TranscriptPath `
         -RedirectStandardError "$TranscriptPath.err"

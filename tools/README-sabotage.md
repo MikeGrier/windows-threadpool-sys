@@ -49,6 +49,36 @@ message says which it is -- `The baseline suite did not pass` -- and names the
 transcript. A caller distinguishing the two cases should read the message rather
 than the code.
 
+## The harness has its own tests
+
+[test-run-sabotage.ps1](test-run-sabotage.ps1) is the harness's unit suite: 43
+cases, about two minutes, run by CI on every push. It stubs cargo out entirely
+through `-CargoCommand`, so nothing is built, and works against a throwaway
+two-file git repository rather than this one.
+
+```powershell
+.\tools\test-run-sabotage.ps1
+.\tools\test-run-sabotage.ps1 -Name '*hung*'   # re-run one
+```
+
+It exists because this tool once did not have it, and that showed. The harness
+took eleven review rounds, and thirteen of the defects found in the later rounds
+were *introduced by earlier fixes* -- not through anything going unverified, but
+because each verification was a one-off command, discarded once it passed, so
+nothing re-checked round six's guarantee when round nine landed. The suite is
+the ratchet: what it establishes stays established.
+
+Two of those defects deserve naming, because they are this tool's own subject
+matter: a `timeoutSeconds` of zero slipped past the check written to reject it
+(PowerShell counts `0` as false, so the guard short-circuited before reaching
+its own comparison), and that same check was skipped entirely when the value was
+overridden on the command line. A guard that is present, documented, and does
+not fire is exactly what a sabotage sweep is for -- and the sweeper had none
+pointed at itself.
+
+The suite is verified to *detect*, not merely to pass: re-introducing that
+truthiness defect turns the relevant case red while the rest stay green.
+
 Runs on **Windows PowerShell 5.1 and PowerShell 7 alike**, like the other
 scripts in this directory, and the full sweep is verified on both. Worth stating
 because the two differ in ways that bite here specifically: 5.1 rejects
