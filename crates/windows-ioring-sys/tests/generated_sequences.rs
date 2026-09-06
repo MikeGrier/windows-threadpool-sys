@@ -963,7 +963,7 @@ fn write(target: TargetKind, buffer: BufferKind, slot: u64) -> Step {
 /// Recorded in the shape it was actually found in rather than a tidied-up
 /// minimal one: the essential part is the operation *before* the attach, which
 /// leaves the completion queue non-empty at handover so that only
-/// [D-20](DESIGN-NOTES.md#d-20)'s deliberate setup signal can wake a waiter --
+/// [D-20](../DESIGN-NOTES.md#d-20)'s deliberate setup signal can wake a waiter --
 /// but a corpus that quietly rewrites what it was given is a corpus nobody can
 /// trust to have preserved the failing case.
 fn issue_47_backlog_at_handover() -> Regression {

@@ -124,8 +124,11 @@ overlapped operation wait for ring operations. A consumer mixing ring and
 non-ring I/O -- the normal case, not an exotic one -- must therefore enforce
 that ordering in its own code, and the multiplexed wait is what lets it do so
 without surrendering the ring or parking a thread in a blocking drain. The
-barrier is also ring-wide and spans submissions, so a drained flush stalls the
-whole ring for its duration; see `PushOptions::drain_preceding`.
+barrier is also ring-wide in *reach*: a drained flush waits on every operation
+outstanding on the ring when it is reached, not only the ones a caller cares
+about, so it takes as long as the slowest of them. It is one-sided, though --
+operations pushed after it are not held back and can complete first. See
+`PushOptions::drain_preceding` and [D-47](DESIGN-NOTES.md#d-47-detail).
 
 Most real applications want Model B on the hot data path and Model A everywhere
 else -- the control plane, background work, cold paths -- where the thread
@@ -160,8 +163,8 @@ stops a reader from never looking.
 So **durability is a property of an epoch, never of an individual write**,
 because the ring offers no per-write primitive to make it one: stream the
 writes, close the epoch with one covering flush, and wait on the flush rather
-than on the writes. The barrier that makes this correct is also a ring-wide
-stall, so the correct construction is also the expensive one. "Durability on
+than on the writes. The barrier that makes this correct waits on everything
+outstanding on the ring, so the correct construction is also the expensive one. "Durability on
 the ring" in [DESIGN-NOTES.md](DESIGN-NOTES.md) has the full shape and the three
 ways to pay for it.
 
