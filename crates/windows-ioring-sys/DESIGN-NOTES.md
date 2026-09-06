@@ -105,10 +105,12 @@ follows.** A drained flush waits for every operation outstanding on the ring whe
 that is the durability guarantee, and it is solid. Operations pushed *after* it are **not** held:
 they can and do complete first ([D-47](#d-47), measured).
 
-Together these mean the correct durability construction is still the expensive one -- the ring
-drains, and that stall is real -- but the drain buys ordering in one direction only. A consumer that
-needs later work to observe the flush's completion must arrange that itself, because the ring will
-not.
+Together these mean the correct durability construction is still the expensive one, and it is worth
+being exact about where the expense lands. **The cost is the flush's own latency, not a stall
+imposed on anything else**: the flush waits on every operation outstanding on the ring when it is
+reached, however unrelated to the caller's epoch, so it takes as long as the slowest of them. What
+it does *not* do is hold up work submitted after it. A consumer that needs later work to observe the
+flush's completion must arrange that itself, because the ring will not.
 
 **How the reordering shows up is device-dependent, and that is a trap rather than a detail.** M12.2
 re-ran the D-23 shape as a permanent test and measured a second machine behaving differently from the
@@ -908,9 +910,10 @@ it is what closing an epoch needs, and it held in every trial.
 completed. A consumer needing later work to observe the flush's completion must sequence it itself
 -- submit it after the flush's completion is popped, rather than assuming the ring holds it.
 
-The cost story in [Durability on the ring](#durability-on-the-ring) is unchanged: the drain still
-waits for everything outstanding, and that stall is still the reason to choose the coverage
-deliberately.
+The cost story in [Durability on the ring](#durability-on-the-ring) is unchanged, and is the flush's
+own: it still waits for everything outstanding on the ring when it is reached, so it is still a long
+operation and still a reason to choose the coverage deliberately. That cost is what the flush pays,
+not something it imposes on later submissions.
 
 ### What the test asserts now
 

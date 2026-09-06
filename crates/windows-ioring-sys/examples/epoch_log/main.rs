@@ -882,7 +882,8 @@ fn compare_strategies<O: io::Write, E: io::Write>(
     // same size, and the reason is visible in the numbers above: every
     // strategy pays exactly one device flush per epoch, that flush is hundreds
     // of microseconds, and everything the strategies actually differ about --
-    // ring-side stalls, an extra host round trip -- lands in the tens. The
+    // how long the flush itself waits, an extra host round trip -- lands in
+    // the tens. The
     // distinction D-24 draws is real; on this device it is two orders of
     // magnitude below the dominant term.
     //

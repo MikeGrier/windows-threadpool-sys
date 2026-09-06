@@ -159,8 +159,9 @@ pub enum FlushCoverage {
     /// Two uses are legitimate. One is *host sequencing*: the caller has
     /// already observed the completions of every write in the epoch before
     /// pushing this, so the ordering is established outside the ring and the
-    /// barrier would only add a stall. The other is a flush that is not being
-    /// used for durability at all.
+    /// barrier would only make this flush wait on operations it has already
+    /// accounted for. The other is a flush that is not being used for
+    /// durability at all.
     Unordered,
 }
 

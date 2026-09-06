@@ -70,8 +70,8 @@
 //! strategy shows between consecutive runs. The reason is visible in the
 //! numbers the sample prints. Every strategy pays exactly one device flush per
 //! epoch, that flush costs hundreds of microseconds, and everything the
-//! strategies actually differ about -- the ring-side stall, the extra host
-//! round trip -- lands in the tens.
+//! strategies actually differ about -- how long the flush itself waits, the
+//! extra host round trip -- lands in the tens.
 //!
 //! The distinction [D-24](../../DESIGN-NOTES.md) draws is real. It is simply
 //! two orders of magnitude below the dominant term at this workload, and a
@@ -106,8 +106,8 @@ use windows_ioring_sys::{
 use crate::commit::Epoch;
 use crate::record::{self, Sequence};
 
-/// Arena slots per ring. Small enough that a commit's stall is visible in
-/// arena pressure, which is the cost strategy 1 is being charged for.
+/// Arena slots per ring. Small enough that a commit's own duration is visible
+/// in arena pressure, which is the cost strategy 1 is being charged for.
 const SLOTS: u32 = 8;
 
 /// Bytes per slot.
@@ -462,8 +462,9 @@ pub fn run(
                         break;
                     }
                     // Every slot is busy. Drain and retry -- the arena
-                    // working as intended, and the pressure a ring-wide
-                    // stall makes worse. Timed, because this is the cost a
+                    // working as intended, and the pressure a long commit
+                    // makes worse by holding its slots for the whole of its
+                    // own duration. Timed, because this is the cost a
                     // covering flush imposes on the append path.
                     None => {
                         let blocked = Instant::now();
