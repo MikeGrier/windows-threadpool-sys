@@ -42,7 +42,7 @@ windows-core = ["dep:windows-core"]
 [dependencies]
 # `default-features = false` keeps this usable from an `alloc`-only build; our
 # own `std` feature forwards to its `std` when both are on.
-windows-core = { version = "0.62.2", optional = true, default-features = false }
+windows-core = { version = "0.100.0", optional = true, default-features = false }
 
 # The storage and str/String conversions are portable; only the OsStr/OsString
 # interop is Windows-only. Build docs on a Windows target so that surface is
