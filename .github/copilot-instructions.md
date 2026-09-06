@@ -155,6 +155,25 @@ edits (`tpu_replace_in_file` / `tpu_edit_file`), not only to PowerShell/shell.
   any hit is a blocking violation — move those tests into a sibling `tests.rs`
   first. See the full gate in
   [instructions/global.rust.instructions.md](instructions/global.rust.instructions.md).
+- **Release-scope pre-commit gate:** before committing anything typed `feat`, `fix`,
+  or marked `!`, run
+  `.\tools\check-commit-scope.ps1 -Staged -Type '<type>'`
+  and act on what it reports. **release-please attributes a commit to a crate by the
+  PATHS it touches, not by the `(scope)` in the subject line**, so a release-triggering
+  commit that incidentally edits a second released crate's files gives that crate a
+  changelog entry and a version bump it did not earn. Measured on this repository: nine
+  such commits on one branch, and it has already **shipped** -- `windows-ioring-sys`'
+  CHANGELOG carries two `**guard-alloc:**` entries for exactly this reason.
+  The script **flags, it does not decide**, because path data cannot separate the two
+  cases and both occur here. When the crates genuinely changed together, leave it -- the
+  bump is earned and splitting would produce a commit that does not compile. When the
+  sibling is only a **ride-along** (its example, test, or docs followed a rename), move
+  that part into its own `chore(<crate>):` commit: `chore` triggers no release, so the
+  sibling gets nothing. For a cross-crate **rename**, the three-commit form is the one
+  that keeps every commit compiling -- add the new name as an alias (`feat`, additive),
+  move the consumer (`chore`), then delete the alias (`feat!`, owning crate only).
+  Never split a genuinely coupled change merely to satisfy the check: a commit that does
+  not build is a worse defect than a changelog line that overstates a bump.
 - **Commit every file `cargo fmt` reformats, even outside your task's scope.**
   `cargo fmt` rewrites *all* files in the formatted scope, not just the ones you
   edited — so a run can clean up a pre-existing formatting drift in a file your
@@ -409,6 +428,203 @@ written against — a decision to raise, not a gap to close in passing.
 
 `cargo_nextest_run` and `cargo_nextest_list` remain in the tool table above because the
 MCP server exposes them; they will fail here until cargo-nextest is installed.
+
+### cargo-mutants — run it through `tools/run-mutants.ps1`
+
+`cargo-mutants` is installed and is **not** exposed by the cargo-mcp server, so it is one
+of the few cargo commands that legitimately runs in a terminal rather than through a
+`cargo_*` tool.
+
+**Run it through [tools/run-mutants.ps1](../tools/run-mutants.ps1) rather than invoking
+`cargo mutants` directly.** Each of the settings the wrapper applies is there because
+getting it wrong has already cost a run, and three of them are invisible until they have:
+it suppresses the Windows Error Reporting dialog that a genuinely-crashing mutant would
+otherwise block the whole run behind, it passes the features, and it writes `mutants.out`
+under `.scratch/` so a new run cannot overwrite the analysis you have not finished reading.
+
+```powershell
+.\tools\run-mutants.ps1 -Package windows-waitable-queues
+.\tools\run-mutants.ps1 -File crates/windows-file-watcher/src/watcher.rs
+```
+
+The rest of this section is why those settings are what they are, and how to read what
+comes back. A direct `cargo mutants` invocation is still fine for a one-off, but then
+every paragraph below is yours to apply by hand.
+
+**Always pass `-j 2`** (the wrapper's default). Serial is the cargo-mutants default, and a
+mutation run is long enough that the difference matters: a 125-mutant sweep over this
+workspace took **3m30s at `-j 2` against roughly six minutes serially**, with identical
+results. Two is the recommended value here rather than "as many as there are cores":
+
+- Each job is a full build plus test run of a scratch copy of the tree, so the cost is
+  disk and RAM as much as CPU, and the builds contend for the same target directory
+  layout.
+- **More importantly, this workspace has timing-sensitive tests** -- doorbell signalling,
+  queue contention, and the placement probe's transfer loops. Under heavy parallel load a
+  timing test can fail for want of a CPU rather than because it detected the mutant, and
+  cargo-mutants records that as `caught`. That is a *false* caught: it inflates the score
+  while leaving the mutant undetected in a real run. Two jobs on an ordinary development
+  machine stays well clear of that; raising it needs the result checked against a serial
+  run before being believed.
+
+Useful narrowing flags, since a full run is long:
+
+- `--file <path>` to scope to one file; repeat it for several.
+- `--re <regex>` to scope to matching function names, e.g.
+  `--re "impl crate::(Bounded|Observable)"` for a trait surface.
+- `--timeout <secs>` to bound each mutant, which matters because a mutant that hangs is
+  otherwise bounded only by cargo-mutants' own auto-timeout.
+
+**A baseline failure stops the whole run before any mutant is tested**, and the message
+(`cargo test failed in an unmutated tree`) does not name the cause. The usual cause here
+is a test that assumes something about the build environment: cargo-mutants builds from a
+scratch copy of the tree **with `.git` left behind**, so anything asserting that a
+repository, a commit, or a clean checkout exists will fail there and nowhere else. Fix
+such a test by asserting what the build could actually determine rather than by skipping
+it -- see `windows-placement-probe`'s `build_identity` tests for the worked example.
+
+**Pass the crate's features to cargo-mutants ITSELF, not after `--`, and never both.**
+cargo-mutants mutates the *source*, so it happily mutates a module gated behind a feature
+that is switched off -- the mutation lands in code that is never compiled, the suite passes
+trivially, and the result is recorded as `missed`. It compiles out that module's tests at
+the same time, so both halves of the evidence disappear together.
+
+This is not a small correction. Measured on two runs here: a `windows-topology-sys` sweep
+reported 61 survivors of which **57 were in `#[cfg(feature = "serde")]` code**, and a
+`windows-file-watcher` sweep reported 247 of which **147 were in `scenario-tool` and
+`test-util` modules**. In both cases roughly 60% of the "gaps" were artifacts of the
+invocation. So:
+
+```
+cargo mutants -p <crate> --all-features
+```
+
+**An earlier version of this section said the flag was needed on both sides, and that
+recipe does not run at all.** cargo-mutants forwards its trailing arguments onto the same
+`cargo test` it is already building, so `--all-features -- --all-features` puts the flag on
+one command line twice and cargo refuses it outright:
+`error: the argument '--all-features' cannot be used multiple times`. The run dies in the
+baseline, before a single mutant is tested.
+
+The two single-sided forms are not equivalent either, and the difference is visible in the
+log's `***` command lines. cargo-mutants runs **two** cargo phases -- a `--no-run` build and
+then the test run -- and:
+
+- `--all-features` **before** `--` lands on **both** phases. This is the one to use.
+- `--all-features` **after** `--` lands on the run phase **only**, leaving the `--no-run`
+  build feature-less. The features do end up enabled for what is actually tested (measured
+  on `windows-file-watcher`: 315 lib tests either way, against 275 with default features),
+  so results are not wrong -- but the first build is thrown away and rebuilt, and the
+  build/test split cargo-mutants reports is timing a configuration it did not test.
+
+**Verify which features were actually on before trusting a miss**, and do not do it by
+eye. Two traps, both measured here:
+
+- `--check-cfg cfg(feature, values("scenario-tool", ...))` appears on every rustc line and
+  merely *declares which names are valid*, so grepping the baseline log for a feature name
+  matches whether or not it was enabled.
+- The enabling flag is **not** spelled `--cfg feature="x"` in the log. cargo quotes it, so
+  the literal text is `--cfg "feature=\"scenario-tool\""` and a search for the unquoted
+  form returns zero hits on a run that had every feature on. (An earlier version of this
+  section told you to look for the unquoted form; it never matches.)
+
+The two checks that do work:
+
+- Read the `***` lines in `mutants.out/log/baseline.log`. They are the exact cargo command
+  lines for both phases, so `--all-features` is either there or it is not.
+- Compare the baseline's test count against a local run -- the quicker check, and
+  independent of log formatting. On `windows-file-watcher`, 275 lib tests with default
+  features against 315 with all of them is the tell.
+
+**When a survivor looks alarming, check the gating before reporting it.** A
+`windows-file-watcher` run showed `ContractChecker::observe -> Ok(())` surviving, which
+would have meant the workspace's contract oracle could be replaced by "everything is fine"
+unnoticed. `mod contract` is `test-util`-gated; its tests are real and thorough; the
+finding was an artifact. The alarming ones are exactly where the check is cheapest and the
+cost of skipping it is highest.
+
+**A surviving mutant is not always a missing test -- sometimes it is unreachable code.**
+Before writing a test, check that a test *could* reach the line. Three survivors in
+`windows-file-watcher`'s `StandingHold::drop` turned out to sit past two early returns that
+between them cover every path: the drained case resolves the hold inline, and the
+undrained case only happens during teardown, when the `Weak` upgrade fails. No test can
+cover that body, and manufacturing one that reaches code nothing calls would be worse than
+leaving the gap visible. That is a design question for the engineer (queued as a checklist
+item), not something to close with a test.
+
+**Verify a fix by re-injecting the mutant on its own line, not by string replace.** A
+whole-file `.Replace` of `        state.reserved += 1;` matched four sites in one file, so
+it mutated a *different, tested* line and reported the untested one as caught -- inverting
+the conclusion. This is the same defect `tools/run-sabotage.ps1` guards with its "pattern
+found N times, expected 1" check; done by hand, nothing guards it.
+
+**A mutant that crashes is scored `caught`, and that is a weaker claim than it looks.**
+cargo-mutants judges by exit code, so a mutant that produces memory unsafety counts as caught
+because the process died -- not because a test noticed. Detection then depends on allocator
+behaviour and heap layout, so the same mutant can be `caught` in one sweep and `missed` in the
+next. Measured in `windows-file-watcher`: sixteen crashes across runs, two scored `CaughtMutant`
+via `STATUS_HEAP_CORRUPTION` and `STATUS_STACK_BUFFER_OVERRUN`, and the mutant that had crashed
+one run was `missed` in another. Treat a crash-caught mutant as an *uncovered* one: write the
+assertion that makes it deterministically red.
+
+**Before blaming the code, check whether the crash needs a mutant at all.** The test binary's
+filename is derived from the target and its features, not its contents, so every crash report
+names the same `.exe` whether the build was mutated or not -- the name proves nothing. Two
+checks settle it: run the unmutated binary many times (55 runs settled the file-watcher case),
+and compare the PE timestamp in each Application Error event against the clean build's. Distinct
+timestamps mean distinct builds, i.e. mutants.
+
+**Read the results as a to-do list, not a score.** `mutants.out/missed.txt` is the useful
+artifact; group it by file and by function to find the shape of the gap rather than
+fixing mutants one at a time. A large block of survivors usually names one absent *kind*
+of test -- the run that prompted this section had 79 survivors in trait impls, all from a
+single missing idea (nothing exercised the traits generically), and one new test file
+section killed all of them.
+
+**Treat `timeout` and `unviable` separately from `caught`.** An unviable mutant did not
+compile and says nothing. A timeout needs interpreting, and in this workspace the
+interpretation is usually the opposite of the alarming reading:
+
+- **In a crate of blocking APIs, a timeout is a detection that has been robbed of its
+  name.** `cargo test` runs every test as a thread in one process (which is deliberate
+  here -- see the nextest note in the cargo section above), so a single test parked on a
+  queue that will never fill stops the *harness* reporting, and the run is recorded as a
+  timeout even though other tests have already failed. Measured: a
+  `windows-waitable-queues` sweep recorded 100 timeouts, and the mutant
+  `<impl Parked for Consumer<T>>::arm -> Ok(true)` was one of them -- yet run against its
+  own test alone it fails in **0.00s**, with the message written for exactly that
+  mutation. The suite cannot pass either way; the timeout only hides which test caught it,
+  and costs the full auto-timeout to do so.
+- So **do not read a timeout as a gap**, and do not go writing tests for one. To find out
+  what a timeout really is, re-inject that single mutant and run the one test that should
+  catch it, or use `cargo_test`'s `bisect` to name the thread that parked.
+- The auto-timeout is `max(20s, 5x baseline)`, so on a fast suite it is the 20s floor. With
+  a 0.31s baseline that is a 60x margin, which is worth knowing because it rules out the
+  other reading: a timeout on this crate cannot be a merely-slower mutant, only a stalled
+  one.
+
+**Some survivors are equivalent mutants, and the answer is to document them in place.**
+An equivalent mutant changes no observable behaviour, so no test can kill it and looking
+for one is wasted effort -- but only the *second* reader knows that, and only if the first
+wrote it down. Record the equivalence as a comment at the mutation site, with the argument
+for why the two forms agree. Three from one crate, as worked examples: `record_depth`'s
+`>` against `>=` differs by one idempotent `fetch_max`; `claim_word`'s `|` against `^`
+cannot differ at all, because the shift leaves the halves disjoint; and `slotwise_mpsc`'s
+lost-race `continue` reaches the same state as the failing compare-exchange it falls
+through to. **Argue it, then measure it anyway** where the claim is about concurrency --
+the third was confirmed by re-injecting the mutant and running the many-producer tests
+thirty times, because a concurrency claim reasoned from source is exactly the kind this
+workspace has been wrong about before.
+
+**Where a fact about constants survives, prefer a `const` assertion to a test.** A mutation
+to a constant is often invisible to every test while still being a real defect. The
+reversed shift in `reserving_mpsc`'s `MAX_RESERVED` passed every existing const assertion,
+because a ceiling wider than the word still satisfies a `<=` against it -- and the count is
+read back out through a cast to `u32`, so the too-wide ceiling truncates silently. Asserting
+that relationship closes it *at compile time*, which is stronger than a test: it cannot be
+skipped, and it fails on the build rather than on a run somebody chose to make. Verify such
+an assertion in both directions -- the mutation must compile cleanly without it and fail to
+compile with it -- or you have not shown it is load-bearing.
 
 ## Scratch directory for temporary files
 
