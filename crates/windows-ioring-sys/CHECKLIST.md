@@ -128,20 +128,27 @@ conclusions belong to it until it converges.
   PDO advertises a proximity domain. Write the correction now (the documentation defect is independent of
   the measurement) and leave the empirical question open.
 
-- [ ] **M20.5** -- Decide what to do about
-  `flush_barrier::a_covering_flush_waits_for_preceding_writes_and_an_unordered_one_does_not`, which is
-  load-sensitive: see [UNRESOLVED-TEST-FAILURES.md](UNRESOLVED-TEST-FAILURES.md) for both sightings and the
-  measurements taken after the second. It has failed **twice in three days** under a local full-workspace
-  run and has never failed in isolation (ten consecutive runs) or in CI. The test asserts a real I/O
-  ordering window, so a full-workspace run's disk contention can widen the window past what it allows.
-  **This item exists because the record is not a queue.** The decision was described in
-  UNRESOLVED-TEST-FAILURES.md from the day the flake was first seen and scheduled nowhere, which is exactly
-  the orphaned-work shape the repository's rules forbid; a second sighting is what made that visible.
-  The two candidate answers -- make the assertion load-independent, or mark the test serial so it does not
-  compete -- are not equivalent, and choosing needs an engineer: the first keeps the coverage under
-  contention but may weaken what the test actually proves about ordering, while the second preserves the
-  assertion exactly and gives up the contended case, which is the case a real consumer runs in.
-  **Do not close this by loosening the assertion without saying which guarantee was surrendered.**
+- [x] **M20.5** -- **Dissolved by [D-47](DESIGN-NOTES.md#d-47-detail), not decided.** This asked whether to
+  make the load-sensitive `flush_barrier` assertion load-independent or mark the test serial. Neither: the
+  assertion was measuring a claim the platform does not honour, so it was not a flaky test at all. Its own
+  contention hypothesis was disproved in the same measurement -- an idle ring failed too. Recorded in
+  [RESOLVED-TEST-FAILURES.md](RESOLVED-TEST-FAILURES.md).
+
+- [ ] **M20.6** -- Re-evaluate `CommitStrategy::AlternatingRings` and the epoch-log benchmark's conclusion
+  against [D-47](DESIGN-NOTES.md#d-47-detail). The strategy comparison in
+  [strategy.rs](examples/epoch_log/strategy.rs) was designed around D-24's claim that a covering flush holds
+  back operations queued behind it: the harness deliberately keeps appending while a commit is outstanding so
+  that the stall would be visible in the numbers. D-47 established there is no such stall, so **the rationale
+  the benchmark rests on is withdrawn even though the measurements themselves stand**. Two things to settle,
+  and they are independent: whether alternating rings still earns its cost now that its stated benefit
+  (keeping appends off a stalled ring) does not exist -- the remaining benefit is that epoch *N+1*'s appends
+  are provably outside epoch *N*, which is a correctness property rather than a throughput one -- and whether
+  the published numbers should be re-read, re-run, or annotated. **Not a documentation-only fix:** if the
+  answer is that the strategy no longer earns its place, that is an API change to a published example.
+  The corrected prose in [strategy.rs](examples/epoch_log/strategy.rs) and
+  [DESIGN-NOTES.md](DESIGN-NOTES.md) both point here.
+  *(Numbered M20.6 rather than M20.5 because M20.5 was in flight on a separate branch when this was
+  written. That branch has since merged, and M20.5 arrived dissolved -- see above.)*
 
 
 ## M6+ -- Model B: explicit-thread delivery and affinity

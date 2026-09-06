@@ -3,7 +3,7 @@
 //!
 //! [`crate::commit`] picks the simplest of the three and says so. This module
 //! implements all three and lets a caller choose at run time, because
-//! [D-24](../../DESIGN-NOTES.md) makes the choice a real fork with no free
+//! [D-24](../../DESIGN-NOTES.md#d-24) makes the choice a real fork with no free
 //! answer, and a reader needs to see all three side by side to make it.
 //!
 //! # The fork
@@ -16,15 +16,18 @@
 //! ## 1. [`CommitStrategy::CoveringFlush`] -- buy it in the ring
 //!
 //! Push the flush with [`FlushCoverage::CoversPrecedingOperations`]. The ring
-//! holds it until everything outstanding completes, and holds everything
-//! pushed after it until *it* completes.
+//! holds it until everything outstanding completes. It does **not** hold back
+//! what is pushed after it (D-47); an earlier version of this section said it
+//! did, and that was the false contract this example used to teach.
 //!
 //! Cheapest to write and easiest to see correct, and the reason is that the
 //! ordering is a property of the submission rather than of any code that runs.
-//! What it costs is that the barrier is **ring-wide** (D-24): appends for the
-//! next epoch queue behind it, and their arena slots stay occupied. On a log
-//! whose commits are rare relative to its appends, that stall is bounded and
-//! fine. On one that commits often, it is the dominant cost.
+//! What it costs is that the wait is **ring-wide**: the flush waits on every
+//! operation outstanding on the ring when it is reached, however unrelated to
+//! this epoch, so it takes as long as the slowest of them. The epoch's own
+//! arena slots stay occupied for that whole time. On a log whose commits are
+//! rare relative to its appends, that is bounded and fine. On one that commits
+//! often, it is the dominant cost.
 //!
 //! ## 2. [`CommitStrategy::HostSequenced`] -- buy it in userspace
 //!
@@ -43,11 +46,12 @@
 //! ## 3. [`CommitStrategy::AlternatingRings`] -- buy it in a second ring
 //!
 //! Two rings. Epoch *N* lives entirely on ring *N mod 2*, and its commit is a
-//! covering flush on that ring -- so the barrier is real, but it stalls only
-//! the ring being committed. Epoch *N+1*'s appends go to the other ring and
-//! proceed while that barrier is held.
+//! covering flush on that ring. Epoch *N+1*'s appends go to the other ring, so
+//! they are unambiguously outside the epoch being committed -- which is what
+//! this buys, now that D-47 has established the ring does not hold later work
+//! back anyway.
 //!
-//! Neither the ring-wide stall nor the host round trip. What it costs is
+//! Neither a long commit on the appending ring nor the host round trip. What it costs is
 //! **doubled registration**: the arena is registered on both rings, and an
 //! `IoRing` has no unregister call, so those registrations live for the rings'
 //! whole lives. It also doubles the completion sources a wait must service,
@@ -66,23 +70,26 @@
 //! strategy shows between consecutive runs. The reason is visible in the
 //! numbers the sample prints. Every strategy pays exactly one device flush per
 //! epoch, that flush costs hundreds of microseconds, and everything the
-//! strategies actually differ about -- the ring-side stall, the extra host
-//! round trip -- lands in the tens.
+//! strategies actually differ about -- how long the flush itself waits, the
+//! extra host round trip -- lands in the tens.
 //!
-//! The distinction [D-24](../../DESIGN-NOTES.md) draws is real. It is simply
-//! two orders of magnitude below the dominant term at this workload, and a
-//! reader is better served by knowing that than by a ranking that would not
-//! reproduce.
+//! The distinction [D-24](../../DESIGN-NOTES.md#d-24) draws is real. It is
+//! simply two orders of magnitude below the dominant term at this workload,
+//! and a reader is better served by knowing that than by a ranking that would
+//! not reproduce.
 //!
 //! Getting that result required fixing the harness twice, which is worth
 //! recording because both mistakes are easy to make and neither announces
 //! itself:
 //!
 //! - The first version awaited each commit before appending the next epoch.
-//!   That serialises every strategy, and a ring-wide barrier costs nothing
-//!   when nothing is queued behind it -- so it measured the barrier as free.
-//!   A real log keeps appending while a commit is outstanding, and those are
-//!   the appends a covering flush holds back.
+//!   That serialises every strategy, so it measured a workload no real log
+//!   runs. A real log keeps appending while a commit is outstanding, and the
+//!   strategies differ in what that overlap costs -- registration, a host round
+//!   trip, or nothing. (The original reason given here was that a covering
+//!   flush *holds back* those appends. It does not; see D-47. Keeping the
+//!   overlap is still right, but the comparison it produces should be re-read
+//!   with that correction in mind -- see M20.6.)
 //! - The second version keyed pending commits by `UserData` in one map across
 //!   both rings. Each ring assigns its own sequence, so the two collided and
 //!   half the samples vanished.
@@ -99,8 +106,8 @@ use windows_ioring_sys::{
 use crate::commit::Epoch;
 use crate::record::{self, Sequence};
 
-/// Arena slots per ring. Small enough that a commit's stall is visible in
-/// arena pressure, which is the cost strategy 1 is being charged for.
+/// Arena slots per ring. Small enough that a commit's own duration is visible
+/// in arena pressure, which is the cost strategy 1 is being charged for.
 const SLOTS: u32 = 8;
 
 /// Bytes per slot.
@@ -112,15 +119,16 @@ const WAIT_MS: u32 = 30_000;
 /// How an epoch's commit establishes that its writes reached the device.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum CommitStrategy {
-    /// A covering flush: the ring holds the flush until everything
-    /// outstanding completes. One ring, ring-wide stall.
+    /// A covering flush: the flush waits until everything outstanding
+    /// completes. One ring; the commit is long, but later appends are not
+    /// blocked by the ring (D-47) -- this sample serialises them itself.
     CoveringFlush,
     /// Wait in userspace for every write's completion, then push an unordered
     /// flush. One ring, no barrier, one host round trip per epoch.
     HostSequenced,
     /// Two rings, epochs alternating between them, each committed with a
-    /// covering flush on its own ring. No ring-wide stall of the ring taking
-    /// new appends, at the cost of registering the arena twice.
+    /// covering flush on its own ring, so the appending ring is never the one
+    /// waiting, at the cost of registering the arena twice.
     AlternatingRings,
 }
 
@@ -144,7 +152,7 @@ impl CommitStrategy {
     /// What this strategy pays, in one line.
     pub fn cost(self) -> &'static str {
         match self {
-            Self::CoveringFlush => "ring-wide stall at every commit",
+            Self::CoveringFlush => "a long, ring-wide wait at every commit",
             Self::HostSequenced => "a host round trip at every epoch boundary",
             Self::AlternatingRings => "the arena registered on both rings, permanently",
         }
@@ -186,9 +194,12 @@ pub struct Outcome {
     pub commit_latencies: Vec<Duration>,
     /// Time appends spent blocked because every arena slot was busy.
     ///
-    /// This is where a ring-wide barrier shows up as a number: slots cannot be
-    /// released until the operations holding them complete, and a covering
-    /// flush holds everything pushed after it.
+    /// This is where a long commit shows up as a number: an arena slot is not
+    /// reusable until the operation holding it completes, and a covering flush
+    /// does not complete until everything outstanding on its ring has. The
+    /// stall is the epoch's own operations retiring, not -- as an earlier
+    /// revision claimed -- the flush holding back what was pushed after it,
+    /// which D-47 established it does not do.
     pub append_stall: Duration,
 }
 
@@ -451,8 +462,9 @@ pub fn run(
                         break;
                     }
                     // Every slot is busy. Drain and retry -- the arena
-                    // working as intended, and the pressure a ring-wide
-                    // stall makes worse. Timed, because this is the cost a
+                    // working as intended, and the pressure a long commit
+                    // makes worse by holding its slots for the whole of its
+                    // own duration. Timed, because this is the cost a
                     // covering flush imposes on the append path.
                     None => {
                         let blocked = Instant::now();
@@ -470,13 +482,16 @@ pub fn run(
         //
         // That placement is what makes the comparison mean anything. Settling
         // first would make every strategy serialise -- commit, wait, append,
-        // commit -- and a ring-wide barrier costs nothing when nothing is
-        // queued behind it. A real log keeps appending while a commit is
-        // outstanding (the one in `main.rs` does), and it is *those* appends
-        // that a covering flush holds back. An earlier revision of this
-        // harness settled first, measured a difference indistinguishable from
-        // run-to-run noise, and would have let a reader conclude the barrier
-        // is free.
+        // commit -- which is a workload no real log runs. A real log keeps
+        // appending while a commit is outstanding (the one in `main.rs` does).
+        // An earlier revision of this harness settled first and measured a
+        // difference indistinguishable from run-to-run noise.
+        //
+        // The original justification said those overlapping appends are held
+        // back by a covering flush. They are not (D-47), so what the overlap
+        // exposes is the strategies' other costs rather than a stall. The
+        // placement stays; the conclusion drawn from the numbers needs
+        // re-reading, which is `M20.6`.
         if let Some((user_data, pushed)) = deferred[lane_index].take() {
             lanes[lane_index].await_flush(user_data)?;
             commit_latencies.push(pushed.elapsed());

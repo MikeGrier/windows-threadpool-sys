@@ -37,24 +37,35 @@ impl PushOptions {
         Self::default()
     }
 
-    /// Set `IOSQE_FLAGS_DRAIN_PRECEDING_OPS`: this op does not start until
+    /// Set `IOSQE_FLAGS_DRAIN_PRECEDING_OPS`: this op does not complete until
     /// every op already queued on this batch's ring has completed. A
-    /// barrier, not a cheap tag -- it forces the ring to drain before
-    /// continuing.
+    /// barrier, not a cheap tag -- but a **one-sided** one, and the direction
+    /// it does not cover is the surprising half.
     ///
-    /// # Ring-wide, and it spans submissions
+    /// Stated in terms of completion rather than of when the op *starts*,
+    /// throughout: user mode cannot see execution begin, only completions
+    /// posted, so completion order is both what was measured and the only
+    /// thing a caller can act on ([D-47](../DESIGN-NOTES.md#d-47-detail)).
     ///
-    /// Measured, not inferred (D-24 in `DESIGN-NOTES.md`). The barrier
+    /// # Ring-wide in reach, one-sided in effect
+    ///
+    /// Measured, not inferred (D-24 and D-47 in `DESIGN-NOTES.md`). The wait
     /// reaches every operation outstanding on the *ring*, not only the ones
-    /// queued in this batch, and it holds back ops pushed after it even when
-    /// they target an entirely different file -- which rules out
-    /// filesystem-level serialization as the explanation. Results were
-    /// identical whether the sequence went in one [`Batch::submit`] or three.
+    /// queued in this batch, and results were identical whether the sequence
+    /// went in one [`Batch::submit`] or three.
     ///
-    /// The consequence to plan for: **cross-epoch pipelining through a single
-    /// ring is not available.** A consumer that closes an epoch with a
-    /// drained flush stalls that whole ring for the flush's duration, so the
-    /// way to overlap epochs is more rings, not more batches.
+    /// **It does not hold back operations pushed after it.** Those can complete
+    /// while this one is still outstanding -- observed across about 4,500
+    /// trials, and in the worst case every one of 32 subsequent writes
+    /// completed first. An earlier version of this documentation said they were
+    /// held; that was measured over too few runs to see a fault this rare, and
+    /// it was wrong.
+    ///
+    /// The consequence to plan for: **this delays the flagged op, not the
+    /// ring.** Later work is not blocked, so it cannot be used to fence
+    /// anything that follows. A consumer that needs later work to begin only
+    /// after this op is durable must sequence that itself, by waiting for its
+    /// completion before submitting.
     ///
     /// # The barrier stops at the ring's edge
     ///
@@ -119,16 +130,31 @@ pub enum FlushCoverage {
     /// completion is observed, and it is what a caller closing an epoch
     /// wants.
     ///
-    /// It sets `IOSQE_FLAGS_DRAIN_PRECEDING_OPS`, which is a **ring-wide**
-    /// barrier rather than a per-file one (D-24, measured): operations pushed
-    /// after it are held until it completes even when they target unrelated
-    /// files, and its reach is every operation outstanding on the ring, not
-    /// only the ones in this batch. The whole ring stalls for the flush's
-    /// duration. That cost is real, and it is the only reason the other
-    /// variant exists.
+    /// It sets `IOSQE_FLAGS_DRAIN_PRECEDING_OPS`, whose reach is **ring-wide**
+    /// rather than per-file: it waits on every operation outstanding on the
+    /// ring when it is reached, not only the ones in this batch. So the flush
+    /// takes as long as the slowest of them, however unrelated. That cost is
+    /// real, and it is the only reason the other variant exists.
+    ///
+    /// # What this does not promise
+    ///
+    /// **The flag is one-sided. Operations you push *after* this flush are not
+    /// held back, and can complete before it.** Measured over about 4,500
+    /// trials at a rate between 0.03% and 0.8%, and in the worst case every one
+    /// of 32 subsequent writes completed first (D-47).
+    ///
+    /// So this flush's completion tells you about the past and not the future:
+    /// everything outstanding when the flush was reached is durable, and
+    /// nothing is implied about work submitted afterwards. If later work must
+    /// not begin until the flush is durable, submit it after you have popped
+    /// the flush's completion. The ring will not sequence it for you.
+    ///
+    /// An earlier version of this documentation said subsequent operations were
+    /// held until the flush completed. That was wrong, and it is corrected here
+    /// rather than quietly dropped because a caller may have relied on it.
     CoversPrecedingOperations,
-    /// Queue the flush with no barrier: it may start, and complete, while
-    /// writes pushed before it are still in flight.
+    /// Queue the flush with no barrier: it may complete while writes pushed
+    /// before it are still in flight.
     ///
     /// **Almost never what a caller wants.** Its completion proves nothing
     /// about any preceding write, so using it to close an epoch loses data
@@ -138,8 +164,9 @@ pub enum FlushCoverage {
     /// Two uses are legitimate. One is *host sequencing*: the caller has
     /// already observed the completions of every write in the epoch before
     /// pushing this, so the ordering is established outside the ring and the
-    /// barrier would only add a stall. The other is a flush that is not being
-    /// used for durability at all.
+    /// barrier would only make this flush wait on operations it has already
+    /// accounted for. The other is a flush that is not being used for
+    /// durability at all.
     Unordered,
 }
 
@@ -1455,7 +1482,7 @@ impl<'ring> Batch<'ring> {
     /// covering flush, and wait on that flush rather than on the writes.
     /// "Durability on the ring" in `DESIGN-NOTES.md` has the full
     /// construction, and the three ways to pay for the barrier's ring-wide
-    /// stall.
+    /// wait.
     ///
     /// # Safety
     ///

@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.3.1](https://github.com/MikeGrier/windows-threadpool-sys/compare/windows-ioring-sys-v0.3.0...windows-ioring-sys-v0.3.1) (2026-09-06)
+
+
+### Bug Fixes
+
+* **ioring:** finish the sweep by reading every barrier mention, not by guessing phrasings ([78ab9fd](https://github.com/MikeGrier/windows-threadpool-sys/commit/78ab9fd3de4f479026934410992193be77bdcd99))
+* **ioring:** name whose cost the drain is, everywhere the old vocabulary survived ([4263a2a](https://github.com/MikeGrier/windows-threadpool-sys/commit/4263a2a1e1fd1a94cae18c8f5f2c917ae5947adc))
+* **ioring:** pop order witnesses posting order; only execution order is hidden ([275bd1e](https://github.com/MikeGrier/windows-threadpool-sys/commit/275bd1e586acab9e17c21da16876077c307a12fd))
+* **ioring:** state the barrier by completion, not by when an operation starts ([255f6d3](https://github.com/MikeGrier/windows-threadpool-sys/commit/255f6d3cc7b9623179fe7995ffeb14f2a58f51c1))
+* **ioring:** sweep the withdrawn ring-wide-stall claim through the example and notes ([dfee26b](https://github.com/MikeGrier/windows-threadpool-sys/commit/dfee26b1bc7f0ca167964152f7f644f7e34574f6))
+* **ioring:** the covering-flush ordering is observable; say why this oracle skips it ([8813327](https://github.com/MikeGrier/windows-threadpool-sys/commit/8813327df3b37d9de8034382eeef4251901ba337))
+* **ioring:** the drain flag is one-sided, and the docs said otherwise ([868768d](https://github.com/MikeGrier/windows-threadpool-sys/commit/868768df8316516742a624a74a5e818b2c791932))
+
 ## [0.3.0](https://github.com/MikeGrier/windows-threadpool-sys/compare/windows-ioring-sys-v0.2.0...windows-ioring-sys-v0.3.0) (2026-09-05)
 
 
