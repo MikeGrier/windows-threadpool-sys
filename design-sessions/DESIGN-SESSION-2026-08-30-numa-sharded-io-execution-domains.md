@@ -3,6 +3,15 @@
 > Tier-3 record. [DESIGN-NOTES.md](../DESIGN-NOTES.md) is authoritative and wins
 > on any conflict. This file records how the discussion went, what was measured,
 > and what is still open.
+>
+> **API names below are as of 2026-08-30 and some have since changed.** The text
+> is left as it was said, because a session record that is edited to match later
+> code stops being a record of the session; the current name is given in brackets
+> at each site instead. Renames so far: `Topology` -> `MachineMemoryTopology`
+> (2026-09-02), and `Core`, which no longer exists as a type -- a processor's
+> `efficiency_class` is now a `ProcessorFacts` field of type `Observed<u8>`,
+> so what this session calls an input that "exists" is now explicitly
+> maybe-absent-with-a-reason.
 
 **Status: OPEN. This session has only just begun.** What follows is the opening
 survey and the first measurement, not a set of converged decisions. No decision
@@ -133,7 +142,8 @@ where the effort may need two.
 
 ## Measurement M-1: a shipping ARM laptop reports no L3 at all
 
-Probed with `Topology::discover()` on the development machine.
+Probed with `Topology::discover()` [now `MachineMemoryTopology::discover()`] on
+the development machine.
 
 **Snapdragon(R) X2 Elite - X2E80100 - Qualcomm Oryon(TM) CPU**, 12 cores, 12
 logical processors, no SMT:
@@ -340,7 +350,9 @@ that is also running everything else may be worse than letting it float across
 the performance cores. But **heterogeneity means even N=1 wants an affinity
 mask**, because an unconstrained thread can be scheduled onto an efficiency core
 or an LPE island. The development machine is the case in point: two clusters of
-six, and `efficiency_class` is already exposed on `Core` by the topology crate.
+six, and `efficiency_class` is already exposed on `Core` [now the
+`ProcessorFacts::efficiency_class` field, an `Observed<u8>`] by the topology
+crate.
 So the small end does not want *no* affinity -- it wants a *set*, which is
 exactly what the large end wants too.
 
@@ -1168,8 +1180,10 @@ Ordered so that a short session yields the most:
   assumes.
 - **Heterogeneous cores.** Intel P/E/LPE and ARM performance/efficiency clusters
   mean pinning an I/O shard to an efficiency core is a latency trap.
-  `windows-topology-sys` exposes `efficiency_class` on `Core`, so the input
-  exists; no policy consumes it.
+  `windows-topology-sys` exposes `efficiency_class` on `Core` [now the
+  `ProcessorFacts::efficiency_class` field, an `Observed<u8>`, so it may now be
+  absent with a reason rather than a bare number], so the input exists; no
+  policy consumes it.
 - **Whether the L2 cluster structure on ARM parts is worth sharding on**, or
   whether one whole-machine domain is the right answer there anyway.
 
