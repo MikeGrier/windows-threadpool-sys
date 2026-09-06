@@ -51,15 +51,37 @@ as "the phase failed", making every sabotage look caught while proving nothing.
 rebuild, and any that is caught *as a hang* costs the full test timeout. Run it
 when a guard is written or changed, not on every commit.
 
-**Hangs dominate the wall clock, not builds.** Measured on the 39-entry
-waitable-queues manifest: **853 seconds**, of which twelve hangs at the default
-60-second bound account for 720. An incremental rebuild is about four seconds by
-comparison. So `-TimeoutSeconds` is the knob that moves the total, and lowering
-it trades certainty for speed -- a genuinely slow test would start reporting as
-a hang, which this tool scores as caught. (An earlier version of this file said
-this manifest took "about three minutes"; that is not reachable at the default
-bound with twelve hangs in it, and the claim is corrected here rather than
-propagated.)
+**Hangs dominate the wall clock, not builds**, so the hang bound is what moves
+the total. An incremental rebuild is about four seconds; a hang costs the whole
+bound. Measured on the 39-entry waitable-queues manifest: **853 seconds** at a
+fixed 60-second bound, of which twelve hangs accounted for 720 -- and **335
+seconds** once the bound is derived from the baseline instead.
+
+**The bound is derived, not fixed.** The baseline runs the unmodified suite
+first anyway, so its measured *test* duration is the best available statement of
+how long this suite legitimately takes on this machine. The bound is
+`max(-TimeoutFloorSeconds, -TimeoutMultiplier x baseline)`, defaulting to
+`max(15, 3x)`. The sweep prints what it derived and why:
+
+```
+Baseline is green in 4s. Hang bound: 15s (3x the 4s baseline, floor 15s).
+```
+
+A fixed number is wrong in both directions: too tight on a loaded machine or a
+large suite, where a slow-but-finite run is scored as **caught** and quietly
+inflates the result; too loose on a fast one, where every hang pays the
+difference. Deriving it removes the guess.
+
+**Raise it where it is actually needed, not everywhere.** `-TimeoutSeconds`
+overrides the derivation for one run; a manifest may set `timeoutSeconds` for
+its whole sweep; and a single sabotage may set its own for the case neither can
+express -- one entry that legitimately runs far longer than the rest. A
+per-entry value only ever *raises* the bound, because the reason to lower one is
+speed and the cost of being wrong about it is a false `caught`.
+
+(An earlier version of this file said this manifest took "about three minutes";
+that was not reachable at the old fixed bound with twelve hangs in it, and the
+claim is corrected here rather than propagated.)
 
 **Build and test are timed separately, and the split is what keeps the test
 bound tight.** A hang is what a lost wakeup looks like and it happens during
@@ -185,12 +207,14 @@ needs escaping.
 | `package` | yes | Cargo package to test, unless `testArgs` overrides the command. |
 | `root` | no | Where `file` paths resolve from, relative to the manifest. Defaults to the manifest's own directory. |
 | `testArgs` | no | Replaces the arguments after `cargo test`. |
+| `timeoutSeconds` | no | Hang bound for the whole sweep, overriding the derived one. `-TimeoutSeconds` still wins over it. |
 | `name` | yes | Unique; also the `-Name` filter key and the transcript filename. |
 | `file` | yes | Source to patch, relative to `root`. |
 | `expect` | yes | `caught` for a defect, `survives` for a control. |
 | `why` | yes | What breaks, and why the suite should or should not notice. This is the part a future reader needs; the patch only says what changed. |
 | `find` | yes | Lines to replace. Must match **exactly once**. |
 | `replace` | yes | Replacement lines. `[""]` deletes. |
+| `timeoutSeconds` | no | Hang bound for this entry alone, when it legitimately runs far longer than the rest. Only ever raises the sweep's bound. |
 
 Keep the manifest **beside the code it sabotages** -- `sabotage.json` in the
 crate root -- so a refactor and its manifest move together and a stale pattern

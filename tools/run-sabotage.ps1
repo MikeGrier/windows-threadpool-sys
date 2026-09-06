@@ -67,9 +67,27 @@
     Optional wildcard filter over sabotage names, to re-run just one.
 
 .PARAMETER TimeoutSeconds
-    Bound on TEST EXECUTION only, defaulting to 60. A run that exceeds it is
-    killed and counted as caught, because a lost wakeup hangs rather than
-    fails.
+    Bound on TEST EXECUTION only. A run that exceeds it is killed and counted as
+    caught, because a lost wakeup hangs rather than fails.
+
+    DERIVED FROM THE BASELINE by default, not a fixed number: the baseline runs
+    the unmodified suite first anyway, so its measured duration is the best
+    available statement of how long this suite legitimately takes on THIS
+    machine. The bound is `max(TimeoutFloorSeconds, TimeoutMultiplier x
+    baseline)`, which adapts to a fast suite and to a slow machine without
+    either being guessed at.
+
+    This matters because hangs dominate the wall clock. Measured on the 39-entry
+    waitable-queues manifest at the old fixed 60-second default: 853 seconds
+    total, of which twelve hangs accounted for 720. The baseline's test phase
+    there is about 12 seconds, so a derived bound is roughly half the fixed one
+    and the sweep finishes materially sooner -- while a suite that genuinely
+    takes longer gets MORE room than the old fixed number gave it, not less.
+
+    Pass an explicit value to override the derivation entirely. A manifest may
+    also set `timeoutSeconds` globally, and any single sabotage may set its own
+    for the case this parameter cannot express: one entry that legitimately
+    needs far longer than the rest.
 
     This is deliberately separate from -BuildTimeoutSeconds, and the split is
     what makes a tight bound safe here. Because a timeout counts as caught, a
@@ -79,13 +97,24 @@
     number had to be generous enough for the slowest imaginable cold build,
     which made every genuinely-hanging sabotage cost that same generous number.
 
-    Measured on this workspace: building the crate after a one-file edit takes
-    under a second, and test execution takes about twelve, nearly all of it
-    compiling doctests -- `cargo test --no-run` does not build those, and Cargo
-    offers no `--doc --no-run` to pre-pay it. The default therefore leaves
-    roughly five times headroom over the measured cost. Raise it for a
-    substantially slower machine or a much larger suite; a sweep whose result
-    you intend to believe should never be run with this tightened for speed.
+    Measured on this workspace: rebuilding the crate in the working copy after a
+    one-file edit takes about four seconds, and test execution takes about
+    twelve, nearly all of it compiling doctests -- `cargo test --no-run` does not
+    build those, and Cargo offers no `--doc --no-run` to pre-pay it. A sweep
+    whose result you intend to believe should never have this tightened for
+    speed: the bound exists to separate "hung" from "slow", and every second cut
+    from it is headroom taken from that distinction.
+
+.PARAMETER TimeoutMultiplier
+    How many times the baseline's measured test duration a run may take before
+    it is called hung. Defaults to 3. Ignored when -TimeoutSeconds is given.
+
+.PARAMETER TimeoutFloorSeconds
+    Lower bound on the derived timeout, defaulting to 15. Without it a suite
+    that runs in a fraction of a second would derive a bound so tight that
+    ordinary scheduling noise would read as a hang -- and a false hang is scored
+    as CAUGHT, which is the direction that quietly inflates a result. Ignored
+    when -TimeoutSeconds is given.
 
 .PARAMETER BuildTimeoutSeconds
     Bound on the build phase, defaulting to 300. Generous on purpose: a slow
@@ -115,7 +144,11 @@ param(
 
     [string] $Name = '*',
 
-    [int] $TimeoutSeconds = 60,
+    [int] $TimeoutSeconds = 0,
+
+    [int] $TimeoutMultiplier = 3,
+
+    [int] $TimeoutFloorSeconds = 15,
 
     [int] $BuildTimeoutSeconds = 300,
 
@@ -224,7 +257,30 @@ function Invoke-Bounded {
     # have turned a loud parse error into a silent wrong answer.
     $null = $process.Handle
 
-    if ($process.WaitForExit($Seconds * 1000)) {
+    # Polled against a deadline rather than `WaitForExit($Seconds * 1000)`,
+    # because that overload does NOT reliably return at the timeout here.
+    #
+    # cargo's stdout and stderr are redirected to files, and the test binary
+    # cargo spawns INHERITS those handles. .NET's timed WaitForExit waits for
+    # the redirected streams to reach end-of-file as well as for the process, so
+    # the wait outlives the bound for exactly as long as the grandchild holds
+    # the handles open -- which, for a hung test, is forever. Measured: a sweep
+    # sat on a single hung sabotage for 31 MINUTES against a 60-second bound,
+    # with the kill never reached, and resumed the moment that test binary was
+    # killed by hand. A tool whose whole job is to detect hangs must not be
+    # hangable by one.
+    #
+    # HasExited only asks the kernel whether the process object is signalled and
+    # never touches the streams, so this loop cannot overrun its deadline.
+    $clock = [Diagnostics.Stopwatch]::StartNew()
+    $deadline = (Get-Date).AddSeconds($Seconds)
+    while (-not $process.HasExited -and (Get-Date) -lt $deadline) {
+        Start-Sleep -Milliseconds 100
+    }
+    $clock.Stop()
+    $elapsed = [int][Math]::Ceiling($clock.Elapsed.TotalSeconds)
+
+    if ($process.HasExited) {
         # Spelled as an if/else rather than a ternary on purpose: `? :` is
         # PowerShell 7 syntax, and this is a PARSE error under Windows
         # PowerShell 5.1 -- so a single ternary anywhere makes the whole script
@@ -233,11 +289,11 @@ function Invoke-Bounded {
         # three sibling scripts in this directory are 5.1-clean; this one stays
         # that way too. Raised in the PR #64 review.
         $outcome = if ($process.ExitCode -eq 0) { 'passed' } else { 'failed' }
-        return [pscustomobject]@{ Outcome = $outcome; Code = $process.ExitCode }
+        return [pscustomobject]@{ Outcome = $outcome; Code = $process.ExitCode; Seconds = $elapsed }
     }
 
     Stop-Tree -ProcessId $process.Id
-    return [pscustomobject]@{ Outcome = 'hung'; Code = $null }
+    return [pscustomobject]@{ Outcome = 'hung'; Code = $null; Seconds = $elapsed }
 }
 
 # Inserts a cargo flag BEFORE any `--` separator, rather than at the end.
@@ -284,10 +340,10 @@ function Invoke-Sabotaged {
         -WorkingDirectory $WorkingDirectory `
         -TranscriptPath "$TranscriptPath.build" -Seconds $BuildSeconds
     if ($build.Outcome -eq 'failed') {
-        return [pscustomobject]@{ Outcome = 'build-failed'; Code = $build.Code }
+        return [pscustomobject]@{ Outcome = 'build-failed'; Code = $build.Code; Seconds = 0 }
     }
     if ($build.Outcome -eq 'hung') {
-        return [pscustomobject]@{ Outcome = 'build-hung'; Code = $null }
+        return [pscustomobject]@{ Outcome = 'build-hung'; Code = $null; Seconds = 0 }
     }
 
     $run = Invoke-Bounded -CargoArgs $CargoArgs -WorkingDirectory $WorkingDirectory `
@@ -310,7 +366,7 @@ function Invoke-Sabotaged {
     # land on stdout (the transcript, not `.err`).
     if ($run.Outcome -eq 'failed' -and (Test-Path -LiteralPath $TranscriptPath)) {
         if (Select-String -LiteralPath $TranscriptPath -Pattern "Couldn't compile the test." -SimpleMatch -Quiet) {
-            return [pscustomobject]@{ Outcome = 'doc-compile-failed'; Code = $run.Code }
+            return [pscustomobject]@{ Outcome = 'doc-compile-failed'; Code = $run.Code; Seconds = $run.Seconds }
         }
     }
 
@@ -431,12 +487,18 @@ function Get-EvidencePath {
 # instead, breaking the report-don't-throw contract. Both are measured, and both
 # are rejected here rather than allowed to reach the wait. Raised in the PR #64
 # review.
-foreach ($bound in @(
-        @{ Name = 'TimeoutSeconds'; Value = $TimeoutSeconds },
-        @{ Name = 'BuildTimeoutSeconds'; Value = $BuildTimeoutSeconds })) {
+$bounds = @(@{ Name = 'BuildTimeoutSeconds'; Value = $BuildTimeoutSeconds },
+    @{ Name = 'TimeoutMultiplier'; Value = $TimeoutMultiplier },
+    @{ Name = 'TimeoutFloorSeconds'; Value = $TimeoutFloorSeconds })
+# Zero means "derive it" for -TimeoutSeconds alone, so it is checked only when
+# the caller actually supplied a value.
+if ($TimeoutSeconds -ne 0) {
+    $bounds += @{ Name = 'TimeoutSeconds'; Value = $TimeoutSeconds }
+}
+foreach ($bound in $bounds) {
     if ($bound.Value -lt 1) {
         Exit-WithMessage (@(
-                "-$($bound.Name) must be at least 1 second, and was $($bound.Value)."
+                "-$($bound.Name) must be at least 1, and was $($bound.Value)."
                 "A bound of zero does not disable the timeout; it makes every phase"
                 "time out instantly, which this tool would report as every sabotage"
                 "being caught -- a green sweep that proved nothing. Pass a real"
@@ -507,6 +569,30 @@ if (@($spec.sabotages).Count -eq 0) {
             "This manifest's 'sabotages' array is empty, so there is nothing to run:"
             "  $manifestPath"
         ) -join "`n") 2
+}
+
+# A manifest may raise the bound for its whole sweep, for a suite that is known
+# to be slow everywhere rather than at one entry. An explicit -TimeoutSeconds
+# still wins: the command line is the more specific statement of intent.
+if ($TimeoutSeconds -eq 0 -and
+    ($spec.PSObject.Properties.Name -contains 'timeoutSeconds') -and $spec.timeoutSeconds) {
+    if ([int]$spec.timeoutSeconds -lt 1) {
+        Exit-WithMessage (@(
+                "This manifest sets timeoutSeconds = $($spec.timeoutSeconds)."
+                "It must be at least 1; a bound of zero reports every sabotage as caught."
+            ) -join "`n") 2
+    }
+    $TimeoutSeconds = [int]$spec.timeoutSeconds
+}
+
+foreach ($entry in @($spec.sabotages)) {
+    if (($entry.PSObject.Properties.Name -contains 'timeoutSeconds') -and
+        $entry.timeoutSeconds -and [int]$entry.timeoutSeconds -lt 1) {
+        Exit-WithMessage (@(
+                "The sabotage '$($entry.name)' sets timeoutSeconds = $($entry.timeoutSeconds)."
+                "It must be at least 1; a bound of zero reports it as caught without running."
+            ) -join "`n") 2
+    }
 }
 
 $hasTestArgs = ($spec.PSObject.Properties.Name -contains 'testArgs') -and $spec.testArgs
@@ -746,8 +832,13 @@ foreach ($writableStem in $writableStems) {
 
 Write-Report 'Baseline: running the unmodified suite.' -Level note
 $baselinePath = Join-Path $OutputDirectory 'baseline.txt'
+
+# The baseline is bounded by the BUILD budget rather than by the test budget it
+# is about to calibrate. There is nothing yet to derive a test bound from, and
+# the baseline is the one run that is known not to be sabotaged, so the risk of
+# giving it room is the opposite of the risk everywhere else.
 $baseline = Invoke-Sabotaged -CargoArgs $testArgs -WorkingDirectory $treeRoot `
-    -TranscriptPath $baselinePath -BuildSeconds $BuildTimeoutSeconds -TestSeconds $TimeoutSeconds
+    -TranscriptPath $baselinePath -BuildSeconds $BuildTimeoutSeconds -TestSeconds $BuildTimeoutSeconds
 
 if ($baseline.Outcome -ne 'passed') {
     Exit-WithMessage (@(
@@ -757,7 +848,34 @@ if ($baseline.Outcome -ne 'passed') {
             "nothing while looking like a clean bill of health. Fix the suite first."
         ) -join "`n") 2
 }
-Write-Report 'Baseline is green. Sweeping.' -Level note
+
+# What a sabotaged run is allowed to take before it is called hung.
+#
+# Derived from the baseline unless the caller named a number: the baseline just
+# measured how long this suite legitimately takes ON THIS MACHINE, including its
+# build, which is a better answer than any constant compiled into this file. A
+# fixed default is wrong in both directions -- too tight on a loaded machine or
+# a big suite, where a slow-but-finite run is scored as CAUGHT and quietly
+# inflates the result; too loose on a fast one, where every hang costs the
+# difference. Hangs dominate the wall clock, so that difference is most of the
+# sweep: 720 of 853 seconds on the 39-entry manifest at the old fixed 60.
+# The TEST phase's duration alone, not build-plus-test. The bound governs test
+# execution, so deriving it from anything else imports a cost it does not
+# govern -- and the build is exactly the volatile part: the first run against a
+# fresh copy pays a cold build, which would inflate the bound several-fold on
+# the one run least able to judge what is normal. Measured: 25s for
+# build-plus-test cold against 8s for the tests themselves.
+$baselineSeconds = [Math]::Max(1, $baseline.Seconds)
+if ($TimeoutSeconds -gt 0) {
+    $defaultTimeout = $TimeoutSeconds
+    $timeoutSource = "-TimeoutSeconds"
+}
+else {
+    $defaultTimeout = [Math]::Max($TimeoutFloorSeconds, $TimeoutMultiplier * $baselineSeconds)
+    $timeoutSource = "${TimeoutMultiplier}x the ${baselineSeconds}s baseline, floor ${TimeoutFloorSeconds}s"
+}
+Write-Report "Baseline is green in ${baselineSeconds}s. Hang bound: ${defaultTimeout}s ($timeoutSource)." -Level note
+Write-Report 'Sweeping.' -Level note
 Write-Report ''
 
 $results = @()
@@ -814,13 +932,25 @@ foreach ($sabotage in $selected) {
     $stem = $stems[$sabotage.name]
     $transcript = Join-Path $OutputDirectory ($stem + '.txt')
 
+    # A single entry may buy itself more room. This is the case neither the
+    # derived bound nor a global override can express: one sabotage whose run
+    # legitimately takes far longer than the rest, where raising the bound for
+    # the whole sweep would pay that cost on every other entry too. It only ever
+    # raises -- a per-entry value below the sweep's bound is ignored, because the
+    # reason to lower one is speed and the cost of being wrong about it is a
+    # false `caught`.
+    $entryTimeout = $defaultTimeout
+    if ($sabotage.PSObject.Properties.Name -contains 'timeoutSeconds' -and $sabotage.timeoutSeconds) {
+        $entryTimeout = [Math]::Max($defaultTimeout, [int]$sabotage.timeoutSeconds)
+    }
+
     try {
         # Inside the guarded region, not before it, so a write that throws
         # part-way through still reaches the reset below and the next sabotage
         # starts from unmodified source.
         [System.IO.File]::WriteAllText($target, $patched, $utf8NoBom)
         $run = Invoke-Sabotaged -CargoArgs $testArgs -WorkingDirectory $treeRoot `
-            -TranscriptPath $transcript -BuildSeconds $BuildTimeoutSeconds -TestSeconds $TimeoutSeconds
+            -TranscriptPath $transcript -BuildSeconds $BuildTimeoutSeconds -TestSeconds $entryTimeout
     }
     finally {
         # Reset the copy from the REAL file, which is the authority, rather than
@@ -842,7 +972,7 @@ foreach ($sabotage in $selected) {
     $actual = switch ($run.Outcome) {
         'passed' { 'survived (NOT caught)' }
         'failed' { "caught (suite failed, exit $($run.Code))" }
-        'hung' { "caught (tests HUNG past ${TimeoutSeconds}s)" }
+        'hung' { "caught (tests HUNG past ${entryTimeout}s)" }
         # Not "caught": the tests never ran, so this says nothing about them.
         # It means the patch is not valid Rust -- a manifest problem to fix,
         # not a result to record.
