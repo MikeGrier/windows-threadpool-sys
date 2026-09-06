@@ -223,6 +223,13 @@ function Remove-Fixture {
     Remove-Item -LiteralPath $Root -Recurse -Force -ErrorAction SilentlyContinue
 }
 
+# The hang stub's sleeper, identified by its distinctive count so nothing else
+# on the machine is mistaken for one.
+function Get-StrayPings {
+    Get-CimInstance Win32_Process -Filter "name='PING.EXE'" -ErrorAction SilentlyContinue |
+        Where-Object { $_.CommandLine -and $_.CommandLine -match '-n 900' }
+}
+
 # --- validation: every one of these must be exit 2 --------------------------
 #
 # Exit 2 is "nothing was swept". Driven from a table because the POPULATION is
@@ -529,16 +536,25 @@ Test-Case 'kills a hung run at the bound and counts it as caught' {
 
 Test-Case 'leaves no stray process behind after killing a hung run' {
     $root = New-Fixture -Manifest (New-Spec)
+    # Scoped to processes this case starts, and cleaned up afterwards whatever
+    # the result. Both matter when the harness is swept by sabotage2.json: an
+    # entry that deletes the kill leaves orphans behind, and a case comparing
+    # against an absolute count would then fail for every LATER entry too --
+    # including the control, whose whole job is to survive.
+    $before = @(Get-StrayPings | ForEach-Object { $_.ProcessId })
     try {
         $stub = New-Stub -Behaviour 'hang' -Root $root
         Invoke-Harness -Root $root -Arguments @(
             '-Manifest', 'sabotage.json', '-CargoCommand', $stub, '-TimeoutSeconds', '5') | Out-Null
 
-        $strays = @(Get-CimInstance Win32_Process -Filter "name='PING.EXE'" -ErrorAction SilentlyContinue |
-                Where-Object { $_.CommandLine -and $_.CommandLine -match '-n 900' })
-        Assert-Equal 0 $strays.Count 'the kill must take the whole process tree'
+        $new = @(Get-StrayPings | Where-Object { $before -notcontains $_.ProcessId })
+        Assert-Equal 0 $new.Count 'the kill must take the whole process tree'
     }
-    finally { Remove-Fixture $root }
+    finally {
+        Get-StrayPings | Where-Object { $before -notcontains $_.ProcessId } |
+            ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
+        Remove-Fixture $root
+    }
 }
 
 # --- the working tree is never touched --------------------------------------
@@ -605,6 +621,41 @@ Test-Case 'sweeps the working tree as it stands, uncommitted edits included' {
 
         $copied = Get-Content -LiteralPath (Join-Path $root '.scratch\sabotage\tree\src\lib.rs') -Raw
         Assert-Match 'edited_but_uncommitted' $copied 'the copy must reflect the working tree'
+    }
+    finally { Remove-Fixture $root }
+}
+
+Test-Case 'stamps the restored file so a build system sees it as changed' {
+    # Found by sabotage2.json, which is the point of pointing the tool at
+    # itself: replacing the restore with File.Copy SURVIVED the suite. Nothing
+    # here had noticed, because the defect is about cargo's rebuild decision and
+    # every case stubs cargo out -- so cargo's fingerprinting is structurally
+    # invisible to them.
+    #
+    # This tests the MECHANISM instead of the consequence: the restore must
+    # stamp the file with the current time, which is what makes a build system
+    # treat it as changed. File.Copy carries the source's timestamp across
+    # instead, so the artifact built from the PATCHED source looks newer than
+    # the restored input and survives into the next run.
+    #
+    # The real file is aged deliberately, so "carried the source's timestamp"
+    # and "stamped now" are an hour apart rather than milliseconds.
+    $root = New-Fixture -Manifest (New-Spec)
+    try {
+        $real = Join-Path $root 'src\lib.rs'
+        (Get-Item -LiteralPath $real).LastWriteTime = (Get-Date).AddHours(-1)
+
+        $stub = New-Stub -Behaviour 'fail' -Root $root
+        $started = Get-Date
+        $result = Invoke-Harness -Root $root `
+            -Arguments @('-Manifest', 'sabotage.json', '-CargoCommand', $stub)
+        Assert-Equal 0 $result.ExitCode $result.Output
+
+        $copied = Join-Path $root '.scratch\sabotage\tree\src\lib.rs'
+        $stamped = (Get-Item -LiteralPath $copied).LastWriteTime
+        Assert-True ($stamped -ge $started) (
+            "the restored copy is stamped $stamped, before the sweep began at " +
+            "$started -- it carried the source's timestamp instead of being rewritten")
     }
     finally { Remove-Fixture $root }
 }

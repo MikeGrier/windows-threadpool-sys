@@ -79,6 +79,42 @@ pointed at itself.
 The suite is verified to *detect*, not merely to pass: re-introducing that
 truthiness defect turns the relevant case red while the rest stay green.
 
+## The harness sabotages itself
+
+[sabotage2.json](sabotage2.json) points the tool at `run-sabotage.ps1`, judged
+by the suite above. Every entry re-injects a defect this tool actually shipped,
+so what gets measured is whether the tests written in response would catch it
+again.
+
+```powershell
+.\tools\run-sabotage.ps1 -Manifest tools\sabotage2.json `
+    -CargoCommand (Resolve-Path tools\sabotage2-runner.cmd).Path
+```
+
+It needs no special support from the harness. `-CargoCommand` points at
+[sabotage2-runner.cmd](sabotage2-runner.cmd), which answers `--no-run` (there is
+nothing to compile), ignores `--target-dir`, and otherwise runs the test suite.
+Because the harness sets the working directory to its own working copy, the
+suite that runs is the copy's -- testing the copy's `run-sabotage.ps1`, the one
+carrying the injected defect. There is no recursion: the inner suite builds its
+fixtures under `TEMP`, never inside the copy.
+
+Expect it to take a while. Each entry runs the whole suite, so the cost is
+roughly `(entries + 1) x 2 minutes`; the first run of eight took 19 minutes.
+Like every sweep, it is an occasional instrument.
+
+**It earned its keep on its first run.** Seven of eight behaved as declared and
+one survived: replacing the byte-exact restore with `File.Copy`, which carries
+the source's timestamp and leaves a sabotaged build in the cache for the next
+run to test against. Nothing in the suite noticed, and the reason was
+structural -- that defect is about a build system's rebuild decision, and every
+case stubs the build system out, so its fingerprinting was invisible to all of
+them. The gap is now covered by asserting the mechanism instead: the restore
+must stamp the file with the current time. The entry is caught.
+
+That is the argument for this file in one paragraph. A test suite cannot tell
+you what it fails to look at; only injecting the defect can.
+
 Runs on **Windows PowerShell 5.1 and PowerShell 7 alike**, like the other
 scripts in this directory, and the full sweep is verified on both. Worth stating
 because the two differ in ways that bite here specifically: 5.1 rejects
