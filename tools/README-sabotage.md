@@ -85,7 +85,8 @@ claim is corrected here rather than propagated.)
 
 **Build and test are timed separately, and the split is what keeps the test
 bound tight.** A hang is what a lost wakeup looks like and it happens during
-test execution, so that phase gets a short bound (60s). A build is merely slow
+test execution, so that phase gets the short derived bound above. A build is
+merely slow
 sometimes, and a slow build killed by a short bound would be reported as a hang
 -- crediting the tests with a detection that never happened -- so the build gets
 a generous one (300s) and its failure is reported as its own outcome. Under a

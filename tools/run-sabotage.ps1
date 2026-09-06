@@ -305,7 +305,7 @@ function Invoke-Bounded {
 # sabotage. The manifest format allows that vector (`testArgs`), so this is the
 # manifest author's mistake to be immune to rather than to warn about.
 function Add-CargoFlag {
-    param([string[]] $CargoArgs, [string] $Flag)
+    param([string[]] $CargoArgs, [string[]] $Flag)
 
     $separator = [array]::IndexOf($CargoArgs, '--')
     if ($separator -lt 0) { return @($CargoArgs) + $Flag }
@@ -339,6 +339,7 @@ function Invoke-Sabotaged {
     $build = Invoke-Bounded -CargoArgs (Add-CargoFlag -CargoArgs $CargoArgs -Flag '--no-run') `
         -WorkingDirectory $WorkingDirectory `
         -TranscriptPath "$TranscriptPath.build" -Seconds $BuildSeconds
+
     if ($build.Outcome -eq 'failed') {
         return [pscustomobject]@{ Outcome = 'build-failed'; Code = $build.Code; Seconds = 0 }
     }
@@ -410,9 +411,17 @@ function Format-Patch {
 function Sync-Tree {
     param([string] $From, [string] $To)
 
-    $tracked = @(git -C $From ls-files)
+    # core.quotePath=false is load bearing, not tidiness. With git's default,
+    # any path containing a non-ASCII byte is emitted wrapped in double quotes
+    # with octal escapes -- `"crates/.../zz-caf\303\251.txt"` -- and
+    # Test-Path -LiteralPath on that string is false, so the file would be
+    # silently neither copied NOR recorded as wanted. The copy would then differ
+    # from the real tree by exactly the files nothing here can see, and the
+    # symptom would be a red baseline blamed on the suite. Measured both ways on
+    # a probe file.
+    $tracked = @(git -c core.quotePath=false -C $From ls-files)
     if ($LASTEXITCODE -ne 0) { Exit-WithMessage 'Could not list tracked files.' 2 }
-    $untracked = @(git -C $From ls-files --others --exclude-standard)
+    $untracked = @(git -c core.quotePath=false -C $From ls-files --others --exclude-standard)
     if ($LASTEXITCODE -ne 0) { Exit-WithMessage 'Could not list untracked files.' 2 }
 
     $wanted = @{}
@@ -478,15 +487,17 @@ function Get-EvidencePath {
     }
 }
 
-# The two bounds reach [Process]::WaitForExit($Seconds * 1000), which does not
-# mean what a caller might hope at or below zero -- and gets it wrong in the
-# dangerous direction. Zero returns immediately without waiting, so every phase
-# would be classified as a hang and every sabotage would read as `caught`: a
-# fully green sweep that proved nothing, which is the one outcome this tool
-# exists to make impossible. A negative value throws a MethodInvocationException
-# instead, breaking the report-don't-throw contract. Both are measured, and both
-# are rejected here rather than allowed to reach the wait. Raised in the PR #64
-# review.
+# A bound at or below zero gets the answer wrong in the dangerous direction.
+# The wait is a deadline poll, so zero or negative means the deadline has
+# already passed: every phase is classified as a hang, and this tool scores a
+# hang as `caught`. A sweep run that way would report every sabotage caught and
+# exit 0 -- a fully green result proving nothing, which is the one outcome the
+# harness exists to make impossible. Rejected here rather than allowed to reach
+# the wait. Raised in the PR #64 review.
+#
+# (The original of this comment blamed WaitForExit's argument validation. That
+# was true of the wait this replaced, not of the poll that is here now; the
+# guard is still necessary, but for the reason above.)
 $bounds = @(@{ Name = 'BuildTimeoutSeconds'; Value = $BuildTimeoutSeconds },
     @{ Name = 'TimeoutMultiplier'; Value = $TimeoutMultiplier },
     @{ Name = 'TimeoutFloorSeconds'; Value = $TimeoutFloorSeconds })
@@ -592,6 +603,23 @@ foreach ($entry in @($spec.sabotages)) {
                 "The sabotage '$($entry.name)' sets timeoutSeconds = $($entry.timeoutSeconds)."
                 "It must be at least 1; a bound of zero reports it as caught without running."
             ) -join "`n") 2
+    }
+}
+
+# The sweep supplies --target-dir itself, aiming every build at the working
+# copy's own directory. A manifest passing its own would be a duplicate flag,
+# which cargo rejects outright -- and the failure would land mid-sweep, after
+# the baseline, looking like a build problem. Refused here instead, where the
+# message can say what it actually is.
+if (($spec.PSObject.Properties.Name -contains 'testArgs') -and $spec.testArgs) {
+    foreach ($supplied in @($spec.testArgs)) {
+        if ($supplied -eq '--target-dir' -or $supplied -like '--target-dir=*') {
+            Exit-WithMessage (@(
+                    "This manifest's testArgs passes --target-dir."
+                    "The sweep sets that itself, so that every build lands in the working"
+                    "copy's own target directory rather than the developer's. Remove it."
+                ) -join "`n") 2
+        }
     }
 }
 
@@ -773,6 +801,29 @@ foreach ($sabotage in $selected) {
 if (-not $OutputDirectory) { $OutputDirectory = Join-Path $repoRoot '.scratch\sabotage' }
 New-Item -ItemType Directory -Force -Path $OutputDirectory | Out-Null
 
+# The working copy must be somewhere git ignores, and this is not a tidiness
+# rule. Sync-Tree enumerates the source through git, so what keeps the copy out
+# of its own enumeration is only that `.scratch/` is ignored -- which covers the
+# DEFAULT and nothing else. Pointed at a tracked-or-ignorable location inside
+# the repository, the second run would enumerate the first run's copy and nest
+# it one level deeper, marking every nested file as wanted so the deletion pass
+# preserves the lot. Checked rather than documented, because the failure grows
+# without bound and looks like nothing until it does.
+$outputFull = [System.IO.Path]::GetFullPath($OutputDirectory)
+if ($outputFull.StartsWith($repoRootPrefix, [System.StringComparison]::OrdinalIgnoreCase)) {
+    git -C $repoRoot check-ignore -q -- $outputFull 2>&1 | Out-Null
+    if ($LASTEXITCODE -ne 0) {
+        Exit-WithMessage (@(
+                "-OutputDirectory is inside the repository but git does not ignore it:"
+                "  $outputFull"
+                "The working copy lives there, and it is kept out of its own enumeration"
+                "only by being ignored -- so an un-ignored location makes each run copy"
+                "the previous run's copy one level deeper. Point it outside the"
+                "repository, or add it to .gitignore."
+            ) -join "`n") 2
+    }
+}
+
 # The copy the sweep actually patches, and the cargo target directory that
 # serves it. Both persist between runs: the copy so that Sync-Tree has something
 # to compare against and can leave unchanged files alone, and the target
@@ -790,11 +841,24 @@ Write-Report 'Refreshing the working copy.' -Level note
 Sync-Tree -From $repoRoot -To $treeRoot
 
 # Every cargo invocation from here on builds the COPY, into the copy's own
-# target directory. Setting it in the environment rather than passing
-# --target-dir keeps it out of the argument vector that manifests may override
-# through `testArgs`, so a manifest cannot accidentally aim a sabotaged build at
-# the developer's real target directory.
-$env:CARGO_TARGET_DIR = [System.IO.Path]::GetFullPath($targetRoot)
+# target directory, passed as --target-dir on each command line.
+#
+# NOT through $env:CARGO_TARGET_DIR, which an earlier revision used and which was
+# wrong twice over. A .ps1 runs IN the caller's PowerShell process, so assigning
+# $env: there mutates the developer's session and outlives the script -- every
+# later cargo command in that session, in this repository or any other, would
+# have built into this scratch directory. Measured: the variable is still set in
+# the calling session after the script exits. And the safety property the old
+# comment claimed was backwards: cargo's precedence is CLI flag OVER environment
+# variable, so a `testArgs` carrying --target-dir would have overridden the
+# environment, not been overridden by it. Measured that too.
+#
+# On the command line the precedence runs the right way: this wins over any
+# CARGO_TARGET_DIR the developer already has set. The one thing it cannot
+# survive is a manifest that also passes --target-dir, which cargo rejects as a
+# duplicate -- so that is refused up front rather than left to fail mid-sweep.
+$sweepTargetDir = [System.IO.Path]::GetFullPath($targetRoot)
+$testArgs = Add-CargoFlag -CargoArgs $testArgs -Flag @('--target-dir', $sweepTargetDir)
 
 # Targets are addressed in the copy from here on. The manifest still resolves
 # them against the real tree -- that is where its `root` and `file` mean
