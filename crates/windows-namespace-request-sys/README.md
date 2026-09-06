@@ -32,6 +32,25 @@ and unassociated, because associating it with a completion port irreversibly
 forecloses `IoRing` use of it, and that choice belongs to a layer that knows the
 handle's destination.
 
+## Why the `-sys` suffix
+
+Not in the usual sense. A `-sys` crate elsewhere in the ecosystem is normally
+raw FFI declarations with no abstraction over them, and by that reading this
+crate is misnamed: it declares almost no FFI of its own and takes its
+declarations from [`windows-sys`](https://crates.io/crates/windows-sys).
+
+In this workspace the suffix marks a **layer**, not a linking strategy: a
+`windows-*-sys` crate makes an existing Win32 API memory-safe **without adding
+policy**, and a crate that decides something Win32 has no equivalent of drops
+the suffix. That is why `windows-waitable-queues` carries no `-sys` -- it picks
+a slot protocol and an overflow policy -- while this crate does, despite
+wrapping a great deal of `unsafe`. Everything above is the suffix being earned:
+it schedules nothing, chooses no delivery model, and reports raw Win32 outcomes
+without normalising them.
+
+The convention is stated for the whole workspace in the repository's
+[README](https://github.com/MikeGrier/windows-threadpool-sys#crate-naming).
+
 ## A path is copied; a handle is duplicated
 
 Several entries take a handle rather than a path, and a request owns a
@@ -127,5 +146,6 @@ operation coverage (every audited call site re-expressed) and scenario coverage
 context, many requests across concurrent workers from one shared capture, and a
 handle opened by one request carried into a later one).
 
-Design decisions are recorded in [DESIGN-NOTES.md](DESIGN-NOTES.md). Not yet
-released to crates.io.
+Design decisions are recorded in [DESIGN-NOTES.md](DESIGN-NOTES.md). Published
+on crates.io as
+[`windows-namespace-request-sys`](https://crates.io/crates/windows-namespace-request-sys).
