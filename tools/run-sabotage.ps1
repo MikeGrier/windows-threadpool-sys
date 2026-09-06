@@ -8,10 +8,21 @@
     A green suite is evidence that the code passes its tests. It is not evidence
     that the tests would fail if the code were wrong, and those are different
     claims. This script measures the second one: for each defect in a manifest
-    it patches the source, runs the suite, restores the source, and records
-    whether the suite went red.
+    it patches the source, runs the suite, and records whether the suite went
+    red.
 
-    Three rules are encoded here because each was learned by getting it wrong.
+    IT NEVER TOUCHES YOUR WORKING TREE. The sweep runs against a copy, kept
+    under the output directory and refreshed from the real tree at the start of
+    each run, with its own cargo target directory. This is the same approach
+    cargo-mutants takes, and it is a premise rather than a precaution: patching
+    the developer's own files means every sabotage needs a backup, a restore, a
+    verification that the restore worked, a guard against running on a dirty
+    tree, and a way to recover when any of that is interrupted -- and each of
+    those is a chance to damage work that was never in a commit. Against a copy
+    none of it exists, a dirty tree is swept exactly as it stands, and the worst
+    outcome of a bug in here is a scratch directory to delete.
+
+    Four rules are encoded here because each was learned by getting it wrong.
 
     JUDGE BY EXIT CODE, NEVER BY READING OUTPUT. A test process that dies of
     heap corruption prints no "test result: FAILED" line at all. A harness that
@@ -36,9 +47,16 @@
     result: check that the injected defect really is a defect before believing
     a hole exists.
 
-    Expect one full rebuild per sabotage. This is a deliberate, occasional
-    instrument -- run it when a guard is written or changed, not on every
-    commit.
+    THE COPY'S BUILD MUST NOT SHARE THE REAL TARGET DIRECTORY. A sabotaged
+    build written into the tree's own target/ would be left there for the next
+    `cargo test` a person runs, which would then be testing sabotaged code
+    without knowing it. The copy therefore gets its own target directory, which
+    persists between runs so the builds stay warm.
+
+    Expect one incremental rebuild per sabotage -- measured at a few seconds
+    once the copy's target directory is warm; the first run after a fresh copy
+    pays a cold build. This is a deliberate, occasional instrument -- run it
+    when a guard is written or changed, not on every commit.
 
 .PARAMETER Manifest
     Path to a sabotage manifest (JSON). See tools/README-sabotage.md for the
@@ -79,21 +97,13 @@
     run and are reclassified there rather than being counted as caught.
 
 .PARAMETER OutputDirectory
-    Where to write per-sabotage transcripts. Defaults to .scratch/sabotage.
-    Stale transcripts are cleared at startup, and pre-patch copies of every
-    target are kept under its `restore/` subdirectory until their restore is
-    verified.
+    Where to write per-sabotage transcripts, and where the working copy and its
+    cargo target directory live. Defaults to .scratch/sabotage. Stale
+    transcripts are cleared at startup; the `tree/` and `target/` subdirectories
+    persist between runs so builds stay warm.
 
 .PARAMETER List
     Print the manifest's sabotages and exit without running anything.
-
-.PARAMETER AllowDirty
-    Permit running when a target file has uncommitted changes. Off by default:
-    a clean starting tree makes the damage from an interrupted run obvious, and
-    makes `git checkout` a safe second recourse. It is not safe once a target
-    carries uncommitted work, so under this switch the pre-patch copy written to
-    the output directory is the only correct recovery -- which is what the
-    script's restore-failure message names.
 
 .OUTPUTS
     Exits 0 only if every sabotage matched its declared expectation.
@@ -111,9 +121,7 @@ param(
 
     [string] $OutputDirectory,
 
-    [switch] $List,
-
-    [switch] $AllowDirty
+    [switch] $List
 )
 
 Set-StrictMode -Version Latest
@@ -324,6 +332,77 @@ function Format-Patch {
         foreach ($line in $Replace -split "`n") { $lines += "    + $line" }
     }
     return $lines -join "`n"
+}
+
+# Refreshes the working copy from the real tree, and returns nothing.
+#
+# WHICH FILES. Enumerated by git -- tracked files plus untracked ones that are
+# not ignored -- and read from the WORKING TREE, not from a commit. So a sweep
+# measures the code as it currently sits, uncommitted edits included, which is
+# usually the code whose guards you are asking about. Using git's own view is
+# also what keeps target/ (28 GB here) and the output directory out of the copy
+# without maintaining a second exclusion list that could drift from
+# .gitignore.
+#
+# WHY NOT COPY EVERY TIME. Cargo decides what to rebuild from mtimes, so
+# re-copying an unchanged file would touch it and force a rebuild of everything
+# on every sweep. Only files whose contents actually differ are copied, which is
+# what keeps the copy's target directory warm between runs; measured here at
+# roughly four seconds for an incremental sabotage against thirty for a cold
+# one. Files that have disappeared from the source are deleted, so a rename
+# cannot leave a stale twin behind for cargo to compile.
+function Sync-Tree {
+    param([string] $From, [string] $To)
+
+    $tracked = @(git -C $From ls-files)
+    if ($LASTEXITCODE -ne 0) { Exit-WithMessage 'Could not list tracked files.' 2 }
+    $untracked = @(git -C $From ls-files --others --exclude-standard)
+    if ($LASTEXITCODE -ne 0) { Exit-WithMessage 'Could not list untracked files.' 2 }
+
+    $wanted = @{}
+    foreach ($relative in ($tracked + $untracked)) {
+        if (-not $relative) { continue }
+        $source = Join-Path $From $relative
+        if (-not (Test-Path -LiteralPath $source -PathType Leaf)) { continue }
+
+        $wanted[$relative.Replace('/', '\')] = $true
+        $destination = Join-Path $To $relative
+
+        $same = $false
+        if (Test-Path -LiteralPath $destination -PathType Leaf) {
+            $sourceInfo = Get-Item -LiteralPath $source
+            $destinationInfo = Get-Item -LiteralPath $destination
+            if ($sourceInfo.Length -eq $destinationInfo.Length) {
+                $same = (Get-FileHash -LiteralPath $source -Algorithm SHA256).Hash -eq
+                        (Get-FileHash -LiteralPath $destination -Algorithm SHA256).Hash
+            }
+        }
+        if ($same) { continue }
+
+        $parent = Split-Path -Parent $destination
+        if ($parent -and -not (Test-Path -LiteralPath $parent)) {
+            New-Item -ItemType Directory -Force -Path $parent | Out-Null
+        }
+        # WriteAllBytes rather than Copy-Item: byte-exact, and it stamps the
+        # copy with the current time so cargo sees a changed input. Copy-Item
+        # would carry the source's older timestamp across and cargo could then
+        # judge an artifact built from different content to be up to date.
+        [System.IO.File]::WriteAllBytes($destination, [System.IO.File]::ReadAllBytes($source))
+    }
+
+    if (-not (Test-Path -LiteralPath $To)) { return }
+    $prefix = [System.IO.Path]::GetFullPath($To)
+    if (-not $prefix.EndsWith([System.IO.Path]::DirectorySeparatorChar)) {
+        $prefix += [System.IO.Path]::DirectorySeparatorChar
+    }
+    foreach ($existing in @(Get-ChildItem -LiteralPath $To -Recurse -File -ErrorAction SilentlyContinue)) {
+        # The cargo target directory lives under the output directory, not under
+        # the copy, so nothing here can reach it.
+        $relative = $existing.FullName.Substring($prefix.Length)
+        if (-not $wanted.ContainsKey($relative)) {
+            Remove-Item -LiteralPath $existing.FullName -Force -ErrorAction SilentlyContinue
+        }
+    }
 }
 
 # Which transcript actually holds the evidence for an outcome.
@@ -583,15 +662,10 @@ foreach ($sabotage in $selected) {
         Exit-WithMessage "Sabotage '$($sabotage.name)' names a file that does not exist: $target" 2
     }
 
-    # Containment, checked for every target and NOT waived by -AllowDirty.
-    #
-    # A manifest's `root` may point anywhere, so without this the tool will
-    # cheerfully patch a file outside the repository. -AllowDirty is documented
-    # as waiving the CLEANLINESS requirement; letting it also widen what may be
-    # modified conflates two separate things, and the second is the one with no
-    # `git checkout` behind it. Checked before the dirtiness query rather than
-    # after, so an out-of-repo path is reported as what it is instead of as a
-    # git pathspec failure. Raised in the PR #64 review.
+    # Containment. The sweep patches inside the copy, so an escape here is no
+    # longer a threat to the developer's files -- but a `root` pointing outside
+    # the repository still cannot be mapped into the copy at all, and saying so
+    # plainly beats letting it fail later as a missing file in the tree.
     $targetFull = [System.IO.Path]::GetFullPath($target)
     if (-not $targetFull.StartsWith($repoRootPrefix, [System.StringComparison]::OrdinalIgnoreCase)) {
         Exit-WithMessage (@(
@@ -599,82 +673,50 @@ foreach ($sabotage in $selected) {
                 "  $targetFull"
                 "The repository is rooted at:"
                 "  $repoRoot"
-                "A sweep only ever patches files it can also restore and reason about,"
-                "so this is refused whether or not -AllowDirty was passed -- that switch"
-                "waives the cleanliness check, not the boundary."
+                "The sweep runs against a copy of this repository, so a file outside it"
+                "has no place in the copy to be patched."
             ) -join "`n") 2
-    }
-
-    if (-not $AllowDirty) {
-        # An absolute pathspec is fine -- git resolves it against the repository
-        # root, so this matches regardless of the caller's working directory.
-        # What is NOT fine is assuming the query succeeded: git reports an
-        # unusable pathspec (a manifest `root` pointing outside the repository,
-        # say) on stderr and exits non-zero, leaving $status empty -- which is
-        # indistinguishable from "the file is clean". A guard that cannot tell
-        # "clean" from "I could not check" is not a guard, so the exit code is
-        # inspected rather than the output alone.
-        $status = git -C $repoRoot status --porcelain -- $target 2>&1
-        if ($LASTEXITCODE -ne 0) {
-            Exit-WithMessage (@(
-                    "Could not determine whether this sabotage target is clean in git:"
-                    "  $target"
-                    "git exited $LASTEXITCODE and said:"
-                    "  $status"
-                    "Refusing to proceed: a failed check is not a clean result, and"
-                    "treating it as one is how a sweep overwrites uncommitted work."
-                ) -join "`n") 2
-        }
-        if ($status) {
-            Exit-WithMessage (@(
-                    "Sabotage targets must be clean in git, and this one is not:"
-                    "  $target"
-                    "This script restores files by rewriting their previous contents, and keeps"
-                    "a pre-patch copy under the output directory in case that fails. Starting"
-                    "from a clean tree additionally makes 'git checkout' a safe second recourse,"
-                    "which it is not once a file carries uncommitted work. Commit or stash"
-                    "first, or pass -AllowDirty to proceed with the backup as the only recourse."
-                ) -join "`n") 2
-        }
     }
 }
 
 # --- Everything from here on is sweep setup, and none of it runs under -List.
 #
-# The output directory is CREATED here rather than earlier, and the leftover
-# check made below rather than above, because -List must be inert: it patches
-# nothing, so it has no business creating directories, and it must stay usable
-# for inspecting a manifest even while an interrupted run's backups are waiting
-# to be dealt with. Being blocked from reading a manifest by a recovery file is
-# precisely when you would want to read it. The README says listing writes and
-# deletes nothing; this ordering is what makes that true. Raised in the PR #64
-# review.
+# The output directory is CREATED here rather than earlier because -List must be
+# inert: it patches nothing, so it has no business creating directories or
+# copying a tree. Raised in the PR #64 review.
 if (-not $OutputDirectory) { $OutputDirectory = Join-Path $repoRoot '.scratch\sabotage' }
 New-Item -ItemType Directory -Force -Path $OutputDirectory | Out-Null
 
-# Pre-patch copies live in their own subdirectory, so the clearing of stale
-# transcripts below cannot reach them, and so a leftover here is unambiguous.
-$backupDirectory = Join-Path $OutputDirectory 'restore'
-New-Item -ItemType Directory -Force -Path $backupDirectory | Out-Null
+# The copy the sweep actually patches, and the cargo target directory that
+# serves it. Both persist between runs: the copy so that Sync-Tree has something
+# to compare against and can leave unchanged files alone, and the target
+# directory so the builds stay warm. Neither is ever the real tree's.
+#
+# The target directory is deliberately a SIBLING of the copy rather than inside
+# it, so that Sync-Tree's deletion of files the source no longer has cannot walk
+# into it, and so `cargo clean` semantics stay the developer's business.
+$treeRoot = Join-Path $OutputDirectory 'tree'
+$targetRoot = Join-Path $OutputDirectory 'target'
+New-Item -ItemType Directory -Force -Path $treeRoot | Out-Null
+New-Item -ItemType Directory -Force -Path $targetRoot | Out-Null
 
-# A leftover backup means the previous run did not get to restore its target,
-# so that copy may be the only surviving version of the file -- and under
-# -AllowDirty it may hold uncommitted work that exists nowhere else. Refusing
-# to start is what makes the "a file here means an interrupted run" claim load
-# bearing: without it, the next sweep would quietly overwrite the evidence it
-# tells the reader to look for.
-$leftover = @(Get-ChildItem -LiteralPath $backupDirectory -File -ErrorAction SilentlyContinue)
-if ($leftover.Count -gt 0) {
-    Exit-WithMessage (@(
-            "Pre-patch backups from an earlier run are still present:"
-            ($leftover | ForEach-Object { "  $($_.FullName)" })
-            "That run was interrupted before it could restore its target, so each of"
-            "these may be the only copy of the file it names -- under -AllowDirty,"
-            "including uncommitted work that is in no commit. Compare each against its"
-            "target and copy it back if the target is still sabotaged, then delete it."
-            "This sweep will not start while they are here, because it would overwrite"
-            "them. Listing the manifest with -List still works meanwhile."
-        ) -join "`n") 2
+Write-Report 'Refreshing the working copy.' -Level note
+Sync-Tree -From $repoRoot -To $treeRoot
+
+# Every cargo invocation from here on builds the COPY, into the copy's own
+# target directory. Setting it in the environment rather than passing
+# --target-dir keeps it out of the argument vector that manifests may override
+# through `testArgs`, so a manifest cannot accidentally aim a sabotaged build at
+# the developer's real target directory.
+$env:CARGO_TARGET_DIR = [System.IO.Path]::GetFullPath($targetRoot)
+
+# Targets are addressed in the copy from here on. The manifest still resolves
+# them against the real tree -- that is where its `root` and `file` mean
+# something -- and each is then re-based onto the copy by its path relative to
+# the repository root.
+$treeRootPrefix = [System.IO.Path]::GetFullPath($treeRoot)
+if (-not $treeRootPrefix.EndsWith([System.IO.Path]::DirectorySeparatorChar)) {
+    $treeRootPrefix += [System.IO.Path]::DirectorySeparatorChar
 }
 
 # Clear the transcripts this run may write -- and only those.
@@ -704,7 +746,7 @@ foreach ($writableStem in $writableStems) {
 
 Write-Report 'Baseline: running the unmodified suite.' -Level note
 $baselinePath = Join-Path $OutputDirectory 'baseline.txt'
-$baseline = Invoke-Sabotaged -CargoArgs $testArgs -WorkingDirectory $repoRoot `
+$baseline = Invoke-Sabotaged -CargoArgs $testArgs -WorkingDirectory $treeRoot `
     -TranscriptPath $baselinePath -BuildSeconds $BuildTimeoutSeconds -TestSeconds $TimeoutSeconds
 
 if ($baseline.Outcome -ne 'passed') {
@@ -721,7 +763,24 @@ Write-Report ''
 $results = @()
 
 foreach ($sabotage in $selected) {
-    $target = Join-Path $sourceRoot $sabotage.file
+    # The file to patch is the COPY's, reached by the real target's path
+    # relative to the repository root. The manifest keeps meaning what it always
+    # meant -- `root` and `file` still resolve against the real tree -- and only
+    # the file that actually gets written changes.
+    $realTarget = [System.IO.Path]::GetFullPath((Join-Path $sourceRoot $sabotage.file))
+    $target = Join-Path $treeRoot $realTarget.Substring($repoRootPrefix.Length)
+    if (-not (Test-Path -LiteralPath $target -PathType Leaf)) {
+        # Reachable when the manifest names a file git does not list -- an
+        # ignored one, say -- so it was never copied. Reported rather than
+        # crashing on the read below.
+        $results += [pscustomobject]@{
+            Sabotage = $sabotage.name; Expected = $sabotage.expect
+            Actual   = 'NOT IN THE WORKING COPY: git does not track or list this file'
+            Ok       = $false; Patch = ''
+        }
+        continue
+    }
+
     $find = ($sabotage.find -join "`n")
     $replace = ($sabotage.replace -join "`n")
     $original = [System.IO.File]::ReadAllText($target)
@@ -755,70 +814,29 @@ foreach ($sabotage in $selected) {
     $stem = $stems[$sabotage.name]
     $transcript = Join-Path $OutputDirectory ($stem + '.txt')
 
-    # The pre-patch contents, on disk and not only in $original.
-    #
-    # $original is a variable, so it dies with the process: an interruption --
-    # Ctrl+C, a crash, Stop-Process -- leaves the file patched with no in-memory
-    # copy to put back. `git checkout` recovers that only when the file was
-    # clean to begin with, which is precisely what -AllowDirty waives. Writing
-    # the backup first is what lets the restore advice below be non-destructive
-    # in both modes rather than only in the default one.
-    $backup = Join-Path $backupDirectory ($stem + '.' + (Split-Path -Leaf $target) + '.bak')
-    # Copied byte-for-byte rather than written from the decoded string. The
-    # decoded round trip is not lossless: ReadAllText strips a UTF-8 BOM and
-    # WriteAllText with $utf8NoBom does not put it back, so restoring a BOM'd
-    # file that way silently drops three bytes -- and the old verification,
-    # which compared decoded TEXT, passed anyway and then deleted the backup.
-    # Measured: a 23-byte BOM'd file came back 20 bytes with the comparison
-    # still reporting success. No tracked file here carries a BOM today (570
-    # checked, 0 found), but a manifest may point at any file, and "restores
-    # what it patched" has to mean the bytes. Raised in the PR #64 review.
-    [System.IO.File]::WriteAllBytes($backup, [System.IO.File]::ReadAllBytes($target))
-
     try {
-        # Inside the guarded region, not before it. A write that throws part-way
-        # through -- having already truncated the file -- would otherwise never
-        # reach the `finally` that restores it, and the tool's whole promise is
-        # that it leaves the tree as it found it.
+        # Inside the guarded region, not before it, so a write that throws
+        # part-way through still reaches the reset below and the next sabotage
+        # starts from unmodified source.
         [System.IO.File]::WriteAllText($target, $patched, $utf8NoBom)
-        $run = Invoke-Sabotaged -CargoArgs $testArgs -WorkingDirectory $repoRoot `
+        $run = Invoke-Sabotaged -CargoArgs $testArgs -WorkingDirectory $treeRoot `
             -TranscriptPath $transcript -BuildSeconds $BuildTimeoutSeconds -TestSeconds $TimeoutSeconds
     }
     finally {
-        # Restored from the byte copy, and verified by hashing both files
-        # rather than by comparing decoded text -- see the note above the
-        # backup. The patched state is still written as decoded text, which is
-        # fine: it is transient and only has to compile, and this restore puts
-        # the original bytes back regardless of what the patch write did.
+        # Reset the copy from the REAL file, which is the authority, rather than
+        # from a backup this script would otherwise have to write, verify and
+        # account for. There is no data at risk here: the file being rewritten
+        # belongs to a scratch copy, so the worst case of getting this wrong is
+        # a stale copy that the next run's Sync-Tree corrects, or that the
+        # developer fixes by deleting a directory.
         #
-        # WriteAllBytes, NOT File.Copy, and the difference is not stylistic.
-        # File.Copy preserves the SOURCE's LastWriteTime, so a restored file
-        # would carry its original timestamp -- older than the artifact cargo
-        # had just built from the patched source. Cargo compares those mtimes,
-        # concludes the crate is up to date, and leaves the SABOTAGED binary in
-        # the build cache: the next `cargo test`, by this tool or by a person,
-        # then runs against sabotaged code. Measured while writing this commit,
-        # by doing exactly that and watching an unrelated test fail on a clean
-        # tree until the source was touched. WriteAllBytes stamps the file now,
-        # so cargo rebuilds.
-        [System.IO.File]::WriteAllBytes($target, [System.IO.File]::ReadAllBytes($backup))
-        $targetHash = (Get-FileHash -LiteralPath $target -Algorithm SHA256).Hash
-        $backupHash = (Get-FileHash -LiteralPath $backup -Algorithm SHA256).Hash
-        if ($targetHash -ne $backupHash) {
-            Exit-WithMessage (@(
-                    "FAILED TO RESTORE $target"
-                    "Its pre-sabotage contents are saved at:"
-                    "  $backup"
-                    "Copy that file back over the target before doing anything else."
-                    "Do NOT reach for 'git checkout' unless the target was clean when this"
-                    "sweep started: under -AllowDirty it was not, and reverting to HEAD would"
-                    "discard the uncommitted work that the backup above still holds."
-                ) -join "`n") 3
-        }
-        # The restore is verified, so the backup has served its purpose. Removing
-        # it is what makes a file left behind in that directory meaningful: it
-        # can then only be from a run that was interrupted before it restored.
-        Remove-Item -LiteralPath $backup -Force -ErrorAction SilentlyContinue
+        # WriteAllBytes rather than Copy-Item, for the same reason Sync-Tree
+        # uses it: it is byte-exact AND stamps the file now, so cargo rebuilds.
+        # Copy-Item would carry the real file's older timestamp across, cargo
+        # would judge the crate up to date against an artifact built from the
+        # PATCHED source, and the sabotaged binary would survive into the next
+        # sabotage's run -- measured, in the in-place design this replaced.
+        [System.IO.File]::WriteAllBytes($target, [System.IO.File]::ReadAllBytes($realTarget))
     }
 
     $actual = switch ($run.Outcome) {

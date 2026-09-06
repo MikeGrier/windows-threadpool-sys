@@ -7,7 +7,11 @@ worth the lines it occupies.
 
 [run-sabotage.ps1](run-sabotage.ps1) measures the second claim. It takes a
 manifest of deliberate defects, and for each one: patches the source, runs the
-suite, restores the source, and records whether the suite noticed.
+suite, and records whether the suite noticed.
+
+**It never touches your working tree** -- the sweep runs against a copy, with
+its own build directory. See [Safety](#safety-the-sweep-never-touches-your-working-tree)
+below for what that buys and why it is the premise rather than a nicety.
 
 ```powershell
 # What is in a manifest
@@ -27,7 +31,6 @@ It exits 0 only when every sabotage behaved as the manifest declared.
 | 0 | Every sabotage behaved as declared. |
 | 1 | The sweep ran and at least one sabotage did not behave as declared. |
 | 2 | Nothing was swept: the manifest or the invocation is wrong. |
-| 3 | A target could not be restored -- see Safety below, and act on it. |
 
 A bad manifest is always the reported exit 2 with a message naming the file and
 the field, never a raw PowerShell error: the tool is a diagnostic instrument, so
@@ -45,9 +48,18 @@ exit code as `$null` unless the handle is held -- which this script would read
 as "the phase failed", making every sabotage look caught while proving nothing.
 
 **This is an occasional instrument, not a CI gate.** Every sabotage forces a
-rebuild, and any that is caught *as a hang* costs the full test timeout. The
-waitable-queues manifest takes about three minutes. Run it when a guard is
-written or changed, not on every commit.
+rebuild, and any that is caught *as a hang* costs the full test timeout. Run it
+when a guard is written or changed, not on every commit.
+
+**Hangs dominate the wall clock, not builds.** Measured on the 39-entry
+waitable-queues manifest: **853 seconds**, of which twelve hangs at the default
+60-second bound account for 720. An incremental rebuild is about four seconds by
+comparison. So `-TimeoutSeconds` is the knob that moves the total, and lowering
+it trades certainty for speed -- a genuinely slow test would start reporting as
+a hang, which this tool scores as caught. (An earlier version of this file said
+this manifest took "about three minutes"; that is not reachable at the default
+bound with twelve hangs in it, and the claim is corrected here rather than
+propagated.)
 
 **Build and test are timed separately, and the split is what keeps the test
 bound tight.** A hang is what a lost wakeup looks like and it happens during
@@ -59,8 +71,9 @@ single combined bound the number had to cover the slowest imaginable cold build,
 which made every genuinely-hanging sabotage cost that same large number; the
 split cut this manifest from twenty-five minutes to three.
 
-Measured here: building the crate after a one-file edit takes under a second,
-while test execution takes about twelve, nearly all of it compiling doctests --
+Measured here: rebuilding the crate in the working copy after a one-file edit
+takes about four seconds, while test execution takes about twelve, nearly all of
+it compiling doctests --
 `cargo test --no-run` does not build those, and Cargo offers no `--doc --no-run`
 to pre-pay it. Pass `testArgs` with `--lib` if you want the sweep faster and
 accept that a sabotage caught only by a doctest would then read as survived.
@@ -199,35 +212,47 @@ specific ordering, bound, or branch whose necessity is in question.
 statements, flipping a `TRUE` to a `FALSE`, returning `None` from one accessor.
 Small patches survive refactoring and stay readable in the failure output.
 
-## Safety
+## Safety: the sweep never touches your working tree
 
-Files are restored in a `finally` block and the restoration is verified by
-comparing contents; if it cannot be restored the script stops immediately and
-names the file to copy back.
+**It patches a copy.** The sweep keeps a working copy under
+`.scratch/sabotage/tree/`, refreshed from your tree at the start of each run,
+with its own cargo target directory at `.scratch/sabotage/target/`. Your files
+are read and never written. Verified rather than asserted: a sweep is run with
+all 570 tracked files fingerprinted by content hash *and* mtime before and
+after, and the two sets match exactly.
 
-**The pre-patch contents are written to `.scratch/sabotage/restore/` before any
-file is touched**, and deleted once the restore is verified. That copy is what
-makes recovery possible when the in-memory one is gone -- after a Ctrl+C, a
-crash, or a `Stop-Process` -- so a file left in that directory means a run was
-interrupted before it could restore.
+This is a premise, not a precaution, and it is the same approach `cargo mutants`
+takes. Patching the developer's own files means every sabotage needs a backup, a
+restore, a check that the restore worked, a guard against running on a dirty
+tree, and a recovery path for when any of that is interrupted -- and each of
+those is a chance to damage work that was never in a commit. Against a copy none
+of it exists. An earlier version of this tool did work in place, and most of its
+defects came from that machinery rather than from the sweep itself.
 
-**A sweep refuses to start while any such file is present**, and names them.
-Otherwise the next run would overwrite the very copy this section tells you to
-go looking for. Compare each against the file it names, copy it back if that
-file is still sabotaged, then delete it.
+Three consequences worth knowing:
 
-**Targets must be inside the repository**, and `-AllowDirty` does not waive
-that. A manifest's `root` may point anywhere, so the boundary is checked for
-every target on every run: the switch waives the cleanliness check, not the
-limit on what may be modified -- and it is the boundary that has no
-`git checkout` behind it.
+**A dirty tree is swept exactly as it stands.** The copy is made from your
+working tree, not from a commit, so uncommitted edits are what get measured --
+usually the code whose guards you are asking about. There is no cleanliness
+requirement and no `-AllowDirty` switch, because there is nothing to waive.
 
-Targets must also be clean in git before a sweep starts, which additionally
-makes `git checkout` a safe second recourse; `-AllowDirty` waives that check. Note
-that it waives only the *second* recourse: once a target carries uncommitted
-work, `git checkout` would destroy it, and the backup above is the only correct
-recovery. The script's own messages say so rather than offering a `checkout`
-that would discard your work.
+**Your build cache is not touched either.** The copy builds into its own target
+directory, so a sabotaged artifact can never be left behind for the next
+`cargo test` you run. That directory persists between sweeps, so builds stay
+warm: measured here at about 4 seconds per sabotage, against 30 for a cold
+build after the copy is first created.
+
+**Getting this wrong costs a directory, not your work.** If the copy is ever
+left in a bad state, delete `.scratch/sabotage/` and run again.
+
+Which files are copied is decided by git -- tracked files plus untracked ones
+that are not ignored -- so `target/` (28 GB here) and the scratch directory stay
+out of it without a second exclusion list to drift from `.gitignore`. Only files
+whose contents actually differ are copied, which is what keeps the builds warm;
+files the source no longer has are deleted from the copy, so a rename cannot
+leave a stale twin for cargo to compile.
+
+## Transcripts
 
 Transcripts land in `.scratch/sabotage/`, one per sabotage plus the baseline.
 Those this run may write are cleared before it starts -- and only those, since
@@ -235,15 +260,16 @@ the directory is caller-supplied via `-OutputDirectory` and nothing else in it
 is the tool's to delete -- so a transcript named in an error message is always
 from the current run.
 
-**`-List` is inert**: it creates no directories, writes and deletes nothing,
-and is never blocked by a leftover backup -- an interrupted run is exactly when
-you want to be able to read the manifest. All of that setup happens after the
-listing path has already exited. Both a transcript and a backup are named after
-the sabotage with non-alphanumerics collapsed to dashes, so two entries
-differing only in punctuation would collide; the manifest is checked for that up
-front and rejected rather than allowed to overwrite one entry's evidence -- or,
-worse, one entry's recovery copy -- with another's. A stem of `baseline` is
-rejected for the same reason: that name is taken by the baseline's own
-transcript, which is the evidence that the suite was green before any patching. Build-phase diagnostics go to the `.build.err`
-transcript, since cargo writes them to stderr, and error messages name whichever
-of the two actually holds the evidence.
+Build-phase diagnostics go to the `.build.err` transcript, since cargo writes
+them to stderr, and error messages name whichever of the two actually holds the
+evidence.
+
+A transcript is named after its sabotage with non-alphanumerics collapsed to
+dashes, so two entries differing only in punctuation would collide; the manifest
+is checked for that up front and rejected rather than allowed to overwrite one
+entry's evidence with another's. A stem of `baseline` is rejected for the same
+reason: that name is taken by the baseline's own transcript, which is the
+evidence that the suite was green before any patching.
+
+**`-List` is inert**: it creates no directories, copies no tree, and writes and
+deletes nothing. All of that setup happens after the listing path has exited.
