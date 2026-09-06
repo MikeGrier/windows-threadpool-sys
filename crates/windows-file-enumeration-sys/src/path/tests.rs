@@ -167,3 +167,98 @@ fn a_device_namespace_path_is_resolved_rather_than_kept_verbatim() {
     let prepared = prepare_str(r"\\.\C:\Windows\..\Windows").expect("resolvable");
     assert_eq!(text(&prepared), r"\\.\C:\Windows");
 }
+
+// ---------------------------------------------------------------------------
+// Boundaries.
+//
+// The tests above use comfortably-wrong values -- a 400-character path, a
+// relative path eight units past the limit -- which prove the check exists but
+// not that it is in the right place. A mutation sweep moved the limit by one in
+// both directions and changed `>` to `>=` and `==`, and every one of those
+// survived. These pin the exact unit at which the answer changes.
+// ---------------------------------------------------------------------------
+
+/// An absolute path of exactly `units` UTF-16 units, already in normal form so
+/// `GetFullPathNameW` returns it unchanged and the resolved length is the input
+/// length.
+fn absolute_path_of_length(units: usize) -> String {
+    let prefix = r"C:\";
+    format!("{prefix}{}", "a".repeat(units - prefix.len()))
+}
+
+#[test]
+fn an_ordinary_path_of_exactly_max_path_content_is_accepted() {
+    // 259 = MAX_PATH - 1, the longest path that leaves room for the terminator.
+    // Rejecting this is the off-by-one that a "400 characters is too long" test
+    // cannot see, and it is the expensive direction: it refuses a path Windows
+    // would have opened.
+    let path = absolute_path_of_length(259);
+    assert_eq!(path.chars().count(), 259);
+
+    let prepared = prepare_str(&path).expect("259 units is within the ordinary limit");
+    assert_eq!(text(&prepared), path);
+}
+
+#[test]
+fn an_ordinary_path_one_unit_past_max_path_content_is_rejected() {
+    // 260 counts the terminator, so 260 content units do not fit.
+    let path = absolute_path_of_length(260);
+    assert_eq!(path.chars().count(), 260);
+
+    let error = prepare_str(&path).expect_err("260 units leaves no room for the terminator");
+    assert_eq!(error.failure(), RequestFailure::PathTooLong);
+}
+
+#[test]
+fn the_ordinary_limit_is_one_less_than_max_path() {
+    // The relationship the two tests above rest on, stated directly so a change
+    // to the constant fails here with its reason rather than only as a puzzling
+    // length assertion elsewhere.
+    assert_eq!(MAX_PATH_CONTENT, MAX_PATH - 1);
+    assert_eq!(MAX_PATH_CONTENT, 259);
+}
+
+#[test]
+fn a_verbatim_drive_relative_path_with_a_separator_is_rejected() {
+    // `\\?\C:foo` -- the existing case -- has no separator at all, so it is
+    // refused before the root is ever inspected and never reaches the
+    // drive-designator check. This form does reach it: the root is `C:foo`,
+    // which contains a colon but is not a drive.
+    //
+    // Without this, the check could report every root as a drive and nothing
+    // would notice.
+    let error = prepare_str(r"\\?\C:foo\bar").expect_err("drive-relative, not fully qualified");
+    assert_eq!(error.failure(), RequestFailure::NotFullyQualified);
+}
+
+#[test]
+fn a_verbatim_root_needs_a_letter_before_its_colon_not_merely_a_colon() {
+    // Both halves of the drive-designator test are load-bearing, and only a
+    // root that satisfies one but not the other shows it. `1:` has the colon in
+    // the right place and is still not a drive, so a check that accepted
+    // *either* condition would wave it through.
+    for path in [r"\\?\1:\", r"\\?\1:\dir"] {
+        let error = prepare_str(path).expect_err("a digit is not a drive letter");
+        assert_eq!(
+            error.failure(),
+            RequestFailure::NotFullyQualified,
+            "for {path}"
+        );
+    }
+
+    // Deliberately no companion case for "second unit is not a colon". The
+    // check is guarded by `root.contains(&COLON)`, so a colonless root -- a
+    // volume GUID, say -- never reaches it and is accepted on its own terms.
+    // `1:` is therefore the only shape that satisfies one half of the rule
+    // while failing the other, which is what makes it the whole test.
+    let prepared = prepare_str(r"\\?\Ca\dir").expect("a colonless root is not a drive at all");
+    assert_eq!(text(&prepared), r"\\?\Ca\dir");
+}
+
+#[test]
+fn a_verbatim_drive_root_is_still_accepted() {
+    // The positive case for the two tests above, so a check that rejected
+    // everything would not pass them by being uniformly strict.
+    let prepared = prepare_str(r"\\?\C:\dir").expect("a drive root is fully qualified");
+    assert_eq!(text(&prepared), r"\\?\C:\dir");
+}

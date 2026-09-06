@@ -305,3 +305,67 @@ fn is_signalled(handle: BorrowedHandle<'_>) -> bool {
     let result = unsafe { WaitForSingleObject(handle.as_raw_handle() as HANDLE, 0) };
     result == WAIT_OBJECT_0
 }
+
+#[test]
+fn a_ring_whose_slots_are_all_occupied_refuses_a_reservation() {
+    // `can_reserve` has two conditions and the tests above exercise only one of
+    // them. `reservations_never_consume_the_last_slot` fills the *reservation*
+    // budget; this fills the *data*, leaving the reservation budget untouched.
+    //
+    // Without it the room check could report every ring as having space and
+    // nothing would fail: a reservation would be handed out against a ring with
+    // nowhere to put the terminal outcome it promises to deliver.
+    let ring = ring(4);
+    let mut sent = 0;
+    while ring.try_send_entry(entry(1, "full")).is_ok() {
+        sent += 1;
+        assert!(sent <= 4, "a capacity-4 ring must stop accepting entries");
+    }
+
+    assert!(
+        !ring.has_data_room(),
+        "the ring is full, which is the state under test"
+    );
+    assert_eq!(ring.reserved(), 0, "and no reservation is holding it");
+    assert!(
+        ring.reserve_terminal(EnumerationId::from_raw(1)).is_none(),
+        "a full ring cannot promise to deliver a terminal outcome"
+    );
+}
+
+#[test]
+fn releasing_an_unused_reservation_gives_back_both_of_the_things_it_took() {
+    // A reservation takes two counts -- a slot's worth of room, and one active
+    // enumeration -- so giving it back has to return both. A mutation that
+    // moved either the wrong way survived every existing test, because nothing
+    // observed the counts *after* a release.
+    //
+    // The two are observed differently on purpose: `reserved()` reads the first
+    // directly, and the second is only visible through `is_closed`, which is
+    // what a receiver uses to decide the stream has ended. A ring left with a
+    // phantom active enumeration never reports closure, so a receiver waits
+    // forever on an outcome nobody owes it.
+    // `CompletionRing::new` starts at one session, so this ring already has the
+    // one that `remove_session` below gives back.
+    let ring = ring(4);
+    let slot = ring
+        .reserve_terminal(EnumerationId::from_raw(1))
+        .expect("room");
+    assert_eq!(ring.reserved(), 1);
+
+    drop(slot);
+
+    assert_eq!(
+        ring.reserved(),
+        0,
+        "the reserved room must come back, or the ring shrinks by one slot per \
+         abandoned reservation"
+    );
+    ring.remove_session();
+    assert!(
+        ring.is_closed(),
+        "with its session gone and nothing active, the stream has ended -- a \
+         reservation that did not give back its active count would keep this \
+         open forever"
+    );
+}

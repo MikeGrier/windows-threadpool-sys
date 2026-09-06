@@ -198,6 +198,12 @@ fn ordinal_equal_ignoring_case(left: &[u16], right: &[u16]) -> bool {
     if left.is_empty() {
         return true;
     }
+    // Both fallbacks below survive a mutation run, and neither is a test gap:
+    // reaching one needs a slice of more than 2^31 UTF-16 units, which is over
+    // four gigabytes of name. No filesystem produces that and no unit test
+    // should allocate it, so these are unreachable in practice rather than
+    // untested. They are kept because "cannot happen" and "is handled" are
+    // different claims, and the second one costs two lines.
     let Ok(left_len) = i32::try_from(left.len()) else {
         // A run this long cannot be a filesystem name; fall back to the exact
         // comparison rather than truncating the length and comparing a prefix.

@@ -35,6 +35,74 @@ pub const MINIMUM_BUFFER_CAPACITY: usize = 1024;
 /// to it.
 pub(crate) const RECORD_ALIGNMENT: usize = 8;
 
+/// The page size every Windows target this crate builds for uses.
+///
+/// Named rather than written as `4096` at the assertion site, and stated here
+/// because it is the unit [`DEFAULT_BUFFER_CAPACITY`]'s *length* is chosen in.
+///
+/// **It says nothing about alignment**, and an earlier version of this comment
+/// claimed it did -- twice, in two places six lines apart, of which only one
+/// was corrected on the first attempt. [`crate::buffer::NativeBuffer`] stores
+/// `Vec<u64>`, so the allocation is 8-byte aligned; a length that is a whole
+/// number of pages does not decide where the buffer *starts*, and a refill can
+/// begin partway through a page. What the constraint buys is a round request
+/// size with no part-page tail. Large-page allocations are a different
+/// mechanism and are not what this buffer uses.
+const PAGE_SIZE: usize = 4096;
+
+// The relationships these capacities depend on, checked by the compiler rather
+// than by a test -- they are facts about constants, so a test could only report
+// after the fact, on a build somebody chose to run.
+//
+// A mutation run replaced `64 * 1024` with `64 + 1024`, and every test passed:
+// 1088 is still above the minimum and still a legal capacity, so nothing that
+// merely enumerates a directory can tell the difference.
+//
+// **The first version of this guard asserted `is_power_of_two`, and its comment
+// gave the wrong reason.** It said 1088 is not "a whole number of records' worth
+// of aligned buffer" -- but 1088 is 136 * 8, so it is exactly that. The
+// assertion killed the mutant only because 1088 happens not to be a power of
+// two, which is incidental: 2048 is a power of two, is not a whole page, and
+// would have passed the guard while regressing every refill. Raised in the
+// PR #56 review.
+//
+// **And the first repair over-claimed in turn**, which the same review caught:
+// it said a page-multiple length makes "each refill begin on a page boundary".
+// It does not. `NativeBuffer` stores `Vec<u64>`, so the allocation is 8-byte
+// aligned and nothing more -- a length that is a whole number of pages says
+// nothing about where the buffer starts. What the constraint actually buys is a
+// page-sized *request*: a round amount for the kernel to fill per call, and one
+// that does not leave a part-page tail. Alignment would need page-aligned
+// storage, which this buffer does not have and does not need.
+const _: () = {
+    assert!(
+        DEFAULT_BUFFER_CAPACITY.is_multiple_of(PAGE_SIZE),
+        "the default is a whole number of pages in length; a value that is merely \
+         'big enough' would pass every functional test while asking the kernel for \
+         a ragged part-page amount on every refill"
+    );
+    assert!(
+        DEFAULT_BUFFER_CAPACITY.is_power_of_two(),
+        "kept alongside the page check because it is the stronger statement of \
+         the same intent: the default is a round size, not an arbitrary one that \
+         happens to divide by the page"
+    );
+    assert!(
+        DEFAULT_BUFFER_CAPACITY > MINIMUM_BUFFER_CAPACITY,
+        "the default must leave real headroom over the floor, or the two serve \
+         the same purpose and one of them is a lie"
+    );
+    assert!(
+        MINIMUM_BUFFER_CAPACITY.is_multiple_of(RECORD_ALIGNMENT),
+        "every capacity is handed to Win32 as a buffer length, and a length that \
+         is not a whole number of alignments cannot hold a whole final record"
+    );
+    assert!(
+        DEFAULT_BUFFER_CAPACITY.is_multiple_of(RECORD_ALIGNMENT),
+        "as above, for the capacity almost every caller actually uses"
+    );
+};
+
 /// One directory to enumerate, with the predicate and bounds that apply to it.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct EnumerationRequest {

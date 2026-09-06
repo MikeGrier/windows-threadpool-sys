@@ -49,6 +49,12 @@ impl WindowsFileTimestamp {
     /// `FILETIME` instead -- not because the crate stores one.
     #[must_use]
     pub const fn from_filetime(time: FILETIME) -> Self {
+        // A mutation run reports `|` here as replaceable by `^`, and it is an
+        // equivalent mutant rather than a gap: the shift puts the high word in
+        // bits 32..64 and the low word occupies bits 0..32, so the two operands
+        // share no set bit and `|`, `^`, and `+` all agree on every input. No
+        // test can distinguish them, and one written to try would be asserting
+        // a property the code does not have.
         let ticks = ((time.dwHighDateTime as u64) << 32) | (time.dwLowDateTime as u64);
         Self(ticks as i64)
     }
