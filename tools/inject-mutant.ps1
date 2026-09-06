@@ -132,7 +132,8 @@ function Invoke-Suite {
             } else {
                 'failed'
             }
-            return [pscustomobject]@{ Outcome = $outcome; Code = $proc.ExitCode }        }
+            return [pscustomobject]@{ Outcome = $outcome; Code = $proc.ExitCode }
+        }
         Get-CimInstance Win32_Process -Filter "ParentProcessId=$($proc.Id)" -ErrorAction SilentlyContinue |
             ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
         Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue
@@ -234,7 +235,8 @@ foreach ($target in $targets) {
             'hung' { "HUNG past ${TimeoutSeconds}s" }
             'unviable' { 'did not compile -- no test ran, so this proves nothing' }
             default { "exit $($run.Code)" }
-        }    }
+        }
+    }
     finally {
         [System.IO.File]::WriteAllText($path, (($original -join "`n") + "`n"), $utf8NoBom)
         if ((Get-Content -LiteralPath $path -Raw) -ne (($original -join "`n") + "`n")) {
@@ -247,7 +249,8 @@ foreach ($target in $targets) {
     # An unviable mutant counts as `bad` for exit purposes: it is an
     # inconclusive result, not a pass, and treating it as one would hide the
     # source drift that produced it.
-    $level = if ($verdict -eq 'caught') { 'good' } else { $survivors++; 'bad' }    Write-Report ("{0}:{1} '{2}' -> '{3}'  {4} ({5})" -f `
+    $level = if ($verdict -eq 'caught') { 'good' } else { $survivors++; 'bad' }
+    Write-Report ("{0}:{1} '{2}' -> '{3}'  {4} ({5})" -f `
             $File, $target.Line, $Find, $Replace, $verdict, $detail) -Level $level
 }
 

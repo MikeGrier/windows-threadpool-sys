@@ -21,10 +21,17 @@
 #>
 [CmdletBinding()]
 param(
-    [string] $RepositoryRoot = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
+    [string] $RepositoryRoot
 )
 
 $ErrorActionPreference = 'Stop'
+
+# Resolved here rather than as a param default: Windows PowerShell 5.1 does not
+# populate $PSScriptRoot while evaluating a default on a [CmdletBinding()]
+# script, so the default form fails outright under 5.1 while working under 7.
+if (-not $RepositoryRoot) {
+    $RepositoryRoot = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
+}
 
 # The single output sink. Every message this tool emits goes through here, so
 # the destination and the formatting stay separable from the call sites that
