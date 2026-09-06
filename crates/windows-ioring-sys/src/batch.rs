@@ -39,22 +39,28 @@ impl PushOptions {
 
     /// Set `IOSQE_FLAGS_DRAIN_PRECEDING_OPS`: this op does not start until
     /// every op already queued on this batch's ring has completed. A
-    /// barrier, not a cheap tag -- it forces the ring to drain before
-    /// continuing.
+    /// barrier, not a cheap tag -- but a **one-sided** one, and the direction
+    /// it does not cover is the surprising half.
     ///
-    /// # Ring-wide, and it spans submissions
+    /// # Ring-wide in reach, one-sided in effect
     ///
-    /// Measured, not inferred (D-24 in `DESIGN-NOTES.md`). The barrier
+    /// Measured, not inferred (D-24 and D-47 in `DESIGN-NOTES.md`). The wait
     /// reaches every operation outstanding on the *ring*, not only the ones
-    /// queued in this batch, and it holds back ops pushed after it even when
-    /// they target an entirely different file -- which rules out
-    /// filesystem-level serialization as the explanation. Results were
-    /// identical whether the sequence went in one [`Batch::submit`] or three.
+    /// queued in this batch, and results were identical whether the sequence
+    /// went in one [`Batch::submit`] or three.
     ///
-    /// The consequence to plan for: **cross-epoch pipelining through a single
-    /// ring is not available.** A consumer that closes an epoch with a
-    /// drained flush stalls that whole ring for the flush's duration, so the
-    /// way to overlap epochs is more rings, not more batches.
+    /// **It does not hold back operations pushed after it.** Those can start,
+    /// and complete, while this one is still waiting -- observed across about
+    /// 4,500 trials, and in the worst case every one of 32 subsequent writes
+    /// completed first. An earlier version of this documentation said they were
+    /// held; that was measured over too few runs to see a fault this rare, and
+    /// it was wrong.
+    ///
+    /// The consequence to plan for: **this delays the flagged op, not the
+    /// ring.** Later work is not blocked, so it cannot be used to fence
+    /// anything that follows. A consumer that needs later work to begin only
+    /// after this op is durable must sequence that itself, by waiting for its
+    /// completion before submitting.
     ///
     /// # The barrier stops at the ring's edge
     ///

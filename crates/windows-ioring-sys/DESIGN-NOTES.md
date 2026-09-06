@@ -143,18 +143,31 @@ omits the decision.
 
 ### Paying for the barrier
 
-Because [D-24](#d-24) makes the drained flush a ring-wide stall, there are three strategies and no
-free one. Which is right depends on epoch size and latency target, which is why this crate exposes
-the mechanism and declines to choose ([D-8](#d-8), [D-26](#d-26)):
+The drained flush waits for everything outstanding on the ring, so **the flush is expensive even
+though the ring is not stalled** ([D-47](#d-47) corrected this: subsequent operations are not held
+back, so later work does proceed). What you pay is a long-latency operation whose completion is the
+epoch's ordering point, and the strategies differ in how that is paid. Which is right depends on
+epoch size and latency target, which is why this crate exposes the mechanism and declines to choose
+([D-8](#d-8), [D-26](#d-26)):
 
 | Strategy | Cost | Suits |
 |---|---|---|
-| **Drained flush** (`FlushCoverage::CoversPrecedingOperations`) | ring stalls for the flush's duration | large epochs, where the stall amortizes |
+| **Drained flush** (`FlushCoverage::CoversPrecedingOperations`) | the flush waits for every outstanding op, so its own latency is the epoch's; later submissions are not blocked | large epochs, where one long flush amortizes |
 | **Host sequencing** -- observe the epoch's write completions, then push a `FlushCoverage::Unordered` flush | one userspace round trip per epoch (completion must reach your thread: wake, schedule, syscall) | any epoch big enough that ~tens of microseconds is noise |
 | **Alternating rings** -- one drains while the other fills | doubled registration, split buffer pools, two completion events to wait on | latency-sensitive work that cannot tolerate either |
 
 Host sequencing looks worst per-operation and is often right per-epoch: group commit means one
 ordering point per epoch rather than per write.
+
+**[D-47](#d-47) weakens the case for alternating rings, and that row has not been rewritten.** The
+strategy exists because a drained flush was believed to stall the whole ring, so a second ring was
+the only way to keep working through a commit. Later operations are not in fact held, so a single
+ring can continue submitting during a drained flush and the second ring buys less than this table
+claims. What it may still buy is a *clean* ordering point -- with one ring, work submitted during the
+flush completes in an order the flush does not constrain, so a consumer that wants "everything after
+this commit" to be identifiable still needs to arrange it. Whether that is worth a second ring is a
+design decision rather than a documentation fix, so it is queued as `M20.6` in
+[CHECKLIST.md](CHECKLIST.md) rather than settled here.
 
 ### Two device facts worth querying before doing any of this
 
@@ -184,9 +197,12 @@ Two of its findings belong here rather than only in the sample:
   magnitude below the dominant term. A device with a fast flush, a log committing far more often, or
   an arena under real pressure moves the balance -- which is why the sample measures rather than
   quotes.
-- The barrier's cost is invisible to a benchmark that awaits each commit before appending again,
-  because a ring-wide barrier costs nothing when nothing is queued behind it. Measuring it requires
-  the shape a real log has: keep appending while the commit is outstanding.
+- A benchmark that awaits each commit before appending again measures a workload no real log runs.
+  Measuring requires the shape a real log has: keep appending while the commit is outstanding.
+  **This bullet originally justified that shape by saying a ring-wide barrier costs nothing when
+  nothing is queued behind it.** [D-47](#d-47-detail) withdrew the stall that reasoning assumed, so
+  the overlap now exposes the strategies' other costs rather than a stall. The measurements stand;
+  what they mean is [`M20.6`](CHECKLIST.md).
 
 The sample is a demonstration of a pattern, not supported API surface -- it makes exactly the policy
 choices [D-8](#d-8) and [D-26](#d-26) say this crate must not make.

@@ -85,11 +85,15 @@
 //! # Why an epoch at all
 //!
 //! Because the alternative is not available. Durability on this ring costs one
-//! flush, the flush must carry a barrier to cover anything, and that barrier
-//! stalls the whole ring while it runs. Paying that per record would serialize
-//! the log completely. Paying it per epoch amortizes one expensive operation
-//! over many records -- the group-commit shape every write-ahead log converges
-//! on -- and the price is precisely the non-guarantees above.
+//! flush, the flush must carry a barrier to cover anything, and that flush
+//! waits for every operation outstanding on the ring -- so it is a long
+//! operation whose completion is the epoch's ordering point. (It does not hold
+//! back later work; D-47 corrected that. What makes it expensive is its own
+//! latency, not a stall it imposes on everything else.) Paying it per record
+//! would put one such wait between every pair of records. Paying it per epoch
+//! amortizes one expensive operation over many records -- the group-commit
+//! shape every write-ahead log converges on -- and the price is precisely the
+//! non-guarantees above.
 
 /// Which part of the contract a statement belongs to.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

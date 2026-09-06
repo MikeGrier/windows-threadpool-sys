@@ -19,11 +19,16 @@
 //!
 //! # What the barrier costs, and why this module says so out loud
 //!
-//! [`FlushCoverage::CoversPrecedingOperations`] is a **ring-wide** barrier
-//! (D-24): it waits for every operation outstanding on the ring, and holds
-//! back every operation pushed after it. So a commit stalls the whole log --
-//! appends for the next epoch queue up behind it, and their arena slots stay
-//! occupied until it finishes.
+//! [`FlushCoverage::CoversPrecedingOperations`] waits for every operation
+//! outstanding on the ring, so the commit itself is a long operation -- but it
+//! is **one-sided** and does not hold back appends pushed after it (D-47,
+//! measured; D-24 originally claimed it did). What a commit costs is its own
+//! latency, and the arena slots of the epoch being committed stay occupied
+//! until it finishes.
+//!
+//! The next epoch's appends are *not* blocked by the ring. This sample still
+//! serialises them, because it waits for the commit before opening the next
+//! epoch -- that is this sample's own sequencing, not the ring's.
 //!
 //! That is the cost the design notes name, and it is the reason a real
 //! consumer has to choose between the three strategies M14.3 implements. This

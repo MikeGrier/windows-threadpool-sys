@@ -16,7 +16,8 @@
 //! a primitive would be exactly the kind of policy D-8 refuses. The residue is
 //! that every consumer would otherwise rediscover the same composition, and
 //! the contracts involved (D-19's edge-triggered completion event, D-23's
-//! non-covering flush, D-24's ring-wide barrier) are the kind that get learned
+//! non-covering flush, D-24's draining barrier as corrected by D-47) are the
+//! kind that get learned
 //! by deadlock or by data loss. This sample is the transfer vehicle: a worked
 //! answer to "how do these go together", offered as a starting point you own.
 //!

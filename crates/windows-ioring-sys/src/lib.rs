@@ -106,10 +106,11 @@
 //! never of an individual write**, because the ring offers no per-write
 //! primitive to make it one: stream the writes, close the epoch with one
 //! covering flush, and wait on the flush rather than on the writes. The
-//! barrier that makes this correct is also a ring-wide stall
-//! ([`PushOptions::drain_preceding`] documents its reach), so the correct
-//! construction is also the expensive one. "Durability on the ring" in
-//! `DESIGN-NOTES.md` has the full shape and the three ways to pay for it.
+//! barrier that makes this correct waits for everything outstanding, so the
+//! flush itself is expensive -- but it is **one-sided** and does not hold back
+//! work submitted after it ([`PushOptions::drain_preceding`] documents both
+//! halves). "Durability on the ring" in `DESIGN-NOTES.md` has the full shape
+//! and the ways to pay for it.
 //!
 //! # Topology guidance
 //!

@@ -43,11 +43,12 @@
 //! ## 3. [`CommitStrategy::AlternatingRings`] -- buy it in a second ring
 //!
 //! Two rings. Epoch *N* lives entirely on ring *N mod 2*, and its commit is a
-//! covering flush on that ring -- so the barrier is real, but it stalls only
-//! the ring being committed. Epoch *N+1*'s appends go to the other ring and
-//! proceed while that barrier is held.
+//! covering flush on that ring. Epoch *N+1*'s appends go to the other ring, so
+//! they are unambiguously outside the epoch being committed -- which is what
+//! this buys, now that D-47 has established the ring does not hold later work
+//! back anyway.
 //!
-//! Neither the ring-wide stall nor the host round trip. What it costs is
+//! Neither a long commit on the appending ring nor the host round trip. What it costs is
 //! **doubled registration**: the arena is registered on both rings, and an
 //! `IoRing` has no unregister call, so those registrations live for the rings'
 //! whole lives. It also doubles the completion sources a wait must service,
@@ -79,10 +80,13 @@
 //! itself:
 //!
 //! - The first version awaited each commit before appending the next epoch.
-//!   That serialises every strategy, and a ring-wide barrier costs nothing
-//!   when nothing is queued behind it -- so it measured the barrier as free.
-//!   A real log keeps appending while a commit is outstanding, and those are
-//!   the appends a covering flush holds back.
+//!   That serialises every strategy, so it measured a workload no real log
+//!   runs. A real log keeps appending while a commit is outstanding, and the
+//!   strategies differ in what that overlap costs -- registration, a host round
+//!   trip, or nothing. (The original reason given here was that a covering
+//!   flush *holds back* those appends. It does not; see D-47. Keeping the
+//!   overlap is still right, but the comparison it produces should be re-read
+//!   with that correction in mind -- see M20.6.)
 //! - The second version keyed pending commits by `UserData` in one map across
 //!   both rings. Each ring assigns its own sequence, so the two collided and
 //!   half the samples vanished.
@@ -112,15 +116,16 @@ const WAIT_MS: u32 = 30_000;
 /// How an epoch's commit establishes that its writes reached the device.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum CommitStrategy {
-    /// A covering flush: the ring holds the flush until everything
-    /// outstanding completes. One ring, ring-wide stall.
+    /// A covering flush: the flush waits until everything outstanding
+    /// completes. One ring; the commit is long, but later appends are not
+    /// blocked by the ring (D-47) -- this sample serialises them itself.
     CoveringFlush,
     /// Wait in userspace for every write's completion, then push an unordered
     /// flush. One ring, no barrier, one host round trip per epoch.
     HostSequenced,
     /// Two rings, epochs alternating between them, each committed with a
-    /// covering flush on its own ring. No ring-wide stall of the ring taking
-    /// new appends, at the cost of registering the arena twice.
+    /// covering flush on its own ring, so the appending ring is never the one
+    /// waiting, at the cost of registering the arena twice.
     AlternatingRings,
 }
 
@@ -144,7 +149,7 @@ impl CommitStrategy {
     /// What this strategy pays, in one line.
     pub fn cost(self) -> &'static str {
         match self {
-            Self::CoveringFlush => "ring-wide stall at every commit",
+            Self::CoveringFlush => "a long, ring-wide wait at every commit",
             Self::HostSequenced => "a host round trip at every epoch boundary",
             Self::AlternatingRings => "the arena registered on both rings, permanently",
         }
@@ -186,9 +191,12 @@ pub struct Outcome {
     pub commit_latencies: Vec<Duration>,
     /// Time appends spent blocked because every arena slot was busy.
     ///
-    /// This is where a ring-wide barrier shows up as a number: slots cannot be
-    /// released until the operations holding them complete, and a covering
-    /// flush holds everything pushed after it.
+    /// This is where a long commit shows up as a number: an arena slot is not
+    /// reusable until the operation holding it completes, and a covering flush
+    /// does not complete until everything outstanding on its ring has. The
+    /// stall is the epoch's own operations retiring, not -- as an earlier
+    /// revision claimed -- the flush holding back what was pushed after it,
+    /// which D-47 established it does not do.
     pub append_stall: Duration,
 }
 
@@ -470,13 +478,16 @@ pub fn run(
         //
         // That placement is what makes the comparison mean anything. Settling
         // first would make every strategy serialise -- commit, wait, append,
-        // commit -- and a ring-wide barrier costs nothing when nothing is
-        // queued behind it. A real log keeps appending while a commit is
-        // outstanding (the one in `main.rs` does), and it is *those* appends
-        // that a covering flush holds back. An earlier revision of this
-        // harness settled first, measured a difference indistinguishable from
-        // run-to-run noise, and would have let a reader conclude the barrier
-        // is free.
+        // commit -- which is a workload no real log runs. A real log keeps
+        // appending while a commit is outstanding (the one in `main.rs` does).
+        // An earlier revision of this harness settled first and measured a
+        // difference indistinguishable from run-to-run noise.
+        //
+        // The original justification said those overlapping appends are held
+        // back by a covering flush. They are not (D-47), so what the overlap
+        // exposes is the strategies' other costs rather than a stall. The
+        // placement stays; the conclusion drawn from the numbers needs
+        // re-reading, which is `M20.6`.
         if let Some((user_data, pushed)) = deferred[lane_index].take() {
             lanes[lane_index].await_flush(user_data)?;
             commit_latencies.push(pushed.elapsed());
