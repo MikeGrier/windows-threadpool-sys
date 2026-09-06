@@ -582,23 +582,34 @@ if (@($spec.sabotages).Count -eq 0) {
         ) -join "`n") 2
 }
 
-# A manifest may raise the bound for its whole sweep, for a suite that is known
-# to be slow everywhere rather than at one entry. An explicit -TimeoutSeconds
-# still wins: the command line is the more specific statement of intent.
-if ($TimeoutSeconds -eq 0 -and
-    ($spec.PSObject.Properties.Name -contains 'timeoutSeconds') -and $spec.timeoutSeconds) {
+# Every timeoutSeconds in the manifest is VALIDATED here, whatever the command
+# line said, and the manifest's sweep-wide one is applied only if -TimeoutSeconds
+# did not already name a number. Validation and use are deliberately separate:
+# gating the check on "we are about to use this" meant a manifest could carry a
+# nonsense bound and be told so only on the runs that did not override it, which
+# is the run least likely to be the one an author is testing with.
+#
+# Presence is `$null -ne`, NOT truthiness. PowerShell counts 0 as false, so
+# `-and $spec.timeoutSeconds` skipped the whole block for exactly the value the
+# error message names -- 0 was silently treated as "not set" and fell back to the
+# derived bound, while -5 was rejected, because a non-zero number is truthy.
+# Measured both ways. Raised in the PR #64 review.
+$timeoutFromCommandLine = $TimeoutSeconds -gt 0
+if (($spec.PSObject.Properties.Name -contains 'timeoutSeconds') -and $null -ne $spec.timeoutSeconds) {
     if ([int]$spec.timeoutSeconds -lt 1) {
         Exit-WithMessage (@(
                 "This manifest sets timeoutSeconds = $($spec.timeoutSeconds)."
                 "It must be at least 1; a bound of zero reports every sabotage as caught."
             ) -join "`n") 2
     }
-    $TimeoutSeconds = [int]$spec.timeoutSeconds
+    # An explicit -TimeoutSeconds still wins: the command line is the more
+    # specific statement of intent.
+    if ($TimeoutSeconds -eq 0) { $TimeoutSeconds = [int]$spec.timeoutSeconds }
 }
 
 foreach ($entry in @($spec.sabotages)) {
     if (($entry.PSObject.Properties.Name -contains 'timeoutSeconds') -and
-        $entry.timeoutSeconds -and [int]$entry.timeoutSeconds -lt 1) {
+        $null -ne $entry.timeoutSeconds -and [int]$entry.timeoutSeconds -lt 1) {
         Exit-WithMessage (@(
                 "The sabotage '$($entry.name)' sets timeoutSeconds = $($entry.timeoutSeconds)."
                 "It must be at least 1; a bound of zero reports it as caught without running."
@@ -930,7 +941,11 @@ if ($baseline.Outcome -ne 'passed') {
 $baselineSeconds = [Math]::Max(1, $baseline.Seconds)
 if ($TimeoutSeconds -gt 0) {
     $defaultTimeout = $TimeoutSeconds
-    $timeoutSource = "-TimeoutSeconds"
+    # Named for where it actually came from. Reporting "-TimeoutSeconds" for a
+    # bound the MANIFEST set would credit a flag the runner never passed, and
+    # send anyone trying to change it to the wrong place.
+    $timeoutSource = if ($timeoutFromCommandLine) { '-TimeoutSeconds' }
+    else { "the manifest's timeoutSeconds" }
 }
 else {
     $defaultTimeout = [Math]::Max($TimeoutFloorSeconds, $TimeoutMultiplier * $baselineSeconds)
@@ -1002,7 +1017,11 @@ foreach ($sabotage in $selected) {
     # reason to lower one is speed and the cost of being wrong about it is a
     # false `caught`.
     $entryTimeout = $defaultTimeout
-    if ($sabotage.PSObject.Properties.Name -contains 'timeoutSeconds' -and $sabotage.timeoutSeconds) {
+    # `$null -ne` rather than truthiness, for the reason given where these are
+    # validated: 0 is false in PowerShell, so a truthiness test reads an
+    # explicit 0 as absent. Validation has already rejected 0 by this point, so
+    # this is consistency rather than a second guard.
+    if (($sabotage.PSObject.Properties.Name -contains 'timeoutSeconds') -and $null -ne $sabotage.timeoutSeconds) {
         $entryTimeout = [Math]::Max($defaultTimeout, [int]$sabotage.timeoutSeconds)
     }
 
