@@ -916,19 +916,21 @@ if ($baseline.Outcome -ne 'passed') {
 # What a sabotaged run is allowed to take before it is called hung.
 #
 # Derived from the baseline unless the caller named a number: the baseline just
-# measured how long this suite legitimately takes ON THIS MACHINE, including its
-# build, which is a better answer than any constant compiled into this file. A
-# fixed default is wrong in both directions -- too tight on a loaded machine or
-# a big suite, where a slow-but-finite run is scored as CAUGHT and quietly
-# inflates the result; too loose on a fast one, where every hang costs the
-# difference. Hangs dominate the wall clock, so that difference is most of the
-# sweep: 720 of 853 seconds on the 39-entry manifest at the old fixed 60.
-# The TEST phase's duration alone, not build-plus-test. The bound governs test
-# execution, so deriving it from anything else imports a cost it does not
-# govern -- and the build is exactly the volatile part: the first run against a
-# fresh copy pays a cold build, which would inflate the bound several-fold on
-# the one run least able to judge what is normal. Measured: 25s for
-# build-plus-test cold against 8s for the tests themselves.
+# measured how long this suite legitimately takes ON THIS MACHINE, which is a
+# better answer than any constant compiled into this file. A fixed default is
+# wrong in both directions -- too tight on a loaded machine or a big suite,
+# where a slow-but-finite run is scored as CAUGHT and quietly inflates the
+# result; too loose on a fast one, where every hang costs the difference. Hangs
+# dominate the wall clock, so that difference is most of the sweep: 720 of 853
+# seconds on the 39-entry manifest at the old fixed 60.
+#
+# The figure used is the baseline's TEST phase alone. $baseline.Seconds carries
+# that and not build-plus-test, and the distinction is load bearing: the bound
+# governs test execution, so anything else imports a cost it does not govern --
+# and the build is the volatile part, since the first run against a fresh copy
+# pays a cold build and would inflate the bound several-fold on the one run
+# least able to judge what is normal. Measured on the placement-probe manifest:
+# 25s for build-plus-test against a cold copy, 3-4s for the tests alone.
 $baselineSeconds = [Math]::Max(1, $baseline.Seconds)
 if ($TimeoutSeconds -gt 0) {
     $defaultTimeout = $TimeoutSeconds

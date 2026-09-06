@@ -60,8 +60,14 @@ seconds** once the bound is derived from the baseline instead.
 **The bound is derived, not fixed.** The baseline runs the unmodified suite
 first anyway, so its measured *test* duration is the best available statement of
 how long this suite legitimately takes on this machine. The bound is
-`max(-TimeoutFloorSeconds, -TimeoutMultiplier x baseline)`, defaulting to
-`max(15, 3x)`. The sweep prints what it derived and why:
+
+```
+hang bound = max(TimeoutFloorSeconds, TimeoutMultiplier * baselineTestSeconds)
+```
+
+where `TimeoutFloorSeconds` defaults to 15 and `TimeoutMultiplier` to 3, so a
+baseline whose tests take 4 seconds yields a bound of 15 (the floor beats 12).
+The sweep prints what it derived and why:
 
 ```
 Baseline is green in 4s. Hang bound: 15s (3x the 4s baseline, floor 15s).
@@ -203,19 +209,30 @@ needs escaping.
 }
 ```
 
+Top level, describing the sweep:
+
 | Field | Required | Meaning |
 |---|---|---|
 | `package` | yes | Cargo package to test, unless `testArgs` overrides the command. |
 | `root` | no | Where `file` paths resolve from, relative to the manifest. Defaults to the manifest's own directory. |
-| `testArgs` | no | Replaces the arguments after `cargo test`. |
+| `testArgs` | no | Replaces the arguments after `cargo test`. Must not contain `--target-dir`; the sweep supplies its own. |
+| `sabotages` | yes | The entries, described below. Must not be empty. |
 | `timeoutSeconds` | no | Hang bound for the whole sweep, overriding the derived one. `-TimeoutSeconds` still wins over it. |
-| `name` | yes | Unique; also the `-Name` filter key and the transcript filename. |
+
+Inside each entry of `sabotages`:
+
+| Field | Required | Meaning |
+|---|---|---|
+| `name` | yes | Unique; also the `-Name` filter key and the transcript filename. Two names that differ only in punctuation are rejected, as is `baseline`. |
 | `file` | yes | Source to patch, relative to `root`. |
 | `expect` | yes | `caught` for a defect, `survives` for a control. |
 | `why` | yes | What breaks, and why the suite should or should not notice. This is the part a future reader needs; the patch only says what changed. |
 | `find` | yes | Lines to replace. Must match **exactly once**. |
-| `replace` | yes | Replacement lines. `[""]` deletes. |
+| `replace` | yes | Replacement lines. Either `[]` or `[""]` deletes -- the lines are joined with newlines, so both spell the empty string, and the shipped manifests use both. |
 | `timeoutSeconds` | no | Hang bound for this entry alone, when it legitimately runs far longer than the rest. Only ever raises the sweep's bound. |
+
+The two `timeoutSeconds` are different fields at different levels: one beside
+`package`, one inside a sabotage.
 
 Keep the manifest **beside the code it sabotages** -- `sabotage.json` in the
 crate root -- so a refactor and its manifest move together and a stale pattern
