@@ -119,13 +119,27 @@ pub enum FlushCoverage {
     /// completion is observed, and it is what a caller closing an epoch
     /// wants.
     ///
-    /// It sets `IOSQE_FLAGS_DRAIN_PRECEDING_OPS`, which is a **ring-wide**
-    /// barrier rather than a per-file one (D-24, measured): operations pushed
-    /// after it are held until it completes even when they target unrelated
-    /// files, and its reach is every operation outstanding on the ring, not
-    /// only the ones in this batch. The whole ring stalls for the flush's
-    /// duration. That cost is real, and it is the only reason the other
-    /// variant exists.
+    /// It sets `IOSQE_FLAGS_DRAIN_PRECEDING_OPS`, whose reach is **ring-wide**
+    /// rather than per-file: every operation outstanding on the ring, not only
+    /// the ones in this batch. The whole ring drains for the flush's duration.
+    /// That cost is real, and it is the only reason the other variant exists.
+    ///
+    /// # What this does not promise
+    ///
+    /// **The flag is one-sided. Operations you push *after* this flush are not
+    /// held back, and can complete before it.** Measured over about 4,500
+    /// trials at a rate between 0.03% and 0.8%, and in the worst case every one
+    /// of 32 subsequent writes completed first (D-47).
+    ///
+    /// So this flush's completion tells you about the past and not the future:
+    /// everything outstanding when the flush was reached is durable, and
+    /// nothing is implied about work submitted afterwards. If later work must
+    /// not begin until the flush is durable, submit it after you have popped
+    /// the flush's completion. The ring will not sequence it for you.
+    ///
+    /// An earlier version of this documentation said subsequent operations were
+    /// held until the flush completed. That was wrong, and it is corrected here
+    /// rather than quietly dropped because a caller may have relied on it.
     CoversPrecedingOperations,
     /// Queue the flush with no barrier: it may start, and complete, while
     /// writes pushed before it are still in flight.

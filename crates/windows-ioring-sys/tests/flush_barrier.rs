@@ -153,7 +153,13 @@ struct Observed {
     /// This is D-23's direct observable; the spike saw 17 and 23 of 32.
     a_after_flush: usize,
     /// Phase-B writes (queued *after* the flush) that completed *before* it.
-    /// D-24's observable: the barrier holds these back.
+    ///
+    /// Was D-24's observable, when D-24 claimed the barrier held these back.
+    /// It does not ([D-47]), so this is now *reported* rather than asserted --
+    /// see the end of the test for why a rate of one-in-a-thousand cannot be an
+    /// assertion, and why deleting the counter would be worse than keeping it.
+    ///
+    /// [D-47]: ../DESIGN-NOTES.md
     b_before_flush: usize,
 }
 
@@ -326,12 +332,30 @@ fn a_covering_flush_waits_for_preceding_writes_and_an_unordered_one_does_not() {
         covering.a_after_flush, unordered.a_after_flush
     );
 
-    // The barrier's other half (D-24): operations pushed after a drained op
-    // are held until it completes.
-    assert_eq!(
-        covering.b_before_flush, 0,
-        "a covering flush must also hold back the writes queued after it, but {} of {PHASE_OPS} \
-         completed first (the unordered control saw {})",
+    // What D-24 used to claim, and what replaced it.
+    //
+    // D-24 recorded the drain flag as a *full* barrier: preceding operations
+    // drained, and subsequent ones held until the flush completed. This test
+    // asserted both halves. The second half is false -- `IOSQE_FLAGS_DRAIN_
+    // PRECEDING_OPS` is one-sided, and a write queued after the flush can
+    // complete before it. Measured over ~4,500 trials at 0.03%-0.8%, and in the
+    // worst trial *all 32* did. See D-47 in DESIGN-NOTES.md.
+    //
+    // **That rate is why this is reported and not asserted.** At roughly one
+    // run in a thousand the assertion passed for three days, failed twice in
+    // full-workspace runs, and was recorded as a flaky test -- so the standing
+    // proposal was to loosen it or mark the test serial. Either would have
+    // suppressed the only evidence that a documented guarantee was false. An
+    // assertion that fails one run in a thousand does not defend a contract; it
+    // teaches the suite to be distrusted.
+    //
+    // The counter stays because deleting it would discard the instrument that
+    // found this. If a future Windows did hold the line, this prints a run of
+    // zeros and says so; today it prints the rate.
+    eprintln!(
+        "D-47: {} of {PHASE_OPS} writes queued after the covering flush completed before it \
+         (the unordered control saw {}). This is reported, not asserted -- the drain flag is \
+         one-sided and does not hold back subsequent operations.",
         covering.b_before_flush, unordered.b_before_flush
     );
 }
