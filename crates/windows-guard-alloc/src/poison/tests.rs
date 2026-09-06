@@ -201,3 +201,49 @@ fn first_mismatch_honours_a_non_zero_offset() {
         "the wrong phase must not verify clean, or the offset argument does nothing"
     );
 }
+
+#[test]
+fn an_ordinal_at_the_allocation_count_is_not_yet_plausible() {
+    // `identify`'s bound survived being loosened to `<=`, which would accept an
+    // ordinal exactly equal to the number of allocations made so far -- one
+    // that has not happened yet.
+    //
+    // That direction is the dangerous one. `identify` is what distinguishes
+    // "these bytes are our poison" from "these bytes are something else that
+    // happened to decode"; every `u64` decodes to *some* ordinal, so the bound
+    // is the entire test. Accepting one allocation too many turns a
+    // use-after-free report into a false positive on unrelated memory.
+    let seed = 0x0123_4567_89AB_CDEF;
+
+    // Ordinals are zero-based, so after `n` allocations the largest that exists
+    // is `n - 1` and `n` is the first that does not.
+    for total in [1_u64, 2, 7, 64] {
+        let last = total - 1;
+        assert_eq!(
+            identify(seed, word(seed, last), total),
+            Some(last),
+            "the most recent allocation must still identify"
+        );
+        assert_eq!(
+            identify(seed, word(seed, total), total),
+            None,
+            "an ordinal equal to the count names an allocation that has not \
+             happened, so it must not be read as ours"
+        );
+    }
+}
+
+#[test]
+fn the_first_allocation_identifies_before_the_count_has_caught_up() {
+    // The `max(1)` in the bound, which exists for exactly this moment: the
+    // check runs while the very first allocation is being made, when the count
+    // may still read zero. Without the floor, ordinal 0 would fail `0 < 0` and
+    // the allocator's own first poison would be unidentifiable.
+    let seed = 42;
+    assert_eq!(identify(seed, word(seed, 0), 0), Some(0));
+    assert_eq!(
+        identify(seed, word(seed, 1), 0),
+        None,
+        "the floor admits exactly one ordinal, not every ordinal"
+    );
+}
