@@ -126,9 +126,10 @@ pub enum FlushCoverage {
     /// wants.
     ///
     /// It sets `IOSQE_FLAGS_DRAIN_PRECEDING_OPS`, whose reach is **ring-wide**
-    /// rather than per-file: every operation outstanding on the ring, not only
-    /// the ones in this batch. The whole ring drains for the flush's duration.
-    /// That cost is real, and it is the only reason the other variant exists.
+    /// rather than per-file: it waits on every operation outstanding on the
+    /// ring when it is reached, not only the ones in this batch. So the flush
+    /// takes as long as the slowest of them, however unrelated. That cost is
+    /// real, and it is the only reason the other variant exists.
     ///
     /// # What this does not promise
     ///
@@ -1475,7 +1476,7 @@ impl<'ring> Batch<'ring> {
     /// covering flush, and wait on that flush rather than on the writes.
     /// "Durability on the ring" in `DESIGN-NOTES.md` has the full
     /// construction, and the three ways to pay for the barrier's ring-wide
-    /// stall.
+    /// wait.
     ///
     /// # Safety
     ///

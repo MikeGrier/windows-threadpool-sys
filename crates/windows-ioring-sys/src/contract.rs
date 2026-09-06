@@ -53,9 +53,11 @@
 //!
 //! - **Completion order.** The ring makes no ordering promise between
 //!   independent operations, so this counts them and never sequences them.
-//!   The one ordering that *is* promised -- a covering flush against preceding
-//!   operations ([D-24](../DESIGN-NOTES.md#d-24)) -- is not observable from
-//!   the completion stream, because a barrier constrains when operations
+//!   The one ordering that *is* promised -- a covering flush against the
+//!   operations *preceding* it, and nothing about those following it
+//!   ([D-24](../DESIGN-NOTES.md#d-24), as corrected by
+//!   [D-47](../DESIGN-NOTES.md#d-47-detail)) -- is not observable from the
+//!   completion stream, because a barrier constrains when operations
 //!   *execute*, not the order their completions are popped.
 //! - **Whether an operation succeeded.** A failed operation still completes
 //!   exactly once; conservation and success are different questions.

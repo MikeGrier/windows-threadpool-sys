@@ -16,15 +16,18 @@
 //! ## 1. [`CommitStrategy::CoveringFlush`] -- buy it in the ring
 //!
 //! Push the flush with [`FlushCoverage::CoversPrecedingOperations`]. The ring
-//! holds it until everything outstanding completes, and holds everything
-//! pushed after it until *it* completes.
+//! holds it until everything outstanding completes. It does **not** hold back
+//! what is pushed after it (D-47); an earlier version of this section said it
+//! did, and that was the false contract this example used to teach.
 //!
 //! Cheapest to write and easiest to see correct, and the reason is that the
 //! ordering is a property of the submission rather than of any code that runs.
-//! What it costs is that the barrier is **ring-wide** (D-24): appends for the
-//! next epoch queue behind it, and their arena slots stay occupied. On a log
-//! whose commits are rare relative to its appends, that stall is bounded and
-//! fine. On one that commits often, it is the dominant cost.
+//! What it costs is that the wait is **ring-wide**: the flush waits on every
+//! operation outstanding on the ring when it is reached, however unrelated to
+//! this epoch, so it takes as long as the slowest of them. The epoch's own
+//! arena slots stay occupied for that whole time. On a log whose commits are
+//! rare relative to its appends, that is bounded and fine. On one that commits
+//! often, it is the dominant cost.
 //!
 //! ## 2. [`CommitStrategy::HostSequenced`] -- buy it in userspace
 //!
