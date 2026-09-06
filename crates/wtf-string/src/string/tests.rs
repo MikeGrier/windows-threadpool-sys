@@ -3,7 +3,9 @@
 // the `core` prelude does not provide. (Imported explicitly rather than via a
 // prelude glob, which would shadow `core`'s `panic!` and warn.)
 use std::borrow::ToOwned;
+use std::cmp::Ordering;
 use std::format;
+use std::hash::{Hash, Hasher};
 use std::string::String;
 use std::vec;
 use std::vec::Vec;
@@ -12,6 +14,21 @@ use super::{Wtf16, Wtf16Str, Wtf16String, WtfEncoding};
 
 // The encoding's named terminator, so assertions don't embed the raw 0 tag.
 const NUL: u16 = Wtf16::NUL;
+
+#[derive(Default)]
+struct WriteCountingHasher {
+    bytes_written: usize,
+}
+
+impl Hasher for WriteCountingHasher {
+    fn finish(&self) -> u64 {
+        self.bytes_written as u64
+    }
+
+    fn write(&mut self, bytes: &[u8]) {
+        self.bytes_written += bytes.len();
+    }
+}
 
 // Matrix / property coverage over a shared corpus lives in a sibling submodule.
 mod matrix;
@@ -250,6 +267,60 @@ fn ordering_is_binary_over_units() {
     assert!(a < b);
     assert!(a < ab); // a prefix orders before the longer string
     assert_eq!(same1, same2);
+}
+
+#[test]
+fn borrowed_partial_order_and_hash_call_their_trait_implementations() {
+    let a = Wtf16Str::from_units(&[1, 2]);
+    let b = Wtf16Str::from_units(&[1, 3]);
+    assert_eq!(PartialOrd::partial_cmp(a, b), Some(Ordering::Less));
+
+    let mut hasher = WriteCountingHasher::default();
+    Hash::hash(a, &mut hasher);
+    assert!(
+        hasher.bytes_written > 0,
+        "hashing a borrowed string must feed its units to the hasher"
+    );
+}
+
+#[test]
+fn str_comparison_forwarders_are_exercised_directly() {
+    let borrowed = Wtf16Str::from_units(&[97, 98, 99]);
+    assert!(<Wtf16Str as PartialEq<&str>>::eq(borrowed, &"abc"));
+    assert!(!<Wtf16Str as PartialEq<&str>>::eq(borrowed, &"abd"));
+
+    let owned = Wtf16String::from("abc");
+    assert!(<Wtf16String as PartialEq<str>>::eq(&owned, "abc"));
+    assert!(!<Wtf16String as PartialEq<str>>::eq(&owned, "abd"));
+}
+
+#[test]
+fn capacity_operations_observably_change_dedicated_buffers() {
+    let mut reserved = Wtf16String::new();
+    reserved.reserve_exact(64);
+    assert!(
+        reserved.capacity() >= 64,
+        "reserve_exact must grow a fresh buffer"
+    );
+
+    let mut fitted = Wtf16String::with_capacity(128);
+    fitted.push_str("abc");
+    let fitted_before = fitted.capacity();
+    fitted.shrink_to_fit();
+    assert!(
+        fitted.capacity() < fitted_before,
+        "shrink_to_fit must release excess capacity on the Windows allocator"
+    );
+
+    let mut bounded = Wtf16String::with_capacity(128);
+    bounded.push_str("abc");
+    let bounded_before = bounded.capacity();
+    bounded.shrink_to(16);
+    assert!(
+        bounded.capacity() < bounded_before,
+        "shrink_to must release capacity above its requested lower bound"
+    );
+    assert!(bounded.capacity() >= 16);
 }
 
 #[test]
