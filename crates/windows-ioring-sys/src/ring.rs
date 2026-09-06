@@ -1032,5 +1032,40 @@ thread_local! {
     pub(crate) static DROP_RUNS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
+/// Pop one completion, bounded, for tests that need a real one.
+///
+/// `Batch::submit_and_wait` returning does **not** mean a completion is
+/// poppable -- its own documentation says so, because the timeout can expire
+/// first. That leaves two ways for a test to be wrong, and this exists so
+/// neither is spelled out at each call site.
+///
+/// A single `try_pop` flakes: under load the completion arrives just after the
+/// check. A bare `loop` around `try_pop` is worse, because it converts that
+/// flake into a hang -- and `cargo test` runs tests as threads in one process,
+/// so a hung test stops the *whole harness* reporting and the failure arrives
+/// with no test name attached. A bounded wait fails loudly instead, naming what
+/// it waited for.
+///
+/// Thirty seconds matches the deadline the crate's own `failure_paths`
+/// integration test already uses; it is a hang bound, not a latency
+/// expectation, so it is far above any real completion time.
+#[cfg(test)]
+pub(crate) fn pop_within(ring: &mut IoRing, what: &str) -> Completion {
+    // Named once so the bound and the message it reports cannot drift apart.
+    const BOUND: std::time::Duration = std::time::Duration::from_secs(30);
+
+    let deadline = std::time::Instant::now() + BOUND;
+    loop {
+        if let Some(completion) = ring.try_pop().expect("pop") {
+            return completion;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "timed out after {BOUND:?} waiting for {what}"
+        );
+        std::thread::yield_now();
+    }
+}
+
 #[cfg(test)]
 mod tests;
