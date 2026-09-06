@@ -159,7 +159,7 @@ struct Observed {
     /// see the end of the test for why a rate of one-in-a-thousand cannot be an
     /// assertion, and why deleting the counter would be worse than keeping it.
     ///
-    /// [D-47]: ../DESIGN-NOTES.md
+    /// [D-47]: ../DESIGN-NOTES.md#d-47-detail
     b_before_flush: usize,
 }
 

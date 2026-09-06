@@ -3,7 +3,7 @@
 //!
 //! [`crate::commit`] picks the simplest of the three and says so. This module
 //! implements all three and lets a caller choose at run time, because
-//! [D-24](../../DESIGN-NOTES.md) makes the choice a real fork with no free
+//! [D-24](../../DESIGN-NOTES.md#d-24) makes the choice a real fork with no free
 //! answer, and a reader needs to see all three side by side to make it.
 //!
 //! # The fork
@@ -73,10 +73,10 @@
 //! strategies actually differ about -- how long the flush itself waits, the
 //! extra host round trip -- lands in the tens.
 //!
-//! The distinction [D-24](../../DESIGN-NOTES.md) draws is real. It is simply
-//! two orders of magnitude below the dominant term at this workload, and a
-//! reader is better served by knowing that than by a ranking that would not
-//! reproduce.
+//! The distinction [D-24](../../DESIGN-NOTES.md#d-24) draws is real. It is
+//! simply two orders of magnitude below the dominant term at this workload,
+//! and a reader is better served by knowing that than by a ranking that would
+//! not reproduce.
 //!
 //! Getting that result required fixing the harness twice, which is worth
 //! recording because both mistakes are easy to make and neither announces
