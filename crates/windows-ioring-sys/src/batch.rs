@@ -651,6 +651,18 @@ impl<B: IoBufMut> RegisteredBuffers<B> {
     }
 
     /// Whether this registration holds no buffers.
+    ///
+    /// Always `false` in practice, and a mutation run reports the constant as
+    /// surviving for that reason rather than for want of a test. Nothing in
+    /// this crate rejects an empty vector, but the kernel refuses the
+    /// submission with `E_INVALIDARG`, so a caller never holds an empty
+    /// registration. `windows_refuses_an_empty_buffer_registration` pins that
+    /// platform behaviour; if a future Windows accepts it, that test fails and
+    /// this becomes reachable.
+    ///
+    /// Kept because it is half of the `len`/`is_empty` pair every Rust
+    /// collection surface offers, and because "cannot happen today" is a
+    /// weaker claim than "cannot happen".
     #[must_use]
     pub fn is_empty(&self) -> bool {
         self.buffers.is_empty()

@@ -184,6 +184,15 @@ impl InjectedFailure {
             Self::Ring(condition) => condition.code(),
             // `HRESULT_FROM_WIN32`: severity 1, facility 7 (`FACILITY_WIN32`),
             // and the low 16 bits of the code.
+            //
+            // The `|` here is provably equivalent to `^`, and a mutation run
+            // will report that mutant surviving: `0x8007_0000`'s low sixteen
+            // bits are zero and `code & 0xFFFF`'s high sixteen bits are zero,
+            // so the two operands never share a set bit and every bitwise
+            // combinator that agrees on disjoint inputs agrees here too. `|`
+            // is kept because it reads as "these are separate fields" where
+            // `^` would read as an arithmetic accident; no test can tell them
+            // apart, so none is written.
             Self::Win32(code) => (0x8007_0000_u32 | (code & 0xFFFF)).cast_signed(),
             Self::Hresult(code) => code,
         };
@@ -545,6 +554,31 @@ impl IoRing {
     #[must_use]
     pub fn supports(&self, op: Op) -> bool {
         self.supported_ops.contains(op)
+    }
+
+    /// Overrides the cached capability set to exactly `ops`, for tests that
+    /// need a ring known to lack support for something.
+    ///
+    /// Every real host this crate has been tested against supports all seven
+    /// named ops, which is exactly why [`IoRing::supports`] and
+    /// [`Batch::require`](crate::Batch)'s use of it could not be told apart
+    /// from a constant `true` by any test that only ever asked a real ring:
+    /// the honest answer and the constant agree on every host available to
+    /// run the test. This seam constructs the disagreement instead of hoping
+    /// to find a host that has it.
+    ///
+    /// Not available outside `#[cfg(test)]`, for the same reason
+    /// [`Completion::synthetic`] is not: production code has no legitimate
+    /// reason to claim a capability the kernel did not actually report.
+    #[cfg(test)]
+    pub(crate) fn set_supported_ops_for_test(&mut self, ops: &[Op]) {
+        self.supported_ops = OpSupport(ops.iter().fold(0_u8, |mask, &op| {
+            let index = Op::ALL
+                .iter()
+                .position(|&candidate| candidate == op)
+                .expect("Op::ALL is exhaustive");
+            mask | (1 << index)
+        }));
     }
 
     /// An owned duplicate of this ring's completion event, so a caller can
@@ -955,6 +989,15 @@ impl IoRing {
 
 impl Drop for IoRing {
     fn drop(&mut self) {
+        // A count of how many times this body has run, so a test can confirm
+        // the rundown-and-close actually executes rather than trusting the
+        // impl exists. The counter is thread-local: a process-wide one is
+        // incremented by every other test's rings as they drop, which would
+        // let an `after > before` assertion be satisfied by somebody else's
+        // drop and mask the very mutation it exists to catch.
+        #[cfg(test)]
+        DROP_RUNS.with(|runs| runs.set(runs.get() + 1));
+
         // Best-effort rundown: a ring with an operation still outstanding at
         // drop time is a use bug (M3's Batch/Token are the sanctioned way to
         // avoid it), but Drop cannot propagate the error, so this asserts in
@@ -969,6 +1012,24 @@ impl Drop for IoRing {
         let hr = unsafe { CloseIoRing(self.handle) };
         debug_assert!(hr >= 0, "CloseIoRing failed: 0x{:08X}", hr as u32);
     }
+}
+
+// How many times `IoRing`'s `Drop` impl has run **on the calling thread**; see
+// its use there.
+//
+// A plain comment rather than a doc comment: rustdoc does not document items
+// produced by a macro invocation, so a doc comment here is an
+// `unused_doc_comments` warning, which CI escalates with `-D warnings`.
+//
+// Thread-local rather than a shared `static`, and that is load-bearing rather
+// than tidiness. `cargo test` runs tests as threads in one process, so a
+// process-wide counter is incremented by every other test's rings as they
+// drop -- and an assertion of the form `after > before` is then satisfied by
+// *somebody else's* drop, which is exactly the mutant it was written to catch.
+// A thread-local is only touched by rings dropped on this test's own thread.
+#[cfg(test)]
+thread_local! {
+    pub(crate) static DROP_RUNS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
 #[cfg(test)]
