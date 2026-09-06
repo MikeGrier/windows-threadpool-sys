@@ -83,9 +83,11 @@ const _: () = {
     );
     assert!(
         DEFAULT_BUFFER_CAPACITY.is_power_of_two(),
-        "kept alongside the page check because it is the stronger statement of \
-         the same intent: the default is a round size, not an arbitrary one that \
-         happens to divide by the page"
+        "kept alongside the page check as an independent, narrower constraint -- \
+         NOT a stronger form of it. Neither implies the other: 2048 is a power of \
+         two and not a whole page, 12288 is a whole number of pages and not a \
+         power of two. This one says the default is a round size rather than an \
+         arbitrary value that happens to divide by the page"
     );
     assert!(
         DEFAULT_BUFFER_CAPACITY > MINIMUM_BUFFER_CAPACITY,

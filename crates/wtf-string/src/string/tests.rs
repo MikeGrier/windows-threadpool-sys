@@ -303,24 +303,49 @@ fn capacity_operations_observably_change_dedicated_buffers() {
         "reserve_exact must grow a fresh buffer"
     );
 
-    let mut fitted = Wtf16String::with_capacity(128);
+    // Both shrink assertions below are threshold comparisons against a
+    // deliberately large excess, rather than comparisons against the exact
+    // capacity before the call. Two traps, and the interesting one is the second.
+    //
+    // `shrink_to_fit` is documented to drop "as close as possible to the length",
+    // with the allocator free to report room for a few more elements. Pinning an
+    // exact capacity would bind this test to that slack.
+    //
+    // But asserting merely that capacity did not *grow* -- the obvious repair --
+    // is worse, because a `shrink_to_fit` whose body has been deleted satisfies
+    // it. The test would then pass against precisely the mutation it exists to
+    // kill. That is measured rather than reasoned: with these assertions weakened
+    // to `<=`, re-injecting the emptied body leaves the mutant SURVIVED, and with
+    // them as written it is caught.
+    //
+    // A threshold far below the reserved excess and far above any plausible
+    // allocation granularity separates a real shrink from a no-op without
+    // depending on the size of either.
+    const EXCESS: usize = 64 * 1024;
+
+    let mut fitted = Wtf16String::with_capacity(EXCESS);
     fitted.push_str("abc");
-    let fitted_before = fitted.capacity();
     fitted.shrink_to_fit();
     assert!(
-        fitted.capacity() < fitted_before,
-        "shrink_to_fit must release excess capacity on the Windows allocator"
+        fitted.capacity() >= fitted.len(),
+        "shrink_to_fit must never drop below the content it holds"
+    );
+    assert!(
+        fitted.capacity() < EXCESS / 2,
+        "shrink_to_fit must release excess capacity"
     );
 
-    let mut bounded = Wtf16String::with_capacity(128);
+    let mut bounded = Wtf16String::with_capacity(EXCESS);
     bounded.push_str("abc");
-    let bounded_before = bounded.capacity();
     bounded.shrink_to(16);
     assert!(
-        bounded.capacity() < bounded_before,
+        bounded.capacity() >= 16,
+        "shrink_to must honour its requested lower bound"
+    );
+    assert!(
+        bounded.capacity() < EXCESS / 2,
         "shrink_to must release capacity above its requested lower bound"
     );
-    assert!(bounded.capacity() >= 16);
 }
 
 #[test]
