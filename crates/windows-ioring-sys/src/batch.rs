@@ -37,10 +37,15 @@ impl PushOptions {
         Self::default()
     }
 
-    /// Set `IOSQE_FLAGS_DRAIN_PRECEDING_OPS`: this op does not start until
+    /// Set `IOSQE_FLAGS_DRAIN_PRECEDING_OPS`: this op does not complete until
     /// every op already queued on this batch's ring has completed. A
     /// barrier, not a cheap tag -- but a **one-sided** one, and the direction
     /// it does not cover is the surprising half.
+    ///
+    /// Stated in terms of completion rather than of when the op *starts*,
+    /// throughout: user mode cannot see execution begin, only completions
+    /// posted, so completion order is both what was measured and the only
+    /// thing a caller can act on ([D-47](../DESIGN-NOTES.md#d-47-detail)).
     ///
     /// # Ring-wide in reach, one-sided in effect
     ///
@@ -49,9 +54,9 @@ impl PushOptions {
     /// queued in this batch, and results were identical whether the sequence
     /// went in one [`Batch::submit`] or three.
     ///
-    /// **It does not hold back operations pushed after it.** Those can start,
-    /// and complete, while this one is still waiting -- observed across about
-    /// 4,500 trials, and in the worst case every one of 32 subsequent writes
+    /// **It does not hold back operations pushed after it.** Those can complete
+    /// while this one is still outstanding -- observed across about 4,500
+    /// trials, and in the worst case every one of 32 subsequent writes
     /// completed first. An earlier version of this documentation said they were
     /// held; that was measured over too few runs to see a fault this rare, and
     /// it was wrong.
@@ -148,8 +153,8 @@ pub enum FlushCoverage {
     /// held until the flush completed. That was wrong, and it is corrected here
     /// rather than quietly dropped because a caller may have relied on it.
     CoversPrecedingOperations,
-    /// Queue the flush with no barrier: it may start, and complete, while
-    /// writes pushed before it are still in flight.
+    /// Queue the flush with no barrier: it may complete while writes pushed
+    /// before it are still in flight.
     ///
     /// **Almost never what a caller wants.** Its completion proves nothing
     /// about any preceding write, so using it to close an epoch loses data

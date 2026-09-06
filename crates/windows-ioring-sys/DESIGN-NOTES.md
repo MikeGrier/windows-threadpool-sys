@@ -80,7 +80,7 @@ Three separate things, which are routinely conflated and must not be:
 
 | Concept | Meaning | On this ring |
 |---|---|---|
-| **Ordering** | does B start after A completes | `IOSQE_FLAGS_DRAIN_PRECEDING_OPS` only, and only where B is the flag-carrying operation itself -- it is one-sided ([D-47](#d-47-detail)) |
+| **Ordering** | does B run only after A completes | `IOSQE_FLAGS_DRAIN_PRECEDING_OPS` only, and then only as far as user mode can see it: what is observable is that B's *completion* follows A's, and only where B is the flag-carrying operation itself. It is one-sided, and execution start is not observable at all ([D-47](#d-47-detail)) |
 | **Durability** | data is on non-volatile media | the flush operation only |
 | **Atomicity** | a torn write is impossible across power loss | not exposed; a device property (NVMe `AWUN`/`AWUPF`) |
 
