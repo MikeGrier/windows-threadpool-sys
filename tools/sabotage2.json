@@ -1,0 +1,72 @@
+{
+  "description": "Sabotages for the sabotage harness itself: run-sabotage.ps1, judged by its own test suite. Every entry re-injects a defect this tool actually shipped, so what is measured is whether the suite that was written in response would catch it again. Run with tools/run-sabotage.ps1 -Manifest tools/sabotage2.json -CargoCommand tools/sabotage2-runner.cmd; see tools/README-sabotage.md.",
+  "root": "..",
+  "package": "sabotage-harness",
+  "testArgs": ["--suite"],
+  "sabotages": [
+    {
+      "name": "a manifest timeoutSeconds of zero is read as absent",
+      "file": "tools/run-sabotage.ps1",
+      "expect": "caught",
+      "why": "PowerShell counts 0 as false, so a truthiness test on a numeric field skips the block for exactly the value the error message names. This shipped: zero fell through to the derived bound while -5 was rejected, and the check written to reject zero could never see it. The one defect most worth being unable to reintroduce.",
+      "find": ["if (($spec.PSObject.Properties.Name -contains 'timeoutSeconds') -and $null -ne $spec.timeoutSeconds) {"],
+      "replace": ["if (($spec.PSObject.Properties.Name -contains 'timeoutSeconds') -and $spec.timeoutSeconds) {"]
+    },
+    {
+      "name": "a per-sabotage timeoutSeconds of zero is read as absent",
+      "file": "tools/run-sabotage.ps1",
+      "expect": "caught",
+      "why": "The same truthiness trap one level down, in the per-entry validation. Separate from the entry above because the two guards are separate code: fixing one and missing the other is precisely how this defect survived a round.",
+      "find": ["        $null -ne $entry.timeoutSeconds -and [int]$entry.timeoutSeconds -lt 1) {"],
+      "replace": ["        $entry.timeoutSeconds -and [int]$entry.timeoutSeconds -lt 1) {"]
+    },
+    {
+      "name": "manifest validation is skipped when the command line overrides it",
+      "file": "tools/run-sabotage.ps1",
+      "expect": "caught",
+      "why": "Re-couples validation to use by gating the whole block on the override being absent. A bogus manifest bound would then be diagnosed only on runs that did not override it -- the run an author debugging an override is least likely to make. Validating what you are about to ignore is still validating.",
+      "find": ["    if ($TimeoutSeconds -eq 0) { $TimeoutSeconds = [int]$spec.timeoutSeconds }"],
+      "replace": ["    if ($TimeoutSeconds -ne 0) { return }", "    $TimeoutSeconds = [int]$spec.timeoutSeconds"]
+    },
+    {
+      "name": "the reserved baseline stem is no longer refused",
+      "file": "tools/run-sabotage.ps1",
+      "expect": "caught",
+      "why": "A sabotage named `baseline` writes its transcript over the baseline's, destroying the evidence that the suite was green before any patching -- the premise every result in the run depends on. Deleting the guard is the honest way to ask whether anything would notice.",
+      "find": ["    if ($reservedStems -contains $stem.ToLowerInvariant()) {"],
+      "replace": ["    if ($false) {"]
+    },
+    {
+      "name": "git path quoting is left on, so odd filenames vanish from the copy",
+      "file": "tools/run-sabotage.ps1",
+      "expect": "caught",
+      "why": "With core.quotePath at its default, a non-ASCII path arrives wrapped in quotes with octal escapes. Read literally it names nothing, so the file is neither copied into the working tree nor recorded as wanted -- the copy differs from the real tree by exactly the files nothing can see, and the symptom is a red baseline blamed on the suite.",
+      "find": ["    $tracked = @(git -c core.quotePath=false -C $From ls-files)"],
+      "replace": ["    $tracked = @(git -C $From ls-files)"]
+    },
+    {
+      "name": "the restore preserves mtimes, leaving a sabotaged build cached",
+      "file": "tools/run-sabotage.ps1",
+      "expect": "caught",
+      "why": "File.Copy carries the source's LastWriteTime, so a restored file looks older than the artifact built from the PATCHED source. Cargo judges the crate up to date and keeps the sabotaged binary, which the next run then tests against. Invisible to a single sweep and obvious across two, which is why the suite runs two.",
+      "find": ["        [System.IO.File]::WriteAllBytes($target, [System.IO.File]::ReadAllBytes($realTarget))"],
+      "replace": ["        [System.IO.File]::Copy($realTarget, $target, $true)"]
+    },
+    {
+      "name": "a hung run is abandoned instead of killed",
+      "file": "tools/run-sabotage.ps1",
+      "expect": "caught",
+      "why": "Removing the kill leaves the outcome correct -- the phase still reports as hung -- while the process tree survives the sweep. A tool that detects hangs by walking away from them accumulates one orphaned test binary per hang, each holding build locks and CPU.",
+      "find": ["    Stop-Tree -ProcessId $process.Id"],
+      "replace": [""]
+    },
+    {
+      "name": "CONTROL: a progress message nothing asserts on is reworded",
+      "file": "tools/run-sabotage.ps1",
+      "expect": "survives",
+      "why": "The manifest checking itself. This changes what a reader sees and nothing a test claims, so it MUST survive -- if it comes back caught, the suite is matching on incidental wording rather than on behaviour, and its other results are worth less than they look.",
+      "find": ["Write-Report 'Refreshing the working copy.' -Level note"],
+      "replace": ["Write-Report 'Syncing the working copy.' -Level note"]
+    }
+  ]
+}

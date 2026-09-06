@@ -80,7 +80,7 @@
       "why": "A producer may push and then drop in the window between a receive's first pop and its disconnection check. Reporting the disconnection without one last take silently discards an item that was successfully sent. This guard was originally unreachable from any test, and this sabotage is what found that out.",
       "find": [
         "    fn finish(&self) -> Option<T> {",
-        "        self.pop()",
+        "        self.take()",
         "    }"
       ],
       "replace": [
@@ -340,7 +340,7 @@
       "expect": "caught",
       "why": "The reservation guarantee itself. If the best-effort path ignores the outstanding count, the slot a reservation was promised gets taken by an ordinary push and the redemption overwrites a live item. Note this sabotage keeps the room check but drops the reservations from it, which is exactly the mistake an optimiser-minded reader would make: the count looks like bookkeeping until you ask who is holding the slot it accounts for.",
       "find": [
-        "        occupied < capacity - reserved"
+        "        occupied < capacity - u64::from(reserved)"
       ],
       "replace": [
         "        let _ = reserved;",
@@ -358,7 +358,7 @@
         "                // stale `word` and a freshly-read `head` need not describe the",
         "                // same instant, and once `head` passes a stale `position` the",
         "                // subtraction wraps and an empty queue refuses a reservation.",
-        "                let current = self.shared.claim.0.load(Ordering::Relaxed);",
+        "                let current = L::Word::load(&self.shared.claim.0, Ordering::Relaxed);",
         "                if current != word {",
         "                    word = current;",
         "                    continue;",
@@ -374,10 +374,10 @@
       "expect": "caught",
       "why": "Redeeming must decrement the count as it advances the position, in ONE exchange. Leaving the count up permanently withdraws a slot from the best-effort path on every send, so the queue's usable capacity bleeds away to zero over time. Caught quickly because a capacity-2 queue stops accepting anything after its first reserved send.",
       "find": [
-        "                claim_word(reserved - 1, position.wrapping_add(1)),"
+        "                claim_word::<L>(reserved - 1, advance::<L>(position)),"
       ],
       "replace": [
-        "                claim_word(reserved, position.wrapping_add(1)),"
+        "                claim_word::<L>(reserved, advance::<L>(position)),"
       ]
     },
     {
@@ -386,10 +386,10 @@
       "expect": "caught",
       "why": "An abandoned reservation must give its capacity back. Without this the queue leaks a slot per dropped reservation and eventually refuses everything, which is the same bleed as the entry above reached by the other path.",
       "find": [
-        "                claim_word(reserved - 1, position_of(word)),"
+        "                claim_word::<L>(reserved - 1, position_of::<L>(word)),"
       ],
       "replace": [
-        "                claim_word(reserved, position_of(word)),"
+        "                claim_word::<L>(reserved, position_of::<L>(word)),"
       ]
     },
     {
