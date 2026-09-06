@@ -53,12 +53,22 @@
 //!
 //! - **Completion order.** The ring makes no ordering promise between
 //!   independent operations, so this counts them and never sequences them.
-//!   The one ordering that *is* promised -- a covering flush against the
-//!   operations *preceding* it, and nothing about those following it
+//!   There is one promised ordering -- a covering flush against the operations
+//!   *preceding* it, and nothing about those following it
 //!   ([D-24](../DESIGN-NOTES.md#d-24), as corrected by
-//!   [D-47](../DESIGN-NOTES.md#d-47-detail)) -- is not observable from the
-//!   completion stream, because a barrier constrains when operations
-//!   *execute*, not the order their completions are popped.
+//!   [D-47](../DESIGN-NOTES.md#d-47-detail)) -- and this oracle does not check
+//!   it. Not because it is unobservable: tag the operations and it is entirely
+//!   observable from the completion stream, which is exactly how
+//!   [tests/flush_barrier.rs](../tests/flush_barrier.rs) tests it and how D-47
+//!   measured the flag's one-sidedness over some 4,500 trials. It is that
+//!   *this* oracle is a conservation checker -- it matches each completion
+//!   against an outstanding claim and never relates that claim to the order
+//!   anything was submitted in, so it holds nothing it could compare against.
+//!
+//!   An observer that does want to check it needs tagged identities, not raw
+//!   pop order: a barrier constrains when operations *execute*, and a batch of
+//!   completions can reach the queue together, so the sequence they happen to
+//!   be popped in is not on its own a faithful witness of the order they ran.
 //! - **Whether an operation succeeded.** A failed operation still completes
 //!   exactly once; conservation and success are different questions.
 //! - **Anything about the device.** Whether a flush truly reached durable
