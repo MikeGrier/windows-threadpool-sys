@@ -94,6 +94,12 @@ $spikes = @(
 )
 
 New-Item -ItemType Directory -Force -Path $OutputDirectory | Out-Null
+
+# Made absolute once, here, because each spike is built and run from inside a
+# temp crate directory. A relative -OutputDirectory resolved later would land
+# under that temp directory and be deleted with it, so the transcripts would
+# vanish exactly when someone went looking for them.
+$OutputDirectory = (Resolve-Path -LiteralPath $OutputDirectory).Path
 $instrumentFailures = 0
 $sections = New-Object System.Collections.Generic.List[string]
 
@@ -123,33 +129,67 @@ windows-sys = { version = "0.61.2", default-features = false, features = [$featu
     Set-Content -Path (Join-Path $work 'Cargo.toml') -Value $manifest -Encoding utf8
     Copy-Item $source (Join-Path $work 'src\main.rs') -Force
 
+    $buildOutput = ''
+    $output = ''
+    $buildExit = 0
+    $runExit = 0
+    $built = $false
+
     Write-Report "=== building $($spike.Name) ==="
     Push-Location $work
     try {
         $build = & cargo build --quiet 2>&1
         $buildExit = $LASTEXITCODE
+        $buildOutput = ($build | Out-String)
         if ($buildExit -ne 0) {
             # A build failure is a defect in the instrument, and is one of the
             # two things here worth failing over.
             Write-Report "spike $($spike.Name) failed to build" -Level error
-            $build | ForEach-Object { Write-Report $_ }
+            # Echo the Out-String rendering rather than the raw objects. `2>&1`
+            # turns cargo's stderr into ErrorRecords, and one of those
+            # stringifies to the literal text `System.Management.Automation.
+            # RemoteException` in the middle of the compiler diagnostic. Piping
+            # the already-rendered text keeps the log and the transcript
+            # identical, instead of the artifact being the more legible of the
+            # two records of the same failure.
+            $buildOutput.TrimEnd() -split "`n" | ForEach-Object { Write-Report $_.TrimEnd() }
             $instrumentFailures++
             $sections.Add("### $($spike.Name)`n`n**FAILED TO BUILD** -- the instrument is broken, not the machine.`n")
-            continue
         }
-
-        Write-Report "=== running $($spike.Name) ==="
-        $output = & cargo run --quiet 2>&1 | Out-String
-        $runExit = $LASTEXITCODE
-        Write-Report $output
+        else {
+            $built = $true
+            Write-Report "=== running $($spike.Name) ==="
+            $output = & cargo run --quiet 2>&1 | Out-String
+            $runExit = $LASTEXITCODE
+            Write-Report $output
+        }
     }
     finally {
         Pop-Location
         Remove-Item -Recurse -Force $work -ErrorAction SilentlyContinue
     }
 
+    # Written for every spike, including one that failed to build. This used to
+    # sit after a `continue` in the branch above: the `finally` still ran, but
+    # everything after the try/finally was skipped, so the broken instrument --
+    # the only case anyone downloads this artifact to diagnose -- was the one
+    # case that produced no transcript at all.
+    #
+    # The build side is recorded even on success, because `cargo build --quiet`
+    # still emits warnings and those were previously captured into $build and
+    # then discarded. A spike accumulating warnings is an instrument beginning
+    # to rot, and that is worth seeing before it fails outright.
     $transcript = Join-Path $OutputDirectory "$($spike.Name).txt"
-    Set-Content -Path $transcript -Value $output -Encoding utf8
+    $transcriptBody = @"
+=== build (exit $buildExit) ===
+$(if ($buildOutput.Trim()) { $buildOutput.TrimEnd() } else { '(no build output)' })
+
+=== run ($(if ($built) { "exit $runExit" } else { 'not run -- build failed' })) ===
+$(if ($output.Trim()) { $output.TrimEnd() } else { '(no run output)' })
+"@
+    Set-Content -Path $transcript -Value $transcriptBody -Encoding utf8
+
+    if (-not $built) { continue }
 
     if ($runExit -ne 0) {
         # The other one. Vacuity is decided by searching the output for
