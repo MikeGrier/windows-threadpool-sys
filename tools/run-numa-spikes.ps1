@@ -162,7 +162,24 @@ windows-sys = { version = "0.61.2", default-features = false, features = [$featu
         $instrumentFailures++
         $verdict = "**FAILED TO RUN (exit $runExit)** -- the instrument is broken, so this says nothing about the machine."
     }
-    elseif ($output -match 'VACUOUS') {
+    # -cmatch, not -match, and the case is load-bearing. PowerShell's -match is
+    # case-INSENSITIVE, and thread-stack-numa-spike.rs emits a structured line
+    # carrying the field name `"vacuous":false` on every run -- so the
+    # insensitive form matched that field name even on a multi-node machine,
+    # making the `NOT vacuous` branch below unreachable and reporting the one
+    # run that would finally answer the question as the boring expected case.
+    # The uppercase sentinel is the spikes' documented verdict marker; the
+    # lowercase JSON key is data. Only the former decides.
+    #
+    # This is the second instance of one class, at the other end of the same
+    # interface: file-handle-numa-spike.rs used to print the sentinel
+    # unconditionally, before any node was queried, which marked every run
+    # vacuous for exactly the same reason. That was fixed in the spike and the
+    # matching hazard here was never looked for. Anything that can make this
+    # branch fire when the machine is not single-node silences the one signal
+    # the job exists to raise, so treat a change to either side as a change to
+    # both.
+    elseif ($output -cmatch 'VACUOUS') {
         $verdict = 'vacuous on this runner (single NUMA node) -- expected, and the spike said so itself'
     }
     else {
