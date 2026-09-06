@@ -886,6 +886,16 @@ Three things the measurement rules out:
   drain: the flush and the writes that overtook it were already in the completion queue together, so
   their order is the order the kernel posted them in.
 
+And one thing it deliberately does **not** settle. The completion queue is FIFO, so pop order is a
+faithful witness of the order the kernel *posted* those completions -- that is the observable above,
+and it is solid. It is not a witness of the order the operations *began executing*. Whether the
+kernel actually let a post-flush write start early, or ran it in order and merely posted its
+completion early, cannot be distinguished from user mode with any instrument available here. The
+decision is therefore stated observationally throughout -- "can and does complete before it" --
+because that is both what was measured and the only form a consumer can act on. A consumer needing
+later work to follow the flush must sequence it on the flush's *completion* either way, so the
+distinction does not change any advice; it bounds what this decision claims to know.
+
 ### Why the original conclusion looked sound
 
 The spike behind D-24 ran the sequence a handful of times and saw the hold-back hold every time. At

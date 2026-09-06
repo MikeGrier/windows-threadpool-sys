@@ -65,10 +65,14 @@
 //!   against an outstanding claim and never relates that claim to the order
 //!   anything was submitted in, so it holds nothing it could compare against.
 //!
-//!   An observer that does want to check it needs tagged identities, not raw
-//!   pop order: a barrier constrains when operations *execute*, and a batch of
-//!   completions can reach the queue together, so the sequence they happen to
-//!   be popped in is not on its own a faithful witness of the order they ran.
+//!   An observer that does want to check it needs tagged identities, so that a
+//!   popped completion can be attributed to the operation it belongs to. Pop
+//!   order itself is a faithful witness of the order the kernel *posted* those
+//!   completions -- that is precisely the observable D-47 measured, and what
+//!   this crate's contract is stated in terms of. What it does not witness is
+//!   the order the operations *began executing*, which is invisible from user
+//!   mode -- see [D-47](../DESIGN-NOTES.md#d-47-detail) for why the contract is
+//!   stated in terms of completion order and stops there.
 //! - **Whether an operation succeeded.** A failed operation still completes
 //!   exactly once; conservation and success are different questions.
 //! - **Anything about the device.** Whether a flush truly reached durable
