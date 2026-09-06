@@ -381,7 +381,7 @@ that previously stood in the way are gone:
   |---|---|---|---|
   | `windows-topology-sys` | 0.1.0 | **0.2.0** | 9 breaking |
   | `windows-waitable-queues` | 0.0.1 | **0.1.0** | 6 breaking, from a corrected starting point -- SH-3.4.1 |
-  | `windows-ioring-sys` | 0.2.0 | **0.2.1** | pinned by `Release-As` -- SH-3.4.2, [D-46](crates/windows-ioring-sys/DESIGN-NOTES.md#d-46) |
+  | `windows-ioring-sys` | 0.2.0 | **0.3.0** (shipped 2026-09-05) | 2 breaking by path attribution -- SH-3.4.2 |
   | `windows-file-watcher` | 0.1.3 | **0.2.0** | 1 breaking, the reopen-by-id removal |
   | `windows-thread-ambient-sys` | 0.2.0 | **0.2.1** | 3 `fix:` commits scoped to other crates that changed its `src/` |
   | `windows-file-watcher-example-test-harness` | 0.1.2 | **0.1.3** | not its own commits -- the `cargo-workspace` plugin, below |
@@ -426,19 +426,21 @@ that previously stood in the way are gone:
   Not a defect -- a naming decision that is cheap now and permanent afterwards.
 
 - [x] **SH-3.4.2** -- **Decide what to do about `windows-ioring-sys`' unearned breaking bump.**
-  **DECIDED 2026-09-03: ioring ships as 0.2.1.** Pinned by a `Release-As: 0.2.1` footer on `cdce13b`,
-  a commit touching only `crates/windows-ioring-sys/`, which release-please applies per package by
-  path. Verified against its documentation that the footer works on any commit type -- including
-  `docs:` -- and overrides a breaking bump. Rationale recorded as
-  [D-46](crates/windows-ioring-sys/DESIGN-NOTES.md#d-46) in the crate that owns the consequence.
-  **The pin creates an obligation, and it is enforced rather than remembered**: a forced version
-  asserts the surface is compatible, so **no breaking change may enter `windows-ioring-sys` before
-  0.2.1 ships**. If one becomes necessary the pin is removed and the crate takes its bump -- the
-  break is never absorbed under a version that says there is not one, which would ship a
-  compatible-looking version over an incompatible surface and is strictly worse than the overstated
-  0.3.0 this avoids. [tools/check-commit-scope.ps1](tools/check-commit-scope.ps1) now fails when a
-  breaking commit lands in a crate pinned earlier in the range; sabotage-verified by injecting a
-  `feat(ioring)!` after the pin and confirming it named both commits.
+  **OUTCOME: the pin was never applied, and 0.3.0 shipped on 2026-09-05.** The decision recorded here
+  on 2026-09-03 was to pin ioring to 0.2.1 with a `Release-As: 0.2.1` footer on `cdce13b`. That commit
+  stayed on this branch; the release ran from `main` without it, so tag `windows-ioring-sys-v0.3.0`
+  exists and the crate's CHANGELOG carries the very entry the pin was written to avoid -- a
+  BREAKING CHANGES heading citing `**topology:** reshape the topology model around observed domains`.
+  The pin has been removed from both branches rather than left stating an intention that events have
+  overtaken: a `Release-As: 0.2.1` carried forward now would ask release-please to regress a crate
+  already at 0.3.0.
+
+  **What survives is the general lesson, and it is now enforced rather than remembered.**
+  [tools/check-commit-scope.ps1](tools/check-commit-scope.ps1) is on `main` and flags a
+  release-triggering commit that spans more than one released crate, which is the mechanism that
+  produced this bump. The reasoning below about path attribution, the three-commit deprecation dance
+  for a cross-crate rename, and the measured cost of a blanket one-crate-per-commit rule is unchanged
+  and still applies; only the pin is gone.
 
   Release-please attributes a commit by the **paths it touches**, not by its Conventional Commits scope.
   Two `feat(topology)!` commits (`b9e0c35`, `36e397d`) touched `crates/windows-ioring-sys/`, so it
@@ -469,10 +471,12 @@ that previously stood in the way are gone:
   `git rebase -i` is forbidden by this repository's own terminal rules; and retrofitting the alias
   step would mean fabricating a deprecation that never happened, for one changelog line.
 
-  **The cheap correct fix, if the bump is worth correcting:** a `Release-As: 0.2.1` footer on a commit
-  that touches **only** `crates/windows-ioring-sys/`. Verified against release-please's manifest-mode
-  documentation that the footer is applied **per package, by the paths the commit touches**, so it
-  pins ioring without disturbing the other five bumps. Decide between that and simply accepting 0.3.0.
+  **The option that was considered and NOT taken:** a `Release-As: 0.2.1` footer on a commit touching
+  **only** `crates/windows-ioring-sys/`. Verified against release-please's manifest-mode documentation
+  that the footer is applied **per package, by the paths the commit touches**, so it would have pinned
+  ioring without disturbing the other five bumps. Recorded because the mechanism is worth knowing --
+  but see the outcome at the head of this item: the footer never reached `main`, 0.3.0 shipped, and
+  the pin has since been removed rather than carried forward against a released version.
 
   **Measured, because the rule had to be affordable before it could be recommended.** Nine
   release-triggering commits on this branch span more than one *released* crate -- and only two of
