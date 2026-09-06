@@ -114,9 +114,9 @@ pub use started::Started;
 // `BlockingEndpoint::read`, which does not exist in the default feature set
 // (`default = []`). Without the gate the example fails to compile for a reason
 // the README already states -- so the gate matches the doctest to what the
-// prose says it needs, rather than weakening the example. docs.rs builds with
-// `all-features`, so the published documentation is the configuration that
-// checks it.
+// prose says it needs, rather than weakening the example. What actually
+// compiles it is CI's `--all-features` test job: docs.rs runs `cargo doc`, which
+// never builds doctests, so the published documentation does not check this.
 #[cfg(all(doctest, windows, feature = "fs"))]
 #[doc = include_str!("../README.md")]
 struct ReadmeDoctests;

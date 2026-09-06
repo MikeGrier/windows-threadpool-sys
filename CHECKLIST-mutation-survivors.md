@@ -45,26 +45,26 @@ an equivalence claim instead of merely arguing it.
 
 - [ ] **MS-1.4** -- **Finish `windows-file-enumeration-sys`: about 20 of 50 remain.**
   See [windows-file-enumeration-sys.md](mutation-sweeps/2026-09-02/windows-file-enumeration-sys.md).
-  The `error.rs` and `path.rs` blocks are closed (commits `07882f0`, `49019f2`),
-  along with the completion ring's reservation accounting. What remains is
+  The `error.rs` and `path.rs` blocks are closed, along with the completion
+  ring's reservation accounting. What remains is
   spread thinly: `native.rs` (5), `session.rs` (4), `submission_ring.rs` (3),
   `pattern.rs`, `admission.rs`, `engine.rs`, `registry.rs`.
 
 - [ ] **MS-1.5** -- **Finish `windows-namespace-request-sys`: about 21 of 49 remain.**
   See [windows-namespace-request-sys.md](mutation-sweeps/2026-09-02/windows-namespace-request-sys.md).
-  The accessor and error-surface blocks are closed (`9a9163c`, `a07b50c`). What
+  The accessor and error-surface blocks are closed. What
   remains is mostly `final_path.rs` (8) and `full_path.rs` (2), plus
   `handle.rs`'s four `delete -` mutants and `buffer.rs`/`watch.rs` drop impls.
 
 - [ ] **MS-1.6** -- **Finish `windows-guard-alloc`: about 16 of 22 remain.**
   See [windows-guard-alloc.md](mutation-sweeps/2026-09-02/windows-guard-alloc.md).
-  Seed parsing and `poison::identify`'s bound are closed (`c16845c`, `b791418`),
-  and two loop bounds are recorded as equivalent. What remains is in `lib.rs`
+  Seed parsing and `poison::identify`'s bound are closed, and two loop bounds
+  are recorded as equivalent. What remains is in `lib.rs`
   (`seed`, `announce_seed`, `poison_check`, `data_offset`) and `witness.rs`.
 
 - [ ] **MS-1.7** -- **Finish `windows-placement-probe`: about 190 of 199 remain.**
   See [windows-placement-probe.md](mutation-sweeps/2026-09-02/windows-placement-probe.md).
-  The plan's arithmetic and the median's rates are closed (`47dfa18`). The bulk
+  The plan's arithmetic and the median's rates are closed. The bulk
   is still `peer_index_cache.rs` (70) and `core_affinity.rs` (54), both of which
   are pure selection and measurement logic that the module documentation already
   says is testable offline -- so most of it should be reachable without hardware.
@@ -82,9 +82,10 @@ to the engineer, not to whoever picks up this checklist.
   survivors are `main`-adjacent code no test was ever going to reach. Judging
   this crate by mutation score is measuring the wrong thing.
   A related, separately-tracked item: twelve of these probes still print
-  directly rather than through the `Report` sink, which is
-  [CHECKLIST-ship-topology-and-queues.md](CHECKLIST-ship-topology-and-queues.md)
-  `SH-13.4`. Doing that first would make some of this reachable.
+  directly rather than through the `Report` sink, tracked as `SH-13.4` on the
+  branch that ships the topology and queue crates. That checklist is not in this
+  repository yet, so this deliberately names the item rather than linking a file
+  that does not exist. Doing that first would make some of this reachable.
 
 - [ ] **MS-2.2** -- **`windows-file-watcher-example-test-harness`: 69 survivors.**
   See [windows-file-watcher-example-test-harness.md](mutation-sweeps/2026-09-02/windows-file-watcher-example-test-harness.md).
