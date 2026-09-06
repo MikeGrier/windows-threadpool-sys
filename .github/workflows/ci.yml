@@ -49,6 +49,27 @@ jobs:
         shell: pwsh
         run: ./tools/check-publishable.ps1
 
+  # A workflow is the one part of this repository that no local command reads.
+  # `cargo check`, `cargo clippy`, and every checker here read Rust and
+  # manifests; none of them read `.github/workflows/`, so a step naming a
+  # `--bin` that does not exist is valid YAML, passes every local gate, and
+  # fails on a runner minutes after the push.
+  #
+  # That is why this job exists rather than being a note to be careful. A change
+  # lifted this workflow wholesale from a feature branch, which carried three
+  # steps naming probe binaries that lived only on that branch; the build went
+  # red on `no bin target named 'probe-topology'`. The same hole opens on any
+  # rename or deletion of a crate, a binary, an example, or a tools/ script.
+  workflow-refs:
+    name: every workflow reference resolves
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Run check-workflow-refs.ps1
+        shell: pwsh
+        run: ./tools/check-workflow-refs.ps1
+
   # The sabotage harness's own tests. NOT a sabotage sweep -- a sweep rebuilds a
   # crate per entry and is deliberately an occasional instrument. These are the
   # harness's unit tests: they stub cargo out entirely and run in about two
