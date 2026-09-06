@@ -51,15 +51,30 @@ than the code.
 
 ## The harness has its own tests
 
-[test-run-sabotage.ps1](test-run-sabotage.ps1) is the harness's unit suite: 43
-cases, about two minutes, run by CI on every push. It stubs cargo out entirely
+[test-run-sabotage.ps1](test-run-sabotage.ps1) is the harness's unit suite: 44
+cases in about 30 seconds, run by CI on every push. It stubs cargo out entirely
 through `-CargoCommand`, so nothing is built, and works against a throwaway
 two-file git repository rather than this one.
 
 ```powershell
 .\tools\test-run-sabotage.ps1
 .\tools\test-run-sabotage.ps1 -Name '*hung*'   # re-run one
+.\tools\test-run-sabotage.ps1 -Jobs 1          # serially, for a clean trace
 ```
+
+**Cases run in parallel by default**, sharded across processes, because almost
+none of the cost is this suite thinking. Measured per sweep: 338 ms of
+PowerShell startup, ~325 ms across four git subprocesses and ~310 ms spawning
+the stub, against ~770 ms of actual interpretation -- so roughly half of every
+case is Windows creating processes, which is exactly what parallelises. On
+sixteen cores the suite goes from **106 seconds to 29**.
+
+Each shard is this script re-invoked with `-Shard`, rather than
+`ForEach-Object -Parallel` (PowerShell 7 only) or a runspace pool (every helper
+would need redeclaring inside it). One extra process per shard buys identical
+behaviour on both shells, and what a shard runs is the serial path that was
+already verified. `-Jobs 1` takes that path in-process, which is what to use
+when a failure needs reading in order.
 
 It exists because this tool once did not have it, and that showed. The harness
 took eleven review rounds, and thirteen of the defects found in the later rounds
@@ -99,9 +114,10 @@ suite that runs is the copy's -- testing the copy's `run-sabotage.ps1`, the one
 carrying the injected defect. There is no recursion: the inner suite builds its
 fixtures under `TEMP`, never inside the copy.
 
-Expect it to take a while. Each entry runs the whole suite, so the cost is
-roughly `(entries + 1) x 2 minutes`; the first run of eight took 19 minutes.
-Like every sweep, it is an occasional instrument.
+Each entry runs the whole suite, so the cost is roughly
+`(entries + 1) x <suite time>` -- about five and a half minutes for these eight
+now that the suite parallelises, against nineteen when it did not. Like every
+sweep, it is an occasional instrument and is not wired into CI.
 
 **It earned its keep on its first run.** Seven of eight behaved as declared and
 one survived: replacing the byte-exact restore with `File.Copy`, which carries

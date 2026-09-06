@@ -36,11 +36,40 @@
 .PARAMETER Name
     Optional wildcard filter over case names, to re-run just one.
 
+.PARAMETER Jobs
+    How many shards to run at once, defaulting to the processor count capped at
+    8. Pass 1 to run everything serially in this process.
+
+    The cases are independent -- each builds its own throwaway repository under
+    TEMP -- and almost none of the time is this script thinking. Measured per
+    sweep: 338 ms of PowerShell startup, ~325 ms across four git subprocesses,
+    ~310 ms spawning the stub, against ~770 ms of actual interpretation. Roughly
+    half of every case is Windows creating processes, which is exactly the cost
+    that parallelises.
+
+    Sharding rather than in-process parallelism, because the two shells differ:
+    ForEach-Object -Parallel is PowerShell 7 only, and runspace pools would need
+    every helper re-declared inside them. Re-invoking this script with -Shard
+    costs one process per shard and behaves identically on both, so what each
+    shard runs is the serial path that is already verified.
+
+.PARAMETER Shard
+    Which shard this process is, from 0. Set by the dispatcher; not meant to be
+    passed by hand.
+
+.PARAMETER ShardCount
+    How many shards exist in total. Set by the dispatcher.
+
 .OUTPUTS
     Exits 0 if every case passed, 1 otherwise.
 #>
 [CmdletBinding()]
-param([string] $Name = '*')
+param(
+    [string] $Name = '*',
+    [int] $Jobs = 0,
+    [int] $Shard = -1,
+    [int] $ShardCount = 0
+)
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
@@ -49,6 +78,11 @@ $script:Harness = Join-Path $PSScriptRoot 'run-sabotage.ps1'
 $script:Passed = 0
 $script:Failed = 0
 $script:Failures = @()
+
+# Counts every case the -Name filter admits, whether or not this shard runs it,
+# so the shard split is by POSITION and therefore stable: each case belongs to
+# exactly one shard, and no case is run twice or skipped when the count changes.
+$script:Ordinal = -1
 
 function Write-Line {
     param([string] $Message, [ValidateSet('info', 'good', 'bad')] [string] $Level = 'info')
@@ -62,6 +96,10 @@ function Test-Case {
     param([string] $CaseName, [scriptblock] $Body)
 
     if ($CaseName -notlike $Name) { return }
+
+    $script:Ordinal++
+    if ($ShardCount -gt 0 -and ($script:Ordinal % $ShardCount) -ne $Shard) { return }
+
     try {
         & $Body
         $script:Passed++
@@ -223,11 +261,80 @@ function Remove-Fixture {
     Remove-Item -LiteralPath $Root -Recurse -Force -ErrorAction SilentlyContinue
 }
 
-# The hang stub's sleeper, identified by its distinctive count so nothing else
-# on the machine is mistaken for one.
-function Get-StrayPings {
-    Get-CimInstance Win32_Process -Filter "name='PING.EXE'" -ErrorAction SilentlyContinue |
-        Where-Object { $_.CommandLine -and $_.CommandLine -match '-n 900' }
+# Processes still alive from a given fixture's hang stub.
+#
+# Scoped by the FIXTURE PATH, not by looking for sleepers globally. The stub is
+# a .cmd, so Windows runs it as `cmd.exe /c <path>` and that path carries the
+# fixture's GUID -- unique to one case. An earlier version matched any ping with
+# the stub's distinctive count, which is correct when cases run one at a time
+# and wrong the moment they do not: under -Jobs every other shard's hang case
+# would look like this one's leak.
+function Get-StrayProcesses {
+    param([string] $FixtureRoot)
+    Get-CimInstance Win32_Process -Filter "name='cmd.exe'" -ErrorAction SilentlyContinue |
+        Where-Object { $_.CommandLine -and $_.CommandLine -like "*$FixtureRoot*" }
+}
+
+# --- parallel dispatch ------------------------------------------------------
+#
+# A parent process fans the cases out across shards and never runs one itself,
+# so there is exactly one code path for actually executing a case: the serial
+# one below, which every shard takes. Nothing about a case behaves differently
+# under -Jobs; it only runs in a different process.
+#
+# Shards are shells of THIS script with -Shard/-ShardCount, chosen over
+# ForEach-Object -Parallel (PowerShell 7 only) and runspace pools (every helper
+# would need re-declaring inside them). One extra process per shard buys
+# identical behaviour on both shells.
+if ($Shard -lt 0) {
+    if ($Jobs -le 0) {
+        $Jobs = [Math]::Min(8, [Environment]::ProcessorCount)
+    }
+
+    if ($Jobs -gt 1) {
+        $shell = if ($PSVersionTable.PSVersion.Major -ge 6) { 'pwsh' } else { 'powershell' }
+        $running = @()
+        for ($i = 0; $i -lt $Jobs; $i++) {
+            $out = Join-Path ([System.IO.Path]::GetTempPath()) "sab-shard-$PID-$i.txt"
+            $running += [pscustomobject]@{
+                Index   = $i
+                Output  = $out
+                Process = Start-Process -FilePath $shell -PassThru -NoNewWindow `
+                    -RedirectStandardOutput $out -RedirectStandardError "$out.err" `
+                    -ArgumentList @(
+                    '-NoProfile', '-File', $PSCommandPath,
+                    '-Name', $Name, '-Shard', $i, '-ShardCount', $Jobs)
+            }
+        }
+
+        # Named $worker, NOT $shard: PowerShell matches variables case
+        # insensitively, so a loop variable called $shard IS the [int] $Shard
+        # parameter, and assigning an object to it fails at runtime.
+        #
+        # Handles are touched before waiting for the same reason the harness
+        # does it: on Windows PowerShell 5.1 a Start-Process object does not
+        # cache one, and ExitCode then reads back $null however the shard ended.
+        foreach ($worker in $running) { $null = $worker.Process.Handle }
+
+        $failed = 0
+        foreach ($worker in $running) {
+            $worker.Process.WaitForExit()
+            if (Test-Path -LiteralPath $worker.Output) {
+                Get-Content -LiteralPath $worker.Output | ForEach-Object { Write-Host $_ }
+            }
+            if ($worker.Process.ExitCode -ne 0) { $failed++ }
+            Remove-Item -LiteralPath $worker.Output, "$($worker.Output).err" `
+                -Force -ErrorAction SilentlyContinue
+        }
+
+        Write-Line ''
+        if ($failed -eq 0) {
+            Write-Line "All shards passed ($Jobs in parallel)." -Level good
+            exit 0
+        }
+        Write-Line "$failed of $Jobs shards reported failures." -Level bad
+        exit 1
+    }
 }
 
 # --- validation: every one of these must be exit 2 --------------------------
@@ -541,17 +648,18 @@ Test-Case 'leaves no stray process behind after killing a hung run' {
     # entry that deletes the kill leaves orphans behind, and a case comparing
     # against an absolute count would then fail for every LATER entry too --
     # including the control, whose whole job is to survive.
-    $before = @(Get-StrayPings | ForEach-Object { $_.ProcessId })
     try {
         $stub = New-Stub -Behaviour 'hang' -Root $root
         Invoke-Harness -Root $root -Arguments @(
             '-Manifest', 'sabotage.json', '-CargoCommand', $stub, '-TimeoutSeconds', '5') | Out-Null
 
-        $new = @(Get-StrayPings | Where-Object { $before -notcontains $_.ProcessId })
-        Assert-Equal 0 $new.Count 'the kill must take the whole process tree'
+        Assert-Equal 0 @(Get-StrayProcesses -FixtureRoot $root).Count `
+            'the kill must take the whole process tree'
     }
     finally {
-        Get-StrayPings | Where-Object { $before -notcontains $_.ProcessId } |
+        # Cleaned up whatever the result, so an entry in sabotage2.json that
+        # deletes the kill cannot leave orphans behind for later entries.
+        Get-StrayProcesses -FixtureRoot $root |
             ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
         Remove-Fixture $root
     }

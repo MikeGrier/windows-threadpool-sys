@@ -25,5 +25,13 @@ rem TEMP, never inside this copy.
 
 echo %* | findstr /C:"--no-run" >nul && exit /b 0
 
-pwsh -NoProfile -File "%CD%\tools\test-run-sabotage.ps1"
+rem PowerShell 7 where it exists, Windows PowerShell where it does not. The
+rem harness and its suite are both 5.1-clean and the documentation says so, so
+rem hard-requiring pwsh here would have made the self-sabotage sweep the one
+rem part of this tool that silently needs PowerShell 7 installed. Raised in the
+rem PR #64 review.
+set "SABOTAGE_PS=pwsh"
+where pwsh >nul 2>&1 || set "SABOTAGE_PS=powershell"
+
+%SABOTAGE_PS% -NoProfile -File "%CD%\tools\test-run-sabotage.ps1"
 exit /b %ERRORLEVEL%
