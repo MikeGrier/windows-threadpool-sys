@@ -132,7 +132,8 @@ function Invoke-Suite {
             } else {
                 'failed'
             }
-            return [pscustomobject]@{ Outcome = $outcome; Code = $proc.ExitCode }        }
+            return [pscustomobject]@{ Outcome = $outcome; Code = $proc.ExitCode }
+        }
         Get-CimInstance Win32_Process -Filter "ParentProcessId=$($proc.Id)" -ErrorAction SilentlyContinue |
             ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
         Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue

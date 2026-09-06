@@ -191,7 +191,16 @@ spike failed to **build** or to **run**, which is a defect in the instrument
 rather than a finding about the machine.
 
 "@
-    Add-Content -Path $Summary -Value ($header + ($sections -join "`n"))
+    # Written through AppendAllText rather than Add-Content because the bytes
+    # have to be identical on both shells. Add-Content's default encoding is the
+    # ANSI code page on Windows PowerShell 5.1 and UTF-8 on 7, so an em dash
+    # lands as 0x97 under 5.1 and as e2 80 94 under 7; GitHub reads
+    # GITHUB_STEP_SUMMARY as UTF-8, so the 5.1 bytes render as mojibake. Adding
+    # `-Encoding utf8` fixes that but introduces a second divergence: on 5.1
+    # that spelling means UTF-8 *with* BOM, so a summary file that does not
+    # already exist gains a BOM there and not on 7. This form has neither.
+    $utf8NoBom = New-Object System.Text.UTF8Encoding $false
+    [System.IO.File]::AppendAllText($Summary, ($header + ($sections -join "`n")), $utf8NoBom)
 }
 
 if ($instrumentFailures -gt 0) {
