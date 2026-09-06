@@ -3,7 +3,9 @@
 // the `core` prelude does not provide. (Imported explicitly rather than via a
 // prelude glob, which would shadow `core`'s `panic!` and warn.)
 use std::borrow::ToOwned;
+use std::cmp::Ordering;
 use std::format;
+use std::hash::{Hash, Hasher};
 use std::string::String;
 use std::vec;
 use std::vec::Vec;
@@ -12,6 +14,21 @@ use super::{Wtf16, Wtf16Str, Wtf16String, WtfEncoding};
 
 // The encoding's named terminator, so assertions don't embed the raw 0 tag.
 const NUL: u16 = Wtf16::NUL;
+
+#[derive(Default)]
+struct WriteCountingHasher {
+    bytes_written: usize,
+}
+
+impl Hasher for WriteCountingHasher {
+    fn finish(&self) -> u64 {
+        self.bytes_written as u64
+    }
+
+    fn write(&mut self, bytes: &[u8]) {
+        self.bytes_written += bytes.len();
+    }
+}
 
 // Matrix / property coverage over a shared corpus lives in a sibling submodule.
 mod matrix;
@@ -250,6 +267,85 @@ fn ordering_is_binary_over_units() {
     assert!(a < b);
     assert!(a < ab); // a prefix orders before the longer string
     assert_eq!(same1, same2);
+}
+
+#[test]
+fn borrowed_partial_order_and_hash_call_their_trait_implementations() {
+    let a = Wtf16Str::from_units(&[1, 2]);
+    let b = Wtf16Str::from_units(&[1, 3]);
+    assert_eq!(PartialOrd::partial_cmp(a, b), Some(Ordering::Less));
+
+    let mut hasher = WriteCountingHasher::default();
+    Hash::hash(a, &mut hasher);
+    assert!(
+        hasher.bytes_written > 0,
+        "hashing a borrowed string must feed its units to the hasher"
+    );
+}
+
+#[test]
+fn str_comparison_forwarders_are_exercised_directly() {
+    let borrowed = Wtf16Str::from_units(&[97, 98, 99]);
+    assert!(<Wtf16Str as PartialEq<&str>>::eq(borrowed, &"abc"));
+    assert!(!<Wtf16Str as PartialEq<&str>>::eq(borrowed, &"abd"));
+
+    let owned = Wtf16String::from("abc");
+    assert!(<Wtf16String as PartialEq<str>>::eq(&owned, "abc"));
+    assert!(!<Wtf16String as PartialEq<str>>::eq(&owned, "abd"));
+}
+
+#[test]
+fn capacity_operations_observably_change_dedicated_buffers() {
+    let mut reserved = Wtf16String::new();
+    reserved.reserve_exact(64);
+    assert!(
+        reserved.capacity() >= 64,
+        "reserve_exact must grow a fresh buffer"
+    );
+
+    // Both shrink assertions below are threshold comparisons against a
+    // deliberately large excess, rather than comparisons against the exact
+    // capacity before the call. Two traps, and the interesting one is the second.
+    //
+    // `shrink_to_fit` is documented to drop "as close as possible to the length",
+    // with the allocator free to report room for a few more elements. Pinning an
+    // exact capacity would bind this test to that slack.
+    //
+    // But asserting merely that capacity did not *grow* -- the obvious repair --
+    // is worse, because a `shrink_to_fit` whose body has been deleted satisfies
+    // it. The test would then pass against precisely the mutation it exists to
+    // kill. That is measured rather than reasoned: with these assertions weakened
+    // to `<=`, re-injecting the emptied body leaves the mutant SURVIVED, and with
+    // them as written it is caught.
+    //
+    // A threshold far below the reserved excess and far above any plausible
+    // allocation granularity separates a real shrink from a no-op without
+    // depending on the size of either.
+    const EXCESS: usize = 64 * 1024;
+
+    let mut fitted = Wtf16String::with_capacity(EXCESS);
+    fitted.push_str("abc");
+    fitted.shrink_to_fit();
+    assert!(
+        fitted.capacity() >= fitted.len(),
+        "shrink_to_fit must never drop below the content it holds"
+    );
+    assert!(
+        fitted.capacity() < EXCESS / 2,
+        "shrink_to_fit must release excess capacity"
+    );
+
+    let mut bounded = Wtf16String::with_capacity(EXCESS);
+    bounded.push_str("abc");
+    bounded.shrink_to(16);
+    assert!(
+        bounded.capacity() >= 16,
+        "shrink_to must honour its requested lower bound"
+    );
+    assert!(
+        bounded.capacity() < EXCESS / 2,
+        "shrink_to must release capacity above its requested lower bound"
+    );
 }
 
 #[test]

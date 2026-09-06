@@ -63,6 +63,16 @@ const fn mul_inverse(x: u64) -> u64 {
     assert!(x % 2 == 1, "only odd values are invertible modulo 2^64");
     let mut inverse = x; // correct to three bits
     let mut round = 0;
+    // Five rounds, and a mutation run reports `<= 5` as surviving because it is
+    // an equivalent mutant rather than a gap. Newton's iteration doubles the
+    // correct bits each round -- 3, 6, 12, 24, 48, 96 -- so five is the first
+    // count that covers all 64, and the step is idempotent once exact:
+    // `inverse * (2 - x * inverse)` is `inverse * (2 - 1)`. A sixth round
+    // returns the same value, so no test can distinguish the two bounds.
+    //
+    // Four rounds would *not* be equivalent, and
+    // `the_multiplicative_inverses_are_actually_inverses` is what catches that
+    // direction.
     while round < 5 {
         inverse = inverse.wrapping_mul(2_u64.wrapping_sub(x.wrapping_mul(inverse)));
         round += 1;
@@ -84,6 +94,11 @@ const MIX_B_INV: u64 = mul_inverse(MIX_B);
 const fn unxor_shift_right(y: u64, shift: u32) -> u64 {
     let mut recovered = y;
     let mut resolved = shift;
+    // `<= 64` survives a mutation run for the same reason `mul_inverse`'s bound
+    // does: the step is idempotent once exact. With `recovered == x`, another
+    // round computes `y ^ (x >> shift)`, which is `x ^ (x >> shift) ^
+    // (x >> shift)` -- that is, `x` again. An extra round cannot change the
+    // answer, so the two bounds are indistinguishable.
     while resolved < 64 {
         recovered = y ^ (recovered >> shift);
         resolved += shift;

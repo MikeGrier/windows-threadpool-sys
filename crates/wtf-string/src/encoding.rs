@@ -159,3 +159,6 @@ impl WtfEncoding for Wtf8 {
         f.write_char('"')
     }
 }
+
+#[cfg(test)]
+mod tests;

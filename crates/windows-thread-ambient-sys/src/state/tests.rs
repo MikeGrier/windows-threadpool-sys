@@ -585,3 +585,151 @@ fn an_uncaptured_aspect_leaves_the_running_threads_value_alone() {
         "an uncaptured aspect was overwritten instead of left alone"
     );
 }
+
+// --- CaptureError::raw_os_error ---------------------------------------------
+//
+// Every existing test only reaches `CaptureError` by way of a real capture
+// failure, none of which this suite can provoke on demand. `raw_os_error`'s
+// three constant mutants (`Some(0)`, `Some(1)`, `Some(-1)`) are ruled out by
+// the `ErrorMode` arm alone, which hardcodes `None` (there is no OS code for
+// an unrepresentable bit) -- but that same case cannot rule out the fourth,
+// `-> None` unconditionally, since it already agrees there. The `Transaction`
+// arm, built with `TransactionError::synthetic`, is what supplies a `Some`
+// case to rule that one out too.
+
+#[test]
+fn raw_os_error_forwards_through_the_failing_aspect_or_reports_none() {
+    let unsupported_bits = ThreadErrorMode::from_bits(0x0100).expect_err("0x0100 is not a mode");
+    let error_mode_failure = CaptureError {
+        failure: CaptureFailure::ErrorMode(unsupported_bits),
+    };
+    assert_eq!(
+        error_mode_failure.raw_os_error(),
+        None,
+        "an unsupported thread error mode carries no Win32 code to report"
+    );
+
+    let transaction_failure = CaptureError {
+        failure: CaptureFailure::Transaction(TransactionError::synthetic(
+            TransactionFailure::Duplicate,
+            Some(5),
+        )),
+    };
+    assert_eq!(transaction_failure.raw_os_error(), Some(5));
+}
+
+#[test]
+fn display_and_source_forward_through_the_failing_aspect() {
+    // `<impl Display for CaptureError>::fmt -> Ok(Default::default())` and
+    // `<impl Error for CaptureError>::source -> None` survived alongside
+    // `raw_os_error`'s gap above, for the same reason: nothing in this suite
+    // provokes a real capture failure. One constructed variant is enough for
+    // both -- the mutation replaces the whole body, so any one working arm
+    // proves the real one ran.
+    let error = CaptureError {
+        failure: CaptureFailure::Transaction(TransactionError::synthetic(
+            TransactionFailure::Duplicate,
+            Some(5),
+        )),
+    };
+    let rendered = error.to_string();
+    assert!(
+        rendered.contains("capturing the transaction aspect failed"),
+        "got {rendered}"
+    );
+    assert!(std::error::Error::source(&error).is_some());
+}
+
+// The `release_error_mode` helper this file used to test no longer exists: the
+// merge from `main` replaced it with a bare `drop(error_mode_guard)`, which is
+// exactly the equivalence its own comment had recorded -- the guard's `Drop`
+// restores identically. Its test went with it rather than being rewritten,
+// because `error_mode`'s own suite now covers both routes more thoroughly than
+// this one did: `apply_installs_the_mode_and_release_restores_it`,
+// `dropping_the_guard_also_restores`, and
+// `explicit_release_reports_an_injected_restore_failure`.
+
+// --- RestoreReport -----------------------------------------------------------
+//
+// `is_clean` chains three `&&`, and both operators survived: every existing
+// test either sets no field (all `is_none()` agree with any operator) or
+// reaches `RestoreReport` only through a real, clean `with_applied` call. One
+// field set at a time is what a wrong operator cannot survive; the three
+// accessors are exercised the same way `Declared::is_empty`'s gap was, and the
+// `error_mode`/`declared`/`transaction` accessors are covered alongside them
+// since building a non-empty report is the same construction either test needs.
+
+#[test]
+fn is_clean_and_the_accessors_require_every_field_to_be_unset() {
+    let empty = RestoreReport::default();
+    assert!(empty.is_clean());
+    assert!(empty.error_mode().is_none());
+    assert!(empty.declared().is_none());
+    assert!(empty.transaction().is_none());
+
+    let only_error_mode = RestoreReport {
+        error_mode: Some(crate::error_mode::RestoreError::synthetic(0x0001, 5)),
+        declared: None,
+        transaction: None,
+    };
+    assert!(
+        !only_error_mode.is_clean(),
+        "an error-mode failure alone must not read as clean"
+    );
+    assert!(only_error_mode.error_mode().is_some());
+
+    let only_declared = RestoreReport {
+        error_mode: None,
+        declared: Some(DeclaredError::synthetic(
+            DeclaredAspect::MemoryPriority,
+            Some(5),
+        )),
+        transaction: None,
+    };
+    assert!(
+        !only_declared.is_clean(),
+        "a declared failure alone must not read as clean"
+    );
+    assert!(only_declared.declared().is_some());
+
+    let only_transaction = RestoreReport {
+        error_mode: None,
+        declared: None,
+        transaction: Some(TransactionError::synthetic(
+            TransactionFailure::Install,
+            Some(5),
+        )),
+    };
+    assert!(
+        !only_transaction.is_clean(),
+        "a transaction failure alone must not read as clean"
+    );
+    assert!(only_transaction.transaction().is_some());
+}
+
+// --- state::ApplyError's own error-trait surface ----------------------------
+//
+// Nothing exercised this type's `raw_os_error`, `Display`, or `Error::source`
+// directly -- only `ApplyFailure::Declared` reaching a real test through
+// `a_failing_aspect_releases_the_ones_already_installed`, which never calls
+// any of the three. One synthetic variant is enough: every arm forwards
+// unconditionally, so a single `Some(5)` rules out all four `raw_os_error`
+// constants at once, and any one working arm proves `Display`/`source`'s real
+// bodies ran.
+
+#[test]
+fn apply_error_forwards_through_the_failing_aspect() {
+    let error = ApplyError {
+        failure: ApplyFailure::Declared(DeclaredError::synthetic(
+            DeclaredAspect::MemoryPriority,
+            Some(5),
+        )),
+    };
+    assert_eq!(error.raw_os_error(), Some(5));
+    let rendered = error.to_string();
+    assert!(
+        rendered.contains("applying the ambient state failed"),
+        "got {rendered}"
+    );
+    assert!(std::error::Error::source(&error).is_some());
+}
