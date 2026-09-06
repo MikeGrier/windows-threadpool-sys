@@ -14,6 +14,38 @@ correct side of `--`, a per-run output directory):
 .\tools\run-mutants.ps1 -Package <name> -OutputDirectory <dir>
 ```
 
+## The revision it was taken from
+
+Every `line:col` in the per-package files is relative to
+**`24718ca`** on branch `mikegrier/deferred-namespace-ops`. The branch is
+long-running and unmerged, so a reader working from `main` has to fetch it before
+`git show 24718ca:<path>` will resolve. The toolchain at that revision is the
+pinned `1.98.0`; which build of cargo-mutants ran is not recoverable.
+
+**This was recovered, not read off the run** -- the original record did not
+capture it, which is the defect this section fixes. What pins it: the per-package
+files name the commits that had already closed part of each list, so the sweep
+must predate the earliest of them (`07882f0`, 2026-09-02 01:09), and `24718ca` is
+the last commit before that. Six packages' first-listed survivors were then
+resolved against that tree, and each cited line is exactly the construct its
+mutation describes -- a function body's first statement, a `match self {`, a
+`MAX_PATH - 1`.
+
+Two limits worth stating rather than implying. Line-matching cannot narrow it
+further, because the files in question were unchanged across a long stretch of
+commits either side; the *bound* is what is solid, not the individual hash. And
+the wrapper was invoked once per package over roughly fourteen hours, so a
+package swept early may correspond to a slightly earlier tree than one swept
+late.
+
+**Why this is worth the paragraph: the drift has already started.**
+`windows-topology-sys`' `src/domain.rs:250` was
+`f.write_str("a JSON-like value")` when the sweep ran. At the head of this
+branch, line 250 is an unrelated doc comment and that construct has moved to line
+288. One of the six references checked above no longer resolves against current
+code -- so read a `line:col` as a pointer into the revision named here, and find
+the construct by name in the current tree.
+
 Only the `missed.txt` and `timeout.txt` lists are kept here. The full run
 produced 219 MB across 10,624 files, almost all of it per-mutant build logs
 that say nothing once the outcome is known.

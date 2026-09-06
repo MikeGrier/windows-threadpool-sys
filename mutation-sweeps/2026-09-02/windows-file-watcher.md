@@ -1,7 +1,8 @@
 # Mutation survivors -- windows-file-watcher
 
-Sweep of 2026-09-02. See [README.md](README.md) for the command, the
-workspace-wide totals, and how to read a timeout.
+Sweep of 2026-09-02. See [README.md](README.md) for the command, the revision
+every `line:col` below is relative to, the workspace-wide totals, and how to
+read a timeout.
 
 - caught: 415
 - survived: 113
