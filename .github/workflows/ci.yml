@@ -49,6 +49,26 @@ jobs:
         shell: pwsh
         run: ./tools/check-publishable.ps1
 
+  # The sabotage harness's own tests. NOT a sabotage sweep -- a sweep rebuilds a
+  # crate per entry and is deliberately an occasional instrument. These are the
+  # harness's unit tests: they stub cargo out entirely and run in about two
+  # minutes, so the tool that measures whether a suite would notice a defect is
+  # itself held to that standard.
+  #
+  # This job is the ratchet. The harness accumulated fixes over eleven review
+  # rounds and thirteen of the later defects were introduced by earlier fixes,
+  # because every verification was a one-off command that was then discarded and
+  # nothing re-checked an earlier guarantee. Running these on every push is what
+  # makes that impossible rather than merely unlikely.
+  sabotage-harness:
+    name: sabotage harness tests
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: Run test-run-sabotage.ps1
+        shell: pwsh
+        run: ./tools/test-run-sabotage.ps1
+
   # The edition, MSRV, and pinned channel are declared once in Cargo.toml and
   # rust-toolchain.toml, then restated a dozen times -- in this file's `msrv`
   # job below, in README/DEVELOPMENT prose, and in the instruction files a code
