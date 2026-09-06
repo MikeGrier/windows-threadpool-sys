@@ -513,10 +513,7 @@ fn windows_refuses_an_empty_buffer_registration() {
     let user_data = pending.user_data();
     batch.submit_and_wait(1, 5_000).expect("submit");
 
-    let completion = ring
-        .try_pop()
-        .expect("pop")
-        .expect("the registration completion is ready");
+    let completion = crate::ring::pop_within(&mut ring, "the registration's completion");
     assert_eq!(completion.user_data(), user_data);
 
     let Err(error) = pending
@@ -525,8 +522,16 @@ fn windows_refuses_an_empty_buffer_registration() {
     else {
         panic!("Windows accepted an empty buffer registration; is_empty is now reachable");
     };
-    assert!(
-        error.to_string().contains("0x80070057"),
-        "expected E_INVALIDARG, got {error}"
+    // Asserted through the crate's own downcast rather than against
+    // `Display`'s text: the point is which HRESULT the kernel returned, and
+    // matching a formatted string would also fail if the message were reworded,
+    // reporting a documentation change as a platform change.
+    let code = crate::IoRingErrorExt::as_ioring_error(&error)
+        .expect("a kernel refusal carries an HRESULT")
+        .code();
+    assert_eq!(
+        code,
+        windows_sys::Win32::Foundation::E_INVALIDARG,
+        "the kernel must refuse an empty registration with E_INVALIDARG, got {error}"
     );
 }

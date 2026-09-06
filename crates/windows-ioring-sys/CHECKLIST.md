@@ -128,6 +128,21 @@ conclusions belong to it until it converges.
   PDO advertises a proximity domain. Write the correction now (the documentation defect is independent of
   the measurement) and leave the empirical question open.
 
+- [ ] **M20.5** -- Decide what to do about
+  `flush_barrier::a_covering_flush_waits_for_preceding_writes_and_an_unordered_one_does_not`, which is
+  load-sensitive: see [UNRESOLVED-TEST-FAILURES.md](UNRESOLVED-TEST-FAILURES.md) for both sightings and the
+  measurements taken after the second. It has failed **twice in three days** under a local full-workspace
+  run and has never failed in isolation (ten consecutive runs) or in CI. The test asserts a real I/O
+  ordering window, so a full-workspace run's disk contention can widen the window past what it allows.
+  **This item exists because the record is not a queue.** The decision was described in
+  UNRESOLVED-TEST-FAILURES.md from the day the flake was first seen and scheduled nowhere, which is exactly
+  the orphaned-work shape the repository's rules forbid; a second sighting is what made that visible.
+  The two candidate answers -- make the assertion load-independent, or mark the test serial so it does not
+  compete -- are not equivalent, and choosing needs an engineer: the first keeps the coverage under
+  contention but may weaken what the test actually proves about ordering, while the second preserves the
+  assertion exactly and gives up the contended case, which is the case a real consumer runs in.
+  **Do not close this by loosening the assertion without saying which guarantee was surrendered.**
+
 
 ## M6+ -- Model B: explicit-thread delivery and affinity
 

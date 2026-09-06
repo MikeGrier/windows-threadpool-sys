@@ -220,11 +220,7 @@ fn real_completion(ring: &mut IoRing) -> (usize, crate::Completion) {
     .expect("queue a flush");
     batch.submit_and_wait(1, 30_000).expect("submit and wait");
 
-    let completion = loop {
-        if let Some(completion) = ring.try_pop().expect("pop") {
-            break completion;
-        }
-    };
+    let completion = super::pop_within(ring, "the flush's completion");
     let _ = std::fs::remove_file(&path);
     (user_data, completion)
 }
@@ -285,11 +281,7 @@ fn an_injected_failure_preserves_the_identity_a_token_claims_against() {
         unsafe { batch.read_raw(file.as_raw_handle(), vec![0_u8; 5], 0, PushOptions::new()) }
             .expect("queue a read");
     batch.submit_and_wait(1, 30_000).expect("submit and wait");
-    let completion = loop {
-        if let Some(completion) = ring.try_pop().expect("pop") {
-            break completion;
-        }
-    };
+    let completion = super::pop_within(&mut ring, "the read's completion");
     completion
         .result()
         .expect("the read really did succeed, or this test proves nothing");
@@ -343,11 +335,7 @@ fn an_injected_failure_zeroes_the_transferred_byte_count() {
         unsafe { batch.read_raw(file.as_raw_handle(), vec![0_u8; 5], 0, PushOptions::new()) }
             .expect("queue a read");
     batch.submit_and_wait(1, 30_000).expect("submit and wait");
-    let completion = loop {
-        if let Some(completion) = ring.try_pop().expect("pop") {
-            break completion;
-        }
-    };
+    let completion = super::pop_within(&mut ring, "the fixture read's completion");
     assert_eq!(
         completion.information, 5,
         "the fixture must transfer five real bytes, or this test proves nothing"
