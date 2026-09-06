@@ -28,6 +28,34 @@ fn none_declares_nothing() {
 }
 
 #[test]
+fn is_empty_requires_every_field_to_be_unset_not_merely_one() {
+    // `is_empty` is a chain of three `&&`. `builders_accumulate_independently`
+    // below sets *two* fields at once, which cannot distinguish the correct
+    // `&&` from an `||` spliced into either junction: with two of three fields
+    // set, `false && (false || true)` and `false && (true || false)` both
+    // still land on `false` by coincidence. Setting exactly one field at a
+    // time is what a wrong operator cannot survive.
+    assert!(
+        !Declared::none()
+            .with_memory_priority(MemoryPriority::Low)
+            .is_empty(),
+        "memory priority alone must not read as empty"
+    );
+    assert!(
+        !Declared::none()
+            .with_background_mode(BackgroundMode::Begin)
+            .is_empty(),
+        "background mode alone must not read as empty"
+    );
+    assert!(
+        !Declared::none()
+            .with_wow64_redirection(Wow64Redirection::Disabled)
+            .is_empty(),
+        "redirection alone must not read as empty"
+    );
+}
+
+#[test]
 fn builders_accumulate_independently() {
     let declared = Declared::none()
         .with_memory_priority(MemoryPriority::Low)
@@ -380,4 +408,122 @@ fn declared_is_copy_and_send_so_it_can_reach_a_worker() {
     assert_send_copy::<MemoryPriority>();
     assert_send_copy::<BackgroundMode>();
     assert_send_copy::<Wow64Redirection>();
+}
+
+// --- DeclaredError's own error-trait surface ------------------------------
+//
+// Nothing exercised `raw_os_error`, `Display`, or `Error::source` at all.
+// `DeclaredError::synthetic` builds one directly rather than provoking a real
+// failure, matching the module's own `without_os_error` constructor.
+
+#[test]
+fn raw_os_error_reports_the_wrapped_code_or_none() {
+    let with_code = DeclaredError::synthetic(DeclaredAspect::MemoryPriority, Some(5));
+    assert_eq!(with_code.raw_os_error(), Some(5));
+
+    let without_code = DeclaredError::synthetic(DeclaredAspect::MemoryPriority, None);
+    assert_eq!(without_code.raw_os_error(), None);
+}
+
+#[test]
+fn display_names_the_aspect_and_the_source_when_there_is_one() {
+    let with_code = DeclaredError::synthetic(DeclaredAspect::BackgroundMode, Some(5));
+    let rendered = with_code.to_string();
+    assert!(
+        rendered.contains("background processing mode"),
+        "got {rendered}"
+    );
+
+    let without_code = DeclaredError::synthetic(DeclaredAspect::Wow64Redirection, None);
+    let rendered = without_code.to_string();
+    assert!(rendered.contains("WOW64"), "got {rendered}");
+}
+
+#[test]
+fn source_is_present_only_when_an_os_error_was_wrapped() {
+    let with_code = DeclaredError::synthetic(DeclaredAspect::MemoryPriority, Some(5));
+    assert!(std::error::Error::source(&with_code).is_some());
+
+    let without_code = DeclaredError::synthetic(DeclaredAspect::MemoryPriority, None);
+    assert!(std::error::Error::source(&without_code).is_none());
+}
+
+// --- DeclaredGuard's release/restore, and Drop --------------------------
+
+#[test]
+fn release_reports_a_genuine_restore_failure() {
+    // `DeclaredGuard::release -> Ok(())` and `restore`'s `ok == 0` survived:
+    // every existing test only ever restores aspects that install cleanly, so
+    // the happy path and the constant `Ok(())` agree everywhere reachable
+    // through the public API. Redirection's revert is the one failure this
+    // crate can provoke deterministically -- there is no redirector at all in
+    // a 64-bit process -- so the guard is built directly with a redirection
+    // to revert, bypassing `install` entirely.
+    if !SIXTY_FOUR_BIT {
+        eprintln!("skipped: relies on redirection's revert failing");
+        return;
+    }
+    let guard = DeclaredGuard {
+        background: None,
+        memory: None,
+        redirection: Some(std::ptr::null_mut()),
+        released: false,
+    };
+    let error = guard
+        .release()
+        .expect_err("reverting redirection has nothing to revert in a 64-bit process");
+    assert_eq!(error.aspect(), DeclaredAspect::Wow64Redirection);
+}
+
+#[test]
+fn dropping_the_guard_restores_memory_priority_even_without_release() {
+    // `<impl Drop for DeclaredGuard>::drop -> ()` survived: every existing
+    // test releases explicitly through `with_applied`, so nothing ever let a
+    // guard fall out of scope unreleased. This is a real restore, not a
+    // synthetic one -- memory priority always installs and restores cleanly.
+    let before = MemoryPriority::current().expect("readable");
+    {
+        let guard = Declared::none()
+            .with_memory_priority(MemoryPriority::Low)
+            .install()
+            .expect("install");
+        assert_eq!(
+            MemoryPriority::current().expect("readable"),
+            MemoryPriority::Low
+        );
+        drop(guard);
+    }
+    assert_eq!(
+        MemoryPriority::current().expect("readable"),
+        before,
+        "drop did not restore memory priority"
+    );
+}
+
+#[test]
+fn release_background_reenters_the_inverse_mode() {
+    // `release_background -> ()` survived: nothing called this private helper
+    // on its own, only through `install`'s rollback path, which a real host
+    // never reaches (memory priority never fails to install).
+    let before = MemoryPriority::current().expect("readable");
+    BackgroundMode::Begin
+        .install()
+        .expect("enter background mode");
+    assert_ne!(
+        MemoryPriority::current().expect("readable"),
+        before,
+        "entering background mode did not move memory priority"
+    );
+
+    super::release_background(Some(BackgroundMode::Begin));
+    assert_eq!(
+        MemoryPriority::current().expect("readable"),
+        before,
+        "release_background did not restore memory priority"
+    );
+
+    // The `None` branch is a real no-op, not merely untested: calling it again
+    // must not disturb the now-restored state.
+    super::release_background(None);
+    assert_eq!(MemoryPriority::current().expect("readable"), before);
 }

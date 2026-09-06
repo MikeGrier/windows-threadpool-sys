@@ -247,6 +247,18 @@ impl ApplyError {
     pub fn raw_os_error(&self) -> Option<i32> {
         self.source.raw_os_error()
     }
+
+    /// Builds an `ApplyError` reporting a specific outcome, for tests that
+    /// need one without a real `SetThreadErrorMode` failure to provoke --
+    /// every bit this crate ever installs is one Windows accepts, so there is
+    /// no reachable failure through the public API at all.
+    #[cfg(test)]
+    pub(crate) fn synthetic(requested: ThreadErrorMode, os_error: i32) -> Self {
+        Self {
+            requested,
+            source: io::Error::from_raw_os_error(os_error),
+        }
+    }
 }
 
 impl fmt::Display for ApplyError {
@@ -291,6 +303,16 @@ impl RestoreError {
     #[must_use]
     pub fn raw_os_error(&self) -> Option<i32> {
         self.source.raw_os_error()
+    }
+
+    /// Builds a `RestoreError` reporting a specific outcome, for tests that
+    /// need one without a genuine restore failure to provoke.
+    #[cfg(test)]
+    pub(crate) fn synthetic(unrestored: THREAD_ERROR_MODE, os_error: i32) -> Self {
+        Self {
+            unrestored,
+            source: io::Error::from_raw_os_error(os_error),
+        }
     }
 }
 

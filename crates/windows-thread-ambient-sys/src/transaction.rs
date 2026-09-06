@@ -222,6 +222,17 @@ impl TransactionError {
     pub fn raw_os_error(&self) -> Option<i32> {
         self.source.as_ref().and_then(io::Error::raw_os_error)
     }
+
+    /// Builds a `TransactionError` reporting a specific outcome, for tests
+    /// elsewhere in the crate that need one without provoking a real ktmw32
+    /// or `RtlSetCurrentTransaction` failure.
+    #[cfg(test)]
+    pub(crate) fn synthetic(failure: TransactionFailure, os_error: Option<i32>) -> Self {
+        Self {
+            failure,
+            source: os_error.map(io::Error::from_raw_os_error),
+        }
+    }
 }
 
 impl fmt::Display for TransactionError {
