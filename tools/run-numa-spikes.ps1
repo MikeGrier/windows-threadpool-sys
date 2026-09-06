@@ -22,9 +22,15 @@
 
     This script never fails on a spike's *result*. It exits non-zero when a
     spike fails to BUILD or fails to RUN, both of which are defects in the
-    instrument rather than findings about the machine. The job that runs it
-    carries `continue-on-error`, so a red step here reports the rot without
-    blocking the workflow.
+    instrument rather than findings about the machine.
+
+    That distinction is the whole contract, so the `numa-spikes` job carries no
+    `continue-on-error`: this script is the only place that separates a finding
+    from instrument rot, and a job-level flag would flatten the two back
+    together, turning a spike that no longer compiles into a green check. The
+    job had such a flag until 2026-09-04, which is exactly the defect the PR #56
+    review caught. Do not add one back on the grounds that a spike's result
+    should not block the build -- the result already does not.
 
 .PARAMETER Summary
     Optional path to append a rendered summary to, for $env:GITHUB_STEP_SUMMARY.

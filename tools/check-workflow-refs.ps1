@@ -126,8 +126,34 @@ $workflows = @(Get-ChildItem -LiteralPath $WorkflowDirectory -Filter '*.yml' -Fi
 
 foreach ($workflow in $workflows) {
     $lines = [System.IO.File]::ReadAllLines($workflow.FullName)
-    for ($i = 0; $i -lt $lines.Count; $i++) {
-        $line = $lines[$i]
+
+    # Rejoin shell line-continuations before matching. A `run:` block splits one
+    # command across physical lines with a trailing backslash, and the release
+    # workflows here do exactly that:
+    #
+    #     cargo build --release --locked \
+    #       --target "${{ matrix.target }}" \
+    #       -p windows-placement-probe --bin placement-probe
+    #
+    # Matching physically would test the CargoOnly rules against a line with no
+    # `cargo` on it and skip all six references in that file -- the checker
+    # would report success having never looked. Each logical line keeps the
+    # physical line its command began on, so a failure still points somewhere.
+    $logicalLines = New-Object System.Collections.Generic.List[object]
+    $index = 0
+    while ($index -lt $lines.Count) {
+        $startLine = $index + 1
+        $text = $lines[$index]
+        while ($text -match '\\\s*$' -and ($index + 1) -lt $lines.Count) {
+            $text = ($text -replace '\\\s*$', ' ') + $lines[$index + 1].Trim()
+            $index++
+        }
+        $logicalLines.Add([pscustomobject]@{ Text = $text; StartLine = $startLine })
+        $index++
+    }
+
+    foreach ($logical in $logicalLines) {
+        $line = $logical.Text
         foreach ($rule in $rules) {
             if ($rule.CargoOnly -and $line -notmatch '\bcargo\b') { continue }
 
@@ -143,7 +169,7 @@ foreach ($workflow in $workflows) {
                 $checked++
                 if (-not (& $rule.Exists $name)) {
                     $detail = & $rule.Detail $name
-                    $failures.Add(("{0}:{1}: {2} '{3}' -- {4}" -f $workflow.Name, ($i + 1), $rule.Name, $name, $detail))
+                    $failures.Add(("{0}:{1}: {2} '{3}' -- {4}" -f $workflow.Name, $logical.StartLine, $rule.Name, $name, $detail))
                 }
             }
         }
