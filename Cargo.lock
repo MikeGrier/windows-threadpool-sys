@@ -216,6 +216,7 @@ dependencies = [
 name = "windows-platform-probes"
 version = "0.0.0"
 dependencies = [
+ "windows-placement-probe",
  "windows-sys",
  "windows-threadpool-sys",
 ]

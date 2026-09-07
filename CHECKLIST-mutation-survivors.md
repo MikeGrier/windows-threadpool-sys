@@ -77,15 +77,28 @@ to the engineer, not to whoever picks up this checklist.
 
 - [ ] **MS-2.1** -- **`windows-platform-probes`: 511 survivors, 17% caught.**
   See [windows-platform-probes.md](mutation-sweeps/2026-09-02/windows-platform-probes.md).
-  Fourteen executable probes you *run* to answer a question about Windows, not a
-  library with a test surface; `publish = false` at version `0.0.0`. Most of the
+  Executable probes you *run* to answer a question about Windows, not a library
+  with a test surface; `publish = false` at version `0.0.0`. Most of the
   survivors are `main`-adjacent code no test was ever going to reach. Judging
   this crate by mutation score is measuring the wrong thing.
-  A related, separately-tracked item: twelve of these probes still print
-  directly rather than through the `Report` sink, tracked as `SH-13.4` on the
-  branch that ships the topology and queue crates. That checklist is not in this
-  repository yet, so this deliberately names the item rather than linking a file
-  that does not exist. Doing that first would make some of this reachable.
+  **The sweep measured a fourteen-probe tree, of which eight are in this
+  repository** -- `core_affinity`, `peer_index_cache`, `doorbell_cost`,
+  `queue_contention`, `request_cost` and `topology` were only ever on the
+  originating branch, so six of the fourteen sections in the sweep report have no
+  counterpart here yet. Read the totals with that in mind before scoping any of
+  it.
+  A related, separately-tracked item, **partly discharged**: at sweep time twelve
+  of those fourteen probes printed directly rather than through a `Report` sink,
+  tracked as `SH-13.4` on the branch that ships the topology and queue crates.
+  The sink has since landed here
+  ([crates/windows-platform-probes/src/report.rs](crates/windows-platform-probes/src/report.rs))
+  and all eight probes in this repository route through it, so what remains of
+  `SH-13.4` is the six branch-only probes, and it stays named rather than linked
+  because that branch checklist is still not in this repository. The crate's own
+  durable work now has a home to link:
+  [crates/windows-platform-probes/CHECKLIST.md](crates/windows-platform-probes/CHECKLIST.md).
+  For the eight that landed, the "would make some of this reachable" prerequisite
+  is met -- each `main` is one line and each report is a `String` a test can read.
 
 - [ ] **MS-2.2** -- **`windows-file-watcher-example-test-harness`: 69 survivors.**
   See [windows-file-watcher-example-test-harness.md](mutation-sweeps/2026-09-02/windows-file-watcher-example-test-harness.md).

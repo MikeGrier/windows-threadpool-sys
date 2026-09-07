@@ -1,7 +1,9 @@
 # Design notes: windows-platform-probes
 
-Decisions for this crate. Pending work is in the workspace
-[CHECKLIST-thread-ambient.md](../../CHECKLIST-thread-ambient.md), milestone M27.
+Decisions for this crate. Pending work is in [CHECKLIST.md](CHECKLIST.md); the
+crate's *creation* is tracked separately in the workspace
+[CHECKLIST-thread-ambient.md](../../CHECKLIST-thread-ambient.md), milestone M27,
+which is feature-scoped and deleted when that feature completes.
 
 ## A probe is a function that returns an observation, never a program that prints one
 
@@ -457,3 +459,42 @@ characters, so no mangling occurred -- an accident of environment, not of
 architecture. It would fail on any host with a longer user name, on either
 architecture. Recorded here because it is exactly the kind of result this
 comparison exists to classify correctly: a red build that is **not** a finding.
+
+## The report is buffered, and what that costs
+
+<a id="d-buffered-report"></a>
+
+Every probe's output goes through one sink: the renderer composes its report into
+a `String` and `emit_report` hands it to a [`Report`]. That is what the
+repository's architectural pre-step asks for -- the real stream is named in
+`report` and nowhere else, so a probe's `main` is one line that chooses no stream
+at all -- and it is what lets a test assert a probe's findings instead of a human
+reading them off a terminal.
+
+It also gave something up. Printing line-by-line meant whatever had been measured
+was already on the terminal; buffering means nothing is, until the renderer
+returns. These probes call into measurements documented to panic --
+`worker_context`'s impersonating observation panics three ways, and its renderer
+composes several completed findings before reaching it -- stated without a count
+deliberately, because the number moves whenever a line is added, and a stale count
+is the drift this repository keeps paying for -- so this is not hypothetical. For an
+instrument whose whole purpose is that a failure be diagnosable, how far it got is
+exactly the information worth keeping.
+
+`emit_report` recovers it for an unwinding panic: catch, emit what was composed,
+resume, so the exit status and message are unchanged and the partial report is
+added to them rather than substituted. **It does not recover it for a termination
+that does not unwind** -- Ctrl-C, which the default Windows console handler serves
+by terminating the process, and an abort from a panic raised during unwinding.
+
+That bound is known rather than overlooked, and it is not a defect in
+`emit_report` to be patched there: the fix is renderers writing into a [`Report`]
+as they measure rather than into a `String`, which restores streaming for *every*
+termination mode and makes the catch/resume machinery unnecessary. That changes
+every renderer and the shape of the sink trait, so it is queued as its own work --
+[CHECKLIST.md](CHECKLIST.md) milestone M1 -- rather than folded into the commit
+that introduced the sink.
+
+The ordering was deliberate. The sink had to exist before the probes could be
+peeled off their originating branch in reviewable stages, and a design that
+streams is a different design, not a later revision of this one.
