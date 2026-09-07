@@ -531,21 +531,29 @@ fn a_capture_failure_exposes_its_os_error_both_ways() {
     let error = unsafe { SecurityDescriptor::capture(zeroed.as_ptr().cast::<c_void>()) }
         .expect_err("a zeroed descriptor has revision 0 and cannot be valid");
 
-    let code = error
-        .raw_os_error()
-        .expect("this failure came from a Win32 call, so it carries a code");
-    assert_ne!(
-        code, 0,
-        "a success code would mean the capture had not failed at all"
-    );
-
+    // Compared as `Option<i32>` on both sides, and deliberately *not* asserted to
+    // be present or non-zero. This failure path takes `GetLastError` after
+    // `IsValidSecurityDescriptor`, which Windows does not document as setting it,
+    // so any particular value here is observed behaviour rather than a promise.
+    //
+    // Measured on this machine: it does set it, to 1338
+    // (`ERROR_INVALID_SECURITY_DESCR`), and does so even when last-error is
+    // poisoned with an unrelated value or cleared to 0 beforehand -- so the code
+    // is neither stale nor absent in practice. That is exactly why it is not
+    // asserted: an undocumented behaviour that happens to hold is the kind of
+    // thing this crate binds to a specification instead, and a test demanding it
+    // would be asserting the platform's incidental behaviour rather than this
+    // crate's contract.
+    //
+    // What *is* this crate's contract is that both routes agree, which holds
+    // whatever Windows reports -- including nothing at all.
     let source = error.source().expect("the OS error is the source");
     assert_eq!(
         source
             .downcast_ref::<std::io::Error>()
             .expect("the source is the io::Error behind the failure")
             .raw_os_error(),
-        Some(code),
+        error.raw_os_error(),
         "the typed accessor and the source chain must report the same error"
     );
 }
