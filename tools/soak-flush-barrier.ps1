@@ -87,6 +87,34 @@ New-Item -ItemType Directory -Force -Path $OutputDirectory | Out-Null
 $OutputDirectory = (Resolve-Path -LiteralPath $OutputDirectory).Path
 $summary = Join-Path $OutputDirectory 'summary.csv'
 
+# Sentinel written into the CSV when the report line could not be found. An
+# empty field is ambiguous -- it reads the same as "this run produced no detail"
+# -- and this one is unmistakable to whoever later analyses the file.
+$script:NoDetail = '<<NO REPORT LINE MATCHED>>'
+
+# Normalise one cargo invocation's merged output into plain strings.
+#
+# With 2>&1, native stderr arrives as ErrorRecord objects. For the *empty* lines
+# cargo emits between diagnostics the message is "" while ToString() falls back
+# to the type name, so a bare "$_" renders those as
+# "System.Management.Automation.RemoteException" scattered through the output --
+# which then reaches both the saved log and the Select-String that extracts the
+# detail column.
+#
+# Defined once and used by every capture site on purpose: this was originally
+# fixed at the build step alone, leaving the per-instrument run with the same
+# defect, which is how two copies of one rule drift apart.
+function ConvertTo-OutputLines {
+    param([Parameter(ValueFromPipeline = $true)] $Record)
+    process {
+        if ($Record -is [System.Management.Automation.ErrorRecord]) {
+            $Record.Exception.Message
+        } else {
+            "$Record"
+        }
+    }
+}
+
 # The rotation, in the order described above.
 $instruments = @(
     'the_drain_holds_across_many_quiet_trials'
@@ -122,17 +150,8 @@ Write-Host ""
 # is the same message for a missing toolchain, a wrong directory and a genuine
 # compile error -- and the one case where the operator most needs the detail.
 Write-Host "Building the test binary once..."
-# Each record is converted via .Exception.Message, not by string interpolation.
-# With a bare 2>&1 the stderr lines arrive as ErrorRecord objects, and for the
-# *empty* lines cargo emits between diagnostics the message is "" while
-# ToString() falls back to the type name -- so interpolating renders those as
-# "System.Management.Automation.RemoteException" scattered through the compiler
-# output. Measured: six such lines in one failing build. Reading the message
-# gives the empty string, which is what those lines actually are.
 $buildOutput = & cargo test -p windows-ioring-sys --test flush_barrier_stress --no-run 2>&1 |
-    ForEach-Object {
-        if ($_ -is [System.Management.Automation.ErrorRecord]) { $_.Exception.Message } else { "$_" }
-    }
+    ConvertTo-OutputLines
 if ($LASTEXITCODE -ne 0) {
     Write-Host "::error::the stress test binary does not build"
     $buildOutput | ForEach-Object { Write-Host "  $_" }
@@ -152,7 +171,7 @@ try {
             $started = Get-Date
             $env:IORING_STRESS_TRIALS = "$TrialsPerRound"
             $output = & cargo test -p windows-ioring-sys --test flush_barrier_stress `
-                -- --ignored --nocapture --exact $name 2>&1
+                -- --ignored --nocapture --exact $name 2>&1 | ConvertTo-OutputLines
             $code = $LASTEXITCODE
             Remove-Item Env:\IORING_STRESS_TRIALS -ErrorAction SilentlyContinue
             $seconds = [int]((Get-Date) - $started).TotalSeconds
@@ -172,16 +191,19 @@ try {
             # and nothing said so.
             #
             # So the pattern is anchored to something that does not get reworded,
-            # AND a miss is now reported instead of silently producing an empty
-            # column -- a soak run whose detail is quietly blank is worse than one
-            # that fails loudly, because the tally still looks healthy.
+            # AND a miss is recorded rather than passed over. Two separate
+            # signals, because they reach different people: a warning for whoever
+            # is watching the run, and a sentinel in the CSV for whoever analyses
+            # it later. An empty field would be ambiguous -- indistinguishable
+            # from a run that legitimately produced no detail -- and is exactly
+            # the shape that let this go unnoticed twice.
             $detail = ($output | Select-String -Pattern 'D-23' |
                 Select-Object -First 1).Line
             if ($detail) {
                 $detail = $detail.Trim() -replace ',', ';'
             } else {
-                $detail = ''
-                Write-Host "      warning: no report line matched 'D-23' -- the harness's report wording may have changed; the detail column is empty" -ForegroundColor Yellow
+                $detail = $script:NoDetail
+                Write-Host "      warning: no report line matched 'D-23' -- the harness's report wording may have changed; the CSV records $script:NoDetail" -ForegroundColor Yellow
             }
 
             "{0},{1},{2},{3},{4},{5}" -f (Get-Date -Format 'o'), $round, $name, $result, $seconds, $detail |

@@ -596,6 +596,25 @@ fn run_trial(ring: &mut IoRing, file: RawHandle, coverage: FlushCoverage) -> (Ob
 
         log.push(Event::RoundEnded { round, drained });
         round += 1;
+
+        // Yield when a round came back empty, rather than spinning the core.
+        //
+        // **Deliberately `yield_now` and not a sleep**, which matters more here
+        // than it usually would. Drain-round boundaries are evidence: D-47 rests
+        // partly on every crossing being confined to the flush's own round, which
+        // is what shows the order observed is the order the kernel posted. A
+        // fixed delay would let completions accumulate between polls, coarsening
+        // those rounds and making "same round" artificially more likely -- the
+        // instrument would then be manufacturing its own conclusion.
+        //
+        // Yielding relinquishes the timeslice without introducing a delay, so
+        // other runnable threads -- the contention generators, and the other
+        // rings in the concurrent instrument -- make progress instead of
+        // competing with a spin. The `attempts` bound above still limits the
+        // total.
+        if drained == 0 {
+            std::thread::yield_now();
+        }
     }
 
     let flush_position = order
