@@ -63,6 +63,11 @@
 [CmdletBinding()]
 param(
     [int]$Rounds = 5,
+    # Validated rather than passed through: IORING_STRESS_TRIALS=0 makes every
+    # instrument run nothing, divide by zero when reporting, and pass. The
+    # harness rejects it too, but failing here names the parameter the operator
+    # actually typed instead of surfacing as a panic inside a test.
+    [ValidateRange(1, [int]::MaxValue)]
     [int]$TrialsPerRound = 100,
     [string]$Only,
     [string]$OutputDirectory
@@ -111,10 +116,26 @@ Write-Host "  instruments: $($instruments.Count)"
 Write-Host ""
 
 # Build once, so a round's timing measures the instrument rather than rustc.
+#
+# The output is captured rather than discarded, and printed on failure. An
+# earlier version sent it to Out-Null and reported only "does not build", which
+# is the same message for a missing toolchain, a wrong directory and a genuine
+# compile error -- and the one case where the operator most needs the detail.
 Write-Host "Building the test binary once..."
-& cargo test -p windows-ioring-sys --test flush_barrier_stress --no-run --quiet 2>&1 | Out-Null
+# Each record is converted via .Exception.Message, not by string interpolation.
+# With a bare 2>&1 the stderr lines arrive as ErrorRecord objects, and for the
+# *empty* lines cargo emits between diagnostics the message is "" while
+# ToString() falls back to the type name -- so interpolating renders those as
+# "System.Management.Automation.RemoteException" scattered through the compiler
+# output. Measured: six such lines in one failing build. Reading the message
+# gives the empty string, which is what those lines actually are.
+$buildOutput = & cargo test -p windows-ioring-sys --test flush_barrier_stress --no-run 2>&1 |
+    ForEach-Object {
+        if ($_ -is [System.Management.Automation.ErrorRecord]) { $_.Exception.Message } else { "$_" }
+    }
 if ($LASTEXITCODE -ne 0) {
     Write-Host "::error::the stress test binary does not build"
+    $buildOutput | ForEach-Object { Write-Host "  $_" }
     exit 1
 }
 

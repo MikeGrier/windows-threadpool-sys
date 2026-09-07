@@ -106,11 +106,30 @@ const WAIT_MS: u32 = 120_000;
 /// so a hundred trials is seconds rather than minutes.
 const DEFAULT_TRIALS: usize = 100;
 
+/// Trials per instrument, from `IORING_STRESS_TRIALS`.
+///
+/// **Zero is rejected rather than honoured.** A zero-trial run divides by zero
+/// in [`Campaign::report`] and passes every assertion vacuously -- an instrument
+/// that exercises no I/O and reports success is worse than one that fails, since
+/// a soak tally full of passes is exactly what someone reads as evidence.
+/// A value that does not parse is treated the same way: a typo should not
+/// silently become the default.
 fn trials() -> usize {
-    std::env::var("IORING_STRESS_TRIALS")
-        .ok()
-        .and_then(|v| v.parse().ok())
-        .unwrap_or(DEFAULT_TRIALS)
+    match std::env::var("IORING_STRESS_TRIALS") {
+        Err(_) => DEFAULT_TRIALS,
+        Ok(raw) => match raw.trim().parse::<usize>() {
+            Ok(0) => panic!(
+                "IORING_STRESS_TRIALS=0 would run no trials, divide by zero when reporting, \
+                 and pass every assertion without exercising anything. Use 1 or more, or \
+                 unset it for the default of {DEFAULT_TRIALS}."
+            ),
+            Ok(n) => n,
+            Err(error) => panic!(
+                "IORING_STRESS_TRIALS={raw:?} is not a trial count ({error}). Use a positive \
+                 integer, or unset it for the default of {DEFAULT_TRIALS}."
+            ),
+        },
+    }
 }
 
 struct Aligned {
@@ -666,8 +685,15 @@ impl Drop for Contention {
 }
 
 /// One fixture: a pre-written extent, opened unbuffered, plus a ring.
+///
+/// The handle is an `Option` so [`Drop`] can close it *before* deleting the
+/// path. Struct fields drop after the `Drop` body runs, so holding it directly
+/// meant `remove_file` was called while the handle was still open -- and the
+/// file is opened with `FILE_SHARE_READ | FILE_SHARE_WRITE` and no
+/// `FILE_SHARE_DELETE`, so that deletion cannot succeed. Every trial leaked its
+/// 32 MiB extent, silently, because the result was discarded.
 struct Fixture {
-    _file: OwnedHandle,
+    file: Option<OwnedHandle>,
     handle: RawHandle,
     ring: IoRing,
     path: PathBuf,
@@ -682,7 +708,7 @@ impl Fixture {
         let handle = file.as_raw_handle();
         let ring = IoRing::new(256, 256).expect("create ring");
         Self {
-            _file: file,
+            file: Some(file),
             handle,
             ring,
             path,
@@ -692,7 +718,19 @@ impl Fixture {
 
 impl Drop for Fixture {
     fn drop(&mut self) {
-        let _ = std::fs::remove_file(&self.path);
+        // Close first; see the note on the struct. `handle` is dangling from here
+        // on, and nothing below touches it.
+        drop(self.file.take());
+
+        // Reported rather than discarded. A silent `let _ =` is what let the leak
+        // above run for a whole session unnoticed, and a warning during teardown
+        // costs nothing while a lost 32 MiB per trial does not stay small.
+        if let Err(error) = std::fs::remove_file(&self.path) {
+            eprintln!(
+                "warning: could not remove the stress fixture {}: {error}",
+                self.path.display()
+            );
+        }
     }
 }
 
