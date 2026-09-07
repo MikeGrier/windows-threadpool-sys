@@ -4,7 +4,7 @@
 and the reasoning. Keyed by decision ID. This file is consulted for "why" questions; it is not
 authoritative for current decisions (Tier 1 is).
 
-## D-1: an example, not a framework
+## <a id="d-1"></a>D-1: an example, not a framework
 
 A framework that must *compose* with an arbitrary third party's other test infrastructure is an
 unsolvable problem (see the file-watcher testability discussion). So we do not ship one; we ship a
@@ -13,13 +13,13 @@ legible exemplar that composes with nothing by design and is meant to be adapted
 most consumers will cut-and-paste rather than depend. Legibility beats completeness everywhere the
 two conflict.
 
-## D-2: public `test-util` surface only
+## <a id="d-2"></a>D-2: public `test-util` surface only
 
 This is a forcing function: if the exemplar cannot be built from the public seam, that is a seam
 gap to fix in `windows-file-watcher`, not to paper over here. So the crate doubles as proof that
 the M13 seam is sufficient for a real harness.
 
-## D-3: the handler is a trait; capture/replay are handler-linked
+## <a id="d-3"></a>D-3: the handler is a trait; capture/replay are handler-linked
 
 Both capture (find a schedule that breaks the handler) and replay (reproduce it) must run the
 consumer's handler *in-process*, and Rust cannot load an unknown third-party handler into a
@@ -27,7 +27,7 @@ prebuilt binary. So this crate's `capture`/`replay` bins run against a **built-i
 handler**, and are themselves worked examples of how a third party writes their own bins against
 their own handler using the library.
 
-## D-4: the wire format is harness-owned, not semver-covered
+## <a id="d-4"></a>D-4: the wire format is harness-owned, not semver-covered
 
 `windows-file-watcher` does not serialize `Notification`, so the harness defines its own
 serde-able description of a notification and converts it to a real `Notification` (via the
@@ -35,20 +35,20 @@ serde-able description of a notification and converts it to a real `Notification
 schedule -- not a data contract; its shape may change in any release. Precedent: file-watcher D-71
 and topology D-8.
 
-## D-5: the generator emits only contract-legal schedules
+## <a id="d-5"></a>D-5: the generator emits only contract-legal schedules
 
 This is the D-83 fidelity principle lifted from values to *schedules*: perturbations (ordering,
 timing, loss) stay inside what file-watcher's documented contract permits (D-12 in-stream
 ordering, D-29 loss/backpressure via `Desync`), so a pathology the harness finds is one a real
 substrate could actually produce -- not a phantom manufactured by an impossible schedule.
 
-## D-6: publication is gated on a published file-watcher with `test-util`
+## <a id="d-6"></a>D-6: publication is gated on a published file-watcher with `test-util`
 
 The crate builds in-workspace today via the path dependency, but it cannot be published to
 crates.io until `windows-file-watcher` is published with the `test-util` feature available. This
 is a release-ordering constraint, recorded so it is not discovered at publish time.
 
-## D-7: the wire format is deliberately unvalidated
+## <a id="d-7"></a>D-7: the wire format is deliberately unvalidated
 
 The format can express schedules file-watcher would never produce (a `Batch` after that watch's
 `Completion { Cancelled }`, a `Desync { Overflow }` on a watch established `Coarse`, a

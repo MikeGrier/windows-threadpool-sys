@@ -5,9 +5,22 @@ This file records the decisions this crate's code is built against. D-1 to D-9 w
 record nothing is obliged to read; D-10 onwards were taken while building the shapes those decisions
 called for, and record what the building settled or corrected.
 
-The naming decision -- plural, and no `-sys` suffix -- lives in the workspace
-[DESIGN-NOTES.md](../../DESIGN-NOTES.md#the-waitable-queues-crate-is-named-plural-and-carries-no-sys-suffix)
-rather than here, since it was taken before this directory existed.
+The naming decision -- plural, and no `-sys` suffix -- was taken before this
+directory existed, and is summarised here because the full record has not landed
+on `main` yet.
+
+**No `-sys` suffix.** In this workspace that suffix marks a layer: a
+`windows-*-sys` crate makes an existing Win32 API memory-safe *without adding
+policy*. This crate is a data structure with an opinion -- it chooses a slot
+protocol, an overflow policy, and a signalling discipline that Win32 has no
+equivalent of -- so `-sys` would misdescribe how much it decides on a caller's
+behalf. The convention itself is stated in the repository
+[README.md](../../README.md#crate-naming).
+
+**Plural, because it is a collection of peers rather than one facility.** SPSC
+and the MPSC shapes are siblings and no single queue is the queue, which is why
+there is deliberately no bare `Queue` type -- a crate named "queues" that
+exported one would claim a primacy the name denies.
 
 ## Intent
 
