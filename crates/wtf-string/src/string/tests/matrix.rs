@@ -28,7 +28,7 @@ fn hash_of<T: std::hash::Hash + ?Sized>(t: &T) -> u64 {
 }
 
 /// The coverage corpus: `(name, content units)`, each entry unique. Mixes
-/// well-formed content (empty, ASCII, controls, interior/edge NUL, BMP, astral,
+/// well-formed content (empty, ASCII, controls, interior/edge NUL, BMP, supplementary,
 /// scalar boundaries) with ill-formed content (lone/mispaired surrogates in every
 /// position). Well-formedness is derived per test via `String::from_utf16`, so it
 /// can never drift from a hand-maintained flag.
@@ -48,13 +48,13 @@ fn corpus() -> Vec<(&'static str, Vec<u16>)> {
         ("bmp_latin1", w("café")),
         ("bmp_cjk", w("日本語")),
         ("bmp_greek", w("Ωμέγα")),
-        ("astral_emoji", w("😀")),
-        ("astral_min", vec![0xD800, 0xDC00]), // U+10000
-        ("astral_max", vec![0xDBFF, 0xDFFF]), // U+10FFFF
-        ("before_surrogates", vec![0xD7FF]),  // U+D7FF
-        ("after_surrogates", vec![0xE000]),   // U+E000
-        ("bmp_max_scalar", vec![0xFFFF]),     // U+FFFF (valid noncharacter)
-        ("replacement_char", vec![0xFFFD]),   // a genuine U+FFFD in content
+        ("supplementary_emoji", w("😀")),
+        ("supplementary_min", vec![0xD800, 0xDC00]), // U+10000
+        ("supplementary_max", vec![0xDBFF, 0xDFFF]), // U+10FFFF
+        ("before_surrogates", vec![0xD7FF]),         // U+D7FF
+        ("after_surrogates", vec![0xE000]),          // U+E000
+        ("bmp_max_scalar", vec![0xFFFF]),            // U+FFFF (valid noncharacter)
+        ("replacement_char", vec![0xFFFD]),          // a genuine U+FFFD in content
         ("mixed_planes", w("aé日😀z")),
         ("whitespace_edges", w("  x  ")),
         ("repeated_ascii", vec![0x41; 64]),
@@ -453,12 +453,12 @@ fn surrogate_range_units_are_ill_formed_alone_neighbours_are_valid() {
 }
 
 #[test]
-fn every_surrogate_pairing_decodes_to_the_expected_astral_scalar() {
+fn every_surrogate_pairing_decodes_to_the_expected_supplementary_scalar() {
     for &hi in &[0xD800u16, 0xD801, 0xDBFF] {
         for &lo in &[0xDC00u16, 0xDC01, 0xDFFF] {
             let owned = Wtf16String::from_units(&[hi, lo]);
             let expected = 0x1_0000 + (((hi as u32 - 0xD800) << 10) | (lo as u32 - 0xDC00));
-            let ch = char::from_u32(expected).expect("valid astral scalar");
+            let ch = char::from_u32(expected).expect("valid scalar above U+FFFF");
             assert_eq!(
                 owned.to_string_checked().as_deref(),
                 Some(ch.to_string().as_str()),
