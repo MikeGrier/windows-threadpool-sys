@@ -81,7 +81,7 @@ fn opens_a_nested_directory() {
 #[test]
 fn opens_a_directory_whose_name_is_not_ascii() {
     let dir = TempDir::new("open-unicode");
-    // Includes an astral character, so the name is a surrogate pair in UTF-16.
+    // Includes characters above U+FFFF, so the name carries surrogate pairs in UTF-16.
     let child = dir.path().join("caf\u{e9}-\u{1f600}-\u{10437}");
     std::fs::create_dir(&child).expect("create unicode-named dir");
     assert!(DirectoryHandle::open(&child).is_ok());
