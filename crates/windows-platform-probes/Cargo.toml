@@ -48,10 +48,26 @@ name = "probe-pool-growth"
 path = "src/bin/pool_growth.rs"
 
 [dependencies]
+# **Every workspace dependency below is path-only, with no `version`**, because
+# this crate is never distributed at all -- not to a registry, and not as a
+# released binary either, unlike `windows-placement-probe` next door. These
+# probes are a development instrument, run from a checkout, and `publish = false`
+# above is the whole story.
+#
+# A `version` beside a `path` is consulted only when the depending crate is
+# packaged, but cargo still requires the path crate's own version to satisfy it
+# at every build -- so a pin left behind by a bump breaks the whole workspace's
+# resolution rather than only this crate's.
+#
 # The pool-growth probe measures the shipping API rather than a
 # reimplementation of the SDK's inline environment helpers, so it depends on the
 # real crate.
-windows-threadpool-sys = { version = "0.1.3", path = "../windows-threadpool-sys" }
+windows-threadpool-sys = { path = "../windows-threadpool-sys" }
+# Every probe's report opens with a line naming the machine that produced it and
+# whether the measurement is tainted, so a captured finding cannot be pasted
+# somewhere and compared against something it does not describe. That banner is
+# `windows-placement-probe`'s to render, not a second copy here.
+windows-placement-probe = { path = "../windows-placement-probe" }
 
 [dependencies.windows-sys]
 version = "0.61.2"
