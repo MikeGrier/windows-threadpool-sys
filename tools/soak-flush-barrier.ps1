@@ -83,6 +83,13 @@ if (-not $OutputDirectory) {
 }
 
 $repoRoot = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
+
+# Every cargo invocation names the manifest explicitly, so the script works from
+# any working directory. Without it, running this from anywhere but the repo root
+# fails with "could not find Cargo.toml in <cwd> or any parent directory" -- and
+# the failure lands in the build step, where it reads like a broken tree rather
+# than a wrong directory.
+$manifest = Join-Path $repoRoot 'Cargo.toml'
 New-Item -ItemType Directory -Force -Path $OutputDirectory | Out-Null
 $OutputDirectory = (Resolve-Path -LiteralPath $OutputDirectory).Path
 $summary = Join-Path $OutputDirectory 'summary.csv'
@@ -91,6 +98,27 @@ $summary = Join-Path $OutputDirectory 'summary.csv'
 # empty field is ambiguous -- it reads the same as "this run produced no detail"
 # -- and this one is unmistakable to whoever later analyses the file.
 $script:NoDetail = '<<NO REPORT LINE MATCHED>>'
+
+# The single output sink. Every message this tool emits goes through here, so
+# the destination and the formatting stay separable from the call sites that
+# produce the content -- the repository's one-output-sink rule, and the same
+# shape as tools/run-mutants.ps1 and tools/run-numa-spikes.ps1.
+function Write-Report {
+    param(
+        [Parameter(Mandatory = $true, ValueFromPipeline = $true)][AllowEmptyString()][string] $Message,
+        [ValidateSet('info', 'detail', 'heading', 'warning', 'error')][string] $Level = 'info'
+    )
+    process {
+        # The only Write-Host calls in this script, by design.
+        switch ($Level) {
+            'error' { Write-Host "::error::$Message" }
+            'warning' { Write-Host "::warning::$Message" -ForegroundColor Yellow }
+            'heading' { Write-Host $Message -ForegroundColor Cyan }
+            'detail' { Write-Host $Message -ForegroundColor DarkGray }
+            default { Write-Host $Message }
+        }
+    }
+}
 
 # Normalise one cargo invocation's merged output into plain strings.
 #
@@ -126,7 +154,7 @@ $instruments = @(
 if ($Only) {
     $instruments = @($instruments | Where-Object { $_ -like "*$Only*" })
     if ($instruments.Count -eq 0) {
-        Write-Host "::error::no instrument matches '$Only'"
+        Write-Report "no instrument matches '$Only'" -Level error
         exit 2
     }
 }
@@ -135,13 +163,13 @@ if (-not (Test-Path -LiteralPath $summary)) {
     Set-Content -LiteralPath $summary -Value 'timestamp,round,instrument,result,seconds,detail' -Encoding utf8
 }
 
-Write-Host "Soaking the flush barrier."
-Write-Host "  repository : $repoRoot"
-Write-Host "  output     : $OutputDirectory"
-Write-Host "  rounds     : $(if ($Rounds -eq 0) { 'until stopped (Ctrl+C)' } else { $Rounds })"
-Write-Host "  trials     : $TrialsPerRound per instrument"
-Write-Host "  instruments: $($instruments.Count)"
-Write-Host ""
+Write-Report "Soaking the flush barrier." -Level heading
+Write-Report "  repository : $repoRoot"
+Write-Report "  output     : $OutputDirectory"
+Write-Report "  rounds     : $(if ($Rounds -eq 0) { 'until stopped (Ctrl+C)' } else { $Rounds })"
+Write-Report "  trials     : $TrialsPerRound per instrument"
+Write-Report "  instruments: $($instruments.Count)"
+Write-Report ""
 
 # Build once, so a round's timing measures the instrument rather than rustc.
 #
@@ -149,12 +177,13 @@ Write-Host ""
 # earlier version sent it to Out-Null and reported only "does not build", which
 # is the same message for a missing toolchain, a wrong directory and a genuine
 # compile error -- and the one case where the operator most needs the detail.
-Write-Host "Building the test binary once..."
-$buildOutput = & cargo test -p windows-ioring-sys --test flush_barrier_stress --no-run 2>&1 |
+Write-Report "Building the test binary once..."
+$buildOutput = & cargo test --manifest-path $manifest `
+    -p windows-ioring-sys --test flush_barrier_stress --no-run 2>&1 |
     ConvertTo-OutputLines
 if ($LASTEXITCODE -ne 0) {
-    Write-Host "::error::the stress test binary does not build"
-    $buildOutput | ForEach-Object { Write-Host "  $_" }
+    Write-Report "the stress test binary does not build" -Level error
+    $buildOutput | ForEach-Object { Write-Report "  $_" -Level detail }
     exit 1
 }
 
@@ -165,12 +194,13 @@ $round = 0
 try {
     while ($Rounds -eq 0 -or $round -lt $Rounds) {
         $round++
-        Write-Host "=== round $round ==="
+        Write-Report "=== round $round ===" -Level heading
 
         foreach ($name in $instruments) {
             $started = Get-Date
             $env:IORING_STRESS_TRIALS = "$TrialsPerRound"
-            $output = & cargo test -p windows-ioring-sys --test flush_barrier_stress `
+            $output = & cargo test --manifest-path $manifest `
+                -p windows-ioring-sys --test flush_barrier_stress `
                 -- --ignored --nocapture --exact $name 2>&1 | ConvertTo-OutputLines
             $code = $LASTEXITCODE
             Remove-Item Env:\IORING_STRESS_TRIALS -ErrorAction SilentlyContinue
@@ -203,15 +233,15 @@ try {
                 $detail = $detail.Trim() -replace ',', ';'
             } else {
                 $detail = $script:NoDetail
-                Write-Host "      warning: no report line matched 'D-23' -- the harness's report wording may have changed; the CSV records $script:NoDetail" -ForegroundColor Yellow
+                Write-Report "no report line matched 'D-23' -- the harness's report wording may have changed; the CSV records $script:NoDetail" -Level warning
             }
 
             "{0},{1},{2},{3},{4},{5}" -f (Get-Date -Format 'o'), $round, $name, $result, $seconds, $detail |
                 Add-Content -LiteralPath $summary -Encoding utf8
 
             $mark = if ($code -eq 0) { 'pass' } else { '*** FAIL ***' }
-            Write-Host ("  {0,-58} {1,-12} {2,4}s" -f $name, $mark, $seconds)
-            if ($detail) { Write-Host "      $detail" }
+            Write-Report ("  {0,-58} {1,-12} {2,4}s" -f $name, $mark, $seconds)
+            if ($detail) { Write-Report "      $detail" -Level detail }
 
             # A failing round's output holds the event log. Keep it verbatim --
             # it is the only record of what happened, and re-running will not
@@ -219,25 +249,25 @@ try {
             if ($code -ne 0) {
                 $log = Join-Path $OutputDirectory ("round-{0:D3}-{1}.log" -f $round, $name)
                 $output | Out-File -LiteralPath $log -Encoding utf8
-                Write-Host "      full output kept at $log"
+                Write-Report "      full output kept at $log" -Level detail
             }
         }
-        Write-Host ""
+        Write-Report ""
     }
 }
 finally {
-    Write-Host "=== tally after $round round(s) ==="
+    Write-Report "=== tally after $round round(s) ===" -Level heading
     $anyFailure = $false
     foreach ($name in $instruments) {
         $t = $tally[$name]
         if ($t.Runs -eq 0) { continue }
         if ($t.Failures -gt 0) { $anyFailure = $true }
-        Write-Host ("  {0,-58} {1} failure(s) in {2} run(s)" -f $name, $t.Failures, $t.Runs)
+        Write-Report ("  {0,-58} {1} failure(s) in {2} run(s)" -f $name, $t.Failures, $t.Runs)
     }
-    Write-Host ""
-    Write-Host "  summary: $summary"
+    Write-Report ""
+    Write-Report "  summary: $summary"
     if ($anyFailure) {
-        Write-Host "  Failing rounds' full output (with the event logs) is in $OutputDirectory."
+        Write-Report "  Failing rounds' full output (with the event logs) is in $OutputDirectory."
     }
 }
 
