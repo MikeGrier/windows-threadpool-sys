@@ -189,10 +189,14 @@ fn a_device_namespace_path_is_resolved_rather_than_kept_verbatim() {
 /// is not one byte, one scalar, and one unit at once.
 fn absolute_path_of_length(units: usize) -> String {
     let prefix = r"C:\";
-    format!(
-        "{prefix}{}",
-        "a".repeat(units - prefix.encode_utf16().count())
-    )
+    let prefix_units = prefix.encode_utf16().count();
+    assert!(
+        units >= prefix_units,
+        "asked for a {units}-unit path, but the {prefix} prefix is already \
+         {prefix_units} units; the subtraction below would underflow and panic \
+         without saying why"
+    );
+    format!("{prefix}{}", "a".repeat(units - prefix_units))
 }
 
 #[test]

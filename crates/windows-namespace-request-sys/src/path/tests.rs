@@ -261,10 +261,14 @@ fn an_error_without_an_os_code_renders_only_its_description() {
 /// is not one byte, one scalar, and one unit at once.
 fn absolute_path_of_length(units: usize) -> String {
     let prefix = r"C:\";
-    format!(
-        "{prefix}{}",
-        "a".repeat(units - prefix.encode_utf16().count())
-    )
+    let prefix_units = prefix.encode_utf16().count();
+    assert!(
+        units >= prefix_units,
+        "asked for a {units}-unit path, but the {prefix} prefix is already \
+         {prefix_units} units; the subtraction below would underflow and panic \
+         without saying why"
+    );
+    format!("{prefix}{}", "a".repeat(units - prefix_units))
 }
 
 #[test]
