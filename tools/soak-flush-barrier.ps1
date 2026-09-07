@@ -143,6 +143,27 @@ function ConvertTo-OutputLines {
     }
 }
 
+# Run a native command, capturing merged stdout+stderr as plain strings.
+#
+# The ErrorActionPreference dance is what makes this work on Windows PowerShell
+# 5.1. There, a native command writing to stderr under `Stop` raises a
+# TERMINATING error, and cargo writes to stderr routinely -- "Compiling ...",
+# and the "did not finalize incremental compilation session directory" notes
+# this workspace emits constantly. Measured: under 5.1 the script died in the
+# build step with NativeCommandError before running a single instrument, having
+# written only the CSV header. Under 7 the same script completed. Restoring the
+# preference afterwards keeps `Stop` for everything that is not a native call.
+function Invoke-Native {
+    param([Parameter(Mandatory = $true)][scriptblock] $Command)
+    $previous = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
+    try {
+        & $Command 2>&1 | ConvertTo-OutputLines
+    } finally {
+        $ErrorActionPreference = $previous
+    }
+}
+
 # The rotation, in the order described above.
 $instruments = @(
     'the_drain_holds_across_many_quiet_trials'
@@ -159,8 +180,19 @@ if ($Only) {
     }
 }
 
+# Every file this script writes goes through this encoding, so the bytes are the
+# same whichever shell ran it. `-Encoding utf8` is not portable between the two:
+# on Windows PowerShell 5.1 it means UTF-8 *with* BOM and on 7 it means without,
+# measured here as EF BB BF against nothing for the same Set-Content call. A CSV
+# that sometimes starts with a BOM is a parsing hazard for whatever reads it
+# later. Same reasoning and same form as tools/run-numa-spikes.ps1.
+$script:Utf8NoBom = New-Object System.Text.UTF8Encoding $false
+
 if (-not (Test-Path -LiteralPath $summary)) {
-    Set-Content -LiteralPath $summary -Value 'timestamp,round,instrument,result,seconds,detail' -Encoding utf8
+    [System.IO.File]::WriteAllText(
+        $summary,
+        "timestamp,round,instrument,result,seconds,detail`r`n",
+        $script:Utf8NoBom)
 }
 
 Write-Report "Soaking the flush barrier." -Level heading
@@ -178,9 +210,10 @@ Write-Report ""
 # is the same message for a missing toolchain, a wrong directory and a genuine
 # compile error -- and the one case where the operator most needs the detail.
 Write-Report "Building the test binary once..."
-$buildOutput = & cargo test --manifest-path $manifest `
-    -p windows-ioring-sys --test flush_barrier_stress --no-run 2>&1 |
-    ConvertTo-OutputLines
+$buildOutput = Invoke-Native {
+    cargo test --manifest-path $manifest `
+        -p windows-ioring-sys --test flush_barrier_stress --no-run
+}
 if ($LASTEXITCODE -ne 0) {
     Write-Report "the stress test binary does not build" -Level error
     $buildOutput | ForEach-Object { Write-Report "  $_" -Level detail }
@@ -199,9 +232,11 @@ try {
         foreach ($name in $instruments) {
             $started = Get-Date
             $env:IORING_STRESS_TRIALS = "$TrialsPerRound"
-            $output = & cargo test --manifest-path $manifest `
-                -p windows-ioring-sys --test flush_barrier_stress `
-                -- --ignored --nocapture --exact $name 2>&1 | ConvertTo-OutputLines
+            $output = Invoke-Native {
+                cargo test --manifest-path $manifest `
+                    -p windows-ioring-sys --test flush_barrier_stress `
+                    -- --ignored --nocapture --exact $name
+            }
             $code = $LASTEXITCODE
             Remove-Item Env:\IORING_STRESS_TRIALS -ErrorAction SilentlyContinue
             $seconds = [int]((Get-Date) - $started).TotalSeconds
@@ -244,8 +279,8 @@ try {
                 Write-Report "no report line matched 'D-23' -- the harness's report wording may have changed; the CSV records $script:NoDetail" -Level warning
             }
 
-            "{0},{1},{2},{3},{4},{5}" -f (Get-Date -Format 'o'), $round, $name, $result, $seconds, $detail |
-                Add-Content -LiteralPath $summary -Encoding utf8
+            $row = "{0},{1},{2},{3},{4},{5}" -f (Get-Date -Format 'o'), $round, $name, $result, $seconds, $detail
+            [System.IO.File]::AppendAllText($summary, "$row`r`n", $script:Utf8NoBom)
 
             $mark = if ($code -eq 0) { 'pass' } else { '*** FAIL ***' }
             Write-Report ("  {0,-58} {1,-12} {2,4}s" -f $name, $mark, $seconds)
@@ -256,7 +291,7 @@ try {
             # reproduce the same interleaving.
             if ($code -ne 0) {
                 $log = Join-Path $OutputDirectory ("round-{0:D3}-{1}.log" -f $round, $name)
-                $output | Out-File -LiteralPath $log -Encoding utf8
+                [System.IO.File]::WriteAllLines($log, [string[]]$output, $script:Utf8NoBom)
                 Write-Report "      full output kept at $log" -Level detail
             }
         }

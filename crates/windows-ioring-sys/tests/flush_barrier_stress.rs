@@ -592,7 +592,24 @@ fn run_trial(ring: &mut IoRing, file: RawHandle, coverage: FlushCoverage) -> (Ob
                     .claim_if(&completion)
                     .expect("a token claims its own completion");
             }
-            let phase = *phase_of.get(&id).unwrap_or(&Phase::Flush);
+            // Every submitted operation is recorded in `phase_of` -- phase A, the
+            // flush, phase B -- so a miss here means the completion queue
+            // returned a `user_data` this trial never submitted. That is a defect
+            // worth stopping on, and the previous `unwrap_or(&Phase::Flush)` was
+            // the worst possible response to it: an unknown completion would be
+            // counted as a *second flush*, which is the one identity the whole
+            // analysis pivots on. The result would be a confusing measurement
+            // rather than a clear failure, in a harness whose entire purpose is
+            // making a rare reordering diagnosable.
+            let phase = *phase_of.get(&id).unwrap_or_else(|| {
+                let mut submitted: Vec<usize> = phase_of.keys().copied().collect();
+                submitted.sort_unstable();
+                panic!(
+                    "completion carried user_data {id}, which this trial never submitted. \
+                     The flush is {flush_id}; the {} submitted ids are {submitted:?}",
+                    submitted.len(),
+                )
+            });
             log.push(Event::Popped {
                 seq: pop_seq,
                 round,
