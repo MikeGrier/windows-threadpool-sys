@@ -220,6 +220,14 @@ try {
             # flush'. Both times the CSV kept filling with blank detail columns
             # and nothing said so.
             #
+            # The FIRST match is taken, which makes the instrument's print order
+            # part of this contract: an instrument printing several reports must
+            # print its representative one first. That has been wrong twice --
+            # the concurrent-rings instrument recorded worker 0 and the depth
+            # sweep recorded depth 128, each in a column labelled with the whole
+            # instrument. The rule is now stated in the harness's module docs
+            # too, since it constrains that file rather than this one.
+            #
             # So the pattern is anchored to something that does not get reworded,
             # AND a miss is recorded rather than passed over. Two separate
             # signals, because they reach different people: a warning for whoever

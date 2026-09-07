@@ -53,6 +53,19 @@
 //! cargo test -p windows-ioring-sys --test flush_barrier_stress -- --ignored --nocapture
 //! ```
 //!
+//! # An instrument's first report line is scraped
+//!
+//! [`tools/soak-flush-barrier.ps1`](../../../tools/soak-flush-barrier.ps1)
+//! records the **first** line matching `D-23` as the detail column of its CSV.
+//! So an instrument that prints several reports must print the representative
+//! one **first**: an aggregate, then the breakdown.
+//!
+//! This is a real coupling between two files and it has already been wrong
+//! twice -- the concurrent-rings instrument put worker 0's figures in a column
+//! labelled with the whole instrument, and the depth sweep put depth 128's
+//! there. Both are the same shape: a number that is quietly unrepresentative
+//! rather than obviously missing.
+//!
 //! Trial counts come from the environment so a run can be widened without
 //! editing this file:
 //!
@@ -1018,9 +1031,13 @@ fn the_drain_holds_with_concurrent_rings() {
     let mut first_reordered = None;
     let mut first_clean = None;
 
+    // Collected rather than printed here, so the TOTAL can be emitted first; see
+    // the note below the loop.
+    let mut per_worker = Vec::with_capacity(threads);
+
     for (worker, handle) in workers.into_iter().enumerate() {
         let result = handle.join().expect("a worker thread panicked");
-        eprintln!("  {}", result.report(&format!("worker {worker}")));
+        per_worker.push(result.report(&format!("worker {worker}")));
         total.trials += result.trials;
         total.reordered_trials += result.reordered_trials;
         total.d23_failures += result.d23_failures;
@@ -1034,6 +1051,26 @@ fn the_drain_holds_with_concurrent_rings() {
         if first_clean.is_none() {
             first_clean = result.first_clean;
         }
+    }
+
+    // The TOTAL first, then the per-worker breakdown.
+    //
+    // Ordering matters because it is scraped, not just read:
+    // `tools/soak-flush-barrier.ps1` takes the *first* line matching `D-23` as
+    // the CSV's detail column. With the per-worker lines printed as each thread
+    // was joined, the CSV recorded worker 0 -- one thread of `threads` -- while
+    // being labelled with the instrument's name, which is a quietly wrong number
+    // rather than a missing one.
+    //
+    // The total was also not printed at all on a passing run: it existed only
+    // inside the assertion message below, which renders on failure. So the
+    // figure a reader most wants was the one they could never get.
+    eprintln!(
+        "{}",
+        total.report(&format!("{threads} concurrent rings TOTAL"))
+    );
+    for line in &per_worker {
+        eprintln!("  {line}");
     }
 
     if let Some(clean) = &first_clean {
@@ -1077,7 +1114,14 @@ fn reordering_rate_by_ring_depth_is_reported() {
     // slack in the queue, the rate should move across these.
     const PER_TRIAL_OPS: u32 = (PHASE_OPS * 2 + 1) as u32;
 
-    eprintln!("Ring depth sweep, {count} trial(s) each, under contention:");
+    // Collected before anything is printed, for the same scraping reason as the
+    // concurrent-rings instrument: the soak runner takes the *first* `D-23` line
+    // as the CSV's detail, so the first line an instrument prints must be the one
+    // that represents it. Printing per-depth lines as they were produced put
+    // `depth 128` in a column labelled with the whole sweep's name.
+    let mut per_depth = Vec::new();
+    let mut combined = Campaign::new(0);
+
     for depth in [128_u32, 256, 512] {
         assert!(
             depth >= PER_TRIAL_OPS,
@@ -1094,6 +1138,28 @@ fn reordering_rate_by_ring_depth_is_reported() {
             );
             result.absorb(&observed);
         }
-        eprintln!("  {}", result.report(&format!("depth {depth}")));
+
+        combined.trials += result.trials;
+        combined.reordered_trials += result.reordered_trials;
+        combined.d23_failures += result.d23_failures;
+        combined.d24_overtakes += result.d24_overtakes;
+        combined.d24_total_overtakers += result.d24_total_overtakers;
+        combined.d24_worst = combined.d24_worst.max(result.d24_worst);
+        combined.same_round += result.same_round;
+
+        per_depth.push(result.report(&format!("depth {depth}")));
+    }
+
+    // The combined figure is the headline because it is the one that is
+    // comparable **across soak rounds** -- which is what the CSV is for. It is
+    // explicitly not the instrument's finding: pooling the depths averages away
+    // the very axis this measures, so the per-depth breakdown follows
+    // immediately and is what a reader should actually compare.
+    eprintln!(
+        "Ring depth sweep, {count} trial(s) each, under contention -- {}",
+        combined.report("ALL DEPTHS COMBINED")
+    );
+    for line in &per_depth {
+        eprintln!("  {line}");
     }
 }
