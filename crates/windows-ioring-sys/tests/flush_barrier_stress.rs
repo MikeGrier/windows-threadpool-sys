@@ -50,8 +50,22 @@
 //! `cargo test`. Run them explicitly:
 //!
 //! ```text
-//! cargo test -p windows-ioring-sys --test flush_barrier_stress -- --ignored --nocapture
+//! cargo test -p windows-ioring-sys --test flush_barrier_stress -- --ignored --nocapture --test-threads 1
 //! ```
+//!
+//! **`--test-threads 1` is not optional decoration.** Three of these instruments
+//! each start four contention writers, so the default parallel harness runs
+//! twelve of them at once and every instrument measures a load three times what
+//! it asked for -- while also competing with the other instruments' actual
+//! measurements. The numbers still come out, and they are not the numbers the
+//! instrument is designed to produce.
+//!
+//! An earlier version of this line omitted the flag, which is also how a
+//! temp-file collision between concurrent contention generators went unnoticed:
+//! every verification run had been serial.
+//!
+//! [`tools/soak-flush-barrier.ps1`](../../../tools/soak-flush-barrier.ps1) runs
+//! them one at a time for this reason, and is the better way to run a campaign.
 //!
 //! # An instrument's first report line is scraped
 //!
@@ -698,10 +712,21 @@ impl Contention {
             .map(|n| {
                 let stop = Arc::clone(&stop);
                 std::thread::spawn(move || {
-                    let path = std::env::temp_dir().join(format!(
-                        "windows-ioring-sys-flush-stress-load-{}-{n}.tmp",
-                        std::process::id()
-                    ));
+                    // Named through the same helper the fixtures use, which adds
+                    // the thread id. Without it the path was only pid + writer
+                    // index, so every `Contention::start(4)` in the process
+                    // produced the *same four paths* -- and three instruments
+                    // start one each. Run with the default parallel harness, as
+                    // this file's own documented command did, they overwrote each
+                    // other's files and deleted them on the way out, so each
+                    // instrument's load was not the load it thought it had.
+                    // Measured before the fix: four load files where twelve were
+                    // expected.
+                    //
+                    // This runs *on the writer thread*, so the id is that
+                    // writer's own and is unique across the process -- Rust
+                    // guarantees a `ThreadId` is never reused.
+                    let path = temp_file(&format!("load-{n}"));
                     let payload = vec![0xA5_u8; 4 * 1024 * 1024];
                     while !stop.load(Ordering::Relaxed) {
                         // Ordinary buffered writes plus a flush: the point is to
