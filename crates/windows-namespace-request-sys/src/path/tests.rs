@@ -301,9 +301,10 @@ fn the_ordinary_limit_is_one_less_than_max_path() {
 fn a_path_whose_character_count_hides_its_utf16_length_is_still_refused() {
     // The two tests above build ASCII, where bytes, `char`s and UTF-16 units are
     // the same number, so a path they accept or refuse says nothing about which
-    // unit was counted. This one separates them: every astral character is one
-    // `char` and *two* UTF-16 units, so a path measured in scalars looks about
-    // half as long as Windows considers it.
+    // unit was counted. This one separates them: a character above `U+FFFF` (a
+    // supplementary character) is one `char` but *two* UTF-16 units, because
+    // UTF-16 encodes it as a surrogate pair. A path built from those measured in
+    // scalars looks about half as long as Windows considers it.
     //
     // What this pins is the **contract** -- such a path is still refused -- and
     // not any single site's arithmetic. Measured, because the distinction is not
@@ -314,11 +315,11 @@ fn a_path_whose_character_count_hides_its_utf16_length_is_still_refused() {
     // stronger one -- its count comes from Windows and so cannot be in the wrong
     // unit -- which is worth knowing before anyone "simplifies" the pre-check
     // away as redundant.
-    let astral = '\u{1F600}';
-    assert_eq!(astral.len_utf16(), 2, "the premise of this test");
+    let supplementary = '\u{1F600}';
+    assert_eq!(supplementary.len_utf16(), 2, "the premise of this test");
 
-    // 3 units of `C:\` plus 128 astral characters is exactly the limit.
-    let accepted = format!(r"C:\{}", astral.to_string().repeat(128));
+    // 3 units of `C:\` plus 128 two-unit characters is exactly the limit.
+    let accepted = format!(r"C:\{}", supplementary.to_string().repeat(128));
     assert_eq!(accepted.encode_utf16().count(), 259);
     assert_eq!(accepted.chars().count(), 131);
 
