@@ -998,9 +998,11 @@ and once there must also re-supply what `std` was doing for it, notably catching
 unwind at the entry so a panic does not cross an `extern "system"` boundary.
 
 Each of those steps is simple. Collectively they are a minefield nobody crosses,
-which is the [SMOP principle](../DESIGN-NOTES.md#the-value-is-existence-not-cleverness)
-exactly: the value is existence, and when the correct construction is difficult,
-providing the constructor *is* the feature.
+which is the SMOP principle exactly: the value is existence, and when the correct
+construction is difficult, providing the constructor *is* the feature. [The link
+here pointed at a workspace DESIGN-NOTES section that has not landed on `main`;
+the principle is stated in full by the sentence itself, so the pointer is
+dropped rather than left dangling.]
 
 **The line is ownership, not construction.** The facility helps *construct* a
 thread and never *owns* one: a builder assembles the attribute list, applies the
