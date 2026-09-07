@@ -22,16 +22,24 @@
       summary.csv          one row per instrument per round
       round-NNN-<name>.log the full output of a FAILING run, kept verbatim
 
-    ROTATION ORDER IS DELIBERATE. The instruments run quiet-first, then
-    contended, then concurrent, then the depth sweep. A violation in the quiet
-    instrument means something different from one under load -- it would say
-    contention is not the trigger at all -- so it is worth knowing which of them
-    moved first rather than discovering everything at once.
+    ROTATION ORDER IS DELIBERATE. Five instruments run in this order: quiet,
+    contended, concurrent rings, the unordered control, then the depth sweep. A
+    D-23 failure in the quiet instrument would mean something different from one
+    under load -- it would say contention is not the trigger at all -- so it is
+    worth knowing which of them moved first rather than discovering everything at
+    once. The unordered control runs every round on purpose: it is what shows the
+    completion queue reorders at all on this machine, without which a clean
+    covering result might only mean nothing was there to reorder.
+
+    WHAT IT REPORTS. D-23 (the flush waits for what precedes it) is asserted, and
+    a failure there is a real defect. D-24's withdrawn hold-back half is counted
+    and never asserted -- a later write completing first is the documented
+    one-sided behaviour (D-47), and its rate is the thing worth watching.
 
     THIS WRITES A LOT. Each trial writes about 32 MiB of unbuffered device I/O,
-    and a default round is four instruments at 100 trials each. Budget roughly
-    ten to fifteen GiB written per round, and prefer -TrialsPerRound on a small
-    or heavily-worn disk.
+    and a default round is five instruments at 100 trials each. Budget roughly
+    fifteen GiB written per round, and prefer -TrialsPerRound on a small or
+    heavily-worn disk.
 
 .PARAMETER Rounds
     How many rotations to run. Default 5. Use 0 for "until stopped" (Ctrl+C).
@@ -80,7 +88,7 @@ $instruments = @(
     'the_drain_holds_under_deliberate_disk_contention'
     'the_drain_holds_with_concurrent_rings'
     'the_unordered_control_still_discriminates_under_contention'
-    'violation_rate_by_ring_depth_is_reported'
+    'reordering_rate_by_ring_depth_is_reported'
 )
 if ($Only) {
     $instruments = @($instruments | Where-Object { $_ -like "*$Only*" })
@@ -135,15 +143,25 @@ try {
             # The report line the instrument printed, so the CSV carries the
             # rate rather than only pass/fail.
             #
-            # Matched on 'trial(s) violated', which is the stable part of the
-            # report's wording. An earlier version matched 'violation(s) in' and
-            # went silently empty when the report was reworded to separate D-23
-            # from D-24 -- the CSV kept filling with blank detail columns and
-            # nothing said so, which is the failure mode a pass/fail-only column
-            # cannot reveal.
-            $detail = ($output | Select-String -Pattern 'trial\(s\) violated' |
+            # Matched on 'D-23', a decision ID rather than prose. This pattern has
+            # now been broken TWICE by rewording the report -- first when it
+            # matched 'violation(s) in', then when it matched 'trial(s) violated'
+            # and D-47's correction renamed that to 'had a completion cross the
+            # flush'. Both times the CSV kept filling with blank detail columns
+            # and nothing said so.
+            #
+            # So the pattern is anchored to something that does not get reworded,
+            # AND a miss is now reported instead of silently producing an empty
+            # column -- a soak run whose detail is quietly blank is worse than one
+            # that fails loudly, because the tally still looks healthy.
+            $detail = ($output | Select-String -Pattern 'D-23' |
                 Select-Object -First 1).Line
-            if ($detail) { $detail = $detail.Trim() -replace ',', ';' } else { $detail = '' }
+            if ($detail) {
+                $detail = $detail.Trim() -replace ',', ';'
+            } else {
+                $detail = ''
+                Write-Host "      warning: no report line matched 'D-23' -- the harness's report wording may have changed; the detail column is empty" -ForegroundColor Yellow
+            }
 
             "{0},{1},{2},{3},{4},{5}" -f (Get-Date -Format 'o'), $round, $name, $result, $seconds, $detail |
                 Add-Content -LiteralPath $summary -Encoding utf8

@@ -19,12 +19,12 @@
 //! That admitted two readings, and a single assertion could not separate them:
 //! either the documented guarantee was false, or the observation was not
 //! faithful -- a test that drains, asserts and discards cannot show whether the
-//! violating completion was posted in a different drain round, arrived alone or
+//! overtaking completion was posted in a different drain round, arrived alone or
 //! in a burst, or how its timing compared to the flush's.
 //!
 //! **These instruments settled it.** Across roughly 4,500 trials the drain side
 //! never failed once, the hold-back side failed in every condition including a
-//! completely idle ring, and every violation was confined to a single drain
+//! completely idle ring, and every overtake was confined to a single drain
 //! round -- so the order observed is the order the kernel posted. The flag is
 //! **one-sided**, and D-24's second half was withdrawn by
 //! [D-47](../DESIGN-NOTES.md#d-47-detail).
@@ -226,7 +226,7 @@ enum Event {
     /// A drain round began -- one `try_pop` loop until it yields `None`.
     ///
     /// This is the field that separates "the CQ posted them in this order" from
-    /// "we looked twice and the second look saw more": a violating pair inside
+    /// "we looked twice and the second look saw more": a mismatched pair inside
     /// one round was posted that way, a pair spanning rounds was not
     /// necessarily.
     RoundBegan { round: usize, at: Duration },
@@ -278,7 +278,7 @@ impl EventLog {
         self.events.push_back(event);
     }
 
-    /// Render the log, with the violating operations called out.
+    /// Render the log, with the operations that crossed the flush called out.
     fn render(&self, observed: &Observed) -> String {
         use std::fmt::Write as _;
         let mut out = String::new();
@@ -300,26 +300,30 @@ impl EventLog {
         );
         let _ = writeln!(
             out,
-            "  violations: {} phase-A after the flush, {} phase-B before it",
+            "  reordered_trials: {} phase-A after the flush, {} phase-B before it",
             observed.a_after_flush, observed.b_before_flush
         );
-        if !observed.violators.is_empty() {
-            let _ = writeln!(out, "  violating user_data: {:?}", observed.violators);
+        if !observed.crossed.is_empty() {
+            let _ = writeln!(
+                out,
+                "  crossed the flush, user_data: {:?}",
+                observed.crossed
+            );
             // The single most useful line in the dump. Inside one round, the
             // order is what the completion queue held when we looked, so the
             // kernel posted it that way. Across rounds, the two completions
             // were seen by separate looks, and the ordering claim is weaker.
             let _ = writeln!(
                 out,
-                "  the flush was popped in drain round {}; every violator {} that round \
+                "  the flush was popped in drain round {}; every crossing {} that round \
                  -- {}",
                 observed.flush_round,
-                if observed.all_violators_in_flush_round {
+                if observed.all_crossings_in_flush_round {
                     "shared"
                 } else {
                     "did NOT share"
                 },
-                if observed.all_violators_in_flush_round {
+                if observed.all_crossings_in_flush_round {
                     "so this is the completion queue's own posting order"
                 } else {
                     "so this spans separate looks at the queue, which is weaker evidence"
@@ -361,8 +365,8 @@ impl EventLog {
                     bytes,
                     at,
                 } => {
-                    let mark = if observed.violators.contains(user_data) {
-                        " <<< VIOLATION"
+                    let mark = if observed.crossed.contains(user_data) {
+                        " <<< CROSSED THE FLUSH"
                     } else if *phase == Phase::Flush {
                         " <<< the flush"
                     } else {
@@ -395,25 +399,34 @@ struct Observed {
     flush_id: usize,
     flush_position: usize,
     /// The user_data of every operation on the wrong side of the flush.
-    violators: Vec<usize>,
+    crossed: Vec<usize>,
     /// Which drain round the flush was popped in.
     flush_round: usize,
-    /// Whether every violator shared the flush's drain round.
+    /// Whether every crossing shared the flush's drain round.
     ///
-    /// A violation *within* one round is the CQ's own posting order. One that
+    /// A crossing *within* one round is the CQ's own posting order. One that
     /// spans rounds means the two completions were seen by separate looks at
     /// the queue, which is a weaker claim about what the kernel did.
-    all_violators_in_flush_round: bool,
+    all_crossings_in_flush_round: bool,
 }
 
 impl Observed {
-    /// Did the completion queue depart from the barrier's contract?
+    /// Did any completion cross the flush, in either direction?
     ///
-    /// For the covering case this is a contract violation. For the unordered
-    /// control it is the *expected* signal -- the control exists to show the
-    /// queue reorders at all on this machine, so the covering result is not
-    /// passing for want of anything to reorder.
-    fn violated(&self) -> bool {
+    /// **Deliberately does not distinguish a failure from an expectation**, and
+    /// so is never what an instrument asserts on the covering case. The two
+    /// directions mean different things after
+    /// [D-47](../DESIGN-NOTES.md#d-47-detail):
+    ///
+    /// - `a_after_flush` -- a write queued *before* the flush completing after
+    ///   it. D-23, which holds, so this is a genuine contract failure.
+    /// - `b_before_flush` -- a write queued *after* the flush completing before
+    ///   it. The documented one-sided behaviour, not a defect.
+    ///
+    /// What this is for is the unordered control, where the question is only
+    /// whether the queue reorders *at all* on this machine -- otherwise a
+    /// passing covering result might mean nothing was ever there to reorder.
+    fn reordered(&self) -> bool {
         self.a_after_flush > 0 || self.b_before_flush > 0
     }
 }
@@ -572,19 +585,19 @@ fn run_trial(ring: &mut IoRing, file: RawHandle, coverage: FlushCoverage) -> (Ob
         .expect("the flush's own completion");
     let flush_round = *round_of.get(&flush_id).expect("the flush was popped");
 
-    let mut violators = Vec::new();
+    let mut crossed = Vec::new();
     let a_after_flush = order[flush_position + 1..]
         .iter()
         .filter(|id| phase_a.contains(id))
-        .inspect(|id| violators.push(**id))
+        .inspect(|id| crossed.push(**id))
         .count();
     let b_before_flush = order[..flush_position]
         .iter()
         .filter(|id| phase_b.contains(id))
-        .inspect(|id| violators.push(**id))
+        .inspect(|id| crossed.push(**id))
         .count();
 
-    let all_violators_in_flush_round = violators
+    let all_crossings_in_flush_round = crossed
         .iter()
         .all(|id| round_of.get(id) == Some(&flush_round));
 
@@ -595,9 +608,9 @@ fn run_trial(ring: &mut IoRing, file: RawHandle, coverage: FlushCoverage) -> (Ob
             order,
             flush_id,
             flush_position,
-            violators,
+            crossed,
             flush_round,
-            all_violators_in_flush_round,
+            all_crossings_in_flush_round,
         },
         log,
     )
@@ -685,27 +698,43 @@ impl Drop for Fixture {
 
 /// Outcome of a repeated run.
 ///
-/// The two halves of the contract are counted **separately and on purpose**.
-/// D-23 (the flush waits for preceding writes) and D-24 (it held back the ones
-/// queued after) are different claims, and every violation seen so far has been
-/// D-24 with D-23 intact. A single `violations` counter would hide exactly the
-/// distinction the campaign exists to measure, so it is not the number reported.
+/// The two directions are counted **separately and on purpose**, because after
+/// [D-47](../DESIGN-NOTES.md#d-47-detail) they are no longer the same kind of
+/// event:
+///
+/// - **D-23** -- the flush waits for what precedes it. This holds, so a phase-A
+///   write completing after the flush is a genuine **failure** of a live
+///   contract, and is what the instruments assert.
+/// - **D-24's withdrawn half** -- that operations queued after are held back.
+///   They are not, so a phase-B write completing early is the **documented
+///   one-sided behaviour**, not a defect. It is counted to measure its rate, and
+///   never asserted against.
+///
+/// A single combined counter would collapse a failure and an expectation into
+/// one number, which is exactly the distinction this campaign exists to draw.
 struct Campaign {
     trials: usize,
-    violations: usize,
-    /// Trials where a phase-A write completed after the flush. D-23's failure.
+    /// Trials where any completion crossed the flush, in either direction.
+    ///
+    /// Deliberately *not* the headline number: it mixes the two above. It is
+    /// asserted only by the unordered control, where the question is whether
+    /// reordering happens at all without a barrier.
+    reordered_trials: usize,
+    /// Trials where a phase-A write completed after the flush. **D-23's failure**
+    /// -- a broken contract.
     d23_failures: usize,
-    /// Trials where a phase-B write completed before the flush. D-24's failure.
-    d24_failures: usize,
+    /// Trials where a phase-B write completed before the flush. The **documented
+    /// one-sided behaviour** (D-47), reported rather than asserted.
+    d24_overtakes: usize,
     /// Total phase-B writes seen ahead of the flush, across all trials.
     d24_total_overtakers: usize,
     /// The largest number of overtakers in any one trial.
     d24_worst: usize,
-    /// The first violating trial's rendered log, if any.
-    first_violation: Option<String>,
+    /// The first reordered trial's rendered log, if any.
+    first_reordered: Option<String>,
     /// A clean trial's rendered log, for comparison.
     first_clean: Option<String>,
-    /// Violating trials whose violators all shared the flush's drain round.
+    /// Reordered trials whose crossings all shared the flush's drain round.
     same_round: usize,
 }
 
@@ -713,12 +742,12 @@ impl Campaign {
     fn new(trials: usize) -> Self {
         Self {
             trials,
-            violations: 0,
+            reordered_trials: 0,
             d23_failures: 0,
-            d24_failures: 0,
+            d24_overtakes: 0,
             d24_total_overtakers: 0,
             d24_worst: 0,
-            first_violation: None,
+            first_reordered: None,
             first_clean: None,
             same_round: 0,
         }
@@ -729,13 +758,13 @@ impl Campaign {
             self.d23_failures += 1;
         }
         if observed.b_before_flush > 0 {
-            self.d24_failures += 1;
+            self.d24_overtakes += 1;
             self.d24_total_overtakers += observed.b_before_flush;
             self.d24_worst = self.d24_worst.max(observed.b_before_flush);
         }
-        if observed.violated() {
-            self.violations += 1;
-            if observed.all_violators_in_flush_round {
+        if observed.reordered() {
+            self.reordered_trials += 1;
+            if observed.all_crossings_in_flush_round {
                 self.same_round += 1;
             }
         }
@@ -743,15 +772,16 @@ impl Campaign {
 
     fn report(&self, what: &str) -> String {
         format!(
-            "{what}: {} of {} trial(s) violated ({:.2}%) -- D-23 (flush waits for preceding) \
-             failed {} time(s), D-24 (holds back subsequent) failed {} time(s); {} overtaking \
-             write(s) in total, worst {} in one trial; {} violation(s) confined to the flush's \
-             own drain round",
-            self.violations,
+            "{what}: {} of {} trial(s) had a completion cross the flush ({:.2}%) -- D-23 \
+             (the flush waits for preceding writes) FAILED {} time(s); D-24's withdrawn \
+             hold-back claim: {} trial(s) where a later write completed first (documented \
+             one-sided behaviour; not a defect); {} overtaking write(s) in total; worst {} in \
+             one trial; {} crossing(s) confined to the flush's own drain round",
+            self.reordered_trials,
             self.trials,
-            100.0 * self.violations as f64 / self.trials as f64,
+            100.0 * self.reordered_trials as f64 / self.trials as f64,
             self.d23_failures,
-            self.d24_failures,
+            self.d24_overtakes,
             self.d24_total_overtakers,
             self.d24_worst,
             self.same_round
@@ -759,7 +789,7 @@ impl Campaign {
     }
 }
 
-/// Run `count` trials with `coverage`, keeping the first violating log and the
+/// Run `count` trials with `coverage`, keeping the first reordered log and the
 /// first clean one.
 fn campaign(tag: &str, coverage: FlushCoverage, count: usize) -> Campaign {
     let mut fixture = Fixture::new(tag);
@@ -768,9 +798,9 @@ fn campaign(tag: &str, coverage: FlushCoverage, count: usize) -> Campaign {
     for trial in 0..count {
         let (observed, log) = run_trial(&mut fixture.ring, fixture.handle, coverage);
         result.absorb(&observed);
-        if observed.violated() {
-            if result.first_violation.is_none() {
-                result.first_violation = Some(format!(
+        if observed.reordered() {
+            if result.first_reordered.is_none() {
+                result.first_reordered = Some(format!(
                     "  trial {trial} of {count}, coverage {coverage:?}\n{}",
                     log.render(&observed)
                 ));
@@ -805,8 +835,8 @@ fn the_drain_holds_across_many_quiet_trials() {
     if let Some(clean) = &result.first_clean {
         eprintln!("A CLEAN TRIAL, for comparison:\n{clean}");
     }
-    if let Some(violation) = &result.first_violation {
-        eprintln!("THE FIRST VIOLATION:\n{violation}");
+    if let Some(reordered) = &result.first_reordered {
+        eprintln!("THE FIRST TRIAL WHERE A COMPLETION CROSSED THE FLUSH:\n{reordered}");
     }
 
     // Only D-23 is asserted. A phase-B write completing early is the documented
@@ -837,8 +867,8 @@ fn the_drain_holds_under_deliberate_disk_contention() {
     if let Some(clean) = &result.first_clean {
         eprintln!("A CLEAN TRIAL, for comparison:\n{clean}");
     }
-    if let Some(violation) = &result.first_violation {
-        eprintln!("THE FIRST VIOLATION:\n{violation}");
+    if let Some(reordered) = &result.first_reordered {
+        eprintln!("THE FIRST TRIAL WHERE A COMPLETION CROSSED THE FLUSH:\n{reordered}");
     }
 
     // D-23 only; see the quiet instrument for why D-24 is reported, not asserted.
@@ -867,12 +897,12 @@ fn the_unordered_control_still_discriminates_under_contention() {
     let result = campaign("control", FlushCoverage::Unordered, count);
 
     eprintln!("{}", result.report("unordered control under contention"));
-    if let Some(sample) = &result.first_violation {
+    if let Some(sample) = &result.first_reordered {
         eprintln!("A REORDERED CONTROL TRIAL:\n{sample}");
     }
 
     assert!(
-        result.violations > 0,
+        result.reordered_trials > 0,
         "an unordered flush produced completions in strict submission order in all {count} \
          contended trials. The covering assertion would then pass for the wrong reason under \
          contention, so a contended covering result proves nothing until this is understood.",
@@ -928,21 +958,21 @@ fn the_drain_holds_with_concurrent_rings() {
         .collect();
 
     let mut total = Campaign::new(0);
-    let mut first_violation = None;
+    let mut first_reordered = None;
     let mut first_clean = None;
 
     for (worker, handle) in workers.into_iter().enumerate() {
         let result = handle.join().expect("a worker thread panicked");
         eprintln!("  {}", result.report(&format!("worker {worker}")));
         total.trials += result.trials;
-        total.violations += result.violations;
+        total.reordered_trials += result.reordered_trials;
         total.d23_failures += result.d23_failures;
-        total.d24_failures += result.d24_failures;
+        total.d24_overtakes += result.d24_overtakes;
         total.d24_total_overtakers += result.d24_total_overtakers;
         total.d24_worst = total.d24_worst.max(result.d24_worst);
         total.same_round += result.same_round;
-        if first_violation.is_none() {
-            first_violation = result.first_violation;
+        if first_reordered.is_none() {
+            first_reordered = result.first_reordered;
         }
         if first_clean.is_none() {
             first_clean = result.first_clean;
@@ -952,8 +982,8 @@ fn the_drain_holds_with_concurrent_rings() {
     if let Some(clean) = &first_clean {
         eprintln!("A CLEAN TRIAL, for comparison:\n{clean}");
     }
-    if let Some(violation) = &first_violation {
-        eprintln!("THE FIRST VIOLATION:\n{violation}");
+    if let Some(reordered) = &first_reordered {
+        eprintln!("THE FIRST TRIAL WHERE A COMPLETION CROSSED THE FLUSH:\n{reordered}");
     }
 
     // D-23 only, as in the single-ring instruments. D-24 failures are expected
@@ -968,14 +998,14 @@ fn the_drain_holds_with_concurrent_rings() {
     );
 }
 
-/// Does the violation rate track queue depth?
+/// Does the overtake rate track queue depth?
 ///
-/// Reports rather than asserts. If violations appear only at depth, that is a
+/// Reports rather than asserts. If reordered_trials appear only at depth, that is a
 /// different shape of answer from a fixed per-trial probability, and it is
 /// cheap to find out while the instrument is already built.
 #[test]
 #[ignore = "writes tens of MiB per trial; run explicitly"]
-fn violation_rate_by_ring_depth_is_reported() {
+fn reordering_rate_by_ring_depth_is_reported() {
     let count = (trials() / 4).max(5);
     let _load = Contention::start(4);
 
@@ -986,7 +1016,7 @@ fn violation_rate_by_ring_depth_is_reported() {
     // anything. Found by running this sweep, which originally started at 64.
     //
     // So what varies here is the ring's *headroom* over a fixed shape, not the
-    // shape itself. That is still the interesting axis: if violations need
+    // shape itself. That is still the interesting axis: if reordered_trials need
     // slack in the queue, the rate should move across these.
     const PER_TRIAL_OPS: u32 = (PHASE_OPS * 2 + 1) as u32;
 
