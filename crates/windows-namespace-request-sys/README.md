@@ -49,7 +49,7 @@ it schedules nothing, chooses no delivery model, and reports raw Win32 outcomes
 without normalising them.
 
 The convention is stated for the whole workspace in the repository's
-[README](https://github.com/MikeGrier/windows-threadpool-sys#crate-naming).
+[README](../../README.md#crate-naming).
 
 ## A path is copied; a handle is duplicated
 

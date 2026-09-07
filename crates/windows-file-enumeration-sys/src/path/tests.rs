@@ -181,9 +181,18 @@ fn a_device_namespace_path_is_resolved_rather_than_kept_verbatim() {
 /// An absolute path of exactly `units` UTF-16 units, already in normal form so
 /// `GetFullPathNameW` returns it unchanged and the resolved length is the input
 /// length.
+///
+/// UTF-16 units and not bytes or `char`s, because that is the unit Win32
+/// measures a path in: `MAX_PATH` is a count of `WCHAR`. The three coincide for
+/// the ASCII this builds, so counting the prefix any other way would pass today
+/// and quietly measure the wrong thing the moment a case uses a character that
+/// is not one byte, one scalar, and one unit at once.
 fn absolute_path_of_length(units: usize) -> String {
     let prefix = r"C:\";
-    format!("{prefix}{}", "a".repeat(units - prefix.len()))
+    format!(
+        "{prefix}{}",
+        "a".repeat(units - prefix.encode_utf16().count())
+    )
 }
 
 #[test]
@@ -193,7 +202,7 @@ fn an_ordinary_path_of_exactly_max_path_content_is_accepted() {
     // cannot see, and it is the expensive direction: it refuses a path Windows
     // would have opened.
     let path = absolute_path_of_length(259);
-    assert_eq!(path.chars().count(), 259);
+    assert_eq!(path.encode_utf16().count(), 259);
 
     let prepared = prepare_str(&path).expect("259 units is within the ordinary limit");
     assert_eq!(text(&prepared), path);
@@ -203,7 +212,7 @@ fn an_ordinary_path_of_exactly_max_path_content_is_accepted() {
 fn an_ordinary_path_one_unit_past_max_path_content_is_rejected() {
     // 260 counts the terminator, so 260 content units do not fit.
     let path = absolute_path_of_length(260);
-    assert_eq!(path.chars().count(), 260);
+    assert_eq!(path.encode_utf16().count(), 260);
 
     let error = prepare_str(&path).expect_err("260 units leaves no room for the terminator");
     assert_eq!(error.failure(), RequestFailure::PathTooLong);

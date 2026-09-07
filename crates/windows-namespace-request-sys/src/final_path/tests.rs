@@ -117,9 +117,9 @@ fn the_buffer_grows_for_a_path_longer_than_the_first_attempt() {
         .to_string_lossy();
 
     assert!(
-        resolved.chars().count() > 260,
-        "the fixture must actually exceed the first attempt: {} chars",
-        resolved.chars().count()
+        resolved.encode_utf16().count() > 260,
+        "the fixture must actually exceed the first attempt: {} UTF-16 units",
+        resolved.encode_utf16().count()
     );
     assert!(resolved.ends_with("f.t"), "unexpected: {resolved}");
 }

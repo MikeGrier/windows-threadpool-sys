@@ -102,9 +102,9 @@ fn a_deeply_nested_path_beyond_the_first_attempt_still_resolves() {
     let resolved = resolve(&path);
 
     assert!(
-        resolved.chars().count() > 260,
-        "the fixture must exceed the first attempt: {} chars",
-        resolved.chars().count()
+        resolved.encode_utf16().count() > 260,
+        "the fixture must exceed the first attempt: {} UTF-16 units",
+        resolved.encode_utf16().count()
     );
     assert!(resolved.ends_with("file.txt"), "unexpected: {resolved}");
 }
