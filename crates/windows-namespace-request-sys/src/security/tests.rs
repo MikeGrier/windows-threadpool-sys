@@ -509,3 +509,43 @@ fn a_capture_moves_and_shares_across_threads() {
 
     assert_eq!(observed, AclState::Populated(1));
 }
+
+#[test]
+fn a_capture_failure_exposes_its_os_error_both_ways() {
+    // `raw_os_error` survived replacement by `None`, `Some(0)`, `Some(1)`, and
+    // `Some(-1)`, and `source` survived replacement by `None`. The test above
+    // asserts the failure stage and the rendered message, neither of which
+    // touches either accessor.
+    //
+    // The two routes are asserted against each other rather than against a
+    // literal code: which error Windows reports for a zeroed descriptor is its
+    // business, but whatever it is must reach a caller identically through the
+    // typed accessor and through the standard `source` chain. That also rules
+    // out every constant the sweep tried, including the plausible-looking ones.
+    use std::error::Error as _;
+
+    let zeroed = AlignedBuffer::zeroed(size_of::<SECURITY_DESCRIPTOR>(), SELF_RELATIVE_ALIGNMENT);
+
+    // SAFETY: the buffer outlives the call; its contents are not a valid
+    // descriptor, which is what makes this fail.
+    let error = unsafe { SecurityDescriptor::capture(zeroed.as_ptr().cast::<c_void>()) }
+        .expect_err("a zeroed descriptor has revision 0 and cannot be valid");
+
+    let code = error
+        .raw_os_error()
+        .expect("this failure came from a Win32 call, so it carries a code");
+    assert_ne!(
+        code, 0,
+        "a success code would mean the capture had not failed at all"
+    );
+
+    let source = error.source().expect("the OS error is the source");
+    assert_eq!(
+        source
+            .downcast_ref::<std::io::Error>()
+            .expect("the source is the io::Error behind the failure")
+            .raw_os_error(),
+        Some(code),
+        "the typed accessor and the source chain must report the same error"
+    );
+}

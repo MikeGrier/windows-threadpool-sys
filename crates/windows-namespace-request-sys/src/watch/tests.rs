@@ -289,3 +289,51 @@ fn a_watch_moves_to_another_thread_and_still_signals() {
         "a notification handle is usable from a thread that did not create it"
     );
 }
+
+#[test]
+fn the_configured_subtree_and_filter_read_back_through_their_accessors() {
+    // `subtree -> false` and `filter -> Default::default()` both survived a
+    // mutation run. Every test above builds a watch and then *performs* it, and
+    // the perform path reads the fields directly -- so nothing distinguished an
+    // accessor reporting the truth from one reporting a constant.
+    //
+    // `WatchDirectory::new` defaults `subtree` to false and the filter to an
+    // empty set, so both values here are deliberately the opposite: a `true`
+    // subtree, and a filter with bits set. A test that watched the default
+    // shape would pass against either constant.
+    let fixture = Fixture::new("watch-accessors");
+    let filter = NotifyFilter::FILE_NAME | NotifyFilter::LAST_WRITE;
+    let request = watch_for(&fixture, filter).with_subtree(true);
+
+    assert!(
+        request.subtree(),
+        "a caller that asked to watch the subtree must be able to see that it did"
+    );
+    assert_eq!(request.filter(), filter);
+    assert_ne!(
+        filter,
+        NotifyFilter::default(),
+        "the filter under test must differ from the default, or a constant \
+         accessor passes"
+    );
+}
+
+#[test]
+fn an_unconfigured_watch_reads_back_as_the_narrowest_one() {
+    // The other half: the defaults are what `new` documents rather than what an
+    // accessor invents, and asserting them is what stops the test above from
+    // being satisfied by an accessor that always reports the configured shape.
+    let fixture = Fixture::new("watch-defaults");
+    let text = fixture
+        .directory()
+        .to_str()
+        .expect("the fixture path is valid UTF-8");
+    let request =
+        WatchDirectory::new(prepare(&Wtf16String::from(text)).expect("prepare the fixture path"));
+
+    assert!(
+        !request.subtree(),
+        "watching a whole tree is the expensive choice and must be asked for"
+    );
+    assert_eq!(request.filter(), NotifyFilter::default());
+}

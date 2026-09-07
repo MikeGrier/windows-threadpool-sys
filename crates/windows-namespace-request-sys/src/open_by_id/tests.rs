@@ -18,8 +18,8 @@ use windows_sys::Win32::Storage::FileSystem::{
 };
 
 use super::{FileIdentifier, OpenFileByIdentifier};
-use crate::CapturedHandle;
 use crate::handle::tests::{FILE_CONTENTS, Fixture, handle_allocation};
+use crate::{CapturedHandle, SecurityAttributes};
 
 const AUDITED_SHARE: u32 = FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE;
 
@@ -274,4 +274,80 @@ fn a_request_performs_the_same_way_on_another_thread() {
     .expect("the worker did not panic");
 
     assert_eq!(length, FILE_CONTENTS.len() as u64);
+}
+
+#[test]
+fn every_configured_parameter_reads_back_through_its_own_accessor() {
+    // Four accessors -- `desired_access`, `share_mode`, `security`, and
+    // `flags_and_attributes` -- all survived replacement by constants in a
+    // mutation run. Every test above builds a request and then *performs* it,
+    // and the perform path reads the struct's fields directly, so nothing
+    // distinguished an accessor that reports the truth from one that does not.
+    //
+    // `OpenFileByIdentifier::new` starts every parameter at zero or `None`, so
+    // the values here are deliberately non-zero and pairwise distinct: a zero
+    // would be indistinguishable from the default, and a repeated value would
+    // let one accessor read a neighbour's field undetected.
+    let _allocating = handle_allocation()
+        .read()
+        .expect("the lock is not poisoned");
+    let fixture = Fixture::new("byid-accessors");
+    let file = fixture.open_file();
+    let id = file_id_of(&file);
+    let hint = open_directory_for_hint(&fixture);
+
+    let request = OpenFileByIdentifier::new(
+        CapturedHandle::capture(hint.as_handle()).expect("capture the volume hint"),
+        FileIdentifier::FileId(id),
+    )
+    .with_desired_access(FILE_GENERIC_READ)
+    .with_share_mode(FILE_SHARE_READ)
+    .with_flags_and_attributes(FILE_FLAG_BACKUP_SEMANTICS);
+
+    assert_eq!(request.desired_access(), FILE_GENERIC_READ);
+    assert_eq!(request.share_mode(), FILE_SHARE_READ);
+    assert_eq!(request.flags_and_attributes(), FILE_FLAG_BACKUP_SEMANTICS);
+    assert!(
+        request.security().is_none(),
+        "nothing was supplied, so nothing must be reported"
+    );
+
+    let configured = [
+        FILE_GENERIC_READ,
+        FILE_SHARE_READ,
+        FILE_FLAG_BACKUP_SEMANTICS,
+    ];
+    for (index, value) in configured.iter().enumerate() {
+        assert_ne!(*value, 0, "a zero is indistinguishable from the default");
+        for other in &configured[index + 1..] {
+            assert_ne!(
+                value, other,
+                "two parameters share a value, so this test cannot tell their \
+                 accessors apart"
+            );
+        }
+    }
+}
+
+#[test]
+fn supplied_security_attributes_read_back_rather_than_reporting_none() {
+    // `security -> None` is the one accessor whose default is already `None`,
+    // so it needs the opposite case: attributes that were supplied must be
+    // visible to a caller inspecting the request, not only to the open that
+    // consumes it.
+    let _allocating = handle_allocation()
+        .read()
+        .expect("the lock is not poisoned");
+    let fixture = Fixture::new("byid-security");
+    let file = fixture.open_file();
+    let id = file_id_of(&file);
+    let hint = open_directory_for_hint(&fixture);
+
+    let request = OpenFileByIdentifier::new(
+        CapturedHandle::capture(hint.as_handle()).expect("capture the volume hint"),
+        FileIdentifier::FileId(id),
+    )
+    .with_security(Some(SecurityAttributes::new(None, false)));
+
+    assert!(request.security().is_some());
 }

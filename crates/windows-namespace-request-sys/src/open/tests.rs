@@ -385,3 +385,69 @@ fn a_copy_duplicates_the_template_rather_than_sharing_the_owner() {
     copy.perform()
         .expect("the copy's template outlived the original");
 }
+
+#[test]
+fn every_configured_parameter_reads_back_through_its_own_accessor() {
+    // A mutation run replaced `desired_access`, `share_mode`, and
+    // `creation_disposition` with constants and nothing failed. The tests above
+    // build requests with `with_*` and then *open* them, so they exercise the
+    // fields through Win32 -- which is exactly what cannot distinguish an
+    // accessor reporting the truth from one reporting a constant, because the
+    // open path reads the struct's fields directly rather than through them.
+    //
+    // Every value here is deliberately non-zero and pairwise distinct.
+    // `OpenFile::new` starts every parameter at zero, so a test that configured
+    // a zero -- or reused one value twice -- would be satisfied by
+    // `-> Default::default()` and by an accessor reading a neighbour's field.
+    let fixture = Fixture::new("open-accessors");
+    let request = request_for(fixture.directory())
+        .with_desired_access(FILE_GENERIC_READ)
+        .with_share_mode(FILE_SHARE_READ)
+        .with_creation_disposition(OPEN_EXISTING)
+        .with_flags_and_attributes(FILE_FLAG_BACKUP_SEMANTICS);
+
+    assert_eq!(request.desired_access(), FILE_GENERIC_READ);
+    assert_eq!(request.share_mode(), FILE_SHARE_READ);
+    assert_eq!(request.creation_disposition(), OPEN_EXISTING);
+    assert_eq!(request.flags_and_attributes(), FILE_FLAG_BACKUP_SEMANTICS);
+
+    // The property the four assertions above rest on, stated rather than left
+    // to the reader's eye: these are Win32 constants and their values are not
+    // obvious, so a collision between two of them would silently weaken the
+    // test into one that cannot tell those accessors apart.
+    let configured = [
+        FILE_GENERIC_READ,
+        FILE_SHARE_READ,
+        OPEN_EXISTING,
+        FILE_FLAG_BACKUP_SEMANTICS,
+    ];
+    for (index, value) in configured.iter().enumerate() {
+        assert_ne!(
+            *value, 0,
+            "a zero is indistinguishable from the unset default"
+        );
+        for other in &configured[index + 1..] {
+            assert_ne!(
+                value, other,
+                "two parameters share a value, so this test cannot tell their \
+                 accessors apart"
+            );
+        }
+    }
+}
+
+#[test]
+fn an_unset_parameter_reads_back_as_nothing_rather_than_as_a_plausible_open() {
+    // The contract `OpenFile::new` states: every parameter starts at "the
+    // caller said nothing" rather than at a plausible-looking open, because a
+    // plausible default is exactly what a caller cannot see they got. An
+    // accessor that invented one would hide that from them.
+    let fixture = Fixture::new("open-unset");
+    let request = request_for(fixture.directory());
+
+    assert_eq!(request.desired_access(), 0);
+    assert_eq!(request.share_mode(), 0);
+    assert_eq!(request.creation_disposition(), 0);
+    assert_eq!(request.flags_and_attributes(), 0);
+    assert!(request.security().is_none());
+}

@@ -27,6 +27,32 @@ code lives behind `cfg(windows)`. The workspace's `wtf-string` crate is the
 exception -- its portable core has no `cfg(windows)` gating, so CI additionally
 builds, tests, and lints it on Linux and macOS.
 
+## Crate naming
+
+The `-sys` suffix here does **not** carry its usual ecosystem meaning. A `-sys`
+crate is normally raw FFI declarations with no abstraction over them; every
+`windows-*-sys` crate in this workspace instead wraps a great deal of `unsafe`,
+and takes its declarations from
+[`windows-sys`](https://crates.io/crates/windows-sys) rather than making its own.
+
+What the suffix marks is a **layer**:
+
+- **`windows-*-sys`** -- makes an existing Win32 API memory-safe *without adding
+  policy*. It schedules nothing, picks no delivery model, and reports the
+  platform's outcomes unnormalised.
+- **no suffix** -- decides something Win32 has no equivalent of.
+  `windows-waitable-queues` is the worked example: it chooses a slot protocol, an
+  overflow policy, and a signalling discipline, so calling it `-sys` would
+  misdescribe how much it decides on the caller's behalf.
+
+So the presence of `unsafe` wrappers is not evidence either way -- it is the job
+description of the first kind. The distinction is *policy*, and the suffix is the
+only signal a reader has for how much a crate decides for them.
+
+This section is the statement of record. The convention governs published crate
+names, so it belongs where a reader meets the crates rather than only in the
+design notes.
+
 ## Build
 
 Requires Rust `1.98` or newer.
