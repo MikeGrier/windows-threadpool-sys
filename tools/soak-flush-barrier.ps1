@@ -36,10 +36,12 @@
     and never asserted -- a later write completing first is the documented
     one-sided behaviour (D-47), and its rate is the thing worth watching.
 
-    THIS WRITES A LOT. Each trial writes about 32 MiB of unbuffered device I/O,
-    and a default round is five instruments at 100 trials each. Budget roughly
-    fifteen GiB written per round, and prefer -TrialsPerRound on a small or
-    heavily-worn disk.
+    THIS WRITES A LOT. Each trial writes about 32 MiB of unbuffered device I/O.
+    A default round is not simply five times 100, because two instruments
+    subdivide the budget (see -TrialsPerRound): on an 8-thread machine it is
+    100 + 100 + 100 quiet/contended/control, 96 concurrent, and 75 across the
+    depth sweep -- 471 trials, so roughly fifteen GiB written per round. Prefer
+    -TrialsPerRound on a small or heavily-worn disk.
 
 .PARAMETER Rounds
     How many rotations to run. Default 5. Use 0 for "until stopped" (Ctrl+C).
@@ -47,6 +49,18 @@
 .PARAMETER TrialsPerRound
     Passed to the tests as IORING_STRESS_TRIALS. Default 100, the tests' own
     default.
+
+    A BUDGET, NOT A PER-INSTRUMENT COUNT. Quiet, contended and the unordered
+    control each run exactly this many trials. The other two subdivide it:
+    concurrent rings runs (N / threads).max(5) per thread across `threads`
+    threads, and the depth sweep runs (N / 4).max(5) per depth across three
+    depths -- so at 40 on an 8-thread machine the depth sweep does 30 trials, not
+    40. The .max(5) floor also dominates below about 20, where raising the value
+    changes some instruments and not others.
+
+    This matters when comparing a rate between instruments in summary.csv, and
+    when budgeting the writes below. The harness's own `trials` documentation
+    carries the table.
 
 .PARAMETER Only
     Run just one instrument, by substring. Useful once a rotation has shown

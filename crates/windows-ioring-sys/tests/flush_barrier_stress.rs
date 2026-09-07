@@ -80,12 +80,17 @@
 //! there. Both are the same shape: a number that is quietly unrepresentative
 //! rather than obviously missing.
 //!
-//! Trial counts come from the environment so a run can be widened without
+//! The trial budget comes from the environment so a run can be widened without
 //! editing this file:
 //!
 //! ```text
-//! IORING_STRESS_TRIALS=500 cargo test ... -- --ignored --nocapture
+//! IORING_STRESS_TRIALS=500 cargo test ... -- --ignored --nocapture --test-threads 1
 //! ```
+//!
+//! It is a **budget, not a per-instrument count**: three instruments run
+//! exactly that many trials and two subdivide it, so a round's total work is
+//! not five times the number. See [`trials`] for the table and what it means
+//! for reading a soak result or budgeting disk writes.
 //!
 //! # Why the fixture helpers are duplicated from `flush_barrier.rs`
 //!
@@ -133,7 +138,32 @@ const WAIT_MS: u32 = 120_000;
 /// so a hundred trials is seconds rather than minutes.
 const DEFAULT_TRIALS: usize = 100;
 
-/// Trials per instrument, from `IORING_STRESS_TRIALS`.
+/// The trial **budget**, from `IORING_STRESS_TRIALS`. Not a per-instrument count.
+///
+/// Three instruments run exactly this many trials -- quiet, contended, and the
+/// unordered control. The other two subdivide it, because their work is a
+/// product rather than a count:
+///
+/// | instrument | trials each | total |
+/// |---|---|---|
+/// | quiet / contended / control | `N` | `N` |
+/// | concurrent rings | `(N / threads).max(5)` | that times `threads` |
+/// | depth sweep | `(N / 4).max(5)` | that times 3 depths |
+///
+/// So at `N = 40` on an 8-thread machine: concurrent rings runs 5 per thread and
+/// 40 in total, and the depth sweep runs 10 per depth and **30** in total.
+/// Verified by running, not inferred from the arithmetic.
+///
+/// Two consequences worth knowing before reading a soak result or budgeting
+/// disk writes:
+///
+/// - **The `.max(5)` floor dominates at small `N`.** Below 20, the depth sweep
+///   runs 5 per depth whatever is asked, so `N = 4` and `N = 20` do the same
+///   work there while the other instruments differ fivefold.
+/// - **The depth sweep's divisor is 4 for 3 depths**, so it does roughly three
+///   quarters of the budget rather than all of it. That is deliberate -- it is
+///   the most expensive instrument per trial -- but it means the totals are not
+///   uniform across a round.
 ///
 /// **Zero is rejected rather than honoured.** A zero-trial run divides by zero
 /// in [`Campaign::report`] and passes every assertion vacuously -- an instrument
