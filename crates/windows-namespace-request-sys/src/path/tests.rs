@@ -253,9 +253,22 @@ fn an_error_without_an_os_code_renders_only_its_description() {
 /// An absolute path of exactly `units` UTF-16 units, already in normal form so
 /// `GetFullPathNameW` returns it unchanged and the resolved length equals the
 /// input length.
+///
+/// UTF-16 units and not bytes or `char`s, because that is the unit Win32
+/// measures a path in: `MAX_PATH` is a count of `WCHAR`. The three coincide for
+/// the ASCII this builds, so counting the prefix any other way would pass today
+/// and quietly measure the wrong thing the moment a case uses a character that
+/// is not one byte, one scalar, and one unit at once.
 fn absolute_path_of_length(units: usize) -> String {
     let prefix = r"C:\";
-    format!("{prefix}{}", "a".repeat(units - prefix.len()))
+    let prefix_units = prefix.encode_utf16().count();
+    assert!(
+        units >= prefix_units,
+        "asked for a {units}-unit path, but the {prefix} prefix is already \
+         {prefix_units} units; the subtraction below would underflow and panic \
+         without saying why"
+    );
+    format!("{prefix}{}", "a".repeat(units - prefix_units))
 }
 
 #[test]
@@ -264,7 +277,7 @@ fn an_ordinary_path_of_exactly_max_path_content_is_accepted() {
     // Rejecting it is the off-by-one a "much too long" test cannot see, and it
     // is the expensive direction: it refuses a path Windows would have opened.
     let path = absolute_path_of_length(259);
-    assert_eq!(path.chars().count(), 259);
+    assert_eq!(path.encode_utf16().count(), 259);
 
     let prepared = prepare_str(&path).expect("259 units is within the ordinary limit");
     assert_eq!(text(&prepared), path);
@@ -273,7 +286,7 @@ fn an_ordinary_path_of_exactly_max_path_content_is_accepted() {
 #[test]
 fn an_ordinary_path_one_unit_past_max_path_content_is_rejected() {
     let path = absolute_path_of_length(260);
-    assert_eq!(path.chars().count(), 260);
+    assert_eq!(path.encode_utf16().count(), 260);
 
     let error = prepare_str(&path).expect_err("260 units leaves no room for the terminator");
     assert_eq!(error.failure(), PathFailure::PathTooLong);
@@ -286,6 +299,46 @@ fn the_ordinary_limit_is_one_less_than_max_path() {
     // length assertion elsewhere.
     assert_eq!(MAX_PATH_CONTENT, MAX_PATH - 1);
     assert_eq!(MAX_PATH_CONTENT, 259);
+}
+
+#[test]
+fn a_path_whose_character_count_hides_its_utf16_length_is_still_refused() {
+    // The two tests above build ASCII, where bytes, `char`s and UTF-16 units are
+    // the same number, so a path they accept or refuse says nothing about which
+    // unit was counted. This one separates them: a character above `U+FFFF` (a
+    // supplementary character) is one `char` but *two* UTF-16 units, because
+    // UTF-16 encodes it as a surrogate pair. A path built from those measured in
+    // scalars looks about half as long as Windows considers it.
+    //
+    // What this pins is the **contract** -- such a path is still refused -- and
+    // not any single site's arithmetic. Measured, because the distinction is not
+    // obvious: `prepare` checks the length twice, and sabotaging only the
+    // pre-check leaves this test passing, because `GetFullPathNameW` reports the
+    // resolved length in UTF-16 units and the post-check refuses on that. It
+    // takes disabling *both* to make this test fail. That second guard is the
+    // stronger one -- its count comes from Windows and so cannot be in the wrong
+    // unit -- which is worth knowing before anyone "simplifies" the pre-check
+    // away as redundant.
+    let supplementary = '\u{1F600}';
+    assert_eq!(supplementary.len_utf16(), 2, "the premise of this test");
+
+    // 3 units of `C:\` plus 128 two-unit characters is exactly the limit.
+    let accepted = format!(r"C:\{}", supplementary.to_string().repeat(128));
+    assert_eq!(accepted.encode_utf16().count(), 259);
+    assert_eq!(accepted.chars().count(), 131);
+
+    let prepared = prepare_str(&accepted).expect("259 UTF-16 units is within the limit");
+    assert_eq!(text(&prepared), accepted);
+
+    // One more unit is over it. A limit enforced on `chars().count()` would see
+    // 132 against a bound of 259 and admit a path Windows refuses -- which is
+    // the expensive direction, since the caller is told the open may proceed.
+    let rejected = format!("{accepted}a");
+    assert_eq!(rejected.encode_utf16().count(), 260);
+    assert_eq!(rejected.chars().count(), 132);
+
+    let error = prepare_str(&rejected).expect_err("260 UTF-16 units is past the limit");
+    assert_eq!(error.failure(), PathFailure::PathTooLong);
 }
 
 #[test]

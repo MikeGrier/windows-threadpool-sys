@@ -134,7 +134,7 @@ fn ill_formed_surrogates_survive_in_storage() {
     assert_eq!(s.as_units(), &lone);
     assert_eq!(s.units, vec![0xD800, NUL]);
 
-    let pair = [0xD83Du16, 0xDE00]; // a well-formed astral pair, for contrast
+    let pair = [0xD83Du16, 0xDE00]; // a well-formed surrogate pair (U+1F600), for contrast
     assert_eq!(Wtf16String::from_units(&pair).as_units(), &pair);
 }
 
@@ -158,8 +158,8 @@ fn well_formed_samples() -> Vec<&'static str> {
         "ascii only",
         "café",      // Latin-1 supplement (BMP, 2-byte UTF-8)
         "日本語",    // CJK (BMP, 3-byte UTF-8)
-        "😀",        // astral (U+1F600, a UTF-16 surrogate pair)
-        "aé日😀mix", // mixed BMP + astral
+        "😀",        // U+1F600, a UTF-16 surrogate pair
+        "aé日😀mix", // mixed BMP + supplementary
     ]
 }
 
@@ -197,7 +197,7 @@ fn round_trips_str_string_and_lossy() {
 }
 
 #[test]
-fn astral_pair_is_two_units_and_round_trips() {
+fn supplementary_pair_is_two_units_and_round_trips() {
     let owned = Wtf16String::from("😀");
     assert_eq!(owned.as_units().len(), 2); // one surrogate pair
     assert_eq!(owned.into_string().unwrap(), "😀");
@@ -589,8 +589,8 @@ fn debug_escapes_lone_low_surrogate_losslessly() {
 }
 
 #[test]
-fn debug_keeps_printable_astral_literal() {
-    // A well-formed astral scalar is printable, so string-style Debug does not
+fn debug_keeps_printable_supplementary_literal() {
+    // A well-formed scalar above U+FFFF is printable, so string-style Debug does not
     // over-escape it to `\u{...}`.
     assert_eq!(
         format!("{:?}", Wtf16String::from("\u{1F600}")),
@@ -606,9 +606,9 @@ fn eq_str_with_interior_nul() {
 }
 
 #[test]
-fn eq_str_astral_empty_and_length_mismatch() {
-    let astral = Wtf16String::from("\u{1F600}");
-    assert_eq!(astral, "\u{1F600}");
+fn eq_str_supplementary_empty_and_length_mismatch() {
+    let supplementary = Wtf16String::from("\u{1F600}");
+    assert_eq!(supplementary, "\u{1F600}");
     let empty = Wtf16String::new();
     assert_eq!(empty, "");
     let ab = Wtf16String::from("ab");
