@@ -227,6 +227,15 @@ jobs:
         run: cargo run -p windows-platform-probes --bin probe-ioring --locked
       - name: probe magnitudes (completion port)
         run: cargo run -p windows-platform-probes --bin probe-completion-port --locked
+      # Both halves of the long-path pair, deliberately. Either alone says
+      # nothing: the finding is the *difference* between two executables that
+      # differ only in whether `build.rs` embedded the `longPathAware` manifest,
+      # so a run that reported one of them would be reporting a number with no
+      # baseline to read it against.
+      - name: probe magnitudes (long path, manifest-aware)
+        run: cargo run -p windows-platform-probes --bin probe-long-path-aware --locked
+      - name: probe magnitudes (long path, manifest-unaware)
+        run: cargo run -p windows-platform-probes --bin probe-long-path-unaware --locked
 
   # The NUMA questions the 2026-08-30 design session could not answer, run
   # against whatever machine the runner fleet supplies.

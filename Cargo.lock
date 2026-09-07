@@ -219,6 +219,7 @@ dependencies = [
  "windows-placement-probe",
  "windows-sys",
  "windows-threadpool-sys",
+ "wtf-string",
 ]
 
 [[package]]

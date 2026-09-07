@@ -48,7 +48,11 @@ $Patterns = @(
 $TextExtensions = @(
     '.rs', '.toml', '.md', '.txt', '.json', '.yaml', '.yml',
     '.ps1', '.psm1', '.psd1', '.sh', '.cfg', '.ini', '.ts',
-    '.lock', '.gitignore', '.gitattributes', '.vscodeignore'
+    '.lock', '.gitignore', '.gitattributes', '.vscodeignore',
+    # Win32 side-by-side manifests. XML that declares its own `encoding="UTF-8"`
+    # and is read by the linker, so a BOM or a mojibake edit would be consumed
+    # rather than merely displayed.
+    '.manifest'
 )
 
 function Test-IsTextFile([string]$file) {
