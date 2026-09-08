@@ -1721,7 +1721,9 @@ something.
 **So suppressed-only reviews are tagged with a marker comment**, posted by the script:
 
 ```
-<!-- copilot-review-processed: 5136043258 -->
+<!-- copilot-review-processed:begin -->
+<!-- copilot-review-processed: [id] -->
+<!-- copilot-review-processed:end -->
 ```
 
 It is an HTML comment, so it does not render; it lives on the pull request rather than in a file

@@ -29,7 +29,14 @@
 
     For those, `-MarkProcessed` posts a pull-request comment carrying a marker:
 
-        <!-- copilot-review-processed: 5136043258 -->
+        <!-- copilot-review-processed:begin -->
+        <!-- copilot-review-processed: <id> -->
+        <!-- copilot-review-processed:end -->
+
+    A marker is honoured only on a line of its own inside that begin/end block,
+    so a comment that merely MENTIONS one does not retire anything. The id is
+    written here as a placeholder rather than digits on purpose: copying this
+    example verbatim, sentinels included, still matches nothing.
 
     The marker is an HTML comment, so it does not render, and it lives on the
     pull request rather than in a file or a session, which is what makes it
@@ -108,6 +115,11 @@ $ErrorActionPreference = 'Stop'
 $script:ExitFindings = 1
 $script:ExitBroken = 2
 
+# The sentinels that make a marker a marker. Written once so the emitter and the
+# reader cannot drift, which is the failure this whole tool is about.
+$script:MarkerBegin = '<!-- copilot-review-processed:begin -->'
+$script:MarkerEnd = '<!-- copilot-review-processed:end -->'
+
 function Exit-Broken {
     param([Parameter(Mandatory = $true)][string] $Message)
     [Console]::Error.WriteLine($Message)
@@ -183,8 +195,15 @@ if ($MarkProcessed) {
     if (-not $Summary) {
         Exit-Broken 'Summary is required with -MarkProcessed: a marker with no account of what was done is a claim with no evidence.'
     }
-    $lines = @($Summary, '')
+    # Bracketed by sentinels, and the reader below honours a marker ONLY inside
+    # such a block, on a line of its own. Without that, any occurrence of the
+    # marker text anywhere in any comment counted -- so a maintainer quoting one
+    # in ordinary discussion, or pasting an example out of the documentation,
+    # would silently retire a review. The block is what distinguishes "this
+    # comment IS a marker" from "this comment MENTIONS one".
+    $lines = @($Summary, '', $script:MarkerBegin)
     foreach ($id in $MarkProcessed) { $lines += "<!-- copilot-review-processed: $id -->" }
+    $lines += $script:MarkerEnd
     $file = Join-Path ([System.IO.Path]::GetTempPath()) ("mark-" + [guid]::NewGuid().ToString('N') + '.md')
     [System.IO.File]::WriteAllText($file, ($lines -join "`n"), [System.Text.UTF8Encoding]::new($false))
     try {
@@ -309,6 +328,37 @@ function Get-RetireAuthority {
     return $authority
 }
 
+# The review ids a comment genuinely marks as processed.
+#
+# A marker counts only when it sits on a line of its own INSIDE a
+# begin/end sentinel block. Matching the marker text anywhere in the body -- what
+# this did first -- cannot tell "this comment IS a marker" from "this comment
+# MENTIONS one", so quoting one in discussion, or pasting the example out of this
+# script's own documentation, would silently retire a review.
+#
+# The documentation deliberately spells its example with a placeholder id rather
+# than digits, so even a verbatim copy of the example, sentinels and all, matches
+# nothing here.
+function Get-MarkerIds {
+    param([string] $Body)
+
+    $ids = @()
+    if (-not $Body) { return $ids }
+
+    # `(?m)` so `^`/`$` bind to lines rather than the whole body, and the
+    # sentinels are matched literally.
+    $blockPattern = '(?ms)^\s*' + [regex]::Escape($script:MarkerBegin) +
+    '\s*$(.*?)^\s*' + [regex]::Escape($script:MarkerEnd) + '\s*$'
+
+    foreach ($block in [regex]::Matches($Body, $blockPattern)) {
+        foreach ($m in [regex]::Matches($block.Groups[1].Value,
+                '(?m)^\s*<!--\s*copilot-review-processed:\s*(\d+)\s*-->\s*$')) {
+            $ids += [long]$m.Groups[1].Value
+        }
+    }
+    return $ids
+}
+
 # Reviews already recorded as processed, by marker.
 #
 # This repository is public, so anyone able to comment on a pull request can post
@@ -320,7 +370,7 @@ $processed = @{}
 $deniedMarkers = 0
 $unverifiableMarkers = 0
 foreach ($c in $issueComments) {
-    $markers = [regex]::Matches((Get-Text $c.body), '<!--\s*copilot-review-processed:\s*(\d+)\s*-->')
+    $markers = @(Get-MarkerIds (Get-Text $c.body))
     if ($markers.Count -eq 0) { continue }
 
     $login = Get-Text (Get-Path $c @('user', 'login'))
@@ -330,7 +380,7 @@ foreach ($c in $issueComments) {
     # wrong one sends them to look in the wrong place.
     switch (Get-RetireAuthority $login) {
         'allowed' {
-            foreach ($m in $markers) { $processed[[long]$m.Groups[1].Value] = $true }
+            foreach ($id in $markers) { $processed[$id] = $true }
         }
         'denied' { $deniedMarkers += $markers.Count }
         default { $unverifiableMarkers += $markers.Count }
