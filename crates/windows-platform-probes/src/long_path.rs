@@ -40,13 +40,21 @@
 //! un-opted-in case is what most consumers of this workspace actually have.
 //! The registry half (`LongPathsEnabled`) is a machine setting and is reported
 //! rather than assumed, since a result gathered without it says nothing.
+//!
+//! **The un-opted-in half is a baseline, not a counter-example**, and its report
+//! says so. `MAX_PATH` applying to a process that never opted in is what
+//! `MAX_PATH` means; only a refusal with *both* halves in effect would bear on
+//! the documented reading. The verdict consults both before drawing any
+//! conclusion, so the unaware binary reports what it is -- the case the aware one
+//! is read against -- rather than announcing a contradiction it did not test.
 
 use std::ffi::OsStr;
 use std::os::windows::ffi::OsStrExt;
 use std::path::{Path, PathBuf};
 
 use windows_sys::Win32::Foundation::{
-    CloseHandle, ERROR_FILE_NOT_FOUND, ERROR_PATH_NOT_FOUND, GetLastError, INVALID_HANDLE_VALUE,
+    CloseHandle, ERROR_ALREADY_EXISTS, ERROR_FILE_NOT_FOUND, ERROR_PATH_NOT_FOUND, GetLastError,
+    INVALID_HANDLE_VALUE,
 };
 use windows_sys::Win32::Storage::FileSystem::{
     CREATE_ALWAYS, CreateDirectoryW, CreateFileW, FILE_ATTRIBUTE_NORMAL, FILE_GENERIC_READ,
@@ -58,8 +66,31 @@ use windows_sys::Win32::Storage::FileSystem::{
 use windows_sys::Win32::System::Environment::{GetCurrentDirectoryW, SetCurrentDirectoryW};
 use wtf_string::Wtf16String;
 
-/// Windows's classic path ceiling.
+/// Windows's classic path ceiling, **counting the terminating NUL**.
 const MAX_PATH: usize = 260;
+
+/// The longest path content that fits under the ceiling, terminator excluded.
+///
+/// The distinction is the whole subject of this probe, so it is spelled out
+/// rather than folded into a comparison: a path of exactly `MAX_PATH` content
+/// units does *not* fit, because the NUL needs the last one. Comparing against
+/// `MAX_PATH` instead would classify that path as under the ceiling while
+/// Windows refused it for length -- a row asserting both at once, at exactly the
+/// boundary this probe exists to characterize.
+///
+/// This is the convention the rest of the workspace already states and tests --
+/// see `windows-namespace-request-sys` and `windows-file-enumeration-sys`, whose
+/// `path` modules define the same pair and assert that the content ceiling is
+/// one less than `MAX_PATH`. A probe that measured against a different ceiling
+/// than the crates whose designs rest on it would be answering a question nobody
+/// asked.
+///
+/// Public because the report has to *print* it. A column headed `> MAX` next to
+/// a module defining `MAX_PATH` as 260 is read as "over 260", and at a resolved
+/// length of exactly 260 that reading is wrong in the one place this probe is
+/// supposed to be exact. The renderer states the number instead of naming a
+/// constant the reader cannot see.
+pub const MAX_PATH_CONTENT: usize = MAX_PATH - 1;
 
 /// One directory level of the deep tree. Short, so the depth rather than the
 /// width is what carries the length, and free of `.` so no segment is itself a
@@ -113,15 +144,43 @@ pub struct Attempt {
     /// The shape tried.
     pub shape: Shape,
     /// Total length the call had to resolve: current directory plus the
-    /// relative path. This is the number `MAX_PATH` is compared against, not
-    /// the length of the relative part alone.
+    /// relative path, **as written**, not the length of the relative part alone
+    /// and not the length after `..` is collapsed.
+    ///
+    /// That distinction is load-bearing for the `..` shape, whose literal is
+    /// five units longer than its canonical form, so it was **measured** rather
+    /// than assumed: forcing the deep level to 21 on the development host put
+    /// plain at 258 and `..` at 263 against a content ceiling of 259, and in a
+    /// binary with no `longPathAware` manifest plain **opened** while `..` was
+    /// **refused**. Had Windows collapsed `..` before applying the ceiling, both
+    /// would have been 258 and both would have opened. So the length Windows
+    /// compares is the one written, and this is that number.
+    ///
+    /// The measurement above is the evidence, and it is self-contained: it uses
+    /// this crate's own un-manifested binary, so it does not depend on any
+    /// assumption about some other program's manifest.
+    ///
+    /// That independence is the point, because the obvious shortcut is unsound.
+    /// Reaching for `cmd.exe` to try a long path measures whatever `cmd`'s
+    /// manifest says, not the un-opted-in case: on the development host --
+    /// Windows 11 build 26200, `cmd.exe` 10.0.26100.1 -- `cmd` carries
+    /// `longPathAware` in its own manifest, beside `dpiAware`, so a path that
+    /// opens there says nothing about the ceiling. Stated with the build because
+    /// it is a fact about that binary on that host rather than about `cmd`
+    /// forever: it has not always been so, and a probe that assumed it either way
+    /// would be resting on someone else's manifest instead of measuring.
     ///
     /// **In UTF-16 code units**, which is the unit `MAX_PATH` itself is
     /// expressed in. Counting Rust's platform encoding instead would disagree
     /// the moment a non-ASCII character appeared in the temporary directory's
     /// path, and would put an attempt on the wrong side of the ceiling.
     pub resolved_len: usize,
-    /// Whether that total exceeds `MAX_PATH`.
+    /// Whether that total is too long to fit under the ceiling.
+    ///
+    /// That is `> MAX_PATH_CONTENT` (259), **not** `> MAX_PATH` (260): a path of
+    /// exactly 260 content units does not fit, because the terminator needs the
+    /// last one. The field name is older than the distinction and is kept for the
+    /// column it feeds; the comparison is the one the sibling crates make.
     pub over_max_path: bool,
     /// Whether `CreateFileW` opened the file.
     pub opened: bool,
@@ -135,7 +194,16 @@ pub struct Observation {
     /// Whether this binary declares `longPathAware`.
     pub manifest_aware: bool,
     /// Whether the machine has `LongPathsEnabled` set to 1.
-    pub registry_enabled: bool,
+    /// `None` when the run was refused before the registry could be read.
+    ///
+    /// A `bool` cannot say "not consulted", and the difference matters: reading
+    /// an unconsulted flag as `false` made a refused run report `LongPathsEnabled
+    /// : unset or 0` and "the machine half of the opt-in is absent" on a host
+    /// where it is set to 1 -- a measured-sounding claim about a query that was
+    /// never issued. The refusal has to come first, because reading the registry
+    /// spawns a process and that is one of the calls that hangs, so the honest
+    /// answer is a third state rather than a default.
+    pub registry_enabled: Option<bool>,
     /// Every attempt, short ones first.
     pub attempts: Vec<Attempt>,
     /// Set when the apparatus itself failed, in which case the attempts say
@@ -169,8 +237,38 @@ pub fn registry_enabled() -> bool {
         .output()
         .ok()
         .filter(|out| out.status.success())
-        .map(|out| String::from_utf8_lossy(&out.stdout).contains("0x1"))
+        .map(|out| enabled_in(&String::from_utf8_lossy(&out.stdout)))
         .unwrap_or(false)
+}
+
+/// Whether `reg query`'s output says the machine half of the opt-in is on.
+///
+/// Separated from the spawn so the reading is testable against captured output
+/// rather than against whatever the developing machine happens to be set to.
+///
+/// Any nonzero value counts as enabled: this is a boolean flag stored in a
+/// DWORD, so the value that is not zero is the one that means yes.
+fn enabled_in(stdout: &str) -> bool {
+    registry_dword(stdout, "LongPathsEnabled").is_some_and(|value| value != 0)
+}
+
+/// The DWORD `reg query ... /v <name>` printed, if it printed one.
+///
+/// Parsed as a whole token rather than searched for as a substring. `reg.exe`
+/// prints the value in hex, so a substring test for `0x1` also matches `0x10`
+/// and every other value that merely starts that way -- which would report a
+/// machine as opted in on the strength of an unrelated setting.
+fn registry_dword(stdout: &str, name: &str) -> Option<u32> {
+    stdout.lines().find_map(|line| {
+        let mut tokens = line.split_whitespace();
+        // `reg.exe` prints `<name>    REG_DWORD    0x1`, and this probe queries
+        // one value, so a line that does not have that shape is not the answer.
+        if tokens.next()? != name || tokens.next()? != "REG_DWORD" {
+            return None;
+        }
+        let digits = tokens.next()?.strip_prefix("0x")?;
+        u32::from_str_radix(digits, 16).ok()
+    })
 }
 
 /// Create one directory by absolute `\\?\` path, so building the apparatus
@@ -184,8 +282,9 @@ fn create_dir_verbatim(path: &Path) -> Result<(), String> {
     if created == 0 {
         // SAFETY: called immediately after the failing call.
         let error = unsafe { GetLastError() };
-        // 183 is ERROR_ALREADY_EXISTS, which is success for our purposes.
-        if error != 183 {
+        // Already there is success for our purposes: the apparatus is a shape on
+        // disk, not a thing this run must be the one to have created.
+        if error != ERROR_ALREADY_EXISTS {
             return Err(format!("CreateDirectoryW({verbatim:?}) failed: {error}"));
         }
     }
@@ -292,7 +391,7 @@ fn attempt(current_dir_len: usize, depth: usize, shape: Shape) -> Attempt {
     Attempt {
         shape,
         resolved_len,
-        over_max_path: resolved_len > MAX_PATH,
+        over_max_path: resolved_len > MAX_PATH_CONTENT,
         opened,
         error,
     }
@@ -415,9 +514,25 @@ impl Drop for Apparatus {
 /// beside this module do exactly that.
 #[must_use]
 pub fn measure(manifest_aware: bool) -> Observation {
+    // First, before anything at all: both `temp_dir()` and the `reg.exe` spawn
+    // below hang on an over-long temporary directory, so neither may run first.
+    // `registry_enabled` is `None` here rather than `false`: the query was never
+    // issued, and saying "not enabled" would be a claim about the machine.
+    if let Some(error) = temp_dir_refusal(
+        std::env::var_os("TMP").as_deref(),
+        std::env::var_os("TEMP").as_deref(),
+    ) {
+        return Observation {
+            manifest_aware,
+            registry_enabled: None,
+            attempts: Vec::new(),
+            apparatus_error: Some(error),
+        };
+    }
+
     let mut observation = Observation {
         manifest_aware,
-        registry_enabled: registry_enabled(),
+        registry_enabled: Some(registry_enabled()),
         attempts: Vec::new(),
         apparatus_error: None,
     };
@@ -436,13 +551,12 @@ pub fn measure(manifest_aware: bool) -> Observation {
     let deep = 40;
     let shallow = 1;
 
-    let deep_relative = match build_tree(&root, deep) {
-        Ok(relative) => relative,
-        Err(error) => {
-            observation.apparatus_error = Some(error);
-            return observation;
-        }
-    };
+    // Only the side effect is wanted. Each attempt spells its own relative path,
+    // because the spelling is what is under test.
+    if let Err(error) = build_tree(&root, deep) {
+        observation.apparatus_error = Some(error);
+        return observation;
+    }
     // `b`, for the `..` shape to descend into and immediately leave.
     for depth in [shallow, deep] {
         let mut bottom = root.clone();
@@ -458,7 +572,6 @@ pub fn measure(manifest_aware: bool) -> Observation {
             return observation;
         }
     }
-    let _ = deep_relative;
 
     // The current directory is the short root for every attempt, so the length
     // under test lives in the relative path rather than in the cwd.
@@ -484,6 +597,98 @@ pub fn measure(manifest_aware: bool) -> Observation {
     }
 
     observation
+}
+
+/// The longest temporary directory this probe will run in, **in UTF-16 units**.
+///
+/// A chosen limit, not a derived one. A long enough temporary directory makes a
+/// `longPathAware` process hang rather than fail, and this sits far enough short
+/// of that to not care where exactly it starts.
+const MAX_TEMP_DIR: usize = 200;
+
+/// Why this run must refuse to start, if it must, given `%TMP%` and `%TEMP%`.
+///
+/// Runs before anything that could resolve a path, because the failure it avoids
+/// is a hang: there is nothing to check afterwards when the call never returns.
+///
+/// The order mirrors `GetTempPath`: `%TMP%` first, then `%TEMP%`, then fallbacks
+/// that are always short. Checking both unconditionally would refuse a run whose
+/// `%TMP%` is perfectly usable merely because a stale `%TEMP%` sits beside it.
+fn temp_dir_refusal(tmp: Option<&OsStr>, temp: Option<&OsStr>) -> Option<String> {
+    let (name, value) = match (tmp, temp) {
+        (Some(value), _) => ("TMP", value),
+        (None, Some(value)) => ("TEMP", value),
+        (None, None) => return None,
+    };
+
+    // The apparatus is built through `\\?\` paths so that creating it never
+    // depends on the behaviour under test, and this crate composes that prefix by
+    // concatenation. Three shapes of temporary directory make that composition
+    // wrong rather than merely long, and all are refused for the same reason the
+    // length is: the probe would report an apparatus failure, or measure a path
+    // that is not the one it names, and either way say nothing about the ceiling.
+    //
+    // Checked in this order because each check needs the previous one to have
+    // passed to be able to say anything true: the prefix tests read the value as
+    // text, and reading an ill-formed value as text is exactly the substitution
+    // the second refusal exists to prevent. Classifying first and validating
+    // afterwards would refuse an ill-formed value under whichever prefix its
+    // replacement characters happened to spell.
+
+    // `Path::display` substitutes U+FFFD for an unpaired surrogate, so a name
+    // containing one would compose a verbatim path naming a different file --
+    // silently, and in the apparatus rather than in the measurement.
+    let Some(text) = value.to_str() else {
+        return Some(format!(
+            "%{name}% is not well-formed UTF-16. The apparatus composes its `\\\\?\\` \
+             paths as text, which would replace the ill-formed part and name a \
+             different file. Point %{name}% somewhere expressible."
+        ));
+    };
+
+    // `\\?\` and `\\.\` open with two backslashes but are the device namespace,
+    // not UNC, so they are separated out ahead of the UNC test rather than
+    // reported as a server share the machine does not have. The refusal is not
+    // only about the doubled prefix: `\\?\` turns off the path normalisation that
+    // this probe exists to measure, so a run rooted there would measure the
+    // verbatim path's ceiling and label it the ordinary one.
+    if let Some(prefix) = [r"\\?\", r"\\.\"]
+        .into_iter()
+        .find(|prefix| text.starts_with(prefix))
+    {
+        return Some(format!(
+            "%{name}% starts with `{prefix}`, which names the device namespace rather \
+             than an ordinary directory. This probe composes its own `\\\\?\\` prefix by \
+             concatenation, and `\\\\?\\` additionally turns off the path normalisation \
+             the probe measures. Point %{name}% at an ordinary local directory."
+        ));
+    }
+
+    // A UNC root needs `\\?\UNC\server\share`, not `\\?\` glued to `\\server`.
+    // Supporting it properly is not the problem -- it is three lines -- but it
+    // could not be exercised on any machine this workspace is developed or tested
+    // on, and an untested path through the apparatus is worth less than an honest
+    // refusal.
+    if text.starts_with(r"\\") {
+        return Some(format!(
+            "%{name}% is a UNC path. This probe builds its apparatus through `\\\\?\\` \
+             paths, which spell a UNC root differently, and it does not implement that \
+             spelling. Point %{name}% at a local directory."
+        ));
+    }
+
+    // UTF-16 units, the unit Windows counts, for the reason `resolved_len`
+    // records: a non-ASCII character makes a byte count disagree.
+    let units = Wtf16String::from_os_str(value).len();
+    if units <= MAX_TEMP_DIR {
+        return None;
+    }
+
+    Some(format!(
+        "%{name}% is {units} UTF-16 units, over this probe's limit of {MAX_TEMP_DIR}. \
+         A temporary directory that long makes a longPathAware process hang rather \
+         than fail, so the run is refused instead. Point %{name}% somewhere shorter."
+    ))
 }
 
 /// Whether an error means "the path was rejected for length", as opposed to a

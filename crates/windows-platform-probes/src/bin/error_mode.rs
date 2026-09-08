@@ -19,7 +19,7 @@ use windows_platform_probes::error_mode::{
     alignment_bit_is_sticky_at_process_scope, bits, combined_invalid_installs_nothing, probe_bit,
     settable_bits, thread_mode_independent_of_process,
 };
-use windows_platform_probes::report::{Stdout, emit};
+use windows_platform_probes::report::emit_report;
 
 fn name(bit: u32) -> &'static str {
     match bit {
@@ -32,9 +32,10 @@ fn name(bit: u32) -> &'static str {
 }
 
 fn main() {
-    // The only place that names the real stream. Everything below composes
-    // text; nothing below knows where it goes.
-    emit(&mut Stdout, &render());
+    // The probe's whole output policy, and it is one line: hand the renderer to
+    // the sink. Nothing here or below names a stream -- that is chosen once, in
+    // `report`, so retargeting a probe is not a rewrite.
+    emit_report(render);
 }
 
 /// The probe's whole report, as text.
@@ -45,8 +46,7 @@ fn main() {
 /// which the observations are taken is part of what is being reported. Splitting
 /// measurement from rendering would invite a later reordering that silently
 /// changes the result.
-fn render() -> String {
-    let mut out = String::new();
+fn render(out: &mut String) {
     // First line of the report, and part of the returned text rather than
     // written out here: a captured report must carry the line naming the
     // machine that produced it, and the taint marker with it. Without it a
@@ -127,5 +127,4 @@ fn render() -> String {
             "clearable"
         }
     );
-    out
 }

@@ -13,7 +13,7 @@
 
 use std::fmt::Write as _;
 use windows_platform_probes::pool_growth::{measure_growth, measure_raise_while_saturated};
-use windows_platform_probes::report::{Stdout, emit};
+use windows_platform_probes::report::emit_report;
 
 /// Measure one configuration and append its block to `out`.
 ///
@@ -43,14 +43,14 @@ fn report(out: &mut String, label: &str, maximum: u32, submissions: usize, runs_
 }
 
 fn main() {
-    // The only place that names the real stream. Everything below composes
-    // text; nothing below knows where it goes.
-    emit(&mut Stdout, &render());
+    // The probe's whole output policy, and it is one line: hand the renderer to
+    // the sink. Nothing here or below names a stream -- that is chosen once, in
+    // `report`, so retargeting a probe is not a rewrite.
+    emit_report(render);
 }
 
 /// The probe's whole report, as text.
-fn render() -> String {
-    let mut out = String::new();
+fn render(out: &mut String) {
     // First line of the report, and part of the returned text rather than
     // written out here: a captured report must carry the line naming the
     // machine that produced it, and the taint marker with it. Without it a
@@ -62,11 +62,11 @@ fn render() -> String {
     );
     let _ = writeln!(out, "== how a blocked pool grows ==\n");
 
-    report(&mut out, "P1 growth curve, max 4:", 4, 8, false);
+    report(out, "P1 growth curve, max 4:", 4, 8, false);
     let _ = writeln!(out);
-    report(&mut out, "P1 growth curve, max 8:", 8, 16, false);
+    report(out, "P1 growth curve, max 8:", 8, 16, false);
     let _ = writeln!(out);
-    report(&mut out, "P2 the same, runs-long:", 4, 8, true);
+    report(out, "P2 the same, runs-long:", 4, 8, true);
     let _ = writeln!(out);
 
     let raise = measure_raise_while_saturated(2, 6, 8);
@@ -104,5 +104,4 @@ fn render() -> String {
         out,
         "Re-run on another architecture rather than assuming they carry over."
     );
-    out
 }

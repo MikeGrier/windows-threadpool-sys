@@ -16,14 +16,6 @@ description = "Executable probes for the undocumented Windows behaviour this wor
 path = "src/lib.rs"
 
 [[bin]]
-name = "probe-long-path-aware"
-path = "src/bin/long_path_aware.rs"
-
-[[bin]]
-name = "probe-long-path-unaware"
-path = "src/bin/long_path_unaware.rs"
-
-[[bin]]
 name = "probe-core-affinity"
 path = "src/bin/core_affinity.rs"
 
@@ -79,6 +71,17 @@ path = "src/bin/queue_contention.rs"
 name = "probe-peer-index-cache"
 path = "src/bin/peer_index_cache.rs"
 
+# These two are the same code, and that is the measurement: they differ only in
+# whether `build.rs` embeds the `longPathAware` manifest, which is not a runtime
+# switch and so cannot be a flag on one binary.
+[[bin]]
+name = "probe-long-path-aware"
+path = "src/bin/long_path_aware.rs"
+
+[[bin]]
+name = "probe-long-path-unaware"
+path = "src/bin/long_path_unaware.rs"
+
 [dependencies]
 # **Every workspace dependency below is path-only, with no `version`**, because
 # this crate is never distributed at all -- not to a registry, and not as a
@@ -104,6 +107,11 @@ windows-topology-sys = { path = "../windows-topology-sys" }
 # with people running it on hardware this workspace does not own. The probes
 # here call into it rather than keeping a second copy: two renderings of one
 # measurement disagreeing is a defect this investigation has already hit.
+#
+# It renders the banner too: every probe's report opens with a line naming the
+# machine that produced it and whether the measurement is tainted, so a captured
+# finding cannot be pasted somewhere and compared against something it does not
+# describe. That banner is this crate's to render, not a second copy here.
 windows-placement-probe = { path = "../windows-placement-probe" }
 # The request-cost probe measures the real request types the design would put on
 # a queue, not a stand-in, for the same reason.
@@ -120,6 +128,18 @@ windows-waitable-queues = { path = "../windows-waitable-queues", features = [
 	# feature; this is the only one that costs the queue crate a dependency.
 	"dwcas",
 ] }
+# The long-path probe measures a length against `MAX_PATH`, and `MAX_PATH` counts
+# UTF-16 code units. `OsStr::len` counts Rust's platform encoding -- WTF-8 here --
+# so the two disagree the moment a non-ASCII character appears in `%TEMP%`, which
+# would put an attempt on the wrong side of the ceiling the probe exists to
+# characterize. This crate holds a string in the encoding Windows uses, so its
+# `len` is the number under test rather than a conversion of one.
+#
+# That is the whole of what it is used for here: a code-unit count, at every site
+# where a length is compared against a Windows limit.
+# `encode_wide().count()` would give the same number, and the choice of this crate
+# over that is a vocabulary one -- the workspace's own WTF-16 type naming the
+# quantity rather than an ad-hoc count that happens to agree.
 wtf-string = { path = "../wtf-string" }
 
 [dependencies.windows-sys]
@@ -129,12 +149,12 @@ features = [
 	"Win32_Foundation",
 	"Win32_Security",
 	"Win32_Storage_FileSystem",
-	# GetSystemDirectoryW, so the request probe measures the real system
-	# directory instead of assuming Windows is installed on C:.
 	# SetCurrentDirectoryW, for the long-path probe: the current directory is
 	# half of what a relative path resolves against, so the probe has to place
 	# it deliberately rather than inherit whatever launched it.
 	"Win32_System_Environment",
+	# GetSystemDirectoryW, so the request probe measures the real system
+	# directory instead of assuming Windows is installed on C:.
 	"Win32_System_SystemInformation",
 	"Win32_System_Diagnostics_Debug",
 	"Win32_System_IO",

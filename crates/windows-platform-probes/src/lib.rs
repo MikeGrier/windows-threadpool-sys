@@ -104,6 +104,7 @@
 //! | [`completion_port::measure`] | ignored | IOCP association, and `CreateThreadpoolIo`, foreclose `IoRing` use of a handle |
 //! | [`cancel_io::cancel_against_idle_thread`] | binary only | `CancelSynchronousIo` is point-in-time against an idle thread |
 //! | [`cancel_io::cancel_against_busy_thread`] | binary only | it can block indefinitely against a thread re-entering synchronous I/O |
+//! | [`long_path::measure`] | binary only | whether the `longPathAware` manifest opt-in lifts `MAX_PATH` for a *relative* path -- binary only because the answer is the difference between two differently-manifested executables, which no single in-process test can observe |
 
 #![cfg(windows)]
 #![forbid(unsafe_op_in_unsafe_fn)]

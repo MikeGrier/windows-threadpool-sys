@@ -1,7 +1,9 @@
 # Design notes: windows-platform-probes
 
-Decisions for this crate. Pending work is in the workspace
-[CHECKLIST-thread-ambient.md](../../CHECKLIST-thread-ambient.md), milestone M27.
+Decisions for this crate. Pending work is in [CHECKLIST.md](CHECKLIST.md); the
+crate's *creation* is tracked separately in the workspace
+[CHECKLIST-thread-ambient.md](../../CHECKLIST-thread-ambient.md), milestone M27,
+which is feature-scoped and deleted when that feature completes.
 
 ## A probe is a function that returns an observation, never a program that prints one
 
@@ -804,3 +806,110 @@ The general lesson is worth keeping even though the duplicate is gone:
 checks that it still does.** This one was checked, which is how the missing
 cache padding was caught; but the checking only ever bounded the error, and the
 bound was loose enough to hide a third of the wide word's cost.
+## The report is buffered, and what that costs
+
+<a id="d-buffered-report"></a>
+
+Every probe's output goes through one sink: the renderer composes its report into
+a `String` and `emit_report` hands it to a [`Report`]. That is what the
+repository's architectural pre-step asks for -- the real stream is named in
+`report` and nowhere else, so a probe's `main` is one line that chooses no stream
+at all -- and it is what lets a test assert a probe's findings instead of a human
+reading them off a terminal.
+
+It also gave something up. Printing line-by-line meant whatever had been measured
+was already on the terminal; buffering means nothing is, until the renderer
+returns. These probes call into measurements documented to panic --
+`worker_context`'s impersonating observation panics three ways, and its renderer
+composes several completed findings before reaching it -- stated without a count
+deliberately, because the number moves whenever a line is added, and a stale count
+is the drift this repository keeps paying for -- so this is not hypothetical. For an
+instrument whose whole purpose is that a failure be diagnosable, how far it got is
+exactly the information worth keeping.
+
+`emit_report` recovers it for an unwinding panic: catch, emit what was composed,
+resume, so the exit status and message are unchanged and the partial report is
+added to them rather than substituted. **It does not recover it for a termination
+that does not unwind** -- Ctrl-C, which the default Windows console handler serves
+by terminating the process, and an abort from a panic raised during unwinding.
+
+That bound is known rather than overlooked, and it is not a defect in
+`emit_report` to be patched there: the fix is renderers writing into a [`Report`]
+as they measure rather than into a `String`, which restores streaming for *every*
+termination mode and makes the catch/resume machinery unnecessary. That changes
+every renderer and the shape of the sink trait, so it is queued as its own work --
+[CHECKLIST.md](CHECKLIST.md) milestone M1 -- rather than folded into the commit
+that introduced the sink.
+
+The ordering was deliberate. The sink had to exist before the probes could be
+peeled off their originating branch in reviewable stages, and a design that
+streams is a different design, not a later revision of this one.
+
+## The long-path probe: a pair of binaries, and a second declined hardening
+
+<a id="d-long-path"></a>
+
+The `longPathAware` opt-in has two halves and neither is a runtime switch: a
+machine-wide registry value, and a per-executable manifest. Nothing a process can
+read off itself tells it whether the manifest half applies, so the question
+"does the opt-in lift `MAX_PATH` for a relative path?" cannot be answered by one
+binary with a flag. It is answered by two binaries that differ *only* in the
+manifest, and the finding is the difference between their reports.
+
+`build.rs` embeds the manifest with `rustc-link-arg-bin` naming
+`probe-long-path-aware` specifically, never `rustc-link-arg-bins`: the plural
+form would opt every binary in the crate into long paths and silently change what
+all the others measure. The aware binary does not assert its own manifest either;
+it reads a `cargo::rustc-cfg` the build script emits from the same guarded block
+that does the embedding, so the label and the linker cannot disagree. Before that,
+a non-MSVC target skipped the block and produced two binaries with no manifest
+between them, one of which still reported `manifest longPathAware : yes` -- the
+one failure this probe cannot make loudly, because the whole finding is the
+difference between the pair.
+
+### `measure` moves the process's current directory, and that is the point
+
+<a id="d-long-path-cwd"></a>
+
+A relative path resolves against the current directory, so half of what is under
+test is *where the process is*. The probe therefore sets the current directory
+deliberately rather than inheriting whatever launched it, restores it in a `Drop`
+guard, and removes the tree it built.
+
+This is the same tension the error-mode probe records in
+[The concurrency hardening is knowingly declined](#the-concurrency-hardening-is-knowingly-declined):
+a probe may change process-wide state, a component may not. As there, **the
+concurrency hardening is knowingly declined.** `measure` is not safe to call
+concurrently, and its rustdoc says so. Giving each call a unique root would not
+fix it, because the current directory is per-process rather than per-call: two
+concurrent runs would still fight over the one thing being measured. The
+serialization lives in the tests, which take a mutex, and the binaries are
+single-threaded and call `measure` once.
+
+The declined alternative is worth naming so it is not re-proposed: threading the
+directory through as an explicit parameter and never calling
+`SetCurrentDirectoryW` would make the function safe, and would also stop it
+measuring the thing it exists to measure -- a *relative* path's resolution, which
+is defined against the process's current directory and nothing else.
+
+### The ceiling is applied to the path as written
+
+<a id="d-long-path-literal"></a>
+
+`MAX_PATH` is compared against the literal path handed to the call, before `..`
+is collapsed. That matters here because the `..` shape's literal is five units
+longer than its canonical form, so the two readings disagree in a five-unit band
+-- and the probe classifies every row on that number.
+
+Measured rather than assumed, using this crate's own un-manifested binary with
+the deep level forced to 21: plain resolved to 258 and **opened**, `..` resolved
+to 263 and was **refused**, against a content ceiling of 259. Had the collapse
+come first, both would have been 258 and both would have opened.
+
+The obvious shortcut does not settle this and should not be used. Reaching for
+`cmd.exe` measures `cmd`'s manifest, not the un-opted-in case: on the development
+host -- Windows 11 build 26200, `cmd.exe` 10.0.26100.1 -- `cmd` carries
+`longPathAware` in its own manifest beside `dpiAware`, so a long path that opens
+there says nothing about the ceiling. That is a fact about that binary on that
+build rather than about `cmd` for all time, which is exactly why the probe rests
+on a binary this workspace builds and manifests itself.

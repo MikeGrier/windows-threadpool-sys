@@ -13,20 +13,20 @@
 //! reading a test's output.
 
 use std::fmt::Write as _;
-use windows_platform_probes::report::{Stdout, emit};
+use windows_platform_probes::report::emit_report;
 use windows_platform_probes::worker_context::{
     observe_on_worker, observe_on_worker_while_impersonating,
 };
 
 fn main() {
-    // The only place that names the real stream. Everything below composes
-    // text; nothing below knows where it goes.
-    emit(&mut Stdout, &render());
+    // The probe's whole output policy, and it is one line: hand the renderer to
+    // the sink. Nothing here or below names a stream -- that is chosen once, in
+    // `report`, so retargeting a probe is not a rewrite.
+    emit_report(render);
 }
 
 /// The probe's whole report, as text.
-fn render() -> String {
-    let mut out = String::new();
+fn render(out: &mut String) {
     // First line of the report, and part of the returned text rather than
     // written out here: a captured report must carry the line naming the
     // machine that produced it, and the taint marker with it. Without it a
@@ -104,5 +104,4 @@ conclusion:"
             "  UNEXPECTED: a worker starts with the handler suppressed."
         );
     }
-    out
 }

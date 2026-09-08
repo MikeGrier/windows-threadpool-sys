@@ -10,14 +10,16 @@
 //! someone else's executable, so whatever this reports is what a caller who has
 //! not opted in will meet.
 
-use windows_platform_probes::report::{Stdout, emit};
-use windows_platform_probes::{long_path, long_path_report};
+use windows_platform_probes::long_path_report;
+use windows_platform_probes::report::emit_report;
 
 fn main() {
-    // The only place that names the real stream. Everything below composes
-    // text; nothing below knows where it goes.
-    emit(
-        &mut Stdout,
-        &long_path_report::render(&long_path::measure(false)),
-    );
+    // The probe's whole output policy, and it is one line: hand the renderer to
+    // the sink. Nothing here or below names a stream -- that is chosen once, in
+    // `report`, so retargeting a probe is not a rewrite.
+    //
+    // `false` is this binary's whole difference from its twin: `build.rs`
+    // embeds the manifest into `probe-long-path-aware` alone, so this one is
+    // the same code compiled without the opt-in.
+    emit_report(|out| long_path_report::render(out, false));
 }

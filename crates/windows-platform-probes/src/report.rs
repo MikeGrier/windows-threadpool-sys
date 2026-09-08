@@ -1,4 +1,4 @@
-// Copyright (c) 2026 Mike Grier
+// Copyright (c) Mike Grier.
 //! The one place a probe writes.
 //!
 //! # Why an abstraction for something as simple as printing
@@ -22,15 +22,26 @@
 //! formatting policy. Callers still own their text.
 //!
 //! Only one stream, unlike the placement probe's near-identical sink, because
-//! these probes have only ever written to stdout -- every one of their findings
-//! is a finding, and none of them is a diagnostic competing with the report for
-//! a reader's attention. Adding a second stream here would be inventing a
-//! distinction the tools do not make.
+//! nothing a probe puts in its *report* is a diagnostic: every line of it is a
+//! finding, so a `problem` method would have no callers here.
+//!
+//! The crate does emit one diagnostic, and it is the exception that shows why
+//! the split is unnecessary rather than one that undermines it.
+//! `Impersonation::drop` warns on stderr when `RevertToSelf` fails during an
+//! unwind, because panicking from `Drop` mid-unwind would abort and replace a
+//! diagnosable failure with one that explains nothing. That warning is not part
+//! of any report and must not be: it belongs to the process, not to the
+//! measurement, and stderr already separates it. Routing it through this sink
+//! would mix it into the evidence stdout carries.
 //!
 //! # Every probe routes through this
 //!
-//! All fourteen, as of SH-13.4. Each conversion was checked by capturing the
-//! probe's output before and after and requiring the two to match.
+//! Every probe in this crate, with no exceptions -- stated without a count on
+//! purpose, so the claim stays true as probes are added. Each conversion was
+//! checked by capturing the probe's output before and after and requiring every
+//! pre-existing line to match, in the same order. Not byte-for-byte: the
+//! conversion also prepends the host banner, which is the one deliberate
+//! difference and the only one permitted.
 //!
 //! **That check has to be positional**, which is worth recording because the
 //! obvious tool is not. The defect a conversion introduces is a helper that
@@ -40,7 +51,7 @@
 //! identical -- it passed three genuinely broken probes here before the
 //! comparison was redone line-by-line.
 
-use std::fmt::Write as _;
+use std::panic::{AssertUnwindSafe, catch_unwind, resume_unwind};
 
 /// Somewhere a probe's report can go.
 pub trait Report {
@@ -98,13 +109,64 @@ pub fn emit(report: &mut impl Report, block: &str) {
     }
 }
 
-/// Append `text` and a newline to `out`, discarding the impossible error.
+/// Compose a report and emit it, **including when composing it panics**.
 ///
-/// Every `render_*` function in these probes writes into a `String`, whose
-/// `fmt::Write` impl cannot fail, so each call site would otherwise carry a
-/// `let _ =` that says nothing. This says it once.
-pub fn writeln_to(out: &mut String, text: &str) {
-    let _ = writeln!(out, "{text}");
+/// Every probe's `main` is one call to this. The buffer is owned here rather
+/// than inside the renderer so that a measurement which aborts part-way still
+/// prints what it had already established.
+///
+/// That is not hypothetical bookkeeping. These probes call into measurements
+/// documented to panic -- `worker_context`'s impersonating observation panics if
+/// the token cannot be duplicated or applied, or if the worker never reports --
+/// and each renderer composes several completed findings *before* reaching one.
+/// Printing line-by-line used to make that automatic: whatever had been measured
+/// was already on the terminal. Buffering the whole report to hand it to a
+/// [`Report`] silently gave that up, and for an instrument the point of which is
+/// that a failure be diagnosable, how far it got is exactly the information
+/// worth keeping.
+///
+/// The panic is resumed afterwards, so the exit status and the message are
+/// unchanged; the partial report is added to them, not substituted for them.
+///
+/// **This restores the streaming property for unwinding panics only, and that
+/// bound is known rather than overlooked.** A termination that does not unwind
+/// still loses the buffer, where printing line-by-line would have kept it: Ctrl-C
+/// (the default Windows console handler terminates the process outright), and an
+/// abort from a panic raised during unwinding. The case that costs most is
+/// `probe-cancel-io`, which can run four attempts at a five-second watchdog --
+/// so about twenty seconds, precisely when the wedge it hunts for occurs, which
+/// is precisely when a reader interrupts it.
+///
+/// Fixing it properly means the renderers writing into a [`Report`] as they go
+/// rather than into a `String`, which keeps [`Captured`] working for tests and
+/// streams for real runs. That is a different design rather than an oversight in
+/// this one -- it changes every renderer -- so it is queued as its own work:
+/// milestone `M1` of [CHECKLIST.md](../CHECKLIST.md), with the reasoning in
+/// [DESIGN-NOTES.md](../DESIGN-NOTES.md#d-buffered-report).
+pub fn emit_report(render: impl FnOnce(&mut String)) {
+    emit_report_to(&mut Stdout, render);
+}
+
+/// [`emit_report`] against an arbitrary sink.
+///
+/// Exists so the catch-emit-resume logic is what a test executes, rather than a
+/// second copy of that shape written in the test. The first version of the test
+/// re-implemented it against a [`Captured`] and so would have passed with the
+/// `resume_unwind` below deleted -- which would leave a probe printing a partial
+/// report and exiting **0**, the failure that looks most like success.
+pub fn emit_report_to(report: &mut impl Report, render: impl FnOnce(&mut String)) {
+    let mut out = String::new();
+
+    // `AssertUnwindSafe` because the only state crossing the boundary is this
+    // buffer, and a partially written report is precisely what is wanted here
+    // rather than a hazard to be guarded against.
+    let outcome = catch_unwind(AssertUnwindSafe(|| render(&mut out)));
+
+    emit(report, &out);
+
+    if let Err(payload) = outcome {
+        resume_unwind(payload);
+    }
 }
 
 #[cfg(test)]

@@ -15,17 +15,17 @@ use std::fmt::Write as _;
 use windows_platform_probes::ioring::{
     IoRingSupport, is_available, measure_registration, measure_thread_agnosticism,
 };
-use windows_platform_probes::report::{Stdout, emit};
+use windows_platform_probes::report::emit_report;
 
 fn main() {
-    // The only place that names the real stream. Everything below composes
-    // text; nothing below knows where it goes.
-    emit(&mut Stdout, &render());
+    // The probe's whole output policy, and it is one line: hand the renderer to
+    // the sink. Nothing here or below names a stream -- that is chosen once, in
+    // `report`, so retargeting a probe is not a rewrite.
+    emit_report(render);
 }
 
 /// The probe's whole report, as text.
-fn render() -> String {
-    let mut out = String::new();
+fn render(out: &mut String) {
     // First line of the report, and part of the returned text rather than
     // written out here: a captured report must carry the line naming the
     // machine that produced it, and the taint marker with it. Without it a
@@ -51,7 +51,7 @@ fn render() -> String {
             "is no' are different facts, and conflating them is how a design note"
         );
         let _ = writeln!(out, "ends up citing a measurement that never ran.)");
-        return out;
+        return;
     }
 
     let _ = writeln!(out, "registration semantics:");
@@ -131,5 +131,4 @@ fn render() -> String {
             }
         }
     }
-    out
 }
