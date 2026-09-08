@@ -99,6 +99,31 @@ function Exit-Broken {
     exit $script:ExitBroken
 }
 
+# `$LASTEXITCODE` is UNSET until a native command has run in the session, and
+# under `Set-StrictMode -Version Latest` reading an unset variable throws. That
+# is not a hypothetical: with `gh` absent from PATH, the call below fails with
+# CommandNotFoundException before ever setting it, and the script then died on
+# the StrictMode violation rather than on the missing tool -- exiting 1, the
+# code that means "there are findings". Reading it through `Get-Variable`
+# removes the landmine wherever the code path reaches it.
+function Get-LastExitCode {
+    $variable = Get-Variable -Name LASTEXITCODE -Scope Global -ErrorAction SilentlyContinue
+    if ($null -eq $variable -or $null -eq $variable.Value) { return $null }
+    return [int]$variable.Value
+}
+
+# `gh` is the whole instrument here, so its absence is checked once, up front,
+# rather than being discovered as a confusing symptom further in. Without this,
+# a machine without the CLI reported either a StrictMode error about
+# `$LASTEXITCODE` or a JSON parse failure -- both describing the wreckage rather
+# than the cause, and both exiting 1 as though the scan had found something.
+if (-not (Get-Command gh -ErrorAction SilentlyContinue)) {
+    Exit-Broken @'
+gh was not found on PATH, so this tool cannot read the pull request at all.
+Install the GitHub CLI (https://cli.github.com) and run `gh auth login`.
+'@
+}
+
 $script:Owner = 'MikeGrier'
 $script:Name = 'windows-threadpool-sys'
 
@@ -119,8 +144,9 @@ function Write-Report {
 function Invoke-GitHubJson {
     param([string[]] $Arguments)
     $text = Invoke-Native { gh @Arguments }
-    if ($LASTEXITCODE -ne 0) {
-        Exit-Broken "gh $($Arguments -join ' ') failed: $($text -join ' ')"
+    $code = Get-LastExitCode
+    if ($null -eq $code -or $code -ne 0) {
+        Exit-Broken "gh $($Arguments -join ' ') failed (exit $code): $($text -join ' ')"
     }
     try {
         return ($text -join "`n") | ConvertFrom-Json
@@ -145,8 +171,9 @@ if ($MarkProcessed) {
     [System.IO.File]::WriteAllText($file, ($lines -join "`n"), [System.Text.UTF8Encoding]::new($false))
     try {
         $url = Invoke-Native { gh pr comment $Pr --repo "$script:Owner/$script:Name" --body-file $file }
-        if ($LASTEXITCODE -ne 0) {
-            Exit-Broken "posting the marker comment failed: $($url -join ' ')"
+        $code = Get-LastExitCode
+        if ($null -eq $code -or $code -ne 0) {
+            Exit-Broken "posting the marker comment failed (exit $code): $($url -join ' ')"
         }
         Write-Report "marked processed: $($MarkProcessed -join ', ')"
         Write-Report ($url -join ' ') -Level detail
