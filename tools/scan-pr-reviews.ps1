@@ -43,7 +43,18 @@
     this control claims to be. This repository is public, so anyone who can
     comment could otherwise retire a finding that has no other state anywhere.
     The check fails closed, and markers that were not honoured are counted and
-    reported rather than silently dropped.
+    reported rather than silently dropped -- separately by cause, because "the
+    author has no write access" and "this account cannot query permissions at
+    all" send a reader to look in different places.
+
+    Two consequences worth knowing before using -MarkProcessed:
+
+    - Running the scan from an account WITHOUT push access to this repository
+      makes every marker unverifiable (the endpoint 403s for every login), so
+      every marked review is re-reported as outstanding.
+    - Posting a marker from a workflow using GITHUB_TOKEN writes it as
+      github-actions[bot], whose permission reads `none`, so that marker can
+      never be honoured. Measured, not assumed. Mark from a real account.
 
 .OUTPUTS
     Exit code 0 when nothing is outstanding, 1 when there are findings, and 2 when
@@ -244,24 +255,53 @@ $issueComments = Invoke-GitHubJson @('api', "repos/$script:Owner/$script:Name/is
 # marker over-reports a finding that was in fact handled, which is visible and
 # recoverable, while wrongly honouring one silently deletes the only record that
 # a finding was never read.
+# Three outcomes, not two, because two of them have different causes and only one
+# of them is a statement about the author:
+#
+#   'allowed'      the endpoint answered `admin` or `write`.
+#   'denied'       the endpoint answered, and it was `read` or `none`. Measured:
+#                  a plain non-collaborator returns exit 0 with `read`, and a bot
+#                  account returns exit 0 with `none` -- neither is an error.
+#   'unverifiable' the call failed. The endpoint requires the CALLER to have push
+#                  access, so an account without it gets a flat 403 for every
+#                  login, including the maintainer who wrote the markers.
+#
+# Collapsing the last two was a defect of exactly the kind this whole tool exists
+# to prevent: the run reported "author lacks write access" in a case where it had
+# established nothing about the author, and the reader would go and check the
+# author's role rather than their own token.
+#
+# All three still fail closed -- only 'allowed' honours a marker -- because
+# over-reporting a handled finding is visible and recoverable, while wrongly
+# honouring one silently deletes the only record that a finding was never read.
 $script:PermissionCache = @{}
-function Test-CanRetireFinding {
+function Get-RetireAuthority {
     param([string] $Login)
-    if (-not $Login) { return $false }
+    # No author at all (a deleted account leaves `user` null). Nothing to
+    # attribute the marker to, which is itself a decided answer rather than an
+    # unanswerable one.
+    if (-not $Login) { return 'denied' }
     if ($script:PermissionCache.ContainsKey($Login)) { return $script:PermissionCache[$Login] }
 
-    # Deliberately NOT through Invoke-GitHubJson: a non-zero exit here is the
-    # ordinary answer for a non-collaborator, not a broken instrument, so it must
-    # not exit 2.
+    # Deliberately NOT through Invoke-GitHubJson: a non-zero exit here is an
+    # ordinary answer rather than a broken instrument, so it must not exit 2.
     $text = Invoke-Native {
         gh api "repos/$script:Owner/$script:Name/collaborators/$Login/permission" --jq '.permission'
     }
     $code = Get-LastExitCode
-    $permission = if ($null -eq $code -or $code -ne 0) { '' } else { (Get-Text ($text -join '')).Trim() }
 
-    $allowed = @('admin', 'write') -contains $permission
-    $script:PermissionCache[$Login] = $allowed
-    return $allowed
+    $authority = if ($null -eq $code -or $code -ne 0) {
+        'unverifiable'
+    }
+    elseif (@('admin', 'write') -contains (Get-Text ($text -join '')).Trim()) {
+        'allowed'
+    }
+    else {
+        'denied'
+    }
+
+    $script:PermissionCache[$Login] = $authority
+    return $authority
 }
 
 # Reviews already recorded as processed, by marker.
@@ -272,22 +312,23 @@ function Test-CanRetireFinding {
 # permanently and silently delete the only record that a finding was never read.
 # The counter would simply report a smaller number, with nothing to indicate why.
 $processed = @{}
-$ignoredMarkers = 0
+$deniedMarkers = 0
+$unverifiableMarkers = 0
 foreach ($c in $issueComments) {
     $markers = [regex]::Matches((Get-Text $c.body), '<!--\s*copilot-review-processed:\s*(\d+)\s*-->')
     if ($markers.Count -eq 0) { continue }
 
     $login = Get-Text (Get-Path $c @('user', 'login'))
-    if (-not (Test-CanRetireFinding $login)) {
-        # Counted and reported rather than dropped in silence: a marker that was
-        # not honoured is either an honest mistake, a permissions problem with
-        # the account running the scan, or an attempt to retire a finding, and
-        # all three are worth seeing.
-        $ignoredMarkers += $markers.Count
-        continue
-    }
-    foreach ($m in $markers) {
-        $processed[[long]$m.Groups[1].Value] = $true
+    # Counted by CAUSE rather than lumped together, and never dropped in silence:
+    # a denied marker says something about its author, an unverifiable one says
+    # something about the account running this scan, and telling a reader the
+    # wrong one sends them to look in the wrong place.
+    switch (Get-RetireAuthority $login) {
+        'allowed' {
+            foreach ($m in $markers) { $processed[[long]$m.Groups[1].Value] = $true }
+        }
+        'denied' { $deniedMarkers += $markers.Count }
+        default { $unverifiableMarkers += $markers.Count }
     }
 }
 
@@ -385,8 +426,18 @@ Write-Report "Copilot reviews:            $($copilotReviews.Count)"
 Write-Report "unresolved threads:         $($openThreads.Count)  ($($current.Count) current, $($outdated.Count) outdated)"
 Write-Report "reviews with suppressed:    $(@($copilotReviews | Where-Object { (Get-SuppressedCount (Get-Text $_.body)) -gt 0 }).Count)"
 Write-Report "  of those, unprocessed:    $($suppressedOnly.Count)"
-if ($ignoredMarkers -gt 0) {
-    Write-Report "ignored markers:            $ignoredMarkers (author lacks write access)" -Level warn
+if ($deniedMarkers -gt 0) {
+    Write-Report "markers not honoured:       $deniedMarkers (author has no write access here)" -Level warn
+}
+if ($unverifiableMarkers -gt 0) {
+    # Says whose problem it is. This fires when the ACCOUNT RUNNING THE SCAN
+    # cannot query collaborator permissions, which is a 403 for every login it
+    # asks about -- including a maintainer whose markers are perfectly valid --
+    # so pointing at the author would send the reader to check the wrong thing.
+    Write-Report "markers unverifiable:       $unverifiableMarkers" -Level warn
+    Write-Report "  This account could not query collaborator permissions, so no marker" -Level warn
+    Write-Report "  could be confirmed and every marked review is re-reported above. That" -Level warn
+    Write-Report "  is this token's push access, not a statement about who wrote them." -Level warn
 }
 Write-Report ''
 

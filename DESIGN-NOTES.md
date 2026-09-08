@@ -1742,7 +1742,18 @@ as a writer, so trusting it would enforce something weaker than the control clai
 fails closed -- a 404, a 403 because the account running the scan cannot query permissions, or
 any network failure leaves the marker unhonoured -- because over-reporting a finding that was
 in fact handled is visible and recoverable, while wrongly honouring a marker silently deletes
-the only record that a finding was never read. Unhonoured markers are counted and reported.
+the only record that a finding was never read.
+
+Unhonoured markers are counted and reported **separately by cause**, because the two causes
+send a reader to different places. A *denied* marker is a statement about its author: the
+endpoint answered, and the answer was `read` or `none`. An *unverifiable* one is a statement
+about the account running the scan: that endpoint requires the caller to have push access, so
+an account without it gets a flat 403 for every login it asks about -- including a maintainer
+whose markers are perfectly valid -- and reporting that as "the author lacks write access"
+would be an accusation the run never established. Two consequences worth knowing: scanning
+from an account without push access re-reports every marked review as outstanding, and a
+marker posted from a workflow using `GITHUB_TOKEN` is written by `github-actions[bot]`, whose
+permission reads `none`, so it can never be honoured. Both measured.
 
 **A marker asserts the review was read, so do not back-fill in bulk.** PR #56 carries 131
 reviews with suppressed comments and no marker. Almost all were addressed during the rounds
