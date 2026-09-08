@@ -47,8 +47,29 @@ function ConvertTo-OutputLines {
 # Under Windows PowerShell 5.1, a native command that writes to stderr while
 # `$ErrorActionPreference` is `Stop` raises a TERMINATING error when its stderr
 # is redirected with `2>&1`. PowerShell 7 does not. Flipping the preference to
-# `Continue` around the call is what makes the capture work on both, and
-# restoring it afterwards keeps `Stop` for everything that is not a native call.
+# `Continue` for the duration of the call is what makes the capture work on both,
+# and keeping that flip function-local is what leaves `Stop` in force for
+# everything that is not a native call.
+#
+# **No restoration is needed, and none is attempted.** `$ErrorActionPreference =
+# 'Continue'` here creates a FUNCTION-LOCAL variable: PowerShell assignment
+# always writes to the current scope, so the caller's own value is untouched and
+# the local one is discarded when this returns. `& $Command` runs the scriptblock
+# in a child of this scope, so it inherits `Continue` -- which is exactly the
+# reach the guard needs -- while nothing outside sees it.
+#
+# An earlier version wrapped the call in `try { } finally { $ErrorActionPreference
+# = $previous }`. That restored the local copy nobody could observe, so it was
+# dead code, and worse: three cases in `test-common.ps1` claimed to cover it and
+# could not fail. Measured on both hosts -- with the `try/finally` deleted
+# outright, the caller still reads `Stop` immediately after the call, identically
+# to the version that had it.
+#
+# The property that DOES need a test is the other direction: that the flip never
+# escapes into the caller. Writing `$script:` or `$global:` here would leave the
+# caller running under `Continue` for everything afterwards, and `test-common.ps1`
+# covers that (a `$script:`-scoped mutant leaves the caller at `Continue` and
+# fails those cases).
 #
 # `$LASTEXITCODE` is global, so a caller still reads the command's exit code
 # after this returns. That matters here: these scripts distinguish a broken
@@ -81,12 +102,90 @@ function ConvertTo-OutputLines {
 # [test-common.ps1](test-common.ps1) asserts this on both hosts.
 function Invoke-Native {
     param([Parameter(Mandatory = $true)][scriptblock] $Command)
-    $previous = $ErrorActionPreference
+    # Function-local by construction -- see the note above on why there is no
+    # restoration to do. Never `$script:` or `$global:` here.
     $ErrorActionPreference = 'Continue'
-    try {
-        & $Command 2>&1 | ConvertTo-OutputLines
-    }
-    finally {
-        $ErrorActionPreference = $previous
+    & $Command 2>&1 | ConvertTo-OutputLines
+}
+
+# Run a native command and capture ONLY its stdout, discarding stderr.
+#
+# **Use this whenever the output is PARSED rather than shown.** `Invoke-Native`
+# above merges stderr into the capture, which is right for a transcript and
+# wrong for data: a command that writes progress or warnings to stderr while
+# succeeding on stdout produces a capture with the two interleaved, and the
+# parse then fails on text that was never part of the answer.
+#
+# That is not hypothetical. Routing `cargo metadata --no-deps --format-version 1`
+# through the merging helper turned green locally and red in CI, because a warm
+# workspace writes nothing to stderr while a cold runner emits rustup's
+# `info: syncing channel updates` -- so `ConvertFrom-Json` failed with
+# "Unexpected character encountered while parsing value: i". Reproduced on both
+# hosts against a stand-in that writes both streams.
+#
+# The redirect is still what makes this need the same `Continue` flip: on
+# Windows PowerShell 5.1 ANY stderr redirect, `2>$null` included, turns a native
+# command's stderr into a terminating error under `Stop`. Measured -- both
+# spellings throw, an unredirected call does not.
+#
+# `$LASTEXITCODE` survives, so a caller still distinguishes success from
+# failure; what it loses is the diagnostic text, which is the trade a parsed
+# command is making anyway.
+function Invoke-NativeStdout {
+    param([Parameter(Mandatory = $true)][scriptblock] $Command)
+    $ErrorActionPreference = 'Continue'
+    & $Command 2>$null
+}
+
+# Run a native command and capture its streams SEPARATELY.
+#
+# For the case `Invoke-NativeStdout` cannot serve: output that is parsed on
+# success, but whose stderr is the diagnostic worth reporting on failure.
+# Discarding stderr keeps the parse clean and throws away the only explanation
+# of what went wrong, and merging keeps the explanation and corrupts the parse;
+# this keeps both by not choosing.
+#
+# Measured, because which stream carries the message is NOT uniform and the
+# obvious assumption is wrong for the common case. `gh`:
+#
+#   REST 404          stdout carries the JSON error body, stderr `gh: Not Found`
+#   network failure   stdout EMPTY, stderr `error connecting to ...`
+#   usage error       stdout EMPTY, stderr the usage text
+#
+# So a failure reported from stdout alone is blank exactly when the cause is
+# least guessable -- an unreachable host, a bad flag, an auth problem -- which
+# is the shape a broken-instrument message exists to explain.
+#
+# Returns an object with `Stdout`, `Stderr` and `ExitCode`, both texts already
+# flattened to plain strings. `$LASTEXITCODE` is also left set, so a caller that
+# only wants the code need not unpack anything.
+function Invoke-NativeSplit {
+    param([Parameter(Mandatory = $true)][scriptblock] $Command)
+    $ErrorActionPreference = 'Continue'
+
+    # Merged with `2>&1`, then partitioned by RECORD TYPE: PowerShell wraps a
+    # native command's stderr in ErrorRecords and leaves stdout as plain
+    # strings, so the merge is losslessly separable even though it looks like a
+    # mixed stream.
+    #
+    # A file redirect (`2>$path`) is the obvious alternative and is WRONG on
+    # Windows PowerShell 5.1. There it writes PowerShell's *formatted* error
+    # record to the file -- `cmd.exe : to-err`, then the offending source line, a
+    # caret ruler, CategoryInfo and FullyQualifiedErrorId -- rather than the raw
+    # stderr text, so the diagnostic would arrive wrapped in a stack trace of
+    # this helper. PowerShell 7 writes the raw text, so that version passed there
+    # and failed on 5.1; the cross-host suite caught it.
+    $merged = & $Command 2>&1
+    $code = $LASTEXITCODE
+
+    $stdout = @($merged | Where-Object { $_ -isnot [System.Management.Automation.ErrorRecord] })
+    $stderr = @($merged |
+            Where-Object { $_ -is [System.Management.Automation.ErrorRecord] } |
+            ForEach-Object { $_.Exception.Message }) -join "`n"
+
+    return [pscustomobject]@{
+        Stdout   = $stdout
+        Stderr   = $stderr
+        ExitCode = $code
     }
 }

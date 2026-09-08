@@ -113,26 +113,138 @@ Test-Case 'captured records are plain strings, not ErrorRecords' {
     }
 }
 
-Test-Case 'the caller''s ErrorActionPreference is restored afterwards' {
-    $before = $ErrorActionPreference
-    $null = Invoke-Native { cmd /c "echo to-stderr 1>&2" }
-    Assert-Equal $before $ErrorActionPreference 'ErrorActionPreference after the call'
+# --- Invoke-NativeStdout: the same guard, but for output that is PARSED -------
+#
+# The distinction is not cosmetic and these cases exist because getting it wrong
+# shipped: routing `cargo metadata` through the MERGING helper passed locally and
+# failed in CI, where a cold runner emits rustup's `info:` line on stderr and
+# `ConvertFrom-Json` then choked on the `i`.
+
+Test-Case 'stdout-only capture discards stderr instead of merging it' {
+    $out = Invoke-NativeStdout { cmd /c "echo noise 1>&2 & echo {`"ok`":true}" }
+    $text = ("$out").Trim()
+    Assert-Equal '{"ok":true}' $text 'only stdout may be captured'
+    if ($text -match 'noise') { throw "stderr leaked into a parsed capture: $text" }
 }
 
-# The guard must not disarm `Stop` for anything that is not the native call.
+Test-Case 'stdout-only capture still yields parseable JSON under stderr noise' {
+    # The exact shape that failed in CI, reduced.
+    $out = Invoke-NativeStdout { cmd /c "echo info: syncing channel updates 1>&2 & echo {`"ok`":true}" }
+    $parsed = $out | ConvertFrom-Json
+    Assert-Equal $true $parsed.ok 'the JSON must survive stderr noise'
+}
+
+Test-Case 'stdout-only capture preserves the exit code' {
+    $null = Invoke-NativeStdout { cmd /c "echo boom 1>&2 & exit 4" }
+    Assert-Equal 4 $LASTEXITCODE 'LASTEXITCODE after a failing parsed command'
+}
+
+Test-Case 'stdout-only capture does not throw on 5.1 despite redirecting' {
+    # `2>$null` is a redirect too, so it hits the same 5.1 rule the merging
+    # helper guards. Without the Continue flip this throws there and passes on 7.
+    $out = Invoke-NativeStdout { cmd /c "echo only-stderr 1>&2" }
+    Assert-Equal '' ("$out").Trim() 'a command writing only to stderr yields nothing, and does not throw'
+}
+
+# --- Invoke-NativeSplit: parse stdout, report stderr --------------------------
+#
+# For output parsed on success whose stderr is the diagnostic on failure.
+# Discarding stderr keeps the parse clean and loses the only explanation of what
+# went wrong; merging keeps the explanation and corrupts the parse. These pin
+# that it does neither.
+
+Test-Case 'split capture keeps the two streams apart' {
+    $r = Invoke-NativeSplit { cmd /c "echo to-err 1>&2 & echo to-out" }
+    Assert-Equal 'to-out' ("$($r.Stdout)").Trim() 'stdout must not carry stderr'
+    if (("$($r.Stderr)").Trim() -ne 'to-err') {
+        throw "stderr must be captured separately, got '$($r.Stderr)'"
+    }
+}
+
+Test-Case 'split capture parses stdout as JSON under stderr noise' {
+    $r = Invoke-NativeSplit { cmd /c "echo info: syncing 1>&2 & echo {`"ok`":true}" }
+    $parsed = $r.Stdout | ConvertFrom-Json
+    Assert-Equal $true $parsed.ok 'the JSON must survive stderr noise'
+}
+
+# The case the whole helper exists for, and the one a stdout-only capture got
+# wrong: measured on `gh`, a network failure or a usage error leaves stdout EMPTY
+# and puts the entire explanation on stderr. Reporting from stdout alone was
+# blank exactly when the cause was least guessable.
+Test-Case 'split capture still has a diagnostic when stdout is empty' {
+    $r = Invoke-NativeSplit { cmd /c "echo only-on-stderr 1>&2 & exit 5" }
+    Assert-Equal 5 $r.ExitCode 'the exit code must survive'
+    Assert-Equal '' ("$($r.Stdout)").Trim() 'this command writes nothing to stdout'
+    if (("$($r.Stderr)").Trim() -ne 'only-on-stderr') {
+        throw "the diagnostic must survive on stderr, got '$($r.Stderr)'"
+    }
+}
+
+Test-Case 'split capture does not throw on 5.1 despite redirecting' {
+    # A file redirect is still a redirect, so this hits the same 5.1 rule.
+    $r = Invoke-NativeSplit { cmd /c "echo x 1>&2" }
+    Assert-Equal 0 $r.ExitCode 'a command that only writes to stderr still succeeds'
+}
+
+Test-Case 'split capture reports an empty stderr as empty, not null' {
+    # StrictMode: a `$null` here would make `.Trim()` at the call sites throw.
+    $r = Invoke-NativeSplit { cmd /c "echo quiet" }
+    Assert-Equal '' ("$($r.Stderr)").Trim() 'a silent command yields empty stderr'
+    if ($null -eq $r.Stderr) { throw 'Stderr must be an empty string rather than $null' }
+}
+
+# The flip must REACH the scriptblock, and this is the only case that shows it
+# directly. The stderr case above shows it too, but only on 5.1 -- PowerShell 7
+# captures either way, so on 7 nothing else here distinguishes a guard that works
+# from one that does nothing. Observing the preference from inside the passed
+# scriptblock is host-independent.
+Test-Case 'the flip reaches the scriptblock it is handed' {
+    $seen = Invoke-Native { $ErrorActionPreference }
+    Assert-Equal 'Continue' ("$seen".Trim()) 'ErrorActionPreference as seen inside the command'
+}
+
+# The three cases below are the OTHER direction: the flip must not escape.
+#
+# They are deliberately not described as testing a "restoration". `Invoke-Native`
+# assigns to a function-local `$ErrorActionPreference`, so the caller's value is
+# never modified and there is nothing to restore -- an earlier version wrapped
+# the call in a `try/finally` that restored a copy nobody could observe, and
+# these three cases could not fail against deleting it. Measured on both hosts.
+#
+# What they do catch is real and is the mutation worth guarding: writing
+# `$script:ErrorActionPreference` or `$global:` in `Invoke-Native` would leave
+# the CALLER running under `Continue` for everything afterwards, silently
+# disarming `Stop` for the rest of the script. A `$script:`-scoped mutant leaves
+# the caller at `Continue` and fails all three.
+# Each of these three sets `$script:ErrorActionPreference` to a known value
+# first, rather than capturing whatever it happens to be. That is not ceremony:
+# a mutant that escapes to script scope leaks `Continue` on its FIRST call, so a
+# later case reading "before" would capture `Continue`, compare it against
+# `Continue` afterwards, and pass -- the contamination hiding itself. Measured:
+# without this reset, a `$script:`-scoped mutant was caught only by the
+# behavioural case below, and the two variable-observing cases passed.
+Test-Case 'the flip does not escape into the caller' {
+    $script:ErrorActionPreference = 'Stop'
+    $null = Invoke-Native { cmd /c "echo to-stderr 1>&2" }
+    Assert-Equal 'Stop' $ErrorActionPreference 'the caller''s ErrorActionPreference after the call'
+}
+
+# The same property observed through behaviour rather than through the variable:
+# `Stop` must still terminate on something that is not the native call.
 Test-Case 'Stop still terminates a non-native error after the call' {
+    $script:ErrorActionPreference = 'Stop'
     $null = Invoke-Native { cmd /c "echo to-stderr 1>&2" }
     $threw = $false
     try { Get-Item 'Q:\no\such\path\at\all.txt' | Out-Null } catch { $threw = $true }
     if (-not $threw) { throw 'Stop was left disarmed for cmdlet errors' }
 }
 
-# Restoration must survive the native call throwing for some other reason, or a
-# later failure would run with the preference still flipped.
-Test-Case 'ErrorActionPreference is restored even when the command throws' {
-    $before = $ErrorActionPreference
+# And on the path where the command throws, which is where a scope-escaping
+# assignment would be least likely to be noticed by hand.
+Test-Case 'the flip does not escape when the command throws' {
+    $script:ErrorActionPreference = 'Stop'
     try { $null = Invoke-Native { throw 'deliberate' } } catch { }
-    Assert-Equal $before $ErrorActionPreference 'ErrorActionPreference after a throwing command'
+    Assert-Equal 'Stop' $ErrorActionPreference 'the caller''s ErrorActionPreference after a throw'
 }
 
 if (-not $SingleHost) {

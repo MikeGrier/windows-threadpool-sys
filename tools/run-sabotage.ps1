@@ -216,7 +216,23 @@ function Exit-WithMessage {
 }
 
 function Get-RepoRoot {
-    $root = git rev-parse --show-toplevel 2>$null
+    # Through `Invoke-NativeStdout`, and BOTH halves of that name are load
+    # bearing here.
+    #
+    # Guarded at all, because any stderr redirect -- `2>$null` as much as `2>&1`
+    # -- makes a native command's stderr a TERMINATING error on Windows
+    # PowerShell 5.1 under `Stop`, and this is the one call in this script whose
+    # failure mode IS stderr: outside a working tree git says `fatal: not a git
+    # repository`. Measured on 5.1, unguarded, the line below was unreachable --
+    # the script died with NativeCommandError and exited 1, which in this script
+    # means "sabotages did not behave as declared" rather than "you ran me in
+    # the wrong directory". PowerShell 7 reached it either way, which is why the
+    # deliberate exit-2 path looked fine.
+    #
+    # Stdout-only rather than the merging `Invoke-Native`, because this output is
+    # PARSED -- it becomes the repository root. Git can warn on stderr while
+    # succeeding, and merging would splice that warning into the path.
+    $root = Invoke-NativeStdout { git rev-parse --show-toplevel }
     if ($LASTEXITCODE -ne 0) {
         # Reported, not thrown. Under $ErrorActionPreference = 'Stop' a `throw`
         # here is a terminating error that prints a stack trace and propagates

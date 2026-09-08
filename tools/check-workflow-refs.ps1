@@ -47,6 +47,11 @@ param(
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 
+# `Invoke-Native`, for the cargo call below. Dot-sourced rather than imported: a
+# module copy of that guard does not reach the scriptblock it is handed and
+# silently fails on 5.1 alone -- see [common.ps1](common.ps1).
+. (Join-Path $PSScriptRoot 'common.ps1')
+
 # Resolved here rather than as a param default: Windows PowerShell 5.1 does not
 # populate $PSScriptRoot while evaluating a default on a [CmdletBinding()]
 # script, so the default form fails outright under 5.1 while working under 7.
@@ -63,7 +68,13 @@ $repoRoot = Resolve-Path (Join-Path $PSScriptRoot '..')
 
 # One `cargo metadata` call answers every crate/bin/example question. `--no-deps`
 # keeps it to workspace members, which is the only thing a workflow can name.
-$metadataJson = & cargo metadata --no-deps --format-version 1 2>$null
+# Through `Invoke-NativeStdout`, NOT `Invoke-Native`, and the difference is the
+# whole point here: this output is parsed as JSON, so stderr must be DISCARDED
+# rather than merged into it. Cargo writes to stderr routinely -- a cold runner
+# emits rustup's `info: syncing channel updates` -- and merging that in makes
+# `ConvertFrom-Json` fail on the `i`. The guard is still needed because any
+# stderr redirect is a terminating error on Windows PowerShell 5.1 under `Stop`.
+$metadataJson = Invoke-NativeStdout { cargo metadata --no-deps --format-version 1 }
 if ($LASTEXITCODE -ne 0) {
     Write-Host "::error::cargo metadata failed, so workflow references cannot be resolved" 
     exit 2

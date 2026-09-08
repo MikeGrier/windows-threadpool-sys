@@ -1827,8 +1827,15 @@ preference.
 The single thing it carries today is `Invoke-Native`, the guard against 5.1's treatment of
 native stderr: there, a native command that writes to stderr while `$ErrorActionPreference`
 is `Stop` raises a **terminating** error when its stderr is redirected with `2>&1`.
-PowerShell 7 does not. The guard flips the preference to `Continue` around the call and
-restores it afterwards.
+PowerShell 7 does not. The guard flips the preference to `Continue` for the duration of the
+call, and **that flip is function-local rather than restored afterwards**: PowerShell
+assignment always writes to the current scope, so the caller's value is never modified and
+the local one is discarded on return, while `& $Command` still inherits it through the child
+scope. An earlier version wrapped the call in a `try`/`finally` that restored a copy nobody
+could observe; it was dead code, and three cases in
+[tools/test-common.ps1](tools/test-common.ps1) claimed to cover it while being unable to
+fail. The property that does need testing is the opposite one -- that the flip never
+*escapes* into the caller, which is what a `$script:`-scoped mistake would do.
 
 **Why a module fails.** A scriptblock carries the session state it was created in.
 `Invoke-Native { cargo build }` builds that scriptblock in the *caller's* script scope, so
@@ -1884,7 +1891,9 @@ something.
 **So suppressed-only reviews are tagged with a marker comment**, posted by the script:
 
 ```
-<!-- copilot-review-processed: 5136043258 -->
+<!-- copilot-review-processed:begin -->
+<!-- copilot-review-processed: [id] -->
+<!-- copilot-review-processed:end -->
 ```
 
 It is an HTML comment, so it does not render; it lives on the pull request rather than in a file
@@ -1897,6 +1906,26 @@ is a claim with no evidence.
 means the anchored line has since changed, which usually means the finding was fixed and the
 thread simply never resolved -- so those are the cheap ones to clear, and they are listed only
 under `-IncludeOutdated` to keep the default output about work that is actually open.
+
+**A marker is only honoured from an account with `admin` or `write` permission**, checked
+against the collaborators permission endpoint rather than inferred from the comment's
+`author_association`. That field reports `COLLABORATOR` for a read-only collaborator as well
+as a writer, so trusting it would enforce something weaker than the control claims. The check
+fails closed -- a 404, a 403 because the account running the scan cannot query permissions, or
+any network failure leaves the marker unhonoured -- because over-reporting a finding that was
+in fact handled is visible and recoverable, while wrongly honouring a marker silently deletes
+the only record that a finding was never read.
+
+Unhonoured markers are counted and reported **separately by cause**, because the two causes
+send a reader to different places. A *denied* marker is a statement about its author: the
+endpoint answered, and the answer was `read` or `none`. An *unverifiable* one is a statement
+about the account running the scan: that endpoint requires the caller to have push access, so
+an account without it gets a flat 403 for every login it asks about -- including a maintainer
+whose markers are perfectly valid -- and reporting that as "the author lacks write access"
+would be an accusation the run never established. Two consequences worth knowing: scanning
+from an account without push access re-reports every marked review as outstanding, and a
+marker posted from a workflow using `GITHUB_TOKEN` is written by `github-actions[bot]`, whose
+permission reads `none`, so it can never be honoured. Both measured.
 
 **A marker asserts the review was read, so do not back-fill in bulk.** PR #56 carries 131
 reviews with suppressed comments and no marker. Almost all were addressed during the rounds
