@@ -1862,3 +1862,44 @@ name, and they are *not* duplicates -- they differ in level vocabulary (`warn` a
 those vocabularies, which changes the output of six tools to remove a duplication that is
 only apparent. The shared name is a naming convention -- the repository's one-output-sink
 rule -- not shared code, and it stays that way until some script needs another's rendering.
+
+## <a id="copilot-review-ledger"></a>Which Copilot reviews are dealt with: resolve threads, and mark suppressed-only reviews
+
+A long-lived pull request accumulates hundreds of Copilot reviews -- PR #56 reached 196 -- and
+GitHub records "this was dealt with" for only some of them. [tools/scan-pr-reviews.ps1](tools/scan-pr-reviews.ps1)
+reports what is genuinely outstanding, and the convention below is what makes that report mean
+something.
+
+**A review's findings arrive in two shapes, and only one of them has state.**
+
+- **Inline comments** become review threads, which can be **resolved**. That flag is durable,
+  visible, and queryable, so it is the tag -- there is nothing to invent. Resolve a thread when
+  its finding is dealt with, including when it is *refuted*: "we measured this and it is not a
+  defect" is a disposition, not an open question.
+- **Suppressed comments** exist only as prose inside the review body's `<details>` block. They
+  create **no thread**, so there is nothing to resolve, and a review is not a reactable object
+  either: `POST /pulls/{n}/reviews/{id}/reactions` returns 404 while the same call against an
+  inline comment succeeds. Nothing anywhere records that a suppressed finding was read.
+
+**So suppressed-only reviews are tagged with a marker comment**, posted by the script:
+
+```
+<!-- copilot-review-processed: 5136043258 -->
+```
+
+It is an HTML comment, so it does not render; it lives on the pull request rather than in a file
+or a session, so it survives a new machine, a new contributor, and a new agent session; and the
+script reads it back, which is what keeps the report from re-raising a review already handled.
+The script requires a `-Summary` alongside it, because a marker with no account of what was done
+is a claim with no evidence.
+
+**Reading the report.** It separates unresolved threads into *current* and *outdated*. Outdated
+means the anchored line has since changed, which usually means the finding was fixed and the
+thread simply never resolved -- so those are the cheap ones to clear, and they are listed only
+under `-IncludeOutdated` to keep the default output about work that is actually open.
+
+**A marker asserts the review was read, so do not back-fill in bulk.** PR #56 carries 131
+reviews with suppressed comments and no marker. Almost all were addressed during the rounds
+that followed them, but "almost all" is not evidence, and marking them wholesale would convert
+an honest absence of information into a false record. Mark a historical review only when
+somebody has actually read it.
