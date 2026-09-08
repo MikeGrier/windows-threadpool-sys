@@ -179,11 +179,50 @@ pub fn measure() -> Observation {
 
     // The kernel transition a captured handle costs. Measured against a handle
     // this process already owns, so nothing here depends on the filesystem.
+    //
+    // Capture and close are timed SEPARATELY, and that separation is the whole
+    // point. `time_loop` black-boxes its closure's return value and drops it at
+    // the end of the statement, so a loop that captures and returns a
+    // `CapturedHandle` -- which owns an `OwnedHandle` -- also calls
+    // `CloseHandle` inside the timed region. That is two kernel transitions
+    // reported as one number, and the report reads that number as the cost of
+    // duplication alone, so it overstated it by however much a close costs.
+    //
+    // Retaining every duplicate in a pre-sized `Vec` keeps the close out of the
+    // capture loop, and timing the drop of that same `Vec` recovers the close as
+    // its own figure rather than discarding it. The `push` is a pointer bump
+    // into reserved capacity, which is not free but is nowhere near a syscall.
     let file = std::fs::File::open(&system_dll).expect("kernel32.dll is readable");
     let borrowed = std::os::windows::io::AsHandle::as_handle(&file);
-    timings.push(time_loop("capture_handle", HANDLE_ITERATIONS, || {
-        CapturedHandle::capture(borrowed).expect("duplicating an owned handle")
-    }));
+
+    // Warmed the same way `time_loop` warms, and for the same reason: the first
+    // pass pays for lazily resolved syscall stubs and the allocator's first
+    // touch of a fresh size class.
+    for _ in 0..256 {
+        let _ =
+            std::hint::black_box(CapturedHandle::capture(borrowed).expect("duplicating a handle"));
+    }
+
+    let mut captured = Vec::with_capacity(HANDLE_ITERATIONS as usize);
+    let start = Instant::now();
+    for _ in 0..HANDLE_ITERATIONS {
+        captured.push(CapturedHandle::capture(borrowed).expect("duplicating an owned handle"));
+    }
+    let capture_elapsed = start.elapsed();
+    timings.push(Timing {
+        label: "capture_handle",
+        iterations: HANDLE_ITERATIONS,
+        nanos_per_op: capture_elapsed.as_nanos() as f64 / f64::from(HANDLE_ITERATIONS),
+    });
+
+    let start = Instant::now();
+    drop(captured);
+    let close_elapsed = start.elapsed();
+    timings.push(Timing {
+        label: "close_handle",
+        iterations: HANDLE_ITERATIONS,
+        nanos_per_op: close_elapsed.as_nanos() as f64 / f64::from(HANDLE_ITERATIONS),
+    });
 
     Observation { timings }
 }

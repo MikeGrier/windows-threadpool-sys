@@ -128,11 +128,9 @@ conclusions belong to it until it converges.
   PDO advertises a proximity domain. Write the correction now (the documentation defect is independent of
   the measurement) and leave the empirical question open.
 
-- [x] **M20.5** -- **Dissolved by [D-47](DESIGN-NOTES.md#d-47-detail), not decided.** This asked whether to
-  make the load-sensitive `flush_barrier` assertion load-independent or mark the test serial. Neither: the
-  assertion was measuring a claim the platform does not honour, so it was not a flaky test at all. Its own
-  contention hypothesis was disproved in the same measurement -- an idle ring failed too. Recorded in
-  [RESOLVED-TEST-FAILURES.md](RESOLVED-TEST-FAILURES.md).
+- [x] **M20.5** -- Dissolved by [D-47](DESIGN-NOTES.md#d-47-detail) rather than decided: the
+  `flush_barrier` assertion was measuring a claim the platform does not honour, so it was never a
+  flaky test. -> [completed 2026-09-07](COMPLETED-CHECKLIST.md#m205)
 
 - [ ] **M20.6** -- Re-evaluate `CommitStrategy::AlternatingRings` and the epoch-log benchmark's conclusion
   against [D-47](DESIGN-NOTES.md#d-47-detail). The strategy comparison in

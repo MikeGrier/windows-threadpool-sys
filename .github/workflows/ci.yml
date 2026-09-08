@@ -252,17 +252,31 @@ jobs:
       # of logs mechanically rather than read by eye.
       - name: probe magnitudes (topology)
         run: cargo run -p windows-platform-probes --bin probe-topology --locked
+      # `--release` on the next two, and ONLY on those two, because they are the
+      # only probes here that report nanoseconds. Everything above measures
+      # BEHAVIOUR -- what an API refuses, what a handle reports, which errors
+      # appear -- and that does not change with the optimisation level, so those
+      # keep the dev profile and the build time it saves.
+      #
+      # These two do not have that luxury. They compare operations a few tens of
+      # nanoseconds apart, and in an unoptimized build the loop, the closure
+      # indirection, and the request construction around each measured call
+      # carry overhead that does not shrink uniformly across them. The RATIOS
+      # are what the design reads -- "a doorbell is x% of a submit", "a captured
+      # handle costs Nx a built request" -- and a ratio of two figures each
+      # inflated by a different amount is not the shipping one.
+      #
       # Decides how much machinery the two-layer ring's doorbell needs. Its
       # park-and-wake handshake is bounded rather than INFINITE on purpose: the
       # first version of it deadlocked, because an auto-reset event does not
       # count signals and the waiter's count never caught up. A probe that can
       # hang is a probe that can hang a build.
       - name: probe magnitudes (doorbell cost)
-        run: cargo run -p windows-platform-probes --bin probe-doorbell-cost --locked
+        run: cargo run -p windows-platform-probes --bin probe-doorbell-cost --locked --release
       # Read with the doorbell probe above: together they say whether the
       # queue's mechanics or the request's own cost deserves the attention.
       - name: probe magnitudes (request cost)
-        run: cargo run -p windows-platform-probes --bin probe-request-cost --locked
+        run: cargo run -p windows-platform-probes --bin probe-request-cost --locked --release
       # Both halves of the long-path pair, deliberately. Either alone says
       # nothing: the finding is the *difference* between two executables that
       # differ only in whether `build.rs` embedded the `longPathAware` manifest,

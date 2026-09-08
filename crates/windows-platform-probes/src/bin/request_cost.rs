@@ -14,9 +14,19 @@ use std::fmt::Write as _;
 use windows_platform_probes::report::{Stdout, emit};
 use windows_platform_probes::request_cost::measure;
 
-/// Measured by `probe-doorbell-cost` on the same machine. Restated here only to
-/// render a ratio; the authoritative number is whatever that probe prints on
-/// the host this runs on.
+/// Measured by `probe-doorbell-cost` on the development machine, and recorded in
+/// [the 2026-08-30 design session]. Restated here only to render a ratio; the
+/// authoritative number is whatever that probe prints on the host this runs on.
+///
+/// **The build profile behind these is not recorded**, which is why the report
+/// below calls the ratios indicative rather than quoting them as results. They
+/// are not re-baselined here: the figure is the one that session recorded, and
+/// silently replacing it would leave the session describing a number that no
+/// longer exists anywhere. CI runs both this probe and `probe-doorbell-cost`
+/// under `--release` in the same job, so the like-for-like comparison a reader
+/// actually wants is those two outputs, not this constant.
+///
+/// [the 2026-08-30 design session]: ../../../../design-sessions/DESIGN-SESSION-2026-08-30-numa-sharded-io-execution-domains.md
 const DOORBELL_NS_REFERENCE: f64 = 164.9;
 const ATOMIC_NS_REFERENCE: f64 = 7.2;
 
@@ -158,6 +168,23 @@ fn render() -> String {
             "  a memory copy, and easy to under-count when thinking about what an"
         );
         let _ = writeln!(out, "  SQE holds.");
+        // Reported beside it because the duplication figure above excludes it by
+        // construction, and a reader sizing a request's real cost needs both:
+        // every captured handle is eventually closed, so the lifecycle is the
+        // pair. Keeping them separate is what stops either being quoted as the
+        // other.
+        if let Some(close) = observation.get("close_handle") {
+            let _ = writeln!(
+                out,
+                "  Closing one costs a further {close:.0} ns, measured separately, so a"
+            );
+            let _ = writeln!(
+                out,
+                "  captured handle's whole lifecycle is {:.0} ns. The duplication figure",
+                capture + close
+            );
+            let _ = writeln!(out, "  above is the duplication alone.");
+        }
         if let Some(build) = build {
             if capture > build {
                 let _ = writeln!(
@@ -239,7 +266,8 @@ fn render() -> String {
         concat!(
             r#"{{"reason":"x-probe-request-cost","arch":"{}","prepare_short_ns":{},"#,
             r#""prepare_long_ns":{},"build_open_request_ns":{},"#,
-            r#""clone_prepared_units_ns":{},"capture_handle_ns":{}}}"#
+            r#""clone_prepared_units_ns":{},"capture_handle_ns":{},"#,
+            r#""close_handle_ns":{}}}"#
         ),
         std::env::consts::ARCH,
         get("prepare_short_path"),
@@ -247,6 +275,7 @@ fn render() -> String {
         get("build_open_request"),
         get("clone_prepared_units"),
         get("capture_handle"),
+        get("close_handle"),
     );
     out
 }

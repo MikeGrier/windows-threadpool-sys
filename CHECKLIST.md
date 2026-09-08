@@ -187,25 +187,10 @@ M22-M29, and [CHECKLIST-io-domains.md](CHECKLIST-io-domains.md) M30-M33.
 
 ## M35 -- Measure what the long-path opt-in actually does
 
-- [x] **M35.1** -- **Measure whether the long-path opt-in lifts `MAX_PATH` for a *relative* path, and
-  whether it does so without changing how the path is parsed.**
-  **Done 2026-09-04, and it settles a question that had produced three wrong answers from reading.**
-  `probe-long-path-aware` and `probe-long-path-unaware` in
-  [windows-platform-probes](crates/windows-platform-probes/src/long_path.rs) are the same code
-  differing only in whether their manifest declares `longPathAware`; `build.rs` embeds it into that
-  one binary via `rustc-link-arg-bin`, so the other thirteen probes are unaffected.
-  **Result, on a host with `LongPathsEnabled=1`.** With the opt-in, a relative path of 429 characters
-  opens in every shape -- plain, containing `b\..`, and forward-slash separated. Without it, all three
-  are refused with `ERROR_PATH_NOT_FOUND` while the same shapes at 78 characters open. The targets are
-  created first, so a not-found from a file that provably exists is the length refusal.
-  **So the documented reading was right and the review finding was wrong**: the opt-in covers relative
-  paths, and `MAX_PATH` binds them only in a process that has not opted in.
-  **And the regularize-then-prefix hypothesis is falsified.** If the opt-in worked by prepending
-  `\\?\`, that prefix would disable `.`, `..` and forward-slash translation, so those shapes would
-  have failed past the ceiling while working below it. Both resolve at both lengths. The opt-in lifts
-  the length check without re-parsing, so there is no discontinuity at `MAX_PATH` for a caller of
-  `windows-file-watcher` to fall into.
-  The measurement is recorded where the claim lives, in `Session::subscribe`'s note.
+- [x] **M35.1** -- Measure whether the long-path opt-in lifts `MAX_PATH` for a relative path, and
+  whether it does so without re-parsing it. It does both, and the regularize-then-prefix hypothesis
+  is falsified. -> [completed 2026-09-04](COMPLETED-CHECKLIST.md#m351)
+
 ## M-inf -- Parked
 
 Ungated work with no identified predecessor deliverable.

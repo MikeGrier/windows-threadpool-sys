@@ -181,7 +181,22 @@ pub fn measure() -> Observation {
     let submit_nanos = ioring::Ring::new().map(|ring| {
         const SUBMIT_ITERATIONS: u32 = 20_000;
         let timing = time_loop("submit_io_ring_empty", SUBMIT_ITERATIONS, || {
-            let _ = ring.submit_and_wait(0);
+            // Both halves of the answer are checked, inside the timed region.
+            // Discarding them let a host where `SubmitIoRing` fails produce a
+            // perfectly plausible timing -- a failing call still costs a
+            // measurable transition -- which the report then read as the cost of
+            // a successful empty submission. That is the failure mode this whole
+            // crate exists to avoid: a number that looks like evidence and is
+            // not. The `submitted` count is checked too, because a call that
+            // succeeded while submitting entries did not measure what the label
+            // says it measured.
+            //
+            // The cost is a predictable branch against a syscall, which does not
+            // perturb the figure; leaving the check outside the loop would let
+            // the timing be taken before anything established it was valid.
+            let (hr, submitted) = ring.submit_and_wait(0);
+            assert!(hr >= 0, "SubmitIoRing(0) failed: {hr:#010x}");
+            assert_eq!(submitted, 0, "SubmitIoRing(0) submitted entries");
         });
         timings.push(timing);
         timing.nanos_per_op

@@ -846,25 +846,54 @@ fn every_cache_level_reports_at_least_one_domain_with_at_least_one_processor() {
 fn the_outermost_partitioning_cache_is_the_deepest_level_that_splits_the_machine() {
     let observation = crate::topology::measure().expect("topology discovery");
 
+    // What this can check, and deliberately no more. `Observation`'s caches are
+    // SUMMARIES -- a level, a domain count, and the size of each domain -- with
+    // processor membership discarded. "Outermost" is defined by set inclusion
+    // between partitions, so nothing here can re-derive the selection, and the
+    // two attempts to do so anyway were both wrong:
+    //
+    // - Ordering candidates by LEVEL NUMBER is the rule the topology crate
+    //   abandoned, because a higher number is not always coarser. This module's
+    //   own `outermost_partitioning_cache` doc records it, and the synthetic
+    //   test below builds the counterexample: a valid L2 outermost partition
+    //   alongside a finer L3 that still partitions. A level-number assertion
+    //   here would fail that legitimate topology.
+    //
+    // - Reading `None` as "no level partitions this machine" is false for the
+    //   same reason the renderer was corrected: `None` is also the answer when
+    //   two partitionings are incomparable, which is a deliberate ambiguity
+    //   result rather than a claim about the hardware.
+    //
+    // So this asserts the two properties that survive the summarising: a
+    // selection is one of the surveyed levels and genuinely partitions, and the
+    // selection agrees with the level the survey captured.
     match observation.outermost_partitioning_cache() {
         Some(chosen) => {
             assert!(
                 chosen.domains > 1,
                 "a level that does not partition cannot be the partitioning level"
             );
-            // Nothing deeper may also partition, or the wrong one was chosen.
+            assert_eq!(
+                Some(chosen.level),
+                observation.partitioning_cache_level,
+                "the looked-up summary must be the level the survey selected"
+            );
             assert!(
-                observation
-                    .caches
-                    .iter()
-                    .all(|other| other.level <= chosen.level || other.domains <= 1),
-                "a deeper cache level also partitions this machine, so the outermost \
-                 one was mis-selected"
+                observation.caches.iter().any(|c| c.level == chosen.level),
+                "the selected level must be one this survey actually recorded"
             );
         }
         None => assert!(
-            observation.caches.iter().all(|cache| cache.domains <= 1),
-            "no level was chosen even though one partitions the machine"
+            // Only the internal consistency, which is all that is knowable: a
+            // survey that captured no level must look one up, and a survey that
+            // captured one must find it. Why the level is absent is not
+            // recoverable from here, and guessing was the defect.
+            observation.partitioning_cache_level.is_none()
+                || !observation
+                    .caches
+                    .iter()
+                    .any(|c| Some(c.level) == observation.partitioning_cache_level),
+            "a level was selected but its summary was not found"
         ),
     }
 }
@@ -932,4 +961,47 @@ fn no_partitioning_level_is_a_real_answer_in_the_survey_too() {
     observation.partitioning_cache_level = None;
 
     assert!(observation.outermost_partitioning_cache().is_none());
+}
+
+// --- the doorbell's park-and-wake handshake ---------------------------------
+//
+// Its own documentation records that the first implementation DEADLOCKED: one
+// thread setting an auto-reset event while the other waited, two signals
+// collapsing into one, and the waiter blocking on INFINITE for ever. Nothing
+// tested it, so the rewrite that fixed it could have been undone silently.
+//
+// Both tests are bounded by construction. A test that can hang is worse than
+// the defect it guards, because it takes the whole suite with it: the handshake
+// itself waits with a 5-second timeout and reports `None` rather than blocking,
+// so a reintroduced deadlock surfaces here as a failed assertion within seconds
+// rather than as a suite that never finishes.
+
+#[test]
+fn a_zero_round_handshake_has_no_average_rather_than_a_meaningless_one() {
+    // The deterministic half of the contract, and the one a caller is most
+    // likely to break by "simplifying". With no rounds the elapsed time is zero
+    // and the average would be `0.0 / 0.0` -- NaN, wrapped in the `Some` this
+    // function documents as a meaningful number, against which every comparison
+    // a caller makes returns false with no indication why.
+    assert_eq!(
+        crate::doorbell_cost::measure_park_and_wake(0),
+        None,
+        "zero rounds has no average, and must not report one"
+    );
+}
+
+#[test]
+fn a_small_handshake_completes_and_reports_a_positive_round_trip() {
+    // The liveness half: the two-event alternation actually runs to completion
+    // and produces a number. Deliberately few rounds -- this is a real
+    // cross-thread measurement, and the assertion is that it terminates and is
+    // sane, not that it is fast. A machine under load may make each round
+    // arbitrarily slow without making it wrong.
+    let average = crate::doorbell_cost::measure_park_and_wake(64)
+        .expect("a bounded handshake of 64 rounds must complete rather than time out");
+
+    assert!(
+        average.is_finite() && average > 0.0,
+        "a completed handshake must report a positive finite round trip, got {average}"
+    );
 }

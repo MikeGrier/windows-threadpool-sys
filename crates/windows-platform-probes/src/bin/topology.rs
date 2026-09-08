@@ -116,9 +116,20 @@ fn render() -> String {
             );
         }
         None => {
+            // Two different topologies land here and the difference matters, so
+            // this reports the absence rather than explaining it. `None` means
+            // "no unique outermost partitioning cache", which is EITHER that no
+            // level partitions the machine OR that two levels partition it
+            // incomparably -- neither being a subset of the other, so neither is
+            // outermost. Naming only the first turns a reported ambiguity into a
+            // false claim about the hardware.
             let _ = writeln!(
                 out,
-                "\nno cache level partitions this machine: every level is machine-wide"
+                "\nno unique outermost partitioning cache was established: either no"
+            );
+            let _ = writeln!(
+                out,
+                "level partitions this machine, or two partition it incomparably."
             );
         }
     }
@@ -158,10 +169,17 @@ fn render() -> String {
     );
     match observation.raw_highest_numa_node {
         Some(highest) => {
+            // The identifier, and deliberately no count derived from it.
+            // `GetNumaHighestNodeNumber` reports the largest node NUMBER, and
+            // node numbers may be sparse -- a machine with nodes 0 and 2 has two
+            // nodes and a highest of 2. `highest + 1` would print three, which
+            // is the same mistake `Observation::cross_check` was corrected to
+            // stop making; re-deriving it here would put it back in the output
+            // the cross-check is printed beside.
+            let _ = writeln!(out, "  GetNumaHighestNodeNumber    : {highest}");
             let _ = writeln!(
                 out,
-                "  GetNumaHighestNodeNumber    : {highest} (so {} nodes)",
-                highest + 1
+                "    (the largest node NUMBER, not a count: node numbers can be sparse)"
             );
         }
         None => {

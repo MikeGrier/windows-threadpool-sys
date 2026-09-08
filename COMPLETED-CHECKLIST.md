@@ -2236,3 +2236,37 @@ annotations and four emitting console colours. Merging them would change six too
 remove a duplication that is only apparent. Recorded in
 [DESIGN-NOTES.md](DESIGN-NOTES.md#tools-shared-support) so it is a decision rather than an
 oversight.
+
+## Moved 2026-09-07 -- M35.1: what the long-path opt-in actually does
+
+### <a id="m351"></a>M35.1 -- Measure whether the long-path opt-in lifts `MAX_PATH` for a relative path, and whether it does so without re-parsing it. It does both, and the regularize-then-prefix hypothesis is falsified. *(completed 2026-09-04, archived 2026-09-07 21:40:23 -04:00)*
+
+**Measure whether the long-path opt-in lifts `MAX_PATH` for a *relative* path, and whether it does
+so without changing how the path is parsed.**
+
+**Done 2026-09-04, and it settles a question that had produced three wrong answers from reading.**
+`probe-long-path-aware` and `probe-long-path-unaware` in
+[windows-platform-probes](crates/windows-platform-probes/src/long_path.rs) are the same code
+differing only in whether their manifest declares `longPathAware`; `build.rs` embeds it into that
+one binary via `rustc-link-arg-bin`, so every other probe binary is unaffected.
+
+**Result, on a host with `LongPathsEnabled=1`.** With the opt-in, a relative path of 429 characters
+opens in every shape -- plain, containing `b\..`, and forward-slash separated. Without it, all three
+are refused with `ERROR_PATH_NOT_FOUND` while the same shapes at 78 characters open. The targets are
+created first, so a not-found from a file that provably exists is the length refusal.
+
+**So the documented reading was right and the review finding was wrong**: the opt-in covers relative
+paths, and `MAX_PATH` binds them only in a process that has not opted in.
+
+**And the regularize-then-prefix hypothesis is falsified.** If the opt-in worked by prepending
+`\\?\`, that prefix would disable `.`, `..` and forward-slash translation, so those shapes would
+have failed past the ceiling while working below it. Both resolve at both lengths. The opt-in lifts
+the length check without re-parsing, so there is no discontinuity at `MAX_PATH` for a caller of
+`windows-file-watcher` to fall into.
+
+The measurement is recorded where the claim lives, in `Session::subscribe`'s note.
+
+*(Archiving note: the original body said the embed leaves "the other thirteen probes" unaffected.
+There were sixteen probe binaries by the time this was archived, so the count was already stale and
+would have been written into the record as a false number. Replaced with the count-free phrasing,
+which stays true as probes are added. Raised in review 5125955392 on pull request #56.)*
