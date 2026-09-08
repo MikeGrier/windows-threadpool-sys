@@ -463,6 +463,29 @@ Test-Case 'rejects an output directory inside the repository that git does not i
     finally { Remove-Fixture $root }
 }
 
+Test-Case 'rejects being run outside a git repository, on both hosts' {
+    # This one is host-sensitive, and it went unnoticed because the suite only
+    # ever ran the harness INSIDE a fixture repository. `Get-RepoRoot` captured
+    # git with `2>$null`, and on Windows PowerShell 5.1 any stderr redirect makes
+    # a native command's stderr a TERMINATING error under `Stop` -- so outside a
+    # working tree, where git's whole answer is `fatal: not a git repository` on
+    # stderr, the deliberate exit-2 path was unreachable. The harness died with
+    # NativeCommandError and exited 1, which in this script means "sabotages did
+    # not behave as declared": a broken instrument reported as a finding.
+    #
+    # PowerShell 7 reached the intended path either way, which is exactly why
+    # this needs a test rather than a reading.
+    $outside = Join-Path ([System.IO.Path]::GetTempPath()) ('nogit-' + [guid]::NewGuid().ToString('N'))
+    New-Item -ItemType Directory -Force -Path $outside | Out-Null
+    [System.IO.File]::WriteAllText((Join-Path $outside 'sabotage.json'), (New-Spec | ConvertTo-Json -Depth 8))
+    try {
+        $result = Invoke-Harness -Root $outside -Arguments @('-Manifest', 'sabotage.json', '-List')
+        Assert-Equal 2 $result.ExitCode $result.Output
+        Assert-Match 'Not inside a git repository' $result.Output
+    }
+    finally { Remove-Item -Recurse -Force $outside -ErrorAction SilentlyContinue }
+}
+
 Test-Case 'validates a manifest timeoutSeconds even when -TimeoutSeconds overrides it' {
     # The check used to be gated on "we are about to use this", so a bogus
     # manifest value was diagnosed only on the runs that did NOT override it --

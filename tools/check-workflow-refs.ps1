@@ -47,6 +47,11 @@ param(
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 
+# `Invoke-Native`, for the cargo call below. Dot-sourced rather than imported: a
+# module copy of that guard does not reach the scriptblock it is handed and
+# silently fails on 5.1 alone -- see [common.ps1](common.ps1).
+. (Join-Path $PSScriptRoot 'common.ps1')
+
 # Resolved here rather than as a param default: Windows PowerShell 5.1 does not
 # populate $PSScriptRoot while evaluating a default on a [CmdletBinding()]
 # script, so the default form fails outright under 5.1 while working under 7.
@@ -63,7 +68,12 @@ $repoRoot = Resolve-Path (Join-Path $PSScriptRoot '..')
 
 # One `cargo metadata` call answers every crate/bin/example question. `--no-deps`
 # keeps it to workspace members, which is the only thing a workflow can name.
-$metadataJson = & cargo metadata --no-deps --format-version 1 2>$null
+# Through `Invoke-Native`: cargo writes to stderr routinely, and any stderr
+# redirect makes that a TERMINATING error on Windows PowerShell 5.1 under
+# `Stop`. It does not fire on a warm workspace, which is what kept it latent --
+# a cold one that prints "Downloading" or a warning would have killed the check
+# on 5.1 while passing on 7.
+$metadataJson = Invoke-Native { cargo metadata --no-deps --format-version 1 }
 if ($LASTEXITCODE -ne 0) {
     Write-Host "::error::cargo metadata failed, so workflow references cannot be resolved" 
     exit 2
