@@ -68,6 +68,23 @@ function Write-Report {
     }
 }
 
+# `Invoke-Native` and `ConvertTo-OutputLines`, which every capture below goes
+# through. Dot-sourced rather than imported: a module copy of that guard does
+# not reach the scriptblock it is handed, and silently fails on 5.1 alone. The
+# full argument, and the measurement behind it, is in that file.
+#
+# What it costs THIS script, recorded here because the shape is specific to the
+# spikes: `cargo --quiet` writes nothing to stderr on a clean build, so under
+# 5.1 this ran to completion for as long as every spike was healthy. It threw
+# only when cargo did write there -- a warning, or a failed compile -- which is
+# exactly the case this script exists to report. The throw landed before
+# `$buildExit` was assigned, so the broken-instrument branch never ran: no
+# transcript, no summary, and the one artifact somebody downloads to diagnose a
+# rotted spike was the one case that never produced it. Confirmed both ways
+# against a deliberately uncompilable crate: unguarded, 5.1 threw and captured
+# nothing; guarded, it returned exit 101 with all seven lines of diagnostic.
+. (Join-Path $PSScriptRoot 'common.ps1')
+
 $repoRoot = Resolve-Path (Join-Path $PSScriptRoot '..')
 $spikeDir = Join-Path $repoRoot 'crates\windows-ioring-sys\design-sessions\spikes'
 
@@ -138,20 +155,20 @@ windows-sys = { version = "0.61.2", default-features = false, features = [$featu
     Write-Report "=== building $($spike.Name) ==="
     Push-Location $work
     try {
-        $build = & cargo build --quiet 2>&1
+        $build = Invoke-Native { cargo build --quiet }
         $buildExit = $LASTEXITCODE
         $buildOutput = ($build | Out-String)
         if ($buildExit -ne 0) {
             # A build failure is a defect in the instrument, and is one of the
             # two things here worth failing over.
             Write-Report "spike $($spike.Name) failed to build" -Level error
-            # Echo the Out-String rendering rather than the raw objects. `2>&1`
-            # turns cargo's stderr into ErrorRecords, and one of those
-            # stringifies to the literal text `System.Management.Automation.
-            # RemoteException` in the middle of the compiler diagnostic. Piping
-            # the already-rendered text keeps the log and the transcript
-            # identical, instead of the artifact being the more legible of the
-            # two records of the same failure.
+            # Echo the same text the transcript gets, so the log and the
+            # artifact are two renderings of one capture rather than two
+            # records of one failure that a reader has to reconcile.
+            # `Invoke-Native` has already flattened the ErrorRecords `2>&1`
+            # produces into plain strings, so neither carries the stray
+            # `System.Management.Automation.RemoteException` this used to
+            # splice into the middle of a compiler diagnostic.
             $buildOutput.TrimEnd() -split "`n" | ForEach-Object { Write-Report $_.TrimEnd() }
             $instrumentFailures++
             $sections.Add("### $($spike.Name)`n`n**FAILED TO BUILD** -- the instrument is broken, not the machine.`n")
@@ -159,7 +176,7 @@ windows-sys = { version = "0.61.2", default-features = false, features = [$featu
         else {
             $built = $true
             Write-Report "=== running $($spike.Name) ==="
-            $output = & cargo run --quiet 2>&1 | Out-String
+            $output = Invoke-Native { cargo run --quiet } | Out-String
             $runExit = $LASTEXITCODE
             Write-Report $output
         }

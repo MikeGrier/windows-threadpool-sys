@@ -1645,3 +1645,91 @@ the caller's own parsing mode -- `GetFullPathNameW`'s output, or
 it after normalisation preserves what the path meant; doing it before silently
 reinterprets it. Both crates arrived at this independently, which is why it is
 written down once.
+
+## <a id="tools-shared-support"></a>Shared support in `tools/` is dot-sourced, never a module
+
+`tools/common.ps1` holds the support every script there shares, and it is delivered by
+dot-sourcing (`. (Join-Path $PSScriptRoot 'common.ps1')`). **Converting it to a `.psm1` and
+importing it silently breaks it on Windows PowerShell 5.1, which is the only host it exists
+to protect**, so the delivery mechanism is a correctness requirement rather than a
+preference.
+
+The single thing it carries today is `Invoke-Native`, the guard against 5.1's treatment of
+native stderr: there, a native command that writes to stderr while `$ErrorActionPreference`
+is `Stop` raises a **terminating** error when its stderr is redirected with `2>&1`.
+PowerShell 7 does not. The guard flips the preference to `Continue` around the call and
+restores it afterwards.
+
+**Why a module fails.** A scriptblock carries the session state it was created in.
+`Invoke-Native { cargo build }` builds that scriptblock in the *caller's* script scope, so
+`& $Command` runs it there, not in the module's scope. A module copy sets
+`$ErrorActionPreference` in the module's own scope, the flip never reaches the scriptblock,
+and the native call still runs under `Stop`. Measured with the identical body in a `.psm1`:
+under 5.1 seven of the eight cases in [tools/test-common.ps1](tools/test-common.ps1) failed,
+while **all eight passed under PowerShell 7**. Dot-sourcing puts the function in the caller's
+own scope, where the plain assignment does reach the call.
+
+A module *can* be made to work by reaching into the caller's session state
+(`$PSCmdlet.SessionState.PSVariable.Set(...)`), and that was measured working on both hosts.
+It is rejected because the guard would then rest on a subtlety that looks removable: anyone
+simplifying it back to a plain assignment reintroduces a defect that still passes on
+PowerShell 7 and in CI. Dot-sourcing makes the property hold by construction.
+
+**The test crosses hosts, and refuses to pass vacuously.**
+[tools/test-common.ps1](tools/test-common.ps1) runs its cases in the invoking host and then
+re-invokes itself in the other one, failing if it cannot find it. A single-host suite is
+worthless for this defect class -- the whole hazard is that it is invisible on the host most
+people run, and CI ran `shell: pwsh` only, which is how the original defect reached `main`
+and survived review. The `sabotage harness tests` job now runs `test-run-sabotage.ps1` under
+both shells for the same reason.
+
+**What is deliberately NOT shared: `Write-Report`.** Six scripts define a function by that
+name, and they are *not* duplicates -- they differ in level vocabulary (`warn` against
+`warning`, `bad` against `error`, plus `good`, `note`, `detail`, `heading`) and in rendering:
+[run-numa-spikes.ps1](tools/run-numa-spikes.ps1) and
+[soak-flush-barrier.ps1](tools/soak-flush-barrier.ps1) emit GitHub Actions annotations
+(`::warning::`), the other four emit console colours. Consolidating them would mean unifying
+those vocabularies, which changes the output of six tools to remove a duplication that is
+only apparent. The shared name is a naming convention -- the repository's one-output-sink
+rule -- not shared code, and it stays that way until some script needs another's rendering.
+
+## <a id="copilot-review-ledger"></a>Which Copilot reviews are dealt with: resolve threads, and mark suppressed-only reviews
+
+A long-lived pull request accumulates hundreds of Copilot reviews -- PR #56 reached 196 -- and
+GitHub records "this was dealt with" for only some of them. [tools/scan-pr-reviews.ps1](tools/scan-pr-reviews.ps1)
+reports what is genuinely outstanding, and the convention below is what makes that report mean
+something.
+
+**A review's findings arrive in two shapes, and only one of them has state.**
+
+- **Inline comments** become review threads, which can be **resolved**. That flag is durable,
+  visible, and queryable, so it is the tag -- there is nothing to invent. Resolve a thread when
+  its finding is dealt with, including when it is *refuted*: "we measured this and it is not a
+  defect" is a disposition, not an open question.
+- **Suppressed comments** exist only as prose inside the review body's `<details>` block. They
+  create **no thread**, so there is nothing to resolve, and a review is not a reactable object
+  either: `POST /pulls/{n}/reviews/{id}/reactions` returns 404 while the same call against an
+  inline comment succeeds. Nothing anywhere records that a suppressed finding was read.
+
+**So suppressed-only reviews are tagged with a marker comment**, posted by the script:
+
+```
+<!-- copilot-review-processed: 5136043258 -->
+```
+
+It is an HTML comment, so it does not render; it lives on the pull request rather than in a file
+or a session, so it survives a new machine, a new contributor, and a new agent session; and the
+script reads it back, which is what keeps the report from re-raising a review already handled.
+The script requires a `-Summary` alongside it, because a marker with no account of what was done
+is a claim with no evidence.
+
+**Reading the report.** It separates unresolved threads into *current* and *outdated*. Outdated
+means the anchored line has since changed, which usually means the finding was fixed and the
+thread simply never resolved -- so those are the cheap ones to clear, and they are listed only
+under `-IncludeOutdated` to keep the default output about work that is actually open.
+
+**A marker asserts the review was read, so do not back-fill in bulk.** PR #56 carries 131
+reviews with suppressed comments and no marker. Almost all were addressed during the rounds
+that followed them, but "almost all" is not evidence, and marking them wholesale would convert
+an honest absence of information into a false record. Mark a historical review only when
+somebody has actually read it.

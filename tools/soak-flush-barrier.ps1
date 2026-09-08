@@ -134,49 +134,22 @@ function Write-Report {
     }
 }
 
-# Normalise one cargo invocation's merged output into plain strings.
+# `Invoke-Native` and `ConvertTo-OutputLines`, which every capture site here goes
+# through. Dot-sourced rather than imported: a module copy of that guard does not
+# reach the scriptblock it is handed, and silently fails on 5.1 alone. The full
+# argument, and the measurement behind it, is in that file.
 #
-# With 2>&1, native stderr arrives as ErrorRecord objects. For the *empty* lines
-# cargo emits between diagnostics the message is "" while ToString() falls back
-# to the type name, so a bare "$_" renders those as
-# "System.Management.Automation.RemoteException" scattered through the output --
-# which then reaches both the saved log and the Select-String that extracts the
-# detail column.
+# What it costs THIS script, recorded here because the shape is specific to the
+# soak: cargo writes to stderr routinely -- "Compiling ...", and the "did not
+# finalize incremental compilation session directory" notes this workspace emits
+# constantly. Measured: under 5.1 the script died in the build step with
+# NativeCommandError before running a single instrument, having written only the
+# CSV header. Under 7 the same script completed.
 #
-# Defined once and used by every capture site on purpose: this was originally
-# fixed at the build step alone, leaving the per-instrument run with the same
-# defect, which is how two copies of one rule drift apart.
-function ConvertTo-OutputLines {
-    param([Parameter(ValueFromPipeline = $true)] $Record)
-    process {
-        if ($Record -is [System.Management.Automation.ErrorRecord]) {
-            $Record.Exception.Message
-        } else {
-            "$Record"
-        }
-    }
-}
-
-# Run a native command, capturing merged stdout+stderr as plain strings.
-#
-# The ErrorActionPreference dance is what makes this work on Windows PowerShell
-# 5.1. There, a native command writing to stderr under `Stop` raises a
-# TERMINATING error, and cargo writes to stderr routinely -- "Compiling ...",
-# and the "did not finalize incremental compilation session directory" notes
-# this workspace emits constantly. Measured: under 5.1 the script died in the
-# build step with NativeCommandError before running a single instrument, having
-# written only the CSV header. Under 7 the same script completed. Restoring the
-# preference afterwards keeps `Stop` for everything that is not a native call.
-function Invoke-Native {
-    param([Parameter(Mandatory = $true)][scriptblock] $Command)
-    $previous = $ErrorActionPreference
-    $ErrorActionPreference = 'Continue'
-    try {
-        & $Command 2>&1 | ConvertTo-OutputLines
-    } finally {
-        $ErrorActionPreference = $previous
-    }
-}
+# Used by every capture site rather than one: this was originally fixed at the
+# build step alone, leaving the per-instrument run with the same defect, which is
+# how two copies of one rule drift apart.
+. (Join-Path $PSScriptRoot 'common.ps1')
 
 # The rotation, in the order described above.
 $instruments = @(

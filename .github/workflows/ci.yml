@@ -86,8 +86,24 @@ jobs:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v7
+      # The shared native-command guard, before the suites that depend on it: a
+      # failure here explains a failure below rather than being diagnosed twice.
+      # This one step covers both hosts on its own -- it re-invokes itself under
+      # the other shell and fails if it cannot find one.
+      - name: Run test-common.ps1
+        shell: pwsh
+        run: ./tools/test-common.ps1
       - name: Run test-run-sabotage.ps1
         shell: pwsh
+        run: ./tools/test-run-sabotage.ps1
+      # And again under Windows PowerShell 5.1, which is not a duplicate of the
+      # step above. The harness and its suite both capture native output, and the
+      # rule that makes that capture terminate under `Stop` exists ONLY on 5.1 --
+      # so a defect in that path is invisible to a pwsh-only job, which is
+      # exactly how one reached `main` and survived review. `powershell` is the
+      # Windows PowerShell 5.1 that ships on every windows runner.
+      - name: Run test-run-sabotage.ps1 (Windows PowerShell 5.1)
+        shell: powershell
         run: ./tools/test-run-sabotage.ps1
 
   # The edition, MSRV, and pinned channel are declared once in Cargo.toml and
