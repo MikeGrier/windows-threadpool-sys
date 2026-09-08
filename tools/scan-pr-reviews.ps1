@@ -36,6 +36,17 @@
     survive a new machine, a new contributor, and a new agent session. A later
     run of this script reads those markers back and stops reporting the review.
 
+    Only markers written by someone with write access (author_association OWNER,
+    MEMBER or COLLABORATOR) are honoured. This repository is public, so anyone who
+    can comment could otherwise retire a finding that has no other state anywhere.
+    Markers from other authors are counted and reported, not silently dropped.
+
+.OUTPUTS
+    Exit code 0 when nothing is outstanding, 1 when there are findings, and 2 when
+    the tool could not run (gh unauthenticated, no such pull request, the marker
+    could not be posted). 1 and 2 are kept distinct so a caller can tell a finding
+    from a broken instrument.
+
 .PARAMETER Pr
     The pull request number.
 
@@ -70,6 +81,24 @@ $ErrorActionPreference = 'Stop'
 
 . (Join-Path $PSScriptRoot 'common.ps1')
 
+# Exit codes, kept distinct on purpose. `1` is a FINDING -- the scan ran and
+# there is outstanding work -- while `2` is a BROKEN INSTRUMENT: `gh` is not
+# authenticated, the network is down, the pull request does not exist, the
+# marker could not be posted. A caller gating on the exit code has to be able to
+# tell those apart, or "no findings" and "the tool never ran" look identical,
+# which is the same instrument-versus-finding separation `run-numa-spikes.ps1`
+# and `run-sabotage.ps1` already make. Every error path below leaves through
+# `Exit-Broken` rather than through a bare `throw`, because an unhandled throw
+# from a script also exits 1 and would collide with the finding code.
+$script:ExitFindings = 1
+$script:ExitBroken = 2
+
+function Exit-Broken {
+    param([Parameter(Mandatory = $true)][string] $Message)
+    [Console]::Error.WriteLine($Message)
+    exit $script:ExitBroken
+}
+
 $script:Owner = 'MikeGrier'
 $script:Name = 'windows-threadpool-sys'
 
@@ -91,16 +120,24 @@ function Invoke-GitHubJson {
     param([string[]] $Arguments)
     $text = Invoke-Native { gh @Arguments }
     if ($LASTEXITCODE -ne 0) {
-        throw "gh $($Arguments -join ' ') failed: $($text -join ' ')"
+        Exit-Broken "gh $($Arguments -join ' ') failed: $($text -join ' ')"
     }
-    return ($text -join "`n") | ConvertFrom-Json
+    try {
+        return ($text -join "`n") | ConvertFrom-Json
+    }
+    catch {
+        # Reached when gh succeeds but returns something that is not JSON -- a
+        # proxy's HTML error page is the realistic case. Still the instrument,
+        # not a finding.
+        Exit-Broken "gh $($Arguments -join ' ') returned unparsable output: $($_.Exception.Message)"
+    }
 }
 
 # --- marking -----------------------------------------------------------------
 
 if ($MarkProcessed) {
     if (-not $Summary) {
-        throw 'Summary is required with -MarkProcessed: a marker with no account of what was done is a claim with no evidence.'
+        Exit-Broken 'Summary is required with -MarkProcessed: a marker with no account of what was done is a claim with no evidence.'
     }
     $lines = @($Summary, '')
     foreach ($id in $MarkProcessed) { $lines += "<!-- copilot-review-processed: $id -->" }
@@ -108,7 +145,9 @@ if ($MarkProcessed) {
     [System.IO.File]::WriteAllText($file, ($lines -join "`n"), [System.Text.UTF8Encoding]::new($false))
     try {
         $url = Invoke-Native { gh pr comment $Pr --repo "$script:Owner/$script:Name" --body-file $file }
-        if ($LASTEXITCODE -ne 0) { throw "posting the marker comment failed: $($url -join ' ')" }
+        if ($LASTEXITCODE -ne 0) {
+            Exit-Broken "posting the marker comment failed: $($url -join ' ')"
+        }
         Write-Report "marked processed: $($MarkProcessed -join ', ')"
         Write-Report ($url -join ' ') -Level detail
     }
@@ -131,9 +170,34 @@ $reviews = Invoke-GitHubJson @('api', "repos/$script:Owner/$script:Name/pulls/$P
 $issueComments = Invoke-GitHubJson @('api', "repos/$script:Owner/$script:Name/issues/$Pr/comments?per_page=100", '--paginate')
 
 # Reviews already recorded as processed, by marker.
+#
+# **Only markers from someone with write access are honoured.** This repository
+# is public, so anyone able to comment on a pull request can post a marker; and
+# because a suppressed-only review has no state anywhere else -- which is the
+# whole reason this tool exists -- an unauthenticated marker would permanently
+# and silently delete the only record that a finding was never read. The counter
+# below would simply report a smaller number, with nothing to indicate why.
+#
+# `author_association` comes back on every comment from the same request, so
+# this costs no extra call. GitHub sets it per comment from the author's
+# relationship to the repository at the time of writing: OWNER, MEMBER and
+# COLLABORATOR are the ones that imply write access. CONTRIBUTOR means only
+# "has had a pull request merged", and NONE is any passer-by; neither is
+# sufficient to retire a finding.
+$trustedAssociations = @('OWNER', 'MEMBER', 'COLLABORATOR')
 $processed = @{}
+$ignoredMarkers = 0
 foreach ($c in $issueComments) {
-    foreach ($m in [regex]::Matches((Get-Text $c.body), '<!--\s*copilot-review-processed:\s*(\d+)\s*-->')) {
+    $markers = [regex]::Matches((Get-Text $c.body), '<!--\s*copilot-review-processed:\s*(\d+)\s*-->')
+    if ($markers.Count -eq 0) { continue }
+    if ($trustedAssociations -notcontains (Get-Text $c.author_association)) {
+        # Counted and reported rather than dropped in silence: a marker from an
+        # untrusted author is either an honest mistake or an attempt to retire a
+        # finding, and both are worth seeing.
+        $ignoredMarkers += $markers.Count
+        continue
+    }
+    foreach ($m in $markers) {
         $processed[[long]$m.Groups[1].Value] = $true
     }
 }
@@ -212,6 +276,9 @@ Write-Report "Copilot reviews:            $($copilotReviews.Count)"
 Write-Report "unresolved threads:         $($openThreads.Count)  ($($current.Count) current, $($outdated.Count) outdated)"
 Write-Report "reviews with suppressed:    $(@($copilotReviews | Where-Object { (Get-SuppressedCount (Get-Text $_.body)) -gt 0 }).Count)"
 Write-Report "  of those, unprocessed:    $($suppressedOnly.Count)"
+if ($ignoredMarkers -gt 0) {
+    Write-Report "ignored markers:            $ignoredMarkers (author lacks write access)" -Level warn
+}
 Write-Report ''
 
 Write-Report '=== unresolved threads on current lines ===' -Level heading
@@ -242,7 +309,7 @@ foreach ($r in ($suppressedOnly | Sort-Object When)) {
 Write-Report ''
 if ($current.Count -gt 0 -or $suppressedOnly.Count -gt 0) {
     Write-Report 'Outstanding items above.' -Level warn
-    exit 1
+    exit $script:ExitFindings
 }
 Write-Report 'Nothing outstanding.'
 exit 0

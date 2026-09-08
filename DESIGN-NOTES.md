@@ -1657,8 +1657,15 @@ preference.
 The single thing it carries today is `Invoke-Native`, the guard against 5.1's treatment of
 native stderr: there, a native command that writes to stderr while `$ErrorActionPreference`
 is `Stop` raises a **terminating** error when its stderr is redirected with `2>&1`.
-PowerShell 7 does not. The guard flips the preference to `Continue` around the call and
-restores it afterwards.
+PowerShell 7 does not. The guard flips the preference to `Continue` for the duration of the
+call, and **that flip is function-local rather than restored afterwards**: PowerShell
+assignment always writes to the current scope, so the caller's value is never modified and
+the local one is discarded on return, while `& $Command` still inherits it through the child
+scope. An earlier version wrapped the call in a `try`/`finally` that restored a copy nobody
+could observe; it was dead code, and three cases in
+[tools/test-common.ps1](tools/test-common.ps1) claimed to cover it while being unable to
+fail. The property that does need testing is the opposite one -- that the flip never
+*escapes* into the caller, which is what a `$script:`-scoped mistake would do.
 
 **Why a module fails.** A scriptblock carries the session state it was created in.
 `Invoke-Native { cargo build }` builds that scriptblock in the *caller's* script scope, so

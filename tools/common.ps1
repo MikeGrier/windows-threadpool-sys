@@ -47,8 +47,9 @@ function ConvertTo-OutputLines {
 # Under Windows PowerShell 5.1, a native command that writes to stderr while
 # `$ErrorActionPreference` is `Stop` raises a TERMINATING error when its stderr
 # is redirected with `2>&1`. PowerShell 7 does not. Flipping the preference to
-# `Continue` around the call is what makes the capture work on both, and
-# restoring it afterwards keeps `Stop` for everything that is not a native call.
+# `Continue` for the duration of the call is what makes the capture work on both,
+# and keeping that flip function-local is what leaves `Stop` in force for
+# everything that is not a native call.
 #
 # **No restoration is needed, and none is attempted.** `$ErrorActionPreference =
 # 'Continue'` here creates a FUNCTION-LOCAL variable: PowerShell assignment
