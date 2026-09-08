@@ -106,6 +106,91 @@ be settled rather than discovered later.
   completion, then submits the query. A compound entry is reserved for a measured performance argument
   and would be a fusion of these two entries rather than a capability they lack. Depends on M21.3.
 
+## M34 -- Tooling
+
+Numbered M34 rather than M22 because the three root-level checklists share one milestone space:
+[CHECKLIST.md](CHECKLIST.md) holds M19-M21, [CHECKLIST-thread-ambient.md](CHECKLIST-thread-ambient.md)
+M22-M29, and [CHECKLIST-io-domains.md](CHECKLIST-io-domains.md) M30-M33.
+
+- [x] **M34.1** -- Promote the ad-hoc sabotage harness into a reusable tool. -> [completed 2026-08-31](COMPLETED-CHECKLIST.md#m341)
+
+- [ ] **M34.3** -- **Archive the completed bodies in
+  [CHECKLIST-io-domains.md](CHECKLIST-io-domains.md)**, which holds twelve checked items still
+  carrying their full write-ups. The completed-item rule moves a large one to
+  [COMPLETED-CHECKLIST.md](COMPLETED-CHECKLIST.md) immediately and leaves a one-line anchored stub, so
+  the active file stays a list of what is *left*. Raised in review 5072735803 on pull request #56,
+  where it was noted that the problem recurs throughout that file rather than at the one line cited.
+  [M34.1](COMPLETED-CHECKLIST.md#m341) is the worked example of the shape: `### <a id="..."></a>` in
+  the archive under a dated group, a stub with a completion link in its place.
+  Bookkeeping with no bearing on correctness, which is why it is queued rather than folded into a
+  branch already under review -- but it is 757 lines of checklist that a reader currently has to scan
+  past to find the open work, so it is not cosmetic either.
+
+- [ ] **M34.2** -- **Route every tool's output through one sink, per the repository's own rule**: never
+  call `println!`/`eprintln!` from more than one site in a tool; introduce a writer trait, sink or
+  formatter at the first occurrence and route everything through it.
+  **Updated 2026-09-04 (second pass): every probe now leads its report with the host line.** The
+  banner had reached only the seven binaries this item named plus the shared long-path renderer,
+  which left **eight** probes -- `cancel_io`, `completion_port`, `device_map`, `error_mode`,
+  `handle_state`, `ioring`, `pool_growth`, `worker_context` -- composing a report that named no
+  machine. `pool_growth` was the sharpest case: it printed "every number here is from this host and
+  this Windows build" while giving a reader no way to tell which host that was. The rest are
+  behavioural findings about what *this* Windows does, which is equally uninterpretable unattributed.
+  All eight now emit `banner_line()` as the first line of the returned text, verified by running each
+  binary rather than by reading the diff. Raised by Copilot at review `5118237348`.
+  **Updated 2026-09-04: the conversion is done; what remains is the capture test.** The item said
+  "seven binaries violate this today" and named them, from review 5072622803 on pull request #56.
+  Five had already been converted when a later review round re-checked, and the last two --
+  [queue_contention.rs](crates/windows-platform-probes/src/bin/queue_contention.rs) and
+  [peer_index_cache.rs](crates/windows-platform-probes/src/bin/peer_index_cache.rs) -- were fixed in
+  that pull request, so all seven now compose their whole report as text and hand it to a sink at one
+  place. Verified by counting, not by reading: no probe binary contains a direct `println!`/
+  `eprintln!` at all. The two survivors were the *banner*, which those two rendered by calling a
+  helper that wrote to stdout itself -- so a captured report was missing the one line naming the
+  machine that produced it, and the banner also emitted mid-`render`, ahead of the body, making the
+  order on a terminal luck rather than construction.
+  **The stdout-writing banner helpers are gone rather than documented against.** `print_banner` and
+  `print_banner_with` were removed and `banner_lines_with` returns the string instead, because three
+  call sites had each grown a comment warning about them -- a rule restated three times instead of a
+  hazard removed once. The defect class is now unreachable by construction: there is no
+  banner helper that writes to a stream.
+  **The PowerShell tools are NOT part of this item, because they are already done.** A later review
+  round on the same pull request observed that the inventory above named only Rust binaries while five
+  scripts emitted from many sites, so those were converted in that pull request rather than queued
+  here: [inject-mutant.ps1](tools/inject-mutant.ps1),
+  [check-publishable.ps1](tools/check-publishable.ps1),
+  [run-numa-spikes.ps1](tools/run-numa-spikes.ps1), [run-mutants.ps1](tools/run-mutants.ps1) and
+  [run-sabotage.ps1](tools/run-sabotage.ps1) each now route everything through one `Write-Report`
+  sink. They were small enough to convert in place, which is exactly why they did not need deferring.
+  (`run-sabotage.ps1`'s `Exit-WithMessage` is deliberately outside its sink: that path writes to
+  stderr and exits, and there the destination is part of the meaning.)
+  **What remains is the capture test, and it has a structural obstacle worth naming.**
+  The point of the rule is that output becomes testable, so this item is not checked off on the
+  refactor alone -- an abstraction introduced without a capture-based test spends the cost and skips
+  the benefit. `Captured` exists in [report.rs](crates/windows-platform-probes/src/report.rs) for
+  exactly that purpose, and `banner_line` is already asserted directly.
+  **The obstacle: each probe's `render()` lives in its own `bin` target, which nothing can import.**
+  That is precisely why the two banner defects survived every test -- there was no reachable seam to
+  assert against. Closing it means moving each `render()` into the crate's library and leaving `main`
+  as the one place that names the stream, which is a real refactor rather than a test to write.
+  Decide the seam once and apply it uniformly.
+  A PowerShell sink is a function whose destination can be swapped, but this workspace runs no
+  PowerShell test harness in which to assert against it, and inventing one to cover five diagnostic
+  scripts is not a cost this item is willing to spend without deciding to adopt such a harness first.
+  Start with `placement_probe`: its output is a published artifact that strangers paste into a
+  discussion thread, so "can this be captured and asserted end to end?" has real value there rather
+  than being architectural tidiness.
+
+- [x] **M34.4** -- Share the native-command guard through a dot-sourced `tools/common.ps1`, route
+  every capture site through it, and prove it on both PowerShell hosts.
+  -> [completed 2026-09-07](COMPLETED-CHECKLIST.md#m344)
+
+## M35 -- Measure what the long-path opt-in actually does
+
+- [x] **M35.1** -- Measure whether the long-path opt-in lifts `MAX_PATH` for a relative path, and
+  whether it does so without re-parsing it. It does both, and the regularize-then-prefix hypothesis
+  is falsified. -> [completed 2026-09-04](COMPLETED-CHECKLIST.md#m351)
+
 ## M-inf -- Parked
 
 Ungated work with no identified predecessor deliverable.

@@ -40,6 +40,141 @@ wants to avoid contributing to it. The Windows threadpool types are inherently m
 choices up to the developer. The `windows-sys` crate published by Microsoft helps with the basics of the FFI
 to the APIs, but does little to help turn the alphabet and phrasebook into a useful programming model.
 
+## <a id="the-value-is-existence-not-cleverness"></a>The value is existence, not cleverness: "it is only a SMOP" is why it is missing, not a reason to skip it
+
+A governing principle for the whole repository, stated because it decides
+questions that otherwise get decided by an instinct to keep scope small.
+
+Nothing here is magic. Every layer in this repository is a Simple Matter Of
+Programming -- attribute lists, guard pages, ring buffers, affinity masks, all
+of it documented and none of it clever. **The reason these layers are worth
+building is precisely that they do not exist**, and their absence is why
+capable people muddle along with the most reachable tools: `fprintf`,
+`CreateFileW` with default parameters, a thread created with no attributes at
+all. Not because those are believed to be right, but because the correct
+alternative was never within reach.
+
+Three rules follow, in decreasing order of how often they are needed:
+
+1. **"It is only a SMOP" is never an argument against building something.** It
+   is the explanation for why it is still missing. The observation that a thing
+   is straightforward is evidence *for* providing it, since straightforward work
+   nobody has done is exactly the gap a platform layer fills. Difficulty is not
+   what makes a layer valuable; availability is.
+
+2. **The measure of success is whether the correct path is easier to reach than
+   the obvious wrong one.** `fprintf` and a default `CreateFileW` win by being
+   reachable. A faster, safer, more correct facility that is harder to reach
+   than the wrong thing has failed, however good it is, because it will not be
+   reached. Ergonomics is not polish applied at the end; it is the feature.
+
+3. **When the correct construction is difficult, providing the constructor is
+   the feature.** If getting a thing right requires a two-pass sizing call, an
+   opaque buffer with lifetime rules, and three attributes that must be set
+   before creation rather than after, then assembling that correctly *is* the
+   deliverable. Declining it on the grounds that each step is simple leaves the
+   consumer exactly where they started.
+
+The failure mode this rule exists to prevent is an assistant or an engineer
+optimizing to protect *the library* from scope, when the whole purpose is to
+absorb difficulty on the *consumer's* behalf. The question is never "is this
+small enough to be worth our while"; it is "is the correct thing currently
+within a consumer's reach, and if not, what would put it there".
+
+**This principle schedules no work of its own.** It is a decision rule for
+weighing future proposals, not a change to existing code, so the absence of a
+checklist item for it is intentional rather than an oversight.
+
+## <a id="the-waitable-queues-crate-is-named-plural-and-carries-no-sys-suffix"></a>`windows-waitable-queues` is plural, and carries no `-sys` suffix
+
+Two naming decisions for the queue crate that
+[CHECKLIST-io-domains.md](CHECKLIST-io-domains.md) M30 introduces, recorded before anything
+depends on the name, because renaming a crate that has dependents is churn.
+
+**No `-sys` suffix.** Every `windows-*-sys` crate in this workspace is thin-over-Win32: it makes
+an existing API memory-safe without adding policy. This crate is a data structure with an
+opinion -- it chooses a slot protocol, an overflow policy, and a signalling discipline that Win32
+has no equivalent of. Calling it `-sys` would misdescribe the layer, and the suffix is the only
+signal a reader has for how much the crate decides on their behalf.
+
+**Plural, because it is a collection of peers rather than one facility.** The workspace already
+draws this distinction: `windows-topology-sys` is singular because it provides *the* topology,
+while [windows-platform-probes](crates/windows-platform-probes/README.md) is plural because it
+provides many probes with none of them canonical. The queue crate is the second kind. SPSC and
+MPSC are siblings, and the shapes deferred to `M-inf` -- intrusive-linked and sharded -- are
+siblings too. No single queue is the queue.
+
+**The consequence is accepted deliberately: there is no bare `Queue` type.** A crate named
+"queues" that exported one would be claiming a primacy the name denies, so a consumer must say
+which shape it wants: the shipped surface is a module per shape -- `spsc`, `slotwise_mpsc`,
+`reserving_mpsc` -- each exporting its own `Producer` and `Consumer` handles. That stops a
+default from accreting by accident, which is the failure the plural is chosen to prevent.
+
+**The single `WaitableQueue` trait anticipated here was rejected when the traits were built.**
+Superseded by
+[D-2](crates/windows-waitable-queues/DESIGN-NOTES.md#d-2) in the crate's own notes, and by
+[traits.rs](crates/windows-waitable-queues/src/traits.rs), which states the same thing where a
+reader of the code will meet it.
+
+The reasoning below was right about *why* a trait is not the same case as a bare type, and wrong
+about the shape it would take. What forced the change is that a fat trait is not merely
+inelegant but **unimplementable** by shapes this crate intends to ship: a queue that is never
+waited on has no doorbell to return, and an unbounded one has no capacity to report. So the
+capability is sliced the way `std::io` slices it -- `Read`, `Write`, `Seek`, rather than one
+`Io` -- and what ships is `Bounded`, `Consumer`, `Drain`, `Observable`, `Producer`, `Reserving`
+and `Waitable`, with each shape implementing the subset it genuinely has.
+
+**What survives unchanged is the constraint that motivated recording this early.** If one shape
+ships `pop(&mut self) -> Option<T>` and another ships `try_pop(&self) -> Result<T, Empty>`, no
+trait unifies them afterwards without a breaking change to one of them. Signatures must
+therefore be trait-compatible from the first type -- which is exactly as binding for a set of
+narrow traits as it would have been for one wide one.
+
+**So every shape is split into producer and consumer handles, and cardinality is expressed by
+`Clone`.** This is the hard part, because the conventions differ by shape: an SPSC queue is
+usually a split `Producer`/`Consumer` pair, while a shared MPMC queue is usually one `Arc<Q>`
+with `&self` on both ends, and no trait spans those two structures. Making every shape
+split-handle resolves it, and buys something better than uniformity:
+
+| Shape | Producer | Consumer |
+|---|---|---|
+| SPSC | not `Clone` | not `Clone` |
+| MPSC | `Clone` | not `Clone` |
+| MPMC | `Clone` | `Clone` |
+
+Cardinality becomes a **compile-time guarantee rather than a documented precondition**: an SPSC
+producer that cannot be cloned cannot become a second producer. The alternative -- a shared
+`&self` queue carrying an unchecked "only one consumer" contract -- is precisely the kind of
+rule-you-must-remember that
+[`RingScope`](crates/windows-ioring-sys/DESIGN-NOTES.md#d-43) and `get(&mut self)` were
+introduced to eliminate elsewhere in this workspace.
+
+**The doorbell belongs on the consumer side**, since the consumer is what waits and the producer
+merely rings. Whether that made the contract one consumer-side trait or a producer/consumer pair
+was deferred to the crate's own design notes rather than guessed here, and has since been
+answered: neither. The contract is sliced by *capability*, so waiting is its own trait --
+[`Waitable`](crates/windows-waitable-queues/src/traits.rs) -- which a shape implements only if it
+has a doorbell at all. See
+[D-2](crates/windows-waitable-queues/DESIGN-NOTES.md#d-2).
+
+**What unifies the family is waitability, not I/O.** An earlier candidate, `windows-io-queue`,
+was rejected on this point: the queues themselves have nothing to do with I/O, and the domain
+runtime is merely their first consumer. Naming a general facility after its first client is the
+mistake `windows-topology-sys` avoided when it declined to become a partitioning policy. What
+every queue here shares is that it can be waited on **alongside other kernel objects**, which is
+precisely what `crossbeam-channel` structurally cannot offer: its `Select` accepts only channel
+operations, so `WaitForMultipleObjects` cannot see a crossbeam channel and `Select` cannot see an
+`IoRing` completion event. That gap is the reason to build rather than depend, so it belongs in
+the name.
+
+"Waitable" is chosen over a coined word because this workspace already owns it with a precise
+meaning -- `windows-threadpool-sys` exposes `WaitableHandle`, governed by the two decisions
+[below](#a-safe-wait-constructor-takes-proven-wait-provenance-not-any-handle) on wait provenance
+and close routines. The new crate inherits an established concept rather than inventing one.
+
+**"Ring" was considered and is wrong for the family.** It is accurate for the array shapes and
+false for the intrusive-linked one, which is genuinely not a ring. `queues` covers both.
+
 ## Windows SDK model and constraints
 
 This crate targets the object-based thread pool API (introduced in Windows Vista) rather than the legacy
@@ -1158,6 +1293,41 @@ here would be a thirteenth restatement, in a file the checker does not police.
 written into the *audit table* while the decision row it contradicted still said the opposite. An audit
 finding is not discharged by being recorded in the audit. It is discharged when the statement it contradicted
 has changed.
+
+## <a id="sabotage-sweeps"></a>Sabotage verification has an instrument, and three rules that are not obvious
+
+Sabotage verification is already required here in several places -- of a derived-fact binding under
+[restatement drift](#restatement-drift), of the baseline-consistency checker, of the queue crate's
+lost-wakeup guard. What was missing was a way to run one that did not have to be reinvented, badly,
+each time. [tools/run-sabotage.ps1](tools/run-sabotage.ps1) is that instrument, documented in
+[README-sabotage.md](tools/README-sabotage.md), driven by a `sabotage.json` kept beside the code it
+patches.
+
+The principle is stated elsewhere and is not restated here. What belongs here is the three operational
+rules the script encodes, because each was arrived at by getting it wrong and none is guessable:
+
+- **Judge by exit code, never by reading output.** A test process that dies of heap corruption prints
+  no `test result: FAILED` line, so a harness that greps for one reports a hole in the tests where
+  there is none. This cost a real hunt for a nonexistent defect.
+- **A timeout counts as caught.** A missing wakeup does not fail a test, it hangs it. An unbounded
+  harness hangs with it, and a bounded one that treats a timeout as inconclusive throws away the
+  detection it just achieved.
+- **The baseline must be green before anything is patched.** Against an already-red suite every
+  sabotage "fails" and the sweep proves nothing while reading as a clean bill of health.
+
+Two further points that are easy to skip and expensive to skip:
+
+**A survived sabotage is not automatically a hole in the tests.** It may be a defect in the sabotage.
+A patch that inserts unreachable code beside a live call, instead of deleting the call, changes the
+file without changing the behaviour, and the suite then passes for the honest reason that nothing was
+broken. That happened here and was misread as a test hole before anyone read the patch, which is why
+the script now prints the patch for every unexpected result.
+
+**A manifest without a control is only half an instrument.** A control is a change that is *not* a
+defect -- typically removing an optimisation -- and it must leave the suite green. Without one, a
+sweep can tell you the tests are sensitive but not that they are sensitive to the right things; a
+control reported as caught means a test has begun asserting the implementation rather than the
+contract, and that test is the thing to fix.
 
 ## <a id="remoting-synchronous-namespace-operations"></a>Remoting synchronous namespace operations: the measured platform
 

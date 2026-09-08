@@ -128,6 +128,10 @@ conclusions belong to it until it converges.
   PDO advertises a proximity domain. Write the correction now (the documentation defect is independent of
   the measurement) and leave the empirical question open.
 
+- [x] **M20.5** -- Dissolved by [D-47](DESIGN-NOTES.md#d-47-detail) rather than decided: the
+  `flush_barrier` assertion was measuring a claim the platform does not honour, so it was never a
+  flaky test. -> [completed 2026-09-07](COMPLETED-CHECKLIST.md#m205)
+
 - [ ] **M20.6** -- Re-evaluate `CommitStrategy::AlternatingRings` and the epoch-log benchmark's conclusion
   against [D-47](DESIGN-NOTES.md#d-47-detail). The strategy comparison in
   [strategy.rs](examples/epoch_log/strategy.rs) was designed around D-24's claim that a covering flush holds
@@ -141,8 +145,8 @@ conclusions belong to it until it converges.
   answer is that the strategy no longer earns its place, that is an API change to a published example.
   The corrected prose in [strategy.rs](examples/epoch_log/strategy.rs) and
   [DESIGN-NOTES.md](DESIGN-NOTES.md) both point here.
-  *(Numbered M20.6 rather than M20.5 deliberately: M20.5 is in flight on `mikegrier/deferred-namespace-ops`
-  and the gap reserves it, so the two do not collide when that branch merges.)*
+  *(Numbered M20.6 rather than M20.5 because M20.5 was in flight on a separate branch when this was
+  written. That branch has since merged, and M20.5 arrived dissolved -- see above.)*
 
 
 ## M6+ -- Model B: explicit-thread delivery and affinity

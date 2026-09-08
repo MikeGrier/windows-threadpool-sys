@@ -98,7 +98,7 @@ gaps the crate did not have and were closed as already-satisfied or re-planned r
 implemented; the notes below record which, and why.
 
 Design record: [DESIGN-NOTES.md](DESIGN-NOTES.md) `D-13` through `D-23`, and
-DESIGN-SESSION-2026-09-02-cache-locality-model.md.
+[DESIGN-SESSION-2026-09-02-cache-locality-model.md](../../design-sessions/DESIGN-SESSION-2026-09-02-cache-locality-model.md).
 
 The context the milestones were written against, preserved because the items refer to it:
 ## What this is for
@@ -213,7 +213,7 @@ be wrong and breaking again later.
     `discover()` returns a topology stale the instant it returns, so the two-call window is only a
     larger instance of an unavoidable problem. True, and **not a reason to do nothing**: the two are
     not equally addressable. Staleness after the fact is the executor's to validate, and is already
-    owned as `M-inf.1` in topology-planner.
+    owned as `M-inf.1` in [topology-planner](../topology-planner/CHECKLIST.md).
     Incoherence *during* collection is ours, detectable, and cheap to fix.
 
   The framing is what caused the miss. Asking "what do we **store** when sources disagree" admits
@@ -248,9 +248,9 @@ be wrong and breaking again later.
      far the parts may be **correlated** -- a different question from whether any one part is accurate.
      Turning that into something actionable, with the identifying provenance an actionable report
      needs, is the probe tools' job and is tracked as **M7** in
-     CHECKLIST-placement-tool.md.
+     [CHECKLIST-placement-tool.md](../../CHECKLIST-placement-tool.md).
      > **-> CROSS-COMPONENT HANDOFF:** the reporting half is `PT-7.1` and `PT-7.2` in
-     > CHECKLIST-placement-tool.md. That tool already carries the
+     > [CHECKLIST-placement-tool.md](../../CHECKLIST-placement-tool.md). That tool already carries the
      > review this needs -- the runner sees real values before sending (`PT-4.5`), the README lists what
      > is collected (`PT-4.3`), and suppression is recorded rather than merely absent.
      Only possible because [D-15](DESIGN-NOTES.md#d-15) keeps both observations: a disagreement cannot
@@ -320,7 +320,7 @@ be wrong and breaking again later.
   landed in a "decisions that shape everything below" milestone because it *looked* foundational, and
   foundational-looking is not the same as being about this component.
   > **-> CROSS-COMPONENT HANDOFF:** the behavioural half is `EP-1.4` in
-  > topology-planner. It no longer has a counterpart here, so it
+  > [topology-planner](../topology-planner/CHECKLIST.md). It no longer has a counterpart here, so it
   > is that component's decision alone rather than a joint one.
 
 - [x] **MMT-1.4** -- **Does `distances` survive at all?** The two-component architecture says the
@@ -339,12 +339,12 @@ be wrong and breaking again later.
 
 - [x] **MMT-1.5** -- **Does the synthesizer live in this crate, and therefore what is this crate
   called?** Recorded as open rather than settled: see
-  topology-planner/COMPONENT.md. The naming follows
+  [topology-planner/COMPONENT.md](../topology-planner/COMPONENT.md). The naming follows
   the merge rather than leading it -- while this crate is only a Win32 wrapper, `-sys` is correct
   for it; if it gains a synthesizer that measures, it stops being one and the name should change
   then.
   **Answered by the engineer's architectural shift, recorded as
-  EP-D-4: no.** The planner is a separate
+  [EP-D-4](../topology-planner/DESIGN-NOTES.md#ep-d-4): no.** The planner is a separate
   component named **`topology-planner`** -- with no `windows-` prefix, because it plans against an
   abstracted idealized machine and emits a platform-neutral plan. So this crate does not gain the
   synthesizer, remains a pure Win32 wrapper, and **keeps its name**.
@@ -627,12 +627,12 @@ facts about processors and memory stated without sentinels; `M4+.4` fixes a rule
 restated three times in two crates. Only `M4+.1`'s pairwise helper is consumer-flavoured, and the
 ordered collection it derives from is what stops that restatement recurring.
 
-They remain cross-referenced to topology-planner as
+They remain cross-referenced to [topology-planner](../topology-planner/DESIGN-NOTES.md) as
 **evidence** the shape is right rather than as its justification -- stating those requirements found
 the `Processor::capacity` sentinel collision that reviewing the model alone had not.
 
 - [x] **M4+.1** -- **The ordered relations are the query surface; pairwise proximity is a method on
-  them.** The requirement arrived from EP-D-2 as a
+  them.** The requirement arrived from [EP-D-2](../topology-planner/DESIGN-NOTES.md#ep-d-2) as a
   *pairwise* query returning the minimal shared granularities, **their membership**, and whether a
   finer granularity went **unobserved** so the answer can be an upper bound and say so. All three
   requirements stand. The **shape** does not, and the requirement says so itself: it asks the answer

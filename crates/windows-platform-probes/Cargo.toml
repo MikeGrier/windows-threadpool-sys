@@ -16,6 +16,10 @@ description = "Executable probes for the undocumented Windows behaviour this wor
 path = "src/lib.rs"
 
 [[bin]]
+name = "probe-core-affinity"
+path = "src/bin/core_affinity.rs"
+
+[[bin]]
 name = "probe-error-mode"
 path = "src/bin/error_mode.rs"
 
@@ -47,6 +51,26 @@ path = "src/bin/ioring.rs"
 name = "probe-pool-growth"
 path = "src/bin/pool_growth.rs"
 
+[[bin]]
+name = "probe-doorbell-cost"
+path = "src/bin/doorbell_cost.rs"
+
+[[bin]]
+name = "probe-request-cost"
+path = "src/bin/request_cost.rs"
+
+[[bin]]
+name = "probe-topology"
+path = "src/bin/topology.rs"
+
+[[bin]]
+name = "probe-queue-contention"
+path = "src/bin/queue_contention.rs"
+
+[[bin]]
+name = "probe-peer-index-cache"
+path = "src/bin/peer_index_cache.rs"
+
 # These two are the same code, and that is the measurement: they differ only in
 # whether `build.rs` embeds the `longPathAware` manifest, which is not a runtime
 # switch and so cannot be a flag on one binary.
@@ -68,17 +92,42 @@ path = "src/bin/long_path_unaware.rs"
 # A `version` beside a `path` is consulted only when the depending crate is
 # packaged, but cargo still requires the path crate's own version to satisfy it
 # at every build -- so a pin left behind by a bump breaks the whole workspace's
-# resolution rather than only this crate's.
+# resolution rather than only this crate's. With six such pins, that was six
+# standing chances to break `main` in exchange for nothing.
 #
 # The pool-growth probe measures the shipping API rather than a
 # reimplementation of the SDK's inline environment helpers, so it depends on the
 # real crate.
 windows-threadpool-sys = { path = "../windows-threadpool-sys" }
-# Every probe's report opens with a line naming the machine that produced it and
-# whether the measurement is tainted, so a captured finding cannot be pasted
-# somewhere and compared against something it does not describe. That banner is
-# `windows-placement-probe`'s to render, not a second copy here.
+# Same reason: the topology probe measures what the shipping parse produces, not
+# a second parse written here, which would only measure itself. The raw Win32
+# counters it cross-checks against are read independently through windows-sys.
+windows-topology-sys = { path = "../windows-topology-sys" }
+# The placement measurement moved out to its own crate so it could be shared
+# with people running it on hardware this workspace does not own. The probes
+# here call into it rather than keeping a second copy: two renderings of one
+# measurement disagreeing is a defect this investigation has already hit.
+#
+# It renders the banner too: every probe's report opens with a line naming the
+# machine that produced it and whether the measurement is tainted, so a captured
+# finding cannot be pasted somewhere and compared against something it does not
+# describe. That banner is this crate's to render, not a second copy here.
 windows-placement-probe = { path = "../windows-placement-probe" }
+# The request-cost probe measures the real request types the design would put on
+# a queue, not a stand-in, for the same reason.
+windows-namespace-request-sys = { path = "../windows-namespace-request-sys" }
+# The contention probe measures the shipping queue shapes rather than a
+# reimplementation, for the same reason: a stand-in would only measure itself,
+# and the whole question is what the real tail claim costs.
+# The experimental permit claim is enabled here because this probe is what
+# decides its fate (SH-15.5): it must be measured against the shipping shapes
+# on the same host, in the same run, by the same harness.
+windows-waitable-queues = { path = "../windows-waitable-queues", features = [
+	"experimental-permit-claim",
+	# So the probe can instantiate the 128-bit layout. The 64-bit ones need no
+	# feature; this is the only one that costs the queue crate a dependency.
+	"dwcas",
+] }
 # The long-path probe measures a length against `MAX_PATH`, and `MAX_PATH` counts
 # UTF-16 code units. `OsStr::len` counts Rust's platform encoding -- WTF-8 here --
 # so the two disagree the moment a non-ASCII character appears in `%TEMP%`, which
@@ -104,6 +153,9 @@ features = [
 	# half of what a relative path resolves against, so the probe has to place
 	# it deliberately rather than inherit whatever launched it.
 	"Win32_System_Environment",
+	# GetSystemDirectoryW, so the request probe measures the real system
+	# directory instead of assuming Windows is installed on C:.
+	"Win32_System_SystemInformation",
 	"Win32_System_Diagnostics_Debug",
 	"Win32_System_IO",
 	"Win32_System_Pipes",

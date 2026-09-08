@@ -1494,3 +1494,13 @@ Independent of M17; may run in parallel.
   `unwrap_or_else(PoisonError::into_inner)`. `scope()` absorbs poisoning internally, matching what the wait
   callback's own drain already did, so the question no longer reaches callers at all.
   Verified: 148 tests pass, both affected examples (`model_a_delivery`, `epoch_log`) still run to exit 0.
+
+## Moved 2026-09-07 -- M20.5: dissolved by D-47 rather than decided
+
+### <a id="m205"></a>M20.5 -- Dissolved by [D-47](DESIGN-NOTES.md#d-47-detail) rather than decided: the `flush_barrier` assertion was measuring a claim the platform does not honour, so it was never a flaky test. *(completed 2026-09-07 21:40:23 -04:00)*
+
+**Dissolved by [D-47](DESIGN-NOTES.md#d-47-detail), not decided.** This asked whether to make the
+load-sensitive `flush_barrier` assertion load-independent or mark the test serial. Neither: the
+assertion was measuring a claim the platform does not honour, so it was not a flaky test at all. Its
+own contention hypothesis was disproved in the same measurement -- an idle ring failed too. Recorded
+in [RESOLVED-TEST-FAILURES.md](RESOLVED-TEST-FAILURES.md).
