@@ -181,6 +181,28 @@ M22-M29, and [CHECKLIST-io-domains.md](CHECKLIST-io-domains.md) M30-M33.
   discussion thread, so "can this be captured and asserted end to end?" has real value there rather
   than being architectural tidiness.
 
+- [ ] **M34.4** -- **Guard the remaining native-command captures in the sabotage scripts against
+  Windows PowerShell 5.1's terminating-stderr rule.** Under 5.1, a native command that writes to
+  stderr while `$ErrorActionPreference` is `Stop` raises a **terminating** error whenever its stderr
+  is redirected with `2>&1`; PowerShell 7 does not, which is why this survives review. Measured both
+  ways against a deliberately uncompilable crate: unguarded, 5.1 threw and captured nothing; with the
+  preference flipped to `Continue` around the call, it returned exit 101 with all seven diagnostic
+  lines.
+  **Fixed already, so this item is only the remainder:** [soak-flush-barrier.ps1](tools/soak-flush-barrier.ps1),
+  [test-run-sabotage.ps1](tools/test-run-sabotage.ps1) (its harness invocation only) and
+  [run-numa-spikes.ps1](tools/run-numa-spikes.ps1) each carry the guard.
+  [run-mutants.ps1](tools/run-mutants.ps1) needs none -- it redirects nothing.
+  **What remains is six `git ... 2>&1 | Out-Null` captures**: one in
+  [run-sabotage.ps1](tools/run-sabotage.ps1) (`check-ignore`) and five in
+  [test-run-sabotage.ps1](tools/test-run-sabotage.ps1) (`init`, `add -A`). They are **latent, not
+  firing** -- the sabotage suite passes under 5.1 today, because git stays silent on those operations
+  in a clean temp repository. They would fire the first time git warned there, and `| Out-Null` means
+  the thrown record would carry no diagnostic at all.
+  Queued rather than fixed in place because the fix is a third and fourth copy of the same guard, and
+  `tools/` has no module or dot-sourcing convention to share one. **Decide that first**: either adopt
+  a shared tools module and route all the copies through it, or accept the duplication deliberately
+  and apply it to the remaining six.
+
 ## M35 -- Measure what the long-path opt-in actually does
 
 - [x] **M35.1** -- **Measure whether the long-path opt-in lifts `MAX_PATH` for a *relative* path, and
