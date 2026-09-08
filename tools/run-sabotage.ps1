@@ -171,6 +171,13 @@ param(
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
+# `Invoke-Native`, which the git calls below go through. Dot-sourced rather than
+# imported: a module copy of that guard does not reach the scriptblock it is
+# handed, and silently fails on Windows PowerShell 5.1 alone -- see
+# [common.ps1](common.ps1), and [test-common.ps1](test-common.ps1) for the
+# cross-host proof.
+. (Join-Path $PSScriptRoot 'common.ps1')
+
 $utf8NoBom = [System.Text.UTF8Encoding]::new($false)
 
 # Script scope so Invoke-Bounded reads it without threading it through three
@@ -209,7 +216,23 @@ function Exit-WithMessage {
 }
 
 function Get-RepoRoot {
-    $root = git rev-parse --show-toplevel 2>$null
+    # Through `Invoke-NativeStdout`, and BOTH halves of that name are load
+    # bearing here.
+    #
+    # Guarded at all, because any stderr redirect -- `2>$null` as much as `2>&1`
+    # -- makes a native command's stderr a TERMINATING error on Windows
+    # PowerShell 5.1 under `Stop`, and this is the one call in this script whose
+    # failure mode IS stderr: outside a working tree git says `fatal: not a git
+    # repository`. Measured on 5.1, unguarded, the line below was unreachable --
+    # the script died with NativeCommandError and exited 1, which in this script
+    # means "sabotages did not behave as declared" rather than "you ran me in
+    # the wrong directory". PowerShell 7 reached it either way, which is why the
+    # deliberate exit-2 path looked fine.
+    #
+    # Stdout-only rather than the merging `Invoke-Native`, because this output is
+    # PARSED -- it becomes the repository root. Git can warn on stderr while
+    # succeeding, and merging would splice that warning into the path.
+    $root = Invoke-NativeStdout { git rev-parse --show-toplevel }
     if ($LASTEXITCODE -ne 0) {
         # Reported, not thrown. Under $ErrorActionPreference = 'Stop' a `throw`
         # here is a terminating error that prints a stack trace and propagates
@@ -837,7 +860,7 @@ New-Item -ItemType Directory -Force -Path $OutputDirectory | Out-Null
 # without bound and looks like nothing until it does.
 $outputFull = [System.IO.Path]::GetFullPath($OutputDirectory)
 if ($outputFull.StartsWith($repoRootPrefix, [System.StringComparison]::OrdinalIgnoreCase)) {
-    git -C $repoRoot check-ignore -q -- $outputFull 2>&1 | Out-Null
+    Invoke-Native { git -C $repoRoot check-ignore -q -- $outputFull } | Out-Null
     if ($LASTEXITCODE -ne 0) {
         Exit-WithMessage (@(
                 "-OutputDirectory is inside the repository but git does not ignore it:"

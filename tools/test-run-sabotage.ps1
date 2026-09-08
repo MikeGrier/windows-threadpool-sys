@@ -74,6 +74,13 @@ param(
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
+# `Invoke-Native`, which every native call below goes through. Dot-sourced
+# rather than imported: a module copy of that guard does not reach the
+# scriptblock it is handed, and silently fails on 5.1 alone -- see
+# [common.ps1](common.ps1), and [test-common.ps1](test-common.ps1) for the
+# cross-host proof.
+. (Join-Path $PSScriptRoot 'common.ps1')
+
 $script:Harness = Join-Path $PSScriptRoot 'run-sabotage.ps1'
 $script:Passed = 0
 $script:Failed = 0
@@ -153,12 +160,12 @@ function New-Fixture {
     [System.IO.File]::WriteAllText((Join-Path $root '.gitignore'), ".scratch/`n")
     [System.IO.File]::WriteAllText((Join-Path $root 'src\lib.rs'), $Source)
 
-    git -C $root init --quiet 2>&1 | Out-Null
+    Invoke-Native { git -C $root init --quiet } | Out-Null
     if ($null -ne $Manifest) { Set-Manifest -Root $root -Spec $Manifest }
     # Added to the index but not committed: `git ls-files` reads the index,
     # which is all the harness needs, and committing would demand identity
     # configuration this fixture has no reason to care about.
-    git -C $root add -A 2>&1 | Out-Null
+    Invoke-Native { git -C $root add -A } | Out-Null
     return $root
 }
 
@@ -166,7 +173,7 @@ function Set-Manifest {
     param([string] $Root, $Spec)
     $json = $Spec | ConvertTo-Json -Depth 8
     [System.IO.File]::WriteAllText((Join-Path $Root 'sabotage.json'), $json)
-    git -C $Root add -A 2>&1 | Out-Null
+    Invoke-Native { git -C $Root add -A } | Out-Null
 }
 
 # The default manifest: patches the fixture's marker line, expecting it caught.
@@ -234,24 +241,24 @@ function Invoke-Harness {
     param([string] $Root, [string[]] $Arguments)
 
     Push-Location $Root
-    # $ErrorActionPreference is dropped to Continue for the call, and this is
-    # load bearing on Windows PowerShell 5.1. There, a native command's stderr
-    # redirected with 2>&1 arrives as an ErrorRecord, which under Stop is a
-    # TERMINATING error -- so every case testing a rejection path threw on the
-    # harness's own message instead of reading its exit code, and reported the
-    # harness's text as the failure. The harness writes to stderr deliberately
-    # (that is what Exit-WithMessage is for), so its output is data here, not a
-    # fault. PowerShell 7 does not do this, which is why the suite passed there
-    # and failed on 5.1 until it was run on both.
-    $previous = $ErrorActionPreference
-    $ErrorActionPreference = 'Continue'
+    # Through Invoke-Native, and that is load bearing on Windows PowerShell 5.1.
+    # The harness runs here as a CHILD PROCESS, so its `Exit-WithMessage` writes
+    # -- which go straight to the process stderr handle -- are native stderr to
+    # this script. Redirected with 2>&1 under Stop they arrive as ErrorRecords,
+    # which is a TERMINATING error: every case testing a rejection path threw on
+    # the harness's own message instead of reading its exit code, and reported
+    # the harness's text as the failure. The harness writes to stderr
+    # deliberately, so its output is data here, not a fault. PowerShell 7 does
+    # not do this, which is why the suite passed there and failed on 5.1 until
+    # it was run on both.
     try {
         $shell = if ($PSVersionTable.PSVersion.Major -ge 6) { 'pwsh' } else { 'powershell' }
-        $text = & $shell -NoProfile -File $script:Harness @Arguments 2>&1 | Out-String
+        $text = Invoke-Native {
+            & $shell -NoProfile -File $script:Harness @Arguments
+        } | Out-String
         return [pscustomobject]@{ ExitCode = $LASTEXITCODE; Output = $text }
     }
     finally {
-        $ErrorActionPreference = $previous
         Pop-Location
     }
 }
@@ -454,6 +461,29 @@ Test-Case 'rejects an output directory inside the repository that git does not i
         Assert-Match 'does not ignore it' $result.Output
     }
     finally { Remove-Fixture $root }
+}
+
+Test-Case 'rejects being run outside a git repository, on both hosts' {
+    # This one is host-sensitive, and it went unnoticed because the suite only
+    # ever ran the harness INSIDE a fixture repository. `Get-RepoRoot` captured
+    # git with `2>$null`, and on Windows PowerShell 5.1 any stderr redirect makes
+    # a native command's stderr a TERMINATING error under `Stop` -- so outside a
+    # working tree, where git's whole answer is `fatal: not a git repository` on
+    # stderr, the deliberate exit-2 path was unreachable. The harness died with
+    # NativeCommandError and exited 1, which in this script means "sabotages did
+    # not behave as declared": a broken instrument reported as a finding.
+    #
+    # PowerShell 7 reached the intended path either way, which is exactly why
+    # this needs a test rather than a reading.
+    $outside = Join-Path ([System.IO.Path]::GetTempPath()) ('nogit-' + [guid]::NewGuid().ToString('N'))
+    New-Item -ItemType Directory -Force -Path $outside | Out-Null
+    [System.IO.File]::WriteAllText((Join-Path $outside 'sabotage.json'), (New-Spec | ConvertTo-Json -Depth 8))
+    try {
+        $result = Invoke-Harness -Root $outside -Arguments @('-Manifest', 'sabotage.json', '-List')
+        Assert-Equal 2 $result.ExitCode $result.Output
+        Assert-Match 'Not inside a git repository' $result.Output
+    }
+    finally { Remove-Item -Recurse -Force $outside -ErrorAction SilentlyContinue }
 }
 
 Test-Case 'validates a manifest timeoutSeconds even when -TimeoutSeconds overrides it' {
@@ -800,7 +830,7 @@ Test-Case 'copies a file whose name git quotes, and drops it when the source doe
     try {
         $odd = Join-Path $root ('src\caf' + [char]0xE9 + '.rs')
         [System.IO.File]::WriteAllText($odd, "// unicode`n")
-        git -C $root add -A 2>&1 | Out-Null
+        Invoke-Native { git -C $root add -A } | Out-Null
 
         $stub = New-Stub -Behaviour 'fail' -Root $root
         Invoke-Harness -Root $root `
@@ -810,7 +840,7 @@ Test-Case 'copies a file whose name git quotes, and drops it when the source doe
         Assert-True (Test-Path -LiteralPath $copied) 'the copy must not silently omit it'
 
         Remove-Item -LiteralPath $odd -Force
-        git -C $root add -A 2>&1 | Out-Null
+        Invoke-Native { git -C $root add -A } | Out-Null
         Invoke-Harness -Root $root `
             -Arguments @('-Manifest', 'sabotage.json', '-CargoCommand', $stub) | Out-Null
 
