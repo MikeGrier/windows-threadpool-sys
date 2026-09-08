@@ -47,6 +47,17 @@ path = "src/bin/ioring.rs"
 name = "probe-pool-growth"
 path = "src/bin/pool_growth.rs"
 
+# These two are the same code, and that is the measurement: they differ only in
+# whether `build.rs` embeds the `longPathAware` manifest, which is not a runtime
+# switch and so cannot be a flag on one binary.
+[[bin]]
+name = "probe-long-path-aware"
+path = "src/bin/long_path_aware.rs"
+
+[[bin]]
+name = "probe-long-path-unaware"
+path = "src/bin/long_path_unaware.rs"
+
 [dependencies]
 # **Every workspace dependency below is path-only, with no `version`**, because
 # this crate is never distributed at all -- not to a registry, and not as a
@@ -68,6 +79,19 @@ windows-threadpool-sys = { path = "../windows-threadpool-sys" }
 # somewhere and compared against something it does not describe. That banner is
 # `windows-placement-probe`'s to render, not a second copy here.
 windows-placement-probe = { path = "../windows-placement-probe" }
+# The long-path probe measures a length against `MAX_PATH`, and `MAX_PATH` counts
+# UTF-16 code units. `OsStr::len` counts Rust's platform encoding -- WTF-8 here --
+# so the two disagree the moment a non-ASCII character appears in `%TEMP%`, which
+# would put an attempt on the wrong side of the ceiling the probe exists to
+# characterize. This crate holds a string in the encoding Windows uses, so its
+# `len` is the number under test rather than a conversion of one.
+#
+# That is the whole of what it is used for here: a code-unit count, at every site
+# where a length is compared against a Windows limit.
+# `encode_wide().count()` would give the same number, and the choice of this crate
+# over that is a vocabulary one -- the workspace's own WTF-16 type naming the
+# quantity rather than an ad-hoc count that happens to agree.
+wtf-string = { path = "../wtf-string" }
 
 [dependencies.windows-sys]
 version = "0.61.2"
@@ -76,6 +100,10 @@ features = [
 	"Win32_Foundation",
 	"Win32_Security",
 	"Win32_Storage_FileSystem",
+	# SetCurrentDirectoryW, for the long-path probe: the current directory is
+	# half of what a relative path resolves against, so the probe has to place
+	# it deliberately rather than inherit whatever launched it.
+	"Win32_System_Environment",
 	"Win32_System_Diagnostics_Debug",
 	"Win32_System_IO",
 	"Win32_System_Pipes",

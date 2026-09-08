@@ -92,7 +92,8 @@ to the engineer, not to whoever picks up this checklist.
   tracked as `SH-13.4` on the branch that ships the topology and queue crates.
   The sink has since landed here
   ([crates/windows-platform-probes/src/report.rs](crates/windows-platform-probes/src/report.rs))
-  and all eight probes in this repository route through it, so what remains of
+  and every probe in this repository routes through it -- stated without a count,
+  because the count moves as stages land -- so what remains of
   `SH-13.4` is the six branch-only probes, and it stays named rather than linked
   because that branch checklist is still not in this repository. The crate's own
   durable work now has a home to link:

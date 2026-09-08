@@ -29,7 +29,7 @@ piece of work rather than a correction to that one.
 
 - [ ] **M1.1** -- Decide how a formatted line reaches the sink, because that choice is what makes the
   rest mechanical. Every renderer today writes through `let _ = writeln!(out, ...)` against a
-  `String`'s `fmt::Write` -- roughly 156 sites across the eight probes -- so the sink must accept
+  `String`'s `fmt::Write` -- upwards of 160 sites across the probes -- so the sink must accept
   *formatted* output, not just `&str`, or every site grows a `format!` and an allocation per line.
   The options differ in what they cost callers, and the choice is the engineer's:
   (a) give `Report` a method taking `fmt::Arguments` plus a `report_line!` macro, so a call site stays
@@ -41,7 +41,7 @@ piece of work rather than a correction to that one.
   (c) leave the renderers writing to a `String` and flush it to the sink at each line boundary, which
   streams without touching the call sites but keeps two buffers.
 
-- [ ] **M1.2** -- Convert the eight renderers to write into the sink as they measure, and simplify
+- [ ] **M1.2** -- Convert every renderer to write into the sink as it measures, and simplify
   `emit_report` accordingly: once lines leave as they are produced, catching the unwind is no longer
   what makes partial output work, and the `catch_unwind`/`resume_unwind` pair should be removed rather
   than left as machinery that no longer earns its place. Keep `Captured` working -- it is what every
