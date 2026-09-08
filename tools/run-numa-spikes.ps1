@@ -68,63 +68,22 @@ function Write-Report {
     }
 }
 
-# Render a captured record as plain text. `2>&1` wraps a native command's stderr
-# in ErrorRecords, and one of those stringifies to the literal text
-# `System.Management.Automation.RemoteException` in the middle of a compiler
-# diagnostic, so the transcript of a broken instrument was less legible than the
-# console log of the same failure.
-function ConvertTo-OutputLines {
-    param([Parameter(ValueFromPipeline = $true)] $Record)
-    process {
-        if ($Record -is [System.Management.Automation.ErrorRecord]) {
-            $Record.Exception.Message
-        }
-        else {
-            "$Record"
-        }
-    }
-}
-
-# Run a native command, capturing merged stdout+stderr as plain strings.
+# `Invoke-Native` and `ConvertTo-OutputLines`, which every capture below goes
+# through. Dot-sourced rather than imported: a module copy of that guard does
+# not reach the scriptblock it is handed, and silently fails on 5.1 alone. The
+# full argument, and the measurement behind it, is in that file.
 #
-# The ErrorActionPreference dance is what makes this work on Windows PowerShell
-# 5.1. There, a native command writing to stderr under `Stop` raises a
-# TERMINATING error. Restoring the preference afterwards keeps `Stop` for
-# everything that is not a native call.
-#
-# Measured, because the shape of the failure is what makes it dangerous rather
-# than merely annoying. `cargo --quiet` writes nothing to stderr on a clean
-# build, so under 5.1 this script ran to completion for as long as every spike
-# was healthy. It threw only when cargo did write there -- a warning, or a
-# failed compile -- which is exactly the case this script exists to report. The
-# throw landed before `$buildExit` was assigned, so the broken-instrument
-# branch never ran: no transcript, no summary, and the one artifact somebody
-# downloads to diagnose a rotted spike was the one case that never produced it.
-# Confirmed both ways against a deliberately uncompilable crate: unguarded, 5.1
-# threw and captured nothing; guarded, it returned exit 101 with all seven lines
-# of diagnostic. Under 7 both forms are fine, which is why this survived.
-#
-# `$LASTEXITCODE` is global, so a caller still reads the native command's exit
-# code after this returns -- which is the whole point here, since this script
-# distinguishes a broken instrument from a finding by exactly that code.
-#
-# This is the third copy of this guard in `tools/`; `soak-flush-barrier.ps1` and
-# `test-run-sabotage.ps1` carry the same one. Kept as a copy rather than shared
-# because `tools/` has no module or dot-sourcing convention, and inventing one
-# here would change how every script in the directory is invoked. Written down
-# so the duplication is a recorded choice rather than something a later reader
-# has to rediscover -- three copies of one rule can drift.
-function Invoke-Native {
-    param([Parameter(Mandatory = $true)][scriptblock] $Command)
-    $previous = $ErrorActionPreference
-    $ErrorActionPreference = 'Continue'
-    try {
-        & $Command 2>&1 | ConvertTo-OutputLines
-    }
-    finally {
-        $ErrorActionPreference = $previous
-    }
-}
+# What it costs THIS script, recorded here because the shape is specific to the
+# spikes: `cargo --quiet` writes nothing to stderr on a clean build, so under
+# 5.1 this ran to completion for as long as every spike was healthy. It threw
+# only when cargo did write there -- a warning, or a failed compile -- which is
+# exactly the case this script exists to report. The throw landed before
+# `$buildExit` was assigned, so the broken-instrument branch never ran: no
+# transcript, no summary, and the one artifact somebody downloads to diagnose a
+# rotted spike was the one case that never produced it. Confirmed both ways
+# against a deliberately uncompilable crate: unguarded, 5.1 threw and captured
+# nothing; guarded, it returned exit 101 with all seven lines of diagnostic.
+. (Join-Path $PSScriptRoot 'common.ps1')
 
 $repoRoot = Resolve-Path (Join-Path $PSScriptRoot '..')
 $spikeDir = Join-Path $repoRoot 'crates\windows-ioring-sys\design-sessions\spikes'

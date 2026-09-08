@@ -2185,3 +2185,54 @@ mutation wrapper. The conversion's three silent fallbacks are replaced by one ru
   Queued rather than left as a note precisely because a half-adopted abstraction is the state most
   likely to be forgotten -- the next probe author will see twelve neighbours printing directly and
   reasonably conclude that is the house style.
+## Moved 2026-09-07 -- M34.4: the native-command guard became shared support, proven on both hosts
+
+### <a id="m344"></a>M34.4 -- Share the native-command guard through a dot-sourced `tools/common.ps1`, route every capture site through it, and prove it on both PowerShell hosts. *(completed 2026-09-07 21:16:31 -04:00)*
+
+Queued as a decision rather than a fix: the remaining sites needed a third and fourth copy of
+one guard, and `tools/` had no sharing convention. The decision was to adopt one, and finding
+out *which* one is the substance of this item.
+
+**Under Windows PowerShell 5.1, a native command that writes to stderr while
+`$ErrorActionPreference` is `Stop` raises a terminating error when its stderr is redirected
+with `2>&1`.** PowerShell 7 does not, which is why this class survives review and CI.
+
+**The obvious answer -- a `.psm1` -- is wrong, and wrong invisibly.** A scriptblock carries
+the session state it was created in, so `Invoke-Native { cargo build }` runs in the caller's
+scope while a module copy flips the preference in the module's scope; the flip never reaches
+the call. Measured with the identical body in a module: **under 5.1 seven of eight cases
+failed, while all eight passed under PowerShell 7.** Dot-sourcing puts the function in the
+caller's own scope, where the plain assignment does reach the call. A module *can* be made to
+work via `$PSCmdlet.SessionState.PSVariable.Set(...)` -- measured working on both hosts -- and
+was rejected: the guard would rest on a subtlety that looks removable, and simplifying it back
+reintroduces a defect that still passes on PowerShell 7.
+
+Delivered:
+
+- **[tools/common.ps1](tools/common.ps1)** -- `Invoke-Native` and `ConvertTo-OutputLines`, with
+  the "why not a module" argument and its measurement at the definition site.
+- **[tools/test-common.ps1](tools/test-common.ps1)** -- eight cases covering capture, stream
+  merging, exit-code survival, diagnostic text, record flattening, preference restoration
+  (including when the command throws), and that `Stop` stays armed for non-native errors. It
+  runs its cases in the invoking host, then **re-invokes itself in the other one**, and treats
+  a missing host as a FAILURE rather than a skip -- a single-host pass is not the claim the
+  file exists to make.
+- **Every capture site routed**: `run-numa-spikes.ps1` and `soak-flush-barrier.ps1` lost their
+  local copies; `run-sabotage.ps1` (`check-ignore`) and `test-run-sabotage.ps1` (`init`,
+  four `add -A`, and its child-process harness invocation) now go through the shared guard.
+  `run-mutants.ps1` needs none -- it redirects nothing, confirmed by experiment on both hosts.
+- **CI runs both shells.** The `sabotage harness tests` job ran `shell: pwsh` only, which is
+  precisely why the defect was invisible; it now runs `test-common.ps1` plus
+  `test-run-sabotage.ps1` under **both** `pwsh` and `powershell`.
+
+Verified by sabotage: delivering the identical guard as a module turns the new suite red on
+5.1 (7 of 8) while staying green on 7, so the suite detects the regression it was written for.
+Both consumer scripts and the full sabotage suite pass on both hosts.
+
+**Deliberately not done: consolidating `Write-Report`.** Six scripts define one, and they are
+not duplicates -- they differ in level vocabulary (`warn`/`warning`, `bad`/`error`, plus
+`good`, `note`, `detail`, `heading`) and in rendering, with two emitting GitHub Actions
+annotations and four emitting console colours. Merging them would change six tools' output to
+remove a duplication that is only apparent. Recorded in
+[DESIGN-NOTES.md](DESIGN-NOTES.md#tools-shared-support) so it is a decision rather than an
+oversight.

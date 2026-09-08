@@ -171,6 +171,13 @@ param(
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
+# `Invoke-Native`, which the git calls below go through. Dot-sourced rather than
+# imported: a module copy of that guard does not reach the scriptblock it is
+# handed, and silently fails on Windows PowerShell 5.1 alone -- see
+# [common.ps1](common.ps1), and [test-common.ps1](test-common.ps1) for the
+# cross-host proof.
+. (Join-Path $PSScriptRoot 'common.ps1')
+
 $utf8NoBom = [System.Text.UTF8Encoding]::new($false)
 
 # Script scope so Invoke-Bounded reads it without threading it through three
@@ -837,7 +844,7 @@ New-Item -ItemType Directory -Force -Path $OutputDirectory | Out-Null
 # without bound and looks like nothing until it does.
 $outputFull = [System.IO.Path]::GetFullPath($OutputDirectory)
 if ($outputFull.StartsWith($repoRootPrefix, [System.StringComparison]::OrdinalIgnoreCase)) {
-    git -C $repoRoot check-ignore -q -- $outputFull 2>&1 | Out-Null
+    Invoke-Native { git -C $repoRoot check-ignore -q -- $outputFull } | Out-Null
     if ($LASTEXITCODE -ne 0) {
         Exit-WithMessage (@(
                 "-OutputDirectory is inside the repository but git does not ignore it:"
