@@ -50,6 +50,26 @@ function ConvertTo-OutputLines {
 # `Continue` around the call is what makes the capture work on both, and
 # restoring it afterwards keeps `Stop` for everything that is not a native call.
 #
+# **No restoration is needed, and none is attempted.** `$ErrorActionPreference =
+# 'Continue'` here creates a FUNCTION-LOCAL variable: PowerShell assignment
+# always writes to the current scope, so the caller's own value is untouched and
+# the local one is discarded when this returns. `& $Command` runs the scriptblock
+# in a child of this scope, so it inherits `Continue` -- which is exactly the
+# reach the guard needs -- while nothing outside sees it.
+#
+# An earlier version wrapped the call in `try { } finally { $ErrorActionPreference
+# = $previous }`. That restored the local copy nobody could observe, so it was
+# dead code, and worse: three cases in `test-common.ps1` claimed to cover it and
+# could not fail. Measured on both hosts -- with the `try/finally` deleted
+# outright, the caller still reads `Stop` immediately after the call, identically
+# to the version that had it.
+#
+# The property that DOES need a test is the other direction: that the flip never
+# escapes into the caller. Writing `$script:` or `$global:` here would leave the
+# caller running under `Continue` for everything afterwards, and `test-common.ps1`
+# covers that (a `$script:`-scoped mutant leaves the caller at `Continue` and
+# fails those cases).
+#
 # `$LASTEXITCODE` is global, so a caller still reads the command's exit code
 # after this returns. That matters here: these scripts distinguish a broken
 # instrument from a finding by exactly that code.
@@ -81,12 +101,8 @@ function ConvertTo-OutputLines {
 # [test-common.ps1](test-common.ps1) asserts this on both hosts.
 function Invoke-Native {
     param([Parameter(Mandatory = $true)][scriptblock] $Command)
-    $previous = $ErrorActionPreference
+    # Function-local by construction -- see the note above on why there is no
+    # restoration to do. Never `$script:` or `$global:` here.
     $ErrorActionPreference = 'Continue'
-    try {
-        & $Command 2>&1 | ConvertTo-OutputLines
-    }
-    finally {
-        $ErrorActionPreference = $previous
-    }
+    & $Command 2>&1 | ConvertTo-OutputLines
 }

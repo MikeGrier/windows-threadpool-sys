@@ -113,26 +113,58 @@ Test-Case 'captured records are plain strings, not ErrorRecords' {
     }
 }
 
-Test-Case 'the caller''s ErrorActionPreference is restored afterwards' {
-    $before = $ErrorActionPreference
-    $null = Invoke-Native { cmd /c "echo to-stderr 1>&2" }
-    Assert-Equal $before $ErrorActionPreference 'ErrorActionPreference after the call'
+# The flip must REACH the scriptblock, and this is the only case that shows it
+# directly. The stderr case above shows it too, but only on 5.1 -- PowerShell 7
+# captures either way, so on 7 nothing else here distinguishes a guard that works
+# from one that does nothing. Observing the preference from inside the passed
+# scriptblock is host-independent.
+Test-Case 'the flip reaches the scriptblock it is handed' {
+    $seen = Invoke-Native { $ErrorActionPreference }
+    Assert-Equal 'Continue' ("$seen".Trim()) 'ErrorActionPreference as seen inside the command'
 }
 
-# The guard must not disarm `Stop` for anything that is not the native call.
+# The three cases below are the OTHER direction: the flip must not escape.
+#
+# They are deliberately not described as testing a "restoration". `Invoke-Native`
+# assigns to a function-local `$ErrorActionPreference`, so the caller's value is
+# never modified and there is nothing to restore -- an earlier version wrapped
+# the call in a `try/finally` that restored a copy nobody could observe, and
+# these three cases could not fail against deleting it. Measured on both hosts.
+#
+# What they do catch is real and is the mutation worth guarding: writing
+# `$script:ErrorActionPreference` or `$global:` in `Invoke-Native` would leave
+# the CALLER running under `Continue` for everything afterwards, silently
+# disarming `Stop` for the rest of the script. A `$script:`-scoped mutant leaves
+# the caller at `Continue` and fails all three.
+# Each of these three sets `$script:ErrorActionPreference` to a known value
+# first, rather than capturing whatever it happens to be. That is not ceremony:
+# a mutant that escapes to script scope leaks `Continue` on its FIRST call, so a
+# later case reading "before" would capture `Continue`, compare it against
+# `Continue` afterwards, and pass -- the contamination hiding itself. Measured:
+# without this reset, a `$script:`-scoped mutant was caught only by the
+# behavioural case below, and the two variable-observing cases passed.
+Test-Case 'the flip does not escape into the caller' {
+    $script:ErrorActionPreference = 'Stop'
+    $null = Invoke-Native { cmd /c "echo to-stderr 1>&2" }
+    Assert-Equal 'Stop' $ErrorActionPreference 'the caller''s ErrorActionPreference after the call'
+}
+
+# The same property observed through behaviour rather than through the variable:
+# `Stop` must still terminate on something that is not the native call.
 Test-Case 'Stop still terminates a non-native error after the call' {
+    $script:ErrorActionPreference = 'Stop'
     $null = Invoke-Native { cmd /c "echo to-stderr 1>&2" }
     $threw = $false
     try { Get-Item 'Q:\no\such\path\at\all.txt' | Out-Null } catch { $threw = $true }
     if (-not $threw) { throw 'Stop was left disarmed for cmdlet errors' }
 }
 
-# Restoration must survive the native call throwing for some other reason, or a
-# later failure would run with the preference still flipped.
-Test-Case 'ErrorActionPreference is restored even when the command throws' {
-    $before = $ErrorActionPreference
+# And on the path where the command throws, which is where a scope-escaping
+# assignment would be least likely to be noticed by hand.
+Test-Case 'the flip does not escape when the command throws' {
+    $script:ErrorActionPreference = 'Stop'
     try { $null = Invoke-Native { throw 'deliberate' } } catch { }
-    Assert-Equal $before $ErrorActionPreference 'ErrorActionPreference after a throwing command'
+    Assert-Equal 'Stop' $ErrorActionPreference 'the caller''s ErrorActionPreference after a throw'
 }
 
 if (-not $SingleHost) {
