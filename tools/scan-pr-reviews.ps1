@@ -36,10 +36,14 @@
     survive a new machine, a new contributor, and a new agent session. A later
     run of this script reads those markers back and stops reporting the review.
 
-    Only markers written by someone with write access (author_association OWNER,
-    MEMBER or COLLABORATOR) are honoured. This repository is public, so anyone who
-    can comment could otherwise retire a finding that has no other state anywhere.
-    Markers from other authors are counted and reported, not silently dropped.
+    Only markers written by someone whose repository permission is `admin` or
+    `write` are honoured, checked against the collaborators permission endpoint
+    rather than inferred from `author_association` -- GitHub reports
+    COLLABORATOR for a read-only collaborator too, so that field is weaker than
+    this control claims to be. This repository is public, so anyone who can
+    comment could otherwise retire a finding that has no other state anywhere.
+    The check fails closed, and markers that were not honoured are counted and
+    reported rather than silently dropped.
 
 .OUTPUTS
     Exit code 0 when nothing is outstanding, 1 when there are findings, and 2 when
@@ -184,6 +188,32 @@ if ($MarkProcessed) {
 
 # --- scanning ----------------------------------------------------------------
 
+# Walk a property chain over API-supplied data, yielding $null rather than
+# throwing when any link is absent or null.
+#
+# Needed because `Set-StrictMode -Version Latest` turns `$x.a.b` into a
+# TERMINATING error the moment `a` is null, and several fields these queries
+# return are nullable BY SCHEMA rather than by accident: GraphQL `author` and
+# `pullRequestReview` are null for a deleted account, REST `user` likewise, and
+# `submitted_at` is null on a PENDING review. Any one of those would leave this
+# script through an unhandled throw -- which exits 1, the code that means
+# "there are findings". A contributor deleting their GitHub account would
+# silently turn this tool into a false positive.
+#
+# Verified on both hosts that all of these throw under StrictMode without it:
+# `$null.login`, `@()[0]`, and `[datetime]$null`.
+function Get-Path {
+    param($Object, [string[]] $Names)
+    $current = $Object
+    foreach ($name in $Names) {
+        if ($null -eq $current) { return $null }
+        $property = $current.PSObject.Properties[$name]
+        if ($null -eq $property) { return $null }
+        $current = $property.Value
+    }
+    return $current
+}
+
 # `??` is PowerShell 7 only, and these tools run on 5.1 too.
 function Get-Text {
     param($Value)
@@ -196,31 +226,63 @@ Write-Report "scanning pull request #$Pr" -Level heading
 $reviews = Invoke-GitHubJson @('api', "repos/$script:Owner/$script:Name/pulls/$Pr/reviews?per_page=100", '--paginate')
 $issueComments = Invoke-GitHubJson @('api', "repos/$script:Owner/$script:Name/issues/$Pr/comments?per_page=100", '--paginate')
 
+# Whether this author may retire a finding, by ACTUAL repository permission.
+#
+# `author_association` is the cheap answer and it is the wrong one. GitHub sets
+# `COLLABORATOR` for anyone *invited to collaborate*, with no permission
+# qualifier -- a collaborator with `read` or `triage` gets `COLLABORATOR` too --
+# so trusting that value would enforce something weaker than the control claims.
+# The permission endpoint answers the question actually being asked.
+#
+# One call per DISTINCT author who posted a marker, cached, and markers are
+# rare, so this is a call or two per scan rather than one per comment.
+#
+# **Fails closed.** Anything other than a confirmed `admin` or `write` -- a 404
+# because the author is not a collaborator, a 403 because the caller running
+# this scan lacks push access and may not query permissions, a network failure
+# -- leaves the marker unhonoured. That direction is deliberate: an unhonoured
+# marker over-reports a finding that was in fact handled, which is visible and
+# recoverable, while wrongly honouring one silently deletes the only record that
+# a finding was never read.
+$script:PermissionCache = @{}
+function Test-CanRetireFinding {
+    param([string] $Login)
+    if (-not $Login) { return $false }
+    if ($script:PermissionCache.ContainsKey($Login)) { return $script:PermissionCache[$Login] }
+
+    # Deliberately NOT through Invoke-GitHubJson: a non-zero exit here is the
+    # ordinary answer for a non-collaborator, not a broken instrument, so it must
+    # not exit 2.
+    $text = Invoke-Native {
+        gh api "repos/$script:Owner/$script:Name/collaborators/$Login/permission" --jq '.permission'
+    }
+    $code = Get-LastExitCode
+    $permission = if ($null -eq $code -or $code -ne 0) { '' } else { (Get-Text ($text -join '')).Trim() }
+
+    $allowed = @('admin', 'write') -contains $permission
+    $script:PermissionCache[$Login] = $allowed
+    return $allowed
+}
+
 # Reviews already recorded as processed, by marker.
 #
-# **Only markers from someone with write access are honoured.** This repository
-# is public, so anyone able to comment on a pull request can post a marker; and
-# because a suppressed-only review has no state anywhere else -- which is the
-# whole reason this tool exists -- an unauthenticated marker would permanently
-# and silently delete the only record that a finding was never read. The counter
-# below would simply report a smaller number, with nothing to indicate why.
-#
-# `author_association` comes back on every comment from the same request, so
-# this costs no extra call. GitHub sets it per comment from the author's
-# relationship to the repository at the time of writing: OWNER, MEMBER and
-# COLLABORATOR are the ones that imply write access. CONTRIBUTOR means only
-# "has had a pull request merged", and NONE is any passer-by; neither is
-# sufficient to retire a finding.
-$trustedAssociations = @('OWNER', 'MEMBER', 'COLLABORATOR')
+# This repository is public, so anyone able to comment on a pull request can post
+# a marker; and because a suppressed-only review has no state anywhere else --
+# which is the whole reason this tool exists -- an unauthorised marker would
+# permanently and silently delete the only record that a finding was never read.
+# The counter would simply report a smaller number, with nothing to indicate why.
 $processed = @{}
 $ignoredMarkers = 0
 foreach ($c in $issueComments) {
     $markers = [regex]::Matches((Get-Text $c.body), '<!--\s*copilot-review-processed:\s*(\d+)\s*-->')
     if ($markers.Count -eq 0) { continue }
-    if ($trustedAssociations -notcontains (Get-Text $c.author_association)) {
-        # Counted and reported rather than dropped in silence: a marker from an
-        # untrusted author is either an honest mistake or an attempt to retire a
-        # finding, and both are worth seeing.
+
+    $login = Get-Text (Get-Path $c @('user', 'login'))
+    if (-not (Test-CanRetireFinding $login)) {
+        # Counted and reported rather than dropped in silence: a marker that was
+        # not honoured is either an honest mistake, a permissions problem with
+        # the account running the scan, or an attempt to retire a finding, and
+        # all three are worth seeing.
         $ignoredMarkers += $markers.Count
         continue
     }
@@ -256,21 +318,36 @@ do {
     if ($cursor) { $arguments += @('-F', "cursor=$cursor") }
     $page = (Invoke-GitHubJson $arguments).data.repository.pullRequest.reviewThreads
     foreach ($t in $page.nodes) {
-        $c = $t.comments.nodes[0]
-        if ($c.author.login -notmatch '[Cc]opilot') { continue }
+        # A thread with no comments is not a shape this query should produce, but
+        # indexing an empty array is an error rather than $null under StrictMode,
+        # so it is checked rather than assumed.
+        $comments = Get-Path $t @('comments', 'nodes')
+        if ($null -eq $comments -or @($comments).Count -eq 0) { continue }
+        $c = @($comments)[0]
+
+        $login = Get-Path $c @('author', 'login')
+        if ((Get-Text $login) -notmatch '[Cc]opilot') { continue }
+
+        # Null for a deleted review; without it there is nothing to attribute the
+        # thread to, so the thread is skipped rather than attributed to review 0.
+        $reviewId = Get-Path $c @('pullRequestReview', 'databaseId')
+        if ($null -eq $reviewId) { continue }
+
         $threads += [pscustomobject]@{
-            Review     = [long]$c.pullRequestReview.databaseId
+            Review     = [long]$reviewId
             IsResolved = $t.isResolved
             IsOutdated = $t.isOutdated
             Path       = $t.path
             Line       = $t.line
-            Body       = ($c.body -replace '\s+', ' ')
+            Body       = ((Get-Text (Get-Path $c @('body'))) -replace '\s+', ' ')
         }
     }
     $cursor = if ($page.pageInfo.hasNextPage) { $page.pageInfo.endCursor } else { $null }
 } while ($cursor)
 
-$copilotReviews = @($reviews | Where-Object { $_.user.login -match '[Cc]opilot' })
+$copilotReviews = @($reviews | Where-Object {
+        (Get-Text (Get-Path $_ @('user', 'login'))) -match '[Cc]opilot'
+    })
 
 # A review's suppressed count is only in its body, as rendered prose.
 function Get-SuppressedCount {
@@ -290,9 +367,14 @@ foreach ($r in $copilotReviews) {
     if ($processed.ContainsKey([long]$r.id)) { continue }
     # A review whose inline threads are all resolved may still carry suppressed
     # findings nobody read, so this is judged on the marker alone.
+    # Null on a PENDING review, and `[datetime]$null` is an error rather than a
+    # zero date, so the absence is rendered rather than cast.
+    $submitted = Get-Path $r @('submitted_at')
+    $when = if ($submitted) { ([datetime]$submitted).ToString('yyyy-MM-dd HH:mm') } else { 'pending         ' }
+
     $suppressedOnly += [pscustomobject]@{
         Id         = [long]$r.id
-        When       = ([datetime]$r.submitted_at).ToString('yyyy-MM-dd HH:mm')
+        When       = $when
         Suppressed = $count
         Inline     = @($threads | Where-Object { $_.Review -eq [long]$r.id }).Count
     }

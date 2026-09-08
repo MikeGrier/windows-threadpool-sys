@@ -1735,6 +1735,15 @@ means the anchored line has since changed, which usually means the finding was f
 thread simply never resolved -- so those are the cheap ones to clear, and they are listed only
 under `-IncludeOutdated` to keep the default output about work that is actually open.
 
+**A marker is only honoured from an account with `admin` or `write` permission**, checked
+against the collaborators permission endpoint rather than inferred from the comment's
+`author_association`. That field reports `COLLABORATOR` for a read-only collaborator as well
+as a writer, so trusting it would enforce something weaker than the control claims. The check
+fails closed -- a 404, a 403 because the account running the scan cannot query permissions, or
+any network failure leaves the marker unhonoured -- because over-reporting a finding that was
+in fact handled is visible and recoverable, while wrongly honouring a marker silently deletes
+the only record that a finding was never read. Unhonoured markers are counted and reported.
+
 **A marker asserts the review was read, so do not back-fill in bulk.** PR #56 carries 131
 reviews with suppressed comments and no marker. Almost all were addressed during the rounds
 that followed them, but "almost all" is not evidence, and marking them wholesale would convert
