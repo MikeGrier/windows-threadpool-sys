@@ -136,3 +136,56 @@ function Invoke-NativeStdout {
     $ErrorActionPreference = 'Continue'
     & $Command 2>$null
 }
+
+# Run a native command and capture its streams SEPARATELY.
+#
+# For the case `Invoke-NativeStdout` cannot serve: output that is parsed on
+# success, but whose stderr is the diagnostic worth reporting on failure.
+# Discarding stderr keeps the parse clean and throws away the only explanation
+# of what went wrong, and merging keeps the explanation and corrupts the parse;
+# this keeps both by not choosing.
+#
+# Measured, because which stream carries the message is NOT uniform and the
+# obvious assumption is wrong for the common case. `gh`:
+#
+#   REST 404          stdout carries the JSON error body, stderr `gh: Not Found`
+#   network failure   stdout EMPTY, stderr `error connecting to ...`
+#   usage error       stdout EMPTY, stderr the usage text
+#
+# So a failure reported from stdout alone is blank exactly when the cause is
+# least guessable -- an unreachable host, a bad flag, an auth problem -- which
+# is the shape a broken-instrument message exists to explain.
+#
+# Returns an object with `Stdout`, `Stderr` and `ExitCode`, both texts already
+# flattened to plain strings. `$LASTEXITCODE` is also left set, so a caller that
+# only wants the code need not unpack anything.
+function Invoke-NativeSplit {
+    param([Parameter(Mandatory = $true)][scriptblock] $Command)
+    $ErrorActionPreference = 'Continue'
+
+    # Merged with `2>&1`, then partitioned by RECORD TYPE: PowerShell wraps a
+    # native command's stderr in ErrorRecords and leaves stdout as plain
+    # strings, so the merge is losslessly separable even though it looks like a
+    # mixed stream.
+    #
+    # A file redirect (`2>$path`) is the obvious alternative and is WRONG on
+    # Windows PowerShell 5.1. There it writes PowerShell's *formatted* error
+    # record to the file -- `cmd.exe : to-err`, then the offending source line, a
+    # caret ruler, CategoryInfo and FullyQualifiedErrorId -- rather than the raw
+    # stderr text, so the diagnostic would arrive wrapped in a stack trace of
+    # this helper. PowerShell 7 writes the raw text, so that version passed there
+    # and failed on 5.1; the cross-host suite caught it.
+    $merged = & $Command 2>&1
+    $code = $LASTEXITCODE
+
+    $stdout = @($merged | Where-Object { $_ -isnot [System.Management.Automation.ErrorRecord] })
+    $stderr = @($merged |
+            Where-Object { $_ -is [System.Management.Automation.ErrorRecord] } |
+            ForEach-Object { $_.Exception.Message }) -join "`n"
+
+    return [pscustomobject]@{
+        Stdout   = $stdout
+        Stderr   = $stderr
+        ExitCode = $code
+    }
+}

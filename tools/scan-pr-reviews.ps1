@@ -170,13 +170,22 @@ function Write-Report {
 
 function Invoke-GitHubJson {
     param([string[]] $Arguments)
-    # Stdout only: this is parsed as JSON, so a notice or warning `gh` writes to
-    # stderr must not be spliced into it. The failure is still reported, from the
-    # exit code rather than from the text.
-    $text = Invoke-NativeStdout { gh @Arguments }
-    $code = Get-LastExitCode
+    # Streams kept separate, because this needs both and for different reasons:
+    # stdout is parsed as JSON on success and must not have stderr spliced into
+    # it, while on failure stderr is usually the ONLY explanation. Measured on
+    # `gh`: a REST 404 puts its JSON body on stdout, but a network failure or a
+    # usage error leaves stdout EMPTY and says everything on stderr -- so
+    # reporting from stdout alone was blank exactly when the cause was least
+    # guessable.
+    $result = Invoke-NativeSplit { gh @Arguments }
+    $text = $result.Stdout
+    $code = $result.ExitCode
     if ($null -eq $code -or $code -ne 0) {
-        Exit-Broken "gh $($Arguments -join ' ') failed (exit $code): $($text -join ' ')"
+        # stderr first, falling back to stdout: whichever carried the message.
+        $detail = ("$($result.Stderr)").Trim()
+        if (-not $detail) { $detail = ("$($text -join ' ')").Trim() }
+        if (-not $detail) { $detail = '(no output on either stream)' }
+        Exit-Broken "gh $($Arguments -join ' ') failed (exit $code): $detail"
     }
     try {
         return ($text -join "`n") | ConvertFrom-Json
@@ -207,13 +216,22 @@ if ($MarkProcessed) {
     $file = Join-Path ([System.IO.Path]::GetTempPath()) ("mark-" + [guid]::NewGuid().ToString('N') + '.md')
     [System.IO.File]::WriteAllText($file, ($lines -join "`n"), [System.Text.UTF8Encoding]::new($false))
     try {
-        $url = Invoke-Native { gh pr comment $Pr --repo "$script:Owner/$script:Name" --body-file $file }
-        $code = Get-LastExitCode
+        # Split for the same reason as the API calls: on success stdout is the
+        # comment URL and is echoed as such, while on failure the explanation is
+        # on stderr. Merging would have reported the two as one string, so a
+        # successful post could echo a warning as though it were the URL.
+        $result = Invoke-NativeSplit {
+            gh pr comment $Pr --repo "$script:Owner/$script:Name" --body-file $file
+        }
+        $code = $result.ExitCode
         if ($null -eq $code -or $code -ne 0) {
-            Exit-Broken "posting the marker comment failed (exit $code): $($url -join ' ')"
+            $detail = ("$($result.Stderr)").Trim()
+            if (-not $detail) { $detail = ("$($result.Stdout -join ' ')").Trim() }
+            if (-not $detail) { $detail = '(no output on either stream)' }
+            Exit-Broken "posting the marker comment failed (exit $code): $detail"
         }
         Write-Report "marked processed: $($MarkProcessed -join ', ')"
-        Write-Report ($url -join ' ') -Level detail
+        Write-Report ($result.Stdout -join ' ') -Level detail
     }
     finally { Remove-Item $file -ErrorAction SilentlyContinue }
     exit 0
