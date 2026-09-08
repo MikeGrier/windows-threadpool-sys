@@ -68,12 +68,13 @@ $repoRoot = Resolve-Path (Join-Path $PSScriptRoot '..')
 
 # One `cargo metadata` call answers every crate/bin/example question. `--no-deps`
 # keeps it to workspace members, which is the only thing a workflow can name.
-# Through `Invoke-Native`: cargo writes to stderr routinely, and any stderr
-# redirect makes that a TERMINATING error on Windows PowerShell 5.1 under
-# `Stop`. It does not fire on a warm workspace, which is what kept it latent --
-# a cold one that prints "Downloading" or a warning would have killed the check
-# on 5.1 while passing on 7.
-$metadataJson = Invoke-Native { cargo metadata --no-deps --format-version 1 }
+# Through `Invoke-NativeStdout`, NOT `Invoke-Native`, and the difference is the
+# whole point here: this output is parsed as JSON, so stderr must be DISCARDED
+# rather than merged into it. Cargo writes to stderr routinely -- a cold runner
+# emits rustup's `info: syncing channel updates` -- and merging that in makes
+# `ConvertFrom-Json` fail on the `i`. The guard is still needed because any
+# stderr redirect is a terminating error on Windows PowerShell 5.1 under `Stop`.
+$metadataJson = Invoke-NativeStdout { cargo metadata --no-deps --format-version 1 }
 if ($LASTEXITCODE -ne 0) {
     Write-Host "::error::cargo metadata failed, so workflow references cannot be resolved" 
     exit 2

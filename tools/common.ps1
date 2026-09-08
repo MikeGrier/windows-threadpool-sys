@@ -107,3 +107,32 @@ function Invoke-Native {
     $ErrorActionPreference = 'Continue'
     & $Command 2>&1 | ConvertTo-OutputLines
 }
+
+# Run a native command and capture ONLY its stdout, discarding stderr.
+#
+# **Use this whenever the output is PARSED rather than shown.** `Invoke-Native`
+# above merges stderr into the capture, which is right for a transcript and
+# wrong for data: a command that writes progress or warnings to stderr while
+# succeeding on stdout produces a capture with the two interleaved, and the
+# parse then fails on text that was never part of the answer.
+#
+# That is not hypothetical. Routing `cargo metadata --no-deps --format-version 1`
+# through the merging helper turned green locally and red in CI, because a warm
+# workspace writes nothing to stderr while a cold runner emits rustup's
+# `info: syncing channel updates` -- so `ConvertFrom-Json` failed with
+# "Unexpected character encountered while parsing value: i". Reproduced on both
+# hosts against a stand-in that writes both streams.
+#
+# The redirect is still what makes this need the same `Continue` flip: on
+# Windows PowerShell 5.1 ANY stderr redirect, `2>$null` included, turns a native
+# command's stderr into a terminating error under `Stop`. Measured -- both
+# spellings throw, an unredirected call does not.
+#
+# `$LASTEXITCODE` survives, so a caller still distinguishes success from
+# failure; what it loses is the diagnostic text, which is the trade a parsed
+# command is making anyway.
+function Invoke-NativeStdout {
+    param([Parameter(Mandatory = $true)][scriptblock] $Command)
+    $ErrorActionPreference = 'Continue'
+    & $Command 2>$null
+}

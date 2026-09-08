@@ -113,6 +113,39 @@ Test-Case 'captured records are plain strings, not ErrorRecords' {
     }
 }
 
+# --- Invoke-NativeStdout: the same guard, but for output that is PARSED -------
+#
+# The distinction is not cosmetic and these cases exist because getting it wrong
+# shipped: routing `cargo metadata` through the MERGING helper passed locally and
+# failed in CI, where a cold runner emits rustup's `info:` line on stderr and
+# `ConvertFrom-Json` then choked on the `i`.
+
+Test-Case 'stdout-only capture discards stderr instead of merging it' {
+    $out = Invoke-NativeStdout { cmd /c "echo noise 1>&2 & echo {`"ok`":true}" }
+    $text = ("$out").Trim()
+    Assert-Equal '{"ok":true}' $text 'only stdout may be captured'
+    if ($text -match 'noise') { throw "stderr leaked into a parsed capture: $text" }
+}
+
+Test-Case 'stdout-only capture still yields parseable JSON under stderr noise' {
+    # The exact shape that failed in CI, reduced.
+    $out = Invoke-NativeStdout { cmd /c "echo info: syncing channel updates 1>&2 & echo {`"ok`":true}" }
+    $parsed = $out | ConvertFrom-Json
+    Assert-Equal $true $parsed.ok 'the JSON must survive stderr noise'
+}
+
+Test-Case 'stdout-only capture preserves the exit code' {
+    $null = Invoke-NativeStdout { cmd /c "echo boom 1>&2 & exit 4" }
+    Assert-Equal 4 $LASTEXITCODE 'LASTEXITCODE after a failing parsed command'
+}
+
+Test-Case 'stdout-only capture does not throw on 5.1 despite redirecting' {
+    # `2>$null` is a redirect too, so it hits the same 5.1 rule the merging
+    # helper guards. Without the Continue flip this throws there and passes on 7.
+    $out = Invoke-NativeStdout { cmd /c "echo only-stderr 1>&2" }
+    Assert-Equal '' ("$out").Trim() 'a command writing only to stderr yields nothing, and does not throw'
+}
+
 # The flip must REACH the scriptblock, and this is the only case that shows it
 # directly. The stderr case above shows it too, but only on 5.1 -- PowerShell 7
 # captures either way, so on 7 nothing else here distinguishes a guard that works

@@ -158,7 +158,10 @@ function Write-Report {
 
 function Invoke-GitHubJson {
     param([string[]] $Arguments)
-    $text = Invoke-Native { gh @Arguments }
+    # Stdout only: this is parsed as JSON, so a notice or warning `gh` writes to
+    # stderr must not be spliced into it. The failure is still reported, from the
+    # exit code rather than from the text.
+    $text = Invoke-NativeStdout { gh @Arguments }
     $code = Get-LastExitCode
     if ($null -eq $code -or $code -ne 0) {
         Exit-Broken "gh $($Arguments -join ' ') failed (exit $code): $($text -join ' ')"
@@ -285,7 +288,9 @@ function Get-RetireAuthority {
 
     # Deliberately NOT through Invoke-GitHubJson: a non-zero exit here is an
     # ordinary answer rather than a broken instrument, so it must not exit 2.
-    $text = Invoke-Native {
+    # Stdout only: the answer is compared against `admin`/`write`, so anything
+    # `gh` writes to stderr would make a genuine writer read as denied.
+    $text = Invoke-NativeStdout {
         gh api "repos/$script:Owner/$script:Name/collaborators/$Login/permission" --jq '.permission'
     }
     $code = Get-LastExitCode

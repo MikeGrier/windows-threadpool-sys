@@ -225,7 +225,9 @@ function Get-RepoRoot {
     # which in this script means "sabotages did not behave as declared" rather
     # than "you ran me in the wrong directory". PowerShell 7 reached it either
     # way, which is why the deliberate exit-2 path looked fine.
-    $root = Invoke-Native { git rev-parse --show-toplevel }
+    # Stdout only: this is parsed as a PATH, and git can warn on stderr while
+    # succeeding, which merging would splice into the repository root.
+    $root = Invoke-NativeStdout { git rev-parse --show-toplevel }
     if ($LASTEXITCODE -ne 0) {
         # Reported, not thrown. Under $ErrorActionPreference = 'Stop' a `throw`
         # here is a terminating error that prints a stack trace and propagates
