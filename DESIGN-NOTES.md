@@ -1790,7 +1790,7 @@ enough to deserve it.
 Running that probe against a deliberately invalid handle, so every event call fails, gives
 what the unchecked version reported against the true figures (x86_64, ns/op):
 
-| timing | unchecked, every call failing | true |
+| timing | reported when unchecked and every call fails | reported when the calls succeed |
 |---|---|---|
 | `set_event_already_signalled` | 212.7 | 205 |
 | `set_reset_event` | 422.9 | 531 |
@@ -1826,10 +1826,11 @@ discards a non-unit value, which is this rule's shape exactly. It is the right i
 it flagged four discarded statuses in a file that had just been fixed by hand and re-swept by
 regex, because a sweep that reports a per-crate total is not a list of sites.
 
-It is not a gate, and should not be denied workspace-wide. Two thirds of its hits are ordinary
-Rust -- `HashMap::insert`, `Vec::pop`, `fetch_add`, `black_box` -- so denying it would trade this
-rule's "no analysis required" property for a large, permanent triage burden, which is the same
-trade the rule exists to refuse.
+It is not a gate, and should not be denied workspace-wide. Most of its hits are ordinary Rust --
+`HashMap::insert`, `Vec::pop`, `fetch_add`, `black_box` -- 62 of 104 on `windows-platform-probes`,
+with the remaining 42 naming a raw Win32 call of which several return `void` and are correct as
+written. Denying it would trade this rule's "no analysis required" property for a large, permanent
+triage burden, which is the same trade the rule exists to refuse.
 
 `#[must_use]` is the enforcement mechanism, and it is unavailable at precisely the sites that
 matter: it cannot be attached to `windows-sys`'s `extern` declarations. It becomes available on

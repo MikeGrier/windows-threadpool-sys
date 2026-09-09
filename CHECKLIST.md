@@ -116,20 +116,33 @@ written before it was stated.
 - [ ] **M22.1** -- Audit every bare `unsafe { Call(...) };` statement in the workspace and handle
   the failure of each one that is failable.
 
-  **Scope, as measured on 2026-09-09:** 121 single-line `unsafe`-block statement discards across
-  11 crates. Most are **not** violations -- `SubmitThreadpoolWork`, `SetThreadpoolWait`,
-  `GetSystemInfo`, `SetLastError` and the `WaitForThreadpool*Callbacks` family return `void`, and
-  `SetErrorMode` returns the previous mode rather than a status. The failable set is roughly 28
-  sites and is dominated by **`CloseHandle` (24 sites)**, with `SetEvent`/`ResetEvent` making up
-  most of the rest. Per-crate totals of the raw 121: `windows-threadpool-sys` 57,
-  `windows-platform-probes` 25 (since discharged), `windows-file-watcher` 9, `windows-ioring-sys`
-  9, `windows-overlapped-io-sys` 5, `windows-thread-ambient-sys` 5,
-  `windows-namespace-request-sys` 4, `windows-guard-alloc` 3, `windows-impersonation-token-sys` 2,
-  `windows-file-enumeration-sys` 1, `windows-placement-probe` 1.
+  **Scope, re-measured against main at `dc2b463` (2026-09-09, after PR #83 merged):** 119
+  single-line `unsafe`-block statement discards across 11 crates -- `windows-threadpool-sys` 57,
+  `windows-platform-probes` 23, `windows-file-watcher` 9, `windows-ioring-sys` 9,
+  `windows-overlapped-io-sys` 5, `windows-thread-ambient-sys` 5, `windows-namespace-request-sys` 4,
+  `windows-guard-alloc` 3, `windows-impersonation-token-sys` 2, `windows-file-enumeration-sys` 1,
+  `windows-placement-probe` 1.
 
-  Classify before changing anything: the count above is a starting point from a regex, not a
-  verdict, and each site needs its callee's return type confirmed. Record the classification so
-  the next reader does not redo it.
+  **Most are not violations.** `SubmitThreadpoolWork`, `SetThreadpoolWait`, `GetSystemInfo`,
+  `SetLastError` and the `WaitForThreadpool*Callbacks` family return `void`, and `SetErrorMode`
+  returns the previous mode rather than a status. Discarding those is correct.
+
+  The failable set is **30 sites**, each confirmed against its `windows-sys` signature rather than
+  assumed:
+
+  | call | returns | discarded sites |
+  |---|---|---|
+  | `CloseHandle` | `BOOL` | 24 |
+  | `SetEvent` | `BOOL` | 2 |
+  | `CancelIoEx` | `BOOL` | 1 |
+  | `RevertToSelf` | `BOOL` | 1 |
+  | `SetCurrentDirectoryW` | `BOOL` | 1 |
+  | `CloseIoRing` | `HRESULT` | 1 |
+
+  **Treat every number here as stale on arrival and re-measure.** These figures moved between two
+  measurements a few hours apart (121 -> 119 raw, and `SetEvent` 4 -> 2) purely because PR #83
+  landed in between. Re-run the lint below rather than trusting the table; it is a description of
+  the shape of the work, not an inventory to tick off.
 
   **Use the compiler, not a regex: `RUSTFLAGS="-W unused_results"`.** `unused_results` is a
   rustc lint, allow-by-default, that fires on any expression statement discarding a non-unit
@@ -138,11 +151,13 @@ written before it was stated.
   every raw Win32 discard the regex found, plus four in `doorbell_cost.rs` the regex had counted
   but nobody had looked at, in a file already believed fixed. A per-crate total is not a list.
 
-  It is too noisy to deny workspace-wide, which is why it is an audit tool rather than a CI gate:
-  112 warnings on that one crate, of which roughly two thirds are legitimate Rust idioms --
-  `HashMap::insert`, `HashSet::remove`, `Vec::pop`, `fetch_add`, `black_box`. Triage is required,
-  and `SetErrorMode`'s previous mode and `fetch_add`'s prior value are the standing examples of a
-  discarded return that is not discarded failure information.
+  It is too noisy to deny workspace-wide, which is why it is an audit tool rather than a CI gate.
+  Measured on `windows-platform-probes` at `dc2b463`: **104 warnings, of which 62 are ordinary
+  Rust** -- `HashMap::insert`, `HashSet::remove`, `Vec::pop`, `fetch_add`, `black_box` -- and 42
+  name a raw Win32 call. Not even those 42 are all violations, since several of the calls return
+  `void`. Triage is required at every step, and `SetErrorMode`'s previous mode and `fetch_add`'s
+  prior value are the standing examples of a discarded return that is not discarded failure
+  information.
 
   Do not reach for `#[must_use]` here: it cannot be applied to `windows-sys`'s `extern` block, so
   it enforces nothing at the sites that matter. It becomes available only after M22.2, on our own
