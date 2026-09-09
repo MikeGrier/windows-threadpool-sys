@@ -131,9 +131,23 @@ written before it was stated.
   verdict, and each site needs its callee's return type confirmed. Record the classification so
   the next reader does not redo it.
 
-  **The multi-line form is not covered by that count.** The regex matched single-line statements
-  only, so a discarded status spread across several lines was not counted and the real figure is
-  at least 121. Widen the search before declaring the audit complete.
+  **Use the compiler, not a regex: `RUSTFLAGS="-W unused_results"`.** `unused_results` is a
+  rustc lint, allow-by-default, that fires on any expression statement discarding a non-unit
+  value -- which is exactly this rule's shape, and it does not care how many lines the statement
+  spans or whether the callee is `unsafe`. Measured on `windows-platform-probes`: it flagged
+  every raw Win32 discard the regex found, plus four in `doorbell_cost.rs` the regex had counted
+  but nobody had looked at, in a file already believed fixed. A per-crate total is not a list.
+
+  It is too noisy to deny workspace-wide, which is why it is an audit tool rather than a CI gate:
+  112 warnings on that one crate, of which roughly two thirds are legitimate Rust idioms --
+  `HashMap::insert`, `HashSet::remove`, `Vec::pop`, `fetch_add`, `black_box`. Triage is required,
+  and `SetErrorMode`'s previous mode and `fetch_add`'s prior value are the standing examples of a
+  discarded return that is not discarded failure information.
+
+  Do not reach for `#[must_use]` here: it cannot be applied to `windows-sys`'s `extern` block, so
+  it enforces nothing at the sites that matter. It becomes available only after M22.2, on our own
+  wrappers -- which is the durable end state, because a `#[must_use]` wrapper gives permanent
+  enforcement with none of the lint's noise.
 
 - [ ] **M22.2** -- Introduce a checked owning handle type and route the `CloseHandle` sites through
   it, so the rule is discharged by construction rather than by 24 written-out checks.

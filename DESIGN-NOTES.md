@@ -1818,6 +1818,26 @@ complete; it is simply worth asking whether an owning type would remove the ques
 Note that `std`'s `OwnedHandle` is **not** by itself a discharge: it closes on drop but
 discards `CloseHandle`'s `BOOL`, so a wrapper is still required to meet the standard.
 
+### The compiler can find these, but cannot enforce the rule
+
+`unused_results` -- a rustc lint, allow-by-default -- fires on any expression statement that
+discards a non-unit value, which is this rule's shape exactly. It is the right instrument for
+*finding* violations and is strictly better than searching for them: on `windows-platform-probes`
+it flagged four discarded statuses in a file that had just been fixed by hand and re-swept by
+regex, because a sweep that reports a per-crate total is not a list of sites.
+
+It is not a gate, and should not be denied workspace-wide. Two thirds of its hits are ordinary
+Rust -- `HashMap::insert`, `Vec::pop`, `fetch_add`, `black_box` -- so denying it would trade this
+rule's "no analysis required" property for a large, permanent triage burden, which is the same
+trade the rule exists to refuse.
+
+`#[must_use]` is the enforcement mechanism, and it is unavailable at precisely the sites that
+matter: it cannot be attached to `windows-sys`'s `extern` declarations. It becomes available on
+our own wrappers, which is a further argument for the type-embedding direction above -- a
+`#[must_use]` wrapper enforces permanently with none of the lint's noise.
+
+So: the lint is how the audit is run, and a type is how the rule is kept.
+
 ### What this does not cover
 
 A call that returns a value which is not a status -- `SetErrorMode` returning the previous
