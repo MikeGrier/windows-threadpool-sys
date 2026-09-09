@@ -106,9 +106,9 @@
 //! | [`cancel_io::cancel_against_busy_thread`] | binary only | it can block indefinitely against a thread re-entering synchronous I/O |
 //! | [`long_path::measure`] | binary only | whether the `longPathAware` manifest opt-in lifts `MAX_PATH` for a *relative* path -- binary only because the answer is the difference between two differently-manifested executables, which no single in-process test can observe |
 //! | [`topology::measure`] | asserted | that `windows-topology-sys`' parse of `GetLogicalProcessorInformationEx` agrees with `GetActiveProcessorCount`, `GetActiveProcessorGroupCount` and `GetNumaHighestNodeNumber` read independently -- asserted because the invariants hold on any machine even though every value is host-specific, and the binary prints the shape so CI doubles as a fleet survey |
-//! | [`doorbell_cost::measure`] | binary only | what `SetEvent` costs against the `SubmitIoRing` it would guard, which is what decides whether the two-layer ring needs an eventcount at all |
+//! | [`doorbell_cost::measure`] | binary only | the absolute cost of `SetEvent`, a set/reset cycle and a satisfied wait against an uncontended atomic, and how much batching drives the doorbell below the push it accompanies |
 //! | [`doorbell_cost::measure_park_and_wake`] | asserted | that the park-and-wake handshake completes rather than deadlocking, which its first implementation did |
-//! | [`request_cost::measure`] | binary only | what building an owned `OpenFile` costs against the doorbell that would carry it |
+//! | [`request_cost::measure`] | binary only | the absolute cost of preparing a path, building an owned `OpenFile`, and duplicating a handle |
 #![cfg(windows)]
 #![forbid(unsafe_op_in_unsafe_fn)]
 #![warn(missing_docs)]

@@ -38,10 +38,14 @@
 //!     what make a queue good or bad. A single uncontended construction time
 //!     measures none of them.
 //!
-//! The conclusion it *does* support is about **operation mix**: for an
-//! open-heavy workload, effort spent shaving the doorbell would be spent on the
-//! small half of the cost.
-//!
+//! What it supports is a **comparison**, not a verdict: build cost against the
+//! doorbell that would carry it. Which of the two is the larger half is a
+//! question about one host, and this probe measures only one side of it --
+//! read `probe-doorbell-cost`'s `set_reset_event` from the same run for the
+//! other. The comparison inverts between machines: the development machine had
+//! the doorbell at roughly a third of a build, and an x86_64 host measured
+//! during review had it at roughly two and a half times one. A sentence naming
+//! a small half would therefore be wrong on one of them.//!
 //! # Handle duplication is the part that is easy to under-count
 //!
 //! A request that carries a handle -- a template handle for an open, or the
@@ -59,11 +63,14 @@
 //! path is resolved at submission -- the process CWD is mutable by any thread,
 //! so even perfect remoting would be racy.
 //!
-//! That means the measured cost is a *syscall* cost and cannot be tuned away by
-//! an allocator. An inline-storage or recycling scheme would only recover the
-//! allocation part, which `clone_prepared_units` bounds from below. Knowing
-//! which half is which is the point of measuring both.
-//!
+//! That means the measured cost is largely a *syscall* cost, and the two
+//! schemes that might reduce it recover different halves. **Inline storage**
+//! removes the allocation and copy, which is what `clone_prepared_units`
+//! measures, and cannot touch the resolution at all. **Recycling** a resolved
+//! path skips the resolution, paying the clone in place of the whole build, so
+//! it recovers the difference between them. Naming one figure for both -- as
+//! this did -- credits an allocator with the syscall it cannot remove. Knowing
+//! which half is which is the point of measuring both.//!
 //! [the namespace session]: ../../../design-sessions/DESIGN-SESSION-2026-08-27-pseudo-async-namespace-operations.md
 //!
 //! Each timing is reported per operation. Absolute values are host-specific;
@@ -107,6 +114,27 @@ impl Observation {
     }
 }
 
+/// Time `body`, including the drop of whatever it returns.
+///
+/// **The drop is inside the timed region, and for the heap-owning values below
+/// that is a construct-and-destroy cycle rather than a construction cost.**
+/// `black_box` takes the value and it falls at the end of the statement, so
+/// `prepare_*`, `build_open_request` and `clone_prepared_units` each include
+/// freeing the `Wtf16String` they built. On a clone measured near 50 ns a free
+/// is a visible share of the figure.
+///
+/// It is reported this way rather than restructured, and the reason is that the
+/// obvious alternative is not more truthful. Retaining each value -- what the
+/// captured-handle loop below does, for a reason that does not apply here --
+/// would hold 100_000 live allocations, which measures an allocator that never
+/// reuses a block instead of one that does. A queue holds a bounded number of
+/// requests, so neither regime is the shipping one, and the honest course is to
+/// say which one this is.
+///
+/// The captured-handle loop is different in kind and is genuinely restructured:
+/// dropping a `CapturedHandle` calls `CloseHandle`, so leaving it in the timed
+/// region reports two kernel transitions as one number. A free is not a
+/// syscall.
 fn time_loop<T>(label: &'static str, iterations: u32, mut body: impl FnMut() -> T) -> Timing {
     // Warm the path: the first pass pays for lazily resolved syscall stubs and
     // for the allocator's first touch of a fresh size class.

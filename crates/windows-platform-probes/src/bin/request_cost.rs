@@ -144,18 +144,47 @@ fn render() -> String {
         );
         let _ = writeln!(out, "  time measures none of them.");
         let _ = writeln!(out);
+        // States the COMPARISON and refuses the verdict, because this probe
+        // does not measure a doorbell.
+        //
+        // This read "What it does support: for an open-heavy workload, doorbell
+        // tuning would be optimizing the small half" -- a design conclusion
+        // whose truth depends entirely on which of the two is larger, decided
+        // against a constant measured on another machine. It INVERTS here:
+        // `probe-doorbell-cost` reports a ~531 ns cycle on this host against
+        // ~210 ns to build a request, so the doorbell is the large half and
+        // tuning it would optimize the large one. Both probes run in the same
+        // CI job, so the sentence was contradicted a few lines further down the
+        // same log.
+        //
+        // The caveats above cover the printed ratio and the operation-type
+        // scope; neither guarded this, because it was phrased as what the run
+        // supports rather than as a ratio.
         let _ = writeln!(
             out,
-            "  What it does support: for an open-heavy workload, doorbell tuning"
+            "  WHICH HALF IS LARGER IS NOT ESTABLISHED HERE. Whether doorbell"
         );
         let _ = writeln!(
             out,
-            "  would be optimizing the small half. That is a finding about"
+            "  tuning would optimize the large or the small half depends on the"
         );
         let _ = writeln!(
             out,
-            "  OPERATION MIX, and it says nothing about the read path."
+            "  doorbell measured ON THIS HOST, which this probe does not measure:"
         );
+        let _ = writeln!(
+            out,
+            "  read probe-doorbell-cost's set_reset_event from the same run and"
+        );
+        let _ = writeln!(
+            out,
+            "  compare it against the {build:.0} ns above. The comparison can invert"
+        );
+        let _ = writeln!(
+            out,
+            "  between hosts, so a conclusion about OPERATION MIX belongs to a"
+        );
+        let _ = writeln!(out, "  reader holding both figures from one machine.");
     }
 
     if let Some(capture) = capture {
@@ -239,16 +268,32 @@ fn render() -> String {
         );
         let _ = writeln!(
             out,
-            "  Cloning already-prepared units is {clone:.0} ns, which bounds what an"
+            "  Two different schemes recover two different things, and this said"
         );
         let _ = writeln!(
             out,
-            "  inline-storage or recycling scheme could recover at {:.0} ns per request",
+            "  one number for both. RECYCLING a resolved path pays {clone:.0} ns instead"
+        );
+        let _ = writeln!(
+            out,
+            "  of {build:.0} ns, so it recovers {:.0} ns -- but that saving is the Win32",
             build - clone
         );
         let _ = writeln!(
             out,
-            "  AT MOST -- and only for a caller that can reuse a resolved path."
+            "  resolution, not an allocation, and only a caller that can reuse a"
+        );
+        let _ = writeln!(
+            out,
+            "  resolved path gets it. INLINE STORAGE removes the allocation and"
+        );
+        let _ = writeln!(
+            out,
+            "  copy instead, which is what the {clone:.0} ns clone measures, so it"
+        );
+        let _ = writeln!(
+            out,
+            "  recovers at most that and cannot touch the resolution at all."
         );
         let _ = writeln!(
             out,
