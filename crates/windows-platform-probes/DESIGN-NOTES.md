@@ -140,6 +140,27 @@ test suite for this workspace's crates: a probe answers "what does Windows do?",
 never "does our code work?". A probe that starts asserting our own behaviour
 belongs in the crate that owns that behaviour.
 
+**One carve-out, and it is narrow.** A probe may compare a workspace crate's
+reading of the platform against a *second, independent* reading this probe takes
+itself -- see [the topology cross-check](#d-topology-three-lists), which reads
+`GetActiveProcessorCount` and friends directly and compares them with what
+`windows-topology-sys` parsed out of `GetLogicalProcessorInformationEx`. The
+subject is still the machine; the crate's parse is one of two readings of it,
+and a divergence is a finding about the platform-facing code precisely because
+the second reading came from the platform.
+
+What makes it belong here rather than in the owning crate is the thing the
+owning crate's own tests cannot get: CI runs these probes across a
+heterogeneous hosted-runner fleet, so the comparison happens on machines nobody
+enumerated in advance. A unit test in `windows-topology-sys` can only assert
+against topologies someone thought to construct.
+
+The boundary this preserves: the probe never asserts a value it did not read
+from the platform. It has no expected core count, no golden topology, no
+knowledge of what the crate *should* have said -- only two readings and whether
+they agree. A probe that grew a hard-coded expectation would be back on the
+wrong side of the rule above.
+
 ## The earlier probes are migrated, and two of them corrected in the move
 
 <a id="d-migration"></a>
@@ -567,3 +588,291 @@ host -- Windows 11 build 26200, `cmd.exe` 10.0.26100.1 -- `cmd` carries
 there says nothing about the ceiling. That is a fact about that binary on that
 build rather than about `cmd` for all time, which is exactly why the probe rests
 on a binary this workspace builds and manifests itself.
+
+## The topology cross-check has three lists, because they have three owners
+
+<a id="d-topology-three-lists"></a>
+
+The topology probe measures what `windows-topology-sys` parsed and compares it
+against three Win32 counters read independently. What it may then *claim* is a
+`Verdict` of `Agree`, `Disagree`, or `Incomplete`, derived from three lists that
+are deliberately not merged:
+
+- `disagreements` -- a counter was compared and did not match. A finding about
+  the shipping crate's parse.
+- `not_compared` -- a reading this probe could not make or could not trust. A
+  gap in this measurement, and nothing at all about the parse. (The causes are
+  not enumerated here. This bullet once named two of them, and a machine that
+  changed under the run -- a bracket that closed on two *different* instants,
+  which is neither of the two named -- had already falsified the pair.)
+- `parse_incomplete` -- the parse is short, or its claims are mutually
+  inconsistent. Neither of the above: nothing this probe read was
+  contradicted, and nothing it wanted to read was missing. Established from the
+  parse rather than from any counter, which is why no counter agreeing can
+  retire an entry here.
+
+  Note the owner is the *parse*, not "what the crate said about itself". That
+  narrower reading held only while every entry happened to be a crate
+  self-assessment; the CPU-Sets-only NUMA domain below is derived by the probe,
+  from provenance the crate carries but draws no conclusion about.
+
+Collapsing any pair of these produced a shipped defect, each caught in a
+separate review round on the same branch. Merging the first two let a failed
+`GetNumaHighestNodeNumber` print the report's agreement line directly below
+"GetNumaHighestNodeNumber : failed". Omitting the
+third let a parse the crate had *already reported as incomplete* satisfy all
+three counters and reach `Agree` -- worse, because that evidence was in hand
+rather than needing another call to fetch. Treating a counter's zero as a count
+inverted the blame, reporting a failed read as though the crate had parsed the
+machine wrongly.
+
+The same inversion reached the NUMA node numbers. `highest_numa_node` was taken
+from the relationship walk's label alone, so a domain that only CPU Sets
+described -- which `fold_memberships` pushes as its own domain, because "the
+walk not describing it is a fact about the walk, not evidence the relation is
+not there" -- raised the domain count while being unable to raise the highest.
+The gap against the machine-wide `GetNumaHighestNodeNumber` was then filed as a
+`disagreement`: an accusation against the crate for a label this probe had
+discarded, with the contradiction printed in the same report. The maximum is
+now taken across every label a PLATFORM source reported, which is sound because
+`NumaNodeIndex` is machine-wide from both of them -- unlike `CoreIndex`, which
+is group-relative and is why the labels are not interchangeable in general.
+
+"Every observation's label" was the first correction and went one step too far.
+`Source::Description` is not a platform source, so a caller annotating a domain
+the walk had already reported -- which is platform-backed, and therefore does
+not close the provenance gate -- could raise the maximum above anything Windows
+said and have the difference filed against the shipping parse. The filter is
+what keeps the comparison a comparison of two platform readings.
+
+That left a real finding needing somewhere to go, and it became a
+`parse_incomplete` cause: a memory domain only one source described means the
+two sources group NUMA membership differently. Nothing else reaches it.
+`coherence` compares PROCESSOR SETS, so two sources can name exactly the same
+processors and still disagree about nodes; and the node totals can match while
+the membership does not, so no counter sees it either.
+
+The rule is fiat rather than derived: **`Agree` requires all three lists
+empty**, so anything `cross_check` pushes blocks it, whether or not a counter
+noticed. Only `disagreements` yields `Disagree`, because an incomplete parse is
+not a wrong one and reporting it as a divergence sends a reader to audit a
+mismatch that does not exist.
+
+**Stated over the lists, not over their causes, and deliberately so.**
+`cross_check`'s body is the single enumeration of what fills `parse_incomplete`,
+and this note does not reproduce it. Read the body.
+
+This section is itself the worked example, twice. An earlier revision stated the
+rule as "anything other than an empty anomaly list and `Coherence::Agreed`",
+which was true when written; a third cause was added without sweeping the
+restatements, and this note then transcribed the stale pair as settled
+fiat. As a biconditional it had become false, and the danger ran the wrong way:
+the guidance below tells a reader not to loosen the CI assertion, but nothing
+would have stopped one *tightening the code* by deleting a branch this document
+did not mention. A rule phrased over the lists cannot rot that way, because a
+fourth cause satisfies it without anyone remembering to edit prose.
+
+The rule was then correctly restated -- and a *list of the current causes* was
+left behind in both this note and `cross_check`'s own rustdoc, hedged with
+"treat that as the current contents rather than the rule". A fourth cause was
+added one commit later and neither list was swept, so the fix rotted inside two
+rounds in the same paragraph that diagnosed the rot. The hedge did not help,
+because the rustdoc carried no hedge at all. The lesson is stronger than the one
+first drawn: a list of causes kept beside the rule is not a summary of the body,
+it is a second copy of it that nothing checks, and the durable answer is not to
+keep one.
+
+The `coherence` match is exhaustive for the same reason at the type level: a
+variant added later is a compile error rather than a silent new path to "parsed
+this machine consistently".
+
+`Verdict` is an enum rather than a `bool` for the same reason, and the NDJSON
+carries a `"cross_check"` string rather than a boolean -- `Verdict`'s three
+values, plus `not_measured` on the row emitted when discovery itself failed:
+a log-mining pass must be able to tell "everything checked out" from "two
+things checked out and the third was never established". `cross_check_ok:true`
+said the same thing for both.
+
+**`cross_check == "agree"` is the one field a mining pass must read before
+trusting any other.** Every count on that line comes from what decoded, so a
+record Windows returned that did not fully decode leaves `caches`, `packages`,
+`cores` and `outermost_partitioning_cache_level` wrong by an amount no field
+states, and a query grouping by cache level has no reason to join against
+`enumeration_anomalies`. The verdict closes that.
+
+**It closes that, and no more: `agree` means no record FAILED TO DECODE, not
+that the counts are complete.** Nothing independent measures packages, cores or
+caches, so a record that decoded cleanly while describing less of the machine
+than exists -- a package covering half the online processors, a cache level
+whose one domain covers half of them -- raises no anomaly and reaches `agree`.
+That gap is deliberate and open: a coverage check would have to hold on every
+machine in the runner fleet, and by the decision below any verdict other than
+`Agree` fails the build, so a check this probe cannot validate beyond its own
+host would fail builds for hosts that are reporting themselves correctly.
+`agree` says every check this probe could make was made and matched -- never
+that a check exists for every field on the line. The report's own comment above
+`x-probe-topology` says the same thing, and the two are meant to be read
+together.
+
+Note "wrong", not "short". A record that decodes to nothing is dropped and
+shortens a count, but a `TruncatedArray` record is *kept* with the entries that
+fit -- so a cache record with a partial affinity mask presents a processor set
+smaller than the truth, which `cache_partitions_at_level` counts as its own
+distinct partition and which therefore INFLATES a domain count. An anomaly does
+not tell you the direction, and nothing in the report claims to.
+
+**The verdict closes that and no more: `agree` means the counts are not
+DISTORTED, not that every field is a plain hardware fact.** `outermost_partitioning_cache_level` is
+where the difference bites. `windows-topology-sys` answers `None` both when no
+level partitions the machine and when two partition it incomparably -- and a
+machine of the second kind has a complete parse, agrees with every counter, and
+still has no outermost partitioning cache. Both emitted `null`, on a row the
+verdict had already certified, so a fleet query counting nulls as "machines no
+cache level partitions" -- the natural reading, and the one this crate's own
+no-L3 story invites -- folded in machines where a level DOES partition. Opposite
+conclusions for anything sizing itself by cache boundary.
+
+The prose report had refused to conflate the two from the start, on the grounds
+that "naming only the first turns a reported ambiguity into a false claim about
+the hardware". The NDJSON simply had no field to say it in. It now does:
+`outermost_partitioning_cache` is always a string, so a consumer filters on
+`== "none"` rather than on the absence of a number, and
+`Observation::partitioning_cache` returns an enum so a renderer cannot emit the
+absent case without having decided which absent case it is.
+
+**The value set is `PartitioningCache`'s variants, and is not reproduced here.**
+This paragraph did list them, and went stale one round later when
+`no_levels_reported` was added -- the same collapse this field exists to prevent,
+moved into the docs, and with a worse failure mode than a merely-missing branch:
+a consumer that maps "not one of the documented values" onto the absent-level
+default folds machines whose cache survey was EMPTY back into "machines no cache
+level partitions", which is a claim about hardware read off a survey that found
+no cache structure. Read the enum, which the renderer matches exhaustively, so
+the two cannot diverge.
+
+`not_unique` is deliberately not called "incomparable":
+the crate reaches `None` both for two maximal candidates that are not the same
+partition and for a candidate filter that left nothing, and this probe cannot
+tell those apart.
+
+The renderer's prose conclusions -- every claim it makes about the hardware, not
+only the cache ones it was written for -- are gated on a **related but
+deliberately narrower** condition, `CrossCheck::parse_in_doubt`: `disagreements` or
+`parse_incomplete` non-empty, but *not* `not_compared`. The verdict answers
+"may this run claim agreement", where a counter that could not be read matters;
+the caveats answer "may these counts be read as hardware facts", where it does
+not -- every `not_compared` entry is a reading this probe could not make or
+could not trust, which says nothing about the parse. (Stated over what the list
+means rather than what fills it: this once enumerated "the three Win32 counters
+failing to read", and two later rounds falsified it by adding the bracket
+outcomes.) Caveating there would assert a doubt the
+run does not have, which is the same defect as asserting a certainty it does
+not have.
+
+The two conditions are close enough that stating them as one was tempting and
+was twice wrong in the other direction. The renderer first re-derived the
+condition as "anomalies non-empty", so a host with `Coherence::Disagreed` and no
+anomalies claimed "this machine reports no L3 at all"; corrected to
+`parse_incomplete` alone, it still missed `disagreements`, so a host whose group
+count Windows contradicts printed that same hardware claim directly above
+"=> DISAGREE" -- in the one case where the evidence that the parse does not
+describe this machine was already in hand. Both times the accompanying comment
+asserted the condition was complete. Hence a single named predicate that argues
+its own membership, rather than a condition restated at the point of use.
+
+## An incomplete parse fails CI, and that is the point
+
+<a id="d-topology-incomplete-fails-ci"></a>
+
+`the_shipping_parse_agrees_with_the_raw_win32_counters` asserts
+`Verdict::Agree`, and by the rule above that requires **all three** lists empty.
+So it goes red on anything that fills any of them -- not only a parse the crate
+reported as short or disputed, but also a counter this probe simply could not
+read (`not_compared`), which is a gap in the measurement and says nothing about
+the parse at all. Every non-`Agree` cause is a red build; there is no subset
+that is tolerated.
+
+That matters because the parse-side causes are legal `Ok` results -- `discover`
+returns the topology and says how the run went -- so this test can go red on a
+host that is merely misbehaving, or on a run where a Win32 call failed, rather
+than on a defect in this repository. CI runs the probe on `windows-latest`, a
+virtualized fleet, which is where a defective hypervisor would show up.
+
+That is deliberate. The probe exists to survey real machines, and a host whose
+enumeration is losing records is exactly the finding worth interrupting a build
+for; a test that passed quietly on it would be the "report asserting something
+the run did not establish" failure this whole probe is built to prevent, moved
+up one level into the test suite. The cost is accepted: an occasional red build
+that turns out to be the runner rather than the code.
+
+So **if this test goes red, read the verdict before touching the assertion.**
+An `Incomplete` verdict names what was not established, and the answer is to
+investigate that host -- not to relax the assertion, which would discard the
+only signal that would ever have surfaced it.
+
+For that reading to be possible, the workflow step that runs the probe carries
+`if: '!cancelled()'`. It sits after this test in the same job, so without it
+GitHub Actions skips the report on exactly the host the report is for, and the
+only surviving evidence is the `CrossCheck` in the assertion message -- not the
+domain counts, the enumeration anomalies, or the machine-readable row. The
+probe's own documentation says it prints on every build; that is what makes the
+claim true rather than nearly true.
+
+What it prints is a **second measurement**, not a rendering of the one that
+failed: the test and the binary each call `measure()`. That recovers a condition
+the host holds persistently -- a fleet machine whose enumeration is genuinely
+losing records, which is the case worth interrupting a build for -- and does not
+recover one that was transient. Rendering the failing observation itself would
+mean the assertion and the report were one step, which is a different design
+than the binary-plus-asserted split this crate is built around.
+
+No work is scheduled by this decision; it records why the strict form is
+correct so a future contributor does not quietly loosen it. Revisiting it means
+splitting the verdicts -- `Disagree` failing while `Incomplete` reports loudly
+and passes -- which is a change to what CI is for, not a bug fix.
+
+## The host banner is bracketed too, because it is a topology and not a name
+
+<a id="d-topology-banner-bracket"></a>
+
+Every probe here opens with `fingerprint::banner_line()`, and in this one that
+line is a *second* topology discovery: the fingerprint renders architecture,
+processor and core counts, cache domain sizes and NUMA nodes, none of which
+`measure`'s bracket encloses. It was read once and defended as "attribution",
+on the grounds that no conclusion in the report is drawn from it.
+
+That defence was weaker than it sounded. A machine that changed across the run
+would print one shape in the banner and a different one in the body, and a
+reader mining accumulated CI output has no way to tell which described the
+measurement -- the banner states the same quantities the body cross-checks, so
+the two simply contradict each other with nothing saying so. Calling the header
+"attribution" does not stop a reader reading a core count off it.
+
+So it is bracketed like everything else: read before and after, and reduced by
+`topology_report::attribution`. Equal readings render exactly as before, which
+keeps every fingerprint string already recorded elsewhere comparable with this
+probe's. Readings that differ print both, because which of the two is stale is
+precisely what cannot be determined here.
+
+**It reports that the readings DIFFER, and does not name a cause.** Saying "the
+host changed" was the first wording and was itself an over-claim of the kind
+this decision exists to remove: `Fingerprint::discover` returns `Ok` on a parse
+that dropped a record or whose two sources disagreed, so a fingerprint can
+differ from the one before it because the enumeration was flaky rather than
+because any hardware moved. `measure`'s own bracket may say "the machine
+changed" because a counter is a simple reading with no such failure mode; a
+fingerprint is a whole parse, and the same sentence is not available to it.
+
+The two readings are `Fingerprint::discover` results rather than rendered
+lines, and that is load-bearing. `banner_line` renders success and failure into
+one string, so comparing two of those cannot tell a host that moved from a
+discovery that failed -- and two failures whose `io::Error` text differs compare
+unequal while establishing nothing at all. Rendering still goes through
+`banner_line_for`, added to `windows-placement-probe` for this, so the format
+has one owner and this probe's banner stays comparable with every other
+probe's.
+
+This is a wider window than `measure`'s own bracket rather than a duplicate of
+it: it closes over the whole run including both banner reads, where `measure`
+closes only over the counters. Neither subsumes the other, and no work is
+scheduled by this decision.
