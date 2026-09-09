@@ -1531,3 +1531,40 @@ reading was almost "the oracle is blind". A sabotage that fails to apply is
 indistinguishable from an instrument that fails to fire, unless the injection
 asserts it changed something. It now does.
 
+### Binding the oracle, and the measurement that shows it is not cosmetic
+
+M2.2 bound the oracle inside `topology_report::report` and `report_unmeasured`
+under `cfg(test)`, rather than at each of the 26 test call sites.
+
+The placement is the whole difference between an oracle and three more tests.
+Asserting at each site checks 26 cases and relies on the 27th author
+remembering; asserting in the renderer checks every case anyone writes later,
+**including the ones written to exercise something else**. That last part is not
+incidental -- the original defect was found by a reviewer reading two paragraphs
+together, not by a test aimed at it, so the cases most likely to catch the next
+one are the cases nobody pointed at it.
+
+**Both directions were measured**, because a binding that only moves when its
+own test moves is cosmetic:
+
+| | tests red |
+|---|---|
+| correspondence defect, binding in place | **13**, all in `tests`, none in `report_oracle::tests` |
+| same defect, binding removed | **0** of 173 |
+
+The defect used was the NDJSON emitting the processor count where the core count
+belongs -- both renderings individually well-formed, so no per-part assertion
+can see it. One of the 13 is `every_report_carries_the_banner_and_title`, which
+exists to check the banner.
+
+The second row is the one that matters. It says the existing suite cannot see
+this class of defect at all, so the detection is genuinely new rather than a
+restatement of assertions already present. Had only `report_oracle::tests` gone
+red, the binding would have been reaching nothing.
+
+**`cfg(test)` rather than always-on** is deliberate. A real probe run must still
+print a contradictory report: a self-contradicting report is a finding *about
+this probe*, and a panic that suppressed it would destroy the evidence a reader
+needs. The real-host path is covered separately, by an integration test that
+applies the oracle explicitly.
+

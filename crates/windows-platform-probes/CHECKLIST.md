@@ -46,12 +46,24 @@ speculative list to extend by imagination -- a fourth is added when a fourth con
   indistinguishable from an instrument that fails to fire unless the injection asserts it changed
   something.
 
-- [ ] **M2.2** -- Route every test that renders a report through the oracle, so the roughly
-  twenty-five existing `report()` call sites inherit the checks and every future one does too. This is
-  the step that makes it an oracle rather than three more tests: a test added beside the others checks
-  one case, whereas binding the call sites checks every case anyone writes later. Verify the binding by
-  sabotage -- change an invariant and confirm existing tests go red -- because a binding that only moves
-  when its own test moves is cosmetic.
+- [x] **M2.2** -- Route every test that renders a report through the oracle. Bound inside
+  `topology_report::report` and `report_unmeasured` under `cfg(test)`, so all **26** existing call
+  sites inherit it without being touched and every future one does too -- no author has to remember.
+
+  `cfg(test)` rather than always-on: a real probe run must still print a contradictory report rather
+  than panic, because a self-contradicting report is a finding *about this probe* and suppressing it
+  would destroy the evidence. The real-host path is M2.3.
+
+  **The sabotage measured both directions, which is what makes it evidence rather than a gesture.**
+  Emitting the processor count where the core count belongs -- a pure correspondence defect, both
+  renderings individually well-formed -- turns **13 tests red**, all in `tests` and none in
+  `report_oracle::tests`. Among them is `every_report_carries_the_banner_and_title`, written for
+  something else entirely, which is exactly the point: the cases most likely to catch the next
+  contradiction are the ones nobody aimed at it.
+
+  With the same defect in place and the binding removed, **all 173 tests pass**. The existing suite
+  cannot see the defect at all, so the detection is the oracle's and the binding is what delivers
+  it. Had only `report_oracle::tests` gone red, the binding would have been cosmetic.
 
 - [ ] **M2.3** -- Add the missing integration test: run `measure()` against the real host, render the
   report, and apply the oracle. At the time of M2 the crate had one integration test, asserting only

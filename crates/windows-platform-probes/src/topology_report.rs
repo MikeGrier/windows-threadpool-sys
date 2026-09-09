@@ -125,6 +125,14 @@ pub fn report_unmeasured(banner: &str, error: &io::Error) -> String {
         r#"{{"reason":"x-probe-topology","arch":"{}","cross_check":"not_measured"}}"#,
         std::env::consts::ARCH
     );
+
+    // Bound here too, for the same reason as `report` below. This renderer
+    // makes fewer claims, so fewer correlations apply -- but "fewer apply" is a
+    // conclusion the oracle should reach by looking, not one assumed by leaving
+    // the call out.
+    #[cfg(test)]
+    crate::report_oracle::assert_corresponds(&out);
+
     out
 }
 
@@ -611,5 +619,33 @@ pub fn report(banner: &str, observation: &Observation) -> String {
         observation.enumeration_anomalies.len(),
         observation.numa_domains_only_in_cpu_sets,
     );
+
+    // Bound HERE rather than at each test that renders a report, and that
+    // placement is the whole difference between an oracle and three more tests.
+    //
+    // There are twenty-six call sites in this crate's tests. Asserting at each
+    // of them would check twenty-six cases and rely on the twenty-seventh
+    // author remembering; asserting here checks every case anyone writes later,
+    // including cases written to exercise something else entirely. The defect
+    // this exists for was found by a reviewer reading two paragraphs together,
+    // not by a test aimed at it, so the cases most likely to catch the next one
+    // are the ones nobody pointed at it.
+    //
+    // **Measured, because a binding that only moves when its own test moves is
+    // cosmetic.** Emitting the processor count where the core count belongs --
+    // a pure correspondence defect, with both renderings individually
+    // well-formed -- turns 13 of these tests red, among them
+    // `every_report_carries_the_banner_and_title`, which was written for
+    // something else entirely. With the same defect in place and this line
+    // removed, all 173 tests pass: the existing suite cannot see it at all.
+    //
+    // `cfg(test)` because a real probe run must still print a contradictory
+    // report rather than panic: a self-contradicting report is a finding about
+    // this probe, and suppressing it would destroy the evidence. The real-host
+    // path is covered by an integration test that applies the oracle
+    // explicitly (M2.3).
+    #[cfg(test)]
+    crate::report_oracle::assert_corresponds(&out);
+
     out
 }
