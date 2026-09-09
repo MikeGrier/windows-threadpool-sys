@@ -343,7 +343,12 @@ pub fn measure_park_and_wake(rounds: u32) -> Option<f64> {
             if waited != WAIT_OBJECT_0 {
                 return false;
             }
-            unsafe { SetEvent(pong) };
+            // Reported rather than asserted: a panic here would cross a thread
+            // boundary into `join`, which turns it into the same `false` with
+            // the message lost. Failing the handshake is the honest handling.
+            if unsafe { SetEvent(pong) } == 0 {
+                return false;
+            }
         }
         true
     });
@@ -352,7 +357,17 @@ pub fn measure_park_and_wake(rounds: u32) -> Option<f64> {
     let start = Instant::now();
     for _ in 0..rounds {
         // SAFETY: both handles are live for the whole loop.
-        unsafe { SetEvent(ping) };
+        //
+        // A failing `SetEvent` would eventually be caught by the peer's wait
+        // timing out, so this is not the difference between a wrong answer and
+        // a right one -- it is the difference between failing in 5 ms and
+        // failing after `rounds` timeouts of WAIT_TIMEOUT_MS each, under a
+        // diagnosis ("the peer never woke") that names the symptom rather than
+        // the cause.
+        if unsafe { SetEvent(ping) } == 0 {
+            ok = false;
+            break;
+        }
         if unsafe { WaitForSingleObject(pong, WAIT_TIMEOUT_MS) } != WAIT_OBJECT_0 {
             ok = false;
             break;
@@ -363,8 +378,8 @@ pub fn measure_park_and_wake(rounds: u32) -> Option<f64> {
     let peer_ok = peer.join().unwrap_or(false);
     // SAFETY: the peer has been joined, so nothing else holds these.
     unsafe {
-        CloseHandle(ping);
-        CloseHandle(pong);
+        assert!(CloseHandle(ping) != 0, "CloseHandle(ping) failed");
+        assert!(CloseHandle(pong) != 0, "CloseHandle(pong) failed");
     }
 
     (ok && peer_ok).then(|| elapsed.as_nanos() as f64 / f64::from(rounds))
