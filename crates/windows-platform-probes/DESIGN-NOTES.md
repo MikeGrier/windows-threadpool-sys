@@ -876,3 +876,134 @@ This is a wider window than `measure`'s own bracket rather than a duplicate of
 it: it closes over the whole run including both banner reads, where `measure`
 closes only over the counters. Neither subsumes the other, and no work is
 scheduled by this decision.
+
+## The defects that survived were correspondence failures, and no instrument here could see them
+
+<a id="d-correspondence-failures"></a>
+
+This probe was reviewed twenty-eight times before it opened as a pull request,
+by two independent readers per round on different models, with `cargo-mutants`
+reporting **zero surviving mutants** on both of its modules. A review on the
+pull request then found, in code none of that had touched, a state where the
+renderer printed
+
+```
+BUG IN THIS PROBE: the topology crate named L3 as the outermost
+partitioning cache and this survey carries no summary for it. Nothing
+below about cache partitioning can be trusted.
+```
+
+while `cross_check` had no branch for that state at all, so `verdict()` could
+return `Agree` for the same run and print `=> agree` two paragraphs below. A
+second finding in the same review had the same shape: one fact rendered twice
+in one report -- `efficiency classes: [0]` in prose, `"efficiency_classes":1`
+in the NDJSON -- in two shapes a consumer cannot reconcile, where the numeral
+happens to read as a plausible class *label*.
+
+Neither is a bug inside a function. Every function involved was correct on its
+own terms, and each had been read repeatedly and found so. The defect lived in
+the **relation between two artifacts**, and that is a place none of the
+instruments in use could look.
+
+### Why each instrument was structurally incapable, not merely unlucky
+
+**Mutation testing cannot find absent code.** `cargo-mutants` perturbs what is
+written and asks whether a test notices. A missing branch has no mutants, so
+the missing `SummaryMissing` check did not lower the score -- it was invisible
+to it. The 180/0 result was true and said nothing about the gap. A perfect
+mutation score is compatible with an entirely missing feature, and this
+component is the proof.
+
+The same run also shows the weaker half of what a mutation score means. A test
+existed asserting `"efficiency_classes":2`, so every mutant of that line died.
+It was pinning the wrong shape faithfully. **Mutation testing measures whether
+behavior is pinned by tests; it is silent on whether the pinned behavior is
+right.** Both halves were over-read here for many rounds as though they were
+evidence of correctness.
+
+**Exhaustiveness checking protects `match` expressions, not concepts.**
+`PartitioningCache` exists precisely to force a decision -- its own doc says a
+renderer or serialiser "cannot emit the absent case without having decided
+which absent case it is" -- and it worked, in the two consumers that wrote a
+`match`. It bought nothing in the two that did not: `domain_counts` reached the
+same information through `outermost_partitioning_cache`, a second accessor
+returning `Option`, which launders five states into two; and `cross_check`
+never asked. A type can only compel a consumer that consults it.
+
+**Per-artifact review finds per-artifact defects.** Two readers checking each
+function against its own documentation will confirm both sides of a
+contradiction, because each side is locally true. Worse, the readers were
+answering questions posed in a prompt, and across rounds that prompt
+accumulated focus areas and "already verified, do not re-litigate" facts. The
+shared prompt correlated the readers far more strongly than their differing
+models decorrelated them; the instrument was being shaped to agree with its
+author. Removing that framing in the final round is what got a reader to trace
+`simultaneous_multithreading` out of this crate into `windows-topology-sys` and
+check it against the Win32 `LTP_PC_SMT` contract.
+
+The single sentence that covers all three: **every instrument in use verified
+properties of things that exist.** Tests assert existing behavior, mutation
+perturbs existing code, reviewers check written claims. A correspondence
+failure is a property of a *pair*, and an absent branch is not a thing at all.
+
+### Integration-level analysis was absent, which is where these live
+
+At the time of the pull request the crate had one integration test, asserting
+that a probe writes something to stdout. Of twenty-five `report()` calls in the
+suite, **none rendered from a real host's `measure()`** -- every one used a
+synthetic `Observation` built by hand. A hand-built fixture can only contain
+states its author already imagined, and each assertion checked one local fact
+about it. Nothing anywhere rendered the artifact a consumer actually reads and
+asked whether it was self-consistent.
+
+### What to do instead: a sparse matrix to explore with, an oracle to keep
+
+The obvious response -- tabulate every state against every consumer and fill
+the grid -- is wrong, and was proposed and rejected during this analysis. Such
+a table grows combinatorially, most of its cells are meaningless, and a version
+of it committed beside the code would be a second copy of the code's structure
+that nothing verifies. It would rot exactly as every restatement in this
+component rotted, and a stale "all cells covered" table is more dangerous than
+no table.
+
+The division that does work:
+
+- **The matrix is a transient, exploratory instrument.** Draw it for one type
+  at one boundary to find out which correlations exist. It is expected to be
+  **sparse**; most cells are empty and discovering that is cheap. Correlations
+  cannot be derived -- which is why twenty-eight rounds of reading produced
+  none -- so populating it is exploration, not specification.
+- **An oracle is the durable artifact.** Only cells that turn out to mean
+  something graduate into it. It stays small because discovery, not
+  enumeration, fills it.
+
+`windows-file-watcher`'s `ContractChecker` is this repository's worked example
+of the oracle half: a shared executable definition of the rules, owned by the
+crate that owns the contract, that the producing crate's own tests and every
+consumer's test doubles all bind to. It already existed while this probe was
+being written, and was not reached for.
+
+Three correlations are known to be real here, each because it was violated:
+
+1. an alarm in the report implies the verdict is not `agree`;
+2. a fact rendered twice must agree across its renderings;
+3. an uncaveated hardware claim implies `!parse_in_doubt`.
+
+What makes an oracle different from three more tests is where it is invoked: if
+every test renders *through* it, all twenty-five existing call sites inherit
+the checks and so does every future one. A test added beside them checks one
+case; an oracle checks every case anyone ever writes.
+
+**Record the vacuous findings too.** "We examined whether X and Y must
+correspond, and they need not" is a result, and it is the half that normally
+evaporates -- without it the next person re-explores the same empty cells.
+
+An oracle is a forcing function for correlations already discovered. It will
+not find a new one. The discipline that makes it compound is that each newly
+found cross-artifact contradiction adds an invariant to the oracle rather than
+a one-off test.
+
+Whether this generalises to `Coherence`, `BracketOutcome`, `Verdict` and the
+sibling probes is **an open question, deliberately not answered here.** The work
+this decision implies is queued as M2 in [CHECKLIST.md](CHECKLIST.md); this
+section schedules nothing on its own.
