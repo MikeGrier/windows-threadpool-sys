@@ -14,14 +14,23 @@
 //! rather than read by eye.
 
 use windows_placement_probe::fingerprint::Fingerprint;
-use windows_platform_probes::report::{Stdout, emit};
+use windows_platform_probes::report::emit_report;
 use windows_platform_probes::topology::measure;
 use windows_platform_probes::topology_report::{attribution, report, report_unmeasured};
 
 fn main() {
-    // The only place that names the real stream, and the only place that reads
-    // the host. The text is composed in the library so every branch of it can
-    // be driven from a test -- see `topology_report`.
+    // `emit_report`, like every other probe. This used to call `emit` with a
+    // fully composed `String`, which gave up the one thing `emit_report` is for:
+    // printing what was already established when a later step panics. The three
+    // host reads below are exactly the steps that can, so the bypass removed the
+    // protection at the only place it would have been used.
+    emit_report(render);
+}
+
+/// The probe's whole report, as text.
+fn render(out: &mut String) {
+    // The only place that reads the host. The text is composed in the library so
+    // every branch of it can be driven from a test -- see `topology_report`.
     //
     // The banner is read FIRST and passed in. It runs a topology discovery of
     // its own, so leaving it to the renderer made the library half depend on a
@@ -46,5 +55,5 @@ fn main() {
         Ok(observation) => report(&banner, &observation),
         Err(error) => report_unmeasured(&banner, &error),
     };
-    emit(&mut Stdout, &text);
+    out.push_str(&text);
 }
