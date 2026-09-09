@@ -433,11 +433,24 @@ impl Observation {
             ),
             (
                 "by-outermost-partitioning-cache",
-                // `.max(1)` on the SELECTED value, not just the `None` default:
+                // Matched per variant rather than read through
+                // `outermost_partitioning_cache`, whose `None` folds four
+                // distinct answers into one. Every absent case does size to a
+                // single domain, but they are spelled out so a variant added
+                // later is a compile error here instead of silently joining
+                // the fallback -- which is the whole reason `PartitioningCache`
+                // exists rather than an `Option`.
+                //
+                // `.max(1)` is on the SELECTED value, not just the default:
                 // the default covers "no level was chosen", and this covers "a
                 // level was chosen whose summary reports no domains".
-                self.outermost_partitioning_cache()
-                    .map_or(1, |c| c.domains().max(1)),
+                match self.partitioning_cache() {
+                    PartitioningCache::Level(cache) => cache.domains().max(1),
+                    PartitioningCache::NoLevelsReported
+                    | PartitioningCache::NoLevelPartitions
+                    | PartitioningCache::NoUniqueOutermost
+                    | PartitioningCache::SummaryMissing(_) => 1,
+                },
             ),
             ("by-core", self.cores.len().max(1)),
         ]
@@ -660,6 +673,23 @@ impl Observation {
             check.parse_incomplete.push(format!(
                 "{unnumbered_levels} cache level(s) are numbered 0, which is not a level Windows \
                  reports, so what they describe was not established"
+            ));
+        }
+
+        // The renderer prints this state as "BUG IN THIS PROBE ... Nothing
+        // below about cache partitioning can be trusted", and nothing here
+        // said anything about it -- so the verdict could certify the same run
+        // as `agree`, two paragraphs apart on one page. `domain_counts` sized
+        // it to a single domain besides.
+        //
+        // Unreachable through `observe`, since the level is captured from the
+        // same survey the summaries are built from. `Observation`'s fields and
+        // `partitioning_cache` are both public, which is the same reason the
+        // clamps in `domain_counts` exist.
+        if let PartitioningCache::SummaryMissing(level) = self.partitioning_cache() {
+            check.parse_incomplete.push(format!(
+                "L{level} was named as the outermost partitioning cache and this survey carries \
+                 no summary for it, so what it divides was not established"
             ));
         }
 
@@ -1360,9 +1390,9 @@ pub fn observe(
     // comparison cannot see it, because two overlapping nodes can carry any
     // labels at all, including the right maximum.
     let overlapping_walk_relations: usize = [
-        &(|kind: &DomainKind| matches!(kind, DomainKind::Package)) as &dyn Fn(&DomainKind) -> bool,
-        &|kind: &DomainKind| matches!(kind, DomainKind::Core { .. }),
-        &|kind: &DomainKind| matches!(kind, DomainKind::Memory { .. }),
+        (|kind: &DomainKind| matches!(kind, DomainKind::Package)) as fn(&DomainKind) -> bool,
+        |kind| matches!(kind, DomainKind::Core { .. }),
+        |kind| matches!(kind, DomainKind::Memory { .. }),
     ]
     .into_iter()
     .map(|is_kind| overlapping_walk_records(topology, is_kind))

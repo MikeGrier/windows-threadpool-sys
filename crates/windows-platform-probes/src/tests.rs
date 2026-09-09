@@ -4188,3 +4188,63 @@ fn a_bracket_outcome_reaches_the_observation_the_caller_passed_it() {
         );
     }
 }
+
+#[test]
+fn a_named_level_with_no_summary_blocks_agreement_and_sizes_to_one_domain() {
+    // The renderer prints this state as "BUG IN THIS PROBE ... Nothing below
+    // about cache partitioning can be trusted", and `cross_check` said nothing
+    // about it -- so the verdict could certify the same run as `agree`, two
+    // paragraphs apart on one page.
+    //
+    // `domain_counts` also read it through `outermost_partitioning_cache`,
+    // whose `None` folds four distinct answers together, so a sizing policy
+    // silently got "one domain" from a state the report calls a bug.
+    let mut observation = agreeing_observation();
+    observation.caches = vec![crate::topology::CacheLevel {
+        level: 2,
+        processors_per_domain: vec![2, 2],
+    }];
+    // A level the survey has no summary for.
+    observation.partitioning_cache_level = Some(3);
+
+    assert_eq!(
+        observation.partitioning_cache(),
+        crate::topology::PartitioningCache::SummaryMissing(3)
+    );
+
+    let check = observation.cross_check();
+    assert!(check.disagreements.is_empty(), "{check:?}");
+    assert!(
+        check
+            .parse_incomplete
+            .iter()
+            .any(|c| c.contains("carries no summary for it")),
+        "{check:?}"
+    );
+    assert_eq!(
+        check.verdict(),
+        crate::topology::Verdict::Incomplete,
+        "the verdict cannot say `agree` beside a report that says BUG: {check:?}"
+    );
+
+    // And the sizing fallback is still one domain -- stated per variant rather
+    // than inherited from a `None`, so a new variant is a compile error.
+    let counts = observation.domain_counts();
+    let (_, cache_policy) = counts
+        .iter()
+        .find(|(name, _)| *name == "by-outermost-partitioning-cache")
+        .expect("the policy is in the table");
+    assert_eq!(*cache_policy, 1);
+
+    // The report says so too, and the two agree.
+    let text = crate::topology_report::report(BANNER, &observation);
+    assert!(text.contains("BUG IN THIS PROBE"), "{text}");
+    assert!(
+        text.contains("=> INCOMPLETE"),
+        "the prose verdict agrees with the bug note rather than saying agree: {text}"
+    );
+    assert!(
+        text.contains(r#""cross_check":"incomplete""#),
+        "and the mining row says the same: {text}"
+    );
+}
