@@ -4329,8 +4329,22 @@ fn a_small_handshake_completes_and_reports_a_positive_round_trip() {
     // The liveness half: the two-event alternation actually runs to completion
     // and produces a number. Deliberately few rounds -- this is a real
     // cross-thread measurement, and the assertion is that it terminates and is
-    // sane, not that it is fast. A machine under load may make each round
-    // arbitrarily slow without making it wrong.
+    // sane, not that it is fast.
+    //
+    // The tolerance for a loaded machine is large but **bounded**, and this once
+    // said "arbitrarily slow without making it wrong", which is not true of the
+    // code it describes. Each wait inside the handshake carries a 5-second
+    // timeout; a round that exceeds it makes `measure_park_and_wake` return
+    // `None` and fails the `expect` below. The section header above states that
+    // bound correctly and the `expect` message names it outright, so the claim
+    // was contradicted twice within a few lines of making it.
+    //
+    // Bounded is the deliberate choice, for the reason in that header: a test
+    // that can hang takes the whole suite with it, which is worse than the
+    // defect it guards against. The margin is enormous -- a round trip is
+    // sub-microsecond in practice against a 5-second ceiling -- so a failure
+    // here means the machine stalled for seconds, which is worth a red test
+    // rather than a silently slow pass.
     let average = crate::doorbell_cost::measure_park_and_wake(64)
         .expect("a bounded handshake of 64 rounds must complete rather than time out");
 
