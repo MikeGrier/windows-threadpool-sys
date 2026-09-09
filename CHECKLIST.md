@@ -106,6 +106,51 @@ be settled rather than discovered later.
   completion, then submits the query. A compound entry is reserved for a measured performance argument
   and would be a fusion of these two entries rather than a capability they lack. Depends on M21.3.
 
+## M22 -- Discharge the failable-call standard across the workspace
+
+The standard is recorded in
+[DESIGN-NOTES.md](DESIGN-NOTES.md#a-failable-call-has-its-failure-handled-always): a call that
+can fail has its failure handled, with no per-site analysis. These items apply it to code
+written before it was stated.
+
+- [ ] **M22.1** -- Audit every bare `unsafe { Call(...) };` statement in the workspace and handle
+  the failure of each one that is failable.
+
+  **Scope, as measured on 2026-09-09:** 121 single-line `unsafe`-block statement discards across
+  11 crates. Most are **not** violations -- `SubmitThreadpoolWork`, `SetThreadpoolWait`,
+  `GetSystemInfo`, `SetLastError` and the `WaitForThreadpool*Callbacks` family return `void`, and
+  `SetErrorMode` returns the previous mode rather than a status. The failable set is roughly 28
+  sites and is dominated by **`CloseHandle` (24 sites)**, with `SetEvent`/`ResetEvent` making up
+  most of the rest. Per-crate totals of the raw 121: `windows-threadpool-sys` 57,
+  `windows-platform-probes` 25 (since discharged), `windows-file-watcher` 9, `windows-ioring-sys`
+  9, `windows-overlapped-io-sys` 5, `windows-thread-ambient-sys` 5,
+  `windows-namespace-request-sys` 4, `windows-guard-alloc` 3, `windows-impersonation-token-sys` 2,
+  `windows-file-enumeration-sys` 1, `windows-placement-probe` 1.
+
+  Classify before changing anything: the count above is a starting point from a regex, not a
+  verdict, and each site needs its callee's return type confirmed. Record the classification so
+  the next reader does not redo it.
+
+  **The multi-line form is not covered by that count.** The regex matched single-line statements
+  only, so a discarded status spread across several lines was not counted and the real figure is
+  at least 121. Widen the search before declaring the audit complete.
+
+- [ ] **M22.2** -- Introduce a checked owning handle type and route the `CloseHandle` sites through
+  it, so the rule is discharged by construction rather than by 24 written-out checks.
+
+  This is the type-embedding half of the decision, and `CloseHandle` is its clearest case: one
+  `Drop` that checks once removes every visible check at every use site and cannot be forgotten at
+  a new one. Note that `std`'s `OwnedHandle` is not a discharge on its own -- it closes on drop but
+  discards the `BOOL`.
+
+  Settle two questions while doing it, because both determine whether the type is usable at all.
+  What a failing close should do in `Drop`, given that panicking in a drop during unwind aborts --
+  the honest options are abort, a debug assertion, or a recorded counter, and they are not
+  equivalent. And whether teardown paths that legitimately expect a close to fail exist in this
+  workspace; `windows-threadpool-sys` owns wait targets whose close routine is a caller-supplied
+  function pointer, which is exactly where such a path would be. Depends on M22.1's
+  classification.
+
 ## M-inf -- Parked
 
 Ungated work with no identified predecessor deliverable.

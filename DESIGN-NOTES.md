@@ -1762,3 +1762,70 @@ reviews with suppressed comments and no marker. Almost all were addressed during
 that followed them, but "almost all" is not evidence, and marking them wholesale would convert
 an honest absence of information into a false record. Mark a historical review only when
 somebody has actually read it.
+
+## <a id="a-failable-call-has-its-failure-handled-always"></a>A failable call has its failure handled, always
+
+**The standard is: a call that can fail has its failure handled. No analysis, no exemption
+for calls that "cannot fail in practice".**
+
+It is written as a flat rule on purpose, because the analysis it replaces is the thing that
+goes wrong. Deciding per site whether a particular call is worth checking requires judging
+how a failure would manifest, and that judgement is made by whoever is looking at the site --
+which means the calls that get exempted are not the ones that are genuinely infallible, they
+are the ones nobody looked at hard enough. "Trivial enough not to check" is a fact about the
+reader's attention, not a property of the call.
+
+The cost is a compare and a branch that is not taken, plus a little source bloat. That is
+worth paying outright for a rule that needs no thought, and it is overwhelmingly worth paying
+the first time it catches a real defect.
+
+### The measurement that settled it
+
+`windows-platform-probes` timed `SetEvent`, `ResetEvent` and `WaitForSingleObject` in loops
+that discarded every `BOOL`, while the `SubmitIoRing` loop twelve lines below carried a
+careful note explaining why discarding a status is exactly the hazard the crate exists to
+avoid. The argument was correct and had been applied only to the call that looked expensive
+enough to deserve it.
+
+Running that probe against a deliberately invalid handle, so every event call fails, gives
+what the unchecked version reported against the true figures (x86_64, ns/op):
+
+| timing | unchecked, every call failing | true |
+|---|---|---|
+| `set_event_already_signalled` | 212.7 | 205 |
+| `set_reset_event` | 422.9 | 531 |
+| `wait_zero_signalled` | 231.5 | 280 |
+
+None of those looks wrong; the first is within 4%. A failing syscall still costs a
+measurable transition, so the report would have read as evidence while describing operations
+that never happened. **A discarded status does not produce an obviously bad result -- it
+produces a plausible one**, which is why it survives review.
+
+The checks cost nothing detectable: the same host reports 204-206, 528-534 and 280.3-280.7
+with them in place, which is run-to-run spread rather than a shift.
+
+### Prefer to discharge the rule in a type, where no caller can see it
+
+The best version of this standard is one a caller never has to follow, because a type already
+did. A handle that closes itself in `Drop`, with the close checked once inside that `Drop`,
+satisfies the rule at every use site without a single visible check -- and cannot be forgotten
+at a new one. Where such a type is available the rule is discharged by construction; where a
+raw call is genuinely the right tool, the check is written out.
+
+This is the preferred direction, not a precondition. A raw checked call today is correct and
+complete; it is simply worth asking whether an owning type would remove the question.
+
+Note that `std`'s `OwnedHandle` is **not** by itself a discharge: it closes on drop but
+discards `CloseHandle`'s `BOOL`, so a wrapper is still required to meet the standard.
+
+### What this does not cover
+
+A call that returns a value which is not a status -- `SetErrorMode` returning the previous
+mode, `GetLastError` returning a code -- is not a failable call, and discarding its return is
+not a violation. Nor is a `void`-returning call such as `SubmitThreadpoolWork`,
+`SetThreadpoolWait`, `GetSystemInfo` or `SetLastError`; a survey of the workspace found the
+majority of bare `unsafe { Call(...) };` statements are of that kind and are correct as
+written. The rule is about **discarded failure information**, not about discarded returns.
+
+The audit this decision implies is queued as
+[CHECKLIST.md](CHECKLIST.md) -> `M22.1`; it is not scheduled by this note alone.
