@@ -4356,8 +4356,20 @@ fn a_small_handshake_completes_and_reports_a_positive_round_trip() {
 
 #[test]
 fn preparing_a_path_needs_no_volume_behind_its_drive_letter() {
-    let absent = ('D'..='Z')
-        .find(|c| !std::path::Path::new(&format!("{c}:\\")).exists())
+    // A bitmask, not 23 `Path::exists()` calls. Probing each root touches real
+    // devices: an offline mapped network drive makes `exists()` block until the
+    // redirector times out, so the original form could stall this test for
+    // minutes on exactly the CI machine most likely to have one.
+    // `GetLogicalDrives` answers from a snapshot without going near a device,
+    // and answers the sharper question too -- a letter absent from the mask has
+    // no volume, where `exists()` also returns false for a drive that is
+    // present but has no media.
+    //
+    // SAFETY: no preconditions.
+    let used = unsafe { windows_sys::Win32::Storage::FileSystem::GetLogicalDrives() };
+    let absent = (b'D'..=b'Z')
+        .find(|&byte| used & (1 << u32::from(byte - b'A')) == 0)
+        .map(char::from)
         .expect("a test machine has at least one unused drive letter");
 
     let text = format!(r"{absent}:\{}\file.txt", vec!["directory"; 24].join("\\"));

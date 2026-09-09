@@ -179,12 +179,15 @@ pub fn measure() -> Observation {
     // installation can sit on any volume -- and hard-coding it made this probe
     // panic on such a machine rather than measure it. The same path is used for
     // the prepared request and the real open below, so the two stay consistent.
+    // Wide the whole way, with no UTF-8 in the middle. `Wtf16String` exists
+    // precisely to carry what Windows hands back, and routing a Windows path
+    // through `str` gives up that property twice over: `to_str` panics on a
+    // path that is not valid UTF-8, and the `from_utf16_lossy` this once used
+    // inside `system_directory` silently replaced any unpaired surrogate before
+    // it ever got here. Neither is reachable on a normal install, and neither
+    // has any business being on the path from a Win32 call to a WTF-16 string.
     let system_dll = system_directory().join("kernel32.dll");
-    let short = Wtf16String::from(
-        system_dll
-            .to_str()
-            .expect("the system directory is representable"),
-    );
+    let short = Wtf16String::from_os_str(system_dll.as_os_str());
     // Synthetic, and hard-coded on purpose -- the opposite requirement to the
     // path above, which is why the two do not match and must not be made to.
     // `short` names a file that is really opened, so it has to exist and is
@@ -283,22 +286,58 @@ pub fn measure() -> Observation {
 
 /// Where Windows is actually installed, rather than where it usually is.
 ///
-/// Falls back to the conventional path only when the system will not say, which
-/// keeps the probe running on a machine that answers and keeps the failure
-/// visible on one that does not.
+/// A short buffer is retried at the size the call asks for, so a long system
+/// directory is read rather than guessed at.
+///
+/// # Panics
+///
+/// Panics if `GetSystemDirectoryW` will not report a directory.
+///
+/// This used to fall back to `C:\Windows\System32`, under a doc comment
+/// claiming the fallback kept the failure visible. It did the opposite: it
+/// substituted a guess for an answer the system declined to give, and the probe
+/// then measured whatever happened to be at the guessed path -- on a non-`C:`
+/// install, something that is not there at all. That is the same defect as
+/// discarding a status: a plausible result standing in for one that was never
+/// obtained. A probe that cannot locate the file it is timing has nothing to
+/// say, and says so here rather than several frames later.
 fn system_directory() -> std::path::PathBuf {
+    // The common case, off the stack.
     let mut buffer = [0_u16; 260];
     // SAFETY: writes at most `buffer.len()` units into a buffer of that size.
-    let written = unsafe { GetSystemDirectoryW(buffer.as_mut_ptr(), buffer.len() as u32) };
-    let written = written as usize;
+    let written = unsafe { GetSystemDirectoryW(buffer.as_mut_ptr(), buffer.len() as u32) } as usize;
+
+    assert!(
+        written != 0,
+        "GetSystemDirectoryW failed: {}",
+        std::io::Error::last_os_error()
+    );
+
     // `>=`, not `>`. On success the count excludes the terminator, so it can
-    // reach at most `buffer.len() - 1`; on failure it is the required size
-    // *including* the terminator, so it is at least `buffer.len() + 1`. Exactly
-    // `buffer.len()` is therefore unreachable from either branch -- and treating
-    // it as a failure costs nothing while removing the need for the next reader
-    // to redo that analysis before trusting a possibly-unterminated buffer.
-    if written == 0 || written >= buffer.len() {
-        return std::path::PathBuf::from(r"C:\Windows\System32");
+    // reach at most `buffer.len() - 1`; when the buffer is too small it is the
+    // required size *including* the terminator, so it is at least
+    // `buffer.len() + 1`. Exactly `buffer.len()` is therefore unreachable from
+    // either branch -- and treating it as too-small costs one wasted retry
+    // while removing the need for the next reader to redo that analysis before
+    // trusting a possibly-unterminated buffer.
+    if written >= buffer.len() {
+        // `written` is the required size including the terminator, so a buffer
+        // of exactly that length is enough and the retry cannot ask again.
+        let mut heap = vec![0_u16; written];
+        // SAFETY: writes at most `heap.len()` units into a buffer of that size.
+        let retried = unsafe { GetSystemDirectoryW(heap.as_mut_ptr(), heap.len() as u32) } as usize;
+        assert!(
+            retried != 0 && retried < heap.len(),
+            "GetSystemDirectoryW failed at the size it asked for ({written}): {}",
+            std::io::Error::last_os_error()
+        );
+        return std::path::PathBuf::from(os_string(&heap[..retried]));
     }
-    std::path::PathBuf::from(String::from_utf16_lossy(&buffer[..written]))
+
+    std::path::PathBuf::from(os_string(&buffer[..written]))
+}
+
+/// Losslessly, because a Windows path is UTF-16 and not necessarily Unicode.
+fn os_string(units: &[u16]) -> std::ffi::OsString {
+    std::os::windows::ffi::OsStringExt::from_wide(units)
 }

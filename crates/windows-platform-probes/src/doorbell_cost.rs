@@ -155,6 +155,13 @@ fn time_loop(label: &'static str, iterations: u32, mut body: impl FnMut()) -> Ti
 ///
 /// Panics if `CreateEventW` fails, which would mean the host cannot create a
 /// manual-reset event and nothing here is measurable.
+///
+/// Panics, too, if any timed call fails -- `SetEvent`, `ResetEvent`, a
+/// zero-timeout wait that does not observe the event as signalled, or
+/// `SubmitIoRing`. This is deliberately loud. Each of those still costs a
+/// measurable transition when it fails, so a probe that swallowed the error
+/// would report a plausible nanosecond figure for an operation that did not
+/// happen, which is worse than reporting nothing.
 #[must_use]
 pub fn measure() -> Observation {
     const ITERATIONS: u32 = 200_000;
@@ -170,25 +177,81 @@ pub fn measure() -> Observation {
         counter.fetch_add(1, Ordering::Relaxed);
     }));
 
+    // THE RULE: every call that returns a status has that status checked,
+    // inside the timed region. No exceptions, and no per-call-site argument
+    // about whether this one is worth it.
+    //
+    // It is a flat rule on purpose. The previous version checked only
+    // `SubmitIoRing`, with a well-argued note there explaining why discarding a
+    // status lets a failing call report a plausible time for an operation that
+    // never happened -- and left the three event loops above it discarding
+    // their `BOOL`s. The argument was correct and got applied to the one call
+    // that looked expensive enough to deserve it. That is how the cheap calls
+    // get missed: "trivial enough not to check" is not a property of the call,
+    // it is a property of how hard anyone looked at it.
+    //
+    // Both halves of that were measured rather than argued, on the x86_64
+    // review host, by running this probe against a deliberately invalid handle
+    // so that every event call fails.
+    //
+    // What the unchecked version reported, in ns/op, against the true figures:
+    //
+    //     set_event_already_signalled   212.7   (true 205)
+    //     set_reset_event               422.9   (true 531)
+    //     wait_zero_signalled           231.5   (true 280)
+    //
+    // Not one of those looks wrong. The redundant-`SetEvent` figure is within
+    // 4% of the real one, and a reader would have taken the whole set as
+    // evidence and drawn the doorbell-versus-build conclusion from a run in
+    // which no event operation ever succeeded. A failing syscall is not cheap
+    // enough to be conspicuous -- that is the entire hazard.
+    //
+    // The checks cost nothing detectable: with them in place the same host
+    // reports 204-206, 528-534 and 280.3-280.7 across three runs, which is the
+    // run-to-run spread and not a shift. If a check ever does cost enough to
+    // distort a figure, that will show up as data and can be tuned then, at
+    // that site, with the evidence in hand. Until then the rule does not bend
+    // to an estimate.
+    //
+    // `atomic_fetch_add` above is not an exception: `fetch_add` returns no
+    // status, so there is nothing to check.
+
     // Leave it signalled, so every call in the next loop is redundant.
-    unsafe { SetEvent(event) };
+    assert!(unsafe { SetEvent(event) } != 0, "SetEvent failed");
     timings.push(time_loop("set_event_already_signalled", ITERATIONS, || {
-        unsafe { SetEvent(event) };
+        assert!(
+            unsafe { SetEvent(event) } != 0,
+            "SetEvent on an already-signalled event failed"
+        );
     }));
 
-    unsafe { ResetEvent(event) };
+    assert!(unsafe { ResetEvent(event) } != 0, "ResetEvent failed");
     timings.push(time_loop("set_reset_event", ITERATIONS, || unsafe {
-        SetEvent(event);
-        ResetEvent(event);
+        assert!(SetEvent(event) != 0, "SetEvent failed mid-cycle");
+        assert!(ResetEvent(event) != 0, "ResetEvent failed mid-cycle");
     }));
 
-    unsafe { SetEvent(event) };
+    assert!(unsafe { SetEvent(event) } != 0, "SetEvent failed");
     timings.push(time_loop("wait_zero_signalled", ITERATIONS, || {
-        unsafe { WaitForSingleObject(event, 0) };
+        // `assert_eq`, not "did not fail". The label says *satisfied* wait, and
+        // `WAIT_TIMEOUT` is a successful return that times a different path --
+        // an unsatisfied poll, which is the cheaper one and would flatter the
+        // figure.
+        assert_eq!(
+            unsafe { WaitForSingleObject(event, 0) },
+            WAIT_OBJECT_0,
+            "a zero-timeout wait did not observe the event as signalled"
+        );
     }));
     unsafe {
-        ResetEvent(event);
-        CloseHandle(event);
+        assert!(ResetEvent(event) != 0, "ResetEvent failed");
+        // Checked as a post-condition: a close that fails means the handle was
+        // already invalid, which retroactively discredits every figure above
+        // it. That is not theoretical -- in the bad-handle run described above,
+        // with every other check stripped out, this was the one that caught it.
+        // It is the backstop for a handle that goes bad in a way no individual
+        // call happens to report.
+        assert!(CloseHandle(event) != 0, "CloseHandle failed");
     }
 
     // The syscall the doorbell would be amortised against. Far fewer
@@ -208,9 +271,13 @@ pub fn measure() -> Observation {
             // succeeded while submitting entries did not measure what the label
             // says it measured.
             //
-            // The cost is a predictable branch against a syscall, which does not
-            // perturb the figure; leaving the check outside the loop would let
+            // Inside the loop, not outside it: a check after the fact would let
             // the timing be taken before anything established it was valid.
+            //
+            // Every loop above now does the same, under the flat rule stated
+            // there. This note came first and for a while was the only one,
+            // which is the whole reason the rule is now flat rather than
+            // argued per site.
             let (hr, submitted) = ring.submit_and_wait(0);
             assert!(hr >= 0, "SubmitIoRing(0) failed: {hr:#010x}");
             assert_eq!(submitted, 0, "SubmitIoRing(0) submitted entries");
