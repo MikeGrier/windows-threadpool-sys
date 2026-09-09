@@ -147,7 +147,12 @@ written before it was stated.
   **Use the compiler, not a regex: `RUSTFLAGS="-W unused_results"`.** `unused_results` is a
   rustc lint, allow-by-default, that fires on any expression statement discarding a non-unit
   value -- which is exactly this rule's shape, and it does not care how many lines the statement
-  spans or whether the callee is `unsafe`. Measured on `windows-platform-probes`: it flagged
+  spans or whether the callee is `unsafe`.
+
+  (Either spelling works: rustc normalises `_` and `-` in lint names on the command line, and then
+  echoes the hyphenated form back -- a run of `-W unused_results` reports "requested on the command
+  line with `-W unused-results`". Verified on 1.98.0; noted only because that echo reads like a
+  correction and is not one.) Measured on `windows-platform-probes`: it flagged
   every raw Win32 discard the regex found, plus four in `doorbell_cost.rs` the regex had counted
   but nobody had looked at, in a file already believed fixed. A per-crate total is not a list.
 
