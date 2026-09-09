@@ -1,0 +1,91 @@
+# Completed checklists: windows-platform-probes
+
+Append-only. Newest groups at the bottom.
+
+## Moved 2026-09-09 19:00:17 -04:00 -- M1: a probe's report streams as it is measured
+
+## M1 -- Stream a probe's report as it is measured
+
+The report sink introduced with [src/report.rs](src/report.rs) has each renderer compose its whole
+report into a `String`, which `emit_report` then hands to a [`Report`]. That buys the seam the crate
+wanted -- a probe's findings can be asserted rather than eyeballed -- and it gave up a property the
+previous line-by-line `println!` had for free: output appearing as it is measured.
+
+`emit_report` recovers it for an **unwinding panic** only, by catching, emitting what was composed, and
+resuming. A termination that does not unwind still discards the buffer:
+
+- **Ctrl-C.** The default Windows console handler terminates the process; no unwind runs.
+- **Abort from a panic raised while already unwinding.**
+
+The case that costs most is `probe-cancel-io`: four attempts against a five-second watchdog, so about
+twenty seconds, and it runs that long *precisely when the wedge it hunts for occurs* -- which is
+precisely when a reader gives up and interrupts. The measurement most worth having is the one most
+likely to be thrown away.
+
+See [DESIGN-NOTES.md](DESIGN-NOTES.md) -> [The report is buffered, and what that
+costs](DESIGN-NOTES.md#d-buffered-report) for why it was built this way and why the fix is a separate
+piece of work rather than a correction to that one.
+
+- [x] **M1.1** -- Decide how a formatted line reaches the sink, and build it. **Option (b): `LineSink`,
+  an adapter implementing `std::fmt::Write` over a `&mut dyn Report`.** Decision and reasoning in
+  [DESIGN-NOTES.md](DESIGN-NOTES.md#d-streaming-report).
+
+  **The estimate in this item was wrong, and re-measuring it decided the question.** It said "upwards
+  of 160" `writeln!` sites; there are **504** across the production renderers, written into the `&mut
+  String` of about twenty functions. Option (a) -- a `Report` method taking `fmt::Arguments` plus a
+  macro -- is the most explicit and would have rewritten all 504; that is affordable at 160 and is not
+  at 504. Option (b) moves the twenty signatures and leaves the 504 untouched, because `String`
+  implements `fmt::Write` too and a call site cannot tell the difference. Option (c) was declined as a
+  half-measure that keeps two buffers.
+
+  The cost this item predicted for (b) is real and is now paid: `fmt::Write` is line-agnostic, so
+  `LineSink` holds a partial line and emits completed ones, and `Captured`'s one-line-per-entry
+  guarantee is re-established by test rather than assumed. Seven tests pin it, including the two
+  properties that are easy to get wrong -- a final `write!` with no trailing newline still emits its
+  line, and `split('\n')` rather than `lines()` because only the former distinguishes a finished line
+  from a partial one. Both were verified by sabotage (failing three tests and two respectively), not
+  by reading.
+
+- [x] **M1.2** -- Convert every renderer to write into the sink as it measures, and simplify
+  `emit_report` accordingly. All sixteen probes now take `out: &mut dyn std::fmt::Write`; the
+  `catch_unwind`/`resume_unwind` pair is deleted, because with lines leaving as they are produced
+  there is no buffer to rescue and keeping it would imply partial output still depends on the panic
+  unwinding. `Captured` is unchanged and its tests pass untouched.
+
+  **Three probes needed more than a signature change**, because they never went through
+  `emit_report` at all -- `core_affinity`, `peer_index_cache` and `queue_contention` each composed a
+  `String` and called `emit` directly. They are branch-local and so missed the round that fixed the
+  same bypass in the peeled probes, which means the crate's "every probe routes through this" claim
+  was false in three places. `core_affinity` additionally measured in `main`'s argument list, ahead
+  of the renderer, so a topology read that failed produced no banner at all; it now measures after
+  the banner and reports the failure as a failure to observe rather than as a finding.
+
+  **Verified with a control, because these probes are not deterministic.** A direct before/after
+  comparison flagged nine of fifteen reports, which is not evidence -- they print measured
+  nanoseconds and branch their verdicts on them. Running the *same* build twice differed by as much
+  or more (`peer-index-cache`: 22 lines between two runs of one build, against 20 across the
+  conversion), and the twelve deterministic reports were structurally identical. A before/after diff
+  on a probe means nothing without that control.
+
+- [x] **M1.3** -- Verify by interruption, not by reasoning. Both halves done, and the in-process half
+  needed a test this item did not describe.
+
+  **The unit test as specified would not have caught a regression.** "A renderer that panics
+  mid-report still has its finished lines in a `Captured`" passes under a *buffered* report too --
+  emit the buffer after catching the unwind and it holds, which is exactly what the pre-M1.2 code
+  did. What distinguishes streaming is not what a reader has at the end but **when** the sink
+  receives it, so `a_line_reaches_the_sink_before_the_renderer_returns` observes the sink from
+  *inside* the renderer through a shared `Rc<RefCell<..>>`. Restoring the old buffered
+  `emit_report_to` fails it with its own message; the panic test alone would have stayed green on
+  the mechanism and gone red only on the missing catch.
+
+  **The interruption half is measured, with a control**, and recorded in
+  [DESIGN-NOTES.md](DESIGN-NOTES.md). `probe-queue-contention` (~65 s), stdout redirected, killed at
+  8 s: the streaming build had **114 bytes** on disk (banner and heading), the pre-M1.2 build built
+  from `246687e` had **0**. The control is what makes it evidence rather than an observation.
+
+  `TerminateProcess` was used rather than Ctrl-C deliberately: it runs no handler at all, where
+  Ctrl-C still lets the runtime unwind its exit path, so surviving it subsumes the interactive case.
+  The reason any of it works is that Rust's `Stdout` wraps a `LineWriter` and flushes at each
+  newline even when redirected -- had stdout been block-buffered this milestone would have needed a
+  per-line flush too.

@@ -610,6 +610,42 @@ Running the *same* build twice showed differences of the same size or larger
 the conversion). The twelve deterministic reports were structurally identical.
 A before/after diff on a probe is not evidence without that control.
 
+### Measured: an interrupted probe keeps what it had already measured
+
+M1.3 asked for this to be measured once rather than assumed, because it is the
+property the whole milestone exists for and no unit test reaches it -- a test
+cannot terminate its own process without taking the harness with it.
+
+`probe-queue-contention` takes about 65 seconds on the x86_64 review host, which
+makes it the natural subject. Started with stdout redirected to a file, left for
+8 seconds, then terminated:
+
+| build | bytes on disk at 8 s | content |
+|---|---|---|
+| streaming (M1.2) | **114** | the host banner and the heading |
+| buffered (pre-M1.2, built from `246687e`) | **0** | nothing at all |
+
+The control is the point. Reading 114 bytes from the streaming build shows only
+that something was written; running the *previous* build through the identical
+sequence and reading zero is what shows the change caused it. Both binaries were
+release builds of the same crate, killed at the same elapsed time, by the same
+command.
+
+**`TerminateProcess` was used rather than Ctrl-C, and it is the stronger case.**
+Ctrl-C on Windows runs the default console handler, which terminates the process
+but still lets the runtime unwind its exit path; `TerminateProcess` -- what
+`Stop-Process -Force` issues -- runs nothing at all, so any bytes still sitting
+in a userspace buffer are lost outright. A report that survives it survives a
+Ctrl-C, so the interactive case is covered by the measurement rather than left
+untested.
+
+**Why the bytes are already safe** is worth naming, since it is what makes the
+whole design work: Rust's `std::io::Stdout` wraps a `LineWriter`, which flushes
+at each newline whether stdout is a terminal or a redirected file. So a line
+handed to `println!` has reached the OS before the next one is composed, and no
+process-level termination can take it back. Had stdout been block-buffered, this
+milestone would have needed an explicit flush per line as well.
+
 ## The long-path probe: a pair of binaries, and a second declined hardening
 <a id="d-long-path"></a>
 
