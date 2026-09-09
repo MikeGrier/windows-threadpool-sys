@@ -485,6 +485,11 @@ comparison exists to classify correctly: a red build that is **not** a finding.
 
 <a id="d-buffered-report"></a>
 
+**Being superseded by [A renderer writes into the sink through
+`fmt::Write`](#d-streaming-report).** The mechanism is decided and built (M1.1);
+the renderers still buffer until M1.2 converts them, so what follows remains an
+accurate description of the code today.
+
 Every probe's output goes through one sink: the renderer composes its report into
 a `String` and `emit_report` hands it to a [`Report`]. That is what the
 repository's architectural pre-step asks for -- the real stream is named in
@@ -519,6 +524,55 @@ that introduced the sink.
 The ordering was deliberate. The sink had to exist before the probes could be
 peeled off their originating branch in reviewable stages, and a design that
 streams is a different design, not a later revision of this one.
+
+## A renderer writes into the sink through `fmt::Write`, not through a sink method
+
+<a id="d-streaming-report"></a>
+
+**Superseding the buffering above**, as M1 said it would: the mechanism by which
+a formatted line reaches a [`Report`] is
+[`LineSink`](src/report.rs), an adapter implementing `std::fmt::Write`.
+
+The choice was between giving `Report` a method taking `fmt::Arguments` (with a
+`report_line!` macro), implementing `fmt::Write` on a sink so existing
+`writeln!` calls keep working, and keeping the `String` while flushing it at
+line boundaries. **It was decided by counting rather than by taste.** Every
+renderer already writes through `writeln!(out, ...)` against a `String`'s
+`fmt::Write`, at **504 sites**; only about twenty functions take the `&mut
+String` those sites write into. A sink method would have been the most explicit
+option and would have rewritten all 504; `fmt::Write` moves the twenty and
+leaves the 504 untouched, because `String` implements `fmt::Write` too and the
+call sites cannot tell the difference.
+
+Worth recording that M1 estimated "upwards of 160" of those sites. The real
+figure is three times that, and it is the whole of the argument -- an option
+whose cost is "rewrite every call site" is affordable at 160 and is not at 504.
+A plan's estimate is worth re-measuring at the moment it becomes a decision.
+
+### What the adapter has to reassemble, and why that is not a detail
+
+`fmt::Write` is **line-agnostic**: `write_str` receives whatever slices the
+formatting machinery produces -- a fragment below a line, several lines at once,
+a bare `"\n"` -- while [`Report`] speaks in whole lines and [`Captured`] is
+addressable by line, which is what lets a test name a row. So `LineSink` holds a
+partial line and emits only completed ones.
+
+Two properties are easy to get wrong and are pinned by tests rather than by
+this paragraph:
+
+- **A report whose last write is a `write!` rather than a `writeln!` must still
+  emit that line.** `LineSink::finish` does it. Without it a report loses
+  exactly its final row, which is invisible except as an absence.
+- **`split('\n')`, not `lines()`.** `lines()` cannot distinguish text that ended
+  on a newline from text that did not, and that distinction is precisely what
+  decides whether the tail is a finished line or a partial one. Sabotaging each
+  of these in turn fails three tests and two tests respectively, so the
+  distinction is measured rather than asserted here.
+
+The remaining conversion -- pointing the twenty renderers at the sink and
+removing the `catch_unwind`/`resume_unwind` pair, which stops being what makes
+partial output work once lines leave as they are produced -- is
+[CHECKLIST.md](CHECKLIST.md) M1.2, and the interruption check is M1.3.
 
 ## The long-path probe: a pair of binaries, and a second declined hardening
 
