@@ -240,12 +240,33 @@ fn render(observation: &Observation, park: Option<f64>) -> String {
         "     part carrying the lost-wakeup risk, so it can wait for a"
     );
     let _ = writeln!(out, "     measurement against real work.");
-    let atomic = observation.get("atomic_fetch_add").unwrap_or(f64::NAN);
+    // `expect`, not `unwrap_or(NAN)`. These four labels are always produced by
+    // `measure`, so a lookup that misses means a label was renamed in one place
+    // and not the other -- a defect in this probe, not a condition of the host.
+    //
+    // The old default made that defect emit `"atomic_ns":NaN`, and **`NaN` is
+    // not JSON**: RFC 8259 has no such literal, and a strict parser rejects the
+    // whole line. So a renamed label would have silently converted every run
+    // into unparseable output for any consumer doing what this format exists
+    // for.
+    //
+    // Note the contrast with the three fields below, which correctly emit
+    // `null`. That is right for *them*: a parked handshake can time out and an
+    // `IoRing` may be unavailable, so absent is a real outcome those fields
+    // must be able to say. Absent is not a real outcome for these four, and
+    // giving them a way to say it only hid the bug.
+    let atomic = observation
+        .get("atomic_fetch_add")
+        .expect("measure always records atomic_fetch_add");
     let already = observation
         .get("set_event_already_signalled")
-        .unwrap_or(f64::NAN);
-    let cycle = observation.get("set_reset_event").unwrap_or(f64::NAN);
-    let wait0 = observation.get("wait_zero_signalled").unwrap_or(f64::NAN);
+        .expect("measure always records set_event_already_signalled");
+    let cycle = observation
+        .get("set_reset_event")
+        .expect("measure always records set_reset_event");
+    let wait0 = observation
+        .get("wait_zero_signalled")
+        .expect("measure always records wait_zero_signalled");
     // `doorbell_over_empty_submit`, not `doorbell_share_of_submit`. The prose
     // above tells a human that an empty submit is not a fair denominator and
     // that any figure derived from it is a confident wrong answer -- and this

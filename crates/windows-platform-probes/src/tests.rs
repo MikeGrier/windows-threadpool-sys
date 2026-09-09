@@ -4367,10 +4367,32 @@ fn preparing_a_path_needs_no_volume_behind_its_drive_letter() {
     //
     // SAFETY: no preconditions.
     let used = unsafe { windows_sys::Win32::Storage::FileSystem::GetLogicalDrives() };
-    let absent = (b'D'..=b'Z')
+
+    // `GetLogicalDrives` returns 0 on failure, which is also a perfectly valid
+    // mask meaning "no drives at all" -- so an unchecked zero would be read as
+    // "every letter is free", and the search would pick a letter that may well
+    // be mounted. The test would then prepare a path on a REAL volume and pass,
+    // proving nothing, which is worse than failing.
+    //
+    // That this test in particular could go vacuous is the sharp edge: it is
+    // the one pinning the claim that no volume is needed. It is also a plain
+    // instance of the workspace standard -- a failable call has its failure
+    // handled -- introduced by the switch away from `Path::exists()`, which
+    // could not fail this way.
+    assert!(
+        used != 0,
+        "GetLogicalDrives failed: {}",
+        std::io::Error::last_os_error()
+    );
+
+    // The whole alphabet. The mask already excludes anything mounted, so there
+    // is no letter worth reserving by hand: starting at `D` only narrowed the
+    // search on a machine with many mapped drives, for no benefit, since `C`
+    // being in use is exactly what the mask reports.
+    let absent = (b'A'..=b'Z')
         .find(|&byte| used & (1 << u32::from(byte - b'A')) == 0)
         .map(char::from)
-        .expect("a test machine has at least one unused drive letter");
+        .expect("every drive letter A-Z is in use, so this test cannot run here");
 
     let text = format!(r"{absent}:\{}\file.txt", vec!["directory"; 24].join("\\"));
     let path = wtf_string::Wtf16String::from(text.as_str());
