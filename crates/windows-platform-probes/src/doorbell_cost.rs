@@ -168,7 +168,11 @@ pub fn measure() -> Observation {
 
     // SAFETY: a manual-reset, initially-unsignalled, unnamed event.
     let event: HANDLE = unsafe { CreateEventW(std::ptr::null(), 1, 0, std::ptr::null()) };
-    assert!(!event.is_null(), "CreateEventW failed");
+    assert!(
+        !event.is_null(),
+        "CreateEventW failed: {}",
+        std::io::Error::last_os_error()
+    );
 
     let counter = AtomicU64::new(0);
     let mut timings = Vec::new();

@@ -285,11 +285,25 @@ jobs:
       # first version of it deadlocked, because an auto-reset event does not
       # count signals and the waiter's count never caught up. A probe that can
       # hang is a probe that can hang a build.
+      #
+      # `if: '!cancelled()'` for the same reason the topology step above carries
+      # it, and the reason is not specific to topology: a probe step exists to
+      # produce diagnostic output, so skipping it because an earlier step failed
+      # suppresses it in precisely the run that wanted it. The test step above
+      # covers both of these probes, and a host where those tests fail is a host
+      # whose timings are worth reading.
+      #
+      # It matters more for these two than for a pass/fail probe. Both now assert
+      # every status they take and panic on a missing NDJSON label, and both go
+      # through `emit_report`, which prints what was already established before a
+      # panic -- machinery that only reaches a reader if the step runs at all.
       - name: probe magnitudes (doorbell cost)
+        if: '!cancelled()'
         run: cargo run -p windows-platform-probes --bin probe-doorbell-cost --locked --release
       # Read with the doorbell probe above: together they say whether the
       # queue's mechanics or the request's own cost deserves the attention.
       - name: probe magnitudes (request cost)
+        if: '!cancelled()'
         run: cargo run -p windows-platform-probes --bin probe-request-cost --locked --release
       # Both halves of the long-path pair, deliberately. Either alone says
       # nothing: the finding is the *difference* between two executables that

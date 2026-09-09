@@ -169,3 +169,40 @@ speculative list to extend by imagination -- a fourth is added when a fourth con
   all on any path this crate takes. The probe measured ~212 ns for a build on x86_64 and declines to
   say what that is made of; the owning crate could say, and a reader of either would then stop
   guessing.
+
+- [ ] **M2.7** -- Decide whether the other nine probe steps in CI should carry `if: '!cancelled()'`,
+  and apply or record the decision.
+
+  **Measured 2026-09-09:** twelve probe steps in [ci.yml](../../.github/workflows/ci.yml), of which
+  three are guarded -- topology, and the doorbell/request pair added with this note. The other nine
+  (`error mode`, `handle state`, `worker context`, `pool growth`, `device map`, `IoRing`,
+  `completion port`, and both halves of the long-path pair) are skipped whenever an earlier step in
+  the job fails, because Actions defaults to `if: success()`.
+
+  The argument for guarding is already written at the topology step and is not specific to it: a
+  probe step exists to emit diagnostics, so skipping it on failure suppresses it in exactly the run
+  that wanted it. **The long-path pair is the sharpest case** -- its own comment says either half
+  alone "says nothing", since the finding is the difference between two executables, so a partial
+  run of that pair is worse than useless.
+
+  **It is queued rather than done because there is a real tradeoff, and it is an operational call.**
+  `!cancelled()` also runs the step when the *build* failed, where `cargo run` cannot compile and
+  the step turns from skipped (grey) into failed (red). That trades quieter broken-build output for
+  better broken-test output. The topology step already took that trade; whether all twelve should is
+  a judgement about how the CI log is read, not something to settle by consistency alone.
+
+- [ ] **M2.8** -- Carry the OS error in the remaining Win32 assertion messages.
+
+  `last_os_error()` (or a raw `GetLastError`) is in the messages in `doorbell_cost`, `request_cost`
+  and `handle_state`, and missing from four sites in probes this peel did not touch:
+  `completion_port.rs:224` and `:234` ("create a completion port"), `ioring.rs:320` ("create the
+  probe pipe"), and `pool_growth.rs:62` ("create the gate event"). Each says what was being attempted
+  and not why it failed, which is the whole of what a CI log can offer someone who cannot rerun under
+  a debugger.
+
+  Two rules worth carrying over, both learned the expensive way in this peel. Read the error
+  **immediately after the single call whose failure is reported** -- a code attached to a condition
+  spanning two calls belongs to whichever ran last, not whichever failed, and can print "The
+  operation completed successfully" under a message saying something failed. And attach it only to a
+  condition that is genuinely an OS failure: a call that returned a size rather than an error should
+  not carry one, since `GetLastError` says nothing about it.
