@@ -250,7 +250,21 @@ jobs:
       # the execution-domain design should size itself by default. The probe
       # emits one `x-probe-topology` JSON line so the results can be mined out
       # of logs mechanically rather than read by eye.
+      #
+      # `if: '!cancelled()'` is what makes "on every build" true. The test step
+      # above asserts the cross-check reaches `Agree`, and the host where that
+      # assertion FAILS is the one whose report is worth the most -- yet Actions
+      # skips later steps in a failed job, so without this the report is
+      # suppressed in exactly the case it exists for. The test's own failure
+      # carries the `CrossCheck` and nothing else: not the domain counts, the
+      # enumeration anomalies, or the machine-readable JSON line.
+      #
+      # It is a SECOND measurement, not a rendering of the one that failed --
+      # the test and this binary each call `measure()`. So it reproduces a
+      # condition the host holds persistently, which is the case worth
+      # investigating, and does not recover a transient one.
       - name: probe magnitudes (topology)
+        if: '!cancelled()'
         run: cargo run -p windows-platform-probes --bin probe-topology --locked
       # `--release` on the next two, and ONLY on those two, because they are the
       # only probes here that report nanoseconds. Everything above measures
@@ -276,8 +290,7 @@ jobs:
       # Read with the doorbell probe above: together they say whether the
       # queue's mechanics or the request's own cost deserves the attention.
       - name: probe magnitudes (request cost)
-        run: cargo run -p windows-platform-probes --bin probe-request-cost --locked --release
-      # Both halves of the long-path pair, deliberately. Either alone says
+        run: cargo run -p windows-platform-probes --bin probe-request-cost --locked --release      # Both halves of the long-path pair, deliberately. Either alone says
       # nothing: the finding is the *difference* between two executables that
       # differ only in whether `build.rs` embedded the `longPathAware` manifest,
       # so a run that reported one of them would be reporting a number with no

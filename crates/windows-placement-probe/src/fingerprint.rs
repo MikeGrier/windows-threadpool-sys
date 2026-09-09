@@ -868,7 +868,32 @@ pub fn places_from_topology(
 /// to rest on a human having read the format string.
 #[must_use]
 pub fn banner_line() -> String {
-    match Fingerprint::discover() {
+    banner_line_for(&Fingerprint::discover())
+}
+
+/// The banner line for a fingerprint that has already been discovered.
+///
+/// Split out of [`banner_line`] for a caller that must BRACKET the discovery --
+/// reading the host before and after a measurement, so two readings that differ
+/// are visible. Such a caller holds the readings already, and formatting
+/// `host:  {fingerprint}` itself would put a second copy of this line's shape
+/// in another crate; a probe's banner is comparable with every other probe's
+/// only while exactly one place produces it.
+///
+/// Bracketing establishes that the two readings DIFFER, not that the host
+/// changed: [`Fingerprint::discover`] returns `Ok` on a parse that dropped a
+/// record or whose sources disagreed, so consecutive fingerprints can differ
+/// because the enumeration was flaky. Naming a cause is the caller's business
+/// and no caller can name that one.
+///
+/// **Takes the `Result` rather than the `Fingerprint`, which is the point.**
+/// [`banner_line`] renders both outcomes into one string, so a caller comparing
+/// two of those strings cannot tell two differing readings from a discovery
+/// that failed -- two failures carrying different `io::Error` text differ as
+/// strings while establishing nothing about the machine at all.
+#[must_use]
+pub fn banner_line_for(discovered: &std::io::Result<Fingerprint>) -> String {
+    match discovered {
         Ok(fingerprint) => format!("host:  {fingerprint}"),
         Err(error) => format!("host:  UNKNOWN -- topology discovery failed: {error}"),
     }

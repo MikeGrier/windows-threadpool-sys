@@ -1341,3 +1341,44 @@ mod multi_group_conversion {
         }
     }
 }
+
+#[test]
+fn a_banner_for_an_already_discovered_fingerprint_renders_both_outcomes() {
+    // `banner_line_for` exists so a caller that BRACKETS the discovery -- reading
+    // the host before and after a measurement, to detect one that changed under
+    // it -- can render the readings it already holds, rather than formatting this
+    // line a second time somewhere else. A failed read stays distinguishable,
+    // which is the whole reason it takes the `Result`: a caller comparing two
+    // rendered lines cannot otherwise tell a host that moved from one that could
+    // not be read.
+    // The two are compared on ONE reading, not on two. Asserting
+    // `banner_line_for(&Ok(discovered)) == banner_line()` re-reads the host
+    // inside the assertion, so a machine that changed between them fails a test
+    // about string formatting -- in the crate whose `attribution` exists
+    // precisely because two consecutive discoveries can differ. The property
+    // under test is that one place owns the format, and that is shown by
+    // rendering the same value twice.
+    let fingerprint = Fingerprint::discover().expect("this machine must be discoverable");
+    let rendered = super::banner_line_for(&Ok(fingerprint.clone()));
+
+    assert_eq!(
+        rendered,
+        super::banner_line_for(&Ok(fingerprint.clone())),
+        "the rendering is a function of the reading alone"
+    );
+    assert!(
+        rendered.starts_with("host:  "),
+        "and it is the shape `banner_line` has always produced: {rendered}"
+    );
+    assert!(
+        rendered.contains(&fingerprint.to_string()),
+        "got {rendered}"
+    );
+
+    let failed = super::banner_line_for(&Err(std::io::Error::other("no topology")));
+    assert!(failed.starts_with("host:  "), "got {failed}");
+    assert!(
+        failed.contains("UNKNOWN") && failed.contains("no topology"),
+        "a failed read says so, and says why: {failed}"
+    );
+}
