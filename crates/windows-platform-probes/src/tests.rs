@@ -2665,7 +2665,42 @@ fn the_heterogeneous_note_appears_only_with_more_than_one_efficiency_class() {
         text.contains(note),
         "two classes means an unconstrained thread can land on an efficiency core: {text}"
     );
-    assert!(text.contains(r#""efficiency_classes":2"#), "{text}");
+    assert!(text.contains(r#""efficiency_classes":[0,1]"#), "{text}");
+}
+
+#[test]
+fn the_json_efficiency_classes_are_the_classes_and_not_how_many() {
+    // A plural name over a count is ambiguous in the one way that matters: a
+    // single-class host emitted `"efficiency_classes":1`, which reads exactly
+    // like a machine whose one class is class 1 -- while the prose above it
+    // printed `efficiency classes: [0]`. Same fact, same report, two renderings
+    // a consumer cannot reconcile.
+    let mut one = clean_observation();
+    one.cores = vec![crate::topology::CoreShape {
+        simultaneous_multithreading: true,
+        efficiency_class: 0,
+        processors: 2,
+    }];
+    let text = crate::topology_report::report(BANNER, &one);
+    assert!(
+        text.contains(r#""efficiency_classes":[0]"#),
+        "the class is 0, and the row says so rather than saying `1`: {text}"
+    );
+    assert!(
+        text.contains("efficiency classes: [0]"),
+        "and the prose agrees with it: {text}"
+    );
+
+    // A host whose single class is genuinely class 1 must not render the same
+    // as the one above -- which is precisely what a count did.
+    let mut class_one = clean_observation();
+    class_one.cores = vec![crate::topology::CoreShape {
+        simultaneous_multithreading: true,
+        efficiency_class: 1,
+        processors: 2,
+    }];
+    let text = crate::topology_report::report(BANNER, &class_one);
+    assert!(text.contains(r#""efficiency_classes":[1]"#), "{text}");
 }
 
 #[test]

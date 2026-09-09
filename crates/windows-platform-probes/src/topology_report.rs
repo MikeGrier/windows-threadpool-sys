@@ -1,19 +1,17 @@
 // Copyright (c) Mike Grier.
-// Split from bin/topology.rs at c335ae5.
 
 //! The topology probe's report, as text.
 //!
-//! Split out of the binary because it was untestable there: `render` called
-//! [`crate::topology::measure`] itself, so every branch needed a live host and
-//! none could be
-//! driven from a test. A mutation sweep found 13 of 13 mutants surviving --
-//! `render` could return `"xyzzy"` and the suite stayed green -- and the
-//! survivors were exactly the claims that cost the most review rounds: the
-//! "no L3 at all" note, the caveat gate on an absent partitioning answer, and
-//! the heterogeneous-core note. Each had been checked by running the binary and
-//! reading the output, which nothing repeats on a later change.
+//! A separate module from the binary because it was untestable there: `render`
+//! called [`crate::topology::measure`] itself, so every branch needed a live
+//! host and none could be driven from a test. A mutation sweep found 13 of 13
+//! mutants surviving -- `render` could return `"xyzzy"` and the suite stayed
+//! green -- and the survivors were exactly the claims that cost the most review
+//! rounds: the "no L3 at all" note, the caveat gate on an absent partitioning
+//! answer, and the heterogeneous-core note. Each had been checked by running
+//! the binary and reading the output, which nothing repeats on a later change.
 //!
-//! The same split as [`crate::topology::observe`] out of
+//! The same division as [`crate::topology::observe`] out of
 //! [`crate::topology::measure`], for the same reason.
 
 use std::fmt::Write as _;
@@ -526,7 +524,7 @@ pub fn report(banner: &str, observation: &Observation) -> String {
         concat!(
             r#"{{"reason":"x-probe-topology","arch":"{}","processors":{},"groups":{},"#,
             r#""packages":{},"numa_domains":{},"numa_domains_without_processors":{},"cores":{},"#,
-            r#""efficiency_classes":{},"caches":[{}],"outermost_partitioning_cache_level":{},"#,
+            r#""efficiency_classes":[{}],"caches":[{}],"outermost_partitioning_cache_level":{},"#,
             r#""outermost_partitioning_cache":"{}","#,
             r#""policies":{{{}}},"cross_check":"{}","not_compared":{},"parse_incomplete":{},"#,
             r#""enumeration_anomalies":{},"numa_domains_only_in_cpu_sets":{}}}"#
@@ -538,7 +536,20 @@ pub fn report(banner: &str, observation: &Observation) -> String {
         observation.numa_domains,
         observation.numa_domains_without_processors,
         observation.cores.len(),
-        classes.len(),
+        // The CLASSES, not how many there are. A plural name over a count is
+        // ambiguous in the one way that matters here: on a single-class host
+        // this emitted `"efficiency_classes":1`, which reads exactly like a
+        // machine whose one class is class *1* -- while the prose two lines
+        // above printed `efficiency classes: [0]`. Same fact, same report, two
+        // renderings a consumer cannot reconcile. The list is what the name
+        // promises, agrees with the prose, and carries strictly more: a fleet
+        // survey can still get the count from its length, and can now also see
+        // WHICH classes a host reported.
+        classes
+            .iter()
+            .map(u8::to_string)
+            .collect::<Vec<_>>()
+            .join(","),
         cache_json.join(","),
         observation
             .outermost_partitioning_cache()
