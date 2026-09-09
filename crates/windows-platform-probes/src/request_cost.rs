@@ -326,10 +326,19 @@ fn system_directory() -> std::path::PathBuf {
         let mut heap = vec![0_u16; written];
         // SAFETY: writes at most `heap.len()` units into a buffer of that size.
         let retried = unsafe { GetSystemDirectoryW(heap.as_mut_ptr(), heap.len() as u32) } as usize;
+
+        // Two conditions, two assertions, because only one of them is an OS
+        // failure and an error code attached to the other would be fiction --
+        // `GetLastError` is not meaningful for a call that returned a size.
         assert!(
-            retried != 0 && retried < heap.len(),
+            retried != 0,
             "GetSystemDirectoryW failed at the size it asked for ({written}): {}",
             std::io::Error::last_os_error()
+        );
+        assert!(
+            retried < heap.len(),
+            "GetSystemDirectoryW asked for {written} units, then wanted {retried} \
+             at that size -- the system directory changed between the two calls"
         );
         return std::path::PathBuf::from(os_string(&heap[..retried]));
     }

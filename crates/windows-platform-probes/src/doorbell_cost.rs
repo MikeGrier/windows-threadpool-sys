@@ -366,14 +366,43 @@ pub fn measure_park_and_wake(rounds: u32) -> Option<f64> {
         return None;
     }
 
-    // SAFETY: two auto-reset, initially-unsignalled, unnamed events.
+    // Created and checked ONE AT A TIME, which the combined assertion this
+    // replaces could not do. That assertion leaked: with `ping` created and
+    // `pong` failing, it panicked without closing `ping`. Worse, it misreported
+    // -- `last_os_error()` was read after *both* calls, so the failure of the
+    // first was overwritten by the success of the second, and the message could
+    // read "CreateEventW failed: The operation completed successfully".
+    //
+    // That is a defect introduced by the previous commit, which added
+    // `last_os_error()` to every assertion in this file for diagnosability.
+    // Attaching an error code to a condition spanning two calls does not improve
+    // the diagnosis, it fabricates one: the code belongs to whichever call ran
+    // last, not to whichever failed. **An error code is only meaningful read
+    // immediately after the single call whose failure is being reported**, which
+    // is why the close below reads its own separately rather than reusing this.
+
+    // SAFETY: an auto-reset, initially-unsignalled, unnamed event.
     let ping: HANDLE = unsafe { CreateEventW(std::ptr::null(), 0, 0, std::ptr::null()) };
-    let pong: HANDLE = unsafe { CreateEventW(std::ptr::null(), 0, 0, std::ptr::null()) };
     assert!(
-        !ping.is_null() && !pong.is_null(),
-        "CreateEventW failed: {}",
+        !ping.is_null(),
+        "CreateEventW(ping) failed: {}",
         std::io::Error::last_os_error()
     );
+
+    // SAFETY: as above.
+    let pong: HANDLE = unsafe { CreateEventW(std::ptr::null(), 0, 0, std::ptr::null()) };
+    if pong.is_null() {
+        // Read before the close, which would overwrite it.
+        let error = std::io::Error::last_os_error();
+        // SAFETY: `ping` was created above and nothing else holds it.
+        let closed = unsafe { CloseHandle(ping) };
+        assert!(
+            closed != 0,
+            "CreateEventW(pong) failed ({error}), and closing ping then also failed: {}",
+            std::io::Error::last_os_error()
+        );
+        panic!("CreateEventW(pong) failed: {error}");
+    }
 
     // A named `Send` carrier, where this used to round-trip the handles through
     // `usize` and cast them back inside the thread.

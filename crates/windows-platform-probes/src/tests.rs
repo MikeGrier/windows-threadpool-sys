@@ -4389,10 +4389,33 @@ fn preparing_a_path_needs_no_volume_behind_its_drive_letter() {
     // is no letter worth reserving by hand: starting at `D` only narrowed the
     // search on a machine with many mapped drives, for no benefit, since `C`
     // being in use is exactly what the mask reports.
+    // Fails rather than skips when no letter is free, which is deliberate and
+    // has been raised in review, so the reasoning is recorded here.
+    //
+    // libtest has no runtime skip: a test that "skips" is a test that PASSES.
+    // This is the test pinning the claim that `prepare` needs no volume, so a
+    // pass that established nothing is the one outcome worth avoiding -- the
+    // same vacuous-green hazard as the unchecked `GetLogicalDrives` above, which
+    // is what made the explicit check necessary in the first place.
+    //
+    // It also matches how this crate already handles the identical condition:
+    // `impersonation_changes_which_device_map_a_drive_letter_resolves_in` and
+    // its sibling both `panic!("no free drive letter on this host, so the probe
+    // cannot run")`, and they search only `H..=Z`. This search covers all 26, so
+    // it fails strictly less often than sites that already chose to fail.
+    //
+    // The condition needs every letter mounted including `A` and `B`, which are
+    // floppy-era and essentially never assigned. A host in that state is worth
+    // hearing about loudly, and the message says plainly that it is the
+    // environment rather than the code.
     let absent = (b'A'..=b'Z')
         .find(|&byte| used & (1 << u32::from(byte - b'A')) == 0)
         .map(char::from)
-        .expect("every drive letter A-Z is in use, so this test cannot run here");
+        .expect(
+            "every drive letter A-Z is mounted on this host, so no unmounted \
+             letter exists to test against -- an environment limitation, not a \
+             failure of the behaviour under test",
+        );
 
     let text = format!(r"{absent}:\{}\file.txt", vec!["directory"; 24].join("\\"));
     let path = wtf_string::Wtf16String::from(text.as_str());
