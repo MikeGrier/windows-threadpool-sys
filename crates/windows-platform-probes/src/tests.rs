@@ -4339,3 +4339,35 @@ fn a_small_handshake_completes_and_reports_a_positive_round_trip() {
         "a completed handshake must report a positive finite round trip, got {average}"
     );
 }
+
+// --- what `prepare` needs from a drive letter -------------------------------
+//
+// `request_cost::measure` builds its long-path sample on a hard-coded `C:`, and
+// two review passes read that as a portability bug: a machine with no `C:`
+// volume would panic on the `expect` rather than measure. It would not, and the
+// reason is the same fact the probe's own headline conclusion rests on -- that
+// `GetFullPathNameW` resolves a fully-qualified path without touching the
+// filesystem. A volume that does not exist is therefore not consulted.
+//
+// That was an argument, and an argument is what a reviewer had to disbelieve.
+// This is the measurement. It also pins the "touches no filesystem" claim
+// itself, which nothing else here does: if that claim ever stops holding, the
+// probe's account of where its nanoseconds go is wrong, and this fails first.
+
+#[test]
+fn preparing_a_path_needs_no_volume_behind_its_drive_letter() {
+    let absent = ('D'..='Z')
+        .find(|c| !std::path::Path::new(&format!("{c}:\\")).exists())
+        .expect("a test machine has at least one unused drive letter");
+
+    let text = format!(r"{absent}:\{}\file.txt", vec!["directory"; 24].join("\\"));
+    let path = wtf_string::Wtf16String::from(text.as_str());
+
+    assert!(
+        windows_namespace_request_sys::prepare(&path).is_ok(),
+        "preparing {text} must succeed with no {absent}: volume mounted -- \
+         a fully-qualified path is normalized, not resolved against a device, \
+         and `request_cost` depends on that both for its long-path sample and \
+         for its claim about where the measured time goes"
+    );
+}

@@ -185,6 +185,19 @@ pub fn measure() -> Observation {
             .to_str()
             .expect("the system directory is representable"),
     );
+    // Synthetic, and hard-coded on purpose -- the opposite requirement to the
+    // path above, which is why the two do not match and must not be made to.
+    // `short` names a file that is really opened, so it has to exist and is
+    // resolved. This one is only ever normalized, so it must NOT need to exist:
+    // a fixed 24-component path keeps the length identical on every host, and a
+    // length that varied with the local system directory would make the figure
+    // incomparable between the machines the report asks a reader to compare.
+    //
+    // The `C:` is safe for the same reason the probe's own conclusion is: a
+    // fully-qualified path is normalized without consulting a device, so no
+    // volume is needed behind the letter. Two review passes read this as the
+    // portability bug fixed above, so it is now measured rather than argued --
+    // see `preparing_a_path_needs_no_volume_behind_its_drive_letter`.
     let long_text = format!(r"C:\{}\file.txt", vec!["directory"; 24].join("\\"));
     let long = Wtf16String::from(long_text.as_str());
 

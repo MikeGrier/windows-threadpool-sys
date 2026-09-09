@@ -251,9 +251,16 @@ fn render(observation: &Observation, park: Option<f64>) -> String {
     // that any figure derived from it is a confident wrong answer -- and this
     // line then handed a machine exactly that figure under a name meaning "the
     // doorbell's share of a submit", with no caveat a mining pass could read.
-    // The name now states its own denominator, so a query that wants the ratio
-    // asks for it knowingly, and one that wants a real share of a syscall does
-    // not find this field by looking for that.
+    // The name states its own denominator, so a query that wants the ratio asks
+    // for it knowingly, and one that wants a real share of a syscall does not
+    // find this field by looking for that.
+    //
+    // The accessor carries the same name, and did not at first. Renaming the
+    // serialized field while leaving the method as `doorbell_share_of_submit`
+    // left the argument above sitting a few lines from the sibling it did not
+    // reach -- and a reviewer duly read the method as promising a meaningful
+    // share. A rename for precision is not finished until every name for the
+    // quantity moves; the field and the method are one fact with two spellings.
     let _ = writeln!(
         out,
         concat!(
@@ -272,7 +279,7 @@ fn render(observation: &Observation, park: Option<f64>) -> String {
             .submit_nanos
             .map_or("null".to_string(), |n| format!("{n:.1}")),
         observation
-            .doorbell_share_of_submit()
+            .doorbell_over_empty_submit()
             .map_or("null".to_string(), |s| format!("{s:.4}")),
     );
     out

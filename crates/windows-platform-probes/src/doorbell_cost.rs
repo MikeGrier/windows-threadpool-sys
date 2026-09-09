@@ -62,8 +62,9 @@
 //! The honest denominator is the cost of the real work a submission carries,
 //! which this probe deliberately does not measure -- so it reports the absolute
 //! costs and the *batching* arithmetic instead, and leaves the ratio alone.
-//! [`Observation::doorbell_share_of_submit`] is retained only because the raw
-//! fact is worth recording; its own documentation repeats this warning.
+//! [`Observation::doorbell_over_empty_submit`] is retained only because the raw
+//! fact is worth recording; it is named for its own denominator, and its own
+//! documentation repeats this warning.
 
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Instant;
@@ -123,7 +124,7 @@ impl Observation {
     /// review it printed the opposite, the
     /// empty submit landing at 216 ns among that probe's own 206 ns syscalls.
     #[must_use]
-    pub fn doorbell_share_of_submit(&self) -> Option<f64> {
+    pub fn doorbell_over_empty_submit(&self) -> Option<f64> {
         let doorbell = self.get("set_reset_event")?;
         let submit = self.submit_nanos?;
         (submit > 0.0).then_some(doorbell / submit)
