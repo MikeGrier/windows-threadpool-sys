@@ -13,12 +13,11 @@
 //! completion arrived, and so read a clean failure -- result code
 //! `ERROR_INVALID_PARAMETER`, zero bytes -- as a success.
 
-use std::fmt::Write as _;
 use windows_platform_probes::completion_port::{CompletionPortFinding, ReadAttempt, measure};
 use windows_platform_probes::ioring::IoRingSupport;
 use windows_platform_probes::report::emit_report;
 
-fn describe(out: &mut String, label: &str, attempt: ReadAttempt) {
+fn describe(out: &mut dyn std::fmt::Write, label: &str, attempt: ReadAttempt) {
     let _ = writeln!(
         out,
         "  {label:<46} result={:#010x} bytes={} first={:#04x}  [{}]",
@@ -29,7 +28,7 @@ fn describe(out: &mut String, label: &str, attempt: ReadAttempt) {
     );
 }
 
-fn report(out: &mut String, finding: CompletionPortFinding) {
+fn report(out: &mut dyn std::fmt::Write, finding: CompletionPortFinding) {
     let _ = writeln!(
         out,
         "a PASS needs all three: success code, full byte count, and the fill byte.\n"
@@ -155,7 +154,7 @@ fn main() {
 }
 
 /// The probe's whole report, as text.
-fn render(out: &mut String) {
+fn render(out: &mut dyn std::fmt::Write) {
     // First line of the report, and part of the returned text rather than
     // written out here: a captured report must carry the line naming the
     // machine that produced it, and the taint marker with it. Without it a

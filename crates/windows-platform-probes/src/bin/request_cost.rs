@@ -10,7 +10,6 @@
 //! Read alongside `probe-doorbell-cost`: together they say whether the queue's
 //! mechanics or the request's allocation model deserves the attention.
 
-use std::fmt::Write as _;
 use windows_platform_probes::report::emit_report;
 use windows_platform_probes::request_cost::measure;
 
@@ -49,7 +48,7 @@ fn main() {
 }
 
 /// The probe's whole report, as text.
-fn render(out: &mut String) {
+fn render(out: &mut dyn std::fmt::Write) {
     // First line of the report, and part of the returned text rather than
     // written out here: a captured report must carry the line naming the
     // machine that produced it, and the taint marker with it. Without it a

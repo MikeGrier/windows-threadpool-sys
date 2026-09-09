@@ -11,7 +11,6 @@
 //! exceed it, and gets there promptly); this binary prints the numbers, which
 //! is what a new architecture actually needs to be re-measured against.
 
-use std::fmt::Write as _;
 use windows_platform_probes::pool_growth::{measure_growth, measure_raise_while_saturated};
 use windows_platform_probes::report::emit_report;
 
@@ -20,7 +19,13 @@ use windows_platform_probes::report::emit_report;
 /// Takes the buffer rather than printing: a helper that wrote to stdout while
 /// its caller composed a string would emit its lines *before* the caller's,
 /// reordering the report even though every line still appeared.
-fn report(out: &mut String, label: &str, maximum: u32, submissions: usize, runs_long: bool) {
+fn report(
+    out: &mut dyn std::fmt::Write,
+    label: &str,
+    maximum: u32,
+    submissions: usize,
+    runs_long: bool,
+) {
     let observed = measure_growth(maximum, submissions, runs_long);
 
     let _ = writeln!(out, "{label}");
@@ -50,7 +55,7 @@ fn main() {
 }
 
 /// The probe's whole report, as text.
-fn render(out: &mut String) {
+fn render(out: &mut dyn std::fmt::Write) {
     // First line of the report, and part of the returned text rather than
     // written out here: a captured report must carry the line naming the
     // machine that produced it, and the taint marker with it. Without it a

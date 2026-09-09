@@ -12,7 +12,6 @@
 //! measurement can be eyeballed on a new host or a new Windows build without
 //! reading a test's output.
 
-use std::fmt::Write as _;
 use windows_platform_probes::report::emit_report;
 use windows_platform_probes::worker_context::{
     observe_on_worker, observe_on_worker_while_impersonating,
@@ -26,7 +25,7 @@ fn main() {
 }
 
 /// The probe's whole report, as text.
-fn render(out: &mut String) {
+fn render(out: &mut dyn std::fmt::Write) {
     // First line of the report, and part of the returned text rather than
     // written out here: a captured report must carry the line naming the
     // machine that produced it, and the taint marker with it. Without it a

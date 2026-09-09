@@ -485,10 +485,12 @@ comparison exists to classify correctly: a red build that is **not** a finding.
 
 <a id="d-buffered-report"></a>
 
-**Being superseded by [A renderer writes into the sink through
-`fmt::Write`](#d-streaming-report).** The mechanism is decided and built (M1.1);
-the renderers still buffer until M1.2 converts them, so what follows remains an
-accurate description of the code today.
+**Superseded by [A renderer writes into the sink through
+`fmt::Write`](#d-streaming-report).** The renderers stream as of M1.2, and the
+`catch_unwind`/`resume_unwind` pair described below no longer exists. Kept
+because the cost it records is what motivated the replacement, and because the
+ordering argument at the end is still the reason the sink was built this way
+first.
 
 Every probe's output goes through one sink: the renderer composes its report into
 a `String` and `emit_report` hands it to a [`Report`]. That is what the
@@ -569,13 +571,46 @@ this paragraph:
   of these in turn fails three tests and two tests respectively, so the
   distinction is measured rather than asserted here.
 
-The remaining conversion -- pointing the twenty renderers at the sink and
-removing the `catch_unwind`/`resume_unwind` pair, which stops being what makes
-partial output work once lines leave as they are produced -- is
-[CHECKLIST.md](CHECKLIST.md) M1.2, and the interruption check is M1.3.
+### Every renderer now writes into the sink, and the catch-and-resume is gone
+
+M1.2 pointed all sixteen probes at the sink. Two things about that conversion are
+worth keeping.
+
+**The `catch_unwind`/`resume_unwind` pair was deleted rather than left in place.**
+Once lines leave as they are produced there is no buffer to rescue, so the pair
+would have been machinery that no longer earned its place -- and worse, it would
+have kept implying that partial output depends on the panic unwinding, which was
+precisely the limitation this milestone removed. The test that guarded it is
+unchanged and still passes: the property held by machinery before and holds by
+construction now.
+
+**A panic still loses at most a partial final line** -- one on which a renderer
+called `write!` without a newline. Flushing it would need a `Drop` on `LineSink`,
+and a `Drop` that writes can panic while unwinding, which aborts and replaces a
+diagnosable failure with one that explains nothing. An unterminated fragment is
+not a finding, so the trade is one-sided.
+
+Three probes needed more than a signature change, because they were composing a
+`String` and calling `emit` directly rather than going through `emit_report` at
+all: `core_affinity`, `peer_index_cache` and `queue_contention`. They are the
+branch-local probes, and they had never been through the round that fixed the
+same bypass in the peeled ones -- the crate's "every probe routes through this"
+claim was false in three places until now. `core_affinity` also measured in
+`main`'s argument list, so a failure to read the topology produced no banner and
+no indication of which probe had died; it now measures inside the renderer,
+after the banner, and reports a failed read as a failure to observe rather than
+as a finding.
+
+**Verifying that no report changed needed a control, because most of these
+probes are not deterministic.** Comparing before and after directly showed
+differences in nine of fifteen reports -- which proves nothing on its own, since
+these probes print measured nanoseconds and render verdicts branching on them.
+Running the *same* build twice showed differences of the same size or larger
+(`peer-index-cache` 22 lines between two runs of one build, against 20 across
+the conversion). The twelve deterministic reports were structurally identical.
+A before/after diff on a probe is not evidence without that control.
 
 ## The long-path probe: a pair of binaries, and a second declined hardening
-
 <a id="d-long-path"></a>
 
 The `longPathAware` opt-in has two halves and neither is a runtime switch: a

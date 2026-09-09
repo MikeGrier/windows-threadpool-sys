@@ -47,11 +47,26 @@ piece of work rather than a correction to that one.
   from a partial one. Both were verified by sabotage (failing three tests and two respectively), not
   by reading.
 
-- [ ] **M1.2** -- Convert every renderer to write into the sink as it measures, and simplify
-  `emit_report` accordingly: once lines leave as they are produced, catching the unwind is no longer
-  what makes partial output work, and the `catch_unwind`/`resume_unwind` pair should be removed rather
-  than left as machinery that no longer earns its place. Keep `Captured` working -- it is what every
-  in-process test asserts against.
+- [x] **M1.2** -- Convert every renderer to write into the sink as it measures, and simplify
+  `emit_report` accordingly. All sixteen probes now take `out: &mut dyn std::fmt::Write`; the
+  `catch_unwind`/`resume_unwind` pair is deleted, because with lines leaving as they are produced
+  there is no buffer to rescue and keeping it would imply partial output still depends on the panic
+  unwinding. `Captured` is unchanged and its tests pass untouched.
+
+  **Three probes needed more than a signature change**, because they never went through
+  `emit_report` at all -- `core_affinity`, `peer_index_cache` and `queue_contention` each composed a
+  `String` and called `emit` directly. They are branch-local and so missed the round that fixed the
+  same bypass in the peeled probes, which means the crate's "every probe routes through this" claim
+  was false in three places. `core_affinity` additionally measured in `main`'s argument list, ahead
+  of the renderer, so a topology read that failed produced no banner at all; it now measures after
+  the banner and reports the failure as a failure to observe rather than as a finding.
+
+  **Verified with a control, because these probes are not deterministic.** A direct before/after
+  comparison flagged nine of fifteen reports, which is not evidence -- they print measured
+  nanoseconds and branch their verdicts on them. Running the *same* build twice differed by as much
+  or more (`peer-index-cache`: 22 lines between two runs of one build, against 20 across the
+  conversion), and the twelve deterministic reports were structurally identical. A before/after diff
+  on a probe means nothing without that control.
 
 - [ ] **M1.3** -- Verify by interruption, not by reasoning. Sending Ctrl-C to a probe part-way through
   must leave the already-measured lines on the terminal; today it leaves nothing. Assert the in-process
