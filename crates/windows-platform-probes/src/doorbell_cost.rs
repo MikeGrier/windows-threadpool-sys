@@ -69,7 +69,9 @@
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Instant;
 
-use windows_sys::Win32::Foundation::{CloseHandle, HANDLE, WAIT_OBJECT_0};
+use windows_sys::Win32::Foundation::{
+    CloseHandle, HANDLE, WAIT_ABANDONED, WAIT_EVENT, WAIT_FAILED, WAIT_OBJECT_0, WAIT_TIMEOUT,
+};
 use windows_sys::Win32::System::Threading::{
     CreateEventW, ResetEvent, SetEvent, WaitForSingleObject,
 };
@@ -146,6 +148,27 @@ fn time_loop(label: &'static str, iterations: u32, mut body: impl FnMut()) -> Ti
         label,
         iterations,
         nanos_per_op: elapsed.as_nanos() as f64 / f64::from(iterations),
+    }
+}
+
+/// Name a wait result, and attach an OS error only where one exists.
+///
+/// `WaitForSingleObject` returns a status code rather than a `BOOL`, and only
+/// `WAIT_FAILED` sets the last-error value. `WAIT_TIMEOUT` and `WAIT_ABANDONED`
+/// are *successful* returns, so a code printed beside either belongs to
+/// whatever call ran previously and describes something else entirely -- which
+/// is worse than printing nothing, because it reads as a diagnosis.
+fn describe_wait(waited: WAIT_EVENT) -> String {
+    match waited {
+        WAIT_OBJECT_0 => "WAIT_OBJECT_0 (signalled)".to_string(),
+        WAIT_TIMEOUT => {
+            "WAIT_TIMEOUT -- the event was not signalled; this is not an OS error".to_string()
+        }
+        WAIT_ABANDONED => {
+            "WAIT_ABANDONED -- a mutex owner exited; this is not an OS error".to_string()
+        }
+        WAIT_FAILED => format!("WAIT_FAILED: {}", std::io::Error::last_os_error()),
+        other => format!("unrecognised wait result {other:#010x}"),
     }
 }
 
@@ -265,15 +288,28 @@ pub fn measure() -> Observation {
         std::io::Error::last_os_error()
     );
     timings.push(time_loop("wait_zero_signalled", ITERATIONS, || {
-        // `assert_eq`, not "did not fail". The label says *satisfied* wait, and
-        // `WAIT_TIMEOUT` is a successful return that times a different path --
-        // an unsatisfied poll, which is the cheaper one and would flatter the
-        // figure.
-        assert_eq!(
-            unsafe { WaitForSingleObject(event, 0) },
-            WAIT_OBJECT_0,
+        // Checked against `WAIT_OBJECT_0`, not merely "did not fail". The label
+        // says *satisfied* wait, and `WAIT_TIMEOUT` is a successful return that
+        // times a different path -- an unsatisfied poll, which is the cheaper
+        // one and would flatter the figure.
+        //
+        // The error code is attached only to `WAIT_FAILED`, because that is the
+        // only return for which `GetLastError` is defined. `WaitForSingleObject`
+        // is not a boolean-returning call: `WAIT_TIMEOUT` and `WAIT_ABANDONED`
+        // are *successful* returns that set no error, so a code printed beside
+        // them belongs to whatever ran last and is fiction.
+        //
+        // This is the rule the previous commits arrived at -- attach an error
+        // only where the condition is genuinely an OS failure -- applied to the
+        // one call in this file that returns a status code rather than a
+        // `BOOL`. The sweep that added `last_os_error()` everywhere treated it
+        // like the others, which is how a rule about failure reporting became a
+        // way to report a failure that did not happen.
+        let waited = unsafe { WaitForSingleObject(event, 0) };
+        assert!(
+            waited == WAIT_OBJECT_0,
             "a zero-timeout wait did not observe the event as signalled: {}",
-            std::io::Error::last_os_error()
+            describe_wait(waited)
         );
     }));
     unsafe {
