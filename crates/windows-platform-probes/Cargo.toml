@@ -51,6 +51,14 @@ path = "src/bin/pool_growth.rs"
 name = "probe-topology"
 path = "src/bin/topology.rs"
 
+[[bin]]
+name = "probe-doorbell-cost"
+path = "src/bin/doorbell_cost.rs"
+
+[[bin]]
+name = "probe-request-cost"
+path = "src/bin/request_cost.rs"
+
 # These two are the same code, and that is the measurement: they differ only in
 # whether `build.rs` embeds the `longPathAware` manifest, which is not a runtime
 # switch and so cannot be a flag on one binary.
@@ -87,6 +95,10 @@ windows-topology-sys = { path = "../windows-topology-sys" }
 # somewhere and compared against something it does not describe. That banner is
 # `windows-placement-probe`'s to render, not a second copy here.
 windows-placement-probe = { path = "../windows-placement-probe" }
+# The request-cost probe measures the real request type the design would put on
+# a queue, not a stand-in, for the same reason the topology probe reads the
+# shipping parse: a reimplementation would measure the reimplementation.
+windows-namespace-request-sys = { path = "../windows-namespace-request-sys" }
 # The long-path probe measures a length against `MAX_PATH`, and `MAX_PATH` counts
 # UTF-16 code units. `OsStr::len` counts Rust's platform encoding -- WTF-8 here --
 # so the two disagree the moment a non-ASCII character appears in `%TEMP%`, which
@@ -115,6 +127,9 @@ features = [
 	"Win32_System_Diagnostics_Debug",
 	"Win32_System_IO",
 	"Win32_System_Pipes",
+	# GetSystemDirectoryW, so the request probe measures the real system
+	# directory instead of assuming Windows is installed on C:.
+	"Win32_System_SystemInformation",
 	"Win32_System_SystemServices",
 	"Win32_System_Threading",
 ]
