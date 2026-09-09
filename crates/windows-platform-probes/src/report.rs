@@ -92,6 +92,78 @@ impl Captured {
     }
 }
 
+/// A [`Report`] a renderer can `writeln!` into directly.
+///
+/// This is the answer to "how does a formatted line reach the sink", and the
+/// reason it is a [`std::fmt::Write`] adapter rather than a method on [`Report`]
+/// is arithmetic. Every renderer writes through `writeln!(out, ...)` against a
+/// `String`, at **504 sites** across this crate; a sink method taking
+/// `fmt::Arguments` would have been explicit but would have rewritten every one
+/// of them, while `String` already implements `fmt::Write`, so a sink that does
+/// too lets those sites stand untouched and moves only the ~20 renderer
+/// signatures. The recorded reasoning is in
+/// [DESIGN-NOTES.md](../DESIGN-NOTES.md#d-streaming-report).
+///
+/// # Lines are reassembled here, because `fmt::Write` does not speak in them
+///
+/// `write_str` receives whatever slices the formatting machinery hands it: a
+/// fragment of a line, several lines at once, or a bare `"\n"`. [`Report`]
+/// speaks in whole lines and [`Captured`] is addressable by line, so this holds
+/// a partial line until a `\n` arrives and emits exactly the completed ones.
+///
+/// **A renderer that ends without a trailing newline still has its last line
+/// emitted**, by [`LineSink::finish`], which `emit_report_to` calls. Dropping
+/// that trailing fragment would silently truncate any report whose final
+/// `write!` was not a `writeln!` -- a defect that would show only as a missing
+/// last row.
+pub struct LineSink<'a> {
+    report: &'a mut dyn Report,
+    partial: String,
+}
+
+impl<'a> LineSink<'a> {
+    /// Wrap a [`Report`] so renderers can write formatted text into it.
+    pub fn new(report: &'a mut dyn Report) -> Self {
+        Self {
+            report,
+            partial: String::new(),
+        }
+    }
+
+    /// Emit any text written since the last newline.
+    ///
+    /// Idempotent: a second call with nothing buffered emits nothing, so a
+    /// caller that finishes a sink twice does not add a stray empty line.
+    pub fn finish(&mut self) {
+        if !self.partial.is_empty() {
+            self.report.line(&self.partial);
+            self.partial.clear();
+        }
+    }
+}
+
+impl std::fmt::Write for LineSink<'_> {
+    fn write_str(&mut self, text: &str) -> std::fmt::Result {
+        // `split('\n')`, not `lines()`. `lines()` cannot distinguish "ends with
+        // a newline" from "does not", which is exactly the distinction that
+        // decides whether the tail is a completed line or a partial one still
+        // being written. `split` always yields one more piece than there are
+        // newlines, so the final piece is the remainder by construction --
+        // empty when the text ended on a newline.
+        let mut pieces = text.split('\n');
+        let first = pieces.next().unwrap_or_default();
+        self.partial.push_str(first);
+
+        for piece in pieces {
+            let line = std::mem::take(&mut self.partial);
+            self.report.line(&line);
+            self.partial.push_str(piece);
+        }
+
+        Ok(())
+    }
+}
+
 /// Write a rendered block to `report`, one line at a time.
 ///
 /// A `render_*` function produces a whole block with embedded newlines and a

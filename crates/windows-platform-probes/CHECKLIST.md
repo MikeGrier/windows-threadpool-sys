@@ -27,19 +27,25 @@ See [DESIGN-NOTES.md](DESIGN-NOTES.md) -> [The report is buffered, and what that
 costs](DESIGN-NOTES.md#d-buffered-report) for why it was built this way and why the fix is a separate
 piece of work rather than a correction to that one.
 
-- [ ] **M1.1** -- Decide how a formatted line reaches the sink, because that choice is what makes the
-  rest mechanical. Every renderer today writes through `let _ = writeln!(out, ...)` against a
-  `String`'s `fmt::Write` -- upwards of 160 sites across the probes -- so the sink must accept
-  *formatted* output, not just `&str`, or every site grows a `format!` and an allocation per line.
-  The options differ in what they cost callers, and the choice is the engineer's:
-  (a) give `Report` a method taking `fmt::Arguments` plus a `report_line!` macro, so a call site stays
-  one line and reads almost as it does now;
-  (b) implement `fmt::Write` for the sink types, so `writeln!(out, ...)` keeps working verbatim against
-  a `&mut dyn Report` -- smallest diff at the call sites, but `fmt::Write` is line-agnostic, so the sink
-  must split on newlines internally and `Captured`'s one-line-per-entry guarantee has to be re-established
-  rather than assumed;
-  (c) leave the renderers writing to a `String` and flush it to the sink at each line boundary, which
-  streams without touching the call sites but keeps two buffers.
+- [x] **M1.1** -- Decide how a formatted line reaches the sink, and build it. **Option (b): `LineSink`,
+  an adapter implementing `std::fmt::Write` over a `&mut dyn Report`.** Decision and reasoning in
+  [DESIGN-NOTES.md](DESIGN-NOTES.md#d-streaming-report).
+
+  **The estimate in this item was wrong, and re-measuring it decided the question.** It said "upwards
+  of 160" `writeln!` sites; there are **504** across the production renderers, written into the `&mut
+  String` of about twenty functions. Option (a) -- a `Report` method taking `fmt::Arguments` plus a
+  macro -- is the most explicit and would have rewritten all 504; that is affordable at 160 and is not
+  at 504. Option (b) moves the twenty signatures and leaves the 504 untouched, because `String`
+  implements `fmt::Write` too and a call site cannot tell the difference. Option (c) was declined as a
+  half-measure that keeps two buffers.
+
+  The cost this item predicted for (b) is real and is now paid: `fmt::Write` is line-agnostic, so
+  `LineSink` holds a partial line and emits completed ones, and `Captured`'s one-line-per-entry
+  guarantee is re-established by test rather than assumed. Seven tests pin it, including the two
+  properties that are easy to get wrong -- a final `write!` with no trailing newline still emits its
+  line, and `split('\n')` rather than `lines()` because only the former distinguishes a finished line
+  from a partial one. Both were verified by sabotage (failing three tests and two respectively), not
+  by reading.
 
 - [ ] **M1.2** -- Convert every renderer to write into the sink as it measures, and simplify
   `emit_report` accordingly: once lines leave as they are produced, catching the unwind is no longer
