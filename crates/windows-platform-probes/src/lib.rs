@@ -105,6 +105,7 @@
 //! | [`cancel_io::cancel_against_idle_thread`] | binary only | `CancelSynchronousIo` is point-in-time against an idle thread |
 //! | [`cancel_io::cancel_against_busy_thread`] | binary only | it can block indefinitely against a thread re-entering synchronous I/O |
 //! | [`long_path::measure`] | binary only | whether the `longPathAware` manifest opt-in lifts `MAX_PATH` for a *relative* path -- binary only because the answer is the difference between two differently-manifested executables, which no single in-process test can observe |
+//! | [`topology::measure`] | asserted | that `windows-topology-sys`' parse of `GetLogicalProcessorInformationEx` agrees with `GetActiveProcessorCount`, `GetActiveProcessorGroupCount` and `GetNumaHighestNodeNumber` read independently -- asserted because the invariants hold on any machine even though every value is host-specific, and the binary prints the shape so CI doubles as a fleet survey |
 
 #![cfg(windows)]
 #![forbid(unsafe_op_in_unsafe_fn)]
@@ -120,6 +121,8 @@ pub mod long_path;
 pub mod long_path_report;
 pub mod pool_growth;
 pub mod report;
+pub mod topology;
+pub mod topology_report;
 pub mod worker_context;
 
 #[cfg(test)]

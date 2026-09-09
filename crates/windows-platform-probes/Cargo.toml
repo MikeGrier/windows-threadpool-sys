@@ -47,6 +47,10 @@ path = "src/bin/ioring.rs"
 name = "probe-pool-growth"
 path = "src/bin/pool_growth.rs"
 
+[[bin]]
+name = "probe-topology"
+path = "src/bin/topology.rs"
+
 # These two are the same code, and that is the measurement: they differ only in
 # whether `build.rs` embeds the `longPathAware` manifest, which is not a runtime
 # switch and so cannot be a flag on one binary.
@@ -74,6 +78,10 @@ path = "src/bin/long_path_unaware.rs"
 # reimplementation of the SDK's inline environment helpers, so it depends on the
 # real crate.
 windows-threadpool-sys = { path = "../windows-threadpool-sys" }
+# Same reason: the topology probe measures what the shipping parse produces, not
+# a second parse written here, which would only measure itself. The raw Win32
+# counters it cross-checks against are read independently through windows-sys.
+windows-topology-sys = { path = "../windows-topology-sys" }
 # Every probe's report opens with a line naming the machine that produced it and
 # whether the measurement is tainted, so a captured finding cannot be pasted
 # somewhere and compared against something it does not describe. That banner is
