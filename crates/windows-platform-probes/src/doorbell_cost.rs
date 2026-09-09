@@ -403,12 +403,13 @@ pub fn measure_park_and_wake(rounds: u32) -> Option<f64> {
         /// Take both handles, consuming the carrier.
         ///
         /// This exists to force the closure below to capture the carrier *as a
-        /// whole*, and it is not decoration. Under edition 2021's precise
-        /// capture a closure captures the individual **fields** it mentions, so
-        /// writing `carriers.ping` inside the closure captures a bare `HANDLE`
-        /// -- which is `!Send` -- and the wrapper's `unsafe impl Send` never
-        /// enters the picture. The first version of this did exactly that and
-        /// failed to compile with the same error the `usize` cast was replacing.
+        /// whole*, and it is not decoration. Under disjoint closure capture
+        /// (RFC 2229, introduced in edition 2021 and in force here in 2024) a
+        /// closure captures the individual **fields** it mentions, so writing
+        /// `carriers.ping` inside the closure captures a bare `HANDLE` -- which
+        /// is `!Send` -- and the wrapper's `unsafe impl Send` never enters the
+        /// picture. The first version of this did exactly that and failed to
+        /// compile with the same error the `usize` cast was replacing.
         ///
         /// A method call needs the whole receiver, so the capture is the carrier
         /// and the `Send` impl applies. Anyone "simplifying" this back to field
