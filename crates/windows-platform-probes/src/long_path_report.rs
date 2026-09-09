@@ -6,8 +6,6 @@
 //! **An experiment, not a component.** These probes measure platform behaviour
 //! and are not for production use. See this crate's DESIGN-NOTES.md.
 
-use std::fmt::Write as _;
-
 use crate::long_path::{MAX_PATH_CONTENT, Observation, Shape, is_refusal};
 
 #[cfg(test)]
@@ -26,7 +24,7 @@ mod tests;
 /// nothing at all, not even the banner that every captured report is supposed to
 /// carry. Composing the banner and the header first makes the buffer worth
 /// emitting from the moment measurement begins.
-pub fn render(out: &mut String, manifest_aware: bool) {
+pub fn render(out: &mut dyn std::fmt::Write, manifest_aware: bool) {
     preamble(out);
     // Everything above is already in `out`, so the report survives whatever this
     // does.
@@ -38,7 +36,7 @@ pub fn render(out: &mut String, manifest_aware: bool) {
 /// Split out so [`body`] can be tested. The ordering is the point rather than an
 /// artefact: this must reach `out` before [`crate::long_path::measure`] is
 /// called, or a panic inside the measurement prints nothing at all.
-fn preamble(out: &mut String) {
+fn preamble(out: &mut dyn std::fmt::Write) {
     // First line of the report, and part of the composed text rather than
     // written out here: a captured report must carry the line naming the
     // machine that produced it, and the taint marker with it.
@@ -62,7 +60,7 @@ fn preamble(out: &mut String) {
 /// it is the length-refusal gating, the ceiling the column compares against, the
 /// registry warning, and the apparatus-error early return, two of which are
 /// fixes for defects a review round had to find by reading output.
-fn body(out: &mut String, observation: &Observation) {
+fn body(out: &mut dyn std::fmt::Write, observation: &Observation) {
     let _ = writeln!(
         out,
         "manifest longPathAware : {}",

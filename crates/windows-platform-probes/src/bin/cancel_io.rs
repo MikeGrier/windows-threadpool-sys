@@ -11,7 +11,6 @@
 //! is a call that can fail to return, so every case here runs behind a
 //! watchdog; a wedged `#[test]` would take the whole suite with it.
 
-use std::fmt::Write as _;
 use windows_platform_probes::cancel_io::{
     CancelOutcome, WATCHDOG, cancel_against_busy_thread, cancel_against_idle_thread,
 };
@@ -35,7 +34,7 @@ fn main() {
 }
 
 /// The probe's whole report, as text.
-fn render(out: &mut String) {
+fn render(out: &mut dyn std::fmt::Write) {
     // First line of the report, and part of the returned text rather than
     // written out here: a captured report must carry the line naming the
     // machine that produced it, and the taint marker with it. Without it a

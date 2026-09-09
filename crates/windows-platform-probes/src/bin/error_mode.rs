@@ -13,8 +13,6 @@
 //! the one observation a test must not: the alignment bit's process-scope
 //! stickiness is irreversible, so it is demonstrated here and nowhere else.
 
-use std::fmt::Write as _;
-
 use windows_platform_probes::error_mode::{
     alignment_bit_is_sticky_at_process_scope, bits, combined_invalid_installs_nothing, probe_bit,
     settable_bits, thread_mode_independent_of_process,
@@ -46,7 +44,7 @@ fn main() {
 /// which the observations are taken is part of what is being reported. Splitting
 /// measurement from rendering would invite a later reordering that silently
 /// changes the result.
-fn render(out: &mut String) {
+fn render(out: &mut dyn std::fmt::Write) {
     // First line of the report, and part of the returned text rather than
     // written out here: a captured report must carry the line naming the
     // machine that produced it, and the taint marker with it. Without it a

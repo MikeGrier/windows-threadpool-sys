@@ -2,23 +2,20 @@
 
 //! Prints whether it matters where the two ends of a queue run.
 
-use std::fmt::Write as _;
-
 use windows_placement_probe::core_affinity::{Observation, Placement, measure};
 use windows_placement_probe::peer_index_cache::Strategy;
-use windows_platform_probes::report::{Stdout, emit};
+use windows_platform_probes::report::emit_report;
 use windows_topology_sys::Observed;
 
-fn main() -> std::io::Result<()> {
-    // The only place that names the real stream. Everything below composes
-    // text; nothing below knows where it goes.
-    emit(&mut Stdout, &render(&measure()?));
-    Ok(())
+fn main() {
+    // The probe's whole output policy, and it is one line: hand the renderer to
+    // the sink. Nothing here or below names a stream -- that is chosen once, in
+    // `report`, so retargeting a probe is not a rewrite.
+    emit_report(render);
 }
 
 /// The probe's whole report, as text.
-fn render(observation: &Observation) -> String {
-    let mut out = String::new();
+fn render(out: &mut dyn std::fmt::Write) {
     // First line of the report, and part of the returned text rather than
     // written out here: a captured report must carry the line naming the
     // machine that produced it, and the taint marker with it.
@@ -31,6 +28,25 @@ fn render(observation: &Observation) -> String {
         out,
         "== does it matter where the two ends of a queue run? ==\n"
     );
+
+    // Measured HERE, after the banner and heading are already out, rather than
+    // in `main`'s argument list where it used to sit. A measurement called
+    // before the renderer is entered is outside the sink entirely, so a host
+    // where it fails gives a reader no banner and no indication of which probe
+    // died. `measure` reads the topology and can fail, which is exactly the
+    // case worth naming.
+    let observation = &match measure() {
+        Ok(observation) => observation,
+        Err(error) => {
+            let _ = writeln!(out, "could not read this machine's topology: {error}");
+            let _ = writeln!(
+                out,
+                "\nNothing below could be measured, so nothing below is reported. This is\n\
+                 a failure to observe the host, not a finding about it."
+            );
+            return;
+        }
+    };
 
     let _ = writeln!(out, "processors, as discovered:");
     let _ = writeln!(
@@ -187,7 +203,7 @@ fn render(observation: &Observation) -> String {
         }
     }
 
-    render_node_distances(&mut out, observation);
+    render_node_distances(out, observation);
 
     let _ = writeln!(
         out,
@@ -211,7 +227,7 @@ interpretation:
             "  a homogeneous single-cache machine has nowhere else to put the"
         );
         let _ = writeln!(out, "  two threads.");
-        return out;
+        return;
     }
 
     // Whether the two factors can be told apart at all on this host. If every
@@ -468,15 +484,13 @@ interpretation:
             "  placement alone does not explain the disagreement between hosts."
         );
     }
-
-    out
 }
 
 /// Print the per-node-pair handoff cost, when the host has nodes to cross.
 ///
 /// Silent on a single-node machine: there is nothing to say, and a header over
 /// an empty table invites the reader to wonder what went wrong.
-fn render_node_distances(out: &mut String, observation: &Observation) {
+fn render_node_distances(out: &mut dyn std::fmt::Write, observation: &Observation) {
     let pairs = observation.node_pairs_measured();
     if pairs.is_empty() {
         return;

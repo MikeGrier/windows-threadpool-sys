@@ -11,7 +11,6 @@
 //! observations themselves -- the actual file names each handle returned --
 //! which is what makes a surprising result diagnosable rather than merely red.
 
-use std::fmt::Write as _;
 use windows_platform_probes::handle_state::{
     Fixture, SingleShot, closing_duplicate_preserves_source, duplicate_shares_cursor, ground_truth,
     query_disturbs_cursor, separate_opens_are_independent,
@@ -26,7 +25,7 @@ fn main() {
 }
 
 /// The probe's whole report, as text.
-fn render(out: &mut String) {
+fn render(out: &mut dyn std::fmt::Write) {
     // First line of the report, and part of the returned text rather than
     // written out here: a captured report must carry the line naming the
     // machine that produced it, and the taint marker with it. Without it a

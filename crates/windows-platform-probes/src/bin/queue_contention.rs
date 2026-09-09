@@ -10,19 +10,18 @@
 //! linked and sharded MPSC shapes are ever needed, and whether `mpsc` and
 //! `reserving_mpsc` should merge. See `queue_contention`'s module docs.
 
-use std::fmt::Write as _;
 use windows_platform_probes::queue_contention::{PRODUCER_COUNTS, Run, measure, shapes};
-use windows_platform_probes::report::{Stdout, emit};
+use windows_platform_probes::report::emit_report;
 
 fn main() {
-    // The only place that names the real stream. Everything below composes
-    // text; nothing below knows where it goes.
-    emit(&mut Stdout, &render());
+    // The probe's whole output policy, and it is one line: hand the renderer to
+    // the sink. Nothing here or below names a stream -- that is chosen once, in
+    // `report`, so retargeting a probe is not a rewrite.
+    emit_report(render);
 }
 
 /// The probe's whole report, as text.
-fn render() -> String {
-    let mut out = String::new();
+fn render(out: &mut dyn std::fmt::Write) {
     // First line of the report, and part of the returned text rather than
     // written out here: a captured report must carry the line naming the
     // machine that produced it, and the taint marker with it.
@@ -44,13 +43,13 @@ fn render() -> String {
         out,
         "-- isolated: producers only, capacity large enough that nothing is refused --"
     );
-    render_table(&mut out, &observation.isolated);
+    render_table(out, &observation.isolated);
 
     let _ = writeln!(
         out,
         "\n-- drained: a consumer popping continuously, capacity 1024 --"
     );
-    render_table(&mut out, &observation.drained);
+    render_table(out, &observation.drained);
 
     let _ = writeln!(out, "\ninterpretation:\n");
 
@@ -276,7 +275,6 @@ fn render() -> String {
         out,
         "  many refusals was waiting for the consumer, not for the tail."
     );
-    out
 }
 
 /// Append one regime's table to `out`.
@@ -284,7 +282,7 @@ fn render() -> String {
 /// Takes the buffer rather than printing, for the reason `pool_growth`'s twin
 /// records: a helper writing to stdout while its caller composes a string emits
 /// its lines first, reordering the report without losing any of it.
-fn render_table(out: &mut String, runs: &[Run]) {
+fn render_table(out: &mut dyn std::fmt::Write, runs: &[Run]) {
     let _ = writeln!(
         out,
         "{:<18} {:>10} {:>14} {:>16} {:>14}",

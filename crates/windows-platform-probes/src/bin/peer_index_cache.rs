@@ -6,19 +6,18 @@
 //! and are not for production use. Do not call them from production code, and
 //! do not lift a technique out of here. See this crate's DESIGN-NOTES.md.
 
-use std::fmt::Write as _;
 use windows_placement_probe::peer_index_cache::{CAPACITY, ITEMS, Strategy, measure};
-use windows_platform_probes::report::{Stdout, emit};
+use windows_platform_probes::report::emit_report;
 
 fn main() {
-    // The only place that names the real stream. Everything below composes
-    // text; nothing below knows where it goes.
-    emit(&mut Stdout, &render());
+    // The probe's whole output policy, and it is one line: hand the renderer to
+    // the sink. Nothing here or below names a stream -- that is chosen once, in
+    // `report`, so retargeting a probe is not a rewrite.
+    emit_report(render);
 }
 
 /// The probe's whole report, as text.
-fn render() -> String {
-    let mut out = String::new();
+fn render(out: &mut dyn std::fmt::Write) {
     // First line of the report, and part of the returned text rather than
     // written out here: a captured report must carry the line naming the
     // machine that produced it, and the taint marker with it.
@@ -63,7 +62,7 @@ fn render() -> String {
     let _ = writeln!(out, "\ninterpretation:\n");
 
     let Some(baseline) = observation.get(Strategy::Baseline) else {
-        return out;
+        return;
     };
 
     // The model has to reproduce the shipping queue before anything it says
@@ -147,7 +146,7 @@ fn render() -> String {
     // states its finding regardless of what it measured is worse than no
     // instrument, because it is believed.
     let Some(cached) = observation.get(Strategy::Cached) else {
-        return out;
+        return;
     };
 
     // The batch depth is the mechanism, so compute it rather than assert it: it
@@ -273,7 +272,7 @@ fn render() -> String {
     let _ = writeln!(out, "  intend to make the decision for.");
 
     let Some(warmed) = observation.get(Strategy::Warmed) else {
-        return out;
+        return;
     };
     let warm_reduction =
         baseline.consumer_refreshes as f64 / warmed.consumer_refreshes.max(1) as f64;
@@ -311,5 +310,4 @@ fn render() -> String {
             "  as a control. Distrust the comparison above until that is explained."
         );
     }
-    out
 }

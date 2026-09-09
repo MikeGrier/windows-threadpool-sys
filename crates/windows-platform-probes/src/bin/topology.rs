@@ -28,7 +28,7 @@ fn main() {
 }
 
 /// The probe's whole report, as text.
-fn render(out: &mut String) {
+fn render(out: &mut dyn std::fmt::Write) {
     // The only place that reads the host. The text is composed in the library so
     // every branch of it can be driven from a test -- see `topology_report`.
     //
@@ -55,5 +55,5 @@ fn render(out: &mut String) {
         Ok(observation) => report(&banner, &observation),
         Err(error) => report_unmeasured(&banner, &error),
     };
-    out.push_str(&text);
+    let _ = write!(out, "{text}");
 }

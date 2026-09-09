@@ -13,7 +13,6 @@
 //! path resolved on a submitting thread and opened on a worker under a captured
 //! token can name a different device.
 
-use std::fmt::Write as _;
 use windows_platform_probes::device_map::{SubstDrive, measure_with_subst};
 use windows_platform_probes::report::emit_report;
 
@@ -25,7 +24,7 @@ fn main() {
 }
 
 /// The probe's whole report, as text.
-fn render(out: &mut String) {
+fn render(out: &mut dyn std::fmt::Write) {
     // First line of the report, and part of the returned text rather than
     // written out here: a captured report must carry the line naming the
     // machine that produced it, and the taint marker with it. Without it a
@@ -65,7 +64,7 @@ fn render(out: &mut String) {
     // stays available to the lines below. A closure capturing it mutably would
     // hold the borrow across every later write.
     fn describe(
-        out: &mut String,
+        out: &mut dyn std::fmt::Write,
         label: &str,
         observation: &windows_platform_probes::device_map::MapObservation,
     ) {

@@ -199,6 +199,12 @@ fn a_renderer_that_panics_still_has_its_finished_lines_emitted() {
     // would print a partial report and exit **0**, which is the failure that
     // looks most like success. Hence `emit_report_to`: same logic, injectable
     // sink.
+    //
+    // **That catch-emit-resume no longer exists**, and this test is why it could
+    // go. Lines now reach the sink as they are written, so a panic leaves the
+    // finished ones already emitted and there is no buffer for a `catch_unwind`
+    // to rescue. The assertions below are unchanged -- which is the point: the
+    // property held by machinery before and holds by construction now.
     let mut captured = Captured::default();
 
     let outcome = catch_unwind(AssertUnwindSafe(|| {
@@ -208,9 +214,13 @@ fn a_renderer_that_panics_still_has_its_finished_lines_emitted() {
         });
     }));
 
-    // Both halves matter, and each fails a different mutation. Without the
-    // first, deleting the `emit` leaves the test green; without the second,
-    // deleting the `resume_unwind` does.
+    // Both halves still matter, and each still fails a different mutation --
+    // but what breaks the first has changed with the mechanism. It used to be
+    // deleting the `emit` after the catch; now it is anything that stops lines
+    // reaching the sink as they are written, because there is no buffer left to
+    // rescue. The second half is unchanged in what it guards and stronger in how
+    // it holds: nothing catches the panic any more, so it propagates by default
+    // rather than by remembering to re-raise it.
     assert_eq!(
         captured.lines,
         ["measured before the failure"],

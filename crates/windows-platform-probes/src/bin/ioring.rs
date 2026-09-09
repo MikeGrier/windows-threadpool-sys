@@ -11,7 +11,6 @@
 //! this reports "cannot measure" rather than a false negative on a host that
 //! has no ring.
 
-use std::fmt::Write as _;
 use windows_platform_probes::ioring::{
     IoRingSupport, is_available, measure_registration, measure_thread_agnosticism,
 };
@@ -25,7 +24,7 @@ fn main() {
 }
 
 /// The probe's whole report, as text.
-fn render(out: &mut String) {
+fn render(out: &mut dyn std::fmt::Write) {
     // First line of the report, and part of the returned text rather than
     // written out here: a captured report must carry the line naming the
     // machine that produced it, and the taint marker with it. Without it a
