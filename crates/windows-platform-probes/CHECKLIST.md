@@ -137,3 +137,35 @@ speculative list to extend by imagination -- a fourth is added when a fourth con
   than noise: across two rounds one reader raised this twice while two others cleared it, one of them
   explicitly after being pointed at the question. Nothing in the suite decides it either way, which is
   itself the argument for the oracle.
+
+- [ ] **M2.6** -- Say precisely what `GetFullPathNameW` does, in the crate that owns it, and decide
+  whether it is still the call `prepare` wants. Two successive descriptions in the cost probe were
+  each wrong in the same direction: *a syscall cost*, which a timing loop cannot establish, and then
+  *lexical*, which it also is not. The probe now states the cost and declines the mechanism, which is
+  honest but leaves the question open one layer down.
+
+  [../windows-namespace-request-sys/src/full_path.rs](../windows-namespace-request-sys/src/full_path.rs)
+  carries the same imprecision, and is the crate that owns the answer: its module doc says "This call
+  is **lexical**. It resolves relative components and `.`/`..` against the process current
+  directory". Those two sentences disagree -- consulting the current directory is process state, and
+  for a drive-relative path (`C:foo`) it also reads the per-drive current directory held in the
+  `=C:` environment variables. "Touches no filesystem" is the claim that holds; "lexical" is not.
+
+  **The mono-repo rule says fix the layer, so the correction belongs in
+  `windows-namespace-request-sys`, not in the probe that consumes it.** It is queued rather than
+  taken because that crate is outside this peel and is release-managed, so a docs change there is its
+  own commit with its own scope.
+
+  The decision half is the part worth an engineer's attention rather than a sweep. A genuinely
+  lexical canonicalizer exists -- `PathCchCanonicalizeEx`, or `PathAllocCanonicalize` -- and would be
+  cheaper, with no process state read at all. **It is very likely the wrong call anyway**, because
+  resolving against the current directory *at submission* is the property the namespace design is
+  buying: the CWD is shared mutable state, so a relative path means something different depending on
+  when it is resolved, and pinning that on the submitting thread is the whole point. Record that
+  conclusion explicitly, with the alternative named, so the next reader does not re-derive it -- and
+  if it is wrong, the cheaper call is sitting there.
+
+  Also worth settling while the question is open: whether `GetFullPathNameW` can enter the kernel at
+  all on any path this crate takes. The probe measured ~212 ns for a build on x86_64 and declines to
+  say what that is made of; the owning crate could say, and a reader of either would then stop
+  guessing.

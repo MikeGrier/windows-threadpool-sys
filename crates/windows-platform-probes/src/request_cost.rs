@@ -19,9 +19,9 @@
 //! faithfully on another. So the queue can carry a request by value and the
 //! lifetime hazard disappears. What remains is a cost question about **this
 //! operation type**: how does building one compare with the doorbell that would
-//! carry it (~165 ns as recorded on the development machine -- run
-//! `probe-doorbell-cost` on the host in front of you for a local figure, which
-//! CI does in the same job)?
+//! carry it (~165 ns as recorded on the Snapdragon X2 (ARM64) development
+//! machine -- run `probe-doorbell-cost` on the host in front of you for a local
+//! figure, which CI does in the same job)?
 //!
 //! # What this does not measure, stated because the number invites over-reading
 //!
@@ -42,10 +42,10 @@
 //! doorbell that would carry it. Which of the two is the larger half is a
 //! question about one host, and this probe measures only one side of it --
 //! read `probe-doorbell-cost`'s `set_reset_event` from the same run for the
-//! other. The comparison inverts between machines: the development machine had
-//! the doorbell at roughly a third of a build, and an x86_64 host measured
-//! during review had it at roughly two and a half times one. A sentence naming
-//! a small half would therefore be wrong on one of them.
+//! other. The comparison inverts between machines: the Snapdragon X2 (ARM64)
+//! development machine had the doorbell at roughly a third of a build, and an
+//! x86_64 host measured during review had it at roughly two and a half times
+//! one. A sentence naming a small half would therefore be wrong on one of them.
 //! # Handle duplication is the part that is easy to under-count
 //!
 //! A request that carries a handle -- a template handle for an open, or the
@@ -63,12 +63,17 @@
 //! path is resolved at submission -- the process CWD is mutable by any thread,
 //! so even perfect remoting would be racy.
 //!
-//! That work is **lexical**: `windows-namespace-request-sys` documents the call
-//! as resolving `.` and `..` "without touching the filesystem". So the measured
-//! remainder is path normalization, not allocation -- and calling it a *syscall
-//! cost*, as this once did, both contradicts the owning crate and names a
-//! mechanism a timing loop cannot establish. What survives is the part that
-//! matters: an allocator cannot remove it.
+//! That work reads **process state**: it resolves against the current
+//! directory, and for a drive-relative path against the per-drive current
+//! directory held in the `=C:` environment variables. So the measured remainder
+//! is path resolution, not allocation -- and naming a *mechanism* for it has
+//! now been got wrong twice. Calling it a *syscall cost* claimed a kernel
+//! transition a timing loop cannot establish; calling it *lexical*, which
+//! replaced it, claimed pure string work it equally is not. A genuinely lexical
+//! canonicalizer is a different call (`PathCchCanonicalizeEx`) and is
+//! deliberately not the one wanted here, because resolving against the CWD at
+//! submission is the property being bought. What survives either way is the
+//! part that matters: an allocator cannot remove it.
 //!
 //! The two schemes that might reduce it recover different halves. **Inline
 //! storage** removes the allocation and copy, which is what

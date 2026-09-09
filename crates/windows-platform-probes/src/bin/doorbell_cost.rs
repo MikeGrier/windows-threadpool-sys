@@ -122,7 +122,8 @@ fn render(observation: &Observation, park: Option<f64>) -> String {
         // used to state, unconditionally, that the empty submit was "far too
         // cheap for a kernel transition -- almost certainly short-circuiting in
         // user mode". That was written around a 79 ns reading on the
-        // development machine and is contradicted by any host where the empty
+        // Snapdragon X2 (ARM64) development machine and is contradicted by any
+        // host where the empty
         // submit lands among this probe's own syscalls: measured here at
         // 216 ns against 205 ns for an already-signalled `SetEvent` and 280 ns
         // for a satisfied wait, the claim is not merely unsupported, it is

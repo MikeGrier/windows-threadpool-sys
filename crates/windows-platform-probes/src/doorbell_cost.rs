@@ -52,7 +52,7 @@
 //! to be.
 //!
 //! Whether it even reaches the kernel is host-dependent and the binary decides
-//! it per run rather than asserting it. On the development machine it came in
+//! it per run rather than asserting it. On the Snapdragon X2 (ARM64) development machine it came in
 //! at ~79 ns, far below that machine's own syscalls, which reads as
 //! short-circuiting in user mode when there is nothing queued; on an x86_64
 //! host measured during review it was 216 ns, sitting among that host's 206 ns
@@ -117,9 +117,10 @@ impl Observation {
     /// The argument rests on *carries no work*, which holds everywhere, and no
     /// longer on *does not enter the kernel*, which does not. That read "an
     /// empty submit does not appear to enter the kernel, so this ratio has a
-    /// denominator that is not a syscall" -- a development-machine reading
-    /// (~79 ns) stated as a general fact. The binary decides it per host and
-    /// on an x86_64 machine measured during review printed the opposite, the
+    /// denominator that is not a syscall" -- a reading from the Snapdragon X2
+    /// (ARM64) development machine (~79 ns) stated as a general fact. The
+    /// binary decides it per host, and on an x86_64 machine measured during
+    /// review it printed the opposite, the
     /// empty submit landing at 216 ns among that probe's own 206 ns syscalls.
     #[must_use]
     pub fn doorbell_share_of_submit(&self) -> Option<f64> {

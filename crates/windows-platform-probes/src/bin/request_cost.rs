@@ -14,9 +14,20 @@ use std::fmt::Write as _;
 use windows_platform_probes::report::{Stdout, emit};
 use windows_platform_probes::request_cost::measure;
 
-/// Measured by `probe-doorbell-cost` on the development machine, and recorded in
-/// [the 2026-08-30 design session]. Restated here only to render a ratio; the
-/// authoritative number is whatever that probe prints on the host this runs on.
+/// Measured by `probe-doorbell-cost` on a **Snapdragon X2 (ARM64)** machine,
+/// and recorded in [the 2026-08-30 design session]. Restated here only to
+/// render a ratio; the authoritative number is whatever that probe prints on
+/// the host this runs on.
+///
+/// **The platform is named because a nanosecond figure without one is not a
+/// measurement, it is an anecdote.** These constants said "the development
+/// machine", which is a label only its author can resolve, and everything
+/// derived from them was then read as though it described machines in general.
+/// It does not: an x86_64 host measured during review put the doorbell cycle at
+/// ~531 ns against ~208 ns for a redundant `SetEvent`, where the ARM64 figures
+/// here are 164.9 and 7.2. Two observations, two architectures, and the
+/// conclusions drawn from them differ in sign -- which is the whole argument
+/// against generalising from either.
 ///
 /// **The build profile behind these is not recorded**, which is why the report
 /// below calls the ratios indicative rather than quoting them as results. They
@@ -94,9 +105,10 @@ fn render() -> String {
         // The ratio names its own reference, because the two numbers do not
         // come from the same machine. `build` was measured on this host just
         // now; the doorbell figure is a constant captured once on the
-        // development machine. This probe now runs on hosted CI runners, which
-        // are a heterogeneous fleet, so a ratio printed as though both halves
-        // were local can be wrong even when the measurement is sound.
+        // Snapdragon X2 (ARM64) development machine. This probe now runs on
+        // hosted CI runners, which are a heterogeneous fleet, so a ratio printed
+        // as though both halves were local can be wrong even when the
+        // measurement is sound.
         let _ = writeln!(
             out,
             "  building a pathed request costs {build:.0} ns, which is {:.1}x one",
@@ -104,7 +116,7 @@ fn render() -> String {
         );
         let _ = writeln!(
             out,
-            "  doorbell AS MEASURED ON THE DEVELOPMENT MACHINE ({DOORBELL_NS_REFERENCE:.1} ns),"
+            "  doorbell AS MEASURED ON THE ARM64 DEVELOPMENT MACHINE ({DOORBELL_NS_REFERENCE:.1} ns),"
         );
         let _ = writeln!(
             out,
@@ -161,10 +173,11 @@ fn render() -> String {
         // This read "What it does support: for an open-heavy workload, doorbell
         // tuning would be optimizing the small half" -- a design conclusion
         // whose truth depends entirely on which of the two is larger, decided
-        // against a constant measured on another machine. It INVERTS here:
-        // `probe-doorbell-cost` reports a ~531 ns cycle on this host against
-        // ~210 ns to build a request, so the doorbell is the large half and
-        // tuning it would optimize the large one. Both probes run in the same
+        // against a constant measured on the Snapdragon X2 (ARM64) development
+        // machine. It INVERTS on the x86_64 host measured during review, where
+        // `probe-doorbell-cost` reported a ~531 ns cycle against ~210 ns to
+        // build a request, so the doorbell is the large half there and tuning
+        // it would optimize the large one. Both probes run in the same
         // CI job, so the sentence was contradicted a few lines further down the
         // same log.
         //
@@ -272,14 +285,21 @@ fn render() -> String {
             out,
             "\n  WHERE THE TIME ACTUALLY GOES, and it is not the allocator:"
         );
-        // "lexical path resolution", not "a syscall". `windows-namespace-
-        // request-sys` documents `GetFullPathNameW` as lexical -- "`.` and `..`
-        // are resolved without touching the filesystem" -- so it normalizes in
-        // user mode against the CWD rather than making a kernel transition.
-        // This said "most of the cost above is a syscall that no allocation
-        // scheme can remove", which contradicts the owning crate and names a
-        // mechanism a timing loop cannot establish anyway. The conclusion that
-        // matters survives: whatever it is, it is not allocation.
+        // "resolves against process state" -- not "a syscall", and not
+        // "lexical" either.
+        //
+        // The first was wrong because a timing loop cannot establish a kernel
+        // transition. The second, which replaced it, is wrong for a symmetric
+        // reason: `GetFullPathNameW` consults the process current directory,
+        // and for a drive-relative path the per-drive current directory held in
+        // the `=C:` environment variables, so it is not pure string work. A
+        // genuinely lexical canonicalizer is a different call
+        // (`PathCchCanonicalizeEx`), and it is deliberately NOT the one
+        // `prepare` wants -- resolving against the CWD at submission is the
+        // property the namespace design is buying.
+        //
+        // What this run established is the cost. The mechanism it did not, and
+        // two successive attempts to name one were each wrong in the same way.
         let _ = writeln!(
             out,
             "  `prepare` calls GetFullPathNameW to resolve the path against the"
@@ -290,19 +310,19 @@ fn render() -> String {
         );
         let _ = writeln!(
             out,
-            "  and resolving later would be racy. That is lexical normalization,"
+            "  and resolving later would be racy. That reads process state and"
         );
         let _ = writeln!(
             out,
-            "  not a filesystem touch -- and not an allocation either, so most of"
+            "  touches no filesystem -- and it is not an allocation, so most of the"
         );
         let _ = writeln!(
             out,
-            "  the cost above is work no allocation scheme can remove. Whether it"
+            "  cost above is work no allocation scheme can remove. Whether any of"
         );
         let _ = writeln!(
             out,
-            "  enters the kernel is not something this run measured."
+            "  it enters the kernel is not something this run measured."
         );
         let _ = writeln!(
             out,
