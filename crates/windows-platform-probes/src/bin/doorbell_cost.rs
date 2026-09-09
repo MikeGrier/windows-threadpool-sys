@@ -77,14 +77,21 @@ fn render(observation: &Observation, park: Option<f64>) -> String {
         if let Some(park) = park {
             let _ = writeln!(
                 out,
-                "  an actual park-and-wake round trip costs {:.0}x that again ({:.0} ns),",
+                "  a full park-and-wake round trip costs {:.0}x that again ({:.0} ns),",
                 park / doorbell,
                 park
             );
+            // "an upper bound", matching what `measure_park_and_wake` documents.
+            // This said "which is what is paid when the consumer genuinely
+            // sleeps", while the function producing the number says it is a
+            // round trip -- wake the peer, park, be woken -- and therefore an
+            // upper bound on one wakeup rather than the cost itself. The real
+            // doorbell path pays one handoff; this measures two.
             let _ = writeln!(
                 out,
-                "  which is what is paid when the consumer genuinely sleeps."
+                "  which bounds ONE wakeup from above: it is two handoffs, and the"
             );
+            let _ = writeln!(out, "  doorbell path pays one.");
         }
     }
 
@@ -174,26 +181,64 @@ fn render(observation: &Observation, park: Option<f64>) -> String {
             "  so at a batch of about {break_even}, the doorbell costs less per"
         );
         let _ = writeln!(out, "  operation than the atomic push it accompanies.");
+
+        // What the arithmetic above does NOT support, spelled out because the
+        // conclusion drawn from it used to be its opposite.
+        //
+        // Every figure above divides ONE doorbell across a batch, which is the
+        // cost of signalling once per drained batch -- coalescing on the
+        // empty-to-non-empty edge. A producer that signals on every push pays a
+        // redundant `SetEvent` each time and amortizes nothing, which is the
+        // `set_event_already_signalled` row this probe measures precisely
+        // because that is the always-signal cost.
+        //
+        // This block used to end "the skip-when-busy rule is a refinement, not a
+        // prerequisite ... a first implementation can always-signal and stay
+        // honest", which reverses its own arithmetic: batching amortizes a
+        // doorbell only for a producer that does not ring one per push.
+        if let Some(redundant) = observation.get("set_event_already_signalled") {
+            let _ = writeln!(
+                out,
+                "\n  That is the COALESCED cost -- one signal per drained batch. A"
+            );
+            let _ = writeln!(
+                out,
+                "  producer that signals on every push amortizes nothing and pays a"
+            );
+            let _ = writeln!(
+                out,
+                "  redundant SetEvent per operation: {redundant:.0} ns, or {:.0}x the push,",
+                redundant / atomic
+            );
+            let _ = writeln!(out, "  at every batch size.");
+        }
     }
 
     let _ = writeln!(
         out,
-        "\n  => The skip-when-busy rule is a refinement, not a prerequisite."
+        "\n  => Coalescing is the prerequisite; the parked-consumer check is the"
     );
     let _ = writeln!(
         out,
-        "     Batching alone drives the doorbell below the cost of the push,"
+        "     refinement. Signalling once per empty-to-non-empty edge is what"
     );
     let _ = writeln!(
         out,
-        "     so a first implementation can always-signal and stay honest."
+        "     drives the doorbell below the push, and it needs no eventcount --"
     );
     let _ = writeln!(
         out,
-        "     Adopt the eventcount when a measurement against real work"
+        "     only the queue's own emptiness. Tracking whether a consumer is"
     );
-    let _ = writeln!(out, "     justifies its lost-wakeup risk -- not before.");
-
+    let _ = writeln!(
+        out,
+        "     actually parked is a further saving on top of that, and it is the"
+    );
+    let _ = writeln!(
+        out,
+        "     part carrying the lost-wakeup risk, so it can wait for a"
+    );
+    let _ = writeln!(out, "     measurement against real work.");
     let atomic = observation.get("atomic_fetch_add").unwrap_or(f64::NAN);
     let already = observation
         .get("set_event_already_signalled")

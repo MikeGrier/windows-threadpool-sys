@@ -46,12 +46,19 @@
 //!
 //! This probe was written expecting to divide the doorbell cost by
 //! `submit_io_ring_empty` and read off "the doorbell is N% of a syscall". **Do
-//! not do that.** Measured on the development machine, an empty `SubmitIoRing`
-//! came in at ~79 ns -- far too cheap for a kernel transition, so it is almost
-//! certainly short-circuiting in user mode when there is nothing queued. The
-//! resulting "doorbell is 210% of a syscall" would have been a confident wrong
-//! answer built on a denominator that never entered the kernel.
+//! not do that.** An empty submission carries no work, so whatever it costs is
+//! not the denominator that question needs, and "the doorbell is 210% of a
+//! syscall" would be a confident wrong answer whatever the number turned out
+//! to be.
 //!
+//! Whether it even reaches the kernel is host-dependent and the binary decides
+//! it per run rather than asserting it. On the development machine it came in
+//! at ~79 ns, far below that machine's own syscalls, which reads as
+//! short-circuiting in user mode when there is nothing queued; on an x86_64
+//! host measured during review it was 216 ns, sitting among that host's 206 ns
+//! `SetEvent` and 280 ns satisfied wait, where nothing supports the claim. The
+//! argument above needs neither reading, which is why it is stated over the
+//! work carried rather than over the transition.
 //! The honest denominator is the cost of the real work a submission carries,
 //! which this probe deliberately does not measure -- so it reports the absolute
 //! costs and the *batching* arithmetic instead, and leaves the ratio alone.
@@ -101,11 +108,19 @@ impl Observation {
     /// One doorbell cycle as a fraction of one **empty** `SubmitIoRing`.
     ///
     /// **This is not the number the design turns on, and it should not be read
-    /// as one.** An empty submit does not appear to enter the kernel (see the
-    /// module documentation), so this ratio has a denominator that is not a
-    /// syscall. It is exposed because the raw fact is worth recording across
-    /// hosts -- a machine where the empty submit is *expensive* would itself be
-    /// a finding -- not because dividing by it answers anything.
+    /// as one.** An empty submit carries no work, so this ratio has a
+    /// denominator that measures nothing the design cares about. It is exposed
+    /// because the raw fact is worth recording across hosts -- a machine where
+    /// the empty submit is *expensive* would itself be a finding -- not because
+    /// dividing by it answers anything.
+    ///
+    /// The argument rests on *carries no work*, which holds everywhere, and no
+    /// longer on *does not enter the kernel*, which does not. That read "an
+    /// empty submit does not appear to enter the kernel, so this ratio has a
+    /// denominator that is not a syscall" -- a development-machine reading
+    /// (~79 ns) stated as a general fact. The binary decides it per host and
+    /// on an x86_64 machine measured during review printed the opposite, the
+    /// empty submit landing at 216 ns among that probe's own 206 ns syscalls.
     #[must_use]
     pub fn doorbell_share_of_submit(&self) -> Option<f64> {
         let doorbell = self.get("set_reset_event")?;

@@ -57,6 +57,17 @@ fn render() -> String {
         "{:<26} {:>10} {:>14} {:>16}",
         "operation", "ns/op", "x an atomic", "x a doorbell"
     );
+    // Says what the first four rows include, because their names do not. Each
+    // is a construct-and-DESTROY cycle: `time_loop` drops the value it is
+    // handed at the end of the timed statement, so the free is inside the
+    // figure. `capture_handle` and `close_handle` are the exception and are
+    // timed apart, because dropping a `CapturedHandle` calls `CloseHandle` and
+    // that is a second kernel transition rather than a free.
+    let _ = writeln!(
+        out,
+        "  (the first four are construct-and-drop cycles; capture and close are\n   \
+         timed separately)"
+    );
     for timing in &observation.timings {
         let _ = writeln!(
             out,
@@ -231,12 +242,23 @@ fn render() -> String {
                 );
                 let _ = writeln!(out, "  half.");
             } else {
+                // The ratio without a verdict. This branch fires on `capture <=
+                // build`, which is every ratio from 0.99 down to 0.01, and it
+                // said "the two are comparable and neither dominates" for all
+                // of them -- a claim about closeness drawn from a test for
+                // order. Whether two figures are comparable needs a range, and
+                // this probe was given one only by accident of which arm it
+                // landed in.
                 let _ = writeln!(
                     out,
-                    "  It is {:.2}x the pathed request, so the two are comparable and",
+                    "  It is {:.2}x the pathed request. Which of the two dominates, if",
                     capture / build
                 );
-                let _ = writeln!(out, "  neither dominates.");
+                let _ = writeln!(
+                    out,
+                    "  either does, is for a reader with a threshold in mind; this run"
+                );
+                let _ = writeln!(out, "  establishes only the two costs and their ratio.");
             }
         }
     }
@@ -250,21 +272,37 @@ fn render() -> String {
             out,
             "\n  WHERE THE TIME ACTUALLY GOES, and it is not the allocator:"
         );
+        // "lexical path resolution", not "a syscall". `windows-namespace-
+        // request-sys` documents `GetFullPathNameW` as lexical -- "`.` and `..`
+        // are resolved without touching the filesystem" -- so it normalizes in
+        // user mode against the CWD rather than making a kernel transition.
+        // This said "most of the cost above is a syscall that no allocation
+        // scheme can remove", which contradicts the owning crate and names a
+        // mechanism a timing loop cannot establish anyway. The conclusion that
+        // matters survives: whatever it is, it is not allocation.
         let _ = writeln!(
             out,
             "  `prepare` calls GetFullPathNameW to resolve the path against the"
         );
         let _ = writeln!(
             out,
-            "  process working directory -- a Win32 call, because the CWD is mutable"
+            "  process working directory, because the CWD is mutable by any thread"
         );
         let _ = writeln!(
             out,
-            "  by any thread and resolving later would be racy. So most of the cost"
+            "  and resolving later would be racy. That is lexical normalization,"
         );
         let _ = writeln!(
             out,
-            "  above is a syscall that no allocation scheme can remove."
+            "  not a filesystem touch -- and not an allocation either, so most of"
+        );
+        let _ = writeln!(
+            out,
+            "  the cost above is work no allocation scheme can remove. Whether it"
+        );
+        let _ = writeln!(
+            out,
+            "  enters the kernel is not something this run measured."
         );
         let _ = writeln!(
             out,
@@ -309,9 +347,9 @@ fn render() -> String {
     let _ = writeln!(
         out,
         concat!(
-            r#"{{"reason":"x-probe-request-cost","arch":"{}","prepare_short_ns":{},"#,
-            r#""prepare_long_ns":{},"build_open_request_ns":{},"#,
-            r#""clone_prepared_units_ns":{},"capture_handle_ns":{},"#,
+            r#"{{"reason":"x-probe-request-cost","arch":"{}","prepare_short_cycle_ns":{},"#,
+            r#""prepare_long_cycle_ns":{},"build_open_request_cycle_ns":{},"#,
+            r#""clone_prepared_units_cycle_ns":{},"capture_handle_ns":{},"#,
             r#""close_handle_ns":{}}}"#
         ),
         std::env::consts::ARCH,

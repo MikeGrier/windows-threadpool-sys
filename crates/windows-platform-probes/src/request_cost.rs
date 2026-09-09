@@ -45,7 +45,7 @@
 //! other. The comparison inverts between machines: the development machine had
 //! the doorbell at roughly a third of a build, and an x86_64 host measured
 //! during review had it at roughly two and a half times one. A sentence naming
-//! a small half would therefore be wrong on one of them.//!
+//! a small half would therefore be wrong on one of them.
 //! # Handle duplication is the part that is easy to under-count
 //!
 //! A request that carries a handle -- a template handle for an open, or the
@@ -63,14 +63,20 @@
 //! path is resolved at submission -- the process CWD is mutable by any thread,
 //! so even perfect remoting would be racy.
 //!
-//! That means the measured cost is largely a *syscall* cost, and the two
-//! schemes that might reduce it recover different halves. **Inline storage**
-//! removes the allocation and copy, which is what `clone_prepared_units`
-//! measures, and cannot touch the resolution at all. **Recycling** a resolved
-//! path skips the resolution, paying the clone in place of the whole build, so
-//! it recovers the difference between them. Naming one figure for both -- as
-//! this did -- credits an allocator with the syscall it cannot remove. Knowing
-//! which half is which is the point of measuring both.//!
+//! That work is **lexical**: `windows-namespace-request-sys` documents the call
+//! as resolving `.` and `..` "without touching the filesystem". So the measured
+//! remainder is path normalization, not allocation -- and calling it a *syscall
+//! cost*, as this once did, both contradicts the owning crate and names a
+//! mechanism a timing loop cannot establish. What survives is the part that
+//! matters: an allocator cannot remove it.
+//!
+//! The two schemes that might reduce it recover different halves. **Inline
+//! storage** removes the allocation and copy, which is what
+//! `clone_prepared_units` measures, and cannot touch the resolution at all.
+//! **Recycling** a resolved path skips the resolution, paying the clone in
+//! place of the whole build, so it recovers the difference between them. Naming
+//! one figure for both -- as this did -- credits an allocator with work it
+//! cannot remove. Knowing which half is which is the point of measuring both.
 //! [the namespace session]: ../../../design-sessions/DESIGN-SESSION-2026-08-27-pseudo-async-namespace-operations.md
 //!
 //! Each timing is reported per operation. Absolute values are host-specific;
