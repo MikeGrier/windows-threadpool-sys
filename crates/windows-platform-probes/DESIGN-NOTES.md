@@ -1568,3 +1568,40 @@ this probe*, and a panic that suppressed it would destroy the evidence a reader
 needs. The real-host path is covered separately, by an integration test that
 applies the oracle explicitly.
 
+### The real-host test, and the guard that stops it passing for nothing
+
+M2.3 added [tests/a_real_report_agrees_with_itself.rs](tests/a_real_report_agrees_with_itself.rs).
+It composes the report the way `probe-topology` does and applies the oracle
+explicitly, because an integration test links the library without `cfg(test)`
+and so does not inherit M2.2's binding.
+
+**Why it had to exist.** All 26 in-crate call sites build their `Observation` by
+hand, and a hand-built observation can only contain a state its author already
+imagined. The oracle bound to those sites was therefore checking correspondences
+over cases chosen by the same person who wrote the renderer. The defect the
+oracle exists for was a state nobody had imagined. `measure()` reads the actual
+host, and on CI that is the whole hosted-runner fleet -- the population where an
+unimagined shape actually turns up.
+
+**It asserts nothing about the machine**, deliberately. A test expecting a
+processor count, a cache level or a verdict would fail on the next runner shape
+rather than on a defect, and would be loosened until it asserted nothing. "The
+report does not contradict itself" is checkable without knowing anything about
+the host, including a host whose topology cannot be read at all.
+
+#### The primary assertion can pass having checked nothing
+
+If the renderer's prose labels drift from the oracle's, every lookup returns
+`None`, every comparison is skipped, and the test passes. So a second test
+corrupts each of the four double-rendered counts in **this host's own report**
+and requires a violation for each. Corrupting one would have left the other
+three pairs unguarded.
+
+That guard was verified by widening one prose label by a single space. It failed,
+naming `"packages":` and pointing at label drift -- **and the primary test passed
+in the same run.** That pairing is the whole argument for the guard: the
+assertion that matters went green while checking one fact fewer than it thought.
+
+The corruption asserts it changed something before concluding anything, which is
+the lesson from M2.1's first injection.
+

@@ -65,12 +65,25 @@ speculative list to extend by imagination -- a fourth is added when a fourth con
   cannot see the defect at all, so the detection is the oracle's and the binding is what delivers
   it. Had only `report_oracle::tests` gone red, the binding would have been cosmetic.
 
-- [ ] **M2.3** -- Add the missing integration test: run `measure()` against the real host, render the
-  report, and apply the oracle. At the time of M2 the crate had one integration test, asserting only
-  that a probe writes to stdout, and none of the twenty-five `report()` calls rendered from a real
-  measurement -- every one used a hand-built `Observation`, which can only contain states its author
-  already imagined. On CI this runs across the whole hosted-runner fleet, which is where states no
-  fixture anticipates will actually appear.
+- [x] **M2.3** -- Add the missing integration test.
+  [tests/a_real_report_agrees_with_itself.rs](tests/a_real_report_agrees_with_itself.rs) composes the
+  report exactly as `probe-topology` does -- two fingerprint reads, a real `measure()`, `attribution`
+  -- and applies the oracle. Explicitly, because an integration test links the lib without
+  `cfg(test)`, so M2.2's binding does not reach it.
+
+  **It asserts nothing about this machine.** A test expecting a processor count or a cache level
+  would fail on the next runner shape rather than on a defect, and would be loosened until it
+  asserted nothing. It checks only that the report's parts agree *with each other*, which every host
+  must satisfy -- including one whose topology cannot be read at all.
+
+  **A second test exists because the first can pass vacuously**, and that is not hypothetical. If the
+  renderer drifts from the oracle's prose labels, every lookup returns `None`, every comparison is
+  skipped, and the real assertion passes having checked nothing. So each of the four double-rendered
+  counts is corrupted in this host's own report and a violation is required. Verified by widening a
+  prose label by one space: the guard failed naming `"packages":`, **while the primary test still
+  passed** -- exactly the vacuous green it exists to expose.
+
+  The corruption asserts it changed something first, per M2.1's lesson.
 
 - [ ] **M2.4** -- Explore, with the sparse matrix as the instrument, whether the same correspondence
   failures exist for `Coherence`, `BracketOutcome` and `Verdict`, and in the sibling probes' renderers.
