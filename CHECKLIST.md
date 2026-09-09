@@ -106,6 +106,85 @@ be settled rather than discovered later.
   completion, then submits the query. A compound entry is reserved for a measured performance argument
   and would be a fusion of these two entries rather than a capability they lack. Depends on M21.3.
 
+## M22 -- Discharge the failable-call standard across the workspace
+
+The standard is recorded in
+[DESIGN-NOTES.md](DESIGN-NOTES.md#a-failable-call-has-its-failure-handled-always): a call that
+can fail has its failure handled, with no per-site analysis. These items apply it to code
+written before it was stated.
+
+- [ ] **M22.1** -- Audit every bare `unsafe { Call(...) };` statement in the workspace and handle
+  the failure of each one that is failable.
+
+  **Scope, re-measured against main at `dc2b463` (2026-09-09, after PR #83 merged):** 119
+  single-line `unsafe`-block statement discards across 11 crates -- `windows-threadpool-sys` 57,
+  `windows-platform-probes` 23, `windows-file-watcher` 9, `windows-ioring-sys` 9,
+  `windows-overlapped-io-sys` 5, `windows-thread-ambient-sys` 5, `windows-namespace-request-sys` 4,
+  `windows-guard-alloc` 3, `windows-impersonation-token-sys` 2, `windows-file-enumeration-sys` 1,
+  `windows-placement-probe` 1.
+
+  **Most are not violations.** `SubmitThreadpoolWork`, `SetThreadpoolWait`, `GetSystemInfo`,
+  `SetLastError` and the `WaitForThreadpool*Callbacks` family return `void`, and `SetErrorMode`
+  returns the previous mode rather than a status. Discarding those is correct.
+
+  The failable set is **30 sites**, each confirmed against its `windows-sys` signature rather than
+  assumed:
+
+  | call | returns | discarded sites |
+  |---|---|---|
+  | `CloseHandle` | `BOOL` | 24 |
+  | `SetEvent` | `BOOL` | 2 |
+  | `CancelIoEx` | `BOOL` | 1 |
+  | `RevertToSelf` | `BOOL` | 1 |
+  | `SetCurrentDirectoryW` | `BOOL` | 1 |
+  | `CloseIoRing` | `HRESULT` | 1 |
+
+  **Treat every number here as stale on arrival and re-measure.** These figures moved between two
+  measurements a few hours apart (121 -> 119 raw, and `SetEvent` 4 -> 2) purely because PR #83
+  landed in between. Re-run the lint below rather than trusting the table; it is a description of
+  the shape of the work, not an inventory to tick off.
+
+  **Use the compiler, not a regex: `RUSTFLAGS="-W unused_results"`.** `unused_results` is a
+  rustc lint, allow-by-default, that fires on any expression statement discarding a non-unit
+  value -- which is exactly this rule's shape, and it does not care how many lines the statement
+  spans or whether the callee is `unsafe`.
+
+  (Either spelling works: rustc normalises `_` and `-` in lint names on the command line, and then
+  echoes the hyphenated form back -- a run of `-W unused_results` reports "requested on the command
+  line with `-W unused-results`". Verified on 1.98.0; noted only because that echo reads like a
+  correction and is not one.) Measured on `windows-platform-probes`: it flagged
+  every raw Win32 discard the regex found, plus four in `doorbell_cost.rs` the regex had counted
+  but nobody had looked at, in a file already believed fixed. A per-crate total is not a list.
+
+  It is too noisy to deny workspace-wide, which is why it is an audit tool rather than a CI gate.
+  Measured on `windows-platform-probes` at `dc2b463`: **104 warnings, of which 62 are ordinary
+  Rust** -- `HashMap::insert`, `HashSet::remove`, `Vec::pop`, `fetch_add`, `black_box` -- and 42
+  name a raw Win32 call. Not even those 42 are all violations, since several of the calls return
+  `void`. Triage is required at every step, and `SetErrorMode`'s previous mode and `fetch_add`'s
+  prior value are the standing examples of a discarded return that is not discarded failure
+  information.
+
+  Do not reach for `#[must_use]` here: it cannot be applied to `windows-sys`'s `extern` block, so
+  it enforces nothing at the sites that matter. It becomes available only after M22.2, on our own
+  wrappers -- which is the durable end state, because a `#[must_use]` wrapper gives permanent
+  enforcement with none of the lint's noise.
+
+- [ ] **M22.2** -- Introduce a checked owning handle type and route the `CloseHandle` sites through
+  it, so the rule is discharged by construction rather than by 24 written-out checks.
+
+  This is the type-embedding half of the decision, and `CloseHandle` is its clearest case: one
+  `Drop` that checks once removes every visible check at every use site and cannot be forgotten at
+  a new one. Note that `std`'s `OwnedHandle` is not a discharge on its own -- it closes on drop but
+  discards the `BOOL`.
+
+  Settle two questions while doing it, because both determine whether the type is usable at all.
+  What a failing close should do in `Drop`, given that panicking in a drop during unwind aborts --
+  the honest options are abort, a debug assertion, or a recorded counter, and they are not
+  equivalent. And whether teardown paths that legitimately expect a close to fail exist in this
+  workspace; `windows-threadpool-sys` owns wait targets whose close routine is a caller-supplied
+  function pointer, which is exactly where such a path would be. Depends on M22.1's
+  classification.
+
 ## M-inf -- Parked
 
 Ungated work with no identified predecessor deliverable.
