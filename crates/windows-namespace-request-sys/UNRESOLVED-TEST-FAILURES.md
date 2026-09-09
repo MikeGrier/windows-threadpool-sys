@@ -54,10 +54,16 @@ can surface later as an unrelated failure somewhere else entirely. The visible
 assertion is the benign outcome.
 
 **Not caused by the change that observed it.** The branch that hit this
-(`mikegrier/probes-cost-pair`, PR #83) touches only
-`crates/windows-platform-probes/`, `.github/workflows/ci.yml` and `Cargo.lock`;
-it adds `windows-namespace-request-sys` as a *dependency* and changes none of its
-code.
+(`mikegrier/probes-cost-pair`, PR #83) makes **no source change to this crate**:
+its only file here is this record. Everything else it touches is
+`crates/windows-platform-probes/`, `.github/workflows/ci.yml` and `Cargo.lock`,
+and it takes `windows-namespace-request-sys` as a new *dependency* without
+altering it.
+
+(An earlier revision of this paragraph said the branch touched only those three
+paths, which was untrue the moment it was written -- the file stating it lives
+under `crates/windows-namespace-request-sys/`. Corrected so a later reader
+checking the claim against the diff finds it holds.)
 
 **Directions for whoever picks this up**, in rough order of directness:
 
@@ -66,13 +72,27 @@ code.
    resting on every future test author remembering -- the same "a flat rule beats
    a rule someone must remember to apply" problem recorded in the root
    [DESIGN-NOTES.md](../../DESIGN-NOTES.md) for status checking.
-2. Make the lock unnecessary by not probing a raw value at all. `was_still_open`
-   exists to answer "did the close routine actually run?", and the close routines
-   already have observation statics for that purpose. A probe that asks the
-   routine rather than the OS cannot race.
-3. Failing both, make the hazard structural: have `Fixture` / `captured_duplicate`
-   take the read lock themselves, so opening a handle without the lock is not
-   something a test can do by omission.
+2. Make the hazard structural rather than remembered: have `Fixture` /
+   `captured_duplicate` take the lock themselves, so opening a handle *without*
+   it is not something a test can do by omission. This is the same move as
+   preferring a type that discharges a rule over a rule each author must apply.
+3. Make the lock unnecessary by not probing a raw value at all. `was_still_open`
+   exists to answer "did the close routine actually run?", and asking the routine
+   rather than the OS cannot race. **Note this is a bigger change than it sounds**
+   -- the two routines here are the real `CloseHandle` and
+   `FindCloseChangeNotification`, called directly with no shim (a deliberate
+   property, recorded in [src/close.rs](src/close.rs)), so there is nothing
+   currently observable to ask. It would mean introducing a test-only routine
+   that records into a static, which is the pattern `windows-threadpool-sys`
+   already uses for its wait targets -- see the root
+   [DESIGN-NOTES.md](../../DESIGN-NOTES.md) -> "Testing it needs per-test statics,
+   not one global counter", which also documents why those statics must be
+   per-test rather than at module scope, for exactly this concurrency reason.
 
-Direction 2 is the most promising and the largest; direction 1 would stop the
-bleeding today.
+Direction 1 stops the bleeding today; direction 2 is the smallest change that
+stops it recurring. Direction 3 is the most thorough and touches the most.
+
+(An earlier revision of this list claimed the close routines "already have
+observation statics". They do not -- that is `windows-threadpool-sys`'s pattern,
+imported here by mistake. `was_still_open`, used at seven sites in
+`close/tests.rs`, is the only mechanism this crate has for the question.)
