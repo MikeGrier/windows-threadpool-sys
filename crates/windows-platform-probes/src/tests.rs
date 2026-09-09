@@ -4296,3 +4296,46 @@ fn a_named_level_with_no_summary_is_not_also_called_missing() {
         "and still says which absent case it is: {text}"
     );
 }
+
+// --- the doorbell's park-and-wake handshake ---------------------------------
+//
+// Its own documentation records that the first implementation DEADLOCKED: one
+// thread setting an auto-reset event while the other waited, two signals
+// collapsing into one, and the waiter blocking on INFINITE for ever. Nothing
+// tested it, so the rewrite that fixed it could have been undone silently.
+//
+// Both tests are bounded by construction. A test that can hang is worse than
+// the defect it guards, because it takes the whole suite with it: the handshake
+// itself waits with a 5-second timeout and reports `None` rather than blocking,
+// so a reintroduced deadlock surfaces here as a failed assertion within seconds
+// rather than as a suite that never finishes.
+
+#[test]
+fn a_zero_round_handshake_has_no_average_rather_than_a_meaningless_one() {
+    // The deterministic half of the contract, and the one a caller is most
+    // likely to break by "simplifying". With no rounds the elapsed time is zero
+    // and the average would be `0.0 / 0.0` -- NaN, wrapped in the `Some` this
+    // function documents as a meaningful number, against which every comparison
+    // a caller makes returns false with no indication why.
+    assert_eq!(
+        crate::doorbell_cost::measure_park_and_wake(0),
+        None,
+        "zero rounds has no average, and must not report one"
+    );
+}
+
+#[test]
+fn a_small_handshake_completes_and_reports_a_positive_round_trip() {
+    // The liveness half: the two-event alternation actually runs to completion
+    // and produces a number. Deliberately few rounds -- this is a real
+    // cross-thread measurement, and the assertion is that it terminates and is
+    // sane, not that it is fast. A machine under load may make each round
+    // arbitrarily slow without making it wrong.
+    let average = crate::doorbell_cost::measure_park_and_wake(64)
+        .expect("a bounded handshake of 64 rounds must complete rather than time out");
+
+    assert!(
+        average.is_finite() && average > 0.0,
+        "a completed handshake must report a positive finite round trip, got {average}"
+    );
+}
