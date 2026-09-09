@@ -1477,3 +1477,57 @@ Whether this generalises to `Coherence`, `BracketOutcome`, `Verdict` and the
 sibling probes is **an open question, deliberately not answered here.** The work
 this decision implies is queued as M2 in [CHECKLIST.md](CHECKLIST.md); this
 section schedules nothing on its own.
+
+### The oracle exists, and what it deliberately refuses to know
+
+M2.1 built it: [src/report_oracle.rs](src/report_oracle.rs), seeded with the
+three correlations that are known to be real because each was violated.
+
+**It reads the rendered artifact, never the state behind it.** Checking state
+would miss precisely this defect class -- in the original finding the state was
+consistent and the two *renderings* of it were not.
+
+**It relates two things already visible in the report, and re-derives nothing.**
+A second implementation of the rendering rules would be a check of the copy
+rather than of the contract, and would drift the moment either moved. So the
+alarm rule compares an alarm line against a verdict line, the double-rendering
+rule compares prose against NDJSON, and the gating rule compares a claim against
+the report's own published evidence of doubt.
+
+That last one is the interesting boundary. `CrossCheck::parse_in_doubt` is
+`!disagreements.is_empty() || !parse_incomplete.is_empty()`, and the NDJSON
+publishes `parse_incomplete` as a **count** rather than the predicate -- so the
+oracle reads the count and the `disagree` verdict, which are the two visible
+shadows of that definition. The coupling is deliberate and is the thing M2.2's
+sabotage check must confirm still holds.
+
+**Half the tests assert acceptance**, following `ContractChecker`: an alarm
+beside a non-agreeing verdict is legal and is what the fix produced, a caveated
+claim under doubt is legal and is what the renderer emits on every heterogeneous
+host with a short parse, and a prose-only report is silence rather than
+violation. Over-constraining is the same defect as under-specifying and fails in
+the more expensive direction, because noise trains a reader to ignore the
+instrument.
+
+#### The failure mode that would look exactly like success
+
+An oracle whose prose labels do not match the renderer reads nothing, finds
+nothing, and passes everything. So the labels were confirmed against a real
+`probe-topology` run, and a test corrupts each double-rendered value in turn and
+requires a violation -- if a label ever drifts, that test fails rather than the
+oracle going quietly blind.
+
+Then the oracle was run against a **real rendered report** with the historical
+defect injected into it. It reported the contradiction twice, once for the prose
+verdict and once for the NDJSON, and reported nothing on the same report
+unmodified.
+
+**The first attempt at that injection silently did nothing**, and is worth
+recording because it nearly produced the opposite conclusion. The anchor used
+was `cross-check:`, which does not occur -- the real text is `cross-check
+against independently read Win32 counters:` -- so the "defective" report was
+identical to the clean one, the oracle correctly reported no violation, and the
+reading was almost "the oracle is blind". A sabotage that fails to apply is
+indistinguishable from an instrument that fails to fire, unless the injection
+asserts it changed something. It now does.
+

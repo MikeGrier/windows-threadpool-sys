@@ -22,14 +22,29 @@ implements.
 The three correlations below are known to be real because each was violated. They are not a
 speculative list to extend by imagination -- a fourth is added when a fourth contradiction is found.
 
-- [ ] **M2.1** -- Add a report oracle to this crate: one shared executable definition of the
-  correlations that must hold between the parts of a rendered report, checked against the rendered
-  artifact rather than against internal state. Seed it with the three known invariants: an alarm in
-  the prose implies the verdict is not `agree`; a fact rendered in both prose and NDJSON agrees across
-  the two; an uncaveated hardware claim implies `!parse_in_doubt`. Model it on
-  [../windows-file-watcher/src/contract.rs](../windows-file-watcher/src/contract.rs)'s
-  `ContractChecker`, which is this repository's worked example and which existed unused while this
-  probe was being written.
+- [x] **M2.1** -- Add a report oracle to this crate. [src/report_oracle.rs](src/report_oracle.rs),
+  seeded with the three known invariants and modelled on `ContractChecker`, including its
+  as-many-must-accept-as-must-reject discipline. Reasoning in
+  [DESIGN-NOTES.md](DESIGN-NOTES.md#d-correspondence-failures).
+
+  It relates two things **already visible in the report** and re-derives nothing, because a second
+  implementation of the rendering rules would be a check of the copy rather than of the contract.
+  The gating rule is the interesting boundary: `parse_in_doubt` is
+  `!disagreements.is_empty() || !parse_incomplete.is_empty()`, and the NDJSON publishes
+  `parse_incomplete` as a *count*, so the oracle reads that count and the `disagree` verdict -- the
+  two visible shadows of the definition. That coupling is what M2.2's sabotage must confirm.
+
+  **Validated against a real rendered report, not only fixtures.** The prose labels were confirmed
+  against a live `probe-topology` run, a test corrupts each double-rendered value in turn so a
+  drifted label fails loudly rather than silently reading nothing, and the historical defect injected
+  into a real report is reported twice -- once for the prose verdict, once for the NDJSON.
+
+  **The first injection silently did nothing and nearly inverted the conclusion.** Its anchor,
+  `cross-check:`, does not occur -- the real text is `cross-check against independently read Win32
+  counters:` -- so the "defective" report was identical to the clean one and the oracle correctly
+  found nothing, which read as the oracle being blind. A sabotage that fails to apply is
+  indistinguishable from an instrument that fails to fire unless the injection asserts it changed
+  something.
 
 - [ ] **M2.2** -- Route every test that renders a report through the oracle, so the roughly
   twenty-five existing `report()` call sites inherit the checks and every future one does too. This is

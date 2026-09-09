@@ -125,6 +125,7 @@ pub mod long_path_report;
 pub mod pool_growth;
 pub mod queue_contention;
 pub mod report;
+pub mod report_oracle;
 pub mod request_cost;
 pub mod topology;
 pub mod topology_report;

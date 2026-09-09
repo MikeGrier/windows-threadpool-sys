@@ -1,0 +1,322 @@
+// Copyright (c) Mike Grier.
+
+//! Correspondences a rendered report must satisfy *between* its parts.
+//!
+//! # Why this exists rather than more per-part tests
+//!
+//! A pull-request review found [`crate::topology_report`] printing
+//! `BUG IN THIS PROBE ... Nothing below about cache partitioning can be
+//! trusted` while the verdict two paragraphs below read `=> agree`. Twenty-eight
+//! rounds of per-artifact review and a zero-surviving-mutant `cargo-mutants` run
+//! had both passed over it, because **every function involved was correct on its
+//! own terms** and the defect lived in the relation between two of them.
+//!
+//! That is the shape no per-part instrument can see. A test asserts one
+//! function's output; a mutant perturbs one function's behaviour; a reviewer
+//! reads one artifact and finds it locally true. A contradiction between two
+//! locally-true parts is invisible to all three.
+//!
+//! # It reads the artifact, not the state that produced it
+//!
+//! Every check here works on the **rendered text** -- the thing a reader and a
+//! log-mining pass actually receive. Checking internal state instead would miss
+//! precisely the defect class this exists for: the state was consistent in the
+//! case above, and the two renderings of it were not.
+//!
+//! # What it deliberately does not do
+//!
+//! It does not re-derive what the renderer should have printed. A second
+//! implementation of the rendering rules would be a check of the copy rather
+//! than of the contract, and would drift from the original the moment either
+//! moved. Each rule below relates **two things already visible in the report**,
+//! so the oracle has no opinion of its own to go stale.
+//!
+//! Over-constraining is the same defect as under-specifying, so a report that
+//! omits a fact is not a violation -- absence is checked only where the report
+//! itself makes a claim that requires the other part to agree.
+//!
+//! Seeded with three correlations, each of which is known to be real **because
+//! it was violated**. It is not a speculative list to extend by imagination: a
+//! fourth is added when a fourth contradiction is found.
+
+/// A correspondence between two parts of a report that did not hold.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Correspondence {
+    /// The prose raised an alarm while the verdict said everything matched.
+    ///
+    /// The original defect. An alarm is a statement that some part of the
+    /// report cannot be trusted; a verdict of `agree` is a statement that every
+    /// check made was made and matched. Both can be locally true and they
+    /// cannot both describe the same run.
+    AlarmWithAgreeingVerdict {
+        /// The alarm line found in the prose.
+        alarm: String,
+        /// Where the agreeing verdict was found: `prose` or `ndjson`.
+        verdict_source: &'static str,
+    },
+    /// One fact rendered twice, with the two renderings disagreeing.
+    ///
+    /// A report carries its findings for a human in prose and for a mining pass
+    /// in NDJSON. A consumer that reconciles the two cannot, and neither
+    /// rendering is self-evidently the wrong one.
+    ProseAndNdjsonDisagree {
+        /// What the fact is called, for the reader of the failure.
+        fact: &'static str,
+        /// As the prose rendered it.
+        prose: String,
+        /// As the NDJSON rendered it.
+        ndjson: String,
+    },
+    /// A hardware claim was stated without its caveat while the report's own
+    /// evidence says the parse was in doubt.
+    ///
+    /// The renderer's rule is that every hardware conclusion is gated on the
+    /// parse being whole. A claim printed bare, in a report that elsewhere
+    /// reports doubt, is that rule with an exception -- and a rule with an
+    /// exception is not a rule.
+    UncaveatedClaimUnderDoubt {
+        /// The claim that was stated bare.
+        claim: &'static str,
+        /// The report's own visible evidence of doubt.
+        evidence: String,
+    },
+}
+
+/// Every correspondence `report` violates, in the order they were checked.
+///
+/// An empty result means every correlation this oracle knows about held. It
+/// does **not** mean the report is correct: an oracle is a floor, not a
+/// specification.
+#[must_use]
+pub fn check(report: &str) -> Vec<Correspondence> {
+    let mut found = Vec::new();
+    let ndjson = ndjson_line(report);
+
+    check_alarm_against_verdict(report, ndjson, &mut found);
+    check_prose_against_ndjson(report, ndjson, &mut found);
+    check_claims_against_doubt(report, ndjson, &mut found);
+
+    found
+}
+
+/// [`check`], as an assertion, for tests that render a report.
+///
+/// # Panics
+///
+/// Panics listing every correspondence the report violated.
+pub fn assert_corresponds(report: &str) {
+    let violations = check(report);
+    assert!(
+        violations.is_empty(),
+        "the report's parts contradict each other: {violations:#?}\n\n\
+         --- the report ---\n{report}"
+    );
+}
+
+/// The report's machine-readable line, if it has one.
+///
+/// A report is prose with at most one NDJSON line in it. `report_unmeasured`
+/// emits a much shorter object than `report`, so every field read below is
+/// optional by construction.
+fn ndjson_line(report: &str) -> Option<&str> {
+    report.lines().find(|line| line.starts_with('{'))
+}
+
+/// The raw text of one field of a flat JSON object.
+///
+/// Hand-written rather than pulled from a JSON crate because this crate has no
+/// such dependency and the object is emitted a few lines away in this same
+/// crate: flat, unnested, and machine-generated. It returns the value's source
+/// text -- quotes stripped for a string, otherwise verbatim -- so a caller
+/// compares renderings rather than parsed values, which is the point.
+fn ndjson_field<'a>(line: &'a str, key: &str) -> Option<&'a str> {
+    let needle = format!("\"{key}\":");
+    let start = line.find(&needle)? + needle.len();
+    let rest = &line[start..];
+
+    let value = if let Some(stripped) = rest.strip_prefix('"') {
+        let end = stripped.find('"')?;
+        &stripped[..end]
+    } else if let Some(stripped) = rest.strip_prefix('[') {
+        let end = stripped.find(']')?;
+        &stripped[..end]
+    } else {
+        let end = rest.find([',', '}']).unwrap_or(rest.len());
+        &rest[..end]
+    };
+
+    Some(value.trim())
+}
+
+/// The text after `label` on the line that begins with it.
+fn prose_field<'a>(report: &'a str, label: &str) -> Option<&'a str> {
+    report
+        .lines()
+        .find(|line| line.starts_with(label))
+        .map(|line| line[label.len()..].trim())
+}
+
+/// Alarms the prose can raise. Each is a statement that part of the report is
+/// not to be trusted.
+const ALARMS: &[&str] = &["BUG IN THIS PROBE"];
+
+fn check_alarm_against_verdict(
+    report: &str,
+    ndjson: Option<&str>,
+    found: &mut Vec<Correspondence>,
+) {
+    let Some(alarm) = report
+        .lines()
+        .find(|line| ALARMS.iter().any(|marker| line.contains(marker)))
+    else {
+        return;
+    };
+
+    if report.contains("=> agree") {
+        found.push(Correspondence::AlarmWithAgreeingVerdict {
+            alarm: alarm.trim().to_owned(),
+            verdict_source: "prose",
+        });
+    }
+
+    if ndjson.and_then(|line| ndjson_field(line, "cross_check")) == Some("agree") {
+        found.push(Correspondence::AlarmWithAgreeingVerdict {
+            alarm: alarm.trim().to_owned(),
+            verdict_source: "ndjson",
+        });
+    }
+}
+
+/// Facts this report renders twice: the prose label, the NDJSON key, and the
+/// name to use when they disagree.
+///
+/// Counts only. A prose line reads `processors (online) : 16` and the NDJSON
+/// `"processors":16`, so the comparison is of the rendered values with the
+/// prose label removed.
+const DOUBLE_RENDERED: &[(&str, &str, &str)] = &[
+    ("processors (online) : ", "processors", "online processors"),
+    ("processor groups    : ", "groups", "processor groups"),
+    ("packages            : ", "packages", "packages"),
+    ("physical cores      : ", "cores", "physical cores"),
+];
+
+fn check_prose_against_ndjson(report: &str, ndjson: Option<&str>, found: &mut Vec<Correspondence>) {
+    let Some(ndjson) = ndjson else {
+        return;
+    };
+
+    for (label, key, fact) in DOUBLE_RENDERED {
+        let (Some(prose), Some(json)) = (prose_field(report, label), ndjson_field(ndjson, key))
+        else {
+            continue;
+        };
+        if prose != json {
+            found.push(Correspondence::ProseAndNdjsonDisagree {
+                fact,
+                prose: prose.to_owned(),
+                ndjson: json.to_owned(),
+            });
+        }
+    }
+
+    // The efficiency classes, whose two renderings differ in punctuation and so
+    // cannot be compared as text. This pair is here because it was wrong: the
+    // NDJSON once emitted the class COUNT under a plural name, so a
+    // single-class host printed `"efficiency_classes":1` beside a prose
+    // `efficiency classes: [0]` -- the same fact, in one report, in two
+    // renderings a consumer cannot reconcile.
+    if let (Some(prose), Some(json)) = (
+        prose_field(report, "  efficiency classes: "),
+        ndjson_field(ndjson, "efficiency_classes"),
+    ) {
+        let prose_classes = normalise_list(prose);
+        let json_classes = normalise_list(json);
+        if prose_classes != json_classes {
+            found.push(Correspondence::ProseAndNdjsonDisagree {
+                fact: "efficiency classes",
+                prose: prose_classes,
+                ndjson: json_classes,
+            });
+        }
+    }
+
+    // The verdict, which the prose states as a sentence and the NDJSON as a
+    // token.
+    let prose_verdict = if report.contains("=> agree") {
+        Some("agree")
+    } else if report.contains("=> DISAGREE") {
+        Some("disagree")
+    } else if report.contains("=> INCOMPLETE") {
+        Some("incomplete")
+    } else {
+        None
+    };
+
+    if let (Some(prose), Some(json)) = (prose_verdict, ndjson_field(ndjson, "cross_check"))
+        && prose != json
+    {
+        found.push(Correspondence::ProseAndNdjsonDisagree {
+            fact: "cross-check verdict",
+            prose: prose.to_owned(),
+            ndjson: json.to_owned(),
+        });
+    }
+}
+
+/// A list of numbers as a comparable string, whichever way it was punctuated.
+fn normalise_list(rendered: &str) -> String {
+    rendered
+        .trim_matches(['[', ']'])
+        .split(',')
+        .map(str::trim)
+        .filter(|piece| !piece.is_empty())
+        .collect::<Vec<_>>()
+        .join(",")
+}
+
+/// Hardware claims the prose can make, each with the caveat that must accompany
+/// it when the parse is in doubt.
+const GATED_CLAIMS: &[(&str, &str, &str)] = &[(
+    "(heterogeneous: an I/O thread left unconstrained can land on an",
+    "This run did not establish that the parse is whole",
+    "heterogeneity",
+)];
+
+fn check_claims_against_doubt(report: &str, ndjson: Option<&str>, found: &mut Vec<Correspondence>) {
+    let Some(ndjson) = ndjson else {
+        return;
+    };
+
+    // The report's own visible evidence that its parse was in doubt.
+    //
+    // These two are exactly what `CrossCheck::parse_in_doubt` is defined as --
+    // a non-empty `parse_incomplete` or a non-empty `disagreements`, the latter
+    // being what makes the verdict `disagree`. That correspondence is the point
+    // rather than a coincidence: if the definition changes and this does not,
+    // the sabotage check in M2.2 is what should notice.
+    let mut evidence = Vec::new();
+    if let Some(count) = ndjson_field(ndjson, "parse_incomplete")
+        && count != "0"
+    {
+        evidence.push(format!("parse_incomplete={count}"));
+    }
+    if ndjson_field(ndjson, "cross_check") == Some("disagree") {
+        evidence.push("cross_check=disagree".to_owned());
+    }
+
+    if evidence.is_empty() {
+        return;
+    }
+
+    for (claim, caveat, name) in GATED_CLAIMS {
+        if report.contains(claim) && !report.contains(caveat) {
+            found.push(Correspondence::UncaveatedClaimUnderDoubt {
+                claim: name,
+                evidence: evidence.join(", "),
+            });
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests;
