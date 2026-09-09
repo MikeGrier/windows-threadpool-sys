@@ -4329,13 +4329,116 @@ fn a_small_handshake_completes_and_reports_a_positive_round_trip() {
     // The liveness half: the two-event alternation actually runs to completion
     // and produces a number. Deliberately few rounds -- this is a real
     // cross-thread measurement, and the assertion is that it terminates and is
-    // sane, not that it is fast. A machine under load may make each round
-    // arbitrarily slow without making it wrong.
+    // sane, not that it is fast.
+    //
+    // The tolerance for a loaded machine is large but **bounded**, and this once
+    // said "arbitrarily slow without making it wrong", which is not true of the
+    // code it describes. Each wait inside the handshake carries a 5-second
+    // timeout; a round that exceeds it makes `measure_park_and_wake` return
+    // `None` and fails the `expect` below. The section header above states that
+    // bound correctly and the `expect` message names it outright, so the claim
+    // was contradicted twice within a few lines of making it.
+    //
+    // Bounded is the deliberate choice, for the reason in that header: a test
+    // that can hang takes the whole suite with it, which is worse than the
+    // defect it guards against. The margin is enormous -- a round trip is
+    // sub-microsecond in practice against a 5-second ceiling -- so a failure
+    // here means the machine stalled for seconds, which is worth a red test
+    // rather than a silently slow pass.
     let average = crate::doorbell_cost::measure_park_and_wake(64)
         .expect("a bounded handshake of 64 rounds must complete rather than time out");
 
     assert!(
         average.is_finite() && average > 0.0,
         "a completed handshake must report a positive finite round trip, got {average}"
+    );
+}
+
+// --- what `prepare` needs from a drive letter -------------------------------
+//
+// `request_cost::measure` builds its long-path sample on a hard-coded `C:`, and
+// two review passes read that as a portability bug: a machine with no `C:`
+// volume would panic on the `expect` rather than measure. It would not, and the
+// reason is the same fact the probe's own headline conclusion rests on -- that
+// `GetFullPathNameW` resolves a fully-qualified path without touching the
+// filesystem. A volume that does not exist is therefore not consulted.
+//
+// That was an argument, and an argument is what a reviewer had to disbelieve.
+// This is the measurement. It also pins the "touches no filesystem" claim
+// itself, which nothing else here does: if that claim ever stops holding, the
+// probe's account of where its nanoseconds go is wrong, and this fails first.
+
+#[test]
+fn preparing_a_path_needs_no_volume_behind_its_drive_letter() {
+    // A bitmask, not 23 `Path::exists()` calls. Probing each root touches real
+    // devices: an offline mapped network drive makes `exists()` block until the
+    // redirector times out, so the original form could stall this test for
+    // minutes on exactly the CI machine most likely to have one.
+    // `GetLogicalDrives` answers from a snapshot without going near a device,
+    // and answers the sharper question too -- a letter absent from the mask has
+    // no volume, where `exists()` also returns false for a drive that is
+    // present but has no media.
+    //
+    // SAFETY: no preconditions.
+    let used = unsafe { windows_sys::Win32::Storage::FileSystem::GetLogicalDrives() };
+
+    // `GetLogicalDrives` returns 0 on failure, which is also a perfectly valid
+    // mask meaning "no drives at all" -- so an unchecked zero would be read as
+    // "every letter is free", and the search would pick a letter that may well
+    // be mounted. The test would then prepare a path on a REAL volume and pass,
+    // proving nothing, which is worse than failing.
+    //
+    // That this test in particular could go vacuous is the sharp edge: it is
+    // the one pinning the claim that no volume is needed. It is also a plain
+    // instance of the workspace standard -- a failable call has its failure
+    // handled -- introduced by the switch away from `Path::exists()`, which
+    // could not fail this way.
+    assert!(
+        used != 0,
+        "GetLogicalDrives failed: {}",
+        std::io::Error::last_os_error()
+    );
+
+    // The whole alphabet. The mask already excludes anything mounted, so there
+    // is no letter worth reserving by hand: starting at `D` only narrowed the
+    // search on a machine with many mapped drives, for no benefit, since `C`
+    // being in use is exactly what the mask reports.
+    // Fails rather than skips when no letter is free, which is deliberate and
+    // has been raised in review, so the reasoning is recorded here.
+    //
+    // libtest has no runtime skip: a test that "skips" is a test that PASSES.
+    // This is the test pinning the claim that `prepare` needs no volume, so a
+    // pass that established nothing is the one outcome worth avoiding -- the
+    // same vacuous-green hazard as the unchecked `GetLogicalDrives` above, which
+    // is what made the explicit check necessary in the first place.
+    //
+    // It also matches how this crate already handles the identical condition:
+    // `impersonation_changes_which_device_map_a_drive_letter_resolves_in` and
+    // its sibling both `panic!("no free drive letter on this host, so the probe
+    // cannot run")`, and they search only `H..=Z`. This search covers all 26, so
+    // it fails strictly less often than sites that already chose to fail.
+    //
+    // The condition needs every letter mounted including `A` and `B`, which are
+    // floppy-era and essentially never assigned. A host in that state is worth
+    // hearing about loudly, and the message says plainly that it is the
+    // environment rather than the code.
+    let absent = (b'A'..=b'Z')
+        .find(|&byte| used & (1 << u32::from(byte - b'A')) == 0)
+        .map(char::from)
+        .expect(
+            "every drive letter A-Z is mounted on this host, so no unmounted \
+             letter exists to test against -- an environment limitation, not a \
+             failure of the behaviour under test",
+        );
+
+    let text = format!(r"{absent}:\{}\file.txt", vec!["directory"; 24].join("\\"));
+    let path = wtf_string::Wtf16String::from(text.as_str());
+
+    assert!(
+        windows_namespace_request_sys::prepare(&path).is_ok(),
+        "preparing {text} must succeed with no {absent}: volume mounted -- \
+         a fully-qualified path is normalized, not resolved against a device, \
+         and `request_cost` depends on that both for its long-path sample and \
+         for its claim about where the measured time goes"
     );
 }

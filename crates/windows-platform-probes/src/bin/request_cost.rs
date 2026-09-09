@@ -11,12 +11,23 @@
 //! mechanics or the request's allocation model deserves the attention.
 
 use std::fmt::Write as _;
-use windows_platform_probes::report::{Stdout, emit};
+use windows_platform_probes::report::emit_report;
 use windows_platform_probes::request_cost::measure;
 
-/// Measured by `probe-doorbell-cost` on the development machine, and recorded in
-/// [the 2026-08-30 design session]. Restated here only to render a ratio; the
-/// authoritative number is whatever that probe prints on the host this runs on.
+/// Measured by `probe-doorbell-cost` on a **Snapdragon X2 (ARM64)** machine,
+/// and recorded in [the 2026-08-30 design session]. Restated here only to
+/// render a ratio; the authoritative number is whatever that probe prints on
+/// the host this runs on.
+///
+/// **The platform is named because a nanosecond figure without one is not a
+/// measurement, it is an anecdote.** These constants said "the development
+/// machine", which is a label only its author can resolve, and everything
+/// derived from them was then read as though it described machines in general.
+/// It does not: an x86_64 host measured during review put the doorbell cycle at
+/// ~531 ns against ~208 ns for a redundant `SetEvent`, where the ARM64 figures
+/// here are 164.9 and 7.2. Two observations, two architectures, and the
+/// conclusions drawn from them differ in sign -- which is the whole argument
+/// against generalising from either.
 ///
 /// **The build profile behind these is not recorded**, which is why the report
 /// below calls the ratios indicative rather than quoting them as results. They
@@ -31,14 +42,14 @@ const DOORBELL_NS_REFERENCE: f64 = 164.9;
 const ATOMIC_NS_REFERENCE: f64 = 7.2;
 
 fn main() {
-    // The only place that names the real stream. Everything below composes
-    // text; nothing below knows where it goes.
-    emit(&mut Stdout, &render());
+    // The probe's whole output policy, and it is one line: hand the renderer to
+    // the sink. Nothing here or below names a stream -- that is chosen once, in
+    // `report`, so retargeting a probe is not a rewrite.
+    emit_report(render);
 }
 
 /// The probe's whole report, as text.
-fn render() -> String {
-    let mut out = String::new();
+fn render(out: &mut String) {
     // First line of the report, and part of the returned text rather than
     // written out here: a captured report must carry the line naming the
     // machine that produced it, and the taint marker with it. Without it a
@@ -56,6 +67,17 @@ fn render() -> String {
         out,
         "{:<26} {:>10} {:>14} {:>16}",
         "operation", "ns/op", "x an atomic", "x a doorbell"
+    );
+    // Says what the first four rows include, because their names do not. Each
+    // is a construct-and-DESTROY cycle: `time_loop` drops the value it is
+    // handed at the end of the timed statement, so the free is inside the
+    // figure. `capture_handle` and `close_handle` are the exception and are
+    // timed apart, because dropping a `CapturedHandle` calls `CloseHandle` and
+    // that is a second kernel transition rather than a free.
+    let _ = writeln!(
+        out,
+        "  (the first four are construct-and-drop cycles; capture and close are\n   \
+         timed separately)"
     );
     for timing in &observation.timings {
         let _ = writeln!(
@@ -83,9 +105,10 @@ fn render() -> String {
         // The ratio names its own reference, because the two numbers do not
         // come from the same machine. `build` was measured on this host just
         // now; the doorbell figure is a constant captured once on the
-        // development machine. This probe now runs on hosted CI runners, which
-        // are a heterogeneous fleet, so a ratio printed as though both halves
-        // were local can be wrong even when the measurement is sound.
+        // Snapdragon X2 (ARM64) development machine. This probe now runs on
+        // hosted CI runners, which are a heterogeneous fleet, so a ratio printed
+        // as though both halves were local can be wrong even when the
+        // measurement is sound.
         let _ = writeln!(
             out,
             "  building a pathed request costs {build:.0} ns, which is {:.1}x one",
@@ -93,7 +116,7 @@ fn render() -> String {
         );
         let _ = writeln!(
             out,
-            "  doorbell AS MEASURED ON THE DEVELOPMENT MACHINE ({DOORBELL_NS_REFERENCE:.1} ns),"
+            "  doorbell AS MEASURED ON THE ARM64 DEVELOPMENT MACHINE ({DOORBELL_NS_REFERENCE:.1} ns),"
         );
         let _ = writeln!(
             out,
@@ -144,18 +167,48 @@ fn render() -> String {
         );
         let _ = writeln!(out, "  time measures none of them.");
         let _ = writeln!(out);
+        // States the COMPARISON and refuses the verdict, because this probe
+        // does not measure a doorbell.
+        //
+        // This read "What it does support: for an open-heavy workload, doorbell
+        // tuning would be optimizing the small half" -- a design conclusion
+        // whose truth depends entirely on which of the two is larger, decided
+        // against a constant measured on the Snapdragon X2 (ARM64) development
+        // machine. It INVERTS on the x86_64 host measured during review, where
+        // `probe-doorbell-cost` reported a ~531 ns cycle against ~210 ns to
+        // build a request, so the doorbell is the large half there and tuning
+        // it would optimize the large one. Both probes run in the same
+        // CI job, so the sentence was contradicted a few lines further down the
+        // same log.
+        //
+        // The caveats above cover the printed ratio and the operation-type
+        // scope; neither guarded this, because it was phrased as what the run
+        // supports rather than as a ratio.
         let _ = writeln!(
             out,
-            "  What it does support: for an open-heavy workload, doorbell tuning"
+            "  WHICH HALF IS LARGER IS NOT ESTABLISHED HERE. Whether doorbell"
         );
         let _ = writeln!(
             out,
-            "  would be optimizing the small half. That is a finding about"
+            "  tuning would optimize the large or the small half depends on the"
         );
         let _ = writeln!(
             out,
-            "  OPERATION MIX, and it says nothing about the read path."
+            "  doorbell measured ON THIS HOST, which this probe does not measure:"
         );
+        let _ = writeln!(
+            out,
+            "  read probe-doorbell-cost's set_reset_event from the same run and"
+        );
+        let _ = writeln!(
+            out,
+            "  compare it against the {build:.0} ns above. The comparison can invert"
+        );
+        let _ = writeln!(
+            out,
+            "  between hosts, so a conclusion about OPERATION MIX belongs to a"
+        );
+        let _ = writeln!(out, "  reader holding both figures from one machine.");
     }
 
     if let Some(capture) = capture {
@@ -202,12 +255,23 @@ fn render() -> String {
                 );
                 let _ = writeln!(out, "  half.");
             } else {
+                // The ratio without a verdict. This branch fires on `capture <=
+                // build`, which is every ratio from 0.99 down to 0.01, and it
+                // said "the two are comparable and neither dominates" for all
+                // of them -- a claim about closeness drawn from a test for
+                // order. Whether two figures are comparable needs a range, and
+                // this probe was given one only by accident of which arm it
+                // landed in.
                 let _ = writeln!(
                     out,
-                    "  It is {:.2}x the pathed request, so the two are comparable and",
+                    "  It is {:.2}x the pathed request. Which of the two dominates, if",
                     capture / build
                 );
-                let _ = writeln!(out, "  neither dominates.");
+                let _ = writeln!(
+                    out,
+                    "  either does, is for a reader with a threshold in mind; this run"
+                );
+                let _ = writeln!(out, "  establishes only the two costs and their ratio.");
             }
         }
     }
@@ -221,34 +285,73 @@ fn render() -> String {
             out,
             "\n  WHERE THE TIME ACTUALLY GOES, and it is not the allocator:"
         );
+        // "resolves against process state" -- not "a syscall", and not
+        // "lexical" either.
+        //
+        // The first was wrong because a timing loop cannot establish a kernel
+        // transition. The second, which replaced it, is wrong for a symmetric
+        // reason: `GetFullPathNameW` consults the process current directory,
+        // and for a drive-relative path the per-drive current directory held in
+        // the `=C:` environment variables, so it is not pure string work. A
+        // genuinely lexical canonicalizer is a different call
+        // (`PathCchCanonicalizeEx`), and it is deliberately NOT the one
+        // `prepare` wants -- resolving against the CWD at submission is the
+        // property the namespace design is buying.
+        //
+        // What this run established is the cost. The mechanism it did not, and
+        // two successive attempts to name one were each wrong in the same way.
         let _ = writeln!(
             out,
             "  `prepare` calls GetFullPathNameW to resolve the path against the"
         );
         let _ = writeln!(
             out,
-            "  process working directory -- a Win32 call, because the CWD is mutable"
+            "  process working directory, because the CWD is mutable by any thread"
         );
         let _ = writeln!(
             out,
-            "  by any thread and resolving later would be racy. So most of the cost"
+            "  and resolving later would be racy. That reads process state and"
         );
         let _ = writeln!(
             out,
-            "  above is a syscall that no allocation scheme can remove."
+            "  touches no filesystem -- and it is not an allocation, so most of the"
         );
         let _ = writeln!(
             out,
-            "  Cloning already-prepared units is {clone:.0} ns, which bounds what an"
+            "  cost above is work no allocation scheme can remove. Whether any of"
         );
         let _ = writeln!(
             out,
-            "  inline-storage or recycling scheme could recover at {:.0} ns per request",
+            "  it enters the kernel is not something this run measured."
+        );
+        let _ = writeln!(
+            out,
+            "  Two different schemes recover two different things, and this said"
+        );
+        let _ = writeln!(
+            out,
+            "  one number for both. RECYCLING a resolved path pays {clone:.0} ns instead"
+        );
+        let _ = writeln!(
+            out,
+            "  of {build:.0} ns, so it recovers {:.0} ns -- but that saving is the Win32",
             build - clone
         );
         let _ = writeln!(
             out,
-            "  AT MOST -- and only for a caller that can reuse a resolved path."
+            "  resolution, not an allocation, and only a caller that can reuse a"
+        );
+        let _ = writeln!(
+            out,
+            "  resolved path gets it. INLINE STORAGE removes the allocation and"
+        );
+        let _ = writeln!(
+            out,
+            "  copy instead, which is what the {clone:.0} ns clone measures, so it"
+        );
+        let _ = writeln!(
+            out,
+            "  recovers at most that and cannot touch the resolution at all."
         );
         let _ = writeln!(
             out,
@@ -256,17 +359,26 @@ fn render() -> String {
         );
     }
 
+    // `expect`, not `null`. Every label below is recorded unconditionally by
+    // `measure`, so a lookup that misses means a label was renamed on one side
+    // and not the other -- a defect in this probe, not a condition of the host.
+    //
+    // `null` is the right answer for a value that can legitimately be absent,
+    // and none of these can be. Letting them say "absent" would have produced a
+    // partially populated record that parses cleanly and reads, to a mining
+    // pass, as a host on which the measurement did not apply.
     let get = |label: &str| {
-        observation
+        let ns = observation
             .get(label)
-            .map_or("null".to_string(), |n| format!("{n:.1}"))
+            .unwrap_or_else(|| panic!("measure always records {label}"));
+        format!("{ns:.1}")
     };
     let _ = writeln!(
         out,
         concat!(
-            r#"{{"reason":"x-probe-request-cost","arch":"{}","prepare_short_ns":{},"#,
-            r#""prepare_long_ns":{},"build_open_request_ns":{},"#,
-            r#""clone_prepared_units_ns":{},"capture_handle_ns":{},"#,
+            r#"{{"reason":"x-probe-request-cost","arch":"{}","prepare_short_cycle_ns":{},"#,
+            r#""prepare_long_cycle_ns":{},"build_open_request_cycle_ns":{},"#,
+            r#""clone_prepared_units_cycle_ns":{},"capture_handle_ns":{},"#,
             r#""close_handle_ns":{}}}"#
         ),
         std::env::consts::ARCH,
@@ -277,5 +389,4 @@ fn render() -> String {
         get("capture_handle"),
         get("close_handle"),
     );
-    out
 }

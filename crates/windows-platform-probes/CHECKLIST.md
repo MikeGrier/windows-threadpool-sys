@@ -137,3 +137,72 @@ speculative list to extend by imagination -- a fourth is added when a fourth con
   than noise: across two rounds one reader raised this twice while two others cleared it, one of them
   explicitly after being pointed at the question. Nothing in the suite decides it either way, which is
   itself the argument for the oracle.
+
+- [ ] **M2.6** -- Say precisely what `GetFullPathNameW` does, in the crate that owns it, and decide
+  whether it is still the call `prepare` wants. Two successive descriptions in the cost probe were
+  each wrong in the same direction: *a syscall cost*, which a timing loop cannot establish, and then
+  *lexical*, which it also is not. The probe now states the cost and declines the mechanism, which is
+  honest but leaves the question open one layer down.
+
+  [../windows-namespace-request-sys/src/full_path.rs](../windows-namespace-request-sys/src/full_path.rs)
+  carries the same imprecision, and is the crate that owns the answer: its module doc says "This call
+  is **lexical**. It resolves relative components and `.`/`..` against the process current
+  directory". Those two sentences disagree -- consulting the current directory is process state, and
+  for a drive-relative path (`C:foo`) it also reads the per-drive current directory held in the
+  `=C:` environment variables. "Touches no filesystem" is the claim that holds; "lexical" is not.
+
+  **The mono-repo rule says fix the layer, so the correction belongs in
+  `windows-namespace-request-sys`, not in the probe that consumes it.** It is queued rather than
+  taken because that crate is outside this peel and is release-managed, so a docs change there is its
+  own commit with its own scope.
+
+  The decision half is the part worth an engineer's attention rather than a sweep. A genuinely
+  lexical canonicalizer exists -- `PathCchCanonicalizeEx`, or `PathAllocCanonicalize` -- and would be
+  cheaper, with no process state read at all. **It is very likely the wrong call anyway**, because
+  resolving against the current directory *at submission* is the property the namespace design is
+  buying: the CWD is shared mutable state, so a relative path means something different depending on
+  when it is resolved, and pinning that on the submitting thread is the whole point. Record that
+  conclusion explicitly, with the alternative named, so the next reader does not re-derive it -- and
+  if it is wrong, the cheaper call is sitting there.
+
+  Also worth settling while the question is open: whether `GetFullPathNameW` can enter the kernel at
+  all on any path this crate takes. The probe measured ~212 ns for a build on x86_64 and declines to
+  say what that is made of; the owning crate could say, and a reader of either would then stop
+  guessing.
+
+- [ ] **M2.7** -- Decide whether the other nine probe steps in CI should carry `if: '!cancelled()'`,
+  and apply or record the decision.
+
+  **Measured 2026-09-09:** twelve probe steps in [ci.yml](../../.github/workflows/ci.yml), of which
+  three are guarded -- topology, and the doorbell/request pair added with this note. The other nine
+  (`error mode`, `handle state`, `worker context`, `pool growth`, `device map`, `IoRing`,
+  `completion port`, and both halves of the long-path pair) are skipped whenever an earlier step in
+  the job fails, because Actions defaults to `if: success()`.
+
+  The argument for guarding is already written at the topology step and is not specific to it: a
+  probe step exists to emit diagnostics, so skipping it on failure suppresses it in exactly the run
+  that wanted it. **The long-path pair is the sharpest case** -- its own comment says either half
+  alone "says nothing", since the finding is the difference between two executables, so a partial
+  run of that pair is worse than useless.
+
+  **It is queued rather than done because there is a real tradeoff, and it is an operational call.**
+  `!cancelled()` also runs the step when the *build* failed, where `cargo run` cannot compile and
+  the step turns from skipped (grey) into failed (red). That trades quieter broken-build output for
+  better broken-test output. The topology step already took that trade; whether all twelve should is
+  a judgement about how the CI log is read, not something to settle by consistency alone.
+
+- [ ] **M2.8** -- Carry the OS error in the remaining Win32 assertion messages.
+
+  `last_os_error()` (or a raw `GetLastError`) is in the messages in `doorbell_cost`, `request_cost`
+  and `handle_state`, and missing from four sites in probes this peel did not touch:
+  `completion_port.rs:224` and `:234` ("create a completion port"), `ioring.rs:320` ("create the
+  probe pipe"), and `pool_growth.rs:62` ("create the gate event"). Each says what was being attempted
+  and not why it failed, which is the whole of what a CI log can offer someone who cannot rerun under
+  a debugger.
+
+  Two rules worth carrying over, both learned the expensive way in this peel. Read the error
+  **immediately after the single call whose failure is reported** -- a code attached to a condition
+  spanning two calls belongs to whichever ran last, not whichever failed, and can print "The
+  operation completed successfully" under a message saying something failed. And attach it only to a
+  condition that is genuinely an OS failure: a call that returned a size rather than an error should
+  not carry one, since `GetLastError` says nothing about it.

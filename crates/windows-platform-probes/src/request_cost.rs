@@ -19,7 +19,9 @@
 //! faithfully on another. So the queue can carry a request by value and the
 //! lifetime hazard disappears. What remains is a cost question about **this
 //! operation type**: how does building one compare with the doorbell that would
-//! carry it (~165 ns, per `probe-doorbell-cost`)?
+//! carry it (~165 ns as recorded on the Snapdragon X2 (ARM64) development
+//! machine -- run `probe-doorbell-cost` on the host in front of you for a local
+//! figure, which CI does in the same job)?
 //!
 //! # What this does not measure, stated because the number invites over-reading
 //!
@@ -36,10 +38,14 @@
 //!     what make a queue good or bad. A single uncontended construction time
 //!     measures none of them.
 //!
-//! The conclusion it *does* support is about **operation mix**: for an
-//! open-heavy workload, effort spent shaving the doorbell would be spent on the
-//! small half of the cost.
-//!
+//! What it supports is a **comparison**, not a verdict: build cost against the
+//! doorbell that would carry it. Which of the two is the larger half is a
+//! question about one host, and this probe measures only one side of it --
+//! read `probe-doorbell-cost`'s `set_reset_event` from the same run for the
+//! other. The comparison inverts between machines: the Snapdragon X2 (ARM64)
+//! development machine had the doorbell at roughly a third of a build, and an
+//! x86_64 host measured during review had it at roughly two and a half times
+//! one. A sentence naming a small half would therefore be wrong on one of them.
 //! # Handle duplication is the part that is easy to under-count
 //!
 //! A request that carries a handle -- a template handle for an open, or the
@@ -57,11 +63,25 @@
 //! path is resolved at submission -- the process CWD is mutable by any thread,
 //! so even perfect remoting would be racy.
 //!
-//! That means the measured cost is a *syscall* cost and cannot be tuned away by
-//! an allocator. An inline-storage or recycling scheme would only recover the
-//! allocation part, which `clone_prepared_units` bounds from below. Knowing
-//! which half is which is the point of measuring both.
+//! That work reads **process state**: it resolves against the current
+//! directory, and for a drive-relative path against the per-drive current
+//! directory held in the `=C:` environment variables. So the measured remainder
+//! is path resolution, not allocation -- and naming a *mechanism* for it has
+//! now been got wrong twice. Calling it a *syscall cost* claimed a kernel
+//! transition a timing loop cannot establish; calling it *lexical*, which
+//! replaced it, claimed pure string work it equally is not. A genuinely lexical
+//! canonicalizer is a different call (`PathCchCanonicalizeEx`) and is
+//! deliberately not the one wanted here, because resolving against the CWD at
+//! submission is the property being bought. What survives either way is the
+//! part that matters: an allocator cannot remove it.
 //!
+//! The two schemes that might reduce it recover different halves. **Inline
+//! storage** removes the allocation and copy, which is what
+//! `clone_prepared_units` measures, and cannot touch the resolution at all.
+//! **Recycling** a resolved path skips the resolution, paying the clone in
+//! place of the whole build, so it recovers the difference between them. Naming
+//! one figure for both -- as this did -- credits an allocator with work it
+//! cannot remove. Knowing which half is which is the point of measuring both.
 //! [the namespace session]: ../../../design-sessions/DESIGN-SESSION-2026-08-27-pseudo-async-namespace-operations.md
 //!
 //! Each timing is reported per operation. Absolute values are host-specific;
@@ -105,6 +125,27 @@ impl Observation {
     }
 }
 
+/// Time `body`, including the drop of whatever it returns.
+///
+/// **The drop is inside the timed region, and for the heap-owning values below
+/// that is a construct-and-destroy cycle rather than a construction cost.**
+/// `black_box` takes the value and it falls at the end of the statement, so
+/// `prepare_*`, `build_open_request` and `clone_prepared_units` each include
+/// freeing the `Wtf16String` they built. On a clone measured near 50 ns a free
+/// is a visible share of the figure.
+///
+/// It is reported this way rather than restructured, and the reason is that the
+/// obvious alternative is not more truthful. Retaining each value -- what the
+/// captured-handle loop below does, for a reason that does not apply here --
+/// would hold 100_000 live allocations, which measures an allocator that never
+/// reuses a block instead of one that does. A queue holds a bounded number of
+/// requests, so neither regime is the shipping one, and the honest course is to
+/// say which one this is.
+///
+/// The captured-handle loop is different in kind and is genuinely restructured:
+/// dropping a `CapturedHandle` calls `CloseHandle`, so leaving it in the timed
+/// region reports two kernel transitions as one number. A free is not a
+/// syscall.
 fn time_loop<T>(label: &'static str, iterations: u32, mut body: impl FnMut() -> T) -> Timing {
     // Warm the path: the first pass pays for lazily resolved syscall stubs and
     // for the allocator's first touch of a fresh size class.
@@ -138,12 +179,28 @@ pub fn measure() -> Observation {
     // installation can sit on any volume -- and hard-coding it made this probe
     // panic on such a machine rather than measure it. The same path is used for
     // the prepared request and the real open below, so the two stay consistent.
+    // Wide the whole way, with no UTF-8 in the middle. `Wtf16String` exists
+    // precisely to carry what Windows hands back, and routing a Windows path
+    // through `str` gives up that property twice over: `to_str` panics on a
+    // path that is not valid UTF-8, and the `from_utf16_lossy` this once used
+    // inside `system_directory` silently replaced any unpaired surrogate before
+    // it ever got here. Neither is reachable on a normal install, and neither
+    // has any business being on the path from a Win32 call to a WTF-16 string.
     let system_dll = system_directory().join("kernel32.dll");
-    let short = Wtf16String::from(
-        system_dll
-            .to_str()
-            .expect("the system directory is representable"),
-    );
+    let short = Wtf16String::from_os_str(system_dll.as_os_str());
+    // Synthetic, and hard-coded on purpose -- the opposite requirement to the
+    // path above, which is why the two do not match and must not be made to.
+    // `short` names a file that is really opened, so it has to exist and is
+    // resolved. This one is only ever normalized, so it must NOT need to exist:
+    // a fixed 24-component path keeps the length identical on every host, and a
+    // length that varied with the local system directory would make the figure
+    // incomparable between the machines the report asks a reader to compare.
+    //
+    // The `C:` is safe for the same reason the probe's own conclusion is: a
+    // fully-qualified path is normalized without consulting a device, so no
+    // volume is needed behind the letter. Two review passes read this as the
+    // portability bug fixed above, so it is now measured rather than argued --
+    // see `preparing_a_path_needs_no_volume_behind_its_drive_letter`.
     let long_text = format!(r"C:\{}\file.txt", vec!["directory"; 24].join("\\"));
     let long = Wtf16String::from(long_text.as_str());
 
@@ -229,22 +286,67 @@ pub fn measure() -> Observation {
 
 /// Where Windows is actually installed, rather than where it usually is.
 ///
-/// Falls back to the conventional path only when the system will not say, which
-/// keeps the probe running on a machine that answers and keeps the failure
-/// visible on one that does not.
+/// A short buffer is retried at the size the call asks for, so a long system
+/// directory is read rather than guessed at.
+///
+/// # Panics
+///
+/// Panics if `GetSystemDirectoryW` will not report a directory.
+///
+/// This used to fall back to `C:\Windows\System32`, under a doc comment
+/// claiming the fallback kept the failure visible. It did the opposite: it
+/// substituted a guess for an answer the system declined to give, and the probe
+/// then measured whatever happened to be at the guessed path -- on a non-`C:`
+/// install, something that is not there at all. That is the same defect as
+/// discarding a status: a plausible result standing in for one that was never
+/// obtained. A probe that cannot locate the file it is timing has nothing to
+/// say, and says so here rather than several frames later.
 fn system_directory() -> std::path::PathBuf {
+    // The common case, off the stack.
     let mut buffer = [0_u16; 260];
     // SAFETY: writes at most `buffer.len()` units into a buffer of that size.
-    let written = unsafe { GetSystemDirectoryW(buffer.as_mut_ptr(), buffer.len() as u32) };
-    let written = written as usize;
+    let written = unsafe { GetSystemDirectoryW(buffer.as_mut_ptr(), buffer.len() as u32) } as usize;
+
+    assert!(
+        written != 0,
+        "GetSystemDirectoryW failed: {}",
+        std::io::Error::last_os_error()
+    );
+
     // `>=`, not `>`. On success the count excludes the terminator, so it can
-    // reach at most `buffer.len() - 1`; on failure it is the required size
-    // *including* the terminator, so it is at least `buffer.len() + 1`. Exactly
-    // `buffer.len()` is therefore unreachable from either branch -- and treating
-    // it as a failure costs nothing while removing the need for the next reader
-    // to redo that analysis before trusting a possibly-unterminated buffer.
-    if written == 0 || written >= buffer.len() {
-        return std::path::PathBuf::from(r"C:\Windows\System32");
+    // reach at most `buffer.len() - 1`; when the buffer is too small it is the
+    // required size *including* the terminator, so it is at least
+    // `buffer.len() + 1`. Exactly `buffer.len()` is therefore unreachable from
+    // either branch -- and treating it as too-small costs one wasted retry
+    // while removing the need for the next reader to redo that analysis before
+    // trusting a possibly-unterminated buffer.
+    if written >= buffer.len() {
+        // `written` is the required size including the terminator, so a buffer
+        // of exactly that length is enough and the retry cannot ask again.
+        let mut heap = vec![0_u16; written];
+        // SAFETY: writes at most `heap.len()` units into a buffer of that size.
+        let retried = unsafe { GetSystemDirectoryW(heap.as_mut_ptr(), heap.len() as u32) } as usize;
+
+        // Two conditions, two assertions, because only one of them is an OS
+        // failure and an error code attached to the other would be fiction --
+        // `GetLastError` is not meaningful for a call that returned a size.
+        assert!(
+            retried != 0,
+            "GetSystemDirectoryW failed at the size it asked for ({written}): {}",
+            std::io::Error::last_os_error()
+        );
+        assert!(
+            retried < heap.len(),
+            "GetSystemDirectoryW asked for {written} units, then wanted {retried} \
+             at that size -- the system directory changed between the two calls"
+        );
+        return std::path::PathBuf::from(os_string(&heap[..retried]));
     }
-    std::path::PathBuf::from(String::from_utf16_lossy(&buffer[..written]))
+
+    std::path::PathBuf::from(os_string(&buffer[..written]))
+}
+
+/// Losslessly, because a Windows path is UTF-16 and not necessarily Unicode.
+fn os_string(units: &[u16]) -> std::ffi::OsString {
+    std::os::windows::ffi::OsStringExt::from_wide(units)
 }

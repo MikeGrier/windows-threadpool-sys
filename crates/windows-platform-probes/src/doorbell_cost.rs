@@ -46,22 +46,32 @@
 //!
 //! This probe was written expecting to divide the doorbell cost by
 //! `submit_io_ring_empty` and read off "the doorbell is N% of a syscall". **Do
-//! not do that.** Measured on the development machine, an empty `SubmitIoRing`
-//! came in at ~79 ns -- far too cheap for a kernel transition, so it is almost
-//! certainly short-circuiting in user mode when there is nothing queued. The
-//! resulting "doorbell is 210% of a syscall" would have been a confident wrong
-//! answer built on a denominator that never entered the kernel.
+//! not do that.** An empty submission carries no work, so whatever it costs is
+//! not the denominator that question needs, and "the doorbell is 210% of a
+//! syscall" would be a confident wrong answer whatever the number turned out
+//! to be.
 //!
+//! Whether it even reaches the kernel is host-dependent and the binary decides
+//! it per run rather than asserting it. On the Snapdragon X2 (ARM64) development machine it came in
+//! at ~79 ns, far below that machine's own syscalls, which reads as
+//! short-circuiting in user mode when there is nothing queued; on an x86_64
+//! host measured during review it was 216 ns, sitting among that host's 206 ns
+//! `SetEvent` and 280 ns satisfied wait, where nothing supports the claim. The
+//! argument above needs neither reading, which is why it is stated over the
+//! work carried rather than over the transition.
 //! The honest denominator is the cost of the real work a submission carries,
 //! which this probe deliberately does not measure -- so it reports the absolute
 //! costs and the *batching* arithmetic instead, and leaves the ratio alone.
-//! [`Observation::doorbell_share_of_submit`] is retained only because the raw
-//! fact is worth recording; its own documentation repeats this warning.
+//! [`Observation::doorbell_over_empty_submit`] is retained only because the raw
+//! fact is worth recording; it is named for its own denominator, and its own
+//! documentation repeats this warning.
 
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Instant;
 
-use windows_sys::Win32::Foundation::{CloseHandle, HANDLE, WAIT_OBJECT_0};
+use windows_sys::Win32::Foundation::{
+    CloseHandle, HANDLE, WAIT_ABANDONED, WAIT_EVENT, WAIT_FAILED, WAIT_OBJECT_0, WAIT_TIMEOUT,
+};
 use windows_sys::Win32::System::Threading::{
     CreateEventW, ResetEvent, SetEvent, WaitForSingleObject,
 };
@@ -101,13 +111,22 @@ impl Observation {
     /// One doorbell cycle as a fraction of one **empty** `SubmitIoRing`.
     ///
     /// **This is not the number the design turns on, and it should not be read
-    /// as one.** An empty submit does not appear to enter the kernel (see the
-    /// module documentation), so this ratio has a denominator that is not a
-    /// syscall. It is exposed because the raw fact is worth recording across
-    /// hosts -- a machine where the empty submit is *expensive* would itself be
-    /// a finding -- not because dividing by it answers anything.
+    /// as one.** An empty submit carries no work, so this ratio has a
+    /// denominator that measures nothing the design cares about. It is exposed
+    /// because the raw fact is worth recording across hosts -- a machine where
+    /// the empty submit is *expensive* would itself be a finding -- not because
+    /// dividing by it answers anything.
+    ///
+    /// The argument rests on *carries no work*, which holds everywhere, and no
+    /// longer on *does not enter the kernel*, which does not. That read "an
+    /// empty submit does not appear to enter the kernel, so this ratio has a
+    /// denominator that is not a syscall" -- a reading from the Snapdragon X2
+    /// (ARM64) development machine (~79 ns) stated as a general fact. The
+    /// binary decides it per host, and on an x86_64 machine measured during
+    /// review it printed the opposite, the
+    /// empty submit landing at 216 ns among that probe's own 206 ns syscalls.
     #[must_use]
-    pub fn doorbell_share_of_submit(&self) -> Option<f64> {
+    pub fn doorbell_over_empty_submit(&self) -> Option<f64> {
         let doorbell = self.get("set_reset_event")?;
         let submit = self.submit_nanos?;
         (submit > 0.0).then_some(doorbell / submit)
@@ -132,19 +151,51 @@ fn time_loop(label: &'static str, iterations: u32, mut body: impl FnMut()) -> Ti
     }
 }
 
+/// Name a wait result, and attach an OS error only where one exists.
+///
+/// `WaitForSingleObject` returns a status code rather than a `BOOL`, and only
+/// `WAIT_FAILED` sets the last-error value. `WAIT_TIMEOUT` and `WAIT_ABANDONED`
+/// are *successful* returns, so a code printed beside either belongs to
+/// whatever call ran previously and describes something else entirely -- which
+/// is worse than printing nothing, because it reads as a diagnosis.
+fn describe_wait(waited: WAIT_EVENT) -> String {
+    match waited {
+        WAIT_OBJECT_0 => "WAIT_OBJECT_0 (signalled)".to_string(),
+        WAIT_TIMEOUT => {
+            "WAIT_TIMEOUT -- the event was not signalled; this is not an OS error".to_string()
+        }
+        WAIT_ABANDONED => {
+            "WAIT_ABANDONED -- a mutex owner exited; this is not an OS error".to_string()
+        }
+        WAIT_FAILED => format!("WAIT_FAILED: {}", std::io::Error::last_os_error()),
+        other => format!("unrecognised wait result {other:#010x}"),
+    }
+}
+
 /// Run every timing.
 ///
 /// # Panics
 ///
 /// Panics if `CreateEventW` fails, which would mean the host cannot create a
 /// manual-reset event and nothing here is measurable.
+///
+/// Panics, too, if any timed call fails -- `SetEvent`, `ResetEvent`, a
+/// zero-timeout wait that does not observe the event as signalled, or
+/// `SubmitIoRing`. This is deliberately loud. Each of those still costs a
+/// measurable transition when it fails, so a probe that swallowed the error
+/// would report a plausible nanosecond figure for an operation that did not
+/// happen, which is worse than reporting nothing.
 #[must_use]
 pub fn measure() -> Observation {
     const ITERATIONS: u32 = 200_000;
 
     // SAFETY: a manual-reset, initially-unsignalled, unnamed event.
     let event: HANDLE = unsafe { CreateEventW(std::ptr::null(), 1, 0, std::ptr::null()) };
-    assert!(!event.is_null(), "CreateEventW failed");
+    assert!(
+        !event.is_null(),
+        "CreateEventW failed: {}",
+        std::io::Error::last_os_error()
+    );
 
     let counter = AtomicU64::new(0);
     let mut timings = Vec::new();
@@ -153,25 +204,131 @@ pub fn measure() -> Observation {
         counter.fetch_add(1, Ordering::Relaxed);
     }));
 
+    // THE RULE: every call that returns a status has that status checked,
+    // inside the timed region. No exceptions, and no per-call-site argument
+    // about whether this one is worth it.
+    //
+    // It is a flat rule on purpose. The previous version checked only
+    // `SubmitIoRing`, with a well-argued note there explaining why discarding a
+    // status lets a failing call report a plausible time for an operation that
+    // never happened -- and left the three event loops above it discarding
+    // their `BOOL`s. The argument was correct and got applied to the one call
+    // that looked expensive enough to deserve it. That is how the cheap calls
+    // get missed: "trivial enough not to check" is not a property of the call,
+    // it is a property of how hard anyone looked at it.
+    //
+    // Both halves of that were measured rather than argued, on the x86_64
+    // review host, by running this probe against a deliberately invalid handle
+    // so that every event call fails.
+    //
+    // What the unchecked version reported, in ns/op, against the true figures:
+    //
+    //     set_event_already_signalled   212.7   (true 205)
+    //     set_reset_event               422.9   (true 531)
+    //     wait_zero_signalled           231.5   (true 280)
+    //
+    // Not one of those looks wrong. The redundant-`SetEvent` figure is within
+    // 4% of the real one, and a reader would have taken the whole set as
+    // evidence and drawn the doorbell-versus-build conclusion from a run in
+    // which no event operation ever succeeded. A failing syscall is not cheap
+    // enough to be conspicuous -- that is the entire hazard.
+    //
+    // The checks cost nothing detectable: with them in place the same host
+    // reports 204-206, 528-534 and 280.3-280.7 across three runs, which is the
+    // run-to-run spread and not a shift. If a check ever does cost enough to
+    // distort a figure, that will show up as data and can be tuned then, at
+    // that site, with the evidence in hand. Until then the rule does not bend
+    // to an estimate.
+    //
+    // `atomic_fetch_add` above is not an exception: `fetch_add` returns no
+    // status, so there is nothing to check.
+
+    // Every message below carries `last_os_error()`. A probe that panics in CI
+    // is read from a log by someone who cannot rerun it under a debugger, and
+    // "SetEvent failed" tells them nothing they could not already see; the code
+    // distinguishes an invalid handle from a resource limit. The format
+    // arguments are evaluated only when the assertion fires, so this costs
+    // nothing in the timed loops.
+
     // Leave it signalled, so every call in the next loop is redundant.
-    unsafe { SetEvent(event) };
+    assert!(
+        unsafe { SetEvent(event) } != 0,
+        "SetEvent failed: {}",
+        std::io::Error::last_os_error()
+    );
     timings.push(time_loop("set_event_already_signalled", ITERATIONS, || {
-        unsafe { SetEvent(event) };
+        assert!(
+            unsafe { SetEvent(event) } != 0,
+            "SetEvent on an already-signalled event failed: {}",
+            std::io::Error::last_os_error()
+        );
     }));
 
-    unsafe { ResetEvent(event) };
+    assert!(
+        unsafe { ResetEvent(event) } != 0,
+        "ResetEvent failed: {}",
+        std::io::Error::last_os_error()
+    );
     timings.push(time_loop("set_reset_event", ITERATIONS, || unsafe {
-        SetEvent(event);
-        ResetEvent(event);
+        assert!(
+            SetEvent(event) != 0,
+            "SetEvent failed mid-cycle: {}",
+            std::io::Error::last_os_error()
+        );
+        assert!(
+            ResetEvent(event) != 0,
+            "ResetEvent failed mid-cycle: {}",
+            std::io::Error::last_os_error()
+        );
     }));
 
-    unsafe { SetEvent(event) };
+    assert!(
+        unsafe { SetEvent(event) } != 0,
+        "SetEvent failed: {}",
+        std::io::Error::last_os_error()
+    );
     timings.push(time_loop("wait_zero_signalled", ITERATIONS, || {
-        unsafe { WaitForSingleObject(event, 0) };
+        // Checked against `WAIT_OBJECT_0`, not merely "did not fail". The label
+        // says *satisfied* wait, and `WAIT_TIMEOUT` is a successful return that
+        // times a different path -- an unsatisfied poll, which is the cheaper
+        // one and would flatter the figure.
+        //
+        // The error code is attached only to `WAIT_FAILED`, because that is the
+        // only return for which `GetLastError` is defined. `WaitForSingleObject`
+        // is not a boolean-returning call: `WAIT_TIMEOUT` and `WAIT_ABANDONED`
+        // are *successful* returns that set no error, so a code printed beside
+        // them belongs to whatever ran last and is fiction.
+        //
+        // This is the rule the previous commits arrived at -- attach an error
+        // only where the condition is genuinely an OS failure -- applied to the
+        // one call in this file that returns a status code rather than a
+        // `BOOL`. The sweep that added `last_os_error()` everywhere treated it
+        // like the others, which is how a rule about failure reporting became a
+        // way to report a failure that did not happen.
+        let waited = unsafe { WaitForSingleObject(event, 0) };
+        assert!(
+            waited == WAIT_OBJECT_0,
+            "a zero-timeout wait did not observe the event as signalled: {}",
+            describe_wait(waited)
+        );
     }));
     unsafe {
-        ResetEvent(event);
-        CloseHandle(event);
+        assert!(
+            ResetEvent(event) != 0,
+            "ResetEvent failed: {}",
+            std::io::Error::last_os_error()
+        );
+        // Checked as a post-condition: a close that fails means the handle was
+        // already invalid, which retroactively discredits every figure above
+        // it. That is not theoretical -- in the bad-handle run described above,
+        // with every other check stripped out, this was the one that caught it.
+        // It is the backstop for a handle that goes bad in a way no individual
+        // call happens to report.
+        assert!(
+            CloseHandle(event) != 0,
+            "CloseHandle failed: {}",
+            std::io::Error::last_os_error()
+        );
     }
 
     // The syscall the doorbell would be amortised against. Far fewer
@@ -191,9 +348,13 @@ pub fn measure() -> Observation {
             // succeeded while submitting entries did not measure what the label
             // says it measured.
             //
-            // The cost is a predictable branch against a syscall, which does not
-            // perturb the figure; leaving the check outside the loop would let
+            // Inside the loop, not outside it: a check after the fact would let
             // the timing be taken before anything established it was valid.
+            //
+            // Every loop above now does the same, under the flat rule stated
+            // there. This note came first and for a while was the only one,
+            // which is the whole reason the rule is now flat rather than
+            // argued per site.
             let (hr, submitted) = ring.submit_and_wait(0);
             assert!(hr >= 0, "SubmitIoRing(0) failed: {hr:#010x}");
             assert_eq!(submitted, 0, "SubmitIoRing(0) submitted entries");
@@ -245,21 +406,105 @@ pub fn measure_park_and_wake(rounds: u32) -> Option<f64> {
         return None;
     }
 
-    // SAFETY: two auto-reset, initially-unsignalled, unnamed events.
-    let ping: HANDLE = unsafe { CreateEventW(std::ptr::null(), 0, 0, std::ptr::null()) };
-    let pong: HANDLE = unsafe { CreateEventW(std::ptr::null(), 0, 0, std::ptr::null()) };
-    assert!(!ping.is_null() && !pong.is_null(), "CreateEventW failed");
+    // Created and checked ONE AT A TIME, which the combined assertion this
+    // replaces could not do. That assertion leaked: with `ping` created and
+    // `pong` failing, it panicked without closing `ping`. Worse, it misreported
+    // -- `last_os_error()` was read after *both* calls, so the failure of the
+    // first was overwritten by the success of the second, and the message could
+    // read "CreateEventW failed: The operation completed successfully".
+    //
+    // That is a defect introduced by the previous commit, which added
+    // `last_os_error()` to every assertion in this file for diagnosability.
+    // Attaching an error code to a condition spanning two calls does not improve
+    // the diagnosis, it fabricates one: the code belongs to whichever call ran
+    // last, not to whichever failed. **An error code is only meaningful read
+    // immediately after the single call whose failure is being reported**, which
+    // is why the close below reads its own separately rather than reusing this.
 
-    let (ping_addr, pong_addr) = (ping as usize, pong as usize);
+    // SAFETY: an auto-reset, initially-unsignalled, unnamed event.
+    let ping: HANDLE = unsafe { CreateEventW(std::ptr::null(), 0, 0, std::ptr::null()) };
+    assert!(
+        !ping.is_null(),
+        "CreateEventW(ping) failed: {}",
+        std::io::Error::last_os_error()
+    );
+
+    // SAFETY: as above.
+    let pong: HANDLE = unsafe { CreateEventW(std::ptr::null(), 0, 0, std::ptr::null()) };
+    if pong.is_null() {
+        // Read before the close, which would overwrite it.
+        let error = std::io::Error::last_os_error();
+        // SAFETY: `ping` was created above and nothing else holds it.
+        let closed = unsafe { CloseHandle(ping) };
+        assert!(
+            closed != 0,
+            "CreateEventW(pong) failed ({error}), and closing ping then also failed: {}",
+            std::io::Error::last_os_error()
+        );
+        panic!("CreateEventW(pong) failed: {error}");
+    }
+
+    // A named `Send` carrier, where this used to round-trip the handles through
+    // `usize` and cast them back inside the thread.
+    //
+    // `HANDLE` is `*mut c_void`, so it is `!Send` and `thread::spawn` refuses
+    // it -- capturing the handles directly does not compile. Some carrier is
+    // therefore required, and the question is only which one says what it is
+    // doing. The `usize` cast worked but laundered the claim: it asserts "these
+    // are safe to move across a thread boundary" with no `unsafe` anywhere near
+    // the assertion, so nothing prompts a reader to check it. Naming the type
+    // puts the `unsafe impl` and its justification at the point the claim is
+    // actually made.
+    //
+    // SAFETY: a Win32 event `HANDLE` is a process-wide kernel object reference,
+    // not thread-affine -- `SetEvent`/`WaitForSingleObject` may be called on it
+    // from any thread. These two are created above, are used by this thread
+    // only until the join below, and are closed only after that join, so the
+    // reference stays valid for the whole of the peer's life.
+    struct SendHandles {
+        ping: HANDLE,
+        pong: HANDLE,
+    }
+    // SAFETY: as argued directly above.
+    unsafe impl Send for SendHandles {}
+
+    impl SendHandles {
+        /// Take both handles, consuming the carrier.
+        ///
+        /// This exists to force the closure below to capture the carrier *as a
+        /// whole*, and it is not decoration. Under disjoint closure capture
+        /// (RFC 2229, introduced in edition 2021 and in force here in 2024) a
+        /// closure captures the individual **fields** it mentions, so writing
+        /// `carriers.ping` inside the closure captures a bare `HANDLE` -- which
+        /// is `!Send` -- and the wrapper's `unsafe impl Send` never enters the
+        /// picture. The first version of this did exactly that and failed to
+        /// compile with the same error the `usize` cast was replacing.
+        ///
+        /// A method call needs the whole receiver, so the capture is the carrier
+        /// and the `Send` impl applies. Anyone "simplifying" this back to field
+        /// access will be told by the compiler, which is the good outcome; this
+        /// note is here so they know why rather than reaching for the cast.
+        fn take(self) -> (HANDLE, HANDLE) {
+            (self.ping, self.pong)
+        }
+    }
+
+    let carriers = SendHandles { ping, pong };
+
     let peer = std::thread::spawn(move || {
-        let (ping, pong) = (ping_addr as HANDLE, pong_addr as HANDLE);
+        let (ping, pong) = carriers.take();
         for _ in 0..rounds {
             // SAFETY: both handles outlive this thread, which is joined below.
             let waited = unsafe { WaitForSingleObject(ping, WAIT_TIMEOUT_MS) };
             if waited != WAIT_OBJECT_0 {
                 return false;
             }
-            unsafe { SetEvent(pong) };
+            // Reported rather than asserted: a panic here would cross a thread
+            // boundary into `join`, which turns it into the same `false` with
+            // the message lost. Failing the handshake is the honest handling.
+            if unsafe { SetEvent(pong) } == 0 {
+                return false;
+            }
         }
         true
     });
@@ -268,7 +513,17 @@ pub fn measure_park_and_wake(rounds: u32) -> Option<f64> {
     let start = Instant::now();
     for _ in 0..rounds {
         // SAFETY: both handles are live for the whole loop.
-        unsafe { SetEvent(ping) };
+        //
+        // A failing `SetEvent` would eventually be caught by the peer's wait
+        // timing out, so this is not the difference between a wrong answer and
+        // a right one -- it is the difference between failing in 5 ms and
+        // failing after `rounds` timeouts of WAIT_TIMEOUT_MS each, under a
+        // diagnosis ("the peer never woke") that names the symptom rather than
+        // the cause.
+        if unsafe { SetEvent(ping) } == 0 {
+            ok = false;
+            break;
+        }
         if unsafe { WaitForSingleObject(pong, WAIT_TIMEOUT_MS) } != WAIT_OBJECT_0 {
             ok = false;
             break;
@@ -279,8 +534,16 @@ pub fn measure_park_and_wake(rounds: u32) -> Option<f64> {
     let peer_ok = peer.join().unwrap_or(false);
     // SAFETY: the peer has been joined, so nothing else holds these.
     unsafe {
-        CloseHandle(ping);
-        CloseHandle(pong);
+        assert!(
+            CloseHandle(ping) != 0,
+            "CloseHandle(ping) failed: {}",
+            std::io::Error::last_os_error()
+        );
+        assert!(
+            CloseHandle(pong) != 0,
+            "CloseHandle(pong) failed: {}",
+            std::io::Error::last_os_error()
+        );
     }
 
     (ok && peer_ok).then(|| elapsed.as_nanos() as f64 / f64::from(rounds))
