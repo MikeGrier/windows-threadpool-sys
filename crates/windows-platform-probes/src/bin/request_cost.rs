@@ -11,7 +11,7 @@
 //! mechanics or the request's allocation model deserves the attention.
 
 use std::fmt::Write as _;
-use windows_platform_probes::report::{Stdout, emit};
+use windows_platform_probes::report::emit_report;
 use windows_platform_probes::request_cost::measure;
 
 /// Measured by `probe-doorbell-cost` on a **Snapdragon X2 (ARM64)** machine,
@@ -42,14 +42,14 @@ const DOORBELL_NS_REFERENCE: f64 = 164.9;
 const ATOMIC_NS_REFERENCE: f64 = 7.2;
 
 fn main() {
-    // The only place that names the real stream. Everything below composes
-    // text; nothing below knows where it goes.
-    emit(&mut Stdout, &render());
+    // The probe's whole output policy, and it is one line: hand the renderer to
+    // the sink. Nothing here or below names a stream -- that is chosen once, in
+    // `report`, so retargeting a probe is not a rewrite.
+    emit_report(render);
 }
 
 /// The probe's whole report, as text.
-fn render() -> String {
-    let mut out = String::new();
+fn render(out: &mut String) {
     // First line of the report, and part of the returned text rather than
     // written out here: a captured report must carry the line naming the
     // machine that produced it, and the taint marker with it. Without it a
@@ -359,10 +359,19 @@ fn render() -> String {
         );
     }
 
+    // `expect`, not `null`. Every label below is recorded unconditionally by
+    // `measure`, so a lookup that misses means a label was renamed on one side
+    // and not the other -- a defect in this probe, not a condition of the host.
+    //
+    // `null` is the right answer for a value that can legitimately be absent,
+    // and none of these can be. Letting them say "absent" would have produced a
+    // partially populated record that parses cleanly and reads, to a mining
+    // pass, as a host on which the measurement did not apply.
     let get = |label: &str| {
-        observation
+        let ns = observation
             .get(label)
-            .map_or("null".to_string(), |n| format!("{n:.1}"))
+            .unwrap_or_else(|| panic!("measure always records {label}"));
+        format!("{ns:.1}")
     };
     let _ = writeln!(
         out,
@@ -380,5 +389,4 @@ fn render() -> String {
         get("capture_handle"),
         get("close_handle"),
     );
-    out
 }

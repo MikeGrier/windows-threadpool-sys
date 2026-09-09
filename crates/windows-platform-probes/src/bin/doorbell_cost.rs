@@ -13,22 +13,19 @@
 //! can wait for evidence that it is worth its lost-wakeup risk.
 
 use std::fmt::Write as _;
-use windows_platform_probes::doorbell_cost::{Observation, measure, measure_park_and_wake};
+use windows_platform_probes::doorbell_cost::{measure, measure_park_and_wake};
 
-use windows_platform_probes::report::{Stdout, emit};
+use windows_platform_probes::report::emit_report;
 
 fn main() {
-    // The only place that names the real stream. Everything above composes
-    // text; nothing above knows where it goes.
-    emit(
-        &mut Stdout,
-        &render(&measure(), measure_park_and_wake(20_000)),
-    );
+    // The probe's whole output policy, and it is one line: hand the renderer to
+    // the sink. Nothing here or below names a stream -- that is chosen once, in
+    // `report`, so retargeting a probe is not a rewrite.
+    emit_report(render);
 }
 
 /// The probe's whole report, as text.
-fn render(observation: &Observation, park: Option<f64>) -> String {
-    let mut out = String::new();
+fn render(out: &mut String) {
     // First line of the report, and part of the returned text rather than
     // written out here: a captured report must carry the line naming the
     // machine that produced it, and the taint marker with it. Without it a
@@ -42,6 +39,24 @@ fn render(observation: &Observation, park: Option<f64>) -> String {
         out,
         "== what does a doorbell cost, against the syscall it guards? ==\n"
     );
+
+    // Measured HERE, after the banner is already in the buffer, and not in
+    // `main`'s argument list where it used to sit.
+    //
+    // `emit_report` prints whatever was composed before a panic, which is the
+    // property that makes a probe diagnosable rather than merely correct. A
+    // measurement called in the argument position runs before the renderer is
+    // ever entered, so it was outside that protection entirely: a panic left
+    // the reader with no banner, no heading, and no indication of which probe
+    // had died.
+    //
+    // This matters more than it did. Both measurements below now assert every
+    // status they take, so the panic surface they present is deliberately much
+    // larger than when this `main` was written -- adding loud failures to a
+    // probe while leaving it outside the mechanism that reports them is half a
+    // change.
+    let observation = &measure();
+    let park = measure_park_and_wake(20_000);
 
     let _ = writeln!(out, "{:<30} {:>12}", "operation", "ns/op");
     for timing in &observation.timings {
@@ -303,5 +318,4 @@ fn render(observation: &Observation, park: Option<f64>) -> String {
             .doorbell_over_empty_submit()
             .map_or("null".to_string(), |s| format!("{s:.4}")),
     );
-    out
 }

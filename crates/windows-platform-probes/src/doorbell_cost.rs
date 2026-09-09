@@ -216,22 +216,50 @@ pub fn measure() -> Observation {
     // `atomic_fetch_add` above is not an exception: `fetch_add` returns no
     // status, so there is nothing to check.
 
+    // Every message below carries `last_os_error()`. A probe that panics in CI
+    // is read from a log by someone who cannot rerun it under a debugger, and
+    // "SetEvent failed" tells them nothing they could not already see; the code
+    // distinguishes an invalid handle from a resource limit. The format
+    // arguments are evaluated only when the assertion fires, so this costs
+    // nothing in the timed loops.
+
     // Leave it signalled, so every call in the next loop is redundant.
-    assert!(unsafe { SetEvent(event) } != 0, "SetEvent failed");
+    assert!(
+        unsafe { SetEvent(event) } != 0,
+        "SetEvent failed: {}",
+        std::io::Error::last_os_error()
+    );
     timings.push(time_loop("set_event_already_signalled", ITERATIONS, || {
         assert!(
             unsafe { SetEvent(event) } != 0,
-            "SetEvent on an already-signalled event failed"
+            "SetEvent on an already-signalled event failed: {}",
+            std::io::Error::last_os_error()
         );
     }));
 
-    assert!(unsafe { ResetEvent(event) } != 0, "ResetEvent failed");
+    assert!(
+        unsafe { ResetEvent(event) } != 0,
+        "ResetEvent failed: {}",
+        std::io::Error::last_os_error()
+    );
     timings.push(time_loop("set_reset_event", ITERATIONS, || unsafe {
-        assert!(SetEvent(event) != 0, "SetEvent failed mid-cycle");
-        assert!(ResetEvent(event) != 0, "ResetEvent failed mid-cycle");
+        assert!(
+            SetEvent(event) != 0,
+            "SetEvent failed mid-cycle: {}",
+            std::io::Error::last_os_error()
+        );
+        assert!(
+            ResetEvent(event) != 0,
+            "ResetEvent failed mid-cycle: {}",
+            std::io::Error::last_os_error()
+        );
     }));
 
-    assert!(unsafe { SetEvent(event) } != 0, "SetEvent failed");
+    assert!(
+        unsafe { SetEvent(event) } != 0,
+        "SetEvent failed: {}",
+        std::io::Error::last_os_error()
+    );
     timings.push(time_loop("wait_zero_signalled", ITERATIONS, || {
         // `assert_eq`, not "did not fail". The label says *satisfied* wait, and
         // `WAIT_TIMEOUT` is a successful return that times a different path --
@@ -240,18 +268,27 @@ pub fn measure() -> Observation {
         assert_eq!(
             unsafe { WaitForSingleObject(event, 0) },
             WAIT_OBJECT_0,
-            "a zero-timeout wait did not observe the event as signalled"
+            "a zero-timeout wait did not observe the event as signalled: {}",
+            std::io::Error::last_os_error()
         );
     }));
     unsafe {
-        assert!(ResetEvent(event) != 0, "ResetEvent failed");
+        assert!(
+            ResetEvent(event) != 0,
+            "ResetEvent failed: {}",
+            std::io::Error::last_os_error()
+        );
         // Checked as a post-condition: a close that fails means the handle was
         // already invalid, which retroactively discredits every figure above
         // it. That is not theoretical -- in the bad-handle run described above,
         // with every other check stripped out, this was the one that caught it.
         // It is the backstop for a handle that goes bad in a way no individual
         // call happens to report.
-        assert!(CloseHandle(event) != 0, "CloseHandle failed");
+        assert!(
+            CloseHandle(event) != 0,
+            "CloseHandle failed: {}",
+            std::io::Error::last_os_error()
+        );
     }
 
     // The syscall the doorbell would be amortised against. Far fewer
@@ -332,11 +369,60 @@ pub fn measure_park_and_wake(rounds: u32) -> Option<f64> {
     // SAFETY: two auto-reset, initially-unsignalled, unnamed events.
     let ping: HANDLE = unsafe { CreateEventW(std::ptr::null(), 0, 0, std::ptr::null()) };
     let pong: HANDLE = unsafe { CreateEventW(std::ptr::null(), 0, 0, std::ptr::null()) };
-    assert!(!ping.is_null() && !pong.is_null(), "CreateEventW failed");
+    assert!(
+        !ping.is_null() && !pong.is_null(),
+        "CreateEventW failed: {}",
+        std::io::Error::last_os_error()
+    );
 
-    let (ping_addr, pong_addr) = (ping as usize, pong as usize);
+    // A named `Send` carrier, where this used to round-trip the handles through
+    // `usize` and cast them back inside the thread.
+    //
+    // `HANDLE` is `*mut c_void`, so it is `!Send` and `thread::spawn` refuses
+    // it -- capturing the handles directly does not compile. Some carrier is
+    // therefore required, and the question is only which one says what it is
+    // doing. The `usize` cast worked but laundered the claim: it asserts "these
+    // are safe to move across a thread boundary" with no `unsafe` anywhere near
+    // the assertion, so nothing prompts a reader to check it. Naming the type
+    // puts the `unsafe impl` and its justification at the point the claim is
+    // actually made.
+    //
+    // SAFETY: a Win32 event `HANDLE` is a process-wide kernel object reference,
+    // not thread-affine -- `SetEvent`/`WaitForSingleObject` may be called on it
+    // from any thread. These two are created above, are used by this thread
+    // only until the join below, and are closed only after that join, so the
+    // reference stays valid for the whole of the peer's life.
+    struct SendHandles {
+        ping: HANDLE,
+        pong: HANDLE,
+    }
+    // SAFETY: as argued directly above.
+    unsafe impl Send for SendHandles {}
+
+    impl SendHandles {
+        /// Take both handles, consuming the carrier.
+        ///
+        /// This exists to force the closure below to capture the carrier *as a
+        /// whole*, and it is not decoration. Under edition 2021's precise
+        /// capture a closure captures the individual **fields** it mentions, so
+        /// writing `carriers.ping` inside the closure captures a bare `HANDLE`
+        /// -- which is `!Send` -- and the wrapper's `unsafe impl Send` never
+        /// enters the picture. The first version of this did exactly that and
+        /// failed to compile with the same error the `usize` cast was replacing.
+        ///
+        /// A method call needs the whole receiver, so the capture is the carrier
+        /// and the `Send` impl applies. Anyone "simplifying" this back to field
+        /// access will be told by the compiler, which is the good outcome; this
+        /// note is here so they know why rather than reaching for the cast.
+        fn take(self) -> (HANDLE, HANDLE) {
+            (self.ping, self.pong)
+        }
+    }
+
+    let carriers = SendHandles { ping, pong };
+
     let peer = std::thread::spawn(move || {
-        let (ping, pong) = (ping_addr as HANDLE, pong_addr as HANDLE);
+        let (ping, pong) = carriers.take();
         for _ in 0..rounds {
             // SAFETY: both handles outlive this thread, which is joined below.
             let waited = unsafe { WaitForSingleObject(ping, WAIT_TIMEOUT_MS) };
@@ -378,8 +464,16 @@ pub fn measure_park_and_wake(rounds: u32) -> Option<f64> {
     let peer_ok = peer.join().unwrap_or(false);
     // SAFETY: the peer has been joined, so nothing else holds these.
     unsafe {
-        assert!(CloseHandle(ping) != 0, "CloseHandle(ping) failed");
-        assert!(CloseHandle(pong) != 0, "CloseHandle(pong) failed");
+        assert!(
+            CloseHandle(ping) != 0,
+            "CloseHandle(ping) failed: {}",
+            std::io::Error::last_os_error()
+        );
+        assert!(
+            CloseHandle(pong) != 0,
+            "CloseHandle(pong) failed: {}",
+            std::io::Error::last_os_error()
+        );
     }
 
     (ok && peer_ok).then(|| elapsed.as_nanos() as f64 / f64::from(rounds))
