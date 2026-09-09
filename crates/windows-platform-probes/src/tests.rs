@@ -4248,3 +4248,51 @@ fn a_named_level_with_no_summary_blocks_agreement_and_sizes_to_one_domain() {
         "and the mining row says the same: {text}"
     );
 }
+
+#[test]
+fn a_named_level_with_no_summary_is_not_also_called_missing() {
+    // Two contradictions in one arm, both introduced by the fix that made
+    // `SummaryMissing` block agreement.
+    //
+    // The prose says "the topology crate named L3 as the outermost partitioning
+    // cache", and the caveat gate -- which excludes only `Level(_)` -- then
+    // added "the level that would have partitioned this machine is missing"
+    // directly beneath it. A level was named; it is its SUMMARY that is absent.
+    // `the_missing_level_caveat_needs_both_doubt_and_an_absent_level` already
+    // states that invariant for `Level`, and `SummaryMissing` names a level too.
+    //
+    // The NDJSON separately laundered the level away: it read through
+    // `outermost_partitioning_cache()`, whose `None` covers this case, so the
+    // row carried `"outermost_partitioning_cache_level":null` beside
+    // `"outermost_partitioning_cache":"summary_missing"` while the prose printed
+    // the number. `domain_counts` was de-laundered in the same commit that
+    // created the contradiction; this consumer was not swept with it.
+    let mut observation = agreeing_observation();
+    observation.caches = vec![crate::topology::CacheLevel {
+        level: 2,
+        processors_per_domain: vec![2, 2],
+    }];
+    observation.partitioning_cache_level = Some(3);
+    assert_eq!(
+        observation.partitioning_cache(),
+        crate::topology::PartitioningCache::SummaryMissing(3)
+    );
+    assert!(observation.cross_check().parse_in_doubt());
+
+    let text = crate::topology_report::report(BANNER, &observation);
+    assert!(text.contains("named L3"), "{text}");
+    assert!(
+        !text.contains("the level that would have partitioned this"),
+        "a level WAS named -- its summary is what is absent, and the two \
+         statements cannot both be printed: {text}"
+    );
+    assert!(
+        text.contains(r#""outermost_partitioning_cache_level":3"#),
+        "the row carries the level the prose names, rather than laundering it \
+         to null through an Option accessor: {text}"
+    );
+    assert!(
+        text.contains(r#""outermost_partitioning_cache":"summary_missing""#),
+        "and still says which absent case it is: {text}"
+    );
+}

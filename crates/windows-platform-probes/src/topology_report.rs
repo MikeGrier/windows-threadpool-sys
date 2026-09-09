@@ -349,12 +349,20 @@ pub fn report(banner: &str, observation: &Observation) -> String {
     if parse_in_doubt
         && !matches!(
             observation.partitioning_cache(),
-            PartitioningCache::Level(_)
+            PartitioningCache::Level(_) | PartitioningCache::SummaryMissing(_)
         )
     {
         // A parse that is short or disputed is exactly how the level that would
-        // have partitioned this machine goes missing, so none of the three
-        // absent answers above is safe to read as hardware either.
+        // have partitioned this machine goes missing, so the absent answers
+        // above are not safe to read as hardware either.
+        //
+        // Both variants that NAME a level are excluded, not just `Level`. The
+        // exclusion list read `Level(_)` alone while `SummaryMissing` could not
+        // reach here -- it did not put the parse in doubt by itself -- and the
+        // check that made it do so turned this into "the topology crate named
+        // L3 ... " printed directly above "the level that would have
+        // partitioned this machine is missing". A level was named; its SUMMARY
+        // is what is absent, and the arm above says exactly that.
         let _ = writeln!(
             out,
             "Or the parse is not whole and the level that would have partitioned this"
@@ -551,9 +559,21 @@ pub fn report(banner: &str, observation: &Observation) -> String {
             .collect::<Vec<_>>()
             .join(","),
         cache_json.join(","),
-        observation
-            .outermost_partitioning_cache()
-            .map_or("null".to_string(), |c| c.level.to_string()),
+        // The level the prose names, read per variant rather than through
+        // `outermost_partitioning_cache`, whose `None` covers the
+        // summary-missing case too. Routing through it emitted
+        // `"outermost_partitioning_cache_level":null` beside
+        // `"outermost_partitioning_cache":"summary_missing"` while the prose
+        // printed the number -- one fact, two renderings, no way to reconcile
+        // them. `domain_counts` was taken off the same accessor for the same
+        // reason; this consumer was not swept with it.
+        match observation.partitioning_cache() {
+            PartitioningCache::Level(cache) => cache.level.to_string(),
+            PartitioningCache::SummaryMissing(level) => level.to_string(),
+            PartitioningCache::NoLevelsReported
+            | PartitioningCache::NoLevelPartitions
+            | PartitioningCache::NoUniqueOutermost => "null".to_string(),
+        },
         // The level alone said `null` for every absent case alike, on a line
         // the verdict had already certified as "agree" -- an incomparable
         // partitioning touches nothing `cross_check` consults. A query counting
