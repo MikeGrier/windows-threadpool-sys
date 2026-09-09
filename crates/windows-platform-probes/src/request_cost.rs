@@ -19,7 +19,9 @@
 //! faithfully on another. So the queue can carry a request by value and the
 //! lifetime hazard disappears. What remains is a cost question about **this
 //! operation type**: how does building one compare with the doorbell that would
-//! carry it (~165 ns, per `probe-doorbell-cost`)?
+//! carry it (~165 ns as recorded on the development machine -- run
+//! `probe-doorbell-cost` on the host in front of you for a local figure, which
+//! CI does in the same job)?
 //!
 //! # What this does not measure, stated because the number invites over-reading
 //!
