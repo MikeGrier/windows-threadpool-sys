@@ -4,7 +4,7 @@ Append-only. Newest groups at the bottom.
 
 ## Moved 2026-09-10 -- NR-1: the per-drive current-directory arm, pinned
 
-### <a id="nr-11"></a>NR-1.1 -- Pin the `=X:` arm of drive-relative rooting. *(completed 2026-09-10)*
+### <a id="nr-11"></a>NR-1.1 -- Pin the `=X:` arm of drive-relative rooting. *(completed 2026-09-10 12:24:46 UTC-04:00)*
 
 - [x] **NR-1.1** -- Decide how this crate's tests may control process-global
   state, then pin the `=X:` arm of drive-relative rooting.
@@ -32,7 +32,9 @@ Append-only. Newest groups at the bottom.
   which is what makes "that drive's own current directory" a convention rather
   than a guarantee); an entry naming nothing is rejected in favour of the drive
   root; and the call writes the entry back, creating it on a host that had none.
-  It uses drive `W` so it cannot race the sibling test's `X`/`Y` under libtest's
+  It draws from the disjoint `W`/`U` pair -- taking `U` when the current drive or
+the probe directory's drive is `W` -- so it cannot race the sibling tests'
+`X`/`Y`, `V`/`T` or `R`/`S` under libtest's
   thread-per-test model.
 
   The sibling test

@@ -96,7 +96,7 @@ piece of work rather than a correction to that one.
 
 ## Moved 2026-09-09 22:54:01 -04:00 -- M2.6: what `GetFullPathNameW` does, and whether it stays
 
-### <a id="m26"></a>M2.6 -- Say what `GetFullPathNameW` does, in the crate that owns it, and whether it stays. *(completed 2026-09-09 22:54:01 -04:00)*
+### <a id="m26"></a>M2.6 -- Say what `GetFullPathNameW` does, in the crate that owns it, and whether it stays. *(completed 2026-09-09 22:54:01 UTC-04:00)*
 
 **Resolved.** The correction and the decision both landed in the owning crate as `D-18` in
 [../windows-namespace-request-sys/DESIGN-NOTES.md](../windows-namespace-request-sys/DESIGN-NOTES.md):

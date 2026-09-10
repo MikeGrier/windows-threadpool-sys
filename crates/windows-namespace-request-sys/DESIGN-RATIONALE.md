@@ -11,7 +11,7 @@ Cross-referenced by decision ID.
 
 The decision is in [DESIGN-NOTES.md](DESIGN-NOTES.md) -> `D-18`. What follows is
 the record of getting there, which is unusually worth keeping because the same
-mistake recurred five times in five different wordings.
+mistake recurred in nine successive wordings, enumerated below.
 
 ### The shape of the error, which never changed
 

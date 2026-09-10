@@ -48,10 +48,20 @@ fn a_path_that_does_not_exist_resolves_perfectly_happily() {
     // Resolution does not verify the result: no error, and no check that any
     // component exists. A consumer wanting a verified path wants an open plus
     // GetFinalPathNameByHandleW.
-    assert_eq!(
-        resolve(r"C:\no-such-directory\..\nothing-here.txt"),
-        r"C:\nothing-here.txt"
+    //
+    // The components are process-specific and their absence is asserted first.
+    // A hard-coded literal is only missing until some host happens to have it,
+    // and this test would then be demonstrating that an EXISTING path resolves
+    // -- which every other test here already covers.
+    let missing = std::env::temp_dir().join(format!("wnrs-{}-absent", std::process::id()));
+    let missing = missing.to_str().expect("the temp path is UTF-8");
+    assert!(
+        !std::path::Path::new(missing).exists(),
+        "precondition: {missing} must not exist"
     );
+
+    let doubled = format!(r"{missing}\also-absent\..\leaf.txt");
+    assert_eq!(resolve(&doubled), format!(r"{missing}\leaf.txt"));
 }
 
 #[test]
@@ -627,6 +637,13 @@ fn drive_entry(drive: char) -> Option<Wtf16String> {
         };
         let written = written as usize;
         if written == 0 {
+            // Zero means absent. It is also what an *empty* value would report,
+            // and this deliberately does not try to tell the two apart --
+            // measured, they are the same state: `SetEnvironmentVariableW(name,
+            // "")` returns success and a subsequent read reports zero with an
+            // empty buffer, exactly as for a name that was never set. Windows
+            // has no environment variable with an empty value for this API to
+            // return, so restoring "absent" cannot lose one.
             return None;
         }
         if written < buffer.len() {
