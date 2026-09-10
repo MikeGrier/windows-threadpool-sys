@@ -6,7 +6,9 @@
 //! what it produces, and a suite that only ever resolved existing paths would
 //! leave a reader believing it does.
 
-use windows_sys::Win32::Foundation::ERROR_INSUFFICIENT_BUFFER;
+use windows_sys::Win32::Foundation::{
+    ERROR_ENVVAR_NOT_FOUND, ERROR_INSUFFICIENT_BUFFER, ERROR_SUCCESS,
+};
 use wtf_string::Wtf16String;
 
 use super::{FullPathError, ResolveFullPath};
@@ -641,13 +643,37 @@ fn probe_directory(tag: &str) -> ProbeDir {
 
     // Not creating anything here, so no write permission is needed on a host
     // whose temp directory is redirected off a drive letter.
-    let system_root = std::env::var("SystemRoot").expect("SystemRoot is always set on Windows");
-    let path = std::path::PathBuf::from(system_root);
-    assert!(
-        canonical_drive_rooted(&path),
-        "the fallback probe must be canonical and drive-rooted: {}",
-        path.display()
+    //
+    // **It must also differ from the process current directory**, which the
+    // temp branch gets for free -- it creates a uniquely named child -- and this
+    // branch does not. Cargo launched from `%SystemRoot%` on a host with a UNC
+    // temp directory would otherwise hand back the current directory itself,
+    // and a probe indistinguishable from the current directory cannot separate
+    // "the entry was honoured" from "the entry was ignored". `System32` is the
+    // second candidate for the same reason `probe_drive_from` takes a list:
+    // one value that is usually right is not a guarantee.
+    let system_root = std::path::PathBuf::from(
+        std::env::var("SystemRoot").expect("SystemRoot is set on Windows"),
     );
+    let cwd = current_directory();
+    let cwd = cwd.trim_end_matches('\\');
+    let distinct = |p: &std::path::Path| {
+        !p.as_os_str()
+            .to_string_lossy()
+            .trim_end_matches('\\')
+            .eq_ignore_ascii_case(cwd)
+    };
+
+    let path = [system_root.clone(), system_root.join("System32")]
+        .into_iter()
+        .find(|p| canonical_drive_rooted(p) && distinct(p))
+        .unwrap_or_else(|| {
+            panic!(
+                "no fallback probe directory is both canonical and distinct \
+                 from the current directory {cwd}"
+            )
+        });
+
     ProbeDir {
         path,
         created: false,
@@ -702,6 +728,13 @@ fn drive_entry(drive: char) -> Option<Wtf16String> {
     // would land before the test could restore the process state it borrowed.
     let mut buffer = vec![0u16; 256];
     loop {
+        // Zero is TWO different answers, and the last error is the only thing
+        // that separates them -- so it is cleared first, because the value left
+        // by some earlier call would otherwise be read as this one's.
+        //
+        // SAFETY: no preconditions.
+        unsafe { windows_sys::Win32::Foundation::SetLastError(ERROR_SUCCESS) };
+
         // SAFETY: the name is NUL-terminated and the buffer is writable for
         // the length passed.
         let written = unsafe {
@@ -713,14 +746,31 @@ fn drive_entry(drive: char) -> Option<Wtf16String> {
         };
         let written = written as usize;
         if written == 0 {
-            // Zero means absent. It is also what an *empty* value would report,
-            // and this deliberately does not try to tell the two apart --
-            // measured, they are the same state: `SetEnvironmentVariableW(name,
-            // "")` returns success and a subsequent read reports zero with an
-            // empty buffer, exactly as for a name that was never set. Windows
-            // has no environment variable with an empty value for this API to
-            // return, so restoring "absent" cannot lose one.
-            return None;
+            // **An earlier version of this comment claimed, as measured, that
+            // an empty value and an absent name are the same state and cannot
+            // be told apart. That was wrong, and wrong in this crate's
+            // signature way: the measurement behind it never cleared the last
+            // error, so it could only ever have seen whatever was already
+            // there.** Cleared first and re-measured, the two are distinct, for
+            // an ordinary name and an `=X:` name alike:
+            //
+            //   set to ""  -> returns 0, last error ERROR_SUCCESS
+            //   deleted    -> returns 0, last error ERROR_ENVVAR_NOT_FOUND
+            //
+            // The difference is not academic here. Collapsing both to `None`
+            // makes the restoration in `BorrowedDriveEntry` DELETE an inherited
+            // empty entry rather than put it back -- losing exactly the process
+            // state the guard exists to preserve.
+            //
+            // SAFETY: no preconditions.
+            let last = unsafe { windows_sys::Win32::Foundation::GetLastError() };
+            return match last {
+                ERROR_SUCCESS => Some(Wtf16String::from_units(&[])),
+                ERROR_ENVVAR_NOT_FOUND => None,
+                // Anything else is neither answer, and folding it into "absent"
+                // would make the guard delete an entry over a transient error.
+                other => panic!("reading ={drive}: failed with error {other}"),
+            };
         }
         if written < buffer.len() {
             // Kept as WTF-16 units rather than going through String: a lossy
@@ -843,6 +893,19 @@ fn a_drive_relative_path_uses_that_drives_entry_verbatim_and_rewrites_a_bad_one(
          convention the entry usually holds, not a guarantee about the result"
     );
 
+    // Verbatim means verbatim, including the join. The module doc records that
+    // an accepted entry ending in a separator yields a DOUBLED one, and nothing
+    // pinned it -- so the observation could have stopped being true without CI
+    // noticing, which is the drift this change exists to close rather than
+    // commit again.
+    set_drive_entry(drive, Some(&format!(r"{probe}\")));
+    assert_eq!(
+        resolve(&format!("{drive}:foo")),
+        format!(r"{probe}\\foo"),
+        "an entry is accepted with a trailing separator and concatenated \
+         without normalising the join"
+    );
+
     // An entry that does not name an existing directory is rejected, and the
     // call rewrites it to the drive root rather than leaving it stale.
     //
@@ -929,6 +992,41 @@ fn a_rejected_drive_entry_is_replaced_by_the_drive_root() {
             "and the rejected entry is written back as the drive root"
         );
     }
+
+    // The type check, which is a separate necessary condition from both the
+    // shape above and the existence check in the sibling test. The module doc
+    // has listed an existing FILE among the rejections since the drive-entry
+    // work, and nothing pinned it -- so the one observation distinguishing
+    // "names a directory" from "names something" lived only in prose.
+    //
+    // Not a file this test creates: `ProbeDir` may be the read-only
+    // `%SystemRoot%` fallback, where creating one needs privileges the suite
+    // must not assume. This one is present on every Windows host by
+    // construction, and setting an entry to a file does not touch the file.
+    let system_file = std::path::PathBuf::from(
+        std::env::var("SystemRoot").expect("SystemRoot is set on Windows"),
+    )
+    .join("System32")
+    .join("kernel32.dll");
+    assert!(
+        system_file.is_file(),
+        "precondition: the rejected entry must name an existing FILE: {}",
+        system_file.display()
+    );
+    let system_file = system_file.to_str().expect("the system path is UTF-8");
+
+    set_drive_entry(drive, Some(system_file));
+    assert_eq!(
+        resolve(&format!("{drive}:foo")),
+        format!(r"{drive}:\foo"),
+        "{system_file} exists and is canonical, and is rejected anyway because \
+         it is not a directory -- so existence alone is not the gate"
+    );
+    assert_eq!(
+        drive_entry(drive).map(|v| v.to_string_lossy()).as_deref(),
+        Some(format!(r"{drive}:\").as_str()),
+        "and an entry naming a file is written back as the drive root too"
+    );
 }
 
 #[test]
@@ -963,6 +1061,13 @@ fn a_borrowed_drive_entry_is_restored_even_when_the_borrower_panics() {
     // against the exact failure it is there for. This takes the path on
     // purpose.
     let drive = probe_drive_from(&['G', 'H', 'J'], None);
+
+    // The outer guard is not ceremony. This test installs a sentinel to watch
+    // the inner guard put back, and without it that install would destroy
+    // whatever the process inherited -- so the test for not losing borrowed
+    // state would itself lose some. The inner guard still takes the unwinding
+    // path; the outer one covers this test's own borrow.
+    let _outer = BorrowedDriveEntry::take(drive);
     let sentinel = format!(r"C:\borrowed-entry-{}", std::process::id());
     set_drive_entry(drive, Some(&sentinel));
 
@@ -983,6 +1088,46 @@ fn a_borrowed_drive_entry_is_restored_even_when_the_borrower_panics() {
         "the guard put the entry back while unwinding, where an end-of-test \
          restore would have been skipped"
     );
+}
+
+#[test]
+fn an_empty_drive_entry_is_distinguished_from_an_absent_one() {
+    // **This pins a correction, not a discovery.** The reader used to fold both
+    // into `None`, on a recorded measurement that an empty value and an absent
+    // name are the same state. They are not; the measurement behind that claim
+    // never cleared the last error, so it could only have read whatever an
+    // earlier call left behind -- the same "stated more precisely than the
+    // evidence reaches" failure this crate keeps meeting, committed inside the
+    // comment that called itself measured.
+    //
+    // The consequence is what makes it worth a test rather than a fix: with the
+    // two collapsed, restoring an inherited EMPTY entry deletes it, so the guard
+    // written to preserve process state destroys it in exactly one case.
+    let drive = probe_drive_from(&['E', 'F', 'B'], None);
+    let _outer = BorrowedDriveEntry::take(drive);
+
+    set_drive_entry(drive, Some(""));
+    let empty = drive_entry(drive);
+    assert_eq!(
+        empty.as_ref().map(|v| v.to_string_lossy()),
+        Some(String::new()),
+        "an entry set to the empty string reads back as PRESENT and empty"
+    );
 
     set_drive_entry(drive, None);
+    assert_eq!(
+        drive_entry(drive),
+        None,
+        "and a deleted entry reads back as absent, which is the answer the \
+         empty one must not be confused with"
+    );
+
+    // The two are distinct in the round trip as well as in the read, which is
+    // the property restoration actually depends on.
+    set_drive_entry_units(drive, empty.as_ref());
+    assert_eq!(
+        drive_entry(drive).as_ref().map(|v| v.to_string_lossy()),
+        Some(String::new()),
+        "restoring an empty entry puts back an empty entry, not an absent one"
+    );
 }

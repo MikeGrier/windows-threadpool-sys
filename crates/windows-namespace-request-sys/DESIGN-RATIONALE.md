@@ -118,6 +118,47 @@ were *enumerations* -- which is the form this kind of error likes.
   it. The tests in [tests.rs](src/full_path/tests.rs) now pin every documented spelling so the
   next omission fails CI instead of a review.
 
+### The measurement that was itself unmeasured
+
+The sharpest instance in this whole sequence is not about `GetFullPathNameW` at
+all. The test helper that reads a `=X:` entry folded "empty value" and "absent
+name" into one answer, and said so in a comment that called the equivalence
+*measured*: `SetEnvironmentVariableW(name, "")` was reported to succeed and then
+read back exactly as a name that was never set.
+
+It does not. `GetEnvironmentVariableW` returns `0` for both, and the last error
+is the only thing that separates them -- so a measurement that never cleared the
+last error first could read nothing but whatever an earlier call had left there.
+Cleared and re-measured, the two are distinct, for an ordinary name and an `=X:`
+name alike:
+
+| state | return | last error |
+|---|---|---|
+| set to `""` | `0` | `ERROR_SUCCESS` |
+| deleted | `0` | `ERROR_ENVVAR_NOT_FOUND` |
+
+An earlier note also recorded that `ERROR_ENVVAR_NOT_FOUND` "never surfaced even
+for genuinely absent variables", which has the same cause and one more: the
+deletion under test had not happened, because the null that deletes an entry had
+been marshalled as an empty string instead. Two layers of the harness agreeing
+with each other is not a measurement.
+
+The consequence was live rather than cosmetic. `BorrowedDriveEntry` restores a
+borrowed entry on unwind precisely so a panicking test cannot leak process
+state; with the two answers collapsed, restoring an inherited *empty* entry
+**deleted** it. The guard destroyed the state it existed to preserve, in exactly
+one case, and only that case.
+
+Pinned by `an_empty_drive_entry_is_distinguished_from_an_absent_one` in
+[tests.rs](src/full_path/tests.rs), and verified by re-introducing the collapse,
+which makes it fail.
+
+The general form is worth keeping separately from the specific fact: **a
+comment that says "measured" is a claim about a procedure, and the procedure can
+be wrong in ways the result never reveals.** Every other entry in this file is an
+assertion that outran its evidence. This one had evidence, and the evidence was
+of something else.
+
 ### The sweep, and its arithmetic
 
 The wrong word had spread well beyond where it was reported. The consuming

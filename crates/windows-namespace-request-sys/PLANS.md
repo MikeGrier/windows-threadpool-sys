@@ -10,7 +10,12 @@ feature completes. *Durable follow-up work* therefore cannot live there, and has
 a local checklist instead. Neither is the workspace
 [CHECKLIST.md](../../CHECKLIST.md), which holds unrelated deferred work.
 
+The local [CHECKLIST.md](CHECKLIST.md) has no open milestone, so it has no row
+below: its one plan so far is finished and recorded in
+[COMPLETED-PLANS.md](COMPLETED-PLANS.md). The file stays because the queue is
+durable even when it is empty, and a row here would give the same path two
+incompatible states across the two indexes.
+
 | Path to CHECKLIST.md | Status | Brief description | Design Notes |
 |---|---|---|---|
-| [CHECKLIST.md](CHECKLIST.md) | not started | This crate's durable follow-up queue, which outlives any one feature. No open milestones; completed items are in [COMPLETED-CHECKLIST.md](COMPLETED-CHECKLIST.md). | [DESIGN-NOTES.md](DESIGN-NOTES.md) |
 | [../../CHECKLIST-thread-ambient.md](../../CHECKLIST-thread-ambient.md) | in progress | **This crate's part (M24-M26) is complete**: the foundations (owned handle duplication, security attributes, path preparation, the faithful-execution contract), the four handle-producing entries, the five query entries, a test seam, and an acceptance pass over both operation and scenario coverage. The checklist itself stays open for M27 (`windows-platform-probes`) and the `M26+` items gated on this branch merging with `main` -- including `M26+.3`, the merge-or-delete decision on this crate's duplicated path preparation. | [DESIGN-NOTES.md](DESIGN-NOTES.md) |

@@ -637,6 +637,15 @@ alternatives cost, whether any filesystem was touched. The wordings differ; the
 error does not. A reader taking only "it is not lexical" away from D-18 has the
 answer without the thing that kept producing wrong ones.
 
+The constraint reaches further than prose, and the sharpest case was not about
+this call at all: a test helper collapsed an *empty* `=X:` entry into an absent
+one on a comment that called the equivalence measured, when the measurement had
+never cleared the last error that distinguishes them. So **"measured" is itself
+a claim, and a procedure can be wrong in ways its result never shows.** The
+practical consequence was that restoring a borrowed empty entry deleted it. See
+[DESIGN-RATIONALE.md](DESIGN-RATIONALE.md) -> "The measurement that was itself
+unmeasured".
+
 The drafts themselves, and why each failed, are Tier 2:
 [DESIGN-RATIONALE.md](DESIGN-RATIONALE.md) -> `D-18`.
 
