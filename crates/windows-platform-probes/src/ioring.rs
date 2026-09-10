@@ -317,9 +317,13 @@ impl PipePair {
                 std::ptr::null(),
             )
         };
+        // Both halves of the condition are ways `CreateNamedPipeW` reports
+        // failure, and it is the only call between here and the code being
+        // read, so the code belongs to it either way.
         assert!(
             !raw.is_null() && raw != INVALID_HANDLE_VALUE,
-            "create the probe pipe"
+            "create the probe pipe: {}",
+            std::io::Error::last_os_error()
         );
 
         // SAFETY: `raw` is a fresh, valid handle this type now owns solely.

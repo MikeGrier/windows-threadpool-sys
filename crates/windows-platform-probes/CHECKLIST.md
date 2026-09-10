@@ -236,7 +236,7 @@ speculative list to extend by imagination -- a fourth is added when a fourth con
   better broken-test output. The topology step already took that trade; whether all twelve should is
   a judgement about how the CI log is read, not something to settle by consistency alone.
 
-- [ ] **M2.8** -- Carry the OS error in the remaining Win32 assertion messages.
+- [x] **M2.8** -- Carry the OS error in the remaining Win32 assertion messages.
 
   `last_os_error()` (or a raw `GetLastError`) is in the messages in `doorbell_cost`, `request_cost`
   and `handle_state`, and missing from four sites in probes this peel did not touch:
