@@ -274,6 +274,13 @@ fn root_of(path: &str) -> String {
         let share = parts.next().unwrap_or_default();
         return format!(r"\\{server}\{share}\");
     }
+    // Stated rather than assumed: the only caller passes a resolved absolute
+    // path, which is always at least `C:\`, but `split_at` would panic on an
+    // index rather than say why.
+    assert!(
+        path.len() >= 2 && path.is_char_boundary(2),
+        "root_of expects an absolute path, got {path:?}"
+    );
     let (drive, _) = path.split_at(2);
     format!(r"{drive}\")
 }
@@ -366,8 +373,14 @@ fn a_drive_relative_path_is_rooted_at_that_drive_and_not_the_process_directory()
     // the two observable consequences are asserted instead:
     let cwd = current_directory();
     let Some(drive) = cwd.chars().next().filter(|c| c.is_ascii_alphabetic()) else {
-        // A UNC current directory has no drive letter, so neither consequence
-        // is expressible. Skipping is visible here rather than silently passing.
+        // A UNC current directory has no drive letter, so there is no
+        // drive-relative form to exercise. Announced rather than returned
+        // silently: a test that quietly does nothing is indistinguishable from
+        // one that passed, which is the failure mode this suite keeps meeting.
+        eprintln!(
+            "SKIPPED a_drive_relative_path_...: current directory {cwd} is UNC, \
+             so it has no drive letter"
+        );
         return;
     };
 
@@ -380,21 +393,34 @@ fn a_drive_relative_path_is_rooted_at_that_drive_and_not_the_process_directory()
         "on the current drive, the per-drive directory is the process one"
     );
 
-    // 2. For a drive the process has never visited there is no recorded
-    //    directory, so it roots at that drive's root -- NOT under the process
-    //    current directory, which is what makes this a different rule rather
-    //    than a spelling of the relative one. The drive need not exist: nothing
-    //    consults the volume.
+    // 2. For a DIFFERENT drive the path roots on that drive, carrying none of
+    //    the process current directory. That is what makes this a distinct rule
+    //    rather than a spelling of the relative one.
+    //
+    //    Asserted as "on that drive" rather than as the exact string
+    //    `X:\foo`, because the precise answer depends on environment this test
+    //    must not assume. Measured: if the drive EXISTS and the process
+    //    inherited a `=X:` entry for it -- which a parent shell sets simply by
+    //    visiting it -- then `X:foo` resolves under that recorded directory
+    //    instead of the drive root. (For a drive that does not exist the entry
+    //    is ignored, which is why this passed locally.) A published crate's
+    //    tests run on machines its authors do not control, and an earlier
+    //    version of this assertion demanded the drive-root form outright, so a
+    //    mapped `X:` would have failed it.
     let other = if drive.eq_ignore_ascii_case(&'X') {
         'Y'
     } else {
         'X'
     };
     let resolved = resolve(&format!("{other}:foo"));
-    assert_eq!(
-        resolved,
-        format!(r"{other}:\foo"),
-        "an unvisited drive roots at its own root"
+    assert!(
+        resolved.starts_with(&format!(r"{other}:\")),
+        "a drive-relative path roots on ITS drive, whatever that drive's \
+         recorded directory happens to be: {resolved}"
+    );
+    assert!(
+        resolved.ends_with(r"\foo"),
+        "and keeps the component it was given: {resolved}"
     );
     assert!(
         !resolved.starts_with(cwd.trim_end_matches('\\')),
