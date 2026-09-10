@@ -104,7 +104,9 @@
 //! those alternatives, because nothing here measures them -- but it does settle
 //! the mechanism question this module once left open: resolving a
 //! drive-relative path for another drive checks that drive's recorded entry
-//! against the filesystem, and writes the entry back.
+//! against the filesystem, and writes the entry back **when that check rejects
+//! it** -- an accepted entry is left alone, so the write is conditional rather
+//! than part of every such resolution.
 //!
 //! The two schemes that might reduce it recover different halves. **Inline
 //! storage** removes the allocation and copy, which is what

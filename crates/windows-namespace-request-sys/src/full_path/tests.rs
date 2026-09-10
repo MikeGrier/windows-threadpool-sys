@@ -55,6 +55,14 @@ fn a_path_that_does_not_exist_resolves_perfectly_happily() {
     // A hard-coded literal is only missing until some host happens to have it,
     // and this test would then be demonstrating that an EXISTING path resolves
     // -- which every other test here already covers.
+    // `Path::exists` goes through `CreateFileW` on Windows, so it allocates a
+    // handle and this suite serialises that -- see `ProbeDir::_allocating`.
+    // This test predates the fixture and was the one filesystem call in the
+    // module not covered by it.
+    let _allocating = handle_allocation()
+        .read()
+        .expect("the lock is not poisoned");
+
     let missing = std::env::temp_dir().join(format!("wnrs-{}-absent", std::process::id()));
     let missing = missing.to_str().expect("the temp path is UTF-8");
     assert!(
@@ -412,8 +420,8 @@ fn a_drive_relative_path_carries_its_component_and_the_current_drive_uses_the_pr
     // the entry: with no `=X:` set, an implementation that always used the
     // drive root would satisfy everything here. The arm is pinned properly by
     // `a_drive_relative_path_uses_that_drives_entry_verbatim_and_rewrites_a_bad_one`,
-    // which sets the entry and draws its letter from a disjoint pair, so the
-    // two cannot race.
+    // which sets the entry and draws its letter from a candidate list disjoint
+    // from this one's, so the two cannot race.
     let cwd = current_directory();
     let cwd_drive = cwd.chars().next().filter(char::is_ascii_alphabetic);
 
@@ -729,6 +737,26 @@ fn nul_is_the_one_device_word_a_path_around_it_does_not_save() {
 struct ProbeDir {
     path: std::path::PathBuf,
     created: bool,
+
+    /// Held for the fixture's whole lifetime, because this fixture opens
+    /// handles and this suite serialises that.
+    ///
+    /// `handle_allocation()`'s read guard means "I may open handles"; its write
+    /// guard means "no other test may, while I reason about a specific handle
+    /// value". Eleven tests across four modules take the write guard to assert
+    /// things like a closed handle's value not being reused, and any test
+    /// allocating a handle beside them can make those assertions fail for a
+    /// reason that has nothing to do with what they pin.
+    ///
+    /// This fixture allocates: `create_dir` and `remove_dir` here, and the
+    /// `Path::exists` / `is_file` preconditions its tests run while it is
+    /// alive -- `std`'s Windows metadata goes through `CreateFileW`. Holding
+    /// the guard on the fixture covers all of them for the whole test, which a
+    /// guard taken at each call site would not.
+    ///
+    /// A test holding one of these must not take a second read guard: `std`
+    /// does not promise recursive read locking is deadlock-free.
+    _allocating: std::sync::RwLockReadGuard<'static, ()>,
 }
 
 impl ProbeDir {
@@ -757,6 +785,12 @@ impl Drop for ProbeDir {
 }
 
 fn probe_directory(tag: &str) -> ProbeDir {
+    // Taken before the first filesystem call, and handed to the fixture so it
+    // outlives this function. See `ProbeDir::_allocating`.
+    let _allocating = handle_allocation()
+        .read()
+        .expect("the lock is not poisoned");
+
     // The full shape an accepted `=X:` entry must have, not just its first
     // three characters: rooted at `X:\`, with no `.` or `..` component and no
     // forward slash. `a_rejected_drive_entry_is_replaced_by_the_drive_root`
@@ -811,7 +845,11 @@ fn probe_directory(tag: &str) -> ProbeDir {
             Err(e) => panic!("create the probe directory {}: {e}", path.display()),
         };
 
-        return ProbeDir { path, created };
+        return ProbeDir {
+            path,
+            created,
+            _allocating,
+        };
     }
 
     // Not creating anything here, so no write permission is needed on a host
@@ -850,6 +888,7 @@ fn probe_directory(tag: &str) -> ProbeDir {
     ProbeDir {
         path,
         created: false,
+        _allocating,
     }
 }
 /// The candidate drive letters, one list per test that mutates a `=X:` entry.

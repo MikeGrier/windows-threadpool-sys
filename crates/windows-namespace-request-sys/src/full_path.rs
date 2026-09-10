@@ -94,6 +94,21 @@
 //! treating a rooted path as proof it names a file on that volume is wrong for
 //! this one name. Only a suffix (`NUL.txt`, `NUL:x`) takes it out.
 //!
+//! **Everything above describes what this call returns, and a review asked
+//! whether that is a safe boundary for what a later `CreateFileW` does.**
+//! Measured on this build, at the open rather than the resolver: creating
+//! `<dir>\NUL` returns a `FILE_TYPE_CHAR` handle and leaves nothing on disk,
+//! while `<dir>\CON`, `<dir>\CON.txt` and `<dir>\NUL.txt` each create an
+//! ordinary `FILE_TYPE_DISK` file. The two layers agree -- the reservation
+//! lives in *rooting*, so a name that roots normally opens normally, and `NUL`
+//! reaches the device at both layers.
+//!
+//! That agreement is a measurement of one build, not a guarantee this crate
+//! makes. The durable statement is the narrower one: these paragraphs describe
+//! the RESOLVER's output. A caller sanitising untrusted names should decide
+//! against what it will do with the result, not infer open-time safety from a
+//! resolved spelling.
+//!
 //! **Do not build a name filter from the list below.** The accepted names are
 //! `CON`, `NUL`, `PRN`, `AUX`, `CONIN$`, `CONOUT$`, and `COM`/`LPT`
 //! followed by a single digit -- where "digit" includes the *superscripts*
