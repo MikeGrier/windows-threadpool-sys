@@ -363,58 +363,38 @@ fn a_fully_qualified_path_is_unaffected_by_the_current_directory() {
 
 #[test]
 fn a_drive_relative_path_is_rooted_at_that_drive_and_not_the_process_directory() {
-    // The third rooting form, and the one whose rule is least believable: a
-    // drive-relative path is rooted at *that drive's* current directory, which
-    // Windows records per drive and which moves independently of the process
-    // current directory.
+    // The third rooting form. A drive-relative path is rooted at *that drive's*
+    // current directory -- and the rule has two arms, which is the part that
+    // gets missed:
     //
-    // Pinned without mutating anything. Setting a `=X:` variable would be the
-    // direct test, but it is process-global and these tests share a process, so
-    // the two observable consequences are asserted instead:
+    //   * For a drive OTHER than the current one, Windows reads the hidden
+    //     =X: entry recorded for it.
+    //   * For the CURRENT drive the entry is ignored entirely and the process
+    //     current directory wins. Measured: setting =Q: while the process is
+    //     on Q: changes nothing.
+    //
+    // Pinned without mutating anything, since =X: is process-global and these
+    // tests share a process.
     let cwd = current_directory();
-    let Some(drive) = cwd.chars().next().filter(|c| c.is_ascii_alphabetic()) else {
-        // A UNC current directory has no drive letter, so there is no
-        // drive-relative form to exercise. Announced rather than returned
-        // silently: a test that quietly does nothing is indistinguishable from
-        // one that passed, which is the failure mode this suite keeps meeting.
-        eprintln!(
-            "SKIPPED a_drive_relative_path_...: current directory {cwd} is UNC, \
-             so it has no drive letter"
-        );
-        return;
-    };
+    let cwd_drive = cwd.chars().next().filter(char::is_ascii_alphabetic);
 
-    // 1. For the drive the process is ALREADY on, that drive's recorded
-    //    directory is the process current directory -- so a drive-relative path
-    //    lands exactly where a plain relative one does.
-    assert_eq!(
-        resolve(&format!("{drive}:foo")),
-        format!(r"{}\foo", cwd.trim_end_matches('\\')),
-        "on the current drive, the per-drive directory is the process one"
-    );
-
-    // 2. For a DIFFERENT drive the path roots on that drive, carrying none of
-    //    the process current directory. That is what makes this a distinct rule
-    //    rather than a spelling of the relative one.
-    //
-    //    Asserted as "on that drive" rather than as the exact string
-    //    `X:\foo`, because the precise answer depends on environment this test
-    //    must not assume. Measured: if the drive EXISTS and the process
-    //    inherited a `=X:` entry for it -- which a parent shell sets simply by
-    //    visiting it -- then `X:foo` resolves under that recorded directory
-    //    instead of the drive root. (For a drive that does not exist the entry
-    //    is ignored, which is why this passed locally.) A published crate's
-    //    tests run on machines its authors do not control, and an earlier
-    //    version of this assertion demanded the drive-root form outright, so a
-    //    mapped `X:` would have failed it.
-    let other = if drive.eq_ignore_ascii_case(&'X') {
-        'Y'
-    } else {
-        'X'
+    // The other-drive arm needs no drive letter from the current directory --
+    // under a UNC current directory every letter is "other" -- so it runs
+    // unconditionally and this test never degenerates to a silent skip.
+    let other = match cwd_drive {
+        Some(d) if d.eq_ignore_ascii_case(&'X') => 'Y',
+        _ => 'X',
     };
     let resolved = resolve(&format!("{other}:foo"));
+
+    // Compared case-insensitively, because the case is not this test's to
+    // choose: the letter comes back as Windows recorded it, not as it was
+    // typed. This host returns q:\... for an uppercase Q: input, because the
+    // shell was started with a lowercase cd. An earlier version compared bytes
+    // and would have failed on a drive visited in lowercase.
+    let prefix = format!(r"{other}:\");
     assert!(
-        resolved.starts_with(&format!(r"{other}:\")),
+        resolved.len() >= prefix.len() && resolved[..prefix.len()].eq_ignore_ascii_case(&prefix),
         "a drive-relative path roots on ITS drive, whatever that drive's \
          recorded directory happens to be: {resolved}"
     );
@@ -422,8 +402,19 @@ fn a_drive_relative_path_is_rooted_at_that_drive_and_not_the_process_directory()
         resolved.ends_with(r"\foo"),
         "and keeps the component it was given: {resolved}"
     );
-    assert!(
-        !resolved.starts_with(cwd.trim_end_matches('\\')),
-        "and carries none of the process current directory ({cwd}): {resolved}"
-    );
+    // Deliberately NOT asserting that esolved avoids the current directory:
+    // other differs from the current drive by construction, so such a check
+    // cannot fail, and an earlier version carried the headline claim's message
+    // on an assertion that could never go red.
+
+    // The current-drive arm, where the process directory wins over any =X:.
+    // Only expressible when the current directory has a drive letter at all.
+    if let Some(drive) = cwd_drive {
+        assert_eq!(
+            resolve(&format!("{drive}:foo")),
+            format!(r"{}\foo", cwd.trim_end_matches('\\')),
+            "on the current drive, the per-drive entry is ignored and the \
+             process directory is used"
+        );
+    }
 }

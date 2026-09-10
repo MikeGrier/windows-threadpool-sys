@@ -547,9 +547,11 @@ process state. Three forms read three different pieces of it: a relative path
 takes the current directory; a root-relative path like `\foo` takes only that
 directory's *root*, which is `\\server\share\` when the current directory is a
 UNC path and so is not a drive at all; and a drive-relative path such as
-`C:foo` takes that drive's own current directory, which Windows keeps in the
-hidden `=C:` environment variables and which moves independently of the process
-current directory. So the call is not lexical *as a whole*, and the claim that
+`C:foo` takes that drive's own current directory. That rule has two arms:
+for a drive other than the current one Windows reads the hidden `=C:` entry
+recorded for it, which moves independently of the process current directory;
+for the *current* drive the entry is ignored and the process current directory
+wins. Measured -- setting `=Q:` while the process is on `Q:` changes nothing. So the call is not lexical *as a whole*, and the claim that
 holds unqualified is that it **does not verify what it produces** -- the documented guarantee, which is narrower than the "touches no filesystem" an earlier draft claimed and which observation cannot establish.
 
 **"Most" rather than "every", because a legacy device name short-circuits the

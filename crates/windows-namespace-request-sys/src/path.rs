@@ -19,7 +19,9 @@
 //! lexically, and it *additionally* roots most paths that are not fully
 //! qualified against process state -- the current directory, or for a
 //! root-relative path that directory's *root*, or for a drive-relative path
-//! that drive's own current directory in the `=C:` environment variables. It is
+//! naming another drive that drive's own current directory from the `=C:`
+//! environment variables (for the current drive the process directory is used
+//! and that entry is ignored). It is
 //! therefore not a lexical call as a whole, which is what makes resolving on
 //! the submitting thread meaningful.
 //!

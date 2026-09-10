@@ -35,8 +35,10 @@
 //!    `\\server\share\foo` when the current directory is a UNC path, which is
 //!    why this says root and not drive; and a drive-relative path like `C:foo`
 //!    is rooted at that drive's own current directory, which Windows keeps in
-//!    the hidden `=C:` environment variables and which moves independently of
-//!    the process current directory.
+//!    the hidden `=C:` environment variables. That entry is what is read for a
+//!    drive *other* than the current one, and it moves independently of the
+//!    process current directory; for the current drive it is ignored and the
+//!    process current directory wins.
 //!
 //! **A whole class of input short-circuits both.** When the input names a
 //! legacy device and nothing else, it resolves into the device namespace and is
