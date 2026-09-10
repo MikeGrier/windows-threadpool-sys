@@ -8,18 +8,27 @@
 //! # What it solves, and what it leaves standing
 //!
 //! This call **touches no filesystem**: it will happily resolve a path to
-//! something that does not exist. It is **not** lexical, and the difference is
-//! the whole reason this entry exists. It resolves relative components and
-//! `.`/`..` against the *process current directory*, and for a drive-relative
-//! path such as `C:foo` against the per-drive current directory Windows keeps
-//! in the hidden `=C:` environment variables. Both are process state, so the
-//! same input string resolves to different outputs in the same process at
-//! different times.
+//! something that does not exist.
 //!
-//! Calling it lexical -- as an earlier revision of this doc did, in the sentence
-//! immediately before the one describing the current directory it reads -- gets
-//! that exactly backwards. A lexical canonicalizer is a pure function of its
-//! input; this reads mutable process state, which is precisely the property
+//! It does **two** things, and keeping them apart is the whole reason this
+//! entry exists:
+//!
+//! 1. It collapses `.` and `..` and normalizes separators. This part *is*
+//!    lexical -- pure string work over the input, reading no process state.
+//!    `C:\a\..\b` becomes `C:\b` whatever the current directory happens to be,
+//!    and whether or not `C:\a` exists.
+//! 2. It **roots** a path that is not fully qualified, and that part reads
+//!    mutable process state. A relative path like `rel.txt` is rooted at the
+//!    *process current directory*; a drive-relative path like `C:foo` is rooted
+//!    at that drive's own current directory, which Windows keeps in the hidden
+//!    `=C:` environment variables.
+//!
+//! So the call is **not** lexical as a whole, and describing it that way -- as
+//! an earlier revision of this doc did, in the sentence immediately before the
+//! one describing the current directory it reads -- loses exactly the half that
+//! matters here. A fully-qualified input resolves to the same output every
+//! time; an input that is not fully qualified resolves to different outputs in
+//! the same process at different times, and pinning *that* is the property
 //! being bought.
 //!
 //! So it solves exactly one problem -- the process current directory is shared

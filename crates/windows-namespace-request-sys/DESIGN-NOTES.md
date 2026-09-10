@@ -537,19 +537,29 @@ to one side alone.
 ## <a id="d-18"></a>D-18: `GetFullPathNameW` is not lexical, and the genuinely lexical alternative is the wrong call
 
 **The correction.** This crate described `GetFullPathNameW` as **lexical** in
-six places, in a sentence that then went on to say it resolves against the
-process current directory. Those two claims disagree: a lexical canonicalizer is
-a pure function of its input, and this reads mutable process state -- the current
-directory, and for a drive-relative path such as `C:foo` the per-drive current
-directory Windows keeps in the hidden `=C:` environment variables. The claim
-that holds is **touches no filesystem**.
+**nine places across five files**, in a sentence that then went on to say it
+resolves against the process current directory. Those two claims disagree, and
+the call is better described as doing two separable things. It collapses
+`.`/`..` and normalizes separators, which *is* lexical -- `C:\a\..\b` becomes
+`C:\b` whatever the current directory is, and whether or not `C:\a` exists. It
+*also* **roots** a path that is not fully qualified, and that reads mutable
+process state: the current directory, or for a drive-relative path such as
+`C:foo` that drive's own current directory, which Windows keeps in the hidden
+`=C:` environment variables. So the call is not lexical *as a whole*, and the
+claim that holds unqualified is **touches no filesystem**.
 
-The wrong word had spread beyond where it was reported. The consuming probe's
-checklist item named [full_path.rs](src/full_path.rs) only; a sweep for the term
-found the identical sentence in [path.rs](src/path.rs), plus four further
-restatements across doc examples, tests, an acceptance comment and this file.
-The reported site was a sample, not the population -- which is the standing
-lesson, met again.
+Keeping the two halves apart matters, because the decision below turns on the
+rooting half alone. Saying the call resolves `.`/`..` "against the current
+directory" -- as a first draft of this correction did -- attributes process-state
+dependence to the one operation that has none, which is the same imprecision
+running the other way.
+
+The wrong word had spread well beyond where it was reported. The consuming
+probe's checklist item named [full_path.rs](src/full_path.rs) only; that file
+held three of the nine on its own, `path.rs` two more, and the rest were spread
+across doc examples, [tests.rs](src/full_path/tests.rs), an acceptance comment
+and this file. The reported site was a sample, not the population -- which is the
+standing lesson, met again.
 
 **The decision: keep `GetFullPathNameW`.** A genuinely lexical canonicalizer
 exists -- `PathCchCanonicalizeEx`, or `PathAllocCanonicalize` -- and is cheaper,

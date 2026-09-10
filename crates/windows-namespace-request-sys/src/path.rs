@@ -15,10 +15,12 @@
 //!
 //! # A resolved path is not a session-independent path
 //!
-//! `GetFullPathNameW` **touches no filesystem**, and it is not lexical: it
-//! resolves relative components and `.`/`..` against process state -- the
-//! current directory, and for a drive-relative path the per-drive current
-//! directory in the `=C:` environment variables. What it never does is expand
+//! `GetFullPathNameW` **touches no filesystem**. It collapses `.`/`..`
+//! lexically, and it *additionally* roots a path that is not fully qualified
+//! against process state -- the current directory, or for a drive-relative path
+//! that drive's own current directory in the `=C:` environment variables. It is
+//! therefore not a lexical call as a whole, which is what makes resolving on
+//! the submitting thread meaningful. What it never does is expand
 //! a drive letter, and a drive letter resolves
 //! against the *logon session* of whatever token is in effect. So a path
 //! prepared on a submitting thread and opened on a worker under a captured

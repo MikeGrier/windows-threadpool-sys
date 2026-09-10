@@ -417,10 +417,10 @@ Entries 5-9 of the audited list. All but the last take a handle, so all but the 
   filesystem name. Handle-based; the path-based `GetVolumeInformationW` is deliberately not in round one
   because no audited consumer calls it.
 
-- [x] **M26.5** -- The `GetFullPathNameW` entry. Touches no filesystem: it resolves relative components
-  and `.`/`..` against the process current directory, and never expands a drive letter, so it does
-  **not** close the session-relative hazard from M20.1, and its documentation must say which problem it
-  solves and which it leaves standing.
+- [x] **M26.5** -- The `GetFullPathNameW` entry. Touches no filesystem: it collapses `.`/`..`
+  lexically and roots a path that is not fully qualified against the process current directory, and
+  never expands a drive letter, so it does **not** close the session-relative hazard from M20.1, and
+  its documentation must say which problem it solves and which it leaves standing.
 
 - [x] **M26.6** -- Acceptance, in **two** parts, because the audit had two purposes and checking only the
   first is how the coverage question got missed once already.

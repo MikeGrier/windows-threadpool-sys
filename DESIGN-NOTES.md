@@ -1460,9 +1460,10 @@ Two corollaries that decide the design:
   resolved on the calling thread at submission, because the process current
   directory is mutable by any thread and even perfect remoting would be racy --
   but `GetFullPathNameW` never expands a drive letter, so the "canonical" path
-  still carries a session-relative reference. (It is not *lexical* either, which
-  matters elsewhere but not here: it resolves against the process current
-  directory, which is exactly the property submission-time resolution buys. See
+  still carries a session-relative reference. (It is not *lexical* as a whole
+  either, which matters elsewhere but not here: it collapses `.`/`..` lexically
+  but roots a path that is not fully qualified against the process current
+  directory, and that rooting is the property submission-time resolution buys. See
   `windows-namespace-request-sys`'
   [DESIGN-NOTES.md](crates/windows-namespace-request-sys/DESIGN-NOTES.md) ->
   `D-18`.)
