@@ -3506,3 +3506,311 @@ and converting them to stubs is queued separately as M34.3 in [CHECKLIST.md](CHE
   deleting it, so it sabotaged nothing and the resulting pass read as a hole in the tests. A sabotage
   that does not sabotage is worse than none, because it retires a question that was never asked --
   always confirm the injected defect actually changes behaviour before believing a "not caught".
+
+## Moved 2026-09-09 21:35:00 -04:00 -- ship-topology M16: PR #56 tenth review round, the SH-3.1.1 diff review
+
+From [CHECKLIST-ship-topology-and-queues.md](CHECKLIST-ship-topology-and-queues.md), which remains open
+at M2-M6, M14, M15 and M-inf.
+
+> **Six of these items are superseded.** SH-16.5, SH-16.8, SH-16.9, SH-16.11, SH-16.12 and SH-16.13
+> are all the same piece of work seen from different angles -- reshaping the machine memory topology
+> -- and they now live in
+> [crates/windows-topology-sys/COMPLETED-CHECKLIST.md](crates/windows-topology-sys/COMPLETED-CHECKLIST.md) as a plan of
+> their own, numbered `MMT-*`. They are left here, unchecked and marked, rather than deleted: each
+> records how the defect was *found*, which the new plan does not repeat.
+>
+> **Read the new plan for what to do; read these for why.** The six that remain live here are the
+> review round's own findings, already fixed.
+
+**This round is the one [SH-3.1.1](#m3-land-the-branch) asked for**, and it is the first that read the
+branch as a *diff* rather than reacting to a reviewer's comment. Five reviewers took non-overlapping
+crate scopes across all 200 changed files; seven findings came back, listed here worst-first rather
+than by crate.
+
+**Two of them are the reason the round was worth running.** SH-16.1 is a regression this branch
+introduced *two commits ago* -- it would have failed the next `windows-ioring-sys` publish, twenty
+minutes in, with an error naming the wrong cause. SH-16.2 is a soundness hole in the crate that is
+about to freeze its API, in a shape whose selling point is that its ordering arguments are written
+down and checked.
+
+**Neither was reachable from a memory of having written the code**, which is exactly what SH-3.1.1
+predicted about a 222-commit branch.
+
+- [x] **SH-16.1** -- **`publish-crate.yml`'s sibling-dependency wait cannot handle a `*` requirement,
+  so `windows-ioring-sys` can no longer publish.** The wait step derives a concrete version with
+  `sed -E 's/^\^//'`, which handles only a caret. Commit `f1fc4eb` on this branch made ioring's
+  topology dev-dependency path-only, so `cargo metadata` now reports `req=*` -- **verified, not
+  assumed**. `windows-topology-sys` is in `workspace_crates`, so the loop is entered, `dep_version`
+  becomes the literal `*`, and `select(.vers == "*")` can never match: 60 attempts x 20 s, then an
+  error telling the operator to re-run once the dependency is available, which will never help.
+  A versionless path dev-dependency is **stripped from the published manifest entirely**, so there is
+  nothing to wait for and the right answer is to skip it.
+  Note that `tools/check-publishable.ps1`, added in this same branch to catch "release-managed but
+  unpublishable", does **not** catch this -- ioring passes all three of its checks.
+  **Done:** `*` is skipped with the reason stated, and any requirement that does not reduce to a
+  comparable version (`~1.2`, `>=1, <2`, `=1.2.3`) now fails **immediately** naming the requirement,
+  rather than reaching the same twenty-minute timeout by a different route. Verified by extracting the
+  `run:` block and exercising it under `bash` against real `cargo metadata` output: ioring's seven
+  dependencies now resolve to two waits, four skips and one versionless skip, and the step exits 0.
+  A side benefit worth recording, found by getting the harness wrong first: the new check also
+  catches a returning CR corruption -- the failure the `tr -d '\r'` above was added for -- because
+  `0.1.3\r` is no longer a comparable version. That failure used to be a silent timeout too.
+
+- [x] **SH-16.2** -- **`reserving_mpsc::Reservation::send` wrote a slot with no happens-before edge to
+  the consumer's read of the previous occupant.** A slot is freed only by `Consumer::pop`'s
+  `head.store(Release)`, and the matching acquire lives in `has_room_beyond_reservations`.
+  `Producer::push` gets its edge from that room check; `send` deliberately has none -- the code says
+  so -- and its claim CAS is `Relaxed` on every path, so there was no release sequence to inherit
+  either. The claim proves the slot is *logically* free, which is not the same as a synchronization
+  edge, and the `SAFETY` comment cited "the room check that permitted the claim" on the one path
+  where no room check exists.
+  **The default configuration was the unsound one**: `Options::tracking_high_water()` accidentally
+  repaired it, because the metric's `head.load(Acquire)` sat just before the write. Fixed by making
+  that load unconditional, which is where it belonged.
+
+- [x] **SH-16.3** -- **`CancelIo` does not wait, so a test frees an `OVERLAPPED` and an I/O buffer the
+  kernel may still write to.** In
+  [reopen_by_id_cannot_be_watched.rs](crates/windows-file-watcher/tests/reopen_by_id_cannot_be_watched.rs),
+  an overlapped `ReadDirectoryChangesW` is issued into a **stack-local** `OVERLAPPED` and a heap
+  buffer, then `CancelIo` is called and both are dropped immediately. `CancelIo` only *requests*
+  cancellation; the IRP still completes asynchronously and writes `Internal`/`InternalHigh` into a
+  frame that has been reclaimed. Two safety comments assert the opposite of what the code guarantees.
+  Aggravated by the helper being called twice back-to-back, so the second call's `overlapped` likely
+  lands on the same stack address the first IRP will write into.
+  **This crate has already been bitten by this exact class of corruption** -- the
+  `STATUS_STACK_BUFFER_OVERRUN` history recorded on the now-removed `reopen_via_existing_handle`.
+  Fix by calling `GetOverlappedResult(..., bWait = TRUE)` and accepting `ERROR_OPERATION_ABORTED`
+  before either buffer leaves scope.
+  **Done, and the wait is measured to be load-bearing rather than assumed.** A probe on the control
+  path returned `completed=0, err=995` -- `ERROR_OPERATION_ABORTED` -- proving an IRP really was
+  outstanding at the moment `CancelIo` returned and completed only during the wait. Without it, that
+  completion landed on a reclaimed frame. The same wait is what makes `Owned`'s later `CloseHandle`
+  safe, since closing a handle with I/O outstanding is another cancellation request and not a wait.
+
+- [x] **SH-16.4** -- **`cache_partitions_at_level` counted a domain covering no processors as a
+  partition.** An empty `ProcessorSet` is not *equal* to any non-empty one, so deduplication kept it,
+  and `is_disjoint` is vacuously true on it, so the pairwise check passed it. A level with one real
+  cache plus one empty domain therefore reported two partitions and was treated as dividing a machine
+  it does not divide. `Domain` is publicly constructible and `ProcessorSet` has `empty()`, so this is
+  reachable by hand and by deserialization -- precisely the input the method promises not to trust.
+  Fixed by dropping empty domains, with the contrast against `memory_domains` (which deliberately
+  keeps a processor-less domain, D-5) recorded at the filter.
+
+- [x] **SH-16.5** -- **DISCHARGED 2026-09-03 by M5+.4 -- `cache_domain` is `Observed<u32>`, the refusal is gone, and `Slice::same_cache_domain` answers `None` rather than `same` for an unobserved participant.** SUPERSEDED by [crates/windows-topology-sys/COMPLETED-CHECKLIST.md](crates/windows-topology-sys/COMPLETED-CHECKLIST.md) (MMT-*); kept for how it was found.** **`windows-placement-probe` refuses a partially-covering cache level that
+  `windows-topology-sys` deliberately hands back.** `outermost_partitioning_cache` documents that
+  "full coverage of the online processors is deliberately *not* required"; `places_from_topology`
+  treats any online processor the chosen level does not name as `MissingPlacement::CacheDomain` and
+  fails the **entire run** with `InvalidData`. Two crates state opposite rules about the same return
+  value -- a [CONTRACT INTEGRITY](.github/copilot-instructions.md) defect, not merely a bug.
+  Decide the rule **once**, in the crate that owns the topology, and have the consumer ask rather than
+  restate. Note the asymmetry that makes the NUMA arm different and correct: for NUMA, `None` has no
+  honest value, whereas `cache_domain` is already `Option<u32>`.
+  **BLOCKED on
+  [DESIGN-SESSION-2026-09-02-cache-locality-model.md](design-sessions/DESIGN-SESSION-2026-09-02-cache-locality-model.md)
+  -- and *not* for want of a consumer.** The fix was implemented; implementing it surfaced a design
+  question the fix would have silently answered. The primitive it adds is a single "which cache domain
+  is this processor in", which **is** the single-boundary collapse that session is about, so landing it
+  would prejudge the outcome. The prototype compiled, and its topology-side tests passed and were
+  sabotage-verified; it was reverted deliberately and preserved outside the repository as
+  `sh-16.5-prototype.patch`.
+  **Unblocked 2026-09-03, and superseded rather than resumed.** The session's questions were answered
+  as `D-13` through `D-21`, and the answer is *not* the primitive this item prototyped: under
+  [D-19](crates/windows-topology-sys/DESIGN-NOTES.md#d-19) the unified relation set with its
+  inclusion order replaces a single per-processor cache-domain lookup, so the prototype would have
+  landed the collapse the session existed to remove. The contradiction is fixed by `MMT` **M2+.5** and
+  **M5+.4** instead. The patch is kept as the record of what was tried and why it was not taken.
+
+- [x] **SH-16.8** -- **DISCHARGED 2026-09-03 by M2 -- the granularity order carries all seven kinds and any depth, and `minimal_shared` is the meet rather than a single cache level.** SUPERSEDED by [crates/windows-topology-sys/COMPLETED-CHECKLIST.md](crates/windows-topology-sys/COMPLETED-CHECKLIST.md) (MMT-*); kept for how it was found.** **The locality model collapses a seven-kind, any-depth topology onto one cache
+  boundary, and nothing records that as a choice.** Raised by the engineer during the SH-16.5 fix, and
+  confirmed: `windows-topology-sys` hardcodes no level count (`level` is a `u8`, and a regression test
+  already guards against a consumer sweeping `1..=4`) and models `Group`, `Package`, `Die`, `Module`,
+  `Core`, `Cache` and `Memory` -- but `outermost_partitioning_cache` selects one level and discards the
+  rest, `ProcessorPlace::cache_domain` is one scalar, and `Placement` carries three tiers.
+  Three consequences, all verified: "same cache" denotes **a different boundary on different machines**,
+  so a label is not portable across records; `CrossCache` conflates "different L2, same L3" with
+  "different L3" on any machine with two live boundaries; and it has already cost a row in this
+  project's own matrix -- the x64 host's "cannot express `same cache, same class`" note in
+  [DESIGN-NOTES.md](crates/windows-waitable-queues/DESIGN-NOTES.md) is attributed to hardware, but
+  those sixteen processors do share one L3, so a per-level model would express it.
+  Gated on the session above, which carries the design space and the open questions.
+  **Scope addition from [D-13](crates/windows-topology-sys/DESIGN-NOTES.md):** the audit that decision
+  performed over every `Option` in the crate found exactly one site that documentation cannot fix.
+  `DomainKind::Memory::memory_bytes` is unambiguous from `discover`, which always sets `None`, but a
+  **description's** `None` conflates "the description omitted the field" with "this node's capacity is
+  genuinely unknown" -- the two are the same value today. Whatever representation this item lands must
+  cover it, since absence becoming first-class is precisely the fix.
+  **Direction now settled** by the engineer: presence and observation must be modeled, not
+  collapsed into an `Option`. "Win32 did not report it" and "it was found not to be present" are
+  different facts, and the representation must be built for **observed connectivity** rather than
+  for a ladder of levels with optional rungs. That rules out the SH-16.5 prototype's `Unknown` arm,
+  which merges both. Shape still open.
+
+- [x] **SH-16.9** -- **DISCHARGED 2026-09-03 by M5+.3 -- the rule has one implementation, which `windows-platform-probes` now asks rather than restates.** SUPERSEDED by [crates/windows-topology-sys/COMPLETED-CHECKLIST.md](crates/windows-topology-sys/COMPLETED-CHECKLIST.md) (MMT-*); kept for how it was found.** **The "outermost partitioning cache" rule is stated three times, and two of the
+  three disagree.** `MachineMemoryTopology::outermost_partitioning_cache` requires more than one partition **and**
+  pairwise disjointness. `Observation::outermost_partitioning_cache` in `windows-platform-probes` is
+  `caches.iter().filter(|c| c.domains > 1).max_by_key(|c| c.level)` -- **no disjointness check** --
+  computed over a `CacheLevel` summary that crate builds itself, even though it already depends on
+  `windows-topology-sys`. On a hand-built or deserialized topology with overlapping domains the two
+  crates give different answers to the same question. `windows-placement-probe` restates it a third
+  time by rebuilding the map from the partition list, which is SH-16.5.
+  A [CONTRACT INTEGRITY](.github/copilot-instructions.md) defect of the exact shape the rules name:
+  a rule re-encoded by a consumer rather than derived from the owner. Note the ordering -- fixing
+  this by pointing both consumers at today's method would have to be redone once SH-16.8 lands, so
+  either fix it now and accept the rework, or sequence it after the design session.
+
+- [x] **SH-16.10** -- **`GetSystemCpuSetInformation` is not consumed anywhere, so a whole Win32
+  topology model is unexposed.** The crate consumes all seven `GetLogicalProcessorInformationEx`
+  relations, but `SYSTEM_CPU_SET_INFORMATION` is a *second, parallel* model carrying at least
+  `LastLevelCacheIndex` -- Windows's own LLC grouping, which is a **different answer** from
+  "outermost partitioning cache" and would be directly comparable against it -- plus
+  `SchedulingClass`, `AllocationTag`, `EfficiencyClass`, and per-processor `Parked` / `Allocated` /
+  `RealTime` state.
+  Raised by the engineer's question of whether we expose everything a real system would reveal
+  through the Win32 API set. Today the answer is **no**.
+  Note `Parked` and `Allocated` bear directly on **thread counts and assignments**, one of the three
+  decisions the model exists to serve, so this is a gap already costing a named use rather than
+  speculative completeness.
+  **Ungated, and split, because the gating premise was wrong.** This said "gated on SH-16.8, since
+  what shape it lands in depends on the model". That conflated two things: *acquiring* the data and
+  *reconciling* it with what `GetLogicalProcessorInformationEx` already reports. Acquisition does
+  not depend on the model at all -- CPU Sets is a **cheap OS read**, in the same class as the walk
+  this crate already does, and nothing about reading it presumes a granularity representation. Only
+  reconciliation depends on the model, and that is now SH-16.13.
+  Field list **verified against `windows-sys 0.61.2`** rather than recalled: `Id`, `Group`,
+  `LogicalProcessorIndex`, `CoreIndex`, `LastLevelCacheIndex`, `NumaNodeIndex`, `EfficiencyClass`,
+  a union carrying `AllFlags` (`Parked` / `Allocated` / `AllocatedToTargetProcess` / `RealTime`), a
+  union carrying `SchedulingClass`, and `AllocationTag`. All five APIs are present
+  (`GetSystemCpuSetInformation`, `GetThreadSelectedCpuSets`, `SetThreadSelectedCpuSets`,
+  `SetThreadSelectedCpuSetMasks`, `SetProcessDefaultCpuSets`) and `Win32_System_SystemInformation`
+  is already an enabled feature, so there is no manifest change and no blocker.
+  **Done.** `src/cpu_set.rs` walks the records with the same buffer discipline the relationship walk
+  uses -- size first, advance by each record's own `Size`, read every field unaligned -- and
+  `MachineMemoryTopology::discover` now populates `MachineMemoryTopology::cpu_sets`. Carried as
+  `Option<Vec<CpuSet>>` where `None` means **not observed**, which a hand-built or deserialized
+  topology genuinely is; that is the honest use of `Option`, one absence rather than two collapsed
+  together. `#[serde(default)]` so descriptions written before the field still load.
+  **Nothing is reconciled**, per duplicate-then-decide. SH-16.13 owns that.
+  **The live dump justified the caution.** On the x64 host, CPU Sets reports **one** distinct
+  `LastLevelCacheIndex` across all sixteen processors, while `outermost_partitioning_cache` reports
+  **eight** partitions at L2. Both are right -- Windows names the *last* level, the derivation names
+  the outermost level that *divides* -- so a merge treating `LastLevelCacheIndex` as "the cache
+  domain" would have collapsed eight shard groups into one on this machine. Kept as a test asserting
+  the *relationship* (Windows's grouping is never finer) rather than the host's numbers.
+  It also confirms the matrix-hole argument from
+  [DESIGN-SESSION-2026-09-02-cache-locality-model.md](design-sessions/DESIGN-SESSION-2026-09-02-cache-locality-model.md):
+  this is the host recorded as unable to express `same cache, same class`, and a second source now
+  says all sixteen share an LLC, so that row is real rather than inferred.
+  **One thing is verified only against the SDK's documented bitfield order, not against Windows:**
+  the four flag bit positions. Every processor on this host reads `parked=false, allocated=false,
+  allocated_to_target_process=false, real_time=false`, which is consistent with a process that has
+  requested no CPU-set allocation but confirms no bit position. `each_flag_is_read_from_its_own_bit`
+  checks the decode is self-consistent, not that it matches the OS. Confirm against a parked
+  processor or an explicit `SetProcessDefaultCpuSets` before relying on the flags.
+
+- [x] **SH-16.13** -- **DISCHARGED 2026-09-03 by M3+.1.2 -- CPU Sets are folded into the relation set and carried beside the walk, so both observers are visible per relation.** SUPERSEDED by [crates/windows-topology-sys/COMPLETED-CHECKLIST.md](crates/windows-topology-sys/COMPLETED-CHECKLIST.md) (MMT-*); kept for how it was found.** **Reconcile the CPU-set observation with the relationship walk.** `CoreIndex`,
+  `NumaNodeIndex` and `EfficiencyClass` **duplicate** facts `GetLogicalProcessorInformationEx`
+  already reports, from a different kernel path -- so this is not redundancy to remove, it is a
+  **second independent observer of the same relations**, and the two can disagree under a hypervisor
+  or where one path is stale.
+  This is the concrete instance of the design session's "can one relation hold several
+  observations?" question, which until now rested on the file-handle spike's agree/disagree
+  reasoning about a different subject. It is no longer speculative: two Win32 sources describe the
+  same processor's NUMA node and efficiency class today.
+  Per [PLATFORM INTEGRITY](.github/copilot-instructions.md)'s duplicate-then-decide rule, SH-16.10
+  lands the CPU-set data as its **own** observation alongside the existing domains, without merging.
+  This item is the merge-or-delete decision, made when the model settles rather than pre-empted.
+  Gated on SH-16.8.
+  Note it also bears on SH-16.12: CPU Sets carries `EfficiencyClass` as a plain `u8` with **no
+  sentinel**, so it is a cleaner source for the field whose `capacity` encoding collides with
+  "unknown".
+
+- [x] **SH-16.11** -- **DISCHARGED 2026-09-03 by M5+.5 -- `distances` and the `Distances` type are deleted.** SUPERSEDED by [crates/windows-topology-sys/COMPLETED-CHECKLIST.md](crates/windows-topology-sys/COMPLETED-CHECKLIST.md) (MMT-*); kept for how it was found.**
+  **And now ANSWERED, in the opposite direction to what this item proposed.**
+  [D-20](crates/windows-topology-sys/DESIGN-NOTES.md#d-20) rules that the crate does not go below the
+  Win32 topology APIs, so a fact Win32 does not report is not one the crate has: `distances` is
+  **deleted, not filled**. The removal is `M5+.5` in
+  [crates/windows-topology-sys/COMPLETED-CHECKLIST.md](crates/windows-topology-sys/COMPLETED-CHECKLIST.md). Everything
+  below is the reasoning that led there and is kept for that; it no longer describes work. **`MachineMemoryTopology::distances` is a field for a fact Win32 cannot supply, it is never
+  populated, and the measurement that would fill it already exists elsewhere.** `discover()`
+  hardcodes `distances: None`, every other construction sets `None`, and no consumer reads the
+  field. Windows exposes no API for NUMA node distance -- ACPI carries SLIT, Win32 does not surface
+  it -- so measurement is the only source. `windows-placement-probe` **already measures the
+  equivalent** through `node_pairs_measured()`, producing per-node-pair handoff cost with ring
+  placement, and renders it as a table that goes nowhere else.
+  This is the canonical case for the whole model: under the bar that the model must be usable
+  **without further measurement**, a consumer shaping memory allocation must today either run the
+  probe at decision time -- forbidden -- or guess. Gated on SH-16.8, and on the open question of
+  which component owns the measurement phase.
+  **Corrected while stating [EP-D-3](crates/topology-planner/DESIGN-NOTES.md#ep-d-3): the
+  wording above reads as an oversight, and it is not one.** The field is documented as being for a
+  fed-in description, because Windows exposes no user-mode SLIT reader -- accurate, and deliberate.
+  Two sharper problems replace the one this item claimed.
+  **First, `distances` can never carry `Measured` provenance, by construction.** Its only inputs are
+  hand construction (defaulting to `Synthetic`) and deserialization (capped at `Restored` by
+  `downgraded_to`), and `discover()` hardcodes `None`. So populating it would not help: a planner on
+  a real machine still could not obtain trustworthy distance *for that machine*.
+  **Second, even populated it answers the wrong question.** The matrix is SLIT-shaped -- one
+  symmetric, workload-independent scalar per pair -- while the residency decision is directional,
+  since the producer writes and the consumer reads. `D-9` in
+  [crates/windows-topology-sys/DESIGN-NOTES.md](crates/windows-topology-sys/DESIGN-NOTES.md) already
+  anticipated exactly this and deferred it, naming an attributed edge list that "would absorb HMAT,
+  **asymmetry**, and multi-hop CXL fabrics", with the trigger being that "scalar distance
+  demonstrably mismodels a machine somebody is tuning for". `D-8` keeps the JSON schema outside
+  semver specifically to make that revision cheap.
+  **The trigger is approached but not met, and the difference is a measurement nobody here can
+  take.** The probe treats direction as real -- four numbers per undirected edge, and its code says
+  "a hop is not symmetric even though the link is" -- but no run has *shown* those numbers differ,
+  because both development hosts report a single NUMA node and every such run prints "VACUOUS ON
+  THIS MACHINE". Take that measurement on multi-node hardware before reopening D-9 on asymmetry
+  grounds, not after.
+
+- [x] **SH-16.12** -- **DISCHARGED 2026-09-03 by M5+.1, subsumed by M4+.2 -- the shard-set surface has no sentinel, so `0` is never overloaded.** SUPERSEDED by [crates/windows-topology-sys/COMPLETED-CHECKLIST.md](crates/windows-topology-sys/COMPLETED-CHECKLIST.md) (MMT-*); kept for how it was found.** **`Processor::capacity` uses `0` as both a legitimate efficiency class and a
+  sentinel for "not known", and the two collide on the common case.** It is computed
+  `online.then(|| find the owning Core domain).flatten().unwrap_or(0)`, so `0` means the processor is
+  offline, *or* is online but named by no `Core` domain, *or* genuinely has efficiency class zero.
+  The third is **every processor on every non-hybrid machine**, so the sentinel is not a rare
+  collision -- it is the usual value.
+  Found by [crates/topology-planner](crates/topology-planner/DESIGN-NOTES.md#ep-d-1)
+  EP-1.1 while checking what a shard planner can rely on, and it is worse for that consumer than for
+  most: Windows orders efficiency class with `0` as **least** performant, so on a hybrid part an
+  unknown processor is indistinguishable from an efficiency core. A policy excluding efficiency cores
+  would silently drop a processor that may be a performance core; a policy tiering them would put it
+  in the wrong tier. Neither shows up in a functional test.
+  **A third instance of the pattern SH-16.8 exists to fix**, and the one not previously swept -- the
+  others being `ProcessorPlace::cache_domain`'s `Option<u32>` (SH-16.5) and
+  `MachineDescription::cpu_model`, where the same conflation was noticed and solved with a side
+  boolean. Note this one is *worse* than an `Option`: a sentinel that collides with a valid value
+  cannot be distinguished even by a careful caller. Gated on SH-16.8, since the fix is the same
+  question -- how absence is represented -- and doing it twice would be doing it twice.
+  Note `DomainKind::Core { efficiency_class }` already carries the value without a sentinel, so the
+  interim guidance is to read that instead; the defect is that `capacity` exists and looks usable.
+
+- [x] **SH-16.6** -- **The thread-stack NUMA spike's `deep_probe` measures the shallow end of its own
+  filler, so the discrimination it exists to make is inert.** The stack grows down, so `filler[0]` is
+  the deepest address and `filler[last]` sits immediately below the caller's frame -- but the probe
+  takes `&raw const filler[last]`, landing very likely on the same page as the shallow probe rather
+  than 64 KiB away. The spike would then report "not first touch" on a machine where placement *is*
+  by first touch: a confident wrong answer, in a file whose whole point is avoiding those. Both ends
+  are already touched, so probing `filler[0]` is a one-token change.
+  **Done, and the defect was worse than reported.** Printing the three addresses on all three spike
+  threads showed the old probe was not merely *likely* on the shallow probe's page -- it was on the
+  **same page every time**, 209 bytes away, where the review had estimated "at worst adjacent". So
+  `shallow.node != deep.node` compared one page against itself and could not fire even in principle.
+  After the change the two probes are 16 pages apart on every thread. Measured on all three threads
+  (`0x...dff7c0` vs `0x...dff6ef` -> same page; vs `0x...def6f0` -> 16 pages), then the instrumentation
+  was removed.
+
+- [x] **SH-16.7** -- **A `windows-thread-ambient-sys` test claims a restore-failure it never
+  injects.** `release_reports_a_genuine_restore_failure_and_restores_on_drop_even_without_it` asserts
+  the *opposite*: it `expect`s the release to succeed and both closing assertions check that restore
+  worked. Its siblings in `declared/tests.rs` and `error_mode/tests.rs` do force genuine failures; this
+  one inherited the name without the failure-injection half.
+  **Done, by renaming -- and the review's stated hazard did not hold.** It reported that
+  `TransactionGuard::release`'s error path "reads as covered when it is not". Checked rather than
+  taken: the path **is** covered, by `explicit_release_reports_an_injected_restore_failure` in the
+  same file, via a `FaultPoint::TransactionSet` injection built for it. Verified by running both.
+  So the defect was only ever the name. Renamed to
+  `release_and_drop_each_restore_a_real_entry_transaction`, and the comment now records *why* the
+  sibling naming does not apply -- a transaction restore either sets a real handle or clears to
+  "none", and both succeed, so unlike a null WOW64 cookie or `SEM_NOALIGNMENTFAULTEXCEPT` there is no
+  naturally-rejecting value to provoke. Written down so the missing half is not re-attempted.
