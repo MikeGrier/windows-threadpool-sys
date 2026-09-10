@@ -13,14 +13,20 @@
 //! It does **two** things, and keeping them apart is the whole reason this
 //! entry exists:
 //!
-//! 1. It collapses `.` and `..` and normalizes separators. This part *is*
-//!    lexical -- pure string work over the input, reading no process state.
-//!    `C:\a\..\b` becomes `C:\b` whatever the current directory happens to be,
-//!    and whether or not `C:\a` exists.
+//! 1. It rewrites the string. `.` and `..` are collapsed, `/` becomes `\`,
+//!    trailing dots and spaces are trimmed, and a legacy device name is mapped
+//!    into the device namespace (`CON` becomes `\\.\CON`, which is worth
+//!    knowing for a crate that prepares paths). This part *is* lexical -- pure
+//!    string work over the input, reading no process state. `C:\a\..\b` becomes
+//!    `C:\b` whatever the current directory happens to be, and whether or not
+//!    `C:\a` exists.
 //! 2. It **roots** a path that is not fully qualified, and that part reads
-//!    mutable process state. A relative path like `rel.txt` is rooted at the
-//!    *process current directory*; a drive-relative path like `C:foo` is rooted
-//!    at that drive's own current directory, which Windows keeps in the hidden
+//!    mutable process state. There are three such forms, and they read
+//!    different state: a relative path like `rel.txt` is rooted at the *process
+//!    current directory*; a root-relative path like `\foo` takes only the
+//!    *current drive* from it, giving `C:\foo` rather than the current
+//!    directory's subtree; and a drive-relative path like `C:foo` is rooted at
+//!    that drive's own current directory, which Windows keeps in the hidden
 //!    `=C:` environment variables.
 //!
 //! So the call is **not** lexical as a whole, and describing it that way -- as
@@ -64,13 +70,17 @@
 //! successive descriptions of this call in a consuming probe were each wrong in
 //! the same direction, by naming a mechanism the evidence did not reach.
 //!
-//! So the figure that exists is quoted for what it is and no more:
-//! `probe-request-cost` measures a *construct-and-drop cycle* for a short
-//! prepared path at roughly 210 ns on x86_64. That is an allocation, this
-//! resolution and a drop together -- the probe deliberately declines to say how
-//! the total divides, so it bounds this call from above and says nothing about
-//! what it costs alone, still less about whether any part of it entered the
-//! kernel.
+//! The figures that exist say more than a bound, and are worth quoting exactly.
+//! On x86_64 `probe-request-cost` measures building an open request as a
+//! construct-and-drop cycle at roughly 210 ns, and cloning an *already
+//! resolved* path at roughly 42 ns. It attributes the difference -- about
+//! 168 ns -- to this resolution rather than to the allocation, which is why
+//! recycling a resolved path is the only one of the two candidate
+//! optimizations that can touch it.
+//!
+//! What the probe declines to name is the **mechanism**, not the division. So
+//! roughly 168 ns is this call's measured share on that host, and nothing in
+//! that number says whether any part of it entered the kernel.
 //!
 //! It does **not** solve the session-relative drive-letter hazard, and saying
 //! so plainly matters more than the part it does solve. `GetFullPathNameW`

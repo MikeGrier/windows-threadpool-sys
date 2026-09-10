@@ -556,10 +556,10 @@ running the other way.
 
 The wrong word had spread well beyond where it was reported. The consuming
 probe's checklist item named [full_path.rs](src/full_path.rs) only; that file
-held three of the nine on its own, `path.rs` two more, and the rest were spread
-across doc examples, [tests.rs](src/full_path/tests.rs), an acceptance comment
-and this file. The reported site was a sample, not the population -- which is the
-standing lesson, met again.
+held three of the nine on its own -- the module doc and both doc examples --
+with two more in `path.rs`, two in [tests.rs](src/full_path/tests.rs), one in an
+acceptance comment and one in this file. The reported site was a sample, not the
+population -- which is the standing lesson, met again.
 
 **The decision: keep `GetFullPathNameW`.** A genuinely lexical canonicalizer
 exists -- `PathCchCanonicalizeEx`, or `PathAllocCanonicalize` -- and is cheaper,
@@ -580,14 +580,20 @@ documented to consult requires a transition; the current directory lives in the
 PEB and the `=C:` variables in the process environment block, both ordinary
 process memory. Windows does not document the implementation, so that is a
 statement about the data sources rather than a measurement of the call.
-The figure that exists is quoted for what it is and no more: `probe-request-cost`
-measures a *construct-and-drop cycle* for a short prepared path at roughly 210 ns
-on x86_64 -- an allocation, this resolution and a drop together. The probe
-deliberately declines to decompose that total, so it bounds this call from above
-and says nothing about what it costs alone, still less about whether any part of
-it entered the kernel. Quoting it as a per-resolution cost, as a first draft of
-this decision did, would have been the same defect this decision is correcting:
-attributing a measured number to a mechanism the measurement does not isolate. The
+The figures that exist say more than a bound, and are worth quoting exactly. On
+x86_64 `probe-request-cost` measures building an open request as a
+construct-and-drop cycle at roughly 210 ns, and cloning an *already resolved*
+path at roughly 42 ns. It attributes the difference -- about 168 ns -- to this
+resolution rather than to the allocation, which is why recycling a resolved path
+is the only one of the two candidate optimizations that can touch it. What the
+probe declines to name is the **mechanism**, not the division.
+
+Two drafts of this decision got that wrong in opposite directions, which is why
+it is spelled out. The first quoted the whole figure as a per-resolution cost,
+attributing to this call a total that includes an allocation and a drop. The
+second over-corrected, saying the probe "declines to decompose" -- it does
+decompose, and names ~168 ns as the resolution's share; what it withholds is
+whether any of that is a kernel transition. The
 distinction is kept deliberately: two successive descriptions of this call in
 that probe were each wrong in the same direction, by naming a mechanism the
 evidence did not reach.
