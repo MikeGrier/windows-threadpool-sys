@@ -64,6 +64,27 @@
 //! around it (`CON.txt`, `a\CON`, `.\CON`, `CON:x`), and `\CON`, which
 //! becomes `Q:\CON` for a current directory on `Q:`.
 //!
+//! **`NUL` does not follow that second list, and it is the only member that
+//! does not.** The paragraph above was written from `CON` and stated of the
+//! whole set; measured across all eight accepted names, seven behave as it
+//! says and `NUL` short-circuits as the *final component of any path*,
+//! however much path is in front of it:
+//!
+//! | input | `CON` | `NUL` |
+//! |---|---|---|
+//! | `X` | `\\.\CON` | `\\.\NUL` |
+//! | `\X` | `Q:\CON` | `\\.\NUL` |
+//! | `.\X` | `Q:\...\CON` | `\\.\NUL` |
+//! | `a\X` | `Q:\...\a\CON` | `\\.\NUL` |
+//! | `C:\X` | `C:\CON` | `\\.\NUL` |
+//! | `X.txt` | rooted | rooted |
+//! | `X:x` | rooted | rooted |
+//!
+//! So a *fully qualified* path can still resolve to a device, which is the
+//! part worth knowing: `prepare(r"C:\NUL")` yields `\\.\NUL`, and a caller
+//! treating a rooted path as proof it names a file on that volume is wrong for
+//! this one name. Only a suffix (`NUL.txt`, `NUL:x`) takes it out.
+//!
 //! **Do not build a name filter from the list below.** The accepted names are
 //! `CON`, `NUL`, `PRN`, `AUX`, `CONIN$`, `CONOUT$`, and `COM`/`LPT`
 //! followed by a single digit -- where "digit" includes the *superscripts*

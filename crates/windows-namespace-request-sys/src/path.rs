@@ -35,7 +35,10 @@
 //! not a file under the current directory -- and the same holds for `CON:`,
 //! `NUL`, `LPT1:` and the rest of the legacy set. A caller passing through an
 //! untrusted name should know that. Anything with more after it (`CON.txt`,
-//! `a\CON`) roots normally. The full shape is in
+//! `a\CON`) roots normally -- **except for `NUL`, the one member a path in
+//! front of it does not save**: `prepare(r"C:\NUL")` is `\\.\NUL`, so a fully
+//! qualified path is not by itself evidence that a name refers to a file on
+//! that volume. Only a suffix (`NUL.txt`) takes it out. The full shape is in
 //! [`crate::full_path`], which documents the call itself.
 //!
 //! What it never does is expand

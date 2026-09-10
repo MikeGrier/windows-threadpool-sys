@@ -175,6 +175,20 @@ fn assert_root_relative_takes_the_share_root(placed_at: &str) {
         .perform()
         .expect("a root-relative path resolves");
 
+    // **Compared case-sensitively on purpose, and a review read that as a
+    // portability bug.** The concern was that a host recording the share as
+    // `LOCALHOST` would fail this equality against the lowercase literal. It
+    // cannot, because both sides descend from `UNC_ROOT`: the parent builds the
+    // child's working directory from it, and the root this call returns is the
+    // root of that directory. Measured -- a process started with
+    // `\\LOCALHOST\C$\Windows` reports exactly that back from
+    // `current_dir()`, and likewise for `\\localhost\c$\Windows`, so Windows
+    // preserves the spelling it was given rather than canonicalising it.
+    //
+    // The precondition above is case-INSENSITIVE for a different reason: it
+    // compares against a value that may have crossed a process boundary by a
+    // route this test does not control, so it accepts what a Windows path
+    // comparison would.
     assert_eq!(
         resolved.to_string_lossy(),
         format!(r"{UNC_ROOT}\foo"),

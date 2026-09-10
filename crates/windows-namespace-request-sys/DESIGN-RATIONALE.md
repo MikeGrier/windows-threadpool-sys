@@ -124,8 +124,24 @@ were *enumerations* -- which is the form this kind of error likes.
   spelling against the device path it produces, and each negative one against
   its full rooted result.
 
-  That last distinction was itself a later correction, and it is the reason the
-  sentence now says which KIND of pinning each case gets. The claim "pins every
+  **A third correction, and the one that shows why "the device set" was the
+  wrong unit all along.** A review asked for the documented `\CON` case to be
+  pinned, since the doc stated it and no test covered it. Writing that
+  assertion as the general rule the request was phrased in -- "a root-relative
+  device word roots at the current directory's root" -- would have pinned a
+  false claim. Measured across all eight accepted names, `NUL` alone
+  short-circuits as the final component of ANY path: `\NUL`, `.\NUL`, `a\NUL`
+  and `C:\NUL` all reach `\\.\NUL`, while every `CON`, `PRN`, `AUX`, `CONIN$`,
+  `CONOUT$`, `COM1` and `LPT1` spelling roots. So a fully qualified path can
+  still name a device.
+
+  Every earlier entry here is a claim generalised from too few observations.
+  This one was generalised from one MEMBER to a set, which is the same error in
+  a dimension nobody had checked -- the enumeration of the set was audited
+  twice, and the assumption that its members behave alike never was.
+
+  That distinction between kinds of pinning was itself a later correction, and
+  it is the reason the sentence now says which KIND of pinning each case gets. The claim "pins every
   documented spelling" was written while one negative spelling, `CON:x`, was
   covered only by `!starts_with("\\.\\")` -- a predicate the unrooted literal
   satisfies. So the claim was true of the list and false of the strength, which

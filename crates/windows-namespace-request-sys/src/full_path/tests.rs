@@ -616,6 +616,67 @@ fn a_name_containing_a_device_word_is_rooted_under_the_current_directory() {
          a leading `.\\` is enough to take the name out of the device \
          short-circuit without taking it out of ordinary rooting"
     );
+
+    // The root-relative form, which the module doc states and nothing pinned.
+    // Its expectation is the current directory's ROOT rather than `base`, so it
+    // cannot join the loop above.
+    let root = root_of(&current_directory());
+    assert_eq!(
+        resolve(r"\CON"),
+        format!("{root}CON"),
+        "a leading separator roots the device word at the current directory's \
+         root instead of reaching the device"
+    );
+}
+
+#[test]
+fn nul_is_the_one_device_word_a_path_around_it_does_not_save() {
+    // **The exception to the test above, and it was found by trying to write
+    // the general rule.** A review asked for the `\CON` case on the grounds
+    // that the doc states it; the doc stated it of the whole device SET, having
+    // been written from `CON` alone. Measured across all eight accepted names,
+    // seven root normally once anything precedes them and `NUL` does not --
+    // `NUL` short-circuits as the final component of any path at all.
+    //
+    // Had the requested assertion been written as the general rule it was
+    // phrased as ("a root-relative device word roots at the root"), it would
+    // have pinned a false claim, which is the failure this branch exists to
+    // stop rather than repeat.
+    let base = current_directory();
+    let base = base.trim_end_matches('\\');
+    let root = root_of(&current_directory());
+
+    // The seven that behave as the doc says, in the form that separates them.
+    for name in ["CON", "PRN", "AUX", "CONIN$", "CONOUT$", "COM1", "LPT1"] {
+        assert_eq!(
+            resolve(&format!(r".\{name}")),
+            format!(r"{base}\{name}"),
+            "{name:?} stops being a device once a path precedes it"
+        );
+        assert_eq!(
+            resolve(&format!(r"C:\{name}")),
+            format!(r"C:\{name}"),
+            "{name:?} is an ordinary component of a fully-qualified path"
+        );
+    }
+
+    // And `NUL`, which does not -- INCLUDING from a fully-qualified path, so a
+    // rooted result is not by itself evidence that a path names a file.
+    for input in [r"\NUL", r".\NUL", r"a\NUL", r"C:\NUL"] {
+        assert_eq!(
+            resolve(input),
+            r"\\.\NUL",
+            "{input:?} still reaches the device: NUL is not saved by a path in \
+             front of it, where every other device word is"
+        );
+    }
+
+    // A suffix is what takes it out, which is the boundary of the exception.
+    assert_eq!(
+        resolve(r"\NUL.txt"),
+        format!("{root}NUL.txt"),
+        "an extension takes even NUL out of the device namespace"
+    );
 }
 
 /// A directory that exists, is in canonical `X:\...` form, and is neither a

@@ -573,6 +573,16 @@ clause cannot be stated unconditionally. The form is looser than exact match:
 `CON:x` root normally. This matters to a crate that prepares paths on a
 caller's behalf: `prepare("CON")` returns a device.
 
+**`NUL` is the one member that clause does not describe**, and the clause was
+written from `CON` and stated of the whole set. Measured across all eight
+accepted names: seven root normally once anything precedes them, and `NUL`
+short-circuits as the final component of any path -- `\NUL`, `.\NUL`, `a\NUL`
+and `C:\NUL` all reach `\\.\NUL`, where the `CON` spellings root. Only a suffix
+(`NUL.txt`, `NUL:x`) takes it out. So a **fully qualified** path can still
+resolve to a device, which is the part a caller needs: a rooted result is not by
+itself evidence that a name refers to a file on that volume. Pinned by
+`nul_is_the_one_device_word_a_path_around_it_does_not_save`.
+
 Keeping the two halves apart matters, because the decision below turns on the
 rooting half alone. Saying the call resolves `.`/`..` "against the current
 directory" -- as a first draft of this correction did -- attributes process-state
