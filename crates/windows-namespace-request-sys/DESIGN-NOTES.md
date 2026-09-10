@@ -543,7 +543,9 @@ the call is better described as doing two separable things. It collapses
 `.`/`..` and normalizes separators, which *is* lexical -- `C:\a\..\b` becomes
 `C:\b` whatever the current directory is, and whether or not `C:\a` exists. It
 *also* **roots** most paths that are not fully qualified, and that reads mutable
-process state. Three forms read three different pieces of it: a relative path
+process state. Three forms use it three different ways -- though not from three
+different sources, since the first two both derive from the process current
+directory and so does the current-drive case of the third: a relative path
 takes the current directory; a root-relative path like `\foo` takes only that
 directory's *root*, which is `\\server\share\` when the current directory is a
 UNC path and so is not a drive at all; and a drive-relative path such as

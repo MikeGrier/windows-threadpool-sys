@@ -374,11 +374,11 @@ fn a_drive_relative_path_is_rooted_at_that_drive_and_not_the_process_directory()
     //     on `Q:` changes nothing.
     //
     // **This test does not mutate `=X:`, but the call it exercises may.**
-    // Measured: resolving `X:foo` for a non-current drive validates that
-    // drive's entry against the filesystem and WRITES it to `X:\` when it does
-    // not name an existing directory -- creating it when absent, so merely
-    // running this test changes the process environment on ANY host, not just
-    // one carrying a stale entry. That is
+    // Measured: resolving `X:foo` for a non-current drive checks that drive's
+    // entry and WRITES it to `X:\` when the entry is absent or rejected. An
+    // accepted entry is left alone, and the current-drive form touches nothing
+    // -- so this is not "every resolution", but it does mean an ordinary host
+    // with no entry has one written merely by running this test. That is
     // a property of the call, documented in the module doc; it is noted here so
     // the next reader does not take "reads process state" at face value, as
     // four revisions of that doc did.
@@ -490,10 +490,42 @@ fn a_name_containing_a_device_word_is_rooted_under_the_current_directory() {
 /// So the temp directory is used only when it is drive-rooted, and otherwise
 /// the fallback is `%SystemRoot%`, which is guaranteed to exist, to be
 /// canonical, and not to be a drive root. Nothing is created in the fallback
-/// case, so [`ProbeDir::created`] tells the caller whether to clean up.
+/// case, so `created` records whether there is anything to remove.
+///
+/// Removal is a [`Drop`], matching this crate's own `Fixture` in
+/// [`crate::handle`]'s tests. An earlier version cleaned up with a statement at
+/// the end of each test and argued that a guard writing during unwinding could
+/// panic and abort -- which is true of the `=X:` entry restore beside it, and
+/// not of removing a directory. Conflating the two left a directory behind
+/// after every failing assertion.
 struct ProbeDir {
     path: std::path::PathBuf,
     created: bool,
+}
+
+impl ProbeDir {
+    /// The drive letter this probe lives on, if it has one.
+    ///
+    /// The caller needs it to pick a probe drive that is *not* this one:
+    /// resolving `W:foo` against an entry naming a directory that is itself on
+    /// `W:` cannot demonstrate that an accepted entry is used verbatim across
+    /// drives, which is the property being pinned.
+    fn drive(&self) -> Option<char> {
+        self.path
+            .as_os_str()
+            .to_string_lossy()
+            .chars()
+            .next()
+            .filter(char::is_ascii_alphabetic)
+    }
+}
+
+impl Drop for ProbeDir {
+    fn drop(&mut self) {
+        if self.created {
+            let _ = std::fs::remove_dir(&self.path);
+        }
+    }
 }
 
 fn probe_directory(tag: &str) -> ProbeDir {
@@ -543,11 +575,30 @@ fn probe_directory(tag: &str) -> ProbeDir {
 /// Each caller passes a disjoint pair, so two tests can never land on the same
 /// letter and race under libtest's thread-per-test model.
 fn probe_drive(preferred: char, fallback: char) -> char {
+    probe_drive_avoiding(preferred, fallback, None)
+}
+
+/// [`probe_drive`], also avoiding the drive some other directory sits on.
+///
+/// **Excluding only the current drive is not enough for a test that asserts an
+/// entry is honoured *across* drives.** `%TEMP%` need not be on the same drive
+/// as the process, so a host with temp on `W:` would have the probe directory
+/// and the probe drive coincide: the entry would still be honoured, the test
+/// would still pass, and the cross-drive property it exists to pin would go
+/// unexercised. That is a silent loss of coverage rather than a failure, which
+/// is the worse of the two.
+fn probe_drive_avoiding(preferred: char, fallback: char, avoid: Option<char>) -> char {
     let cwd = current_directory();
-    match cwd.chars().next().filter(char::is_ascii_alphabetic) {
-        Some(current) if current.eq_ignore_ascii_case(&preferred) => fallback,
-        // A UNC current directory has no drive letter, so nothing collides.
-        _ => preferred,
+    // A UNC current directory has no drive letter, so nothing collides there.
+    let current = cwd.chars().next().filter(char::is_ascii_alphabetic);
+    let taken = |c: char| {
+        current.is_some_and(|d| d.eq_ignore_ascii_case(&c))
+            || avoid.is_some_and(|d| d.eq_ignore_ascii_case(&c))
+    };
+    if taken(preferred) {
+        fallback
+    } else {
+        preferred
     }
 }
 
@@ -619,23 +670,29 @@ fn a_drive_relative_path_uses_that_drives_entry_verbatim_and_rewrites_a_bad_one(
     // assertion there, because a host with no `=X:` entry cannot tell the two
     // rules apart.
     //
-    // **Controlling it is not the hazard it looks like**, and that is what
-    // unblocked this test. The objection was that `=X:` is process-global while
-    // these tests share a process -- but `GetFullPathNameW` *itself* writes the
-    // entry on every drive-relative resolution, creating it when absent. The
-    // code under test already mutates this state, so a test that sets it first
-    // introduces no hazard that resolving alone did not.
+    // **Controlling the entry is not the hazard it looks like**, and that is
+    // what unblocked this test. The objection was that `=X:` is process-global
+    // while these tests share a process. But the call under test writes that
+    // entry itself whenever it is absent or rejected, so this state is already
+    // mutated by the code being exercised. What keeps the tests from
+    // interfering is not that -- it is that each takes a drive letter no other
+    // one can choose.
     //
-    // `W` (or `U` when the suite runs from `W:`) keeps this clear of the
-    // sibling tests' `X`/`Y` and `V`/`T`, so none of them can race.
-    let drive = probe_drive('W', 'U');
-    let restore = drive_entry(drive);
-
-    // A real directory that is certainly NOT on the probe drive, which is what
-    // makes it the right probe: if the entry is honoured verbatim, a
-    // drive-relative path resolves onto another drive entirely.
+    // The probe directory is created FIRST so the letter can avoid its drive as
+    // well as the current one: an entry naming a directory on the same drive it
+    // is recorded for would be honoured, the test would pass, and the
+    // cross-drive property below would go unexercised.
     let probe_dir = probe_directory("verbatim");
     let probe = probe_dir.path.to_str().expect("the probe path is UTF-8");
+    let drive = probe_drive_avoiding('W', 'U', probe_dir.drive());
+    let restore = drive_entry(drive);
+
+    assert_ne!(
+        Some(drive.to_ascii_uppercase()),
+        probe_dir.drive().map(|d| d.to_ascii_uppercase()),
+        "the probe directory must be on a different drive, or the assertion \
+         below cannot show the entry is honoured ACROSS drives"
+    );
 
     set_drive_entry(drive, Some(probe));
     assert_eq!(
@@ -648,7 +705,22 @@ fn a_drive_relative_path_uses_that_drives_entry_verbatim_and_rewrites_a_bad_one(
 
     // An entry that does not name an existing directory is rejected, and the
     // call rewrites it to the drive root rather than leaving it stale.
-    set_drive_entry(drive, Some(r"C:\no-such-directory-for-this-test"));
+    //
+    // Derived from the probe directory rather than hard-coded: a literal like
+    // `C:\no-such-directory-for-this-test` is only missing until some host
+    // happens to have it, and the test would then assert the rejected case
+    // against an accepted one. A child of a directory this test just created
+    // cannot exist unless something else creates it in between.
+    let missing = probe_dir.path.join("no-such-child");
+    assert!(
+        !missing.exists(),
+        "precondition: the rejected entry must name nothing: {}",
+        missing.display()
+    );
+    set_drive_entry(
+        drive,
+        Some(missing.to_str().expect("the probe path is UTF-8")),
+    );
     assert_eq!(
         resolve(&format!("{drive}:foo")),
         format!(r"{drive}:\foo"),
@@ -672,9 +744,6 @@ fn a_drive_relative_path_uses_that_drives_entry_verbatim_and_rewrites_a_bad_one(
     );
 
     set_drive_entry_units(drive, restore.as_ref());
-    if probe_dir.created {
-        let _ = std::fs::remove_dir(&probe_dir.path);
-    }
 }
 
 #[test]
@@ -685,11 +754,10 @@ fn a_rejected_drive_entry_is_replaced_by_the_drive_root() {
     // existing directory, so anything rejected here is rejected on shape alone.
     //
     // Pinned because the distinction is not guessable and the doc asserts it.
-    let drive = probe_drive('V', 'T');
-    let restore = drive_entry(drive);
-
     let probe_dir = probe_directory("shape");
     let accepted = probe_dir.path.to_str().expect("the probe path is UTF-8");
+    let drive = probe_drive_avoiding('V', 'T', probe_dir.drive());
+    let restore = drive_entry(drive);
 
     // The control: this exact directory IS accepted in canonical form, so the
     // rejections below cannot be blamed on the directory itself.
@@ -725,9 +793,6 @@ fn a_rejected_drive_entry_is_replaced_by_the_drive_root() {
     }
 
     set_drive_entry_units(drive, restore.as_ref());
-    if probe_dir.created {
-        let _ = std::fs::remove_dir(&probe_dir.path);
-    }
 }
 
 #[test]
