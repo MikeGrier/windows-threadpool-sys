@@ -498,6 +498,27 @@ fn probe_directory(tag: &str) -> std::path::PathBuf {
     dir
 }
 
+/// A drive letter to probe with, which is certainly not the current drive.
+///
+/// **The letter cannot be a constant, for the reason these tests exist.** An
+/// entry is only consulted for a drive *other* than the current one -- on the
+/// current drive it is ignored and the process directory wins -- so a test that
+/// hard-codes `W` asserts something false when run from `W:`. Measured: with
+/// `subst W:` and the suite launched from `W:\`, the verbatim test failed.
+/// `W` and `V` are exactly the letters a mapped network drive or a `subst`
+/// tends to take.
+///
+/// Each caller passes a disjoint pair, so two tests can never land on the same
+/// letter and race under libtest's thread-per-test model.
+fn probe_drive(preferred: char, fallback: char) -> char {
+    let cwd = current_directory();
+    match cwd.chars().next().filter(char::is_ascii_alphabetic) {
+        Some(current) if current.eq_ignore_ascii_case(&preferred) => fallback,
+        // A UNC current directory has no drive letter, so nothing collides.
+        _ => preferred,
+    }
+}
+
 /// Reads one of the hidden `=X:` per-drive current-directory entries.
 ///
 /// Through Win32 rather than `std::env`, which rejects a key containing `=`
@@ -548,10 +569,10 @@ fn a_drive_relative_path_uses_that_drives_entry_verbatim_and_rewrites_a_bad_one(
     // code under test already mutates this state, so a test that sets it first
     // introduces no hazard that resolving alone did not.
     //
-    // Drive `W` is used rather than the `X`/`Y` of the sibling test, so the two
-    // cannot race under libtest's thread-per-test model.
-    const DRIVE: char = 'W';
-    let restore = drive_entry(DRIVE);
+    // `W` (or `U` when the suite runs from `W:`) keeps this clear of the
+    // sibling tests' `X`/`Y` and `V`/`T`, so none of them can race.
+    let drive = probe_drive('W', 'U');
+    let restore = drive_entry(drive);
 
     // A real directory that is certainly NOT on drive W, which is what makes it
     // the right probe: if the entry is honoured verbatim, a `W:`-relative path
@@ -559,9 +580,9 @@ fn a_drive_relative_path_uses_that_drives_entry_verbatim_and_rewrites_a_bad_one(
     let probe_owned = probe_directory("verbatim");
     let probe = probe_owned.to_str().expect("the temp path is UTF-8");
 
-    set_drive_entry(DRIVE, Some(probe));
+    set_drive_entry(drive, Some(probe));
     assert_eq!(
-        resolve(&format!("{DRIVE}:foo")),
+        resolve(&format!("{drive}:foo")),
         format!(r"{probe}\foo"),
         "an entry naming an existing directory is honoured verbatim, even onto \
          a different drive -- so \"that drive's own current directory\" is the \
@@ -570,30 +591,30 @@ fn a_drive_relative_path_uses_that_drives_entry_verbatim_and_rewrites_a_bad_one(
 
     // An entry that does not name an existing directory is rejected, and the
     // call rewrites it to the drive root rather than leaving it stale.
-    set_drive_entry(DRIVE, Some(r"C:\no-such-directory-for-this-test"));
+    set_drive_entry(drive, Some(r"C:\no-such-directory-for-this-test"));
     assert_eq!(
-        resolve(&format!("{DRIVE}:foo")),
-        format!(r"{DRIVE}:\foo"),
+        resolve(&format!("{drive}:foo")),
+        format!(r"{drive}:\foo"),
         "an entry that names nothing is rejected in favour of the drive root"
     );
     assert_eq!(
-        drive_entry(DRIVE).as_deref(),
-        Some(format!(r"{DRIVE}:\").as_str()),
+        drive_entry(drive).as_deref(),
+        Some(format!(r"{drive}:\").as_str()),
         "and the call REWROTE the entry: this is a query that mutates the \
          process environment block"
     );
 
     // Absent entirely, the entry is created rather than merely read.
-    set_drive_entry(DRIVE, None);
-    assert_eq!(drive_entry(DRIVE), None, "precondition: entry cleared");
-    let _ = resolve(&format!("{DRIVE}:foo"));
+    set_drive_entry(drive, None);
+    assert_eq!(drive_entry(drive), None, "precondition: entry cleared");
+    let _ = resolve(&format!("{drive}:foo"));
     assert_eq!(
-        drive_entry(DRIVE).as_deref(),
-        Some(format!(r"{DRIVE}:\").as_str()),
+        drive_entry(drive).as_deref(),
+        Some(format!(r"{drive}:\").as_str()),
         "resolving created the entry on a host that had none"
     );
 
-    set_drive_entry(DRIVE, restore.as_deref());
+    set_drive_entry(drive, restore.as_deref());
     let _ = std::fs::remove_dir(&probe_owned);
 }
 
@@ -605,17 +626,17 @@ fn a_rejected_drive_entry_is_replaced_by_the_drive_root() {
     // existing directory, so anything rejected here is rejected on shape alone.
     //
     // Pinned because the distinction is not guessable and the doc asserts it.
-    const DRIVE: char = 'V';
-    let restore = drive_entry(DRIVE);
+    let drive = probe_drive('V', 'T');
+    let restore = drive_entry(drive);
 
     let probe_owned = probe_directory("shape");
     let accepted = probe_owned.to_str().expect("the temp path is UTF-8");
 
     // The control: this exact directory IS accepted in canonical form, so the
     // rejections below cannot be blamed on the directory itself.
-    set_drive_entry(DRIVE, Some(accepted));
+    set_drive_entry(drive, Some(accepted));
     assert_eq!(
-        resolve(&format!("{DRIVE}:foo")),
+        resolve(&format!("{drive}:foo")),
         format!(r"{accepted}\foo"),
         "control: the same directory in canonical form is accepted"
     );
@@ -631,19 +652,19 @@ fn a_rejected_drive_entry_is_replaced_by_the_drive_root() {
         ),
         format!(r"\\?\{accepted}"),
     ] {
-        set_drive_entry(DRIVE, Some(&spelling));
+        set_drive_entry(drive, Some(&spelling));
         assert_eq!(
-            resolve(&format!("{DRIVE}:foo")),
-            format!(r"{DRIVE}:\foo"),
+            resolve(&format!("{drive}:foo")),
+            format!(r"{drive}:\foo"),
             "{spelling:?} names an existing directory but is rejected on shape"
         );
         assert_eq!(
-            drive_entry(DRIVE).as_deref(),
-            Some(format!(r"{DRIVE}:\").as_str()),
+            drive_entry(drive).as_deref(),
+            Some(format!(r"{drive}:\").as_str()),
             "and the rejected entry is written back as the drive root"
         );
     }
 
-    set_drive_entry(DRIVE, restore.as_deref());
+    set_drive_entry(drive, restore.as_deref());
     let _ = std::fs::remove_dir(&probe_owned);
 }
