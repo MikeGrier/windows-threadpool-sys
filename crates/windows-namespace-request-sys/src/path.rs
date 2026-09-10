@@ -16,11 +16,23 @@
 //! # A resolved path is not a session-independent path
 //!
 //! `GetFullPathNameW` **touches no filesystem**. It collapses `.`/`..`
-//! lexically, and it *additionally* roots a path that is not fully qualified
-//! against process state -- the current directory, or for a drive-relative path
+//! lexically, and it *additionally* roots most paths that are not fully
+//! qualified against process state -- the current directory, or for a
+//! root-relative path that directory's *root*, or for a drive-relative path
 //! that drive's own current directory in the `=C:` environment variables. It is
 //! therefore not a lexical call as a whole, which is what makes resolving on
-//! the submitting thread meaningful. What it never does is expand
+//! the submitting thread meaningful.
+//!
+//! **"Most" rather than "every", because a legacy device name short-circuits
+//! the rooting entirely.** [`prepare`] hands the input to that call without
+//! device handling of its own, so `prepare("CON")` yields `\\.\CON` -- a device,
+//! not a file under the current directory -- and the same holds for `CON:`,
+//! `NUL`, `LPT1:` and the rest of the legacy set. A caller passing through an
+//! untrusted name should know that. Anything with more after it (`CON.txt`,
+//! `a\CON`) roots normally. The full shape is in
+//! [`crate::full_path`], which documents the call itself.
+//!
+//! What it never does is expand
 //! a drive letter, and a drive letter resolves
 //! against the *logon session* of whatever token is in effect. So a path
 //! prepared on a submitting thread and opened on a worker under a captured

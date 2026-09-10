@@ -542,11 +542,23 @@ resolves against the process current directory. Those two claims disagree, and
 the call is better described as doing two separable things. It collapses
 `.`/`..` and normalizes separators, which *is* lexical -- `C:\a\..\b` becomes
 `C:\b` whatever the current directory is, and whether or not `C:\a` exists. It
-*also* **roots** a path that is not fully qualified, and that reads mutable
-process state: the current directory, or for a drive-relative path such as
-`C:foo` that drive's own current directory, which Windows keeps in the hidden
-`=C:` environment variables. So the call is not lexical *as a whole*, and the
-claim that holds unqualified is **touches no filesystem**.
+*also* **roots** most paths that are not fully qualified, and that reads mutable
+process state. Three forms read three different pieces of it: a relative path
+takes the current directory; a root-relative path like `\foo` takes only that
+directory's *root*, which is `\\server\share\` when the current directory is a
+UNC path and so is not a drive at all; and a drive-relative path such as
+`C:foo` takes that drive's own current directory, which Windows keeps in the
+hidden `=C:` environment variables and which moves independently of the process
+current directory. So the call is not lexical *as a whole*, and the claim that
+holds unqualified is **touches no filesystem**.
+
+**"Most" rather than "every", because a legacy device name short-circuits the
+rooting.** `CON` resolves to `\\.\CON` and is not rooted, so it is an
+unqualified input that is nonetheless invariant -- which is why the rooting
+clause cannot be stated unconditionally. The form is looser than exact match:
+`CON:`, `CON.`, `con` and `CONIN$` all map, while `CON.txt`, `a\CON` and
+`CON:x` root normally. This matters to a crate that prepares paths on a
+caller's behalf: `prepare("CON")` returns a device.
 
 Keeping the two halves apart matters, because the decision below turns on the
 rooting half alone. Saying the call resolves `.`/`..` "against the current

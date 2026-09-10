@@ -98,7 +98,7 @@ piece of work rather than a correction to that one.
 
 **Resolved.** The correction and the decision both landed in the owning crate as `D-18` in
 [../windows-namespace-request-sys/DESIGN-NOTES.md](../windows-namespace-request-sys/DESIGN-NOTES.md):
-`GetFullPathNameW` collapses `.`/`..` lexically but roots a path that is not fully qualified against
+`GetFullPathNameW` collapses `.`/`..` lexically but roots most paths that are not fully qualified against
 process state, so it is not a lexical call as a whole; `PathCchCanonicalizeEx` is genuinely lexical,
 cheaper, and the wrong call, because rooting at submission is the property being bought. Whether it
 enters the kernel is recorded as NOT established. The item's body below is the request as it was

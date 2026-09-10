@@ -1462,7 +1462,7 @@ Two corollaries that decide the design:
   but `GetFullPathNameW` never expands a drive letter, so the "canonical" path
   still carries a session-relative reference. (It is not *lexical* as a whole
   either, which matters elsewhere but not here: it collapses `.`/`..` lexically
-  but roots a path that is not fully qualified against process state -- the
+  but roots most paths that are not fully qualified against process state -- the
   current directory, or for a drive-relative path that drive's own current
   directory, which moves independently of it -- and that rooting is the property
   submission-time resolution buys. See

@@ -29,12 +29,19 @@
 //!    the hidden `=C:` environment variables and which moves independently of
 //!    the process current directory.
 //!
-//! **One input short-circuits both.** An input that is *exactly* a legacy device
-//! name resolves into the device namespace and is not rooted at all: `CON`
-//! becomes `\\.\CON`, not a file under the current directory. It is exact-match
-//! only -- `CON.txt` and `a\CON` are rooted normally, and `\CON` becomes
-//! `Q:\CON` for a current directory on `Q:`. A crate that prepares paths on a
-//! caller's behalf should know that `prepare("CON")` hands back a device.
+//! **A whole class of input short-circuits both.** When the input names a
+//! legacy device and nothing else, it resolves into the device namespace and is
+//! not rooted at all: `CON` becomes `\\.\CON`, not a file under the current
+//! directory.
+//!
+//! "And nothing else" is doing real work, and is looser than it first looks. A
+//! trailing colon is part of the form, so `CON:` and `CON::` map too; the
+//! trimming in step 1 happens first, so `CON.` and `CON ` map as well; and the
+//! match is case-insensitive, so `con` does. What does *not* map is a name with
+//! anything after it -- `CON.txt`, `a\CON` and `CON:x` are all rooted normally,
+//! and `\CON` becomes `Q:\CON` for a current directory on `Q:`. The device set
+//! is the legacy one (`CON`, `NUL`, `PRN`, `AUX`, `COM1`-`9`, `LPT1`-`9`, and
+//! the console pair `CONIN$`/`CONOUT$`), not an open-ended list.
 //!
 //! So the call is **not** lexical as a whole, and describing it that way -- as
 //! an earlier revision of this doc did, in the sentence immediately before the
@@ -82,12 +89,17 @@
 //! cost**, and the difference matters. On x86_64 `probe-request-cost` measures
 //! building an open request as a construct-and-drop cycle at roughly 210 ns and
 //! cloning an already-resolved path at roughly 45 ns. The ~165 ns between them
-//! is what recycling a resolved path recovers, and that is all it is: the gap
-//! covers the whole preparation step, which makes **two** heap allocations this
-//! crate's own code performs -- a copy of the input and a MAX_PATH output
-//! buffer -- against the clone's one, plus the builder chain. Attributing the
-//! gap to this call, as a draft of this doc did, credits `GetFullPathNameW`
-//! with allocator work the same sentence is busy excluding.
+//! is what recycling a resolved path recovers, and that is all it is.
+//!
+//! **That probe exercises [`crate::path::prepare`], not this module**, and the
+//! two have different allocation shapes -- which is itself why the gap cannot be
+//! read as this call's cost. `prepare` copies the input and then allocates a
+//! `MAX_PATH` output buffer, so two allocations against the clone's one, and the
+//! builder chain sits on top. [`ResolveFullPath`] takes its input already owned
+//! and allocates one buffer per attempt instead. Either way the allocator work
+//! is the crate's, not `GetFullPathNameW`'s, and attributing the gap to the call
+//! -- as a draft of this doc did -- credits it with the work the same sentence
+//! is busy excluding.
 //!
 //! Timed on its own -- input already marshalled, output buffer pre-allocated,
 //! so no allocation is in the loop -- the call costs about **110 ns** on this
