@@ -97,6 +97,15 @@ fn the_oracle_is_actually_reading_this_host_s_report() {
         "\"groups\":",
         "\"packages\":",
         "\"cores\":",
+        // Added by the M2.4 matrix walk. Each is a fact this report renders
+        // twice, with nothing comparing the two until that walk.
+        "\"numa_domains\":",
+        "\"outermost_partitioning_cache_level\":",
+        // Nested, and reached by their inner keys: `policies` is an object and
+        // `caches` an array of objects, so these corrupt the first entry of
+        // each rather than the container.
+        "\"single\":",
+        "\"domains\":",
     ] {
         let corrupted = corrupt_count(&text, key);
         assert_ne!(

@@ -95,6 +95,8 @@ pub fn check(report: &str) -> Vec<Correspondence> {
     check_alarm_against_verdict(report, ndjson, &mut found);
     check_prose_against_ndjson(report, ndjson, &mut found);
     check_claims_against_doubt(report, ndjson, &mut found);
+    check_structured_pairs(report, ndjson, &mut found);
+    check_counters_against_verdict(report, ndjson, &mut found);
 
     found
 }
@@ -137,15 +139,38 @@ fn ndjson_field<'a>(line: &'a str, key: &str) -> Option<&'a str> {
     let value = if let Some(stripped) = rest.strip_prefix('"') {
         let end = stripped.find('"')?;
         &stripped[..end]
-    } else if let Some(stripped) = rest.strip_prefix('[') {
-        let end = stripped.find(']')?;
-        &stripped[..end]
+    } else if rest.starts_with('[') || rest.starts_with('{') {
+        // Balanced, not first-closer. `caches` is an array OF objects and
+        // `policies` is an object, so stopping at the first `]` or `}` would
+        // truncate both -- returning `[{"level":1,"domains":8` for a three-level
+        // machine, which then compares unequal against anything and reports a
+        // contradiction that is the reader's own parse.
+        let end = balanced_end(rest)?;
+        &rest[1..end]
     } else {
         let end = rest.find([',', '}']).unwrap_or(rest.len());
         &rest[..end]
     };
 
     Some(value.trim())
+}
+
+/// The index of the bracket closing the one `text` opens with.
+fn balanced_end(text: &str) -> Option<usize> {
+    let mut depth = 0_i32;
+    for (index, character) in text.char_indices() {
+        match character {
+            '[' | '{' => depth += 1,
+            ']' | '}' => {
+                depth -= 1;
+                if depth == 0 {
+                    return Some(index);
+                }
+            }
+            _ => {}
+        }
+    }
+    None
 }
 
 /// The text after `label` on the line that begins with it.
@@ -260,6 +285,188 @@ fn check_prose_against_ndjson(report: &str, ndjson: Option<&str>, found: &mut Ve
             prose: prose.to_owned(),
             ndjson: json.to_owned(),
         });
+    }
+}
+
+/// The facts whose two renderings differ in shape rather than punctuation.
+///
+/// Found by the M2.4 matrix rather than by a defect. The four counts already
+/// checked above were the ones a reviewer had happened to look at; walking every
+/// NDJSON field against the prose showed these carrying the same fact twice as
+/// well, with nothing comparing them.
+fn check_structured_pairs(report: &str, ndjson: Option<&str>, found: &mut Vec<Correspondence>) {
+    let Some(ndjson) = ndjson else {
+        return;
+    };
+
+    // `NUMA domains        : 1 (0 with no processors)` against two fields.
+    if let Some(prose) = prose_field(report, "NUMA domains        : ") {
+        let total = prose.split_whitespace().next().unwrap_or_default();
+        let without = prose
+            .split_once('(')
+            .and_then(|(_, rest)| rest.split_whitespace().next())
+            .unwrap_or_default();
+
+        compare(
+            found,
+            "NUMA domains",
+            total,
+            ndjson_field(ndjson, "numa_domains"),
+        );
+        compare(
+            found,
+            "NUMA domains without processors",
+            without,
+            ndjson_field(ndjson, "numa_domains_without_processors"),
+        );
+    }
+
+    // `outermost cache that partitions the processors it covers: L2 (8 domains)`
+    // against the level the NDJSON names. This pair is the one the original
+    // defect lived next to: the prose can name a level the machine-readable
+    // line does not.
+    if let Some(prose) = prose_field(
+        report,
+        "outermost cache that partitions the processors it covers: ",
+    ) {
+        let level = prose
+            .trim_start_matches('L')
+            .split_whitespace()
+            .next()
+            .unwrap_or_default();
+        compare(
+            found,
+            "outermost partitioning cache level",
+            level,
+            ndjson_field(ndjson, "outermost_partitioning_cache_level"),
+        );
+    }
+
+    // The policy table against the `policies` object. A policy's domain count is
+    // what the whole report is for, so two renderings of it disagreeing would
+    // mislead exactly the reader who came for the answer.
+    if let Some(policies) = ndjson_field(ndjson, "policies") {
+        for (name, count) in policy_rows(report) {
+            let key = format!("\"{name}\":");
+            let json = policies
+                .find(&key)
+                .map(|at| &policies[at + key.len()..])
+                .map(|rest| {
+                    let end = rest.find(',').unwrap_or(rest.len());
+                    rest[..end].trim()
+                });
+            compare(found, "policy domain count", &count, json);
+        }
+    }
+
+    // The cache table against the `caches` array, level by level.
+    if let Some(caches) = ndjson_field(ndjson, "caches") {
+        for (level, domains) in cache_rows(report) {
+            let key = format!("\"level\":{level},\"domains\":");
+            let json = caches
+                .find(&key)
+                .map(|at| &caches[at + key.len()..])
+                .map(|rest| {
+                    let end = rest.find([',', '}']).unwrap_or(rest.len());
+                    rest[..end].trim()
+                });
+            compare(found, "cache domain count", &domains, json);
+        }
+    }
+}
+
+/// Push a disagreement when both renderings are present and differ.
+fn compare(found: &mut Vec<Correspondence>, fact: &'static str, prose: &str, json: Option<&str>) {
+    let Some(json) = json else {
+        return;
+    };
+    if prose != json {
+        found.push(Correspondence::ProseAndNdjsonDisagree {
+            fact,
+            prose: prose.to_owned(),
+            ndjson: json.to_owned(),
+        });
+    }
+}
+
+/// `(policy name, domain count)` for each row of the policy table.
+fn policy_rows(report: &str) -> Vec<(String, String)> {
+    report
+        .lines()
+        .skip_while(|line| !line.starts_with("domains each policy would produce:"))
+        .skip(1)
+        .take_while(|line| line.starts_with("  "))
+        .filter_map(|line| {
+            let mut parts = line.split_whitespace();
+            Some((parts.next()?.to_owned(), parts.next()?.to_owned()))
+        })
+        .collect()
+}
+
+/// `(level, domain count)` for each row of the cache table.
+fn cache_rows(report: &str) -> Vec<(String, String)> {
+    report
+        .lines()
+        .skip_while(|line| !line.starts_with("caches:"))
+        .skip(1)
+        .take_while(|line| line.starts_with("  "))
+        .filter_map(|line| {
+            let mut parts = line.split_whitespace();
+            let level = parts.next()?.strip_prefix('L')?.to_owned();
+            Some((level, parts.next()?.to_owned()))
+        })
+        .collect()
+}
+
+/// The independently-read Win32 counters against the verdict drawn from them.
+///
+/// A different shape from the rules above, and the one closest to what this
+/// probe is *for*. The prose prints each counter beside the enumerated value it
+/// was read to check; the whole point of the run is that a mismatch is a
+/// finding. So a counter that disagrees with the enumeration while the verdict
+/// reads `agree` is the original defect in its purest form -- the report
+/// showing its own contradicting evidence directly above a verdict denying it.
+fn check_counters_against_verdict(
+    report: &str,
+    ndjson: Option<&str>,
+    found: &mut Vec<Correspondence>,
+) {
+    let Some(ndjson) = ndjson else {
+        return;
+    };
+    if ndjson_field(ndjson, "cross_check") != Some("agree") {
+        return;
+    }
+
+    // Only the two counters that are a direct count of an enumerated quantity.
+    // `GetNumaHighestNodeNumber` is deliberately absent: it reports the largest
+    // node NUMBER, which the report itself says is not a count, so comparing it
+    // against `numa_domains` would manufacture a disagreement on any machine
+    // with sparse node numbering.
+    for (label, key, fact) in [
+        (
+            "  GetActiveProcessorCount     : ",
+            "processors",
+            "active processor count against the enumeration",
+        ),
+        (
+            "  GetActiveProcessorGroupCount: ",
+            "groups",
+            "active group count against the enumeration",
+        ),
+    ] {
+        let (Some(counter), Some(enumerated)) =
+            (prose_field(report, label), ndjson_field(ndjson, key))
+        else {
+            continue;
+        };
+        if counter != enumerated {
+            found.push(Correspondence::ProseAndNdjsonDisagree {
+                fact,
+                prose: counter.to_owned(),
+                ndjson: enumerated.to_owned(),
+            });
+        }
     }
 }
 

@@ -85,12 +85,51 @@ speculative list to extend by imagination -- a fourth is added when a fourth con
 
   The corruption asserts it changed something first, per M2.1's lesson.
 
-- [ ] **M2.4** -- Explore, with the sparse matrix as the instrument, whether the same correspondence
-  failures exist for `Coherence`, `BracketOutcome` and `Verdict`, and in the sibling probes' renderers.
-  Expect the matrix to be mostly empty; that is the expected shape and not a sign the exercise failed.
-  **Record the vacuous results as well as the findings** -- "X and Y were examined and need not
-  correspond" is what stops the next person re-exploring the same cells, and is the half that normally
-  evaporates. Promote only what proves meaningful into the oracle from M2.1.
+- [x] **M2.4** -- Explore with the sparse matrix. Full record, findings and vacuous cells both, in
+  [DESIGN-NOTES.md](DESIGN-NOTES.md#d-correspondence-failures).
+
+  **The prediction held on the axis it named and failed on one it did not.** `Coherence` and
+  `BracketOutcome` are each rendered exactly once -- `Coherence` never appears in prose or NDJSON at
+  all, `BracketOutcome` only in the banner -- so neither can contradict itself and both cells are
+  genuinely empty. `Verdict` was already covered.
+
+  The productive axis turned out to be **facts, not state enums**: six more were rendered twice with
+  nothing comparing them, and all six are now promoted -- NUMA domains and those without processors,
+  cache domains per level, the outermost partitioning level, domains per policy, and the two
+  independently-read Win32 counters against the enumeration.
+
+  Those last two are a **different rule shape** and the closest to what this probe is for: the
+  counters exist so a mismatch is a finding, so one contradicting the enumeration under an `agree`
+  verdict is the original defect in its purest form. `GetNumaHighestNodeNumber` is deliberately
+  excluded and the exclusion is pinned by a test -- it is the largest node *number*, not a count, so
+  comparing it would manufacture a disagreement on any sparsely-numbered machine.
+
+  Reading `caches` and `policies` forced the field reader to balance brackets rather than stop at the
+  first closer; `caches` is an array *of objects*, so the naive read saw only its first entry and
+  would have skipped every later cache level in silence.
+
+  All eight promoted cells are proved live against this host's real report by the M2.3 guard.
+
+  > **-> SCOPE FINDING:** `probe-doorbell-cost` and `probe-request-cost` render **every measured
+  > figure twice**, prose table and NDJSON, with nothing comparing them -- the same class, in two
+  > more probes. Queued as M2.9 rather than taken here, because extending the oracle past one
+  > renderer is a design question about where it should live, not a mechanical follow-on.
+
+- [ ] **M2.9** -- Decide how the oracle covers more than one probe, then cover them.
+  `probe-doorbell-cost` and `probe-request-cost` each render every measured figure in both a prose
+  table and an NDJSON line, and nothing compares the two. M2.4 established the class is real and not
+  confined to the topology report.
+
+  The rule -- *a fact rendered twice must agree* -- is general. Its inputs are not: the oracle
+  currently knows topology's prose labels by hard-coded string. Covering three probes by tripling
+  that table works and scales badly; the alternatives are for a renderer to declare its
+  double-rendered pairs once, or for the NDJSON to be generated from the same values the prose
+  formats so the pairing is structural and no oracle is needed for it.
+
+  **That is the engineer's decision**, and it is the one the M2.4 open question was pointing at from
+  a different direction: if the answer is a shared mechanism rather than a per-crate one, the
+  question becomes a repository convention. Decide the shape before writing the second and third rule
+  set, because the shape is what the third one will be stuck with.
 
 > **-> OPEN QUESTION for the engineer:** M2.4 may show this generalises past this crate, in which case
 > the oracle belongs somewhere shared and the question becomes a repository-wide convention rather than

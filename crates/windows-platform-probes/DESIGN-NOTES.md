@@ -1605,3 +1605,63 @@ assertion that matters went green while checking one fact fewer than it thought.
 The corruption asserts it changed something before concluding anything, which is
 the lesson from M2.1's first injection.
 
+### The M2.4 matrix: what was examined, including what needed nothing
+
+The instrument was a walk of every NDJSON field against the report's prose, and
+every state enum against both. Recorded in full because **the cells that needed
+nothing are the half that normally evaporates** -- without them the next person
+re-explores the same ground and cannot tell an unexamined cell from an examined
+one.
+
+The prediction in M2.4 was that the matrix would be mostly empty. It was, along
+the axis the item named, and was not along an axis the item did not.
+
+#### Empty, and why
+
+| cell | why nothing correlates |
+|---|---|
+| `Coherence` | Never rendered. It feeds the verdict and appears in no prose line and no NDJSON field, so it has one rendering and cannot contradict itself. |
+| `BracketOutcome` | Rendered once, in the banner, as `HOST READINGS DISAGREE` / `HOST NOT ESTABLISHED`. No NDJSON counterpart. |
+| `Verdict` | Already covered by M2.1's prose-against-`cross_check` rule. |
+| `reason`, `arch` | NDJSON only. No prose renders them, so there is nothing to disagree with. |
+| `cores with SMT` | Prose only. |
+| `not_compared`, `parse_incomplete`, `enumeration_anomalies` | NDJSON only as counts. `parse_incomplete` is read by the gating rule, but as evidence rather than as a second rendering of a prose fact. |
+| `GetNumaHighestNodeNumber` against `numa_domains` | **Examined and deliberately not correlated.** It reports the largest node *number*, which the report itself says is not a count, so comparing the two would manufacture a disagreement on any machine with sparse node numbering. A test pins this exclusion so it is not "fixed" later. |
+
+#### Not empty, and promoted
+
+The productive axis was not the state enums the item named but the **facts**: six
+more were rendered twice with nothing comparing them.
+
+| fact | prose | NDJSON |
+|---|---|---|
+| NUMA domains, and those without processors | `NUMA domains        : 1 (0 with no processors)` | `numa_domains`, `numa_domains_without_processors` |
+| cache domains per level | the `caches:` table | `caches[]` |
+| outermost partitioning level | `outermost cache that partitions...: L2` | `outermost_partitioning_cache_level` |
+| domains per policy | the policy table | `policies{}` |
+| active processor count | `GetActiveProcessorCount` | `processors` |
+| active group count | `GetActiveProcessorGroupCount` | `groups` |
+
+The last two are a **different rule shape** and the closest to what this probe is
+for. The counters are read independently precisely so a mismatch is a finding, so
+a counter contradicting the enumeration while the verdict reads `agree` is the
+original defect in its purest form: the report printing its own contradicting
+evidence directly above a verdict denying it. A must-accept test pins the legal
+case, where the verdict reports the disagreement.
+
+Reading `caches` and `policies` also forced the field reader to balance brackets
+rather than stop at the first closer -- `caches` is an array *of objects*, so the
+naive read returned its first entry and would have silently skipped every later
+cache level.
+
+#### The finding that goes beyond this milestone
+
+`probe-doorbell-cost` and `probe-request-cost` render **every measured figure
+twice** -- once in their prose table and once in their NDJSON line -- with
+nothing comparing the two. That is the same class as the topology defect, in two
+more probes, and it is not covered: the oracle's rules are written against
+topology's prose labels.
+
+That is a scope question rather than a mechanical follow-on, and is queued as
+M2.9 rather than taken here.
+

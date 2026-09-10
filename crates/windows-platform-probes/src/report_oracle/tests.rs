@@ -28,9 +28,22 @@ fn clean_report() -> String {
         "  cores with SMT    : 8",
         "  efficiency classes: [0]",
         "",
-        "cross-check:",
+        "caches:",
+        "  L1    8 domain(s), processors per domain: [2, 2, 2, 2, 2, 2, 2, 2]",
+        "  L3    1 domain(s), processors per domain: [16]",
+        "",
+        "outermost cache that partitions the processors it covers: L1 (8 domains)",
+        "",
+        "domains each policy would produce:",
+        "  single                             1",
+        "  by-core                            8",
+        "",
+        "cross-check against independently read Win32 counters:",
+        "  GetActiveProcessorCount     : 16",
+        "  GetActiveProcessorGroupCount: 1",
+        "  GetNumaHighestNodeNumber    : 0",
         "  => agree. Every check this probe could make was made and matched.",
-        r#"{"reason":"x-probe-topology","arch":"x86_64","processors":16,"groups":1,"packages":1,"cores":8,"efficiency_classes":[0],"cross_check":"agree","parse_incomplete":0}"#,
+        r#"{"reason":"x-probe-topology","arch":"x86_64","processors":16,"groups":1,"packages":1,"numa_domains":1,"numa_domains_without_processors":0,"cores":8,"efficiency_classes":[0],"caches":[{"level":1,"domains":8},{"level":3,"domains":1}],"outermost_partitioning_cache_level":1,"policies":{"single":1,"by-core":8},"cross_check":"agree","parse_incomplete":0}"#,
     ]
     .join("\n")
 }
@@ -43,8 +56,8 @@ fn an_alarm_beside_an_agreeing_prose_verdict_is_a_violation() {
     // report. Both statements were locally true and they cannot both describe
     // the same run.
     let report = clean_report().replace(
-        "cross-check:",
-        "BUG IN THIS PROBE: the topology crate named L3 as the outermost\ncross-check:",
+        "cross-check against independently read Win32 counters:",
+        "BUG IN THIS PROBE: the topology crate named L3 as the outermost\ncross-check against independently read Win32 counters:",
     );
 
     let violations = check(&report);
@@ -71,8 +84,10 @@ fn an_alarm_beside_an_agreeing_ndjson_verdict_is_a_violation() {
             "  => agree. Every check this probe could make was made and matched.",
             "  => INCOMPLETE. Nothing this probe compared disagreed.",
         )
-        .replace("cross-check:", "BUG IN THIS PROBE: something\ncross-check:");
-
+        .replace(
+            "cross-check against independently read Win32 counters:",
+            "BUG IN THIS PROBE: something\ncross-check against independently read Win32 counters:",
+        );
     let violations = check(&report);
 
     assert!(
@@ -236,6 +251,144 @@ fn every_double_rendered_fact_is_actually_read() {
     }
 }
 
+// --- the cells the M2.4 matrix walk added ------------------------------------
+
+#[test]
+fn a_counter_that_contradicts_the_enumeration_under_an_agreeing_verdict_is_a_violation() {
+    // The rule closest to what this probe is *for*, and the original defect in
+    // its purest form: the report printing its own contradicting evidence
+    // directly above a verdict denying it. The whole run exists to compare an
+    // independently read counter against the enumeration, so a mismatch is the
+    // finding -- and `agree` says there was none.
+    let report = clean_report().replace(
+        "  GetActiveProcessorCount     : 16",
+        "  GetActiveProcessorCount     : 8",
+    );
+
+    let violations = check(&report);
+
+    assert!(
+        violations.iter().any(|v| matches!(
+            v,
+            Correspondence::ProseAndNdjsonDisagree {
+                fact: "active processor count against the enumeration",
+                ..
+            }
+        )),
+        "a counter disagreeing with the enumeration under `agree` must be \
+         reported, got {violations:#?}"
+    );
+}
+
+#[test]
+fn a_contradicting_counter_is_accepted_when_the_verdict_reports_it() {
+    // The legal shape, and the one the probe exists to produce. Rejecting it
+    // would fire on every host that actually has the disagreement this probe
+    // hunts for -- the run most worth reading.
+    let report = clean_report()
+        .replace(
+            "  GetActiveProcessorCount     : 16",
+            "  GetActiveProcessorCount     : 8",
+        )
+        .replace(
+            "  => agree. Every check this probe could make was made and matched.",
+            "  => DISAGREE. This is a finding, not a nuisance:",
+        )
+        .replace(r#""cross_check":"agree""#, r#""cross_check":"disagree""#);
+
+    assert_eq!(check(&report), Vec::new());
+}
+
+#[test]
+fn the_highest_numa_node_number_is_not_compared_against_the_domain_count() {
+    // Deliberately absent from the counter rule, and pinned so it stays absent.
+    // `GetNumaHighestNodeNumber` reports the largest node NUMBER, which the
+    // report itself says is not a count; comparing it against `numa_domains`
+    // would manufacture a disagreement on any machine with sparse node
+    // numbering. Over-constraining is the same defect as under-specifying.
+    let report = clean_report().replace(
+        "  GetNumaHighestNodeNumber    : 0",
+        "  GetNumaHighestNodeNumber    : 7",
+    );
+
+    assert_eq!(check(&report), Vec::new());
+}
+
+#[test]
+fn a_policy_count_the_two_renderings_disagree_about_is_a_violation() {
+    // The domain count per policy is the answer the whole report exists to
+    // give, so two renderings of it disagreeing misleads exactly the reader who
+    // came for it.
+    let report = clean_report().replace(r#""by-core":8"#, r#""by-core":4"#);
+
+    let violations = check(&report);
+
+    assert!(
+        violations.iter().any(|v| matches!(
+            v,
+            Correspondence::ProseAndNdjsonDisagree {
+                fact: "policy domain count",
+                ..
+            }
+        )),
+        "the policy table and the policies object must agree, got {violations:#?}"
+    );
+}
+
+#[test]
+fn a_cache_domain_count_the_two_renderings_disagree_about_is_a_violation() {
+    let report = clean_report().replace(r#"{"level":3,"domains":1}"#, r#"{"level":3,"domains":9}"#);
+
+    let violations = check(&report);
+
+    assert!(
+        violations.iter().any(|v| matches!(
+            v,
+            Correspondence::ProseAndNdjsonDisagree {
+                fact: "cache domain count",
+                ..
+            }
+        )),
+        "the cache table and the caches array must agree, got {violations:#?}"
+    );
+}
+
+#[test]
+fn an_outermost_level_the_two_renderings_disagree_about_is_a_violation() {
+    let report = clean_report().replace(
+        r#""outermost_partitioning_cache_level":1"#,
+        r#""outermost_partitioning_cache_level":3"#,
+    );
+
+    let violations = check(&report);
+
+    assert!(
+        violations.iter().any(|v| matches!(
+            v,
+            Correspondence::ProseAndNdjsonDisagree {
+                fact: "outermost partitioning cache level",
+                ..
+            }
+        )),
+        "the named outermost level must match the machine-readable one, got {violations:#?}"
+    );
+}
+
+#[test]
+fn a_nested_container_is_read_whole_rather_than_to_its_first_closer() {
+    // `caches` is an array OF objects, so a reader stopping at the first `}`
+    // would see only its first entry -- and would then silently skip every
+    // later level rather than compare it. This corrupts the LAST cache entry,
+    // which only a balanced read can reach.
+    let report = clean_report().replace(r#"{"level":3,"domains":1}"#, r#"{"level":3,"domains":5}"#);
+
+    assert!(
+        !check(&report).is_empty(),
+        "a disagreement in the last element of a nested container must still be \
+         found, or the container is being truncated at its first closer"
+    );
+}
+
 // --- must accept ------------------------------------------------------------
 
 #[test]
@@ -254,8 +407,10 @@ fn an_alarm_with_a_verdict_that_is_not_agree_is_accepted() {
             "  => INCOMPLETE. Nothing this probe compared disagreed, but this run",
         )
         .replace(r#""cross_check":"agree""#, r#""cross_check":"incomplete""#)
-        .replace("cross-check:", "BUG IN THIS PROBE: something\ncross-check:");
-
+        .replace(
+            "cross-check against independently read Win32 counters:",
+            "BUG IN THIS PROBE: something\ncross-check against independently read Win32 counters:",
+        );
     assert_eq!(check(&report), Vec::new());
 }
 
