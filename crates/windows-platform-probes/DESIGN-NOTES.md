@@ -885,16 +885,16 @@ The choice was between giving `Report` a method taking `fmt::Arguments` (with a
 `writeln!` calls keep working, and keeping the `String` while flushing it at
 line boundaries. **It was decided by counting rather than by taste.** Every
 renderer already writes through `writeln!(out, ...)` against a `String`'s
-`fmt::Write`, at **504 sites**; only about twenty functions take the `&mut
+`fmt::Write`, at **332 sites** in this crate; only 18 functions take the `&mut
 String` those sites write into. A sink method would have been the most explicit
-option and would have rewritten all 504; `fmt::Write` moves the twenty and
-leaves the 504 untouched, because `String` implements `fmt::Write` too and the
-call sites cannot tell the difference.
+option and would have rewritten all 332; `fmt::Write` moves the 18 and leaves
+the 332 untouched, because `String` implements `fmt::Write` too and the call
+sites cannot tell the difference.
 
 Worth recording that M1 estimated "upwards of 160" of those sites. The real
-figure is three times that, and it is the whole of the argument -- an option
-whose cost is "rewrite every call site" is affordable at 160 and is not at 504.
-A plan's estimate is worth re-measuring at the moment it becomes a decision.
+figure is twice that, and it is the whole of the argument -- an option whose
+cost is "rewrite every call site" is affordable at 160 and is not at 332. A
+plan's estimate is worth re-measuring at the moment it becomes a decision.
 
 ### What the adapter has to reassemble, and why that is not a detail
 
@@ -918,7 +918,7 @@ this paragraph:
 
 ### Every renderer now writes into the sink, and the catch-and-resume is gone
 
-M1.2 pointed all sixteen probes at the sink. Two things about that conversion are
+M1.2 pointed all thirteen probes at the sink. Two things about that conversion are
 worth keeping.
 
 **The `catch_unwind`/`resume_unwind` pair was deleted rather than left in place.**
@@ -961,25 +961,38 @@ M1.3 asked for this to be measured once rather than assumed, because it is the
 property the whole milestone exists for and no unit test reaches it -- a test
 cannot terminate its own process without taking the harness with it.
 
-`probe-queue-contention` takes about 65 seconds on the x86_64 review host, which
-makes it the natural subject. Started with stdout redirected to a file, left for
-8 seconds, then terminated:
+`probe-doorbell-cost` runs for about 0.8 seconds, which makes it the subject.
+(It was **the** longest-running probe when this was measured, on a crate that
+did not yet have `probe-queue-contention`'s ~65 seconds. The merge that brought
+the branch-local probes back invalidated the superlative, not the measurement:
+the numbers below are unchanged and were taken against the shorter probe, which
+is the harder case -- a 300 ms window against 800 ms leaves far less room for a
+slow start to masquerade as buffering than it would against 65 seconds.)
+Started with stdout redirected, left for
+300 milliseconds, then terminated -- **six runs of each build**, with every run
+confirmed to have still been alive at the moment it was killed, since a probe
+that had already exited would be measuring nothing:
 
-| build | bytes on disk at 8 s | content |
-|---|---|---|
-| streaming (M1.2) | **114** | the host banner and the heading |
-| buffered (pre-M1.2, built from `246687e`) | **0** | nothing at all |
+| build | characters captured | runs | content |
+|---|---|---|---|
+| streaming | **129** | 6 of 6 identical | the host banner and the heading |
+| buffered (built from the `LineSink` commit, before the conversion) | **0** | 6 of 6 identical | nothing at all |
 
-The control is the point. Reading 114 bytes from the streaming build shows only
-that something was written; running the *previous* build through the identical
-sequence and reading zero is what shows the change caused it. Both binaries were
-release builds of the same crate, killed at the same elapsed time, by the same
-command.
+The control is the point. Reading 129 characters from the streaming build shows
+only that something was written; running the *previous* build through the
+identical sequence and reading zero is what shows the change caused it. Both
+binaries were release builds of the same crate, killed at the same elapsed time,
+by the same code.
+
+The margin is narrower than it looks and deliberately so. 300 ms against an
+800 ms probe leaves no room for a slow start to be mistaken for buffering, which
+is why each run records whether the process was still running when killed rather
+than inferring it from the byte count.
 
 **`TerminateProcess` was used rather than Ctrl-C, and it is the stronger case.**
 Ctrl-C on Windows runs the default console handler, which terminates the process
 but still lets the runtime unwind its exit path; `TerminateProcess` -- what
-`Stop-Process -Force` issues -- runs nothing at all, so any bytes still sitting
+.NET's `Process.Kill` issues -- runs nothing at all, so any bytes still sitting
 in a userspace buffer are lost outright. A report that survives it survives a
 Ctrl-C, so the interactive case is covered by the measurement rather than left
 untested.

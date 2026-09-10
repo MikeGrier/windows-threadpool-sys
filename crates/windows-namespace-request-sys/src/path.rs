@@ -15,10 +15,33 @@
 //!
 //! # A resolved path is not a session-independent path
 //!
-//! `GetFullPathNameW` **touches no filesystem**, and it is not lexical: it
-//! resolves relative components and `.`/`..` against process state -- the
-//! current directory, and for a drive-relative path the per-drive current
-//! directory in the `=C:` environment variables. What it never does is expand
+//! `GetFullPathNameW` **does not verify what it produces** -- though for a
+//! drive-relative path naming another drive it does query the filesystem, and
+//! may rewrite that drive's recorded entry (see [`crate::full_path`]). It
+//! collapses `.`/`..`
+//! lexically, and it *additionally* roots most paths that are not fully
+//! qualified against process state -- the current directory, or for a
+//! root-relative path that directory's *root*, or for a drive-relative path
+//! naming another drive the entry recorded for it in the `=C:` environment
+//! variables -- used verbatim when accepted, so it need not even be on that
+//! drive, and replaced by the drive root when not (for the current drive the
+//! process directory is used and the entry makes no difference). It is
+//! therefore not a lexical call as a whole, which is what makes resolving on
+//! the submitting thread meaningful.
+//!
+//! **"Most" rather than "every", because a legacy device name short-circuits
+//! the rooting entirely.** [`prepare`] hands the input to that call without
+//! device handling of its own, so `prepare("CON")` yields `\\.\CON` -- a device,
+//! not a file under the current directory -- and the same holds for `CON:`,
+//! `NUL`, `LPT1:` and the rest of the legacy set. A caller passing through an
+//! untrusted name should know that. Anything with more after it (`CON.txt`,
+//! `a\CON`) roots normally -- **except for `NUL`, the one member a path in
+//! front of it does not save**: `prepare(r"C:\NUL")` is `\\.\NUL`, so a fully
+//! qualified path is not by itself evidence that a name refers to a file on
+//! that volume. Only a suffix (`NUL.txt`) takes it out. The full shape is in
+//! [`crate::full_path`], which documents the call itself.
+//!
+//! What it never does is expand
 //! a drive letter, and a drive letter resolves
 //! against the *logon session* of whatever token is in effect. So a path
 //! prepared on a submitting thread and opened on a worker under a captured
