@@ -46,8 +46,8 @@ fn an_already_absolute_path_is_returned_unchanged() {
 
 #[test]
 fn a_path_that_does_not_exist_resolves_perfectly_happily() {
-    // The call is lexical and touches no filesystem. A consumer wanting a
-    // verified path wants an open plus GetFinalPathNameByHandleW.
+    // The call touches no filesystem. A consumer wanting a verified path wants
+    // an open plus GetFinalPathNameByHandleW.
     assert_eq!(
         resolve(r"C:\no-such-directory\..\nothing-here.txt"),
         r"C:\nothing-here.txt"

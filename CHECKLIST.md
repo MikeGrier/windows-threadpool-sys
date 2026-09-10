@@ -59,8 +59,8 @@ they are deliberately separate from building the new facility, which cannot star
 - [ ] **M20.1** -- Decide what the namespace facility does with a session-relative drive letter, and record
   it as a decision rather than leaving the absence of one implicit. Path resolution follows the
   impersonated token's logon session (measured: under a token from another logon session with unchanged
-  local access, the global `C:` resolved and a `subst` letter did not), and `GetFullPathNameW` is lexical
-  so submission-time canonicalisation does not expand the letter. `QueryDosDeviceW` distinguishes a real
+  local access, the global `C:` resolved and a `subst` letter did not), and `GetFullPathNameW` never
+  expands a drive letter, so submission-time canonicalisation does not expand it either. `QueryDosDeviceW` distinguishes a real
   local volume, a `subst`, and a network mapping cheaply, so detection is settled and only the response is
   open: expand to a session-independent form at submission, or reject at admission with a typed error.
   Expansion is not uniform -- a network mapping becomes a UNC path, a local volume becomes a device path
