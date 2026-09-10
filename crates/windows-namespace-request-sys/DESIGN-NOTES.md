@@ -580,20 +580,26 @@ documented to consult requires a transition; the current directory lives in the
 PEB and the `=C:` variables in the process environment block, both ordinary
 process memory. Windows does not document the implementation, so that is a
 statement about the data sources rather than a measurement of the call.
-The figures that exist say more than a bound, and are worth quoting exactly. On
-x86_64 `probe-request-cost` measures building an open request as a
-construct-and-drop cycle at roughly 210 ns, and cloning an *already resolved*
-path at roughly 42 ns. It attributes the difference -- about 168 ns -- to this
-resolution rather than to the allocation, which is why recycling a resolved path
-is the only one of the two candidate optimizations that can touch it. What the
-probe declines to name is the **mechanism**, not the division.
+What `probe-request-cost` produces is a **bound, not this call's cost**. On
+x86_64 it measures building an open request as a construct-and-drop cycle at
+roughly 210 ns and cloning an already-resolved path at roughly 45 ns. The
+~165 ns between them is what recycling recovers, and no more than that: the gap
+spans the whole preparation step, which makes **two** heap allocations this
+crate performs -- a copy of the input and a `MAX_PATH` output buffer -- against
+the clone's one, plus the builder chain. Timed on its own with no allocation in
+the loop, the call is about **110 ns** on this host, roughly two thirds of the
+gap; that is a direct measurement taken for this note, not a probe output, and
+no instrument in this repository isolates the call.
 
-Two drafts of this decision got that wrong in opposite directions, which is why
-it is spelled out. The first quoted the whole figure as a per-resolution cost,
-attributing to this call a total that includes an allocation and a drop. The
-second over-corrected, saying the probe "declines to decompose" -- it does
-decompose, and names ~168 ns as the resolution's share; what it withholds is
-whether any of that is a kernel transition. The
+**Three drafts of this paragraph were wrong in three different ways, which is
+why it is now spelled out.** The first quoted ~210 ns as a per-resolution cost,
+attributing to this call a total containing an allocation and a drop. The second
+over-corrected to "the probe declines to decompose" -- it does decompose, and
+prints the build-minus-clone split itself. The third took that split at face
+value and called ~168 ns "this call's measured share", which credits the call
+with the allocator work the same sentence excludes, and overstates it by about
+half. Each draft named a mechanism the evidence did not reach, which is the
+defect this decision exists to correct. The
 distinction is kept deliberately: two successive descriptions of this call in
 that probe were each wrong in the same direction, by naming a mechanism the
 evidence did not reach.

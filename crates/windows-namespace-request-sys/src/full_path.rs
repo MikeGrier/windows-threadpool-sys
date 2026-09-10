@@ -13,10 +13,8 @@
 //! It does **two** things, and keeping them apart is the whole reason this
 //! entry exists:
 //!
-//! 1. It rewrites the string. `.` and `..` are collapsed, `/` becomes `\`,
-//!    trailing dots and spaces are trimmed, and a legacy device name is mapped
-//!    into the device namespace (`CON` becomes `\\.\CON`, which is worth
-//!    knowing for a crate that prepares paths). This part *is* lexical -- pure
+//! 1. It rewrites the string. `.` and `..` are collapsed, `/` becomes `\`, and
+//!    trailing dots and spaces are trimmed. This part *is* lexical -- pure
 //!    string work over the input, reading no process state. `C:\a\..\b` becomes
 //!    `C:\b` whatever the current directory happens to be, and whether or not
 //!    `C:\a` exists.
@@ -24,18 +22,28 @@
 //!    mutable process state. There are three such forms, and they read
 //!    different state: a relative path like `rel.txt` is rooted at the *process
 //!    current directory*; a root-relative path like `\foo` takes only the
-//!    *current drive* from it, giving `C:\foo` rather than the current
-//!    directory's subtree; and a drive-relative path like `C:foo` is rooted at
-//!    that drive's own current directory, which Windows keeps in the hidden
-//!    `=C:` environment variables.
+//!    *root* of that directory, giving `C:\foo` rather than its subtree -- and
+//!    `\\server\share\foo` when the current directory is a UNC path, which is
+//!    why this says root and not drive; and a drive-relative path like `C:foo`
+//!    is rooted at that drive's own current directory, which Windows keeps in
+//!    the hidden `=C:` environment variables and which moves independently of
+//!    the process current directory.
+//!
+//! **One input short-circuits both.** An input that is *exactly* a legacy device
+//! name resolves into the device namespace and is not rooted at all: `CON`
+//! becomes `\\.\CON`, not a file under the current directory. It is exact-match
+//! only -- `CON.txt` and `a\CON` are rooted normally, and `\CON` becomes
+//! `Q:\CON` for a current directory on `Q:`. A crate that prepares paths on a
+//! caller's behalf should know that `prepare("CON")` hands back a device.
 //!
 //! So the call is **not** lexical as a whole, and describing it that way -- as
 //! an earlier revision of this doc did, in the sentence immediately before the
 //! one describing the current directory it reads -- loses exactly the half that
 //! matters here. A fully-qualified input resolves to the same output every
-//! time; an input that is not fully qualified resolves to different outputs in
-//! the same process at different times, and pinning *that* is the property
-//! being bought.
+//! time; an input that is rooted resolves to different outputs in the same
+//! process at different times, and pinning *that* is the property being bought.
+//! (Not every unqualified input is rooted, which is the point of the device
+//! short-circuit above: `CON` is unqualified and yet invariant.)
 //!
 //! So it solves exactly one problem -- the process current directory is shared
 //! mutable state that any thread can change, so a relative path means something
@@ -70,17 +78,26 @@
 //! successive descriptions of this call in a consuming probe were each wrong in
 //! the same direction, by naming a mechanism the evidence did not reach.
 //!
-//! The figures that exist say more than a bound, and are worth quoting exactly.
-//! On x86_64 `probe-request-cost` measures building an open request as a
-//! construct-and-drop cycle at roughly 210 ns, and cloning an *already
-//! resolved* path at roughly 42 ns. It attributes the difference -- about
-//! 168 ns -- to this resolution rather than to the allocation, which is why
-//! recycling a resolved path is the only one of the two candidate
-//! optimizations that can touch it.
+//! The figure the repo's own instrument produces is a **bound, not this call's
+//! cost**, and the difference matters. On x86_64 `probe-request-cost` measures
+//! building an open request as a construct-and-drop cycle at roughly 210 ns and
+//! cloning an already-resolved path at roughly 45 ns. The ~165 ns between them
+//! is what recycling a resolved path recovers, and that is all it is: the gap
+//! covers the whole preparation step, which makes **two** heap allocations this
+//! crate's own code performs -- a copy of the input and a MAX_PATH output
+//! buffer -- against the clone's one, plus the builder chain. Attributing the
+//! gap to this call, as a draft of this doc did, credits `GetFullPathNameW`
+//! with allocator work the same sentence is busy excluding.
 //!
-//! What the probe declines to name is the **mechanism**, not the division. So
-//! roughly 168 ns is this call's measured share on that host, and nothing in
-//! that number says whether any part of it entered the kernel.
+//! Timed on its own -- input already marshalled, output buffer pre-allocated,
+//! so no allocation is in the loop -- the call costs about **110 ns** on this
+//! host, roughly two thirds of that gap. That measurement is a direct one taken
+//! for this note and is *not* something the probe reports; no instrument in
+//! this repository isolates the call, and the honest reading of
+//! `probe-request-cost` alone is an upper bound.
+//!
+//! What the probe declines to name is the **mechanism**. No figure here says
+//! whether any part of the call entered the kernel.
 //!
 //! It does **not** solve the session-relative drive-letter hazard, and saying
 //! so plainly matters more than the part it does solve. `GetFullPathNameW`
