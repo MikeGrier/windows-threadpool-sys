@@ -15,8 +15,11 @@
 //!
 //! # A resolved path is not a session-independent path
 //!
-//! `GetFullPathNameW` is **lexical**. It resolves relative components and
-//! `.`/`..` and never expands a drive letter, and a drive letter resolves
+//! `GetFullPathNameW` **touches no filesystem**, and it is not lexical: it
+//! resolves relative components and `.`/`..` against process state -- the
+//! current directory, and for a drive-relative path the per-drive current
+//! directory in the `=C:` environment variables. What it never does is expand
+//! a drive letter, and a drive letter resolves
 //! against the *logon session* of whatever token is in effect. So a path
 //! prepared on a submitting thread and opened on a worker under a captured
 //! token from another session can name a different device. Preparation closes
@@ -177,7 +180,7 @@ impl std::error::Error for PathError {
 /// Preparation resolves against the *process* current directory, on the
 /// calling thread, which is what stops the meaning of a relative path changing
 /// between submission and execution. It does **not** expand a drive letter,
-/// because `GetFullPathNameW` is lexical and never does -- and a drive letter
+/// because `GetFullPathNameW` never does -- and a drive letter
 /// is resolved against the logon session of the token in effect at open time.
 /// A prepared path carried to a worker running under a captured token from
 /// another logon session can therefore still name a different device. That

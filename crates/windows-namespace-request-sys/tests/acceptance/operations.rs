@@ -275,7 +275,7 @@ fn watcher_getvolumeinformationbyhandle_shape_is_reachable() {
 
 #[test]
 fn enumeration_getfullpathname_shape_is_reachable() {
-    // path.rs:149 -- lexical resolution with a null file-part out-param.
+    // path.rs:149 -- resolution with a null file-part out-param.
     let resolved = ResolveFullPath::new(Wtf16String::from(r"C:\Windows\System32\..\.\Temp"))
         .perform()
         .expect("the enumeration crate's resolution shape")

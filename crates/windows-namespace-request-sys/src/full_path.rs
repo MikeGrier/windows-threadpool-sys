@@ -7,14 +7,55 @@
 //!
 //! # What it solves, and what it leaves standing
 //!
-//! This call is **lexical**. It resolves relative components and `.`/`..`
-//! against the process current directory, and it touches no filesystem: it will
-//! happily resolve a path to something that does not exist.
+//! This call **touches no filesystem**: it will happily resolve a path to
+//! something that does not exist. It is **not** lexical, and the difference is
+//! the whole reason this entry exists. It resolves relative components and
+//! `.`/`..` against the *process current directory*, and for a drive-relative
+//! path such as `C:foo` against the per-drive current directory Windows keeps
+//! in the hidden `=C:` environment variables. Both are process state, so the
+//! same input string resolves to different outputs in the same process at
+//! different times.
+//!
+//! Calling it lexical -- as an earlier revision of this doc did, in the sentence
+//! immediately before the one describing the current directory it reads -- gets
+//! that exactly backwards. A lexical canonicalizer is a pure function of its
+//! input; this reads mutable process state, which is precisely the property
+//! being bought.
 //!
 //! So it solves exactly one problem -- the process current directory is shared
 //! mutable state that any thread can change, so a relative path means something
 //! different depending on *when* it is resolved. Performing this on the
 //! submitting thread pins that meaning.
+//!
+//! # Why not a genuinely lexical canonicalizer
+//!
+//! One exists: `PathCchCanonicalizeEx`, or `PathAllocCanonicalize`. Either is
+//! cheaper and reads no process state at all.
+//!
+//! **They are the wrong call here, and the reason is the property above rather
+//! than cost.** Resolving against the current directory *at submission* is what
+//! this crate is buying. A lexical canonicalizer would leave a relative path
+//! still relative, so its meaning would be decided on the worker thread at
+//! execution time, against a current directory any thread may have changed in
+//! between -- reintroducing exactly the race preparation exists to close. The
+//! cheaper call is cheaper because it does less, and the part it does not do is
+//! the part wanted.
+//!
+//! Recorded so the next reader does not re-derive it. If this reasoning is ever
+//! wrong -- for a consumer that genuinely wants a pure string operation and has
+//! resolved relativity some other way -- the cheaper call is named here.
+//!
+//! # Whether it can enter the kernel
+//!
+//! Nothing it is documented to consult requires a transition. The process
+//! current directory lives in the PEB and the `=C:` variables in the process
+//! environment block; both are ordinary process memory. Windows does not
+//! document the implementation, so this is a statement about the data sources,
+//! not a measurement of the call -- a distinction worth keeping, because two
+//! successive descriptions of this call in a consuming probe were each wrong in
+//! the same direction, by naming a mechanism the evidence did not reach.
+//! `probe-request-cost` measures roughly 212 ns per resolution on x86_64, which
+//! is consistent with user-mode work and does not by itself establish it.
 //!
 //! It does **not** solve the session-relative drive-letter hazard, and saying
 //! so plainly matters more than the part it does solve. `GetFullPathNameW`
@@ -103,7 +144,7 @@ impl From<Win32Error> for FullPathError {
 /// use windows_namespace_request_sys::full_path::ResolveFullPath;
 /// use wtf_string::Wtf16String;
 ///
-/// // Lexical: `.` and `..` are resolved without touching the filesystem.
+/// // `.` and `..` are resolved without touching the filesystem.
 /// let resolved = ResolveFullPath::new(Wtf16String::from(r"C:\Windows\System32\..\.\Temp"))
 ///     .perform()?
 ///     .to_string_lossy();
@@ -118,8 +159,8 @@ impl From<Win32Error> for FullPathError {
 /// use windows_namespace_request_sys::full_path::ResolveFullPath;
 /// use wtf_string::Wtf16String;
 ///
-/// // A path to nothing resolves perfectly happily, because the call is
-/// // lexical. A consumer wanting a verified path wants an open plus
+/// // A path to nothing resolves perfectly happily, because the call
+/// // touches no filesystem. A consumer wanting a verified path wants an open plus
 /// // GetFinalPathNameByHandleW instead.
 /// let resolved = ResolveFullPath::new(Wtf16String::from(r"C:\no-such-directory\..\file.txt"))
 ///     .perform()?
