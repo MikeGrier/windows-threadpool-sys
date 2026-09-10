@@ -2,7 +2,8 @@
 
 //! Tests for the `GetFullPathNameW` entry.
 //!
-//! The negatives matter more than the positives here: this call is lexical, and
+//! The negatives matter more than the positives here: this call touches no
+//! filesystem, and
 //! a suite that only ever resolved existing paths would leave a reader
 //! believing it verifies something.
 

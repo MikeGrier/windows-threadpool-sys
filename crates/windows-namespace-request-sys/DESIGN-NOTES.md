@@ -534,11 +534,53 @@ proven correct -- a bad trade on a crate whose buffers are handed to the kernel.
 If it is ever done, it must be done together with the size passed to Win32, never
 to one side alone.
 
+## <a id="d-18"></a>D-18: `GetFullPathNameW` is not lexical, and the genuinely lexical alternative is the wrong call
+
+**The correction.** This crate described `GetFullPathNameW` as **lexical** in
+six places, in a sentence that then went on to say it resolves against the
+process current directory. Those two claims disagree: a lexical canonicalizer is
+a pure function of its input, and this reads mutable process state -- the current
+directory, and for a drive-relative path such as `C:foo` the per-drive current
+directory Windows keeps in the hidden `=C:` environment variables. The claim
+that holds is **touches no filesystem**.
+
+The wrong word had spread beyond where it was reported. The consuming probe's
+checklist item named [full_path.rs](src/full_path.rs) only; a sweep for the term
+found the identical sentence in [path.rs](src/path.rs), plus four further
+restatements across doc examples, tests, an acceptance comment and this file.
+The reported site was a sample, not the population -- which is the standing
+lesson, met again.
+
+**The decision: keep `GetFullPathNameW`.** A genuinely lexical canonicalizer
+exists -- `PathCchCanonicalizeEx`, or `PathAllocCanonicalize` -- and is cheaper,
+reading no process state at all. It is the wrong call here, and for the property
+rather than the price: resolving against the current directory *at submission* is
+what this crate is buying. A lexical canonicalizer would leave a relative path
+relative, so its meaning would be settled on the worker at execution time,
+against a current directory any thread may have changed in between -- which is
+exactly the race preparation exists to close. The cheaper call is cheaper because
+it does less, and the part it omits is the part wanted.
+
+Recorded with the alternative named so the next reader does not re-derive it. If
+the reasoning is ever wrong -- a consumer wanting a pure string operation, having
+resolved relativity another way -- the cheaper call is named here.
+
+**Whether it enters the kernel: not established, and said so.** Nothing it is
+documented to consult requires a transition; the current directory lives in the
+PEB and the `=C:` variables in the process environment block, both ordinary
+process memory. Windows does not document the implementation, so that is a
+statement about the data sources rather than a measurement of the call.
+`probe-request-cost` measures roughly 212 ns per resolution on x86_64, which is
+consistent with user-mode work and does not by itself establish it. The
+distinction is kept deliberately: two successive descriptions of this call in
+that probe were each wrong in the same direction, by naming a mechanism the
+evidence did not reach.
+
 ## Open, and inherited rather than introduced
 
 - **Path resolution under a captured identity.** A path must be resolved on the
   calling thread, because the process current directory is mutable by any
-  thread -- but `GetFullPathNameW` is lexical and never expands a drive letter,
+  thread -- but `GetFullPathNameW` never expands a drive letter,
   and drive-letter resolution follows the *impersonated* token's logon session.
   So a root resolved on a submitter and opened on a worker under a captured
   token can name a different device. The workspace has this as an open decision;
