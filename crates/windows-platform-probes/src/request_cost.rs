@@ -70,8 +70,13 @@
 //! is not what these timings contain.
 //!
 //! So the measured remainder is the **resolution step**, which is an upper
-//! bound on the call and not the call itself: it also spans this crate's two
-//! allocations and the builder chain. Saying the remainder *is* the resolution,
+//! bound on the call and not the call itself: it also spans one net allocation
+//! of this crate's own and the builder chain. **Net**, because the subtraction
+//! cancels one -- `prepare` allocates twice, an input copy and a `MAX_PATH`
+//! output buffer, against the clone's one, so what survives the subtraction is
+//! the difference and not both. Calling it "two allocations", as a draft did,
+//! charges the gap with allocator work the subtraction has already removed.
+//! Saying the remainder *is* the resolution,
 //! as an earlier revision did, hands the call credit for the allocator work the
 //! same sentence sets out to exclude.
 //!

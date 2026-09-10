@@ -322,16 +322,23 @@ fn render(out: &mut dyn std::fmt::Write) {
         );
         let _ = writeln!(
             out,
-            "  above. It is not the call's own cost: it also spans this crate's two"
+            "  above. It is not the call's own cost: it also spans ONE NET allocation"
         );
         let _ = writeln!(
             out,
-            "  allocations and the builder chain. Whether any of it enters the kernel is"
+            "  of this crate's own -- prepare allocates twice against the clone's once,"
         );
-        let _ = writeln!(out, "  not something this run measured.");
         let _ = writeln!(
             out,
-            "  Two different schemes recover two different things, and this said"
+            "  so the subtraction cancels one -- and the builder chain."
+        );
+        let _ = writeln!(
+            out,
+            "  Whether any of it enters the kernel is not something this run measured."
+        );
+        let _ = writeln!(
+            out,
+            "  Two different schemes recover different things, and this said"
         );
         let _ = writeln!(
             out,
@@ -344,7 +351,7 @@ fn render(out: &mut dyn std::fmt::Write) {
         );
         let _ = writeln!(
             out,
-            "  RESOLUTION STEP, allocations included, and only a caller that can"
+            "  RESOLUTION STEP plus that net allocation, and only a caller that can"
         );
         let _ = writeln!(
             out,
