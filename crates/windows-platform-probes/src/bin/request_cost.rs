@@ -282,7 +282,7 @@ fn render(out: &mut dyn std::fmt::Write) {
     {
         let _ = writeln!(
             out,
-            "\n  WHERE THE TIME ACTUALLY GOES, and it is not the allocator:"
+            "\n  WHERE THE TIME ACTUALLY GOES, and it is not only the allocator:"
         );
         // "resolves against process state" -- not "a syscall", and not
         // "lexical" either.
@@ -301,11 +301,15 @@ fn render(out: &mut dyn std::fmt::Write) {
         // two successive attempts to name one were each wrong in the same way.
         let _ = writeln!(
             out,
-            "  `prepare` calls GetFullPathNameW, which resolves a path that is not fully"
+            "  `prepare` calls GetFullPathNameW, which roots MOST paths that are not fully"
         );
         let _ = writeln!(
             out,
-            "  qualified against process state -- the CWD is mutable by any thread, so"
+            "  qualified against process state -- most, because a legacy device name such"
+        );
+        let _ = writeln!(
+            out,
+            "  as CON short-circuits rooting entirely. The CWD is mutable by any thread, so"
         );
         let _ = writeln!(
             out,

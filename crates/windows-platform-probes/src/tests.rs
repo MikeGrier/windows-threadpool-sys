@@ -4442,9 +4442,9 @@ fn preparing_a_path_needs_no_volume_behind_its_drive_letter() {
 
     assert!(
         windows_namespace_request_sys::prepare(&path).is_ok(),
-        "preparing {text} must succeed with no {absent}: volume mounted -- \
-         a fully-qualified path is normalized, not resolved against a device, \
-         and `request_cost` depends on that both for its long-path sample and \
-         for its claim about where the measured time goes"
+        "preparing {text} must succeed with no {absent}: volume mounted. That \
+         outcome is the whole claim -- this says nothing about whether a device \
+         is consulted, because a black-box success cannot -- and it is what \
+         `request_cost` depends on for its hard-coded long-path sample"
     );
 }

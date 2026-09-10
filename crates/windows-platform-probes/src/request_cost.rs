@@ -58,7 +58,10 @@
 //! # Preparing a path is a Win32 call, not an allocation
 //!
 //! This probe was written expecting `prepare` to be an allocation and a copy.
-//! It is not: it calls **`GetFullPathNameW`** to resolve the path against the
+//! It is not *only* that -- the qualifier matters, because the decomposition
+//! below charges the measured gap with one net allocation, and a heading saying
+//! flatly "not an allocation" would contradict it: it calls
+//! **`GetFullPathNameW`** to resolve the path against the
 //! process working directory, because [the namespace session] settled that the
 //! path is resolved at submission -- the process CWD is mutable by any thread,
 //! so even perfect remoting would be racy.
