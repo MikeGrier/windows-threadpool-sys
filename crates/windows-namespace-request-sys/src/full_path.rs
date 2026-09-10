@@ -54,8 +54,14 @@
 //! not a measurement of the call -- a distinction worth keeping, because two
 //! successive descriptions of this call in a consuming probe were each wrong in
 //! the same direction, by naming a mechanism the evidence did not reach.
-//! `probe-request-cost` measures roughly 212 ns per resolution on x86_64, which
-//! is consistent with user-mode work and does not by itself establish it.
+//!
+//! So the figure that exists is quoted for what it is and no more:
+//! `probe-request-cost` measures a *construct-and-drop cycle* for a short
+//! prepared path at roughly 210 ns on x86_64. That is an allocation, this
+//! resolution and a drop together -- the probe deliberately declines to say how
+//! the total divides, so it bounds this call from above and says nothing about
+//! what it costs alone, still less about whether any part of it entered the
+//! kernel.
 //!
 //! It does **not** solve the session-relative drive-letter hazard, and saying
 //! so plainly matters more than the part it does solve. `GetFullPathNameW`

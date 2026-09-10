@@ -570,8 +570,14 @@ documented to consult requires a transition; the current directory lives in the
 PEB and the `=C:` variables in the process environment block, both ordinary
 process memory. Windows does not document the implementation, so that is a
 statement about the data sources rather than a measurement of the call.
-`probe-request-cost` measures roughly 212 ns per resolution on x86_64, which is
-consistent with user-mode work and does not by itself establish it. The
+The figure that exists is quoted for what it is and no more: `probe-request-cost`
+measures a *construct-and-drop cycle* for a short prepared path at roughly 210 ns
+on x86_64 -- an allocation, this resolution and a drop together. The probe
+deliberately declines to decompose that total, so it bounds this call from above
+and says nothing about what it costs alone, still less about whether any part of
+it entered the kernel. Quoting it as a per-resolution cost, as a first draft of
+this decision did, would have been the same defect this decision is correcting:
+attributing a measured number to a mechanism the measurement does not isolate. The
 distinction is kept deliberately: two successive descriptions of this call in
 that probe were each wrong in the same direction, by naming a mechanism the
 evidence did not reach.
