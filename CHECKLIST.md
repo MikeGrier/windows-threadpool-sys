@@ -207,11 +207,6 @@ M22-M29, and [CHECKLIST-io-domains.md](CHECKLIST-io-domains.md) M30-M33.
   Whatever is chosen must be verified by **re-injecting this exact weld** and confirming the gate
   goes red, since the point of the item is that the current one does not.
 
-## M35 -- Measure what the long-path opt-in actually does
-
-- [x] **M35.1** -- Measure whether the long-path opt-in lifts `MAX_PATH` for a relative path, and
-  whether it does so without re-parsing it. It does both, and the regularize-then-prefix hypothesis
-  is falsified. -> [completed 2026-09-04](COMPLETED-CHECKLIST.md#m351)
 ## M37 -- Discharge the failable-call standard across the workspace
 
 Numbered M37, not M22. This section arrived from PR #84, which numbered it M22 without knowing
