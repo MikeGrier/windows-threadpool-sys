@@ -405,10 +405,7 @@ fn a_drive_relative_path_is_rooted_at_that_drive_and_not_the_process_directory()
     // The other-drive arm needs no drive letter from the current directory --
     // under a UNC current directory every letter is "other" -- so it runs
     // unconditionally and this test never degenerates to a silent skip.
-    let other = match cwd_drive {
-        Some(d) if d.eq_ignore_ascii_case(&'X') => 'Y',
-        _ => 'X',
-    };
+    let other = probe_drive_from(&['X', 'Y', 'P'], None);
     let resolved = resolve(&format!("{other}:foo"));
 
     // Compared case-insensitively, because the case is not this test's to
@@ -572,32 +569,26 @@ fn probe_directory(tag: &str) -> ProbeDir {
         created: false,
     }
 }
-/// A drive letter to probe with, which is certainly not the current drive.
+/// A drive letter to probe with, drawn from `candidates` and guaranteed to be
+/// neither the current drive nor `avoid`.
 ///
-/// **The letter cannot be a constant, for the reason these tests exist.** An
-/// entry is only consulted for a drive *other* than the current one -- on the
-/// current drive it is ignored and the process directory wins -- so a test that
-/// hard-codes `W` asserts something false when run from `W:`. Measured: with
-/// `subst W:` and the suite launched from `W:\`, the verbatim test failed.
-/// `W` and `V` are exactly the letters a mapped network drive or a `subst`
-/// tends to take.
+/// **Every candidate is checked, which an earlier version did not do.** It took
+/// a preferred letter and a fallback, tested only the preferred one, and
+/// returned the fallback unvalidated -- so when the preferred letter was
+/// excluded the caller could still be handed the current drive. Measured: with
+/// the process on `U:` and `%TEMP%` on a `subst`-ed `W:`, the verbatim test
+/// selected `U` and then asserted the *other-drive* contract while exercising
+/// the *current-drive* arm, which is the one case where the entry is ignored.
+/// It failed, but the mode is worse than a failure: the helper's own doc
+/// promised a guarantee it never enforced.
 ///
-/// Each caller passes a disjoint pair, so two tests can never land on the same
-/// letter and race under libtest's thread-per-test model.
-fn probe_drive(preferred: char, fallback: char) -> char {
-    probe_drive_avoiding(preferred, fallback, None)
-}
-
-/// [`probe_drive`], also avoiding the drive some other directory sits on.
+/// Three candidates against at most two exclusions, so one always survives; the
+/// assertion is there because that argument is about the caller's list and
+/// nothing here can check it.
 ///
-/// **Excluding only the current drive is not enough for a test that asserts an
-/// entry is honoured *across* drives.** `%TEMP%` need not be on the same drive
-/// as the process, so a host with temp on `W:` would have the probe directory
-/// and the probe drive coincide: the entry would still be honoured, the test
-/// would still pass, and the cross-drive property it exists to pin would go
-/// unexercised. That is a silent loss of coverage rather than a failure, which
-/// is the worse of the two.
-fn probe_drive_avoiding(preferred: char, fallback: char, avoid: Option<char>) -> char {
+/// Callers pass disjoint lists, so no two tests can select the same letter and
+/// race under libtest's thread-per-test model.
+fn probe_drive_from(candidates: &[char], avoid: Option<char>) -> char {
     let cwd = current_directory();
     // A UNC current directory has no drive letter, so nothing collides there.
     let current = cwd.chars().next().filter(char::is_ascii_alphabetic);
@@ -605,13 +596,14 @@ fn probe_drive_avoiding(preferred: char, fallback: char, avoid: Option<char>) ->
         current.is_some_and(|d| d.eq_ignore_ascii_case(&c))
             || avoid.is_some_and(|d| d.eq_ignore_ascii_case(&c))
     };
-    if taken(preferred) {
-        fallback
-    } else {
-        preferred
-    }
-}
 
+    *candidates.iter().find(|&&c| !taken(c)).unwrap_or_else(|| {
+        panic!(
+            "every candidate of {candidates:?} is excluded by the current \
+                 drive ({current:?}) or the probe drive ({avoid:?})"
+        )
+    })
+}
 /// Reads one of the hidden `=X:` per-drive current-directory entries.
 ///
 /// Through Win32 rather than `std::env`, which rejects a key containing `=`
@@ -701,7 +693,7 @@ fn a_drive_relative_path_uses_that_drives_entry_verbatim_and_rewrites_a_bad_one(
     // cross-drive property below would go unexercised.
     let probe_dir = probe_directory("verbatim");
     let probe = probe_dir.path.to_str().expect("the probe path is UTF-8");
-    let drive = probe_drive_avoiding('W', 'U', probe_dir.drive());
+    let drive = probe_drive_from(&['W', 'U', 'N'], probe_dir.drive());
     let restore = drive_entry(drive);
 
     assert_ne!(
@@ -773,7 +765,7 @@ fn a_rejected_drive_entry_is_replaced_by_the_drive_root() {
     // Pinned because the distinction is not guessable and the doc asserts it.
     let probe_dir = probe_directory("shape");
     let accepted = probe_dir.path.to_str().expect("the probe path is UTF-8");
-    let drive = probe_drive_avoiding('V', 'T', probe_dir.drive());
+    let drive = probe_drive_from(&['V', 'T', 'M'], probe_dir.drive());
     let restore = drive_entry(drive);
 
     // The control: this exact directory IS accepted in canonical form, so the
@@ -823,7 +815,7 @@ fn a_long_drive_entry_round_trips_through_the_reader() {
     // 1200 units is comfortably past the 256 the reader starts with and past
     // the 1024 an earlier fixed-size version used, and is a legitimate value: a
     // per-drive entry is a path, and long paths reach far beyond this.
-    let drive = probe_drive('R', 'S');
+    let drive = probe_drive_from(&['R', 'S', 'K'], None);
     let restore = drive_entry(drive);
 
     let long = format!(r"C:\{}", "a".repeat(1200));
