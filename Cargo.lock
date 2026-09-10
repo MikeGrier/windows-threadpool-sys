@@ -187,7 +187,7 @@ checksum = "9b39de7c7fe78858b0144c50c3fc000bab3be17d5e9b85b1053871693c7f7415"
 
 [[package]]
 name = "windows-namespace-request-sys"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "windows-sys",
  "windows-thread-ambient-sys",
@@ -214,7 +214,7 @@ dependencies = [
 
 [[package]]
 name = "windows-platform-probes"
-version = "0.0.0"
+version = "0.0.1"
 dependencies = [
  "windows-namespace-request-sys",
  "windows-placement-probe",

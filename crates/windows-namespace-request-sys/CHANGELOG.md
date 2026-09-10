@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.2.1](https://github.com/MikeGrier/windows-threadpool-sys/compare/windows-namespace-request-sys-v0.2.0...windows-namespace-request-sys-v0.2.1) (2026-09-10)
+
+
+### Bug Fixes
+
+* **namespace-request:** assert which device each name reaches, and repoint the links the split moved ([dbbecce](https://github.com/MikeGrier/windows-threadpool-sys/commit/dbbeccefedb209cb7702dd44c376200bdbcbcd9d))
+* **namespace-request:** grow the entry buffer, and stop the probe contradicting itself ([092bda8](https://github.com/MikeGrier/windows-threadpool-sys/commit/092bda82dfe7a8b1adeff781b640866edbbcd2f0))
+* **namespace-request:** NUL is the one device word a path in front of it does not save ([4198862](https://github.com/MikeGrier/windows-threadpool-sys/commit/41988625eba4ace6ef31b9a9143d985753e97a88))
+* **namespace-request:** state the current-drive arm at the boundary observation reaches ([e13aac7](https://github.com/MikeGrier/windows-threadpool-sys/commit/e13aac78d4789c88d2ff2cfc88a98307ec55858b))
+* **namespace-request:** take the handle-allocation guard, and say which layer the device rules describe ([3e48630](https://github.com/MikeGrier/windows-threadpool-sys/commit/3e48630b1cfd47a2037f2393fbd05f50334099ed))
+* **namespace-request:** tell an empty per-drive entry from an absent one ([016f032](https://github.com/MikeGrier/windows-threadpool-sys/commit/016f0320ff6a46ebd01a4f1e88818f3908662c74))
+* **namespace-request:** the lexical half claimed a mechanism too, for twenty-three rounds ([c20ef91](https://github.com/MikeGrier/windows-threadpool-sys/commit/c20ef91c534ac4c24101165c49344584d6470c4e))
+
 ## [0.2.0](https://github.com/MikeGrier/windows-threadpool-sys/compare/windows-namespace-request-sys-v0.1.0...windows-namespace-request-sys-v0.2.0) (2026-08-29)
 
 
