@@ -631,7 +631,7 @@ on has to be the narrow one -- the call does not *verify* what it produces --
 because the broad one is not merely unproven but false.
 
 **The constraint this decision carries, and not just its conclusion:** state
-only what the evidence reaches. Seven drafts of this entry each named a
+only what the evidence reaches. Nine drafts of this entry each named a
 mechanism it did not -- the call's nature, what a number measured, what the
 alternatives cost, whether any filesystem was touched. The wordings differ; the
 error does not. A reader taking only "it is not lexical" away from D-18 has the

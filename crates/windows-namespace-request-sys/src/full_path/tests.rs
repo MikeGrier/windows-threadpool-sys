@@ -437,6 +437,69 @@ fn a_drive_relative_path_is_rooted_at_that_drive_and_not_the_process_directory()
 }
 
 #[test]
+fn the_current_drives_entry_is_neither_consulted_nor_rewritten() {
+    // The module doc states both halves of the current-drive arm as fact. Until
+    // now nothing pinned either, and the assertion just above -- which looks
+    // like it does -- cannot: it resolves `X:foo` WITHOUT controlling the entry
+    // and compares against the process directory, and Windows keeps the current
+    // drive's entry equal to that directory. So it reads the same whether the
+    // entry is consulted or ignored. Vacuous in precisely the way this crate
+    // keeps rediscovering, and the reason the two arms need opposite fixtures:
+    // the sibling tests must AVOID the current drive, and this one must be on
+    // it.
+    let cwd = current_directory();
+    let Some(drive) = cwd.chars().next().filter(char::is_ascii_alphabetic) else {
+        // A UNC current directory has no drive letter, so there is no
+        // current-drive arm to exercise. Not a skip of something testable.
+        return;
+    };
+    let process_directory = format!(r"{}\foo", cwd.trim_end_matches('\\'));
+
+    let probe_dir = probe_directory("current-drive");
+    let probe = probe_dir.path.to_str().expect("the probe path is UTF-8");
+    let _restore = BorrowedDriveEntry::take(drive);
+
+    // The anti-vacuity check, made permanent rather than performed once by
+    // hand: unless the two arms would give DIFFERENT answers, every assertion
+    // below passes without distinguishing them, which is the failure this test
+    // was written to correct.
+    assert_ne!(
+        process_directory,
+        format!(r"{probe}\foo"),
+        "precondition: the entry must name somewhere other than the process \
+         directory, or consulting it and ignoring it look identical"
+    );
+
+    // Not consulted. The entry is one the OTHER arm would honour verbatim -- an
+    // existing directory in canonical form -- and it names somewhere the
+    // process directory cannot be, because this test just created it under a
+    // process-unique name. If the entry were read, the result would be under
+    // `probe`.
+    set_drive_entry(drive, Some(probe));
+    assert_eq!(
+        resolve(&format!("{drive}:foo")),
+        process_directory,
+        "the current drive's entry was set to {probe}, an entry the non-current \
+         arm honours verbatim, and the process directory won anyway"
+    );
+
+    // Not rewritten, which needs a REJECTED entry to be visible: an accepted one
+    // is left alone on both arms, so leaving it alone shows nothing. A child of
+    // the probe directory cannot exist, and on the non-current arm that is
+    // replaced by the drive root.
+    let missing = probe_dir.path.join("no-such-child");
+    let missing = missing.to_str().expect("the probe path is UTF-8");
+    set_drive_entry(drive, Some(missing));
+    let _ = resolve(&format!("{drive}:foo"));
+    assert_eq!(
+        drive_entry(drive).map(|v| v.to_string_lossy()).as_deref(),
+        Some(missing),
+        "an entry the non-current arm would have replaced with {drive}:\\ is \
+         left untouched on the current drive"
+    );
+}
+
+#[test]
 fn trailing_dots_and_spaces_are_trimmed_from_ordinary_components() {
     // The module doc says the rewrite trims trailing dots and spaces. Until now
     // that was only exercised through a final `.` component (which is the
@@ -536,17 +599,38 @@ impl Drop for ProbeDir {
 }
 
 fn probe_directory(tag: &str) -> ProbeDir {
-    let drive_rooted = |p: &std::path::Path| {
+    // The full shape an accepted `=X:` entry must have, not just its first
+    // three characters: rooted at `X:\`, with no `.` or `..` component and no
+    // forward slash. `a_rejected_drive_entry_is_replaced_by_the_drive_root`
+    // shows each of those spellings is rejected while naming the same existing
+    // directory, so a base carrying one would turn that test's CONTROL
+    // assertion -- "the same directory in canonical form is accepted" -- into a
+    // rejection, and it would fail for a reason unrelated to what it pins.
+    //
+    // **A review read that as reachable through a non-canonical `%TMP%`. It is
+    // not, and the measurement is here so the next reader need not repeat it.**
+    // `std::env::temp_dir` goes through `GetTempPath2W`, which normalises what
+    // it finds: `C:/Users/.../Temp`, `...\Temp\.`, `...\Temp\..\Temp`,
+    // `...\Temp\\` and even the drive-relative `C:Users\...` all came back as
+    // `C:\Users\...\Temp\`. The one spelling passed through verbatim is
+    // `\\?\C:\...`, which is not drive-rooted and so takes the fallback below.
+    //
+    // The check is widened anyway. It costs nothing, it covers the fallback
+    // base too, and it is the difference between a precondition that is
+    // enforced and one that is argued -- which is the distinction this whole
+    // change exists to hold.
+    let canonical_drive_rooted = |p: &std::path::Path| {
         let s = p.as_os_str().to_string_lossy().into_owned();
         let mut chars = s.chars();
         matches!(
             (chars.next(), chars.next(), chars.next()),
             (Some(d), Some(':'), Some('\\')) if d.is_ascii_alphabetic()
-        )
+        ) && !s.contains('/')
+            && !s.split('\\').any(|c| c == "." || c == "..")
     };
 
     let temp = std::env::temp_dir();
-    if drive_rooted(&temp) {
+    if canonical_drive_rooted(&temp) {
         let path = temp.join(format!("wnrs-{}-{tag}", std::process::id()));
         std::fs::create_dir_all(&path).expect("create the probe directory");
         return ProbeDir {
@@ -560,8 +644,8 @@ fn probe_directory(tag: &str) -> ProbeDir {
     let system_root = std::env::var("SystemRoot").expect("SystemRoot is always set on Windows");
     let path = std::path::PathBuf::from(system_root);
     assert!(
-        drive_rooted(&path),
-        "the fallback probe must be drive-rooted: {}",
+        canonical_drive_rooted(&path),
+        "the fallback probe must be canonical and drive-rooted: {}",
         path.display()
     );
     ProbeDir {
@@ -658,6 +742,18 @@ fn set_drive_entry(drive: char, value: Option<&str>) {
 /// Restoration goes through this rather than through `&str`, so an entry
 /// containing an unpaired surrogate is put back byte for byte.
 fn set_drive_entry_units(drive: char, value: Option<&Wtf16String>) {
+    assert!(
+        try_set_drive_entry_units(drive, value),
+        "set ={drive}: entry"
+    );
+}
+
+/// [`set_drive_entry_units`] without the assertion, reporting success instead.
+///
+/// Separate because the restoration in [`BorrowedDriveEntry`] runs during
+/// unwinding, where a panic would abort the process and destroy the report of
+/// the failure that started the unwind.
+fn try_set_drive_entry_units(drive: char, value: Option<&Wtf16String>) -> bool {
     let name = Wtf16String::from(format!("={drive}:").as_str());
     let value_ptr = value
         .as_ref()
@@ -669,7 +765,42 @@ fn set_drive_entry_units(drive: char, value: Option<&Wtf16String>) {
             value_ptr,
         )
     };
-    assert!(ok != 0, "set ={drive}: entry");
+    ok != 0
+}
+
+/// Borrows one drive's `=X:` entry and puts it back when the test ends,
+/// **whether or not the test panicked**.
+///
+/// Restoring on the last line of the test is not enough, and the hazard is not
+/// theoretical: `=X:` is process-global, `cargo test` runs tests as threads in
+/// ONE process, and every assertion between the save and the restore is a place
+/// the entry can be abandoned. What a sibling test would then inherit is not
+/// merely a stale value but one no host would produce -- a path to a directory
+/// that no longer exists once the probe directory is removed, or the 1200-unit
+/// value that `a_long_drive_entry_round_trips_through_the_reader` installs on
+/// purpose. The reader above already names this ("the entry is then never
+/// restored") without defending against it; this is the defence.
+///
+/// A failed restore is dropped rather than asserted, for the reason given on
+/// [`try_set_drive_entry_units`].
+struct BorrowedDriveEntry {
+    drive: char,
+    saved: Option<Wtf16String>,
+}
+
+impl BorrowedDriveEntry {
+    fn take(drive: char) -> Self {
+        Self {
+            drive,
+            saved: drive_entry(drive),
+        }
+    }
+}
+
+impl Drop for BorrowedDriveEntry {
+    fn drop(&mut self) {
+        let _ = try_set_drive_entry_units(self.drive, self.saved.as_ref());
+    }
 }
 
 #[test]
@@ -694,7 +825,7 @@ fn a_drive_relative_path_uses_that_drives_entry_verbatim_and_rewrites_a_bad_one(
     let probe_dir = probe_directory("verbatim");
     let probe = probe_dir.path.to_str().expect("the probe path is UTF-8");
     let drive = probe_drive_from(&['W', 'U', 'N'], probe_dir.drive());
-    let restore = drive_entry(drive);
+    let _restore = BorrowedDriveEntry::take(drive);
 
     assert_ne!(
         Some(drive.to_ascii_uppercase()),
@@ -751,8 +882,6 @@ fn a_drive_relative_path_uses_that_drives_entry_verbatim_and_rewrites_a_bad_one(
         Some(format!(r"{drive}:\").as_str()),
         "resolving created the entry on a host that had none"
     );
-
-    set_drive_entry_units(drive, restore.as_ref());
 }
 
 #[test]
@@ -766,7 +895,7 @@ fn a_rejected_drive_entry_is_replaced_by_the_drive_root() {
     let probe_dir = probe_directory("shape");
     let accepted = probe_dir.path.to_str().expect("the probe path is UTF-8");
     let drive = probe_drive_from(&['V', 'T', 'M'], probe_dir.drive());
-    let restore = drive_entry(drive);
+    let _restore = BorrowedDriveEntry::take(drive);
 
     // The control: this exact directory IS accepted in canonical form, so the
     // rejections below cannot be blamed on the directory itself.
@@ -800,8 +929,6 @@ fn a_rejected_drive_entry_is_replaced_by_the_drive_root() {
             "and the rejected entry is written back as the drive root"
         );
     }
-
-    set_drive_entry_units(drive, restore.as_ref());
 }
 
 #[test]
@@ -816,7 +943,7 @@ fn a_long_drive_entry_round_trips_through_the_reader() {
     // the 1024 an earlier fixed-size version used, and is a legitimate value: a
     // per-drive entry is a path, and long paths reach far beyond this.
     let drive = probe_drive_from(&['R', 'S', 'K'], None);
-    let restore = drive_entry(drive);
+    let _restore = BorrowedDriveEntry::take(drive);
 
     let long = format!(r"C:\{}", "a".repeat(1200));
     set_drive_entry(drive, Some(&long));
@@ -827,6 +954,35 @@ fn a_long_drive_entry_round_trips_through_the_reader() {
         long,
         "a long entry survives the read, so the buffer grew instead of truncating"
     );
+}
 
-    set_drive_entry_units(drive, restore.as_ref());
+#[test]
+fn a_borrowed_drive_entry_is_restored_even_when_the_borrower_panics() {
+    // The guard exists for the unwinding path, and a suite that passes never
+    // takes it -- so trusting it would mean shipping an untested defence
+    // against the exact failure it is there for. This takes the path on
+    // purpose.
+    let drive = probe_drive_from(&['G', 'H', 'J'], None);
+    let sentinel = format!(r"C:\borrowed-entry-{}", std::process::id());
+    set_drive_entry(drive, Some(&sentinel));
+
+    let outcome = std::panic::catch_unwind(|| {
+        let _restore = BorrowedDriveEntry::take(drive);
+        set_drive_entry(drive, Some(r"C:\the-borrowed-value"));
+        panic!("expected: this panic exercises the restore-on-unwind path");
+    });
+    assert!(
+        outcome.is_err(),
+        "precondition: the borrower must actually panic, or the unwinding path \
+         is not the thing being measured"
+    );
+
+    assert_eq!(
+        drive_entry(drive).map(|v| v.to_string_lossy()).as_deref(),
+        Some(sentinel.as_str()),
+        "the guard put the entry back while unwinding, where an end-of-test \
+         restore would have been skipped"
+    );
+
+    set_drive_entry(drive, None);
 }

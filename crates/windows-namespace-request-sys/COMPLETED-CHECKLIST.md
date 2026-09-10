@@ -32,10 +32,16 @@ Append-only. Newest groups at the bottom.
   which is what makes "that drive's own current directory" a convention rather
   than a guarantee); an entry naming nothing is rejected in favour of the drive
   root; and the call writes the entry back, creating it on a host that had none.
-  It draws from the disjoint `W`/`U` pair -- taking `U` when the current drive or
-the probe directory's drive is `W` -- so it cannot race the sibling tests'
-`X`/`Y`, `V`/`T` or `R`/`S` under libtest's
-  thread-per-test model.
+  It draws its drive letter from a list disjoint from every sibling test's, so
+  no two can select the same one and race under libtest's thread-per-test model.
+
+  *(Later correction, recorded here because the archive is history and the
+  history was briefly wrong: this entry described the selection as a `W`/`U`
+  **pair**, matching the helper as written. That helper validated only its first
+  letter and returned the second unchecked, so the guarantee the pair implied did
+  not hold. The lists are now three letters each -- `X`/`Y`/`P`, `W`/`U`/`N`,
+  `V`/`T`/`M`, `R`/`S`/`K`, `G`/`H`/`J` -- and every candidate is checked against
+  both the current drive and the probe drive.)*
 
   The sibling test
   `a_drive_relative_path_is_rooted_at_that_drive_and_not_the_process_directory`

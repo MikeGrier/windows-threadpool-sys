@@ -225,11 +225,17 @@ pub fn measure() -> Observation {
     // length that varied with the local system directory would make the figure
     // incomparable between the machines the report asks a reader to compare.
     //
-    // The `C:` is safe for the same reason the probe's own conclusion is: a
-    // fully-qualified path is normalized without consulting a device, so no
-    // volume is needed behind the letter. Two review passes read this as the
-    // portability bug fixed above, so it is now measured rather than argued --
-    // see `preparing_a_path_needs_no_volume_behind_its_drive_letter`.
+    // The `C:` is safe, and what makes it safe is an OUTCOME, not a mechanism:
+    // preparation succeeds with no volume behind the drive letter. Whether a
+    // device is consulted is neither established here nor needed. A black-box
+    // success is equally compatible with a consultation whose failure is
+    // ignored, so claiming the letter is "normalized without consulting a
+    // device" -- as this comment did -- reaches past its evidence, which is the
+    // one overreach the owning crate's `D-18` exists to remove.
+    //
+    // Two review passes read this as the portability bug fixed above, so the
+    // outcome is measured rather than argued -- see
+    // `preparing_a_path_needs_no_volume_behind_its_drive_letter`.
     let long_text = format!(r"C:\{}\file.txt", vec!["directory"; 24].join("\\"));
     let long = Wtf16String::from(long_text.as_str());
 

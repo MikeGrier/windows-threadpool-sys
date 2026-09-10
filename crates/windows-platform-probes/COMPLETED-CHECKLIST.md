@@ -123,6 +123,13 @@ request as it was written, and quotes the module doc as it read before the corre
   for a drive-relative path (`C:foo`) it also reads the per-drive current directory held in the
   `=C:` environment variables. "Touches no filesystem" is the claim that holds; "lexical" is not.
 
+  *(Later correction: the second half stood, the first did not. "Touches no filesystem" was measured
+  false while carrying out this item -- resolving `X:foo` for a non-current drive distinguishes an
+  existing directory from an existing file from a missing one, and rewrites the `=X:` entry. What
+  Microsoft documents is only that the call does not VERIFY its result. See
+  [../windows-namespace-request-sys/DESIGN-NOTES.md](../windows-namespace-request-sys/DESIGN-NOTES.md)
+  -> `D-18`.)*
+
   **The mono-repo rule says fix the layer, so the correction belongs in
   `windows-namespace-request-sys`, not in the probe that consumes it.** It is queued rather than
   taken because that crate is outside this peel and is release-managed, so a docs change there is its
