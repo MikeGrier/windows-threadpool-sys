@@ -550,7 +550,7 @@ UNC path and so is not a drive at all; and a drive-relative path such as
 `C:foo` takes that drive's own current directory, which Windows keeps in the
 hidden `=C:` environment variables and which moves independently of the process
 current directory. So the call is not lexical *as a whole*, and the claim that
-holds unqualified is **touches no filesystem**.
+holds unqualified is that it **does not verify what it produces** -- the documented guarantee, which is narrower than the "touches no filesystem" an earlier draft claimed and which observation cannot establish.
 
 **"Most" rather than "every", because a legacy device name short-circuits the
 rooting.** `CON` resolves to `\\.\CON` and is not rooted, so it is an
@@ -573,19 +573,28 @@ with two more in `path.rs`, two in [tests.rs](src/full_path/tests.rs), one in an
 acceptance comment and one in this file. The reported site was a sample, not the
 population -- which is the standing lesson, met again.
 
-**The decision: keep `GetFullPathNameW`.** A genuinely lexical canonicalizer
-exists -- `PathCchCanonicalizeEx`, or `PathAllocCanonicalize` -- and is cheaper,
-reading no process state at all. It is the wrong call here, and for the property
-rather than the price: resolving against the current directory *at submission* is
-what this crate is buying. A lexical canonicalizer would leave a relative path
-relative, so its meaning would be settled on the worker at execution time,
-against a current directory any thread may have changed in between -- which is
-exactly the race preparation exists to close. The cheaper call is cheaper because
-it does less, and the part it omits is the part wanted.
+**The decision: keep `GetFullPathNameW`.** Two canonicalizers that do not root
+exist -- `PathCchCanonicalizeEx` and `PathAllocCanonicalize`. They are the wrong
+call here for a semantic reason: resolving against the current directory *at
+submission* is what this crate is buying. A canonicalizer that does not root
+would leave a relative path relative, so its meaning would be settled on the
+worker at execution time, against a current directory any thread may have
+changed in between -- which is exactly the race preparation exists to close. What
+they omit is the part that is wanted.
 
-Recorded with the alternative named so the next reader does not re-derive it. If
-the reasoning is ever wrong -- a consumer wanting a pure string operation, having
-resolved relativity another way -- the cheaper call is named here.
+**No cost comparison is claimed, and that is deliberate.** An earlier draft of
+this decision called the alternatives "cheaper". Nothing here benchmarks them,
+Microsoft documents behaviour rather than relative cost, and
+`PathAllocCanonicalize` allocates its own result -- so the word was a guess
+wearing the clothes of a measurement, in a decision whose whole subject is not
+doing that. It is also unnecessary: the rooting semantics decide this alone.
+Neither is reliably free of process state either, since
+`PATHCCH_ALLOW_LONG_PATHS` makes `PathCchCanonicalizeEx` consult the process
+long-path setting unless the FORCE variant is used.
+
+Recorded with the alternatives named so the next reader does not re-derive it.
+If the reasoning is ever wrong -- a consumer wanting a pure string operation,
+having resolved relativity another way -- they are named here.
 
 **Whether it enters the kernel: not established, and said so.** Nothing it is
 documented to consult requires a transition; the current directory lives in the
@@ -603,18 +612,15 @@ the loop, the call is about **110 ns** on this host, roughly two thirds of the
 gap; that is a direct measurement taken for this note, not a probe output, and
 no instrument in this repository isolates the call.
 
-**Three drafts of this paragraph were wrong in three different ways, which is
-why it is now spelled out.** The first quoted ~210 ns as a per-resolution cost,
-attributing to this call a total containing an allocation and a drop. The second
-over-corrected to "the probe declines to decompose" -- it does decompose, and
-prints the build-minus-clone split itself. The third took that split at face
-value and called ~168 ns "this call's measured share", which credits the call
-with the allocator work the same sentence excludes, and overstates it by about
-half. Each draft named a mechanism the evidence did not reach, which is the
-defect this decision exists to correct. The
-distinction is kept deliberately: two successive descriptions of this call in
-that probe were each wrong in the same direction, by naming a mechanism the
-evidence did not reach.
+**The constraint this decision carries, and not just its conclusion:** state
+only what the evidence reaches. Seven drafts of this entry each named a
+mechanism it did not -- the call's nature, what a number measured, what the
+alternatives cost, whether any filesystem was touched. The wordings differ; the
+error does not. A reader taking only "it is not lexical" away from D-18 has the
+answer without the thing that kept producing wrong ones.
+
+The drafts themselves, and why each failed, are Tier 2:
+[DESIGN-RATIONALE.md](DESIGN-RATIONALE.md) -> `D-18`.
 
 ## Open, and inherited rather than introduced
 

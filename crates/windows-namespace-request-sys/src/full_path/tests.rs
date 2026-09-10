@@ -2,10 +2,9 @@
 
 //! Tests for the `GetFullPathNameW` entry.
 //!
-//! The negatives matter more than the positives here: this call touches no
-//! filesystem, and
-//! a suite that only ever resolved existing paths would leave a reader
-//! believing it verifies something.
+//! The negatives matter more than the positives here: this call does not verify
+//! what it produces, and a suite that only ever resolved existing paths would
+//! leave a reader believing it does.
 
 use windows_sys::Win32::Foundation::ERROR_INSUFFICIENT_BUFFER;
 use wtf_string::Wtf16String;
@@ -46,8 +45,9 @@ fn an_already_absolute_path_is_returned_unchanged() {
 
 #[test]
 fn a_path_that_does_not_exist_resolves_perfectly_happily() {
-    // The call touches no filesystem. A consumer wanting a verified path wants
-    // an open plus GetFinalPathNameByHandleW.
+    // Resolution does not verify the result: no error, and no check that any
+    // component exists. A consumer wanting a verified path wants an open plus
+    // GetFinalPathNameByHandleW.
     assert_eq!(
         resolve(r"C:\no-such-directory\..\nothing-here.txt"),
         r"C:\nothing-here.txt"
@@ -214,4 +214,121 @@ fn a_resolution_performs_the_same_way_on_another_thread() {
     .expect("the worker did not panic");
 
     assert_eq!(resolved, r"C:\Windows\System32");
+}
+
+/// The current directory this process is running in, as `GetFullPathNameW`
+/// would use it.
+///
+/// Read through the same API rather than `std::env::current_dir`, because the
+/// two can disagree: `std` normalizes, and what these tests need is exactly the
+/// string the call under test roots against.
+fn current_directory() -> String {
+    // A lone `.` is rooted at the current directory and then collapses to it.
+    resolve(".")
+}
+
+#[test]
+fn a_relative_path_is_rooted_at_the_process_current_directory() {
+    // The rooting half of the documented contract. Asserted as a RELATION to
+    // the current directory rather than against a literal, so it holds on any
+    // machine and in any working directory.
+    let expected = format!(r"{}\rel.txt", current_directory().trim_end_matches('\\'));
+    assert_eq!(resolve("rel.txt"), expected);
+}
+
+#[test]
+fn a_root_relative_path_takes_the_root_and_not_the_whole_directory() {
+    // `\foo` is documented as taking only the ROOT of the current directory,
+    // which is what distinguishes it from an ordinary relative path. Calling it
+    // "the current drive" was wrong -- under a UNC current directory there is
+    // no drive at all -- so this pins the property the doc actually claims.
+    let cwd = current_directory();
+    let resolved = resolve(r"\foo");
+
+    assert!(
+        resolved.ends_with(r"\foo"),
+        "a root-relative path keeps its component: {resolved}"
+    );
+    assert!(
+        cwd.starts_with(resolved.trim_end_matches(r"foo")),
+        "and is rooted at a PREFIX of the current directory ({cwd}), not under it: {resolved}"
+    );
+    // The distinguishing property: it does NOT include the current directory's
+    // subtree, so unless the current directory is itself the root, the two differ.
+    if cwd.trim_end_matches('\\').len() > resolved.trim_end_matches(r"\foo").len() {
+        assert_ne!(
+            resolved,
+            format!(r"{}\foo", cwd.trim_end_matches('\\')),
+            "a root-relative path is not the same as a relative one"
+        );
+    }
+}
+
+#[test]
+fn a_legacy_device_name_short_circuits_rooting() {
+    // The exception to "roots a path that is not fully qualified", and the one
+    // a caller passing an untrusted name has to know about: these do not become
+    // files under the current directory.
+    for name in [
+        "CON", "NUL", "PRN", "AUX", "CONIN$", "CONOUT$", "COM1", "LPT9",
+    ] {
+        let resolved = resolve(name);
+        assert!(
+            resolved.starts_with(r"\\.\"),
+            "{name} names a device, so it must not be rooted: {resolved}"
+        );
+    }
+}
+
+#[test]
+fn the_device_form_accepts_trailing_colons_dots_spaces_and_any_casing() {
+    // Every spelling the module doc claims reaches a device. A filter written
+    // from a narrower reading of the rule would let these through.
+    for spelling in ["CON", "CON:", "CON::", "CON.", "CON ", "con", "cOn:"] {
+        let resolved = resolve(spelling);
+        assert!(
+            resolved.starts_with(r"\\.\"),
+            "{spelling:?} is a device spelling: {resolved}"
+        );
+    }
+}
+
+#[test]
+fn superscript_digits_are_device_names_too() {
+    // The members a hand-written denylist omits, and which this crate's own
+    // documentation asserted did not exist until a review measured them. If a
+    // future Windows build stops accepting them this test says so, which is the
+    // whole reason it is here rather than left as prose.
+    for spelling in ["COM\u{00b9}", "COM\u{00b2}", "COM\u{00b3}", "LPT\u{00b9}"] {
+        let resolved = resolve(spelling);
+        assert!(
+            resolved.starts_with(r"\\.\"),
+            "{spelling:?} uses a superscript digit and still names a device: {resolved}"
+        );
+    }
+}
+
+#[test]
+fn a_device_name_with_anything_around_it_is_rooted_normally() {
+    // The other half, and the one that keeps the rule from being read as "any
+    // input containing a device name". Without these the test above would pass
+    // just as well against an implementation that mapped far too much.
+    for spelling in [
+        "CON.txt", r"a\CON", r".\CON", "CON:x", "COM0", "COM10", "CONIN",
+    ] {
+        let resolved = resolve(spelling);
+        assert!(
+            !resolved.starts_with(r"\\.\"),
+            "{spelling:?} is not a bare device name, so it must be rooted: {resolved}"
+        );
+    }
+}
+
+#[test]
+fn a_fully_qualified_path_is_unaffected_by_the_current_directory() {
+    // The lexical half, stated as the invariance the rooting half lacks: this
+    // is what makes "not lexical as a whole" a claim about the OTHER half only.
+    // `C:\a` need not exist, which is the same fact the existence test pins.
+    assert_eq!(resolve(r"C:\a\..\b"), r"C:\b");
+    assert_eq!(resolve("C:/a/b//c"), r"C:\a\b\c");
 }

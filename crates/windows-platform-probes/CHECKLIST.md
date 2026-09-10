@@ -88,8 +88,7 @@ speculative list to extend by imagination -- a fourth is added when a fourth con
   explicitly after being pointed at the question. Nothing in the suite decides it either way, which is
   itself the argument for the oracle.
 
-- [x] **M2.6** -- Say precisely what `GetFullPathNameW` does, in the crate that owns it, and decide
-  whether it is still the call `prepare` wants. -> [completed 2026-09-09](COMPLETED-CHECKLIST.md#m26)
+- [x] **M2.6** -- Say what `GetFullPathNameW` does, in the crate that owns it, and whether it stays. -> [completed 2026-09-09](COMPLETED-CHECKLIST.md#m26)
 
 - [ ] **M2.7** -- Decide whether the other nine probe steps in CI should carry `if: '!cancelled()'`,
   and apply or record the decision.

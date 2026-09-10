@@ -7,8 +7,17 @@
 //!
 //! # What it solves, and what it leaves standing
 //!
-//! This call **touches no filesystem**: it will happily resolve a path to
-//! something that does not exist.
+//! This call **does not verify what it produces**: it will happily resolve a
+//! path to something that does not exist, and it reports no error for one.
+//!
+//! That is the documented guarantee, and it is deliberately narrower than
+//! "touches no filesystem", which earlier revisions of this doc claimed.
+//! Microsoft specifies that the function does not verify that the resulting
+//! path and file name are valid or that they name an existing file; it does not
+//! specify that no I/O occurs. Observation cannot close that gap either --
+//! resolving a path under a directory that does not exist shows no *check* was
+//! made, not that no filesystem was touched. The narrower claim is the one this
+//! crate relies on, and it is sufficient: a caller wanting existence must open.
 //!
 //! It does **two** things, and keeping them apart is the whole reason this
 //! entry exists:
@@ -34,14 +43,24 @@
 //! not rooted at all: `CON` becomes `\\.\CON`, not a file under the current
 //! directory.
 //!
-//! "And nothing else" is doing real work, and is looser than it first looks. A
-//! trailing colon is part of the form, so `CON:` and `CON::` map too; the
-//! trimming in step 1 happens first, so `CON.` and `CON ` map as well; and the
-//! match is case-insensitive, so `con` does. What does *not* map is a name with
-//! anything after it -- `CON.txt`, `a\CON` and `CON:x` are all rooted normally,
-//! and `\CON` becomes `Q:\CON` for a current directory on `Q:`. The device set
-//! is the legacy one (`CON`, `NUL`, `PRN`, `AUX`, `COM1`-`9`, `LPT1`-`9`, and
-//! the console pair `CONIN$`/`CONOUT$`), not an open-ended list.
+//! "And nothing else" is doing real work, and is looser than it first looks.
+//! These all reach a device: a bare name (`CON`), a trailing colon (`CON:`,
+//! `CON::`), trailing dots or spaces (`CON.`, `CON `), and any casing
+//! (`con`). These do not, and root normally: anything with more of a path
+//! around it (`CON.txt`, `a\CON`, `.\CON`, `CON:x`), and `\CON`, which
+//! becomes `Q:\CON` for a current directory on `Q:`.
+//!
+//! **Do not build a name filter from the list below.** The accepted names are
+//! `CON`, `NUL`, `PRN`, `AUX`, `CONIN$`, `CONOUT$`, and `COM`/`LPT`
+//! followed by a single digit -- where "digit" includes the *superscripts*
+//! `COM^1`, `COM^2` and `COM^3` (U+00B9, U+00B2, U+00B3) as well as `1`-`9`.
+//! An exhaustive scan of the character after `COM` accepts exactly
+//! U+0031-U+0039, U+00B2, U+00B3 and U+00B9 on the tested build; `COM0` and
+//! `COM10` are not devices. The superscripts are precisely the sort of member a
+//! hand-written denylist omits, and this documentation asserted a list without
+//! them until a review measured it -- so treat the set as *observed on one
+//! build*, and prefer letting this call answer the question over reimplementing
+//! its judgement.
 //!
 //! So the call is **not** lexical as a whole, and describing it that way -- as
 //! an earlier revision of this doc did, in the sentence immediately before the
@@ -59,21 +78,28 @@
 //!
 //! # Why not a genuinely lexical canonicalizer
 //!
-//! One exists: `PathCchCanonicalizeEx`, or `PathAllocCanonicalize`. Either is
-//! cheaper and reads no process state at all.
+//! Two exist: `PathCchCanonicalizeEx` and `PathAllocCanonicalize`. Both
+//! canonicalize the string without rooting it.
 //!
-//! **They are the wrong call here, and the reason is the property above rather
-//! than cost.** Resolving against the current directory *at submission* is what
+//! **They are the wrong call here, and the reason is a semantic difference, not
+//! a cost one.** Resolving against the current directory *at submission* is what
 //! this crate is buying. A lexical canonicalizer would leave a relative path
 //! still relative, so its meaning would be decided on the worker thread at
 //! execution time, against a current directory any thread may have changed in
-//! between -- reintroducing exactly the race preparation exists to close. The
-//! cheaper call is cheaper because it does less, and the part it does not do is
-//! the part wanted.
+//! between -- reintroducing exactly the race preparation exists to close. What
+//! they omit is the part that is wanted.
+//!
+//! **No cost comparison is claimed, deliberately.** Nothing in this repository
+//! benchmarks either alternative, Microsoft documents behaviour rather than
+//! relative cost, and `PathAllocCanonicalize` allocates its own result -- so
+//! "cheaper" would be a guess. It is also not needed: the decision rests on the
+//! rooting semantics alone. Nor is either one reliably free of process state,
+//! since `PATHCCH_ALLOW_LONG_PATHS` makes `PathCchCanonicalizeEx` consult the
+//! process long-path setting unless the FORCE variant is used.
 //!
 //! Recorded so the next reader does not re-derive it. If this reasoning is ever
 //! wrong -- for a consumer that genuinely wants a pure string operation and has
-//! resolved relativity some other way -- the cheaper call is named here.
+//! resolved relativity some other way -- the alternatives are named here.
 //!
 //! # Whether it can enter the kernel
 //!
@@ -214,8 +240,8 @@ impl From<Win32Error> for FullPathError {
 /// use wtf_string::Wtf16String;
 ///
 /// // A path to nothing resolves perfectly happily, because the call
-/// // touches no filesystem. A consumer wanting a verified path wants an open plus
-/// // GetFinalPathNameByHandleW instead.
+/// // does not verify it. A consumer wanting a verified path wants an open
+/// // plus GetFinalPathNameByHandleW instead.
 /// let resolved = ResolveFullPath::new(Wtf16String::from(r"C:\no-such-directory\..\file.txt"))
 ///     .perform()?
 ///     .to_string_lossy();

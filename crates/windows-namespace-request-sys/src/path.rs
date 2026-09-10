@@ -15,7 +15,7 @@
 //!
 //! # A resolved path is not a session-independent path
 //!
-//! `GetFullPathNameW` **touches no filesystem**. It collapses `.`/`..`
+//! `GetFullPathNameW` **does not verify what it produces**. It collapses `.`/`..`
 //! lexically, and it *additionally* roots most paths that are not fully
 //! qualified against process state -- the current directory, or for a
 //! root-relative path that directory's *root*, or for a drive-relative path

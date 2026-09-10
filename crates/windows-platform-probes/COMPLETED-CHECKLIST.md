@@ -94,15 +94,19 @@ piece of work rather than a correction to that one.
   newline even when redirected -- had stdout been block-buffered this milestone would have needed a
   per-line flush too.
 
-## <a id="m26"></a>Moved 2026-09-09 22:54:01 -04:00 -- M2.6: what `GetFullPathNameW` does, and whether it stays
+## Moved 2026-09-09 22:54:01 -04:00 -- M2.6: what `GetFullPathNameW` does, and whether it stays
+
+### <a id="m26"></a>M2.6 -- Say what `GetFullPathNameW` does, in the crate that owns it, and whether it stays. *(completed 2026-09-09 22:54:01 -04:00)*
 
 **Resolved.** The correction and the decision both landed in the owning crate as `D-18` in
 [../windows-namespace-request-sys/DESIGN-NOTES.md](../windows-namespace-request-sys/DESIGN-NOTES.md):
 `GetFullPathNameW` collapses `.`/`..` lexically but roots most paths that are not fully qualified against
-process state, so it is not a lexical call as a whole; `PathCchCanonicalizeEx` is genuinely lexical,
-cheaper, and the wrong call, because rooting at submission is the property being bought. Whether it
-enters the kernel is recorded as NOT established. The item's body below is the request as it was
-written, and quotes the module doc as it read before the correction.
+process state, so it is not a lexical call as a whole; `PathCchCanonicalizeEx` does not root, and is
+the wrong call for that reason, because rooting at submission is the property being bought. No cost
+comparison is claimed -- the item below asked whether the alternative "would be cheaper", and the
+answer recorded in D-18 is that nothing measures it, so the decision rests on semantics alone.
+Whether the call enters the kernel is recorded as NOT established. The item's body below is the
+request as it was written, and quotes the module doc as it read before the correction.
 
 - [x] **M2.6** -- Say precisely what `GetFullPathNameW` does, in the crate that owns it, and decide
   whether it is still the call `prepare` wants. Two successive descriptions in the cost probe were
