@@ -31,10 +31,10 @@ piece of work rather than a correction to that one.
   [DESIGN-NOTES.md](DESIGN-NOTES.md#d-streaming-report).
 
   **The estimate in this item was wrong, and re-measuring it decided the question.** It said "upwards
-  of 160" `writeln!` sites; there are **504** across the production renderers, written into the `&mut
-  String` of about twenty functions. Option (a) -- a `Report` method taking `fmt::Arguments` plus a
-  macro -- is the most explicit and would have rewritten all 504; that is affordable at 160 and is not
-  at 504. Option (b) moves the twenty signatures and leaves the 504 untouched, because `String`
+  of 160" `writeln!` sites; there are **332** across this crate's production renderers, written into
+  the `&mut String` of 18 functions. Option (a) -- a `Report` method taking `fmt::Arguments` plus a
+  macro -- is the most explicit and would have rewritten all 332; that is affordable at 160 and is not
+  at 332. Option (b) moves the 18 signatures and leaves the 332 untouched, because `String`
   implements `fmt::Write` too and a call site cannot tell the difference. Option (c) was declined as a
   half-measure that keeps two buffers.
 
@@ -47,25 +47,27 @@ piece of work rather than a correction to that one.
   by reading.
 
 - [x] **M1.2** -- Convert every renderer to write into the sink as it measures, and simplify
-  `emit_report` accordingly. All sixteen probes now take `out: &mut dyn std::fmt::Write`; the
+  `emit_report` accordingly. All thirteen probes now take `out: &mut dyn std::fmt::Write`; the
   `catch_unwind`/`resume_unwind` pair is deleted, because with lines leaving as they are produced
   there is no buffer to rescue and keeping it would imply partial output still depends on the panic
   unwinding. `Captured` is unchanged and its tests pass untouched.
 
-  **Three probes needed more than a signature change**, because they never went through
-  `emit_report` at all -- `core_affinity`, `peer_index_cache` and `queue_contention` each composed a
-  `String` and called `emit` directly. They are branch-local and so missed the round that fixed the
-  same bypass in the peeled probes, which means the crate's "every probe routes through this" claim
-  was false in three places. `core_affinity` additionally measured in `main`'s argument list, ahead
-  of the renderer, so a topology read that failed produced no banner at all; it now measures after
-  the banner and reports the failure as a failure to observe rather than as a finding.
+  **Every probe in this crate needed only the signature change**, because each already went through
+  `emit_report` rather than composing a `String` and calling `emit` itself. That is what the
+  one-sink refactor bought, and it is why converting thirteen probes is one function plus one line
+  per renderer. Three further probes under development on a branch do not hold that property and
+  are converted where they land, since they are not in this crate yet.
 
-  **Verified with a control, because these probes are not deterministic.** A direct before/after
-  comparison flagged nine of fifteen reports, which is not evidence -- they print measured
-  nanoseconds and branch their verdicts on them. Running the *same* build twice differed by as much
-  or more (`peer-index-cache`: 22 lines between two runs of one build, against 20 across the
-  conversion), and the twelve deterministic reports were structurally identical. A before/after diff
-  on a probe means nothing without that control.
+  **Verified with a control, because several of these probes are not deterministic.** A direct
+  before/after comparison flagged four of the thirteen reports, which is not evidence -- they print
+  measured nanoseconds and branch their verdicts on them. Running the *same* build twice differs in
+  **five**, by the same amount or more in every case: `probe-doorbell-cost` 34 lines against 30,
+  `probe-request-cost` 32 against 32, `probe-pool-growth` 14 against 14, `probe-device-map` 4
+  against 4, and `probe-cancel-io` 2 against **0** -- that last one being the sharpest, since a
+  probe whose output varies run to run happened to match across the change and would have counted
+  as evidence of no change had the control not existed. The eight reports the control showed to be
+  genuinely deterministic were byte-identical. A before/after diff on a probe means nothing without
+  that control.
 
 - [x] **M1.3** -- Verify by interruption, not by reasoning. Both halves done, and the in-process half
   needed a test this item did not describe.
@@ -80,9 +82,11 @@ piece of work rather than a correction to that one.
   the mechanism and gone red only on the missing catch.
 
   **The interruption half is measured, with a control**, and recorded in
-  [DESIGN-NOTES.md](DESIGN-NOTES.md). `probe-queue-contention` (~65 s), stdout redirected, killed at
-  8 s: the streaming build had **114 bytes** on disk (banner and heading), the pre-M1.2 build built
-  from `246687e` had **0**. The control is what makes it evidence rather than an observation.
+  [DESIGN-NOTES.md](DESIGN-NOTES.md). `probe-doorbell-cost` (~0.8 s, the longest-running probe
+  here), stdout redirected, killed at 300 ms, six runs of each build with every run confirmed still
+  alive at the kill: the streaming build captured **129 characters** (banner and heading) on all
+  six, the pre-conversion build **0** on all six. The control is what makes it evidence rather than
+  an observation.
 
   `TerminateProcess` was used rather than Ctrl-C deliberately: it runs no handler at all, where
   Ctrl-C still lets the runtime unwind its exit path, so surviving it subsumes the interactive case.

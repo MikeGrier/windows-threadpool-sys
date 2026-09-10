@@ -540,16 +540,16 @@ The choice was between giving `Report` a method taking `fmt::Arguments` (with a
 `writeln!` calls keep working, and keeping the `String` while flushing it at
 line boundaries. **It was decided by counting rather than by taste.** Every
 renderer already writes through `writeln!(out, ...)` against a `String`'s
-`fmt::Write`, at **504 sites**; only about twenty functions take the `&mut
+`fmt::Write`, at **332 sites** in this crate; only 18 functions take the `&mut
 String` those sites write into. A sink method would have been the most explicit
-option and would have rewritten all 504; `fmt::Write` moves the twenty and
-leaves the 504 untouched, because `String` implements `fmt::Write` too and the
-call sites cannot tell the difference.
+option and would have rewritten all 332; `fmt::Write` moves the 18 and leaves
+the 332 untouched, because `String` implements `fmt::Write` too and the call
+sites cannot tell the difference.
 
 Worth recording that M1 estimated "upwards of 160" of those sites. The real
-figure is three times that, and it is the whole of the argument -- an option
-whose cost is "rewrite every call site" is affordable at 160 and is not at 504.
-A plan's estimate is worth re-measuring at the moment it becomes a decision.
+figure is twice that, and it is the whole of the argument -- an option whose
+cost is "rewrite every call site" is affordable at 160 and is not at 332. A
+plan's estimate is worth re-measuring at the moment it becomes a decision.
 
 ### What the adapter has to reassemble, and why that is not a detail
 
@@ -573,7 +573,7 @@ this paragraph:
 
 ### Every renderer now writes into the sink, and the catch-and-resume is gone
 
-M1.2 pointed all sixteen probes at the sink. Two things about that conversion are
+M1.2 pointed all thirteen probes at the sink. Two things about that conversion are
 worth keeping.
 
 **The `catch_unwind`/`resume_unwind` pair was deleted rather than left in place.**
@@ -590,24 +590,40 @@ and a `Drop` that writes can panic while unwinding, which aborts and replaces a
 diagnosable failure with one that explains nothing. An unterminated fragment is
 not a finding, so the trade is one-sided.
 
-Three probes needed more than a signature change, because they were composing a
-`String` and calling `emit` directly rather than going through `emit_report` at
-all: `core_affinity`, `peer_index_cache` and `queue_contention`. They are the
-branch-local probes, and they had never been through the round that fixed the
-same bypass in the peeled ones -- the crate's "every probe routes through this"
-claim was false in three places until now. `core_affinity` also measured in
-`main`'s argument list, so a failure to read the topology produced no banner and
-no indication of which probe had died; it now measures inside the renderer,
-after the banner, and reports a failed read as a failure to observe rather than
-as a finding.
+Every probe in this crate needed only the signature change, because each already
+went through `emit_report` rather than composing a `String` and calling `emit`
+itself. That is worth stating because it was not free: it is what the one-sink
+refactor bought, and it is why converting thirteen probes to stream is a
+mechanical change to one function plus one line per renderer.
 
-**Verifying that no report changed needed a control, because most of these
-probes are not deterministic.** Comparing before and after directly showed
-differences in nine of fifteen reports -- which proves nothing on its own, since
+Three further probes are being developed on a branch and do **not** hold that
+property -- they compose a `String` and call `emit` directly, so the crate's
+"every probe routes through this" claim is false for them. They are converted
+where they land rather than here, since they do not exist in this crate yet.
+
+**Verifying that no report changed needed a control, because several of these
+probes are not deterministic.** Comparing before and after directly showed four
+of the thirteen reports differing -- which proves nothing on its own, since
 these probes print measured nanoseconds and render verdicts branching on them.
-Running the *same* build twice showed differences of the same size or larger
-(`peer-index-cache` 22 lines between two runs of one build, against 20 across
-the conversion). The twelve deterministic reports were structurally identical.
+
+Running the *same* build twice is the control, and it differs in **five**, by
+the same amount or more in every case:
+
+| probe | lines differing, same build twice | lines differing, across the change |
+|---|---|---|
+| `probe-doorbell-cost` | 34 | 30 |
+| `probe-request-cost` | 32 | 32 |
+| `probe-pool-growth` | 14 | 14 |
+| `probe-device-map` | 4 | 4 |
+| `probe-cancel-io` | 2 | **0** |
+
+`probe-cancel-io` is the one that makes the point sharpest: it is *not*
+deterministic, yet it happened to match across the change. Had the before/after
+diff been read on its own, that would have counted as evidence of no change --
+from a probe whose output varies run to run regardless. The eight reports the
+control showed to be genuinely deterministic were byte-identical across the
+conversion, and those are the eight that carry the argument.
+
 A before/after diff on a probe is not evidence without that control.
 
 ### Measured: an interrupted probe keeps what it had already measured
@@ -616,25 +632,32 @@ M1.3 asked for this to be measured once rather than assumed, because it is the
 property the whole milestone exists for and no unit test reaches it -- a test
 cannot terminate its own process without taking the harness with it.
 
-`probe-queue-contention` takes about 65 seconds on the x86_64 review host, which
-makes it the natural subject. Started with stdout redirected to a file, left for
-8 seconds, then terminated:
+`probe-doorbell-cost` is the longest-running probe in this crate at about 0.8
+seconds, which makes it the subject. Started with stdout redirected, left for
+300 milliseconds, then terminated -- **six runs of each build**, with every run
+confirmed to have still been alive at the moment it was killed, since a probe
+that had already exited would be measuring nothing:
 
-| build | bytes on disk at 8 s | content |
-|---|---|---|
-| streaming (M1.2) | **114** | the host banner and the heading |
-| buffered (pre-M1.2, built from `246687e`) | **0** | nothing at all |
+| build | characters captured | runs | content |
+|---|---|---|---|
+| streaming | **129** | 6 of 6 identical | the host banner and the heading |
+| buffered (built from the `LineSink` commit, before the conversion) | **0** | 6 of 6 identical | nothing at all |
 
-The control is the point. Reading 114 bytes from the streaming build shows only
-that something was written; running the *previous* build through the identical
-sequence and reading zero is what shows the change caused it. Both binaries were
-release builds of the same crate, killed at the same elapsed time, by the same
-command.
+The control is the point. Reading 129 characters from the streaming build shows
+only that something was written; running the *previous* build through the
+identical sequence and reading zero is what shows the change caused it. Both
+binaries were release builds of the same crate, killed at the same elapsed time,
+by the same code.
+
+The margin is narrower than it looks and deliberately so. 300 ms against an
+800 ms probe leaves no room for a slow start to be mistaken for buffering, which
+is why each run records whether the process was still running when killed rather
+than inferring it from the byte count.
 
 **`TerminateProcess` was used rather than Ctrl-C, and it is the stronger case.**
 Ctrl-C on Windows runs the default console handler, which terminates the process
 but still lets the runtime unwind its exit path; `TerminateProcess` -- what
-`Stop-Process -Force` issues -- runs nothing at all, so any bytes still sitting
+.NET's `Process.Kill` issues -- runs nothing at all, so any bytes still sitting
 in a userspace buffer are lost outright. A report that survives it survives a
 Ctrl-C, so the interactive case is covered by the measurement rather than left
 untested.
