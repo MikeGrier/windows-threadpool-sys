@@ -2423,7 +2423,7 @@ pool, or async anywhere near it. The family grows by one entry per Win32 call.
 | 6 | `GetFileInformationByHandle` (non-Ex) | watcher | `BY_HANDLE_FILE_INFORMATION`; a distinct call, not a class of entry 5 |
 | 7 | `GetFinalPathNameByHandleW` | watcher directly, Globazog via `std::fs::canonicalize` | `VOLUME_NAME_DOS \| FILE_NAME_NORMALIZED` |
 | 8 | `GetVolumeInformationByHandleW` | watcher | handle-based, not the path-based `GetVolumeInformationW` |
-| 9 | `GetFullPathNameW` | enumeration | lexical only |
+| 9 | `GetFullPathNameW` | enumeration | collapses `.`/`..` lexically, roots against process state |
 
 Four audit findings that shape the milestones below, recorded because each contradicts an assumption the
 first draft of this plan was written on.
@@ -2680,9 +2680,20 @@ Entries 5-9 of the audited list. All but the last take a handle, so all but the 
   filesystem name. Handle-based; the path-based `GetVolumeInformationW` is deliberately not in round one
   because no audited consumer calls it.
 
-- [x] **M26.5** -- The `GetFullPathNameW` entry. Lexical only: it resolves relative components and `.`/`..`
-  and never expands a drive letter, so it does **not** close the session-relative hazard from M20.1, and
-  its documentation must say which problem it solves and which it leaves standing.
+- [x] **M26.5** -- The `GetFullPathNameW` entry. Does not verify its result: it collapses `.`/`..`
+  lexically and roots most paths that are not fully qualified against process state -- the current
+  directory, or for a drive-relative path naming another drive the entry recorded for that drive,
+  while on the current drive that entry makes no difference -- and never expands a drive letter, so it
+  does **not** close the session-relative hazard from M20.1, and its documentation must say which
+  problem it solves and which it leaves standing.
+
+  *(Corrected during the merge that brought PR #86 into this branch. This item was archived here while
+  it still read "Lexical only", which is the claim that PR ran to twenty-four review rounds to remove:
+  the call roots against process state, and for a drive-relative path naming another drive it checks
+  that drive's `=X:` entry against the filesystem and rewrites a rejected one. Taking the archived copy
+  unchanged would have reintroduced the false claim into the repository by way of the archive. See
+  [crates/windows-namespace-request-sys/DESIGN-NOTES.md](crates/windows-namespace-request-sys/DESIGN-NOTES.md)
+  -> `D-18`.)*
 
 - [x] **M26.6** -- Acceptance, in **two** parts, because the audit had two purposes and checking only the
   first is how the coverage question got missed once already.
