@@ -620,7 +620,10 @@ directory that `C:\Windows\System32` was accepted for. So the draft calling this
 "a filesystem query rather than a syntax test" named a mechanism the evidence
 contradicts: it is both, and the list is observation rather than specification. The rewrite mutates the process environment
 block as a side effect of what reads like a pure query. For the current drive
-the entry is neither consulted nor rewritten.
+the entry makes no difference to the result and is not rewritten -- stated as
+those two measured effects rather than as "not consulted", because installing an
+entry and observing the outcome cannot separate "not read" from "read and
+ignored", and a draft of this very paragraph said "not consulted" anyway.
 
 Earlier drafts concluded the opposite by reasoning that the current directory
 lives in the PEB and the `=X:` variables in the environment block, so both are

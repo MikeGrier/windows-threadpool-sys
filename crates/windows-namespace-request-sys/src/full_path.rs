@@ -142,8 +142,15 @@
 //! of this doc did, states a mechanism the evidence contradicts. It is both, and
 //! this list is a set of observations rather than a specification.
 //!
-//! For the current drive neither happens: the entry is not consulted and not
-//! rewritten.
+//! For the current drive neither happens, and the guarantee is stated at the
+//! boundary observation can actually reach: **the entry makes no difference to
+//! the result, and is not rewritten.** Both halves are measured -- an entry the
+//! non-current arm would honour verbatim is installed and the process directory
+//! wins anyway, and an entry the non-current arm would replace is left
+//! untouched. Whether Windows *reads* it internally is not established, because
+//! setting a value and observing the result cannot separate "not read" from
+//! "read and ignored". An earlier revision said "not consulted", which is the
+//! same overreach this section corrects two paragraphs above.
 //!
 //! This is why the "does not verify what it produces" guarantee above is worth
 //! stating narrowly. The broad reading -- that the call touches no filesystem --

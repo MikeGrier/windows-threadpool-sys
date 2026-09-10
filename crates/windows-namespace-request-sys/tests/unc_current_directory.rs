@@ -34,7 +34,23 @@ const UNC_ROOT: &str = r"\\localhost\C$";
 
 const TEST_NAME: &str = "a_root_relative_path_takes_the_share_root_under_a_unc_current_directory";
 
+// Ignored by default and run explicitly in CI, which is this repository's
+// existing "ignored tier" pattern rather than a new one.
+//
+// `C$` is an ADMINISTRATIVE share. It is reachable for a member of
+// Administrators and not for an ordinary user, and it can be switched off
+// entirely -- so running by default would turn `cargo test` red for a
+// non-administrator developer on a perfectly good host, reporting an
+// environment limitation as a defect in the crate. Provisioning a share of our
+// own is not an escape: creating one needs the same privileges.
+//
+// The alternative -- skipping quietly when the share is missing -- is the one
+// thing that must not happen, because this is the ONLY coverage of the UNC
+// branch and a silent skip would leave it unpinned while reporting otherwise.
+// `#[ignore]` keeps that visible: an ignored test is counted and named in the
+// output, where a skip inside a passing test is not.
 #[test]
+#[ignore = "needs a reachable administrative share for a UNC current directory; run in CI with --include-ignored"]
 fn a_root_relative_path_takes_the_share_root_under_a_unc_current_directory() {
     if std::env::var_os(CHILD_MARKER).is_some() {
         assert_root_relative_takes_the_share_root();
@@ -58,6 +74,10 @@ fn a_root_relative_path_takes_the_share_root_under_a_unc_current_directory() {
         .arg("--exact")
         .arg(TEST_NAME)
         .arg("--nocapture")
+        // Without this the child runs zero tests and exits 0 -- the parent
+        // would report success having measured nothing at all. The test it is
+        // told to run is the ignored one, so the filter alone is not enough.
+        .arg("--include-ignored")
         .env(CHILD_MARKER, "1")
         .current_dir(UNC_ROOT)
         .status()

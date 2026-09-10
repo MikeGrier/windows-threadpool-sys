@@ -408,6 +408,14 @@ fn a_drive_relative_path_is_rooted_at_that_drive_and_not_the_process_directory()
     // under a UNC current directory every letter is "other" -- so it runs
     // unconditionally and this test never degenerates to a silent skip.
     let other = probe_drive_from(&['X', 'Y', 'P'], None);
+
+    // This test controls no entry, but the CALL does: resolving for a
+    // non-current drive writes `=X:` whenever the recorded entry is absent or
+    // rejected, and on most hosts a letter chosen for being unused has no entry
+    // at all. So merely observing the arm mutates process-global state, and
+    // this was the one mutating case here without a guard -- the borrow is
+    // needed exactly because the mutation is not the test's own doing.
+    let _restore = BorrowedDriveEntry::take(other);
     let resolved = resolve(&format!("{other}:foo"));
 
     // Compared case-insensitively, because the case is not this test's to
@@ -439,16 +447,24 @@ fn a_drive_relative_path_is_rooted_at_that_drive_and_not_the_process_directory()
 }
 
 #[test]
-fn the_current_drives_entry_is_neither_consulted_nor_rewritten() {
+fn the_current_drives_entry_does_not_affect_resolution_and_is_not_rewritten() {
     // The module doc states both halves of the current-drive arm as fact. Until
     // now nothing pinned either, and the assertion just above -- which looks
     // like it does -- cannot: it resolves `X:foo` WITHOUT controlling the entry
     // and compares against the process directory, and Windows keeps the current
-    // drive's entry equal to that directory. So it reads the same whether the
-    // entry is consulted or ignored. Vacuous in precisely the way this crate
-    // keeps rediscovering, and the reason the two arms need opposite fixtures:
-    // the sibling tests must AVOID the current drive, and this one must be on
-    // it.
+    // drive's entry equal to that directory. So it reads the same either way.
+    // Vacuous in precisely the way this crate keeps rediscovering, and the
+    // reason the two arms need opposite fixtures: the sibling tests must AVOID
+    // the current drive, and this one must be on it.
+    //
+    // **The name says what is observable, and an earlier one did not.** This
+    // was `..._is_neither_consulted_nor_rewritten`, which claims the entry is
+    // not READ -- and installing a value and watching the outcome cannot
+    // separate "not read" from "read and ignored". That is the same overreach
+    // this branch removed from the probe's "without consulting a device", and
+    // the test correcting it committed it in its own name. What the two
+    // assertions below reach is the pair of observable effects: the entry makes
+    // no difference to the result, and it is not written back.
     let cwd = current_directory();
     let Some(drive) = cwd.chars().next().filter(char::is_ascii_alphabetic) else {
         // A UNC current directory has no drive letter, so there is no
@@ -469,14 +485,14 @@ fn the_current_drives_entry_is_neither_consulted_nor_rewritten() {
         process_directory,
         format!(r"{probe}\foo"),
         "precondition: the entry must name somewhere other than the process \
-         directory, or consulting it and ignoring it look identical"
+         directory, or honouring it and ignoring it look identical"
     );
 
-    // Not consulted. The entry is one the OTHER arm would honour verbatim -- an
-    // existing directory in canonical form -- and it names somewhere the
-    // process directory cannot be, because this test just created it under a
-    // process-unique name. If the entry were read, the result would be under
-    // `probe`.
+    // No difference to the result. The entry is one the OTHER arm would honour
+    // verbatim -- an existing directory in canonical form -- and it names
+    // somewhere the process directory cannot be, because this test just created
+    // it under a process-unique name. If the entry were HONOURED, the result
+    // would be under `probe`.
     set_drive_entry(drive, Some(probe));
     assert_eq!(
         resolve(&format!("{drive}:foo")),
@@ -849,7 +865,21 @@ impl BorrowedDriveEntry {
 
 impl Drop for BorrowedDriveEntry {
     fn drop(&mut self) {
-        let _ = try_set_drive_entry_units(self.drive, self.saved.as_ref());
+        let restored = try_set_drive_entry_units(self.drive, self.saved.as_ref());
+
+        // Silence is bought only where it buys something. While unwinding, a
+        // panic here aborts the process and destroys the report of the failure
+        // that started the unwind, so a failed restore is worth less than the
+        // diagnosis it would replace. On the ordinary path there is no such
+        // trade: staying quiet would let the suite carry on with corrupted
+        // process-global state and fail somewhere unrelated, which is the
+        // hardest kind of failure to read.
+        assert!(
+            restored || std::thread::panicking(),
+            "restoring ={}: failed, leaving process-global state corrupted for \
+             every test that follows",
+            self.drive
+        );
     }
 }
 

@@ -165,6 +165,23 @@ jobs:
           RUST_BACKTRACE: 1
           RUST_LIB_BACKTRACE: 1
         run: cargo test --workspace --locked --no-fail-fast
+      # The UNC current-directory test is ignored by default because it needs a
+      # reachable administrative share (`\\localhost\C$`), which an ordinary
+      # developer account does not have -- running it by default would report an
+      # environment limitation as a defect. The runner is an administrator, so
+      # the coverage is deterministic HERE, which is where it has to be: this is
+      # the only test that puts `GetFullPathNameW` under a UNC current directory,
+      # and the guarantee it pins ("a root-relative path takes the ROOT of the
+      # current directory, which is a share root and not a drive") is public.
+      #
+      # A FAILURE HERE IS A RESULT. If the share stops being reachable on the
+      # runner the test says so in those terms, and the answer is to provision a
+      # UNC fixture rather than to delete the assertion.
+      - name: cargo test (namespace-request, UNC current directory)
+        env:
+          RUST_BACKTRACE: 1
+          RUST_LIB_BACKTRACE: 1
+        run: cargo test -p windows-namespace-request-sys --locked --test unc_current_directory -- --include-ignored
       # windows-file-watcher-example-test-harness is a normal workspace member
       # that depends on windows-file-watcher with the test-util feature, so
       # the two `--workspace` steps above unify that feature onto
