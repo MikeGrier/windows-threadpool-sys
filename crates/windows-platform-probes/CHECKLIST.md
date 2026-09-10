@@ -215,7 +215,7 @@ speculative list to extend by imagination -- a fourth is added when a fourth con
   say what that is made of; the owning crate could say, and a reader of either would then stop
   guessing.
 
-- [ ] **M2.7** -- Decide whether the other nine probe steps in CI should carry `if: '!cancelled()'`,
+- [x] **M2.7** -- Decide whether the other nine probe steps in CI should carry `if: '!cancelled()'`,
   and apply or record the decision.
 
   **Measured 2026-09-09:** twelve probe steps in [ci.yml](../../.github/workflows/ci.yml), of which

@@ -1758,3 +1758,43 @@ catch is the seam construction leaves open: `Fingerprint::from_topology` and
 for which processors count, and they have already disagreed once, when
 `from_topology` summed core-domain membership and printed `0p` for a machine
 about to be measured on four processors.
+
+### M2.7: probe steps are gated on the build, not on the job
+
+All twelve probe steps in [ci.yml](../../.github/workflows/ci.yml) now carry
+`if: "!cancelled() && steps.build.outcome == 'success'"`, against three before.
+
+**The item posed this as a trade and it turned out not to be one.** Its argument
+for guarding was already settled -- a probe step exists to emit diagnostics, so
+Actions' default `if: success()` suppresses it in exactly the run that wanted it,
+and the long-path pair is the sharpest case since either half alone "says
+nothing". What kept it queued was the cost: a plain `!cancelled()` also runs the
+step when the *build* failed, where `cargo run` cannot compile, turning a skipped
+grey step into a failed red one.
+
+Gating on the build takes both halves. A failing test still emits its
+diagnostics; a broken build still goes quiet. The trade the first three steps
+accepted is no longer necessary, so the decision the item reserved for an
+engineer was answered by removing the thing being traded rather than by choosing
+a side.
+
+**Two defects found while implementing it, both by verification rather than by
+reading.**
+
+The first: `id: build` was added to the workspace build step, which lives in job
+`build-test`, while every probe runs in `platform-probes`. `steps.build` does not
+cross a job boundary, so the expression would have evaluated against an empty
+context, made the condition permanently false, and **silently skipped all twelve
+probes** -- a guard that reads as more careful while disabling everything it
+guards. The probes job had no build step at all (its first step is `cargo test`,
+which builds implicitly but whose outcome cannot separate "did not compile" from
+"a test failed"), so one was added there.
+
+The second was pre-existing and unrelated: a conflict resolution in merge
+`1abcaaf` had welded a step's `if:` and `run:` onto one line, which is not valid
+YAML. It survived the merge and the repository's own workflow gate, which checks
+references by regex without parsing the document. Fixed, and the gap queued as
+M34.5 in the root checklist.
+
+Both are the same lesson this milestone keeps producing: the failure mode of a
+check is to pass.

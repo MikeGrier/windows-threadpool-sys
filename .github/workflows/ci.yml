@@ -204,6 +204,17 @@ jobs:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
+      # Explicit, and ahead of the tests, purely so that every probe step below
+      # has something to gate on. `cargo test` would build these targets anyway,
+      # but its outcome cannot distinguish "did not compile" from "compiled and
+      # a test failed" -- and that distinction is the whole point of the guard:
+      # a failing test is exactly when a probe's diagnostics are wanted, while a
+      # broken build is when `cargo run` cannot produce any. Incremental and
+      # cached, so the tests below reuse these artifacts rather than repeating
+      # the work.
+      - name: cargo build (probes)
+        id: build
+        run: cargo build -p windows-platform-probes --all-targets --locked
       - name: cargo test (probes, including the ignored tier)
         env:
           RUST_BACKTRACE: 1
@@ -230,18 +241,25 @@ jobs:
       # Splitting also names the failing probe in the Actions UI, which matters
       # for a job whose output is per-probe magnitudes.
       - name: probe magnitudes (error mode)
+        if: "!cancelled() && steps.build.outcome == 'success'"
         run: cargo run -p windows-platform-probes --bin probe-error-mode --locked
       - name: probe magnitudes (handle state)
+        if: "!cancelled() && steps.build.outcome == 'success'"
         run: cargo run -p windows-platform-probes --bin probe-handle-state --locked
       - name: probe magnitudes (worker context)
+        if: "!cancelled() && steps.build.outcome == 'success'"
         run: cargo run -p windows-platform-probes --bin probe-worker-context --locked
       - name: probe magnitudes (pool growth)
+        if: "!cancelled() && steps.build.outcome == 'success'"
         run: cargo run -p windows-platform-probes --bin probe-pool-growth --locked
       - name: probe magnitudes (device map)
+        if: "!cancelled() && steps.build.outcome == 'success'"
         run: cargo run -p windows-platform-probes --bin probe-device-map --locked
       - name: probe magnitudes (IoRing)
+        if: "!cancelled() && steps.build.outcome == 'success'"
         run: cargo run -p windows-platform-probes --bin probe-ioring --locked
       - name: probe magnitudes (completion port)
+        if: "!cancelled() && steps.build.outcome == 'success'"
         run: cargo run -p windows-platform-probes --bin probe-completion-port --locked
       # Printed on every build on purpose. Hosted runners are a heterogeneous
       # fleet, so accumulating this across builds turns ordinary CI into a slow
@@ -251,20 +269,30 @@ jobs:
       # emits one `x-probe-topology` JSON line so the results can be mined out
       # of logs mechanically rather than read by eye.
       #
-      # `if: '!cancelled()'` is what makes "on every build" true. The test step
-      # above asserts the cross-check reaches `Agree`, and the host where that
+      # The `if:` is what makes "on every build" true. The test step above
+      # asserts the cross-check reaches `Agree`, and the host where that
       # assertion FAILS is the one whose report is worth the most -- yet Actions
       # skips later steps in a failed job, so without this the report is
       # suppressed in exactly the case it exists for. The test's own failure
       # carries the `CrossCheck` and nothing else: not the domain counts, the
       # enumeration anomalies, or the machine-readable JSON line.
       #
+      # EVERY probe step carries the same guard, in the two-part form. The
+      # `!cancelled()` half is what runs the step when an earlier step failed.
+      # The `steps.build.outcome` half is what keeps that from being a nuisance:
+      # a plain `!cancelled()` also runs the step when the BUILD failed, where
+      # `cargo run` cannot compile and the step turns from skipped (grey) into
+      # failed (red), trading quieter broken-build logs for better broken-test
+      # ones. Gating on the build takes both -- a failing test still emits its
+      # diagnostics, and a broken build still goes quiet -- so the trade the
+      # first three of these steps accepted is no longer necessary.
+      #
       # It is a SECOND measurement, not a rendering of the one that failed --
       # the test and this binary each call `measure()`. So it reproduces a
       # condition the host holds persistently, which is the case worth
       # investigating, and does not recover a transient one.
       - name: probe magnitudes (topology)
-        if: '!cancelled()'
+        if: "!cancelled() && steps.build.outcome == 'success'"
         run: cargo run -p windows-platform-probes --bin probe-topology --locked
       # `--release` on the next two, and ONLY on those two, because they are the
       # only probes here that report nanoseconds. Everything above measures
@@ -286,32 +314,34 @@ jobs:
       # count signals and the waiter's count never caught up. A probe that can
       # hang is a probe that can hang a build.
       #
-      # `if: '!cancelled()'` for the same reason the topology step above carries
-      # it, and the reason is not specific to topology: a probe step exists to
-      # produce diagnostic output, so skipping it because an earlier step failed
-      # suppresses it in precisely the run that wanted it. The test step above
-      # covers both of these probes, and a host where those tests fail is a host
-      # whose timings are worth reading.
+      # Guarded for the same reason the topology step above is, and the reason
+      # is not specific to topology: a probe step exists to produce diagnostic
+      # output, so skipping it because an earlier step failed suppresses it in
+      # precisely the run that wanted it. The test step above covers both of
+      # these probes, and a host where those tests fail is a host whose timings
+      # are worth reading.
       #
       # It matters more for these two than for a pass/fail probe. Both now assert
       # every status they take and panic on a missing NDJSON label, and both go
       # through `emit_report`, which prints what was already established before a
       # panic -- machinery that only reaches a reader if the step runs at all.
       - name: probe magnitudes (doorbell cost)
-        if: '!cancelled()'
+        if: "!cancelled() && steps.build.outcome == 'success'"
         run: cargo run -p windows-platform-probes --bin probe-doorbell-cost --locked --release
       # Read with the doorbell probe above: together they say whether the
       # queue's mechanics or the request's own cost deserves the attention.
       - name: probe magnitudes (request cost)
-        if: '!cancelled()'
+        if: "!cancelled() && steps.build.outcome == 'success'"
         run: cargo run -p windows-platform-probes --bin probe-request-cost --locked --release
       # Both halves of the long-path pair, deliberately. Either alone says      # nothing: the finding is the *difference* between two executables that
       # differ only in whether `build.rs` embedded the `longPathAware` manifest,
       # so a run that reported one of them would be reporting a number with no
       # baseline to read it against.
       - name: probe magnitudes (long path, manifest-aware)
+        if: "!cancelled() && steps.build.outcome == 'success'"
         run: cargo run -p windows-platform-probes --bin probe-long-path-aware --locked
       - name: probe magnitudes (long path, manifest-unaware)
+        if: "!cancelled() && steps.build.outcome == 'success'"
         run: cargo run -p windows-platform-probes --bin probe-long-path-unaware --locked
 
   # The NUMA questions the 2026-08-30 design session could not answer, run
