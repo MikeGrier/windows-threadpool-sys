@@ -27,7 +27,7 @@ Append-only. Newest groups at the bottom.
   their disjoint drive letters.
 
   `a_drive_relative_path_uses_that_drives_entry_verbatim_and_rewrites_a_bad_one`
-  in [tests.rs](src/full_path/tests.rs) now pins all three behaviours: an entry
+  in [drive_entry.rs](src/full_path/tests/drive_entry.rs) now pins all three behaviours: an entry
   naming an existing directory is honoured verbatim (onto a *different* drive,
   which is what makes "that drive's own current directory" a convention rather
   than a guarantee); an entry naming nothing is rejected in favour of the drive
@@ -41,7 +41,7 @@ Append-only. Newest groups at the bottom.
   letter and returned the second unchecked, so the guarantee the pair implied did
   not hold. The lists are now three letters each, every candidate is checked
   against both the current drive and the probe drive, and the lists themselves
-  live in one table in [tests.rs](src/full_path/tests.rs) with a test enforcing
+  live in one table in [drive_entry.rs](src/full_path/tests/drive_entry.rs) with a test enforcing
   that they stay disjoint and long enough. This note deliberately does NOT
   enumerate them: an earlier version did, and named five lists after a sixth had
   been added -- so a reader picking letters for a seventh would have consulted

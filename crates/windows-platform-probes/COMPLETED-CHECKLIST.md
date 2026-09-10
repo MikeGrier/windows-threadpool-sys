@@ -94,7 +94,7 @@ piece of work rather than a correction to that one.
   newline even when redirected -- had stdout been block-buffered this milestone would have needed a
   per-line flush too.
 
-## Moved 2026-09-09 22:54:01 -04:00 -- M2.6: what `GetFullPathNameW` does, and whether it stays
+## Moved 2026-09-09 -- M2.6: what `GetFullPathNameW` does, and whether it stays
 
 ### <a id="m26"></a>M2.6 -- Say what `GetFullPathNameW` does, in the crate that owns it, and whether it stays. *(completed 2026-09-09 22:54:01 UTC-04:00)*
 
@@ -125,7 +125,9 @@ request as it was written, and quotes the module doc as it read before the corre
 
   *(Later correction: the second half stood, the first did not. "Touches no filesystem" was measured
   false while carrying out this item -- resolving `X:foo` for a non-current drive distinguishes an
-  existing directory from an existing file from a missing one, and rewrites the `=X:` entry. What
+  existing directory from an existing file from a missing one, and rewrites the `=X:` entry when that
+  check REJECTS it -- an accepted entry is left alone, so the write is conditional rather than part of
+  every such resolution. What
   Microsoft documents is only that the call does not VERIFY its result. Two smaller things in the
   paragraph above also turned out to be stated too broadly: the per-drive entry is consulted for a
   drive OTHER than the current one, and on the current drive it makes no difference to the result --

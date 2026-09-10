@@ -312,13 +312,19 @@ fn a_legacy_device_name_short_circuits_rooting() {
     // The exception to "roots a path that is not fully qualified", and the one
     // a caller passing an untrusted name has to know about: these do not become
     // files under the current directory.
+    //
+    // **Asserted as the complete mapping, not as "somewhere in the device
+    // namespace".** `starts_with(r"\\.\")`, which this used, would pass if
+    // `CON` resolved to `\\.\NUL` -- and the contract names which device each
+    // spelling reaches, so a test binding only to the prefix does not bind to
+    // the contract. Measured: the name is carried through unchanged.
     for name in [
         "CON", "NUL", "PRN", "AUX", "CONIN$", "CONOUT$", "COM1", "LPT9",
     ] {
-        let resolved = resolve(name);
-        assert!(
-            resolved.starts_with(r"\\.\"),
-            "{name} names a device, so it must not be rooted: {resolved}"
+        assert_eq!(
+            resolve(name),
+            format!(r"\\.\{name}"),
+            "{name} reaches ITS device, not merely some device"
         );
     }
 }
@@ -327,11 +333,23 @@ fn a_legacy_device_name_short_circuits_rooting() {
 fn the_device_form_accepts_trailing_colons_dots_spaces_and_any_casing() {
     // Every spelling the module doc claims reaches a device. A filter written
     // from a narrower reading of the rule would let these through.
-    for spelling in ["CON", "CON:", "CON::", "CON.", "CON ", "con", "cOn:"] {
-        let resolved = resolve(spelling);
-        assert!(
-            resolved.starts_with(r"\\.\"),
-            "{spelling:?} is a device spelling: {resolved}"
+    //
+    // The full result again rather than the prefix, which also pins what the
+    // device form does to the spelling: trailing colons, dots and spaces are
+    // dropped, and case is carried through untouched.
+    for (spelling, expected) in [
+        ("CON", r"\\.\CON"),
+        ("CON:", r"\\.\CON"),
+        ("CON::", r"\\.\CON"),
+        ("CON.", r"\\.\CON"),
+        ("CON ", r"\\.\CON"),
+        ("con", r"\\.\con"),
+        ("cOn:", r"\\.\cOn"),
+    ] {
+        assert_eq!(
+            resolve(spelling),
+            expected,
+            "{spelling:?} is a device spelling, and reaches this exact device"
         );
     }
 }

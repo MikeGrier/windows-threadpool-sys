@@ -195,3 +195,24 @@ Ungated work with no identified predecessor deliverable.
   probe because a `LOGON32_LOGON_NEW_CREDENTIALS` token answered the question with a passing control, so
   the fallback was redundant -- not because the crash was understood. Parked rather than dropped so the
   unexplained result is not mistaken for a tested one.
+
+- [ ] **M-inf.2** -- Archive the eight completed milestone groups in
+  [CHECKLIST-thread-ambient.md](CHECKLIST-thread-ambient.md) into
+  [COMPLETED-CHECKLIST.md](COMPLETED-CHECKLIST.md).
+
+  **Raised by a review that named one item, and measured to be eight groups.** The comment asked for
+  M26.5's completed multi-line body to be replaced by a one-line stub, per the checklist-hygiene rule
+  that an active checklist is an action queue. That rule is right and the file does violate it -- but
+  M26.5 is not exceptional: its five siblings in M26 are written the same way, so stubbing only the
+  reported item would have made it inconsistent with the group it belongs to rather than more
+  consistent with the rule.
+
+  Counted rather than assumed, every group in the file is complete and due for migration under the
+  "move the completed group" rule: M22 (8 items), M23 (6), M24 (6), M25 (7), M26 (6), M27 (6),
+  M28 (4) and M29 (5). Only `M26+` has open items, and it is what keeps the file alive.
+
+  Not taken in PR #86 because that branch corrects `GetFullPathNameW` documentation and touched
+  M26.5 only to fix one technical premise inside it. Migrating roughly 400 lines of another feature's
+  bookkeeping through it would bury the change it exists to make. The migration is mechanical, is its
+  own commit, and needs the group headings dated per the archive format -- date-only on the `## Moved`
+  line, with any precise timestamp reserved for an anchored item heading.

@@ -187,7 +187,7 @@ state; with the two answers collapsed, restoring an inherited *empty* entry
 one case, and only that case.
 
 Pinned by `an_empty_drive_entry_is_distinguished_from_an_absent_one` in
-[tests.rs](src/full_path/tests.rs), and verified by re-introducing the collapse,
+[drive_entry.rs](src/full_path/tests/drive_entry.rs), and verified by re-introducing the collapse,
 which makes it fail.
 
 The general form is worth keeping separately from the specific fact: **a
