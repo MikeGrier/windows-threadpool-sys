@@ -473,6 +473,31 @@ fn a_name_containing_a_device_word_is_rooted_under_the_current_directory() {
     }
 }
 
+/// A directory that certainly exists, is in canonical `X:\...` form, and is
+/// neither a drive root nor the process current directory.
+///
+/// **Derived from the temp directory rather than from the current directory,
+/// which is not a detail.** An earlier version of these tests built their probe
+/// values by trimming the trailing separator off `current_directory()`. Run
+/// from a drive root that turns `C:\` into `C:` -- a *drive-relative* value, not
+/// a directory -- and since an accepted entry is joined literally, the entry
+/// resolved to `C:foo` and both tests failed. They passed only because CI runs
+/// from a repository checkout. A test whose strength depends on where it is run
+/// is the vacuous pass this suite keeps paying for.
+///
+/// The caller removes it, and the entry restore beside it is a plain statement
+/// rather than a drop guard. Neither runs if the test panics -- which leaves a
+/// directory under `%TEMP%` and an `=X:` entry reading `X:\`. Both are states
+/// the system already produces on its own: the call under test writes that
+/// entry on every drive-relative resolution anyway. A guard that wrote during
+/// unwinding could panic and abort the process, replacing a diagnosable failure
+/// with one that explains nothing, so the trade is one-sided.
+fn probe_directory(tag: &str) -> std::path::PathBuf {
+    let dir = std::env::temp_dir().join(format!("wnrs-{}-{tag}", std::process::id()));
+    std::fs::create_dir_all(&dir).expect("create the probe directory");
+    dir
+}
+
 /// Reads one of the hidden `=X:` per-drive current-directory entries.
 ///
 /// Through Win32 rather than `std::env`, which rejects a key containing `=`
@@ -528,17 +553,16 @@ fn a_drive_relative_path_uses_that_drives_entry_verbatim_and_rewrites_a_bad_one(
     const DRIVE: char = 'W';
     let restore = drive_entry(DRIVE);
 
-    // The current directory is a real directory that is certainly NOT on drive
-    // W, which is exactly what makes it the right probe: if the entry is
-    // honoured verbatim, a `W:`-relative path resolves onto another drive
-    // entirely.
-    let cwd = current_directory();
-    let cwd = cwd.trim_end_matches('\\');
+    // A real directory that is certainly NOT on drive W, which is what makes it
+    // the right probe: if the entry is honoured verbatim, a `W:`-relative path
+    // resolves onto another drive entirely.
+    let probe_owned = probe_directory("verbatim");
+    let probe = probe_owned.to_str().expect("the temp path is UTF-8");
 
-    set_drive_entry(DRIVE, Some(cwd));
+    set_drive_entry(DRIVE, Some(probe));
     assert_eq!(
         resolve(&format!("{DRIVE}:foo")),
-        format!(r"{cwd}\foo"),
+        format!(r"{probe}\foo"),
         "an entry naming an existing directory is honoured verbatim, even onto \
          a different drive -- so \"that drive's own current directory\" is the \
          convention the entry usually holds, not a guarantee about the result"
@@ -570,6 +594,7 @@ fn a_drive_relative_path_uses_that_drives_entry_verbatim_and_rewrites_a_bad_one(
     );
 
     set_drive_entry(DRIVE, restore.as_deref());
+    let _ = std::fs::remove_dir(&probe_owned);
 }
 
 #[test]
@@ -583,8 +608,8 @@ fn a_rejected_drive_entry_is_replaced_by_the_drive_root() {
     const DRIVE: char = 'V';
     let restore = drive_entry(DRIVE);
 
-    let accepted = current_directory();
-    let accepted = accepted.trim_end_matches('\\');
+    let probe_owned = probe_directory("shape");
+    let accepted = probe_owned.to_str().expect("the temp path is UTF-8");
 
     // The control: this exact directory IS accepted in canonical form, so the
     // rejections below cannot be blamed on the directory itself.
@@ -620,4 +645,5 @@ fn a_rejected_drive_entry_is_replaced_by_the_drive_root() {
     }
 
     set_drive_entry(DRIVE, restore.as_deref());
+    let _ = std::fs::remove_dir(&probe_owned);
 }
