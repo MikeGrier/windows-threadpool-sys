@@ -92,13 +92,11 @@ impl Captured {
 
 /// A [`Report`] a renderer can `writeln!` into directly.
 ///
-/// This is the answer to "how does a formatted line reach the sink", and the
-/// reason it is a [`std::fmt::Write`] adapter rather than a method on [`Report`]
 /// is arithmetic. Every renderer writes through `writeln!(out, ...)` against a
-/// `String`, at **504 sites** across this crate; a sink method taking
+/// `String`, at **332 sites** across this crate; a sink method taking
 /// `fmt::Arguments` would have been explicit but would have rewritten every one
 /// of them, while `String` already implements `fmt::Write`, so a sink that does
-/// too lets those sites stand untouched and moves only the ~20 renderer
+/// too lets those sites stand untouched and moves only 18 renderer signatures.
 /// signatures. The recorded reasoning is in
 /// [DESIGN-NOTES.md](../DESIGN-NOTES.md#d-streaming-report).
 ///
