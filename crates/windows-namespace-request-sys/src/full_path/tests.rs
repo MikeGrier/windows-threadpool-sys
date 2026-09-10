@@ -671,12 +671,35 @@ fn nul_is_the_one_device_word_a_path_around_it_does_not_save() {
         );
     }
 
-    // A suffix is what takes it out, which is the boundary of the exception.
+    // A suffix is what takes it out, which is the boundary of the exception --
+    // and the doc names both spellings, so both are asserted. The root-relative
+    // form alone would leave the bare ones uncovered, which is how `CON:x` came
+    // to be pinned by a predicate the wrong answer satisfied.
     assert_eq!(
         resolve(r"\NUL.txt"),
         format!("{root}NUL.txt"),
         "an extension takes even NUL out of the device namespace"
     );
+    for (input, expected) in [("NUL.txt", "NUL.txt"), ("NUL:x", "NUL:x")] {
+        assert_eq!(
+            resolve(input),
+            format!(r"{base}\{expected}"),
+            "{input:?} is a suffixed name, so it roots under the current \
+             directory like any other"
+        );
+    }
+
+    // And the boundary is a suffix, not merely "more characters": a trailing
+    // colon or space still reaches the device, exactly as for `CON`. Without
+    // these the rule above would read as "anything after NUL saves it".
+    for input in ["NUL::", "NUL "] {
+        assert_eq!(
+            resolve(input),
+            r"\\.\NUL",
+            "{input:?} is still the device: trailing colons and spaces are part \
+             of the device form, not a suffix that escapes it"
+        );
+    }
 }
 
 /// A directory that exists, is in canonical `X:\...` form, and is neither a

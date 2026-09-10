@@ -30,11 +30,19 @@ producing wrong answers.
    process state.
 
 2. **"It resolves relative components and `.`/`..` against the process current
-   directory."** The first correction, which overshot. Collapsing `.`/`..` is
-   pure string work and reads no process state at all -- `C:\a\..\b` becomes
-   `C:\b` under any current directory, and whether or not `C:\a` exists. Only
-   *rooting* reads process state. Measured under two different current
-   directories.
+   directory."** The first correction, which overshot. Collapsing `.`/`..` has
+   an output that is a function of the input alone -- `C:\a\..\b` becomes
+   `C:\b` under any current directory, and whether or not `C:\a` exists.
+   Measured under two different current directories.
+
+   **This entry itself carried the error it describes, for twenty-three
+   rounds.** It read "pure string work and reads no process state at all", and
+   two different current directories giving the same answer shows the output
+   does not depend on that state, not that nothing was read. Every correction in
+   this file was aimed at the *rooting* half; the overreach in the **lexical**
+   half was the sentence doing the correcting, which is why nobody looked at it.
+   Whether rooting reads process state is a separate question, and it is
+   answered observably: changing the current directory changes the result.
 
 3. **"The probe measures roughly 212 ns per resolution."** It does not. The
    probe reports a construct-and-drop cycle whose total contains an allocation

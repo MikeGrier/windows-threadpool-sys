@@ -34,9 +34,18 @@
 //!    dots and spaces (`C:\name...` and `C:\name   ` both become `C:\name`),
 //!    while an *intermediate* component loses a single trailing dot and nothing
 //!    else -- `C:\a.\b` becomes `C:\a\b`, but `C:\a...\b` and `C:\a \b` are
-//!    returned unchanged. This part *is* lexical -- pure string work over the
-//!    input, reading no process state. `C:\a\..\b` becomes `C:\b` whatever the
-//!    current directory happens to be, and whether or not `C:\a` exists.
+//!    returned unchanged. This part's **output is a function of the input
+//!    alone**: `C:\a\..\b` becomes `C:\b` whatever the current directory
+//!    happens to be, and whether or not `C:\a` exists.
+//!
+//!    Stated that way deliberately. Earlier revisions said it "reads no process
+//!    state", which the evidence does not reach: varying the current directory
+//!    and getting the same answer shows the output does not DEPEND on it, not
+//!    that nothing was read. That is the same overreach this doc removes from
+//!    the current-drive entry below, and it sat here in the positive half while
+//!    seven reviews corrected the negative one. Invariance is the whole claim,
+//!    and it is also all a caller needs: this half can be reasoned about
+//!    without knowing the process's state.
 //! 2. It **roots** a path that is not fully qualified, using mutable process
 //!    state -- and on one form it also *changes* that state. There are three
 //!    such forms:
