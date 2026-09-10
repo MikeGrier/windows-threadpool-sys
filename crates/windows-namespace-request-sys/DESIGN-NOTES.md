@@ -601,7 +601,8 @@ current one validates that drive's `=X:` entry against the filesystem: an entry
 naming an existing directory is honoured **verbatim** (and need not be on that
 drive -- with `=X:` set to `C:\Windows`, `X:foo` is `C:\Windows\foo`), while a
 missing directory or an existing *file* is rejected and the entry is
-**rewritten** to the drive root. The rewrite mutates the process environment
+**written** to the drive root -- created when absent, so this happens on a
+pristine host too. The rewrite mutates the process environment
 block as a side effect of what reads like a pure query. For the current drive
 the entry is neither consulted nor rewritten.
 

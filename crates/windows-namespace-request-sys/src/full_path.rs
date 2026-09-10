@@ -120,7 +120,9 @@
 //!   including a directory on a *different* drive. With `=X:` set to
 //!   `C:\Windows`, `X:foo` resolves to `C:\Windows\foo`. So "that drive's own
 //!   current directory" describes the convention, not a guarantee.
-//! * Otherwise the entry is **rewritten** to the drive root and that is used.
+//! * Otherwise the entry is **written** to the drive root and that is used --
+//!   created when absent, so this happens on a pristine host and not only on
+//!   one carrying a stale entry.
 //!   Both a missing directory and an existing *file* are rejected this way, so
 //!   the check is a filesystem query rather than a syntax or drive-existence
 //!   test -- and the rewrite mutates the process environment block as a side

@@ -375,22 +375,19 @@ fn a_drive_relative_path_is_rooted_at_that_drive_and_not_the_process_directory()
     //
     // **This test does not mutate `=X:`, but the call it exercises may.**
     // Measured: resolving `X:foo` for a non-current drive validates that
-    // drive's entry against the filesystem and REWRITES it to `X:\` when it
-    // does not name an existing directory. So on a host that inherited a stale
-    // entry, merely running this test changes the process environment. That is
+    // drive's entry against the filesystem and WRITES it to `X:\` when it does
+    // not name an existing directory -- creating it when absent, so merely
+    // running this test changes the process environment on ANY host, not just
+    // one carrying a stale entry. That is
     // a property of the call, documented in the module doc; it is noted here so
     // the next reader does not take "reads process state" at face value, as
     // four revisions of that doc did.
     //
-    // **What that leaves unpinned, stated rather than glossed:** when the chosen
-    // drive has no `=X:` entry, an implementation that always used the drive
-    // root would satisfy every assertion below, and the current-drive arm cannot
-    // separate the two rules either because there the entry is ignored by
-    // design. Pinning the entry-reading arm needs a controlled `=X:`, which
-    // means either mutating process-global state that other test threads share
-    // or spawning a child process -- a decision about this crate's test shape
-    // rather than something to slip in here. Queued as `NR-1.1` in this
-    // crate's CHECKLIST.md.
+    // **This test only BOUNDS the other-drive arm**, because it does not control
+    // the entry: with no `=X:` set, an implementation that always used the
+    // drive root would satisfy everything here. The arm is pinned properly by
+    // `a_drive_relative_path_uses_that_drives_entry_verbatim_and_rewrites_a_bad_one`,
+    // which sets the entry and uses drive `W` so the two cannot race.
     let cwd = current_directory();
     let cwd_drive = cwd.chars().next().filter(char::is_ascii_alphabetic);
 
@@ -408,21 +405,15 @@ fn a_drive_relative_path_is_rooted_at_that_drive_and_not_the_process_directory()
     // typed. This host returns `q:\...` for an uppercase `Q:` input, because the
     // shell was started with a lowercase `cd`. An earlier version compared bytes
     // and would have failed on a drive visited in lowercase.
-    // Asserted against the process current directory, not against the drive
-    // letter. The entry is honoured VERBATIM when it names an existing
-    // directory, and is not constrained to live on that drive -- with `=X:`
-    // set to `C:\Windows`, `X:foo` is `C:\Windows\foo`. An earlier version
-    // required the result to start with `X:\` and carried a message claiming
-    // robustness "whatever that drive's recorded directory happens to be",
-    // which is exactly the case that broke it.
-    assert!(
-        !resolved.eq_ignore_ascii_case(&format!(r"{}\foo", cwd.trim_end_matches('\\'))),
-        "a drive-relative path for another drive does not use the process \
-         current directory ({cwd}): {resolved}"
-    );
+    // Only what is invariant without controlling the entry. An earlier version
+    // required the result to start with `X:\`, which the verbatim rule breaks;
+    // its replacement compared against the current directory, which `other`
+    // differs from by construction, so it could fire only if the entry happened
+    // to equal the process directory exactly -- the same vacuity, respelled.
+    // What survives every entry value is that the component is carried through.
     assert!(
         resolved.ends_with(r"\foo"),
-        "and keeps the component it was given: {resolved}"
+        "the component is carried through whatever the entry holds: {resolved}"
     );
 
     // The current-drive arm, where the process directory wins over any `=X:`.
@@ -480,4 +471,103 @@ fn a_name_containing_a_device_word_is_rooted_under_the_current_directory() {
              directory rather than merely avoiding the device namespace"
         );
     }
+}
+
+/// Reads one of the hidden `=X:` per-drive current-directory entries.
+///
+/// Through Win32 rather than `std::env`, which rejects a key containing `=`
+/// outright and so cannot address these at all.
+fn drive_entry(drive: char) -> Option<String> {
+    let name = Wtf16String::from(format!("={drive}:").as_str());
+    let mut buffer = vec![0u16; 1024];
+    // SAFETY: `name` is NUL-terminated, and `buffer` is writable for the length
+    // passed.
+    let written = unsafe {
+        windows_sys::Win32::System::Environment::GetEnvironmentVariableW(
+            name.as_terminated_ptr(),
+            buffer.as_mut_ptr(),
+            u32::try_from(buffer.len()).unwrap_or(u32::MAX),
+        )
+    };
+    (written != 0).then(|| String::from_utf16_lossy(&buffer[..written as usize]))
+}
+
+/// Sets or clears one of the hidden `=X:` entries.
+fn set_drive_entry(drive: char, value: Option<&str>) {
+    let name = Wtf16String::from(format!("={drive}:").as_str());
+    let value = value.map(Wtf16String::from);
+    let value_ptr = value
+        .as_ref()
+        .map_or(core::ptr::null(), Wtf16String::as_terminated_ptr);
+    // SAFETY: both pointers are NUL-terminated; a null value clears the entry.
+    let ok = unsafe {
+        windows_sys::Win32::System::Environment::SetEnvironmentVariableW(
+            name.as_terminated_ptr(),
+            value_ptr,
+        )
+    };
+    assert!(ok != 0, "set ={drive}: entry");
+}
+
+#[test]
+fn a_drive_relative_path_uses_that_drives_entry_verbatim_and_rewrites_a_bad_one() {
+    // The arm the sibling test can only BOUND. Without controlling the entry,
+    // an implementation that always used the drive root would satisfy every
+    // assertion there, because a host with no `=X:` entry cannot tell the two
+    // rules apart.
+    //
+    // **Controlling it is not the hazard it looks like**, and that is what
+    // unblocked this test. The objection was that `=X:` is process-global while
+    // these tests share a process -- but `GetFullPathNameW` *itself* writes the
+    // entry on every drive-relative resolution, creating it when absent. The
+    // code under test already mutates this state, so a test that sets it first
+    // introduces no hazard that resolving alone did not.
+    //
+    // Drive `W` is used rather than the `X`/`Y` of the sibling test, so the two
+    // cannot race under libtest's thread-per-test model.
+    const DRIVE: char = 'W';
+    let restore = drive_entry(DRIVE);
+
+    // The current directory is a real directory that is certainly NOT on drive
+    // W, which is exactly what makes it the right probe: if the entry is
+    // honoured verbatim, a `W:`-relative path resolves onto another drive
+    // entirely.
+    let cwd = current_directory();
+    let cwd = cwd.trim_end_matches('\\');
+
+    set_drive_entry(DRIVE, Some(cwd));
+    assert_eq!(
+        resolve(&format!("{DRIVE}:foo")),
+        format!(r"{cwd}\foo"),
+        "an entry naming an existing directory is honoured verbatim, even onto \
+         a different drive -- so \"that drive's own current directory\" is the \
+         convention the entry usually holds, not a guarantee about the result"
+    );
+
+    // An entry that does not name an existing directory is rejected, and the
+    // call rewrites it to the drive root rather than leaving it stale.
+    set_drive_entry(DRIVE, Some(r"C:\no-such-directory-for-this-test"));
+    assert_eq!(
+        resolve(&format!("{DRIVE}:foo")),
+        format!(r"{DRIVE}:\foo"),
+        "an entry that names nothing is rejected in favour of the drive root"
+    );
+    assert_eq!(
+        drive_entry(DRIVE).as_deref(),
+        Some(format!(r"{DRIVE}:\").as_str()),
+        "and the call REWROTE the entry: this is a query that mutates the \
+         process environment block"
+    );
+
+    // Absent entirely, the entry is created rather than merely read.
+    set_drive_entry(DRIVE, None);
+    assert_eq!(drive_entry(DRIVE), None, "precondition: entry cleared");
+    let _ = resolve(&format!("{DRIVE}:foo"));
+    assert_eq!(
+        drive_entry(DRIVE).as_deref(),
+        Some(format!(r"{DRIVE}:\").as_str()),
+        "resolving created the entry on a host that had none"
+    );
+
+    set_drive_entry(DRIVE, restore.as_deref());
 }
