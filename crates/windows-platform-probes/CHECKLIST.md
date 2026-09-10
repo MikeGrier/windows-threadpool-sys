@@ -88,7 +88,7 @@ speculative list to extend by imagination -- a fourth is added when a fourth con
   explicitly after being pointed at the question. Nothing in the suite decides it either way, which is
   itself the argument for the oracle.
 
-- [ ] **M2.6** -- Say precisely what `GetFullPathNameW` does, in the crate that owns it, and decide
+- [x] **M2.6** -- Say precisely what `GetFullPathNameW` does, in the crate that owns it, and decide
   whether it is still the call `prepare` wants. Two successive descriptions in the cost probe were
   each wrong in the same direction: *a syscall cost*, which a timing loop cannot establish, and then
   *lexical*, which it also is not. The probe now states the cost and declines the mechanism, which is
