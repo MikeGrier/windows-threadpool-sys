@@ -106,13 +106,13 @@ were *enumerations* -- which is the form this kind of error likes.
   two, and finally three: a relative path takes the current directory, a
   root-relative path takes only that directory's *root* (which is
   `\\server\share\` under a UNC current directory, so "current drive" was
-  wrong), and a drive-relative path takes that drive's own current directory
+  wrong), and a drive-relative path takes the entry recorded for that drive
   from `=C:`.
 
 - **The device set.** The short-circuit was first described as "exact-match
   only", which `CON:` disproves; then enumerated as `CON`/`NUL`/`PRN`/`AUX`/
   `COM1`-`9`/`LPT1`-`9`/`CONIN$`/`CONOUT$`, which omits the superscript
-  spellings `COM^1`, `COM^2`, `COM^3` (U+00B9, U+00B2, U+00B3) and their `LPT`
+  spellings `COM\u{00b9}`, `COM\u{00b2}`, `COM\u{00b3}` and their `LPT`
   equivalents. Those are exactly the members a hand-written denylist misses, and
   the documentation asserted a closed list without them until a review measured
   it. The tests in [tests.rs](src/full_path/tests.rs) now pin every documented spelling so the

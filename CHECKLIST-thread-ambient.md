@@ -419,7 +419,8 @@ Entries 5-9 of the audited list. All but the last take a handle, so all but the 
 
 - [x] **M26.5** -- The `GetFullPathNameW` entry. Does not verify its result: it collapses `.`/`..`
   lexically and roots most paths that are not fully qualified against process state -- the current
-  directory, or for a drive-relative path that drive's own -- and never expands a drive letter, so it
+  directory, or for a drive-relative path the entry recorded for that drive -- and never expands a
+  drive letter, so it
   does **not** close the session-relative hazard from M20.1, and its documentation must say which
   problem it solves and which it leaves standing.
 

@@ -63,17 +63,25 @@
 //! path is resolved at submission -- the process CWD is mutable by any thread,
 //! so even perfect remoting would be racy.
 //!
-//! That work reads **process state**: it resolves against the current
-//! directory, and for a drive-relative path against the per-drive current
-//! directory held in the `=C:` environment variables. So the measured remainder
-//! is path resolution, not allocation -- and naming a *mechanism* for it has
-//! now been got wrong twice. Calling it a *syscall cost* claimed a kernel
-//! transition a timing loop cannot establish; calling it *lexical*, which
-//! replaced it, claimed pure string work it equally is not. A genuinely lexical
-//! canonicalizer is a different call (`PathCchCanonicalizeEx`) and is
+//! That call reads **process state** when it has to root a path -- the current
+//! directory, or for a drive-relative path the entry recorded for that drive in
+//! the `=C:` environment variables. **Neither sample here is rooted**: both are
+//! fully qualified, so the rooting is why resolution happens at submission and
+//! is not what these timings contain.
+//!
+//! So the measured remainder is the **resolution step**, which is an upper
+//! bound on the call and not the call itself: it also spans this crate's two
+//! allocations and the builder chain. Saying the remainder *is* the resolution,
+//! as an earlier revision did, hands the call credit for the allocator work the
+//! same sentence sets out to exclude.
+//!
+//! Naming a *mechanism* for it has now been got wrong repeatedly. A *syscall
+//! cost* claimed a kernel transition a timing loop cannot establish; *lexical*,
+//! which replaced it, claimed pure string work it equally is not. A genuinely
+//! lexical canonicalizer is a different call (`PathCchCanonicalizeEx`) and is
 //! deliberately not the one wanted here, because resolving against the CWD at
 //! submission is the property being bought. What survives either way is the
-//! part that matters: an allocator cannot remove it.
+//! part that matters: an allocator cannot remove all of it.
 //!
 //! The owning crate now settles both halves rather than leaving them to be
 //! re-derived from a probe: see `windows-namespace-request-sys`'

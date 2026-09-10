@@ -301,32 +301,34 @@ fn render(out: &mut dyn std::fmt::Write) {
         // two successive attempts to name one were each wrong in the same way.
         let _ = writeln!(
             out,
-            "  `prepare` calls GetFullPathNameW to resolve the path against the"
+            "  `prepare` calls GetFullPathNameW, which resolves a path that is not fully"
         );
         let _ = writeln!(
             out,
-            "  process working directory, because the CWD is mutable by any thread"
+            "  qualified against process state -- the CWD is mutable by any thread, so"
         );
         let _ = writeln!(
             out,
-            "  and resolving later would be racy. That reads process state and"
+            "  resolving later would be racy. BOTH SAMPLES HERE ARE FULLY QUALIFIED, so"
         );
         let _ = writeln!(
             out,
-            "  verifies nothing it produces. The gap between building and cloning"
+            "  that rooting is the motivation for resolving at submission and is not"
+        );
+        let _ = writeln!(out, "  what these numbers measure.");
+        let _ = writeln!(
+            out,
+            "  The gap between building and cloning bounds the resolution step from"
         );
         let _ = writeln!(
             out,
-            "  bounds that resolution from above; it is not the call's own cost,"
+            "  above. It is not the call's own cost: it also spans this crate's two"
         );
         let _ = writeln!(
             out,
-            "  because it also spans this crate's allocations and the builder chain."
+            "  allocations and the builder chain. Whether any of it enters the kernel is"
         );
-        let _ = writeln!(
-            out,
-            "  Whether any of it enters the kernel is not something this run measured."
-        );
+        let _ = writeln!(out, "  not something this run measured.");
         let _ = writeln!(
             out,
             "  Two different schemes recover two different things, and this said"
@@ -337,16 +339,16 @@ fn render(out: &mut dyn std::fmt::Write) {
         );
         let _ = writeln!(
             out,
-            "  of {build:.0} ns, so it recovers {:.0} ns -- but that saving is the Win32",
+            "  of {build:.0} ns, so it recovers {:.0} ns -- but that saving is the",
             build - clone
         );
         let _ = writeln!(
             out,
-            "  resolution, not an allocation, and only a caller that can reuse a"
+            "  RESOLUTION STEP, allocations included, and only a caller that can"
         );
         let _ = writeln!(
             out,
-            "  resolved path gets it. INLINE STORAGE removes the allocation and"
+            "  reuse a resolved path gets it. INLINE STORAGE removes the allocation and"
         );
         let _ = writeln!(
             out,

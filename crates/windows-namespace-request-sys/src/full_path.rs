@@ -62,7 +62,10 @@
 //! **Do not build a name filter from the list below.** The accepted names are
 //! `CON`, `NUL`, `PRN`, `AUX`, `CONIN$`, `CONOUT$`, and `COM`/`LPT`
 //! followed by a single digit -- where "digit" includes the *superscripts*
-//! `COM^1`, `COM^2` and `COM^3` (U+00B9, U+00B2, U+00B3) as well as `1`-`9`.
+//! `COM\u{00b9}`, `COM\u{00b2}` and `COM\u{00b3}` as well as `1`-`9`. Those are
+//! written as Rust escapes deliberately: spelled `COM^1` with a caret, as an
+//! earlier revision had them, a reader copying the text gets an ordinary
+//! filename rather than a device.
 //! An exhaustive scan of the character after `COM` accepts exactly
 //! U+0031-U+0039, U+00B2, U+00B3 and U+00B9 on the tested build; `COM0` and
 //! `COM10` are not devices. The superscripts are precisely the sort of member a

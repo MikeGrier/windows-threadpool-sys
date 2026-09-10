@@ -555,28 +555,53 @@ fn probe_drive(preferred: char, fallback: char) -> char {
 ///
 /// Through Win32 rather than `std::env`, which rejects a key containing `=`
 /// outright and so cannot address these at all.
-fn drive_entry(drive: char) -> Option<String> {
+fn drive_entry(drive: char) -> Option<Wtf16String> {
     let name = Wtf16String::from(format!("={drive}:").as_str());
-    let mut buffer = vec![0u16; 1024];
-    // SAFETY: `name` is NUL-terminated, and `buffer` is writable for the length
-    // passed.
-    let written = unsafe {
-        windows_sys::Win32::System::Environment::GetEnvironmentVariableW(
-            name.as_terminated_ptr(),
-            buffer.as_mut_ptr(),
-            u32::try_from(buffer.len()).unwrap_or(u32::MAX),
-        )
-    };
-    (written != 0).then(|| String::from_utf16_lossy(&buffer[..written as usize]))
+    // Start small and grow to whatever Windows asks for. The API's two return
+    // conventions differ: on success it reports the units written EXCLUDING the
+    // terminator, and on an undersized buffer it reports the capacity REQUIRED
+    // INCLUDING it. Treating the second as the first indexes past the buffer and
+    // panics -- while trying to preserve a legitimate long entry, so the failure
+    // would land before the test could restore the process state it borrowed.
+    let mut buffer = vec![0u16; 256];
+    loop {
+        // SAFETY: the name is NUL-terminated and the buffer is writable for
+        // the length passed.
+        let written = unsafe {
+            windows_sys::Win32::System::Environment::GetEnvironmentVariableW(
+                name.as_terminated_ptr(),
+                buffer.as_mut_ptr(),
+                u32::try_from(buffer.len()).unwrap_or(u32::MAX),
+            )
+        };
+        let written = written as usize;
+        if written == 0 {
+            return None;
+        }
+        if written < buffer.len() {
+            // Kept as WTF-16 units rather than going through String: a lossy
+            // conversion would replace an unpaired surrogate, so restoring the
+            // entry afterwards would write back something the process did not
+            // start with.
+            return Some(Wtf16String::from_units(&buffer[..written]));
+        }
+        buffer = vec![0u16; written];
+    }
 }
-
 /// Sets or clears one of the hidden `=X:` entries.
 fn set_drive_entry(drive: char, value: Option<&str>) {
+    set_drive_entry_units(drive, value.map(Wtf16String::from).as_ref());
+}
+
+/// [`set_drive_entry`], taking the exact units a [`drive_entry`] read returned.
+///
+/// Restoration goes through this rather than through `&str`, so an entry
+/// containing an unpaired surrogate is put back byte for byte.
+fn set_drive_entry_units(drive: char, value: Option<&Wtf16String>) {
     let name = Wtf16String::from(format!("={drive}:").as_str());
-    let value = value.map(Wtf16String::from);
     let value_ptr = value
         .as_ref()
-        .map_or(core::ptr::null(), Wtf16String::as_terminated_ptr);
+        .map_or(core::ptr::null(), |v| v.as_terminated_ptr());
     // SAFETY: both pointers are NUL-terminated; a null value clears the entry.
     let ok = unsafe {
         windows_sys::Win32::System::Environment::SetEnvironmentVariableW(
@@ -630,7 +655,7 @@ fn a_drive_relative_path_uses_that_drives_entry_verbatim_and_rewrites_a_bad_one(
         "an entry that names nothing is rejected in favour of the drive root"
     );
     assert_eq!(
-        drive_entry(drive).as_deref(),
+        drive_entry(drive).map(|v| v.to_string_lossy()).as_deref(),
         Some(format!(r"{drive}:\").as_str()),
         "and the call REWROTE the entry: this is a query that mutates the \
          process environment block"
@@ -641,12 +666,12 @@ fn a_drive_relative_path_uses_that_drives_entry_verbatim_and_rewrites_a_bad_one(
     assert_eq!(drive_entry(drive), None, "precondition: entry cleared");
     let _ = resolve(&format!("{drive}:foo"));
     assert_eq!(
-        drive_entry(drive).as_deref(),
+        drive_entry(drive).map(|v| v.to_string_lossy()).as_deref(),
         Some(format!(r"{drive}:\").as_str()),
         "resolving created the entry on a host that had none"
     );
 
-    set_drive_entry(drive, restore.as_deref());
+    set_drive_entry_units(drive, restore.as_ref());
     if probe_dir.created {
         let _ = std::fs::remove_dir(&probe_dir.path);
     }
@@ -693,14 +718,41 @@ fn a_rejected_drive_entry_is_replaced_by_the_drive_root() {
             "{spelling:?} names an existing directory but is rejected on shape"
         );
         assert_eq!(
-            drive_entry(drive).as_deref(),
+            drive_entry(drive).map(|v| v.to_string_lossy()).as_deref(),
             Some(format!(r"{drive}:\").as_str()),
             "and the rejected entry is written back as the drive root"
         );
     }
 
-    set_drive_entry(drive, restore.as_deref());
+    set_drive_entry_units(drive, restore.as_ref());
     if probe_dir.created {
         let _ = std::fs::remove_dir(&probe_dir.path);
     }
+}
+
+#[test]
+fn a_long_drive_entry_round_trips_through_the_reader() {
+    // The reader grows its buffer, and this is what proves it. Windows reports
+    // an undersized buffer by returning the REQUIRED capacity rather than the
+    // units written, so a reader that treats the two alike slices past its own
+    // buffer and panics -- while preserving a legitimate entry, which is the
+    // worst moment for it, because the entry is then never restored.
+    //
+    // 1200 units is comfortably past the 256 the reader starts with and past
+    // the 1024 an earlier fixed-size version used, and is a legitimate value: a
+    // per-drive entry is a path, and long paths reach far beyond this.
+    let drive = probe_drive('R', 'S');
+    let restore = drive_entry(drive);
+
+    let long = format!(r"C:\{}", "a".repeat(1200));
+    set_drive_entry(drive, Some(&long));
+
+    let read_back = drive_entry(drive).expect("the entry was just set");
+    assert_eq!(
+        read_back.to_string_lossy(),
+        long,
+        "a long entry survives the read, so the buffer grew instead of truncating"
+    );
+
+    set_drive_entry_units(drive, restore.as_ref());
 }

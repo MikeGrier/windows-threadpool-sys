@@ -547,12 +547,18 @@ process state. Three forms read three different pieces of it: a relative path
 takes the current directory; a root-relative path like `\foo` takes only that
 directory's *root*, which is `\\server\share\` when the current directory is a
 UNC path and so is not a drive at all; and a drive-relative path such as
-`C:foo` takes that drive's own current directory. That rule has two arms:
+`C:foo` takes the entry recorded for that drive -- usually that drive's own
+current directory, though the entry is used verbatim and an accepted one may
+name a directory on another drive entirely. That rule has two arms:
 for a drive other than the current one Windows reads the hidden `=C:` entry
 recorded for it, which moves independently of the process current directory;
 for the *current* drive the entry is ignored and the process current directory
 wins. Measured -- setting `=Q:` while the process is on `Q:` changes nothing. So the call is not lexical *as a whole*, and the claim that
-holds unqualified is that it **does not verify what it produces** -- the documented guarantee, which is narrower than the "touches no filesystem" an earlier draft claimed and which observation cannot establish.
+holds unqualified is that it **does not verify what it produces** -- the
+documented guarantee, and narrower than the "touches no filesystem" an earlier
+draft claimed. A black-box success cannot establish that broader claim, and it
+did not need to: the drive-relative form *disproves* it outright, as the
+measurement below records.
 
 **"Most" rather than "every", because a legacy device name short-circuits the
 rooting.** `CON` resolves to `\\.\CON` and is not rooted, so it is an

@@ -17,10 +17,14 @@ Append-only. Newest groups at the bottom.
   something to take in passing.
 
   Measurement dissolved the first route's objection within the hour.
-  `GetFullPathNameW` **itself** writes the `=X:` entry on every drive-relative
-  resolution, creating it when absent. The code under test already mutates that
-  state, so a test that sets it first introduces no hazard that resolving alone
-  did not, and there was nothing left to decide.
+  `GetFullPathNameW` **itself** writes the `=X:` entry -- when resolving for a
+  drive other than the current one, and when the recorded entry is absent or
+  rejected, in which case it is written as the drive root. (An accepted entry is
+  left alone, and the current-drive form touches nothing.) The code under test
+  therefore already mutates that state on the very path these tests exercise, so
+  a test that sets it first introduces no hazard that resolving alone did not,
+  and there was nothing left to decide. Isolation across the tests comes from
+  their disjoint drive letters.
 
   `a_drive_relative_path_uses_that_drives_entry_verbatim_and_rewrites_a_bad_one`
   in [tests.rs](src/full_path/tests.rs) now pins all three behaviours: an entry
