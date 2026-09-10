@@ -12,7 +12,6 @@
 //! adequate and the more delicate protocol -- publish intent, re-check, park --
 //! can wait for evidence that it is worth its lost-wakeup risk.
 
-use std::fmt::Write as _;
 use windows_platform_probes::doorbell_cost::{measure, measure_park_and_wake};
 
 use windows_platform_probes::report::emit_report;
@@ -25,7 +24,7 @@ fn main() {
 }
 
 /// The probe's whole report, as text.
-fn render(out: &mut String) {
+fn render(out: &mut dyn std::fmt::Write) {
     // First line of the report, and part of the returned text rather than
     // written out here: a captured report must carry the line naming the
     // machine that produced it, and the taint marker with it. Without it a

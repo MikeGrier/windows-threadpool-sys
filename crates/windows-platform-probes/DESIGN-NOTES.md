@@ -485,6 +485,13 @@ comparison exists to classify correctly: a red build that is **not** a finding.
 
 <a id="d-buffered-report"></a>
 
+**Superseded by [A renderer writes into the sink through
+`fmt::Write`](#d-streaming-report).** The renderers stream as of M1.2, and the
+`catch_unwind`/`resume_unwind` pair described below no longer exists. Kept
+because the cost it records is what motivated the replacement, and because the
+ordering argument at the end is still the reason the sink was built this way
+first.
+
 Every probe's output goes through one sink: the renderer composes its report into
 a `String` and `emit_report` hands it to a [`Report`]. That is what the
 repository's architectural pre-step asks for -- the real stream is named in
@@ -520,8 +527,149 @@ The ordering was deliberate. The sink had to exist before the probes could be
 peeled off their originating branch in reviewable stages, and a design that
 streams is a different design, not a later revision of this one.
 
-## The long-path probe: a pair of binaries, and a second declined hardening
+## A renderer writes into the sink through `fmt::Write`, not through a sink method
 
+<a id="d-streaming-report"></a>
+
+**Superseding the buffering above**, as M1 said it would: the mechanism by which
+a formatted line reaches a [`Report`] is
+[`LineSink`](src/report.rs), an adapter implementing `std::fmt::Write`.
+
+The choice was between giving `Report` a method taking `fmt::Arguments` (with a
+`report_line!` macro), implementing `fmt::Write` on a sink so existing
+`writeln!` calls keep working, and keeping the `String` while flushing it at
+line boundaries. **It was decided by counting rather than by taste.** Every
+renderer already writes through `writeln!(out, ...)` against a `String`'s
+`fmt::Write`, at **332 sites** in this crate; only 18 functions take the `&mut
+String` those sites write into. A sink method would have been the most explicit
+option and would have rewritten all 332; `fmt::Write` moves the 18 and leaves
+the 332 untouched, because `String` implements `fmt::Write` too and the call
+sites cannot tell the difference.
+
+Worth recording that M1 estimated "upwards of 160" of those sites. The real
+figure is twice that, and it is the whole of the argument -- an option whose
+cost is "rewrite every call site" is affordable at 160 and is not at 332. A
+plan's estimate is worth re-measuring at the moment it becomes a decision.
+
+### What the adapter has to reassemble, and why that is not a detail
+
+`fmt::Write` is **line-agnostic**: `write_str` receives whatever slices the
+formatting machinery produces -- a fragment below a line, several lines at once,
+a bare `"\n"` -- while [`Report`] speaks in whole lines and [`Captured`] is
+addressable by line, which is what lets a test name a row. So `LineSink` holds a
+partial line and emits only completed ones.
+
+Two properties are easy to get wrong and are pinned by tests rather than by
+this paragraph:
+
+- **A report whose last write is a `write!` rather than a `writeln!` must still
+  emit that line.** `LineSink::finish` does it. Without it a report loses
+  exactly its final row, which is invisible except as an absence.
+- **`split('\n')`, not `lines()`.** `lines()` cannot distinguish text that ended
+  on a newline from text that did not, and that distinction is precisely what
+  decides whether the tail is a finished line or a partial one. Sabotaging each
+  of these in turn fails three tests and two tests respectively, so the
+  distinction is measured rather than asserted here.
+
+### Every renderer now writes into the sink, and the catch-and-resume is gone
+
+M1.2 pointed all thirteen probes at the sink. Two things about that conversion are
+worth keeping.
+
+**The `catch_unwind`/`resume_unwind` pair was deleted rather than left in place.**
+Once lines leave as they are produced there is no buffer to rescue, so the pair
+would have been machinery that no longer earned its place -- and worse, it would
+have kept implying that partial output depends on the panic unwinding, which was
+precisely the limitation this milestone removed. The test that guarded it is
+unchanged and still passes: the property held by machinery before and holds by
+construction now.
+
+**A panic still loses at most a partial final line** -- one on which a renderer
+called `write!` without a newline. Flushing it would need a `Drop` on `LineSink`,
+and a `Drop` that writes can panic while unwinding, which aborts and replaces a
+diagnosable failure with one that explains nothing. An unterminated fragment is
+not a finding, so the trade is one-sided.
+
+Every probe in this crate needed only the signature change, because each already
+went through `emit_report` rather than composing a `String` and calling `emit`
+itself. That is worth stating because it was not free: it is what the one-sink
+refactor bought, and it is why converting thirteen probes to stream is a
+mechanical change to one function plus one line per renderer.
+
+Three further probes are being developed on a branch and do **not** hold that
+property -- they compose a `String` and call `emit` directly, so the crate's
+"every probe routes through this" claim is false for them. They are converted
+where they land rather than here, since they do not exist in this crate yet.
+
+**Verifying that no report changed needed a control, because several of these
+probes are not deterministic.** Comparing before and after directly showed four
+of the thirteen reports differing -- which proves nothing on its own, since
+these probes print measured nanoseconds and render verdicts branching on them.
+
+Running the *same* build twice is the control, and it differs in **five**, by
+the same amount or more in every case:
+
+| probe | lines differing, same build twice | lines differing, across the change |
+|---|---|---|
+| `probe-doorbell-cost` | 34 | 30 |
+| `probe-request-cost` | 32 | 32 |
+| `probe-pool-growth` | 14 | 14 |
+| `probe-device-map` | 4 | 4 |
+| `probe-cancel-io` | 2 | **0** |
+
+`probe-cancel-io` is the one that makes the point sharpest: it is *not*
+deterministic, yet it happened to match across the change. Had the before/after
+diff been read on its own, that would have counted as evidence of no change --
+from a probe whose output varies run to run regardless. The eight reports the
+control showed to be genuinely deterministic were byte-identical across the
+conversion, and those are the eight that carry the argument.
+
+A before/after diff on a probe is not evidence without that control.
+
+### Measured: an interrupted probe keeps what it had already measured
+
+M1.3 asked for this to be measured once rather than assumed, because it is the
+property the whole milestone exists for and no unit test reaches it -- a test
+cannot terminate its own process without taking the harness with it.
+
+`probe-doorbell-cost` is the longest-running probe in this crate at about 0.8
+seconds, which makes it the subject. Started with stdout redirected, left for
+300 milliseconds, then terminated -- **six runs of each build**, with every run
+confirmed to have still been alive at the moment it was killed, since a probe
+that had already exited would be measuring nothing:
+
+| build | characters captured | runs | content |
+|---|---|---|---|
+| streaming | **129** | 6 of 6 identical | the host banner and the heading |
+| buffered (built from the `LineSink` commit, before the conversion) | **0** | 6 of 6 identical | nothing at all |
+
+The control is the point. Reading 129 characters from the streaming build shows
+only that something was written; running the *previous* build through the
+identical sequence and reading zero is what shows the change caused it. Both
+binaries were release builds of the same crate, killed at the same elapsed time,
+by the same code.
+
+The margin is narrower than it looks and deliberately so. 300 ms against an
+800 ms probe leaves no room for a slow start to be mistaken for buffering, which
+is why each run records whether the process was still running when killed rather
+than inferring it from the byte count.
+
+**`TerminateProcess` was used rather than Ctrl-C, and it is the stronger case.**
+Ctrl-C on Windows runs the default console handler, which terminates the process
+but still lets the runtime unwind its exit path; `TerminateProcess` -- what
+.NET's `Process.Kill` issues -- runs nothing at all, so any bytes still sitting
+in a userspace buffer are lost outright. A report that survives it survives a
+Ctrl-C, so the interactive case is covered by the measurement rather than left
+untested.
+
+**Why the bytes are already safe** is worth naming, since it is what makes the
+whole design work: Rust's `std::io::Stdout` wraps a `LineWriter`, which flushes
+at each newline whether stdout is a terminal or a redirected file. So a line
+handed to `println!` has reached the OS before the next one is composed, and no
+process-level termination can take it back. Had stdout been block-buffered, this
+milestone would have needed an explicit flush per line as well.
+
+## The long-path probe: a pair of binaries, and a second declined hardening
 <a id="d-long-path"></a>
 
 The `longPathAware` opt-in has two halves and neither is a runtime switch: a

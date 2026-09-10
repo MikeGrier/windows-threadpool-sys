@@ -9,7 +9,134 @@
 use std::fmt::Write as _;
 use std::panic::{AssertUnwindSafe, catch_unwind};
 
-use super::{Captured, Report, emit, emit_report_to};
+use super::{Captured, LineSink, Report, emit, emit_report_to};
+
+// --- the fmt::Write sink ----------------------------------------------------
+//
+// `LineSink` exists so a renderer can `writeln!` straight into a `Report`, and
+// the whole of its difficulty is that `fmt::Write` does not speak in lines
+// while `Report` does. `write_str` receives whatever slices the formatting
+// machinery happens to produce, so these pin the reassembly rather than the
+// happy path: fragments below a line, several lines in one call, and the tail
+// that arrives without a newline behind it.
+
+#[test]
+fn a_line_sink_emits_one_line_per_newline() {
+    // The ordinary case, and the one every renderer relies on.
+    let mut captured = Captured::default();
+    {
+        let mut sink = LineSink::new(&mut captured);
+        writeln!(sink, "header").expect("writing to a line sink cannot fail");
+        writeln!(sink, "row {}", 1).expect("writing to a line sink cannot fail");
+        writeln!(sink, "row {}", 2).expect("writing to a line sink cannot fail");
+        sink.finish();
+    }
+
+    assert_eq!(captured.lines, ["header", "row 1", "row 2"]);
+}
+
+#[test]
+fn a_line_sink_joins_fragments_written_below_a_line() {
+    // `write!` without a newline, repeatedly, is how a renderer builds a row
+    // from parts -- and it is what `fmt::Arguments` does internally for a
+    // format string with interpolations. Each fragment must accumulate rather
+    // than becoming a line of its own.
+    let mut captured = Captured::default();
+    {
+        let mut sink = LineSink::new(&mut captured);
+        write!(sink, "one ").expect("writing to a line sink cannot fail");
+        write!(sink, "two ").expect("writing to a line sink cannot fail");
+        writeln!(sink, "three").expect("writing to a line sink cannot fail");
+        sink.finish();
+    }
+
+    assert_eq!(captured.lines, ["one two three"]);
+}
+
+#[test]
+fn a_line_sink_splits_a_multi_line_write() {
+    // One `write_str` carrying several newlines must still produce several
+    // lines, because a renderer may hand over a pre-composed block.
+    let mut captured = Captured::default();
+    {
+        let mut sink = LineSink::new(&mut captured);
+        write!(sink, "a\nb\nc\n").expect("writing to a line sink cannot fail");
+        sink.finish();
+    }
+
+    assert_eq!(captured.lines, ["a", "b", "c"]);
+}
+
+#[test]
+fn a_line_sink_emits_a_final_line_that_has_no_newline() {
+    // The case that decides whether this adapter can be trusted at all. A
+    // renderer whose last call is `write!` rather than `writeln!` has a
+    // complete line sitting in the buffer with nothing to flush it, and
+    // dropping it would truncate the report by exactly one row -- a defect
+    // visible only as a missing last line.
+    let mut captured = Captured::default();
+    {
+        let mut sink = LineSink::new(&mut captured);
+        writeln!(sink, "kept").expect("writing to a line sink cannot fail");
+        write!(sink, "also kept").expect("writing to a line sink cannot fail");
+        sink.finish();
+    }
+
+    assert_eq!(captured.lines, ["kept", "also kept"]);
+}
+
+#[test]
+fn finishing_a_line_sink_twice_adds_nothing() {
+    // `emit_report_to` finishes the sink, and a renderer may reasonably finish
+    // its own; the second call must not invent an empty line.
+    let mut captured = Captured::default();
+    {
+        let mut sink = LineSink::new(&mut captured);
+        writeln!(sink, "only").expect("writing to a line sink cannot fail");
+        sink.finish();
+        sink.finish();
+    }
+
+    assert_eq!(captured.lines, ["only"]);
+}
+
+#[test]
+fn a_line_sink_preserves_a_blank_line() {
+    // Blank lines are structure in these reports -- they separate a table from
+    // the prose reading it -- so an empty line between two newlines is content,
+    // not noise to collapse.
+    let mut captured = Captured::default();
+    {
+        let mut sink = LineSink::new(&mut captured);
+        writeln!(sink, "section").expect("writing to a line sink cannot fail");
+        writeln!(sink).expect("writing to a line sink cannot fail");
+        writeln!(sink, "next").expect("writing to a line sink cannot fail");
+        sink.finish();
+    }
+
+    assert_eq!(captured.lines, ["section", "", "next"]);
+}
+
+#[test]
+fn a_line_sink_matches_what_emit_produces_for_the_same_text() {
+    // The correspondence that lets M1.2 be a mechanical conversion: writing
+    // through the sink must give a reader exactly what composing a `String` and
+    // handing it to `emit` gives today. If these disagreed, converting a
+    // renderer would silently change its report.
+    let block = "header\n\nrow 1\nrow 2\ntrailing";
+
+    let mut through_emit = Captured::default();
+    emit(&mut through_emit, block);
+
+    let mut through_sink = Captured::default();
+    {
+        let mut sink = LineSink::new(&mut through_sink);
+        write!(sink, "{block}").expect("writing to a line sink cannot fail");
+        sink.finish();
+    }
+
+    assert_eq!(through_sink.lines, through_emit.lines);
+}
 
 #[test]
 fn a_captured_report_keeps_its_lines_in_order() {
@@ -72,6 +199,12 @@ fn a_renderer_that_panics_still_has_its_finished_lines_emitted() {
     // would print a partial report and exit **0**, which is the failure that
     // looks most like success. Hence `emit_report_to`: same logic, injectable
     // sink.
+    //
+    // **That catch-emit-resume no longer exists**, and this test is why it could
+    // go. Lines now reach the sink as they are written, so a panic leaves the
+    // finished ones already emitted and there is no buffer for a `catch_unwind`
+    // to rescue. The assertions below are unchanged -- which is the point: the
+    // property held by machinery before and holds by construction now.
     let mut captured = Captured::default();
 
     let outcome = catch_unwind(AssertUnwindSafe(|| {
@@ -81,9 +214,13 @@ fn a_renderer_that_panics_still_has_its_finished_lines_emitted() {
         });
     }));
 
-    // Both halves matter, and each fails a different mutation. Without the
-    // first, deleting the `emit` leaves the test green; without the second,
-    // deleting the `resume_unwind` does.
+    // Both halves still matter, and each still fails a different mutation --
+    // but what breaks the first has changed with the mechanism. It used to be
+    // deleting the `emit` after the catch; now it is anything that stops lines
+    // reaching the sink as they are written, because there is no buffer left to
+    // rescue. The second half is unchanged in what it guards and stronger in how
+    // it holds: nothing catches the panic any more, so it propagates by default
+    // rather than by remembering to re-raise it.
     assert_eq!(
         captured.lines,
         ["measured before the failure"],

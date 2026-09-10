@@ -51,8 +51,6 @@
 //! identical -- it passed three genuinely broken probes here before the
 //! comparison was redone line-by-line.
 
-use std::panic::{AssertUnwindSafe, catch_unwind, resume_unwind};
-
 /// Somewhere a probe's report can go.
 pub trait Report {
     /// Emit one line.
@@ -92,6 +90,76 @@ impl Captured {
     }
 }
 
+/// A [`Report`] a renderer can `writeln!` into directly.
+///
+/// is arithmetic. Every renderer writes through `writeln!(out, ...)` against a
+/// `String`, at **332 sites** across this crate; a sink method taking
+/// `fmt::Arguments` would have been explicit but would have rewritten every one
+/// of them, while `String` already implements `fmt::Write`, so a sink that does
+/// too lets those sites stand untouched and moves only 18 renderer signatures.
+/// signatures. The recorded reasoning is in
+/// [DESIGN-NOTES.md](../DESIGN-NOTES.md#d-streaming-report).
+///
+/// # Lines are reassembled here, because `fmt::Write` does not speak in them
+///
+/// `write_str` receives whatever slices the formatting machinery hands it: a
+/// fragment of a line, several lines at once, or a bare `"\n"`. [`Report`]
+/// speaks in whole lines and [`Captured`] is addressable by line, so this holds
+/// a partial line until a `\n` arrives and emits exactly the completed ones.
+///
+/// **A renderer that ends without a trailing newline still has its last line
+/// emitted**, by [`LineSink::finish`], which `emit_report_to` calls. Dropping
+/// that trailing fragment would silently truncate any report whose final
+/// `write!` was not a `writeln!` -- a defect that would show only as a missing
+/// last row.
+pub struct LineSink<'a> {
+    report: &'a mut dyn Report,
+    partial: String,
+}
+
+impl<'a> LineSink<'a> {
+    /// Wrap a [`Report`] so renderers can write formatted text into it.
+    pub fn new(report: &'a mut dyn Report) -> Self {
+        Self {
+            report,
+            partial: String::new(),
+        }
+    }
+
+    /// Emit any text written since the last newline.
+    ///
+    /// Idempotent: a second call with nothing buffered emits nothing, so a
+    /// caller that finishes a sink twice does not add a stray empty line.
+    pub fn finish(&mut self) {
+        if !self.partial.is_empty() {
+            self.report.line(&self.partial);
+            self.partial.clear();
+        }
+    }
+}
+
+impl std::fmt::Write for LineSink<'_> {
+    fn write_str(&mut self, text: &str) -> std::fmt::Result {
+        // `split('\n')`, not `lines()`. `lines()` cannot distinguish "ends with
+        // a newline" from "does not", which is exactly the distinction that
+        // decides whether the tail is a completed line or a partial one still
+        // being written. `split` always yields one more piece than there are
+        // newlines, so the final piece is the remainder by construction --
+        // empty when the text ended on a newline.
+        let mut pieces = text.split('\n');
+        let first = pieces.next().unwrap_or_default();
+        self.partial.push_str(first);
+
+        for piece in pieces {
+            let line = std::mem::take(&mut self.partial);
+            self.report.line(&line);
+            self.partial.push_str(piece);
+        }
+
+        Ok(())
+    }
+}
+
 /// Write a rendered block to `report`, one line at a time.
 ///
 /// A `render_*` function produces a whole block with embedded newlines and a
@@ -109,65 +177,58 @@ pub fn emit(report: &mut impl Report, block: &str) {
     }
 }
 
-/// Compose a report and emit it, **including when composing it panics**.
+/// Render a report straight to the sink, a line at a time as it is produced.
 ///
-/// Every probe's `main` is one call to this. The buffer is owned here rather
-/// than inside the renderer so that a measurement which aborts part-way still
-/// prints what it had already established.
+/// Every probe's `main` is one call to this. The renderer writes into a
+/// [`LineSink`], so each completed line reaches the [`Report`] as it is
+/// composed rather than when the renderer returns.
 ///
-/// That is not hypothetical bookkeeping. These probes call into measurements
-/// documented to panic -- `worker_context`'s impersonating observation panics if
-/// the token cannot be duplicated or applied, or if the worker never reports --
-/// and each renderer composes several completed findings *before* reaching one.
-/// Printing line-by-line used to make that automatic: whatever had been measured
-/// was already on the terminal. Buffering the whole report to hand it to a
-/// [`Report`] silently gave that up, and for an instrument the point of which is
-/// that a failure be diagnosable, how far it got is exactly the information
-/// worth keeping.
+/// That matters because these renderers **interleave measurement with output**.
+/// `probe-cancel-io` writes a heading, runs an attempt against a five-second
+/// watchdog, writes its outcome, and repeats -- so with a buffered report a
+/// reader who interrupts a run gets nothing, and a run is slowest to finish in
+/// exactly the case it was hunting for. Streaming makes the finished lines a
+/// reader's regardless of how the process ends.
 ///
-/// The panic is resumed afterwards, so the exit status and the message are
-/// unchanged; the partial report is added to them, not substituted for them.
+/// # What replaced the catch-and-resume
 ///
-/// **This restores the streaming property for unwinding panics only, and that
-/// bound is known rather than overlooked.** A termination that does not unwind
-/// still loses the buffer, where printing line-by-line would have kept it: Ctrl-C
-/// (the default Windows console handler terminates the process outright), and an
-/// abort from a panic raised during unwinding. The case that costs most is
-/// `probe-cancel-io`, which can run four attempts at a five-second watchdog --
-/// so about twenty seconds, precisely when the wedge it hunts for occurs, which
-/// is precisely when a reader interrupts it.
+/// This used to compose the whole report into a `String` inside `catch_unwind`,
+/// emit the buffer, and resume the panic, which recovered the finished lines
+/// for an unwinding panic **and only for that**. A Ctrl-C, which the default
+/// Windows console handler serves by terminating the process, or an abort from
+/// a panic raised while already unwinding, both discarded the buffer.
 ///
-/// Fixing it properly means the renderers writing into a [`Report`] as they go
-/// rather than into a `String`, which keeps [`Captured`] working for tests and
-/// streams for real runs. That is a different design rather than an oversight in
-/// this one -- it changes every renderer -- so it is queued as its own work:
-/// milestone `M1` of [CHECKLIST.md](../CHECKLIST.md), with the reasoning in
-/// [DESIGN-NOTES.md](../DESIGN-NOTES.md#d-buffered-report).
-pub fn emit_report(render: impl FnOnce(&mut String)) {
+/// Streaming makes that machinery unnecessary rather than merely redundant: the
+/// lines are already out, so there is no buffer to rescue and nothing for a
+/// `catch_unwind` to do. Keeping it would have been machinery that no longer
+/// earned its place -- and would have kept the misleading implication that
+/// partial output depends on the panic unwinding.
+///
+/// **A panic still loses at most a partial final line**, meaning one on which a
+/// renderer had called `write!` without a newline. That is deliberate: flushing
+/// it would require a `Drop` on [`LineSink`], and a `Drop` that writes can panic
+/// while unwinding, which aborts -- replacing a diagnosable failure with one
+/// that explains nothing, the same hazard `Impersonation::drop` documents above.
+/// An unterminated fragment is not a finding, so the trade is one-sided.
+pub fn emit_report(render: impl FnOnce(&mut dyn std::fmt::Write)) {
     emit_report_to(&mut Stdout, render);
 }
 
 /// [`emit_report`] against an arbitrary sink.
 ///
-/// Exists so the catch-emit-resume logic is what a test executes, rather than a
-/// second copy of that shape written in the test. The first version of the test
-/// re-implemented it against a [`Captured`] and so would have passed with the
-/// `resume_unwind` below deleted -- which would leave a probe printing a partial
-/// report and exiting **0**, the failure that looks most like success.
-pub fn emit_report_to(report: &mut impl Report, render: impl FnOnce(&mut String)) {
-    let mut out = String::new();
-
-    // `AssertUnwindSafe` because the only state crossing the boundary is this
-    // buffer, and a partially written report is precisely what is wanted here
-    // rather than a hazard to be guarded against.
-    let outcome = catch_unwind(AssertUnwindSafe(|| render(&mut out)));
-
-    emit(report, &out);
-
-    if let Err(payload) = outcome {
-        resume_unwind(payload);
-    }
+/// Exists so the streaming behaviour is what a test executes, rather than a
+/// second copy of that shape written in the test. That mattered more when this
+/// wrapped a `catch_unwind`: the first version of the test re-implemented the
+/// catch-emit-resume itself and so would have passed with the `resume_unwind`
+/// deleted, leaving a probe printing a partial report and exiting **0** -- the
+/// failure that looks most like success. The shape is simpler now, and the
+/// reason to share it is unchanged.
+pub fn emit_report_to(report: &mut impl Report, render: impl FnOnce(&mut dyn std::fmt::Write)) {
+    let mut sink = LineSink::new(report);
+    render(&mut sink);
+    // Emits a final line the renderer left without a newline. Not reached when
+    // `render` panics, which costs at most that fragment -- see `emit_report`.
+    sink.finish();
 }
-
 #[cfg(test)]
 mod tests;
