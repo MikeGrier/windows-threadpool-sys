@@ -1155,3 +1155,92 @@ Whether this generalises to `Coherence`, `BracketOutcome`, `Verdict` and the
 sibling probes is **an open question, deliberately not answered here.** The work
 this decision implies is queued as M2 in [CHECKLIST.md](CHECKLIST.md); this
 section schedules nothing on its own.
+
+## The oracle exists, and what it deliberately refuses to know
+
+M2.1 built it: [src/report_oracle.rs](src/report_oracle.rs), seeded with the
+three correlations that are known to be real because each was violated. The
+defect that forced it is the section above.
+
+**It reads the rendered artifact, never the state behind it.** Checking state
+would miss precisely this defect class -- in the original finding the state was
+consistent and the two *renderings* of it were not.
+
+**It relates two things already visible in the report, and re-derives nothing.**
+A second implementation of the rendering rules would be a check of the copy
+rather than of the contract, and would drift the moment either moved. So the
+alarm rule compares an alarm line against a verdict line, the double-rendering
+rule compares prose against NDJSON, and the gating rule compares a claim against
+the report's own published evidence of doubt.
+
+That last one is the interesting boundary. `CrossCheck::parse_in_doubt` is
+`!disagreements.is_empty() || !parse_incomplete.is_empty()`, and the NDJSON
+publishes `parse_incomplete` as a **count** rather than the predicate -- so the
+oracle reads the count and the `disagree` verdict, which are the two visible
+shadows of that definition. The coupling is deliberate, and confirming it still
+holds is what M2.2's sabotage check is for when the call sites are bound.
+
+**Half the tests assert acceptance**, following
+[../windows-file-watcher/src/contract.rs](../windows-file-watcher/src/contract.rs)'s
+`ContractChecker`: an alarm beside a non-agreeing verdict is legal and is what
+the fix produced, a caveated claim under doubt is legal and is what the renderer
+emits on every heterogeneous host with a short parse, and a prose-only report is
+silence rather than violation. Over-constraining is the same defect as
+under-specifying and fails in the more expensive direction, because noise trains
+a reader to ignore the instrument.
+
+### The failure mode that would look exactly like success
+
+An oracle whose prose labels do not match the renderer reads nothing, finds
+nothing, and passes everything. So the labels were confirmed against a real
+`probe-topology` run, and a test corrupts each double-rendered value in turn and
+requires a violation -- if a label ever drifts, that test fails rather than the
+oracle going quietly blind.
+
+**The first attempt at that injection silently did nothing**, and is worth
+recording because it nearly produced the opposite conclusion. The anchor used
+was `cross-check:`, which does not occur -- the real text is `cross-check
+against independently read Win32 counters:` -- so the "defective" report was
+identical to the clean one, the oracle correctly reported no violation, and the
+reading was almost "the oracle is blind". A sabotage that fails to apply is
+indistinguishable from an instrument that fails to fire, unless the injection
+asserts it changed something. It now does.
+
+### The real-host test, and the guard that stops it passing for nothing
+
+[tests/a_real_report_agrees_with_itself.rs](tests/a_real_report_agrees_with_itself.rs)
+composes the report the way `probe-topology` does and applies the oracle
+explicitly.
+
+**Why it has to exist.** The oracle's unit tests pin it against fixtures, and a
+fixture is a report somebody wrote down -- so a fixture-bound oracle checks
+correspondences over states its author already imagined, and the defect it
+exists for was a state nobody had imagined. More narrowly, a fixture cannot
+notice the *renderer* drifting away from the prose labels the oracle reads:
+both sides would still agree with each other. Only the real artifact disagrees.
+
+Some unit tests in this crate do call `measure()` and so do read this host.
+What none of them does is run the **oracle** over a report rendered from that
+reading, which is the gap this test closes. On CI it runs across the hosted
+runner fleet, a survey of shapes no fixture anticipates.
+
+**It asserts nothing about this machine, deliberately.** A test expecting a
+processor count, a cache level or a verdict would fail on the next runner shape
+rather than on a defect, and would have to be loosened until it asserted
+nothing. What it checks is that whatever this host produced, the report's parts
+agree with each other -- a property every host must satisfy, including one whose
+topology cannot be read at all.
+
+#### The primary assertion can pass having checked nothing
+
+On a host whose report the oracle cannot parse, every lookup returns `None`,
+every comparison is skipped, and
+`a_report_rendered_from_this_host_agrees_with_itself` passes having checked
+exactly zero correspondences. That is why the second test corrupts each
+double-rendered fact in a report **this host really produced** and requires the
+oracle to report a violation -- and asserts first that the corruption changed
+the text at all, for the reason recorded above.
+
+Eight facts rather than one, because corrupting a single field would leave the
+others unguarded: the renderer could drift away from the oracle's other prose
+labels and the test would still pass on the strength of the one that remained.

@@ -2,7 +2,7 @@
 
 Append-only. Newest groups at the bottom.
 
-## Moved 2026-09-09 19:00:17 -04:00 -- M1: a probe's report streams as it is measured
+## Moved 2026-09-09 -- M1: a probe's report streams as it is measured
 
 ## M1 -- Stream a probe's report as it is measured
 
@@ -153,3 +153,48 @@ request as it was written, and quotes the module doc as it read before the corre
   all on any path this crate takes. The probe measured ~212 ns for a build on x86_64 and declines to
   say what that is made of; the owning crate could say, and a reader of either would then stop
   guessing.
+
+## Moved 2026-09-10 -- M2.1: the report oracle
+
+### <a id="m21"></a>M2.1 -- Add a report oracle to this crate. *(completed 2026-09-10 19:45:50 UTC-04:00)*
+
+- [x] **M2.1** -- Add a report oracle to this crate: one shared executable definition of the
+  correlations that must hold between the parts of a rendered report, checked against the rendered
+  artifact rather than against internal state. Seed it with the three known invariants: an alarm in
+  the prose implies the verdict is not `agree`; a fact rendered in both prose and NDJSON agrees across
+  the two; an uncaveated hardware claim implies `!parse_in_doubt`. Model it on
+  [../windows-file-watcher/src/contract.rs](../windows-file-watcher/src/contract.rs)'s
+  `ContractChecker`, which is this repository's worked example and which existed unused while this
+  probe was being written.
+
+  Built as [src/report_oracle.rs](src/report_oracle.rs) with the three seeded
+  correlations, plus [tests/a_real_report_agrees_with_itself.rs](tests/a_real_report_agrees_with_itself.rs),
+  which runs it over a report rendered from this host and then corrupts eight
+  double-rendered facts to prove the oracle is reading them rather than going
+  quietly blind. The reasoning is in
+  [DESIGN-NOTES.md](DESIGN-NOTES.md) -> "The oracle exists, and what it
+  deliberately refuses to know".
+
+  **M2.2 is the next step and is deliberately not part of this**: the oracle
+  exists and is applied explicitly, but the crate's existing `report()` call
+  sites are not yet bound to it, so it checks the cases these tests name rather
+  than every case anyone writes later.
+### <a id="m23"></a>M2.3 -- Run `measure()` against the real host, render the report, and apply the oracle. *(completed 2026-09-10 19:45:50 UTC-04:00)*
+
+- [x] **M2.3** -- Add the missing integration test: run `measure()` against the real host, render the
+  report, and apply the oracle. At the time of M2 the crate had one integration test, asserting only
+  that a probe writes to stdout, and none of the twenty-five `report()` calls rendered from a real
+  measurement -- every one used a hand-built `Observation`, which can only contain states its author
+  already imagined. On CI this runs across the whole hosted-runner fleet, which is where states no
+  fixture anticipates will actually appear.
+
+  Landed as [tests/a_real_report_agrees_with_itself.rs](tests/a_real_report_agrees_with_itself.rs),
+  composing the report exactly as `src/bin/topology.rs` does so the artifact
+  checked is the one that ships.
+
+  *(One premise of the item above was corrected on the way in. It says none of
+  the `report()` calls render from a real measurement and every one uses a
+  hand-built `Observation`. Measured: three unit tests in `src/tests.rs` do
+  call `crate::topology::measure()`. The gap is narrower than stated and still
+  real -- what no test did was run the ORACLE over a report rendered from that
+  reading, which is what this one adds.)*

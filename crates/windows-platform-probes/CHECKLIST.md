@@ -22,14 +22,7 @@ implements.
 The three correlations below are known to be real because each was violated. They are not a
 speculative list to extend by imagination -- a fourth is added when a fourth contradiction is found.
 
-- [ ] **M2.1** -- Add a report oracle to this crate: one shared executable definition of the
-  correlations that must hold between the parts of a rendered report, checked against the rendered
-  artifact rather than against internal state. Seed it with the three known invariants: an alarm in
-  the prose implies the verdict is not `agree`; a fact rendered in both prose and NDJSON agrees across
-  the two; an uncaveated hardware claim implies `!parse_in_doubt`. Model it on
-  [../windows-file-watcher/src/contract.rs](../windows-file-watcher/src/contract.rs)'s
-  `ContractChecker`, which is this repository's worked example and which existed unused while this
-  probe was being written.
+- [x] **M2.1** -- Add a report oracle to this crate: one shared executable definition of the correlations that must hold between the parts of a rendered report. -> [completed 2026-09-10](COMPLETED-CHECKLIST.md#m21)
 
 - [ ] **M2.2** -- Route every test that renders a report through the oracle, so the roughly
   twenty-five existing `report()` call sites inherit the checks and every future one does too. This is
@@ -38,12 +31,7 @@ speculative list to extend by imagination -- a fourth is added when a fourth con
   sabotage -- change an invariant and confirm existing tests go red -- because a binding that only moves
   when its own test moves is cosmetic.
 
-- [ ] **M2.3** -- Add the missing integration test: run `measure()` against the real host, render the
-  report, and apply the oracle. At the time of M2 the crate had one integration test, asserting only
-  that a probe writes to stdout, and none of the twenty-five `report()` calls rendered from a real
-  measurement -- every one used a hand-built `Observation`, which can only contain states its author
-  already imagined. On CI this runs across the whole hosted-runner fleet, which is where states no
-  fixture anticipates will actually appear.
+- [x] **M2.3** -- Run `measure()` against the real host, render the report, and apply the oracle. -> [completed 2026-09-10](COMPLETED-CHECKLIST.md#m23)
 
 - [ ] **M2.4** -- Explore, with the sparse matrix as the instrument, whether the same correspondence
   failures exist for `Coherence`, `BracketOutcome` and `Verdict`, and in the sibling probes' renderers.
