@@ -387,7 +387,8 @@ fn a_drive_relative_path_is_rooted_at_that_drive_and_not_the_process_directory()
     // the entry: with no `=X:` set, an implementation that always used the
     // drive root would satisfy everything here. The arm is pinned properly by
     // `a_drive_relative_path_uses_that_drives_entry_verbatim_and_rewrites_a_bad_one`,
-    // which sets the entry and uses drive `W` so the two cannot race.
+    // which sets the entry and draws its letter from a disjoint pair, so the
+    // two cannot race.
     let cwd = current_directory();
     let cwd_drive = cwd.chars().next().filter(char::is_ascii_alphabetic);
 
@@ -473,31 +474,62 @@ fn a_name_containing_a_device_word_is_rooted_under_the_current_directory() {
     }
 }
 
-/// A directory that certainly exists, is in canonical `X:\...` form, and is
-/// neither a drive root nor the process current directory.
+/// A directory that exists, is in canonical `X:\...` form, and is neither a
+/// drive root nor the process current directory.
 ///
-/// **Derived from the temp directory rather than from the current directory,
-/// which is not a detail.** An earlier version of these tests built their probe
-/// values by trimming the trailing separator off `current_directory()`. Run
-/// from a drive root that turns `C:\` into `C:` -- a *drive-relative* value, not
-/// a directory -- and since an accepted entry is joined literally, the entry
-/// resolved to `C:foo` and both tests failed. They passed only because CI runs
-/// from a repository checkout. A test whose strength depends on where it is run
-/// is the vacuous pass this suite keeps paying for.
+/// **The form is enforced, not assumed, and that distinction has now cost two
+/// rounds.** An earlier version derived the probe from `current_directory()`,
+/// which yields `C:` at a drive root -- drive-relative, not a directory -- and
+/// both tests failed there. Its replacement used `std::env::temp_dir()`, which
+/// is `%TMP%`/`%TEMP%` verbatim and carries no guarantee of a drive letter: with
+/// temp redirected to a share, the probe is a UNC path, which
+/// `GetFullPathNameW` rejects as an entry *on shape* -- the very rule the
+/// caller is trying to pin. Folder redirection makes that an ordinary
+/// configuration, not a contrived one.
 ///
-/// The caller removes it, and the entry restore beside it is a plain statement
-/// rather than a drop guard. Neither runs if the test panics -- which leaves a
-/// directory under `%TEMP%` and an `=X:` entry reading `X:\`. Both are states
-/// the system already produces on its own: the call under test writes that
-/// entry on every drive-relative resolution anyway. A guard that wrote during
-/// unwinding could panic and abort the process, replacing a diagnosable failure
-/// with one that explains nothing, so the trade is one-sided.
-fn probe_directory(tag: &str) -> std::path::PathBuf {
-    let dir = std::env::temp_dir().join(format!("wnrs-{}-{tag}", std::process::id()));
-    std::fs::create_dir_all(&dir).expect("create the probe directory");
-    dir
+/// So the temp directory is used only when it is drive-rooted, and otherwise
+/// the fallback is `%SystemRoot%`, which is guaranteed to exist, to be
+/// canonical, and not to be a drive root. Nothing is created in the fallback
+/// case, so [`ProbeDir::created`] tells the caller whether to clean up.
+struct ProbeDir {
+    path: std::path::PathBuf,
+    created: bool,
 }
 
+fn probe_directory(tag: &str) -> ProbeDir {
+    let drive_rooted = |p: &std::path::Path| {
+        let s = p.as_os_str().to_string_lossy().into_owned();
+        let mut chars = s.chars();
+        matches!(
+            (chars.next(), chars.next(), chars.next()),
+            (Some(d), Some(':'), Some('\\')) if d.is_ascii_alphabetic()
+        )
+    };
+
+    let temp = std::env::temp_dir();
+    if drive_rooted(&temp) {
+        let path = temp.join(format!("wnrs-{}-{tag}", std::process::id()));
+        std::fs::create_dir_all(&path).expect("create the probe directory");
+        return ProbeDir {
+            path,
+            created: true,
+        };
+    }
+
+    // Not creating anything here, so no write permission is needed on a host
+    // whose temp directory is redirected off a drive letter.
+    let system_root = std::env::var("SystemRoot").expect("SystemRoot is always set on Windows");
+    let path = std::path::PathBuf::from(system_root);
+    assert!(
+        drive_rooted(&path),
+        "the fallback probe must be drive-rooted: {}",
+        path.display()
+    );
+    ProbeDir {
+        path,
+        created: false,
+    }
+}
 /// A drive letter to probe with, which is certainly not the current drive.
 ///
 /// **The letter cannot be a constant, for the reason these tests exist.** An
@@ -574,11 +606,11 @@ fn a_drive_relative_path_uses_that_drives_entry_verbatim_and_rewrites_a_bad_one(
     let drive = probe_drive('W', 'U');
     let restore = drive_entry(drive);
 
-    // A real directory that is certainly NOT on drive W, which is what makes it
-    // the right probe: if the entry is honoured verbatim, a `W:`-relative path
-    // resolves onto another drive entirely.
-    let probe_owned = probe_directory("verbatim");
-    let probe = probe_owned.to_str().expect("the temp path is UTF-8");
+    // A real directory that is certainly NOT on the probe drive, which is what
+    // makes it the right probe: if the entry is honoured verbatim, a
+    // drive-relative path resolves onto another drive entirely.
+    let probe_dir = probe_directory("verbatim");
+    let probe = probe_dir.path.to_str().expect("the probe path is UTF-8");
 
     set_drive_entry(drive, Some(probe));
     assert_eq!(
@@ -615,7 +647,9 @@ fn a_drive_relative_path_uses_that_drives_entry_verbatim_and_rewrites_a_bad_one(
     );
 
     set_drive_entry(drive, restore.as_deref());
-    let _ = std::fs::remove_dir(&probe_owned);
+    if probe_dir.created {
+        let _ = std::fs::remove_dir(&probe_dir.path);
+    }
 }
 
 #[test]
@@ -629,8 +663,8 @@ fn a_rejected_drive_entry_is_replaced_by_the_drive_root() {
     let drive = probe_drive('V', 'T');
     let restore = drive_entry(drive);
 
-    let probe_owned = probe_directory("shape");
-    let accepted = probe_owned.to_str().expect("the temp path is UTF-8");
+    let probe_dir = probe_directory("shape");
+    let accepted = probe_dir.path.to_str().expect("the probe path is UTF-8");
 
     // The control: this exact directory IS accepted in canonical form, so the
     // rejections below cannot be blamed on the directory itself.
@@ -666,5 +700,7 @@ fn a_rejected_drive_entry_is_replaced_by_the_drive_root() {
     }
 
     set_drive_entry(drive, restore.as_deref());
-    let _ = std::fs::remove_dir(&probe_owned);
+    if probe_dir.created {
+        let _ = std::fs::remove_dir(&probe_dir.path);
+    }
 }
