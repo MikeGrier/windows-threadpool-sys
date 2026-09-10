@@ -1710,3 +1710,51 @@ map. The oracle covers it today and the eight cells M2.4 promoted are what make
 that coverage real. Converting it is a decision available later, not a gap left
 by accident.
 
+
+### M2.5: the banner is built from the read the body describes
+
+A `probe-topology` run makes **three** independent discoveries of the machine --
+one before, `measure`'s own, and one after -- and the banner naming the host was
+built from an *endpoint*. `attribution` compared only those two endpoints, so
+when they agreed it printed their fingerprint unqualified, with nothing having
+established that the middle read agreed with either. The line naming the machine
+could therefore describe a different topology from the body beneath it, and the
+report would say so nowhere.
+
+**The uncovered window is narrow, and stating it exactly is the point.**
+`measure` already brackets counter reads around its own discovery, so a
+processor, group or NUMA change during the middle read is caught as
+`BracketOutcome::Changed`. What no counter reaches is cache and
+efficiency-class structure. The reachable case is a run whose cache structure
+differs between the endpoints and the middle read while processor, group and
+NUMA counts stay identical -- near-impossible on real hardware, since caches do
+not change without processors changing, and entirely reachable on a hypervisor
+returning inconsistent `GetLogicalProcessorInformationEx` results, which is
+precisely the population this probe exists to survey.
+
+**Construction, not a third comparison** -- the same choice M2.9 made, for the
+same reason. A third comparison would be new prose able to drift from what it
+compares; a banner built from the body's own read cannot disagree with it,
+because there is no second value to disagree. `measure_observed` is a sibling of
+`measure` returning the observation *and* `Fingerprint::from_topology` of the
+very topology it parsed, so `measure`'s six existing callers are untouched.
+
+The endpoint reads keep their job rather than being deleted: they bracket a
+**wider** window than `measure`'s counter bracket, which spans only its own
+discovery, so they still detect structural change the counters cannot see. They
+simply no longer supply the banner.
+
+**The fix nearly reintroduced the defect it removes.** The first attempt
+formatted `host:  {fingerprint}` inline -- a second copy of a line whose owning
+function documents, in the crate that owns it, that a probe's banner is
+comparable with every other probe's only while exactly one place produces it. It
+now routes through `banner_line_for`, wrapping in `Ok` to do so.
+
+Measured, not read: sabotaging the banner back to the endpoint turns exactly one
+test red. The real-host test does **not** catch that sabotage -- on a stable host
+all three fingerprints are equal -- and its comment now says so. What it does
+catch is the seam construction leaves open: `Fingerprint::from_topology` and
+`observe` are two derivations from that one topology, each with its own filter
+for which processors count, and they have already disagreed once, when
+`from_topology` summed core-domain membership and printed `0p` for a machine
+about to be measured on four processors.

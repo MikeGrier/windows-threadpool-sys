@@ -78,9 +78,37 @@ fn preamble(banner: &str) -> String {
 /// that changed. That is a claim about the machine drawn from a gap in the
 /// measurement: a failed read establishes neither that the host moved nor that
 /// it held still.
+/// **`measured` names the read the body describes, and that is the point.**
+/// The banner used to be built from `before` -- an *endpoint* read -- so equal
+/// endpoints printed an unqualified banner without anything having established
+/// that the middle read agreed with them. `measure_observed` returns the
+/// fingerprint of the topology it actually parsed, so passing it here makes the
+/// banner describe the body by construction rather than by a third comparison
+/// that would itself be prose able to drift.
+///
+/// `None` for a run whose discovery failed: there is no measured read to name,
+/// so the banner falls back to the first endpoint as before. That is the
+/// `report_unmeasured` path, where the body describes no topology either.
+///
+/// The endpoints keep their job. They bracket a **wider** window than
+/// `measure`'s counter bracket -- which covers only its own discovery -- so they
+/// still catch structural change the counters cannot see.
 #[must_use]
-pub fn attribution(before: &io::Result<Fingerprint>, after: &io::Result<Fingerprint>) -> String {
-    let first = banner_line_for(before);
+pub fn attribution(
+    measured: Option<&Fingerprint>,
+    before: &io::Result<Fingerprint>,
+    after: &io::Result<Fingerprint>,
+) -> String {
+    // Routed through `banner_line_for` rather than formatted here, even though
+    // wrapping in `Ok` to do it looks roundabout. Its own documentation says
+    // why: a probe's banner is comparable with every other probe's only while
+    // exactly one place produces that line, and writing `host:  {fingerprint}`
+    // here would be a second copy of its shape in a second crate -- the defect
+    // this milestone exists to remove, reintroduced by the fix for it.
+    let first = measured.map_or_else(
+        || banner_line_for(before),
+        |fingerprint| banner_line_for(&Ok(fingerprint.clone())),
+    );
     match (before, after) {
         (Ok(one), Ok(two)) if one == two => first,
         (Ok(_), Ok(_)) => format!(

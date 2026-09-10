@@ -152,7 +152,7 @@ speculative list to extend by imagination -- a fourth is added when a fourth con
 > but it needed no shared code to apply, because what generalises is the principle rather than a
 > mechanism.
 
-- [ ] **M2.5** -- Make the banner describe the read the body describes. A probe run performs
+- [x] **M2.5** -- Make the banner describe the read the body describes. A probe run performs
   **three** independent `MachineMemoryTopology::discover()` calls: `Fingerprint::discover()` for the
   banner, `measure()`'s own discovery for the body, and `Fingerprint::discover()` again. `attribution`
   compares only the two endpoints, so equal endpoints print an unqualified banner without establishing

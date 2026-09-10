@@ -80,6 +80,19 @@ pub enum Correspondence {
         /// The report's own visible evidence of doubt.
         evidence: String,
     },
+    /// The banner names one machine and the body describes another.
+    ///
+    /// The banner is the line a reader uses to decide whether two runs are
+    /// comparable at all, so a banner describing a different machine from the
+    /// body under it invalidates every comparison drawn from the report --
+    /// while each half stays locally correct, which is what let this survive
+    /// review.
+    BannerDisagreesWithBody {
+        /// The processor count the banner named.
+        banner: String,
+        /// The processor count the body reported.
+        body: String,
+    },
 }
 
 /// Every correspondence `report` violates, in the order they were checked.
@@ -97,8 +110,70 @@ pub fn check(report: &str) -> Vec<Correspondence> {
     check_claims_against_doubt(report, ndjson, &mut found);
     check_structured_pairs(report, ndjson, &mut found);
     check_counters_against_verdict(report, ndjson, &mut found);
+    check_banner_against_body(report, ndjson, &mut found);
 
     found
+}
+
+/// The banner names the machine the body describes.
+///
+/// A run makes three discoveries of the host -- one before the measurement,
+/// `measure`'s own, and one after -- and the banner used to be built from an
+/// endpoint, so it could name a different topology from the body beneath it
+/// with nothing in the report saying so.
+///
+/// **This rule survives the fix that made that unrepresentable, and is not
+/// redundant with it.** `measure_observed` now builds the banner from the body's
+/// own topology, so the two cannot come from different reads; but they are still
+/// two independent *derivations* from that one topology --
+/// `Fingerprint::from_topology` and `observe`, each with its own filter for
+/// which processors count. Those have already disagreed once, when
+/// `from_topology` summed core-domain membership and printed `0p` for a machine
+/// about to be measured on four processors. Construction closes the read gap;
+/// this closes the derivation gap, on every report rather than in one test.
+///
+/// Reads the FIRST banner line only. When the endpoint readings disagree the
+/// banner carries a second line naming the other reading, which is a reading the
+/// body deliberately does not describe -- comparing it here would report a
+/// contradiction the renderer went to some trouble to state honestly.
+fn check_banner_against_body(report: &str, ndjson: Option<&str>, found: &mut Vec<Correspondence>) {
+    let (Some(banner), Some(ndjson)) = (
+        report.lines().find(|line| line.starts_with("host:")),
+        ndjson,
+    ) else {
+        return;
+    };
+    // Absent on a report whose discovery failed: the banner reads `UNKNOWN` and
+    // `report_unmeasured` emits no processor count, so there is nothing to
+    // relate and no violation to claim.
+    let (Some(banner_count), Some(body_count)) = (
+        processors_in_banner(banner),
+        ndjson_field(ndjson, "processors"),
+    ) else {
+        return;
+    };
+
+    if banner_count != body_count {
+        found.push(Correspondence::BannerDisagreesWithBody {
+            banner: banner_count.to_owned(),
+            body: body_count.to_owned(),
+        });
+    }
+}
+
+/// The processor count a banner line names, as it was rendered.
+///
+/// The fingerprint renders as `<arch> <N>p/<M>c smt<S>`, optionally behind a
+/// `!!taint!! ` prefix, so the count is the digits immediately before `p/`.
+/// Returned as text rather than parsed, so a malformed count is reported as the
+/// mismatch it is instead of being silently discarded by a failed parse.
+fn processors_in_banner(banner: &str) -> Option<&str> {
+    let before = &banner[..banner.find("p/")?];
+    let start = before
+        .rfind(|c: char| !c.is_ascii_digit())
+        .map_or(0, |i| i + 1);
+    let digits = &before[start..];
+    (!digits.is_empty()).then_some(digits)
 }
 
 /// [`check`], as an assertion, for tests that render a report.

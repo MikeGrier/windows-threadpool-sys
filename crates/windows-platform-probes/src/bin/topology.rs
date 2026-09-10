@@ -15,7 +15,7 @@
 
 use windows_placement_probe::fingerprint::Fingerprint;
 use windows_platform_probes::report::emit_report;
-use windows_platform_probes::topology::measure;
+use windows_platform_probes::topology::measure_observed;
 use windows_platform_probes::topology_report::{attribution, report, report_unmeasured};
 
 fn main() {
@@ -48,12 +48,26 @@ fn render(out: &mut dyn std::fmt::Write) {
     // `banner_line_for`, which keeps this probe's banner the same shape as every
     // other probe's.
     let before = Fingerprint::discover();
-    let measured = measure();
+    let measured = measure_observed();
     let after = Fingerprint::discover();
-    let banner = attribution(&before, &after);
+
+    // The banner names the read the BODY describes, not an endpoint. The
+    // endpoints still bracket, and still report a disagreement across the wider
+    // window they span; what they no longer do is supply the line naming the
+    // machine, which they could do while describing a different topology from
+    // the one measured between them.
     let text = match measured {
-        Ok(observation) => report(&banner, &observation),
-        Err(error) => report_unmeasured(&banner, &error),
+        Ok((observation, fingerprint)) => {
+            let banner = attribution(Some(&fingerprint), &before, &after);
+            report(&banner, &observation)
+        }
+        Err(error) => {
+            // No measured read to name, so the banner falls back to the first
+            // endpoint -- which is honest here, because the body describes no
+            // topology either.
+            let banner = attribution(None, &before, &after);
+            report_unmeasured(&banner, &error)
+        }
     };
     let _ = write!(out, "{text}");
 }

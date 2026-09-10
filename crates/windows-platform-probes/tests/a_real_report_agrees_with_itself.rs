@@ -28,7 +28,7 @@
 
 use windows_placement_probe::fingerprint::Fingerprint;
 use windows_platform_probes::report_oracle;
-use windows_platform_probes::topology::measure;
+use windows_platform_probes::topology::measure_observed;
 use windows_platform_probes::topology_report::{attribution, report, report_unmeasured};
 
 /// The report exactly as `probe-topology` composes it.
@@ -38,14 +38,59 @@ use windows_platform_probes::topology_report::{attribution, report, report_unmea
 /// separately by the stdout test.
 fn real_report() -> (String, bool) {
     let before = Fingerprint::discover();
-    let measured = measure();
+    let measured = measure_observed();
     let after = Fingerprint::discover();
-    let banner = attribution(&before, &after);
 
     match measured {
-        Ok(observation) => (report(&banner, &observation), true),
-        Err(error) => (report_unmeasured(&banner, &error), false),
+        Ok((observation, fingerprint)) => {
+            let banner = attribution(Some(&fingerprint), &before, &after);
+            (report(&banner, &observation), true)
+        }
+        Err(error) => {
+            let banner = attribution(None, &before, &after);
+            (report_unmeasured(&banner, &error), false)
+        }
     }
+}
+
+#[test]
+fn this_host_s_banner_names_the_read_its_body_describes() {
+    // **Says exactly what it establishes, which is less than its name suggests
+    // and was measured rather than assumed.** After the construction fix the
+    // banner and the body come from ONE discovery, so this cannot catch the
+    // banner drifting back to an endpoint read -- sabotaging that turns the
+    // unit test red and leaves this one green, because on a stable host all
+    // three fingerprints are equal anyway.
+    //
+    // What it does catch is the seam the construction leaves open: the banner
+    // and the body are two independent DERIVATIONS from that one topology --
+    // `Fingerprint::from_topology` and `observe` -- each with its own idea of
+    // which processors count. They have already disagreed once, when
+    // `from_topology` summed core-domain membership and printed `0p` for a
+    // machine about to be measured on four processors. Nothing but a real host
+    // exercises the filters on a shape no fixture chose.
+    //
+    // A host whose topology cannot be read is skipped explicitly, so the skip
+    // is visible rather than a silent vacuous pass.
+    let Ok((observation, fingerprint)) = measure_observed() else {
+        return;
+    };
+
+    let banner = attribution(
+        Some(&fingerprint),
+        &Ok(fingerprint.clone()),
+        &Ok(fingerprint.clone()),
+    );
+    let named = banner
+        .lines()
+        .next()
+        .expect("attribution always renders at least the banner line");
+
+    assert!(
+        named.contains(&format!("{}p/", observation.online_processors)),
+        "the banner must name the processor count the body reports ({}): {named}",
+        observation.online_processors
+    );
 }
 
 #[test]

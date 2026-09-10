@@ -487,3 +487,73 @@ fn the_two_class_list_punctuations_are_read_as_the_same_list() {
 
     assert_eq!(check(&report), Vec::new());
 }
+
+#[test]
+fn a_banner_naming_a_different_machine_from_the_body_is_a_violation() {
+    // The M2.5 defect. Both halves are locally correct -- the banner faithfully
+    // renders one topology and the body another -- and the report reconciles
+    // them nowhere, so a reader deciding whether two runs are comparable is
+    // reading a line about a machine the numbers did not come from.
+    let report = clean_report().replace("host:  x86_64 16p/8c", "host:  x86_64 8p/8c");
+    assert!(
+        !report.contains("16p/8c"),
+        "the sabotage must actually have landed, or this test proves nothing"
+    );
+
+    assert_eq!(
+        check(&report),
+        vec![Correspondence::BannerDisagreesWithBody {
+            banner: "8".to_owned(),
+            body: "16".to_owned(),
+        }]
+    );
+}
+
+#[test]
+fn a_banner_for_a_host_that_could_not_be_read_is_accepted() {
+    // `Fingerprint::discover` failing renders `UNKNOWN` with no count in it.
+    // There is nothing to relate, and reporting a contradiction would turn a
+    // gap in the measurement into a claim about the report -- the inversion
+    // this whole crate is built to avoid.
+    let report = clean_report().replace(
+        "host:  x86_64 16p/8c",
+        "host:  UNKNOWN -- topology discovery failed: access denied",
+    );
+
+    assert_eq!(check(&report), Vec::new());
+}
+
+#[test]
+fn a_tainted_banner_is_still_read_for_its_count() {
+    // An unmeasured topology renders behind a `!!...!! ` prefix. The taint says
+    // the numbers are not to be trusted as hardware -- it does not excuse the
+    // banner from naming the same numbers the body does, and a reader
+    // reconciling the two is exactly who the marker is for.
+    let report = clean_report().replace("host:  x86_64 16p/8c", "host:  !!assumed!! x86_64 8p/8c");
+
+    assert_eq!(
+        check(&report),
+        vec![Correspondence::BannerDisagreesWithBody {
+            banner: "8".to_owned(),
+            body: "16".to_owned(),
+        }]
+    );
+}
+
+#[test]
+fn the_second_banner_line_of_a_disagreeing_bracket_is_not_compared() {
+    // When the endpoint readings differ, `attribution` prints the other reading
+    // too and says plainly that which one names the machine was not
+    // established. The body deliberately does not describe that second reading,
+    // so comparing it here would report a contradiction as a defect when it is
+    // the renderer being honest -- an oracle that over-constrains fails in the
+    // more expensive direction.
+    let report = clean_report().replace(
+        "host:  x86_64 16p/8c",
+        "host:  x86_64 16p/8c\nhost:  x86_64 8p/8c\nHOST READINGS DISAGREE: the two readings above \
+         bracket the measurement\nand differ, so which of them names the machine the body below \
+         describes\nwas not established.",
+    );
+
+    assert_eq!(check(&report), Vec::new());
+}
