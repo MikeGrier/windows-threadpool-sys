@@ -353,3 +353,51 @@ fn a_fully_qualified_path_is_unaffected_by_the_current_directory() {
     assert_eq!(resolve(r"C:\a\..\b"), r"C:\b");
     assert_eq!(resolve("C:/a/b//c"), r"C:\a\b\c");
 }
+
+#[test]
+fn a_drive_relative_path_is_rooted_at_that_drive_and_not_the_process_directory() {
+    // The third rooting form, and the one whose rule is least believable: a
+    // drive-relative path is rooted at *that drive's* current directory, which
+    // Windows records per drive and which moves independently of the process
+    // current directory.
+    //
+    // Pinned without mutating anything. Setting a `=X:` variable would be the
+    // direct test, but it is process-global and these tests share a process, so
+    // the two observable consequences are asserted instead:
+    let cwd = current_directory();
+    let Some(drive) = cwd.chars().next().filter(|c| c.is_ascii_alphabetic()) else {
+        // A UNC current directory has no drive letter, so neither consequence
+        // is expressible. Skipping is visible here rather than silently passing.
+        return;
+    };
+
+    // 1. For the drive the process is ALREADY on, that drive's recorded
+    //    directory is the process current directory -- so a drive-relative path
+    //    lands exactly where a plain relative one does.
+    assert_eq!(
+        resolve(&format!("{drive}:foo")),
+        format!(r"{}\foo", cwd.trim_end_matches('\\')),
+        "on the current drive, the per-drive directory is the process one"
+    );
+
+    // 2. For a drive the process has never visited there is no recorded
+    //    directory, so it roots at that drive's root -- NOT under the process
+    //    current directory, which is what makes this a different rule rather
+    //    than a spelling of the relative one. The drive need not exist: nothing
+    //    consults the volume.
+    let other = if drive.eq_ignore_ascii_case(&'X') {
+        'Y'
+    } else {
+        'X'
+    };
+    let resolved = resolve(&format!("{other}:foo"));
+    assert_eq!(
+        resolved,
+        format!(r"{other}:\foo"),
+        "an unvisited drive roots at its own root"
+    );
+    assert!(
+        !resolved.starts_with(cwd.trim_end_matches('\\')),
+        "and carries none of the process current directory ({cwd}): {resolved}"
+    );
+}
