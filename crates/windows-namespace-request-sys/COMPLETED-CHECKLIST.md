@@ -20,7 +20,7 @@ Append-only. Newest groups at the bottom.
   `GetFullPathNameW` **itself** writes the `=X:` entry -- when resolving for a
   drive other than the current one, and when the recorded entry is absent or
   rejected, in which case it is written as the drive root. (An accepted entry is
-  left alone, and the current-drive form touches nothing.) The code under test
+  left alone, and the current-drive form writes nothing.) The code under test
   therefore already mutates that state on the very path these tests exercise, so
   a test that sets it first introduces no hazard that resolving alone did not,
   and there was nothing left to decide. Isolation across the tests comes from
@@ -39,11 +39,21 @@ Append-only. Newest groups at the bottom.
   history was briefly wrong: this entry described the selection as a `W`/`U`
   **pair**, matching the helper as written. That helper validated only its first
   letter and returned the second unchecked, so the guarantee the pair implied did
-  not hold. The lists are now three letters each -- `X`/`Y`/`P`, `W`/`U`/`N`,
-  `V`/`T`/`M`, `R`/`S`/`K`, `G`/`H`/`J` -- and every candidate is checked against
-  both the current drive and the probe drive.)*
+  not hold. The lists are now three letters each, every candidate is checked
+  against both the current drive and the probe drive, and the lists themselves
+  live in one table in [tests.rs](src/full_path/tests.rs) with a test enforcing
+  that they stay disjoint and long enough. This note deliberately does NOT
+  enumerate them: an earlier version did, and named five lists after a sixth had
+  been added -- so a reader picking letters for a seventh would have consulted
+  an inventory missing three of the letters already in use. The table is the
+  inventory.)*
 
-  The sibling test
-  `a_drive_relative_path_is_rooted_at_that_drive_and_not_the_process_directory`
-  keeps its weaker form and now says so: without controlling the entry it can
-  only bound the arm.
+  The sibling test keeps its weaker form and now says so: without controlling
+  the entry it can only bound the arm.
+
+  *(Later correction: that sibling was named
+  `a_drive_relative_path_is_rooted_at_that_drive_and_not_the_process_directory`,
+  and the name claimed two things its assertions do not reach -- `ends_with`
+  accepts any base, including the process directory, and an accepted entry is
+  used verbatim so the result need not be on that drive at all. It is now
+  `a_drive_relative_path_carries_its_component_and_the_current_drive_uses_the_process_directory`.)*

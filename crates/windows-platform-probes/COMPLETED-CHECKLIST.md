@@ -126,7 +126,10 @@ request as it was written, and quotes the module doc as it read before the corre
   *(Later correction: the second half stood, the first did not. "Touches no filesystem" was measured
   false while carrying out this item -- resolving `X:foo` for a non-current drive distinguishes an
   existing directory from an existing file from a missing one, and rewrites the `=X:` entry. What
-  Microsoft documents is only that the call does not VERIFY its result. See
+  Microsoft documents is only that the call does not VERIFY its result. Two smaller things in the
+  paragraph above also turned out to be stated too broadly: the per-drive entry is consulted for a
+  drive OTHER than the current one, and on the current drive it makes no difference to the result --
+  and "reads" is a mechanism word that observation cannot reach either way. See
   [../windows-namespace-request-sys/DESIGN-NOTES.md](../windows-namespace-request-sys/DESIGN-NOTES.md)
   -> `D-18`.)*
 

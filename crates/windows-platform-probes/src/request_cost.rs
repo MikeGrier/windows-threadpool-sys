@@ -55,12 +55,15 @@
 //! copy. So "what does a request cost" is not only an allocation question, and
 //! measuring only the path would understate it.
 //!
-//! # Preparing a path is a Win32 call, not an allocation
+//! # Preparing a path is a Win32 call as well as an allocation
 //!
 //! This probe was written expecting `prepare` to be an allocation and a copy.
 //! It is not *only* that -- the qualifier matters, because the decomposition
-//! below charges the measured gap with one net allocation, and a heading saying
-//! flatly "not an allocation" would contradict it: it calls
+//! below charges the measured gap with one net allocation, so a heading saying
+//! flatly "not an allocation" contradicts it. This heading said exactly that
+//! for two rounds after the sentence you are reading was written to explain why
+//! it must not: the correction went into the prose and stopped one line short
+//! of the heading above it. What `prepare` additionally does is call
 //! **`GetFullPathNameW`** to resolve the path against the
 //! process working directory, because [the namespace session] settled that the
 //! path is resolved at submission -- the process CWD is mutable by any thread,

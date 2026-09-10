@@ -28,10 +28,15 @@
 //! entry exists:
 //!
 //! 1. It rewrites the string. `.` and `..` are collapsed, `/` becomes `\`, and
-//!    trailing dots and spaces are trimmed. This part *is* lexical -- pure
-//!    string work over the input, reading no process state. `C:\a\..\b` becomes
-//!    `C:\b` whatever the current directory happens to be, and whether or not
-//!    `C:\a` exists.
+//!    trailing dots and spaces are trimmed -- but **not uniformly across
+//!    components**, and an earlier revision of this list said so without
+//!    qualification. Measured: the *final* component loses any run of trailing
+//!    dots and spaces (`C:\name...` and `C:\name   ` both become `C:\name`),
+//!    while an *intermediate* component loses a single trailing dot and nothing
+//!    else -- `C:\a.\b` becomes `C:\a\b`, but `C:\a...\b` and `C:\a \b` are
+//!    returned unchanged. This part *is* lexical -- pure string work over the
+//!    input, reading no process state. `C:\a\..\b` becomes `C:\b` whatever the
+//!    current directory happens to be, and whether or not `C:\a` exists.
 //! 2. It **roots** a path that is not fully qualified, using mutable process
 //!    state -- and on one form it also *changes* that state. There are three
 //!    such forms:
@@ -44,8 +49,8 @@
 //!      is why this says root and not drive.
 //!    * A drive-relative path like `C:foo` is rooted at the entry Windows
 //!      keeps for that drive in the hidden `=C:` environment variables. For
-//!      the *current* drive that entry is ignored and the process current
-//!      directory wins.
+//!      the *current* drive that entry makes no difference to the result and
+//!      the process current directory wins.
 //!
 //! **A whole class of input short-circuits both.** When the input names a
 //! legacy device and nothing else, it resolves into the device namespace and is

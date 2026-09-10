@@ -119,8 +119,17 @@ were *enumerations* -- which is the form this kind of error likes.
   spellings `COM\u{00b9}`, `COM\u{00b2}`, `COM\u{00b3}` and their `LPT`
   equivalents. Those are exactly the members a hand-written denylist misses, and
   the documentation asserted a closed list without them until a review measured
-  it. The tests in [tests.rs](src/full_path/tests.rs) now pin every documented spelling so the
-  next omission fails CI instead of a review.
+  it. The tests in [tests.rs](src/full_path/tests.rs) now pin every documented
+  spelling so the next omission fails CI instead of a review -- each positive
+  spelling against the device path it produces, and each negative one against
+  its full rooted result.
+
+  That last distinction was itself a later correction, and it is the reason the
+  sentence now says which KIND of pinning each case gets. The claim "pins every
+  documented spelling" was written while one negative spelling, `CON:x`, was
+  covered only by `!starts_with("\\.\\")` -- a predicate the unrooted literal
+  satisfies. So the claim was true of the list and false of the strength, which
+  is the same shape as the trimming generalisation two entries below.
 
 ### The measurement that was itself unmeasured
 

@@ -374,21 +374,34 @@ fn a_fully_qualified_path_is_unaffected_by_the_current_directory() {
 }
 
 #[test]
-fn a_drive_relative_path_is_rooted_at_that_drive_and_not_the_process_directory() {
-    // The third rooting form. A drive-relative path is rooted at *that drive's*
-    // current directory -- and the rule has two arms, which is the part that
-    // gets missed:
+fn a_drive_relative_path_carries_its_component_and_the_current_drive_uses_the_process_directory() {
+    // **The name says what the two assertions reach, and an earlier one did
+    // not.** This was
+    // `a_drive_relative_path_is_rooted_at_that_drive_and_not_the_process_directory`,
+    // which claims more than anything here shows, in two separate ways. The
+    // other-drive assertion is `ends_with("\\foo")`, which accepts ANY base
+    // including the process directory -- so it cannot say "not the process
+    // directory". And "rooted at that drive" is not even true in general: an
+    // accepted entry is used verbatim and may name a directory on a different
+    // drive entirely, which is the sibling test's whole point.
+    //
+    // The body already said it only bounds the arm. The name did not, and the
+    // name is what a reader takes away -- the same defect as the test called
+    // `..._is_neither_consulted_nor_rewritten` before it was renamed.
+    //
+    // The third rooting form, with two arms, which is the part that gets
+    // missed:
     //
     //   * For a drive OTHER than the current one, Windows reads the hidden
     //     `=X:` entry recorded for it.
-    //   * For the CURRENT drive the entry is ignored entirely and the process
-    //     current directory wins. Measured: setting `=Q:` while the process is
-    //     on `Q:` changes nothing.
+    //   * For the CURRENT drive the entry makes no difference to the result and
+    //     the process current directory wins. Measured: setting `=Q:` while the
+    //     process is on `Q:` changes nothing.
     //
     // **This test does not mutate `=X:`, but the call it exercises may.**
     // Measured: resolving `X:foo` for a non-current drive checks that drive's
     // entry and WRITES it to `X:\` when the entry is absent or rejected. An
-    // accepted entry is left alone, and the current-drive form touches nothing
+    // accepted entry is left alone, and the current-drive form writes nothing
     // -- so this is not "every resolution", but it does mean an ordinary host
     // with no entry has one written merely by running this test. That is
     // a property of the call, documented in the module doc; it is noted here so
@@ -407,7 +420,7 @@ fn a_drive_relative_path_is_rooted_at_that_drive_and_not_the_process_directory()
     // The other-drive arm needs no drive letter from the current directory --
     // under a UNC current directory every letter is "other" -- so it runs
     // unconditionally and this test never degenerates to a silent skip.
-    let other = probe_drive_from(&['X', 'Y', 'P'], None);
+    let other = probe_drive_from(probe_drives::ROOTED_AT_THAT_DRIVE, None);
 
     // This test controls no entry, but the CALL does: resolving for a
     // non-current drive writes `=X:` whenever the recorded entry is absent or
@@ -418,11 +431,6 @@ fn a_drive_relative_path_is_rooted_at_that_drive_and_not_the_process_directory()
     let _restore = BorrowedDriveEntry::take(other);
     let resolved = resolve(&format!("{other}:foo"));
 
-    // Compared case-insensitively, because the case is not this test's to
-    // choose: the letter comes back as Windows recorded it, not as it was
-    // typed. This host returns `q:\...` for an uppercase `Q:` input, because the
-    // shell was started with a lowercase `cd`. An earlier version compared bytes
-    // and would have failed on a drive visited in lowercase.
     // Only what is invariant without controlling the entry. An earlier version
     // required the result to start with `X:\`, which the verbatim rule breaks;
     // its replacement compared against the current directory, which `other`
@@ -440,8 +448,8 @@ fn a_drive_relative_path_is_rooted_at_that_drive_and_not_the_process_directory()
         assert_eq!(
             resolve(&format!("{drive}:foo")),
             format!(r"{}\foo", cwd.trim_end_matches('\\')),
-            "on the current drive, the per-drive entry is ignored and the \
-             process directory is used"
+            "on the current drive, the per-drive entry makes no difference to \
+             the result and the process directory is used"
         );
     }
 }
@@ -518,23 +526,53 @@ fn the_current_drives_entry_does_not_affect_resolution_and_is_not_rewritten() {
 }
 
 #[test]
-fn trailing_dots_and_spaces_are_trimmed_from_ordinary_components() {
+fn trailing_dot_and_space_trimming_differs_between_final_and_intermediate_components() {
     // The module doc says the rewrite trims trailing dots and spaces. Until now
     // that was only exercised through a final `.` component (which is the
     // separate `.`-collapsing rule) and through device spellings (which take
     // the short-circuit and never reach the ordinary path). Neither pins this.
     //
-    // Every case measured before being written down.
+    // **An earlier version of this test generalised the rule, and the
+    // generalisation is false.** It carried one intermediate case, `C:\a.\b` ->
+    // `C:\a\b`, under the comment "trimming applies per component, not only at
+    // the end of the path". Measured, a component's position decides what it
+    // loses:
+    //
+    //   final:        C:\name...   -> C:\name     (a RUN of dots goes)
+    //                 C:\name      -> C:\name     (trailing spaces go)
+    //   intermediate: C:\a.\b      -> C:\a\b      (ONE trailing dot goes)
+    //                 C:\a.b.\c    -> C:\a.b\c    (inner dots are not special)
+    //                 C:\a...\b    -> unchanged   (a run does NOT go)
+    //                 C:\a \b      -> unchanged   (a space does NOT go)
+    //                 C:\a. \b     -> unchanged
+    //
+    // **The preservation cases are the load-bearing half**, and their absence
+    // is what let the wrong generalisation stand: with only the transforming
+    // inputs, an implementation trimming every component's trailing dots and
+    // spaces satisfies the entire test while being wrong about three of the
+    // five intermediate spellings. A reviewer demonstrated exactly that against
+    // the previous seven assertions.
+    //
+    // Every case measured before being written down -- which was also claimed
+    // last time, and was true of the cases present. What was not measured was
+    // the sentence generalising them.
     for (input, expected) in [
+        // The final component loses any run of trailing dots and spaces.
         (r"C:\name.", r"C:\name"),
         (r"C:\name ", r"C:\name"),
         (r"C:\name...", r"C:\name"),
         (r"C:\name   ", r"C:\name"),
         (r"C:\name. ", r"C:\name"),
-        // Trimming applies per component, not only at the end of the path.
-        (r"C:\a.\b", r"C:\a\b"),
         // An extension is not special: the trailing dot goes, the rest stays.
         (r"C:\name.txt.", r"C:\name.txt"),
+        // An intermediate component loses a single trailing dot ...
+        (r"C:\a.\b", r"C:\a\b"),
+        (r"C:\a.b.\c", r"C:\a.b\c"),
+        // ... and nothing else. These are the cases that fail the broad rule.
+        (r"C:\a...\b", r"C:\a...\b"),
+        (r"C:\a \b", r"C:\a \b"),
+        (r"C:\a. \b", r"C:\a. \b"),
+        (r"C:\a b \c", r"C:\a b \c"),
     ] {
         assert_eq!(resolve(input), expected, "trimming {input:?}");
     }
@@ -549,7 +587,13 @@ fn a_name_containing_a_device_word_is_rooted_under_the_current_directory() {
     //
     let base = current_directory();
     let base = base.trim_end_matches('\\');
-    for name in ["CON.txt", "CONIN", "COM0", "COM10", r"a\CON"] {
+    // `CON:x` is here because it was NOT, and the negative test alone cannot
+    // carry it: that test asserts only `!starts_with("\\\\.\\")`, which the
+    // unrooted literal `CON:x` satisfies. So the one spelling whose rooting is
+    // least obvious -- a device word followed by a colon, where `CON:` itself
+    // IS a device -- was the one nothing pinned. Measured: `<cwd>\CON:x`, with
+    // the colon carried through untouched.
+    for name in ["CON.txt", "CONIN", "COM0", "COM10", r"a\CON", "CON:x"] {
         assert_eq!(
             resolve(name),
             format!(r"{base}\{name}"),
@@ -662,11 +706,28 @@ fn probe_directory(tag: &str) -> ProbeDir {
     let temp = std::env::temp_dir();
     if canonical_drive_rooted(&temp) {
         let path = temp.join(format!("wnrs-{}-{tag}", std::process::id()));
-        std::fs::create_dir_all(&path).expect("create the probe directory");
-        return ProbeDir {
-            path,
-            created: true,
+
+        // `create_dir`, not `create_dir_all`, and the difference is ownership
+        // rather than parents. `create_dir_all` SUCCEEDS on a directory that
+        // already exists, so setting `created` after it recorded a claim this
+        // fixture had not established -- and `Drop` then removes the path on
+        // the strength of that claim. The name is `%TEMP%\wnrs-<pid>-<tag>`,
+        // which an interrupted earlier run leaves behind and which Windows can
+        // hand back to a later process when it reuses the PID. The blast radius
+        // is small, because `remove_dir` refuses a non-empty directory -- but
+        // "small" is not the point. Deleting something on an ownership claim
+        // nothing checked is the same defect as asserting a mechanism nothing
+        // measured, and this file exists to stop doing that.
+        //
+        // An existing directory is still perfectly usable as a probe; it is
+        // just not ours to remove.
+        let created = match std::fs::create_dir(&path) {
+            Ok(()) => true,
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => false,
+            Err(e) => panic!("create the probe directory {}: {e}", path.display()),
         };
+
+        return ProbeDir { path, created };
     }
 
     // Not creating anything here, so no write permission is needed on a host
@@ -707,6 +768,80 @@ fn probe_directory(tag: &str) -> ProbeDir {
         created: false,
     }
 }
+/// The candidate drive letters, one list per test that mutates a `=X:` entry.
+///
+/// **Centralised so the properties these tests depend on are CHECKED rather
+/// than restated.** Both were previously prose -- a doc comment saying the
+/// lists are disjoint, and an archived note enumerating them -- and prose
+/// drifted: the archive named five lists after the sixth had been added, so a
+/// reader picking letters for a seventh would have consulted an inventory
+/// missing three of the eighteen letters already in use. Nothing checked
+/// either claim, because nothing could: the lists were literals at six call
+/// sites with no table to read.
+///
+/// [`the_probe_drive_candidate_lists_are_disjoint_and_large_enough`] now reads
+/// this table, so adding a list that collides -- or one too short for
+/// [`probe_drive_from`]'s guarantee -- fails a test instead of a review.
+mod probe_drives {
+    pub const ROOTED_AT_THAT_DRIVE: &[char] = &['X', 'Y', 'P'];
+    pub const VERBATIM_ENTRY: &[char] = &['W', 'U', 'N'];
+    pub const REJECTED_ENTRY: &[char] = &['V', 'T', 'M'];
+    pub const LONG_ENTRY: &[char] = &['R', 'S', 'K'];
+    pub const BORROW_GUARD: &[char] = &['G', 'H', 'J'];
+    pub const EMPTY_VS_ABSENT: &[char] = &['E', 'F', 'B'];
+
+    /// Every list above. A new list that is not added here is not covered by
+    /// the disjointness test, so keep them together.
+    pub const ALL: &[(&str, &[char])] = &[
+        ("ROOTED_AT_THAT_DRIVE", ROOTED_AT_THAT_DRIVE),
+        ("VERBATIM_ENTRY", VERBATIM_ENTRY),
+        ("REJECTED_ENTRY", REJECTED_ENTRY),
+        ("LONG_ENTRY", LONG_ENTRY),
+        ("BORROW_GUARD", BORROW_GUARD),
+        ("EMPTY_VS_ABSENT", EMPTY_VS_ABSENT),
+    ];
+}
+
+#[test]
+fn the_probe_drive_candidate_lists_are_disjoint_and_large_enough() {
+    for (name, list) in probe_drives::ALL {
+        // `probe_drive_from` excludes at most two letters -- the current drive
+        // and the probe directory's drive -- so three candidates guarantee a
+        // survivor. This is the premise of the panic in that function, checked
+        // here rather than left to the caller as the doc comment used to.
+        assert!(
+            list.len() >= 3,
+            "{name} has {} candidates, and at most two can be excluded, so \
+             fewer than three cannot guarantee a survivor",
+            list.len()
+        );
+
+        let mut seen = list.to_vec();
+        seen.sort_unstable();
+        seen.dedup();
+        assert_eq!(seen.len(), list.len(), "{name} repeats a letter");
+    }
+
+    for (a_name, a) in probe_drives::ALL {
+        for (b_name, b) in probe_drives::ALL {
+            if a_name == b_name {
+                continue;
+            }
+            let shared: Vec<char> = a
+                .iter()
+                .copied()
+                .filter(|c| b.iter().any(|d| d.eq_ignore_ascii_case(c)))
+                .collect();
+            assert!(
+                shared.is_empty(),
+                "{a_name} and {b_name} share {shared:?}, so the two tests can \
+                 select the same drive and race under libtest's \
+                 thread-per-test model"
+            );
+        }
+    }
+}
+
 /// A drive letter to probe with, drawn from `candidates` and guaranteed to be
 /// neither the current drive nor `avoid`.
 ///
@@ -716,13 +851,16 @@ fn probe_directory(tag: &str) -> ProbeDir {
 /// excluded the caller could still be handed the current drive. Measured: with
 /// the process on `U:` and `%TEMP%` on a `subst`-ed `W:`, the verbatim test
 /// selected `U` and then asserted the *other-drive* contract while exercising
-/// the *current-drive* arm, which is the one case where the entry is ignored.
+/// the *current-drive* arm, which is the one case where the entry makes no
+/// difference to the result.
 /// It failed, but the mode is worse than a failure: the helper's own doc
 /// promised a guarantee it never enforced.
 ///
-/// Three candidates against at most two exclusions, so one always survives; the
-/// assertion is there because that argument is about the caller's list and
-/// nothing here can check it.
+/// Three candidates against at most two exclusions, so one always survives. The
+/// panic remains because that argument is about the caller's list, which this
+/// function cannot see -- but the argument is no longer only an argument:
+/// [`the_probe_drive_candidate_lists_are_disjoint_and_large_enough`] checks it
+/// against every list in [`probe_drives`].
 ///
 /// Callers pass disjoint lists, so no two tests can select the same letter and
 /// race under libtest's thread-per-test model.
@@ -916,7 +1054,7 @@ fn a_drive_relative_path_uses_that_drives_entry_verbatim_and_rewrites_a_bad_one(
     // cross-drive property below would go unexercised.
     let probe_dir = probe_directory("verbatim");
     let probe = probe_dir.path.to_str().expect("the probe path is UTF-8");
-    let drive = probe_drive_from(&['W', 'U', 'N'], probe_dir.drive());
+    let drive = probe_drive_from(probe_drives::VERBATIM_ENTRY, probe_dir.drive());
     let _restore = BorrowedDriveEntry::take(drive);
 
     assert_ne!(
@@ -999,7 +1137,7 @@ fn a_rejected_drive_entry_is_replaced_by_the_drive_root() {
     // Pinned because the distinction is not guessable and the doc asserts it.
     let probe_dir = probe_directory("shape");
     let accepted = probe_dir.path.to_str().expect("the probe path is UTF-8");
-    let drive = probe_drive_from(&['V', 'T', 'M'], probe_dir.drive());
+    let drive = probe_drive_from(probe_drives::REJECTED_ENTRY, probe_dir.drive());
     let _restore = BorrowedDriveEntry::take(drive);
 
     // The control: this exact directory IS accepted in canonical form, so the
@@ -1082,7 +1220,7 @@ fn a_long_drive_entry_round_trips_through_the_reader() {
     // 1200 units is comfortably past the 256 the reader starts with and past
     // the 1024 an earlier fixed-size version used, and is a legitimate value: a
     // per-drive entry is a path, and long paths reach far beyond this.
-    let drive = probe_drive_from(&['R', 'S', 'K'], None);
+    let drive = probe_drive_from(probe_drives::LONG_ENTRY, None);
     let _restore = BorrowedDriveEntry::take(drive);
 
     let long = format!(r"C:\{}", "a".repeat(1200));
@@ -1102,7 +1240,7 @@ fn a_borrowed_drive_entry_is_restored_even_when_the_borrower_panics() {
     // takes it -- so trusting it would mean shipping an untested defence
     // against the exact failure it is there for. This takes the path on
     // purpose.
-    let drive = probe_drive_from(&['G', 'H', 'J'], None);
+    let drive = probe_drive_from(probe_drives::BORROW_GUARD, None);
 
     // The outer guard is not ceremony. This test installs a sentinel to watch
     // the inner guard put back, and without it that install would destroy
@@ -1145,7 +1283,7 @@ fn an_empty_drive_entry_is_distinguished_from_an_absent_one() {
     // The consequence is what makes it worth a test rather than a fix: with the
     // two collapsed, restoring an inherited EMPTY entry deletes it, so the guard
     // written to preserve process state destroys it in exactly one case.
-    let drive = probe_drive_from(&['E', 'F', 'B'], None);
+    let drive = probe_drive_from(probe_drives::EMPTY_VS_ABSENT, None);
     let _outer = BorrowedDriveEntry::take(drive);
 
     set_drive_entry(drive, Some(""));

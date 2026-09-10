@@ -290,8 +290,14 @@ fn render(out: &mut dyn std::fmt::Write) {
         // The first was wrong because a timing loop cannot establish a kernel
         // transition. The second, which replaced it, is wrong for a symmetric
         // reason: `GetFullPathNameW` consults the process current directory,
-        // and for a drive-relative path the per-drive current directory held in
-        // the `=C:` environment variables, so it is not pure string work. A
+        // and for a drive-relative path naming a drive OTHER than the current
+        // one the per-drive current directory held in the `=C:` environment
+        // variables, so it is not pure string work. (On the current drive that
+        // entry makes no difference to the result; whether it is read is not
+        // observable and is not claimed. The qualifier was missing here for two
+        // rounds after the module doc above gained it -- the sweep reached the
+        // module doc and the emitted report and stopped short of this inline
+        // comment.) A
         // genuinely lexical canonicalizer is a different call
         // (`PathCchCanonicalizeEx`), and it is deliberately NOT the one
         // `prepare` wants -- resolving against the CWD at submission is the

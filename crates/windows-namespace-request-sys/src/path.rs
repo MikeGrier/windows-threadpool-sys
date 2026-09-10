@@ -25,7 +25,7 @@
 //! naming another drive the entry recorded for it in the `=C:` environment
 //! variables -- used verbatim when accepted, so it need not even be on that
 //! drive, and replaced by the drive root when not (for the current drive the
-//! process directory is used and the entry is ignored). It is
+//! process directory is used and the entry makes no difference). It is
 //! therefore not a lexical call as a whole, which is what makes resolving on
 //! the submitting thread meaningful.
 //!
