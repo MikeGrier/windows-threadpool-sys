@@ -245,23 +245,37 @@ fn a_root_relative_path_takes_the_root_and_not_the_whole_directory() {
     let cwd = current_directory();
     let resolved = resolve(r"\foo");
 
-    assert!(
-        resolved.ends_with(r"\foo"),
-        "a root-relative path keeps its component: {resolved}"
+    // Computed, not inferred. An earlier version of this test derived the root
+    // by trimming the result it was checking, and guarded its one distinguishing
+    // assertion behind a length comparison -- so with the current directory at a
+    // drive root, where a root-relative path and a relative one coincide, the
+    // guard was false and the test passed having asserted almost nothing. A
+    // check whose strength depends on where it runs is the vacuous pass this
+    // repository keeps paying for.
+    let root = root_of(&cwd);
+    assert_eq!(
+        resolved,
+        format!(r"{root}foo"),
+        "a root-relative path is rooted at the root of the current directory \
+         ({cwd}, root {root}), and carries none of its subtree"
     );
-    assert!(
-        cwd.starts_with(resolved.trim_end_matches(r"foo")),
-        "and is rooted at a PREFIX of the current directory ({cwd}), not under it: {resolved}"
-    );
-    // The distinguishing property: it does NOT include the current directory's
-    // subtree, so unless the current directory is itself the root, the two differ.
-    if cwd.trim_end_matches('\\').len() > resolved.trim_end_matches(r"\foo").len() {
-        assert_ne!(
-            resolved,
-            format!(r"{}\foo", cwd.trim_end_matches('\\')),
-            "a root-relative path is not the same as a relative one"
-        );
+}
+
+/// The root of an absolute Windows path, including its trailing separator.
+///
+/// C:\a\b gives C:\, and \\server\share\a gives \\server\share\ -- which
+/// is why this returns a *root* rather than a drive: under a UNC current
+/// directory there is no drive letter to return.
+fn root_of(path: &str) -> String {
+    if let Some(rest) = path.strip_prefix(r"\\") {
+        // server\share, then everything after it.
+        let mut parts = rest.splitn(3, '\\');
+        let server = parts.next().unwrap_or_default();
+        let share = parts.next().unwrap_or_default();
+        return format!(r"\\{server}\{share}\");
     }
+    let (drive, _) = path.split_at(2);
+    format!(r"{drive}\")
 }
 
 #[test]
@@ -299,7 +313,14 @@ fn superscript_digits_are_device_names_too() {
     // documentation asserted did not exist until a review measured them. If a
     // future Windows build stops accepting them this test says so, which is the
     // whole reason it is here rather than left as prose.
-    for spelling in ["COM\u{00b9}", "COM\u{00b2}", "COM\u{00b3}", "LPT\u{00b9}"] {
+    for spelling in [
+        "COM\u{00b9}",
+        "COM\u{00b2}",
+        "COM\u{00b3}",
+        "LPT\u{00b9}",
+        "LPT\u{00b2}",
+        "LPT\u{00b3}",
+    ] {
         let resolved = resolve(spelling);
         assert!(
             resolved.starts_with(r"\\.\"),

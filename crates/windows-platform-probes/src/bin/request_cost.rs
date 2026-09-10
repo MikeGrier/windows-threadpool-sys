@@ -313,11 +313,11 @@ fn render(out: &mut dyn std::fmt::Write) {
         );
         let _ = writeln!(
             out,
-            "  touches no filesystem -- and it is not an allocation, so most of the"
+            "  verifies nothing it produces -- and it is not an allocation, so most"
         );
         let _ = writeln!(
             out,
-            "  cost above is work no allocation scheme can remove. Whether any of"
+            "  of the cost above is work no allocation scheme can remove. Whether any"
         );
         let _ = writeln!(
             out,

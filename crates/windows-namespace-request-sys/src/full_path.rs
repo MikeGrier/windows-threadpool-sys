@@ -224,7 +224,8 @@ impl From<Win32Error> for FullPathError {
 /// use windows_namespace_request_sys::full_path::ResolveFullPath;
 /// use wtf_string::Wtf16String;
 ///
-/// // `.` and `..` are resolved without touching the filesystem.
+/// // `.` and `..` are collapsed as string work, with no component verified:
+/// // this holds whether or not `C:\Windows\System32` exists.
 /// let resolved = ResolveFullPath::new(Wtf16String::from(r"C:\Windows\System32\..\.\Temp"))
 ///     .perform()?
 ///     .to_string_lossy();

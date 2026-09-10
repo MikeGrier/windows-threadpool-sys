@@ -4358,15 +4358,20 @@ fn a_small_handshake_completes_and_reports_a_positive_round_trip() {
 //
 // `request_cost::measure` builds its long-path sample on a hard-coded `C:`, and
 // two review passes read that as a portability bug: a machine with no `C:`
-// volume would panic on the `expect` rather than measure. It would not, and the
-// reason is the same fact the probe's own headline conclusion rests on -- that
-// `GetFullPathNameW` resolves a fully-qualified path without touching the
-// filesystem. A volume that does not exist is therefore not consulted.
+// volume would panic on the `expect` rather than measure. It would not, because
+// resolving a fully-qualified path consults no volume -- the same fact the
+// probe's account of its own nanoseconds rests on.
 //
 // That was an argument, and an argument is what a reviewer had to disbelieve.
-// This is the measurement. It also pins the "touches no filesystem" claim
-// itself, which nothing else here does: if that claim ever stops holding, the
-// probe's account of where its nanoseconds go is wrong, and this fails first.
+// This is the measurement.
+//
+// **It pins less than an earlier version of this comment claimed.** That version
+// said it pinned "touches no filesystem". It cannot: succeeding against a volume
+// that does not exist shows the volume was never *consulted*, which is an
+// absence of verification, not an absence of I/O. No black-box test can
+// establish the latter, and the owning crate's `D-18` now says so. What this
+// does pin is exactly what the probe needs -- that a missing volume does not
+// make the measurement fail.
 
 #[test]
 fn preparing_a_path_needs_no_volume_behind_its_drive_letter() {
