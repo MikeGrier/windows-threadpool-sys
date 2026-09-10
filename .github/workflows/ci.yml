@@ -298,7 +298,8 @@ jobs:
       # through `emit_report`, which prints what was already established before a
       # panic -- machinery that only reaches a reader if the step runs at all.
       - name: probe magnitudes (doorbell cost)
-        if: '!cancelled()'        run: cargo run -p windows-platform-probes --bin probe-doorbell-cost --locked --release
+        if: '!cancelled()'
+        run: cargo run -p windows-platform-probes --bin probe-doorbell-cost --locked --release
       # Read with the doorbell probe above: together they say whether the
       # queue's mechanics or the request's own cost deserves the attention.
       - name: probe magnitudes (request cost)

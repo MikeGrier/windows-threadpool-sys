@@ -185,6 +185,28 @@ M22-M29, and [CHECKLIST-io-domains.md](CHECKLIST-io-domains.md) M30-M33.
   every capture site through it, and prove it on both PowerShell hosts.
   -> [completed 2026-09-07](COMPLETED-CHECKLIST.md#m344)
 
+- [ ] **M34.5** -- **Validate that every workflow file is well-formed YAML**, which nothing currently
+  does. [check-workflow-refs.ps1](tools/check-workflow-refs.ps1) checks that 62 *references* resolve
+  across 5 files, by regex; it does not parse the document, so a file GitHub Actions would reject
+  outright passes it.
+
+  **Measured, not supposed.** A conflict resolution in merge `1abcaaf` welded a step's `if:` and
+  `run:` onto one line in [ci.yml](.github/workflows/ci.yml) -- `if: '!cancelled()'        run: cargo
+  run ...` -- which is not valid YAML. It survived the merge, survived the workflow gate (re-run
+  against the damaged file: exit 0, same 62 references), and would have been caught only by pushing
+  and watching Actions refuse the workflow. It was found by eye, three commits later, while editing
+  the same step for an unrelated reason.
+
+  The gap is the gate's shape rather than a bug in it: a regex over lines cannot notice that two keys
+  share one. The fix wants a real parser, and the choice is a decision rather than a detail --
+  `actionlint` validates workflow *semantics* (expression syntax, context availability, `needs`
+  graphs) and not merely YAML, but is another CI dependency; `js-yaml` or a PowerShell YAML module
+  parses the document and nothing more. Prefer `actionlint`: the same merge could equally have
+  produced a syntactically valid file with a broken `if:` expression, which a YAML parser would pass.
+
+  Whatever is chosen must be verified by **re-injecting this exact weld** and confirming the gate
+  goes red, since the point of the item is that the current one does not.
+
 ## M35 -- Measure what the long-path opt-in actually does
 
 - [x] **M35.1** -- Measure whether the long-path opt-in lifts `MAX_PATH` for a relative path, and
