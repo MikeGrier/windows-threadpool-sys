@@ -275,7 +275,13 @@ fn watcher_getvolumeinformationbyhandle_shape_is_reachable() {
 
 #[test]
 fn enumeration_getfullpathname_shape_is_reachable() {
-    // path.rs:149 -- lexical resolution with a null file-part out-param.
+    // enumeration path.rs:149 -- resolution with a null file-part out-param.
+    // Qualified by crate because this is the one consumer filename that also
+    // exists in THIS crate, and a reviewer resolved it against the local
+    // `src/path.rs` -- where line 149 is unrelated -- and reported the citation
+    // as stale. It is not. The neighbouring "watcher directory.rs" /
+    // "enumeration native.rs" citations already use this form for the same
+    // reason.
     let resolved = ResolveFullPath::new(Wtf16String::from(r"C:\Windows\System32\..\.\Temp"))
         .perform()
         .expect("the enumeration crate's resolution shape")

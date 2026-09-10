@@ -4358,15 +4358,21 @@ fn a_small_handshake_completes_and_reports_a_positive_round_trip() {
 //
 // `request_cost::measure` builds its long-path sample on a hard-coded `C:`, and
 // two review passes read that as a portability bug: a machine with no `C:`
-// volume would panic on the `expect` rather than measure. It would not, and the
-// reason is the same fact the probe's own headline conclusion rests on -- that
-// `GetFullPathNameW` resolves a fully-qualified path without touching the
-// filesystem. A volume that does not exist is therefore not consulted.
+// volume would panic on the `expect` rather than measure. It does not -- and
+// that, the observable outcome, is the whole of what is claimed here.
 //
 // That was an argument, and an argument is what a reviewer had to disbelieve.
-// This is the measurement. It also pins the "touches no filesystem" claim
-// itself, which nothing else here does: if that claim ever stops holding, the
-// probe's account of where its nanoseconds go is wrong, and this fails first.
+// This is the measurement.
+//
+// **It pins less than two earlier versions of this comment claimed.** The first
+// said it pinned "touches no filesystem"; the second said it showed the volume
+// was "never consulted". Neither follows. A black-box success is equally
+// compatible with a consultation whose failure is ignored, so nothing here
+// reaches the mechanism -- which is the overreach the owning crate's `D-18`
+// exists to remove, committed twice in the comment describing it.
+//
+// What this pins is the observable outcome, and it is exactly what the probe
+// needs: the absence of a volume does not make preparation fail.
 
 #[test]
 fn preparing_a_path_needs_no_volume_behind_its_drive_letter() {
@@ -4436,9 +4442,9 @@ fn preparing_a_path_needs_no_volume_behind_its_drive_letter() {
 
     assert!(
         windows_namespace_request_sys::prepare(&path).is_ok(),
-        "preparing {text} must succeed with no {absent}: volume mounted -- \
-         a fully-qualified path is normalized, not resolved against a device, \
-         and `request_cost` depends on that both for its long-path sample and \
-         for its claim about where the measured time goes"
+        "preparing {text} must succeed with no {absent}: volume mounted. That \
+         outcome is the whole claim -- this says nothing about whether a device \
+         is consulted, because a black-box success cannot -- and it is what \
+         `request_cost` depends on for its hard-coded long-path sample"
     );
 }

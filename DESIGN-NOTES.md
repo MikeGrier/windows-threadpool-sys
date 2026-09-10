@@ -1459,9 +1459,18 @@ Two corollaries that decide the design:
 - **Submission-time canonicalisation does not close this.** The path must be
   resolved on the calling thread at submission, because the process current
   directory is mutable by any thread and even perfect remoting would be racy --
-  but `GetFullPathNameW` is *lexical*. It resolves relative components and
-  `.`/`..` and never expands a drive letter, so the "canonical" path still
-  carries a session-relative reference.
+  but `GetFullPathNameW` never expands a drive letter, so the "canonical" path
+  still carries a session-relative reference. (It is not *lexical* as a whole
+  either, which matters elsewhere but not here: it collapses `.`/`..` lexically
+  but roots most paths that are not fully qualified against process state -- the
+  current directory, or for a drive-relative path naming a drive OTHER than the
+  current one the entry recorded for that drive, which moves independently of
+  it; on the current drive that entry makes no difference and the process
+  current directory wins -- and that rooting is the property
+  submission-time resolution buys. See
+  `windows-namespace-request-sys`'
+  [DESIGN-NOTES.md](crates/windows-namespace-request-sys/DESIGN-NOTES.md) ->
+  `D-18`.)
 - **The extended-length prefix does not help.** `\\?\Z:\dir` still resolves `Z:`
   through the device map; the prefix skips Win32 normalisation, not
   object-manager resolution. Only UNC, `\\?\Volume{GUID}\`, and

@@ -282,7 +282,7 @@ fn render(out: &mut dyn std::fmt::Write) {
     {
         let _ = writeln!(
             out,
-            "\n  WHERE THE TIME ACTUALLY GOES, and it is not the allocator:"
+            "\n  WHERE THE TIME ACTUALLY GOES, and it is not only the allocator:"
         );
         // "resolves against process state" -- not "a syscall", and not
         // "lexical" either.
@@ -290,8 +290,14 @@ fn render(out: &mut dyn std::fmt::Write) {
         // The first was wrong because a timing loop cannot establish a kernel
         // transition. The second, which replaced it, is wrong for a symmetric
         // reason: `GetFullPathNameW` consults the process current directory,
-        // and for a drive-relative path the per-drive current directory held in
-        // the `=C:` environment variables, so it is not pure string work. A
+        // and for a drive-relative path naming a drive OTHER than the current
+        // one the per-drive current directory held in the `=C:` environment
+        // variables, so it is not pure string work. (On the current drive that
+        // entry makes no difference to the result; whether it is read is not
+        // observable and is not claimed. The qualifier was missing here for two
+        // rounds after the module doc above gained it -- the sweep reached the
+        // module doc and the emitted report and stopped short of this inline
+        // comment.) A
         // genuinely lexical canonicalizer is a different call
         // (`PathCchCanonicalizeEx`), and it is deliberately NOT the one
         // `prepare` wants -- resolving against the CWD at submission is the
@@ -301,31 +307,48 @@ fn render(out: &mut dyn std::fmt::Write) {
         // two successive attempts to name one were each wrong in the same way.
         let _ = writeln!(
             out,
-            "  `prepare` calls GetFullPathNameW to resolve the path against the"
+            "  `prepare` calls GetFullPathNameW, which roots MOST paths that are not fully"
         );
         let _ = writeln!(
             out,
-            "  process working directory, because the CWD is mutable by any thread"
+            "  qualified against process state -- most, because a legacy device name such"
         );
         let _ = writeln!(
             out,
-            "  and resolving later would be racy. That reads process state and"
+            "  as CON short-circuits rooting entirely. The CWD is mutable by any thread, so"
         );
         let _ = writeln!(
             out,
-            "  touches no filesystem -- and it is not an allocation, so most of the"
+            "  resolving later would be racy. BOTH SAMPLES HERE ARE FULLY QUALIFIED, so"
         );
         let _ = writeln!(
             out,
-            "  cost above is work no allocation scheme can remove. Whether any of"
+            "  that rooting is the motivation for resolving at submission and is not"
+        );
+        let _ = writeln!(out, "  what these numbers measure.");
+        let _ = writeln!(
+            out,
+            "  The gap between building and cloning bounds the resolution step from"
         );
         let _ = writeln!(
             out,
-            "  it enters the kernel is not something this run measured."
+            "  above. It is not the call's own cost: it also spans ONE NET allocation"
         );
         let _ = writeln!(
             out,
-            "  Two different schemes recover two different things, and this said"
+            "  of this crate's own -- prepare allocates twice against the clone's once,"
+        );
+        let _ = writeln!(
+            out,
+            "  so the subtraction cancels one -- and the builder chain."
+        );
+        let _ = writeln!(
+            out,
+            "  Whether any of it enters the kernel is not something this run measured."
+        );
+        let _ = writeln!(
+            out,
+            "  Two different schemes recover different things, and this said"
         );
         let _ = writeln!(
             out,
@@ -333,16 +356,16 @@ fn render(out: &mut dyn std::fmt::Write) {
         );
         let _ = writeln!(
             out,
-            "  of {build:.0} ns, so it recovers {:.0} ns -- but that saving is the Win32",
+            "  of {build:.0} ns, so it recovers {:.0} ns -- but that saving is the",
             build - clone
         );
         let _ = writeln!(
             out,
-            "  resolution, not an allocation, and only a caller that can reuse a"
+            "  RESOLUTION STEP plus that net allocation, and only a caller that can"
         );
         let _ = writeln!(
             out,
-            "  resolved path gets it. INLINE STORAGE removes the allocation and"
+            "  reuse a resolved path gets it. INLINE STORAGE removes the allocation and"
         );
         let _ = writeln!(
             out,

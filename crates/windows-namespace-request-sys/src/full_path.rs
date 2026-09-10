@@ -7,14 +7,234 @@
 //!
 //! # What it solves, and what it leaves standing
 //!
-//! This call is **lexical**. It resolves relative components and `.`/`..`
-//! against the process current directory, and it touches no filesystem: it will
-//! happily resolve a path to something that does not exist.
+//! This call **does not verify what it produces**: it will happily resolve a
+//! path to something that does not exist, and it reports no error for one.
+//!
+//! That is the documented guarantee, and it is deliberately narrower than
+//! "touches no filesystem", which earlier revisions of this doc claimed.
+//! Microsoft specifies that the function does not verify that the resulting
+//! path and file name are valid or that they name an existing file; it does not
+//! specify that no I/O occurs.
+//!
+//! **And on one form it demonstrably does touch the filesystem.** Resolving a
+//! drive-relative path for a drive other than the current one validates that
+//! drive's recorded entry against the filesystem, and rewrites it when the
+//! entry does not name an existing directory -- see "The drive-relative form
+//! writes process state" below. So the narrow guarantee is the one to rely on
+//! precisely because the broad one is false, not merely unproven. A caller
+//! wanting existence must still open.
+//!
+//! It does **two** things, and keeping them apart is the whole reason this
+//! entry exists:
+//!
+//! 1. It rewrites the string. `.` and `..` are collapsed, `/` becomes `\`, and
+//!    trailing dots and spaces are trimmed -- but **not uniformly across
+//!    components**, and an earlier revision of this list said so without
+//!    qualification. Measured: the *final* component loses any run of trailing
+//!    dots and spaces (`C:\name...` and `C:\name   ` both become `C:\name`),
+//!    while an *intermediate* component loses a single trailing dot and nothing
+//!    else -- `C:\a.\b` becomes `C:\a\b`, but `C:\a...\b` and `C:\a \b` are
+//!    returned unchanged. This part's **output is a function of the input
+//!    alone**: `C:\a\..\b` becomes `C:\b` whatever the current directory
+//!    happens to be, and whether or not `C:\a` exists.
+//!
+//!    Stated that way deliberately. Earlier revisions said it "reads no process
+//!    state", which the evidence does not reach: varying the current directory
+//!    and getting the same answer shows the output does not DEPEND on it, not
+//!    that nothing was read. That is the same overreach this doc removes from
+//!    the current-drive entry below, and it sat here in the positive half while
+//!    seven reviews corrected the negative one. Invariance is the whole claim,
+//!    and it is also all a caller needs: this half can be reasoned about
+//!    without knowing the process's state.
+//! 2. It **roots** a path that is not fully qualified, using mutable process
+//!    state -- and on one form it also *changes* that state. There are three
+//!    such forms:
+//!
+//!    * A relative path like `rel.txt` is rooted at the *process current
+//!      directory*.
+//!    * A root-relative path like `\foo` takes only the *root* of that
+//!      directory, giving `C:\foo` rather than its subtree -- and
+//!      `\\server\share\foo` when the current directory is a UNC path, which
+//!      is why this says root and not drive.
+//!    * A drive-relative path like `C:foo` is rooted at the entry Windows
+//!      keeps for that drive in the hidden `=C:` environment variables. For
+//!      the *current* drive that entry makes no difference to the result and
+//!      the process current directory wins.
+//!
+//! **A whole class of input short-circuits both.** When the input names a
+//! legacy device and nothing else, it resolves into the device namespace and is
+//! not rooted at all: `CON` becomes `\\.\CON`, not a file under the current
+//! directory.
+//!
+//! "And nothing else" is doing real work, and is looser than it first looks.
+//! These all reach a device: a bare name (`CON`), a trailing colon (`CON:`,
+//! `CON::`), trailing dots or spaces (`CON.`, `CON `), and any casing
+//! (`con`). These do not, and root normally: anything with more of a path
+//! around it (`CON.txt`, `a\CON`, `.\CON`, `CON:x`), and `\CON`, which
+//! becomes `Q:\CON` for a current directory on `Q:`.
+//!
+//! **`NUL` does not follow that second list, and it is the only member that
+//! does not.** The paragraph above was written from `CON` and stated of the
+//! whole set; measured across all eight accepted names, seven behave as it
+//! says and `NUL` short-circuits as the *final component of any path*,
+//! however much path is in front of it:
+//!
+//! | input | `CON` | `NUL` |
+//! |---|---|---|
+//! | `X` | `\\.\CON` | `\\.\NUL` |
+//! | `\X` | `Q:\CON` | `\\.\NUL` |
+//! | `.\X` | `Q:\...\CON` | `\\.\NUL` |
+//! | `a\X` | `Q:\...\a\CON` | `\\.\NUL` |
+//! | `C:\X` | `C:\CON` | `\\.\NUL` |
+//! | `X.txt` | rooted | rooted |
+//! | `X:x` | rooted | rooted |
+//!
+//! So a *fully qualified* path can still resolve to a device, which is the
+//! part worth knowing: `prepare(r"C:\NUL")` yields `\\.\NUL`, and a caller
+//! treating a rooted path as proof it names a file on that volume is wrong for
+//! this one name. Only a suffix (`NUL.txt`, `NUL:x`) takes it out.
+//!
+//! **Everything above describes what this call returns, and a review asked
+//! whether that is a safe boundary for what a later `CreateFileW` does.**
+//! Measured on this build, at the open rather than the resolver: creating
+//! `<dir>\NUL` returns a `FILE_TYPE_CHAR` handle and leaves nothing on disk,
+//! while `<dir>\CON`, `<dir>\CON.txt` and `<dir>\NUL.txt` each create an
+//! ordinary `FILE_TYPE_DISK` file. The two layers agree -- the reservation
+//! lives in *rooting*, so a name that roots normally opens normally, and `NUL`
+//! reaches the device at both layers.
+//!
+//! That agreement is a measurement of one build, not a guarantee this crate
+//! makes. The durable statement is the narrower one: these paragraphs describe
+//! the RESOLVER's output. A caller sanitising untrusted names should decide
+//! against what it will do with the result, not infer open-time safety from a
+//! resolved spelling.
+//!
+//! **Do not build a name filter from the list below.** The accepted names are
+//! `CON`, `NUL`, `PRN`, `AUX`, `CONIN$`, `CONOUT$`, and `COM`/`LPT`
+//! followed by a single digit -- where "digit" includes the *superscripts*
+//! `COM\u{00b9}`, `COM\u{00b2}` and `COM\u{00b3}` as well as `1`-`9`. Those are
+//! written as Rust escapes deliberately: spelled `COM^1` with a caret, as an
+//! earlier revision had them, a reader copying the text gets an ordinary
+//! filename rather than a device.
+//! An exhaustive scan of the character after `COM` accepts exactly
+//! U+0031-U+0039, U+00B2, U+00B3 and U+00B9 on the tested build; `COM0` and
+//! `COM10` are not devices. The superscripts are precisely the sort of member a
+//! hand-written denylist omits, and this documentation asserted a list without
+//! them until a review measured it -- so treat the set as *observed on one
+//! build*, and prefer letting this call answer the question over reimplementing
+//! its judgement.
+//!
+//! So the call is **not** lexical as a whole, and describing it that way -- as
+//! an earlier revision of this doc did, in the sentence immediately before the
+//! one describing the current directory it reads -- loses exactly the half that
+//! matters here. A fully-qualified input resolves to the same output every
+//! time; an input that is rooted resolves to different outputs in the same
+//! process at different times, and pinning *that* is the property being bought.
+//! (Not every unqualified input is rooted, which is the point of the device
+//! short-circuit above: `CON` is unqualified and yet invariant.)
 //!
 //! So it solves exactly one problem -- the process current directory is shared
 //! mutable state that any thread can change, so a relative path means something
 //! different depending on *when* it is resolved. Performing this on the
 //! submitting thread pins that meaning.
+//!
+//! # Why not a genuinely lexical canonicalizer
+//!
+//! Two exist: `PathCchCanonicalizeEx` and `PathAllocCanonicalize`. Both
+//! canonicalize the string without rooting it.
+//!
+//! **They are the wrong call here, and the reason is a semantic difference, not
+//! a cost one.** Resolving against the current directory *at submission* is what
+//! this crate is buying. A lexical canonicalizer would leave a relative path
+//! still relative, so its meaning would be decided on the worker thread at
+//! execution time, against a current directory any thread may have changed in
+//! between -- reintroducing exactly the race preparation exists to close. What
+//! they omit is the part that is wanted.
+//!
+//! **No cost comparison is claimed, deliberately.** Nothing in this repository
+//! benchmarks either alternative, Microsoft documents behaviour rather than
+//! relative cost, and `PathAllocCanonicalize` allocates its own result -- so
+//! "cheaper" would be a guess. It is also not needed: the decision rests on the
+//! rooting semantics alone. Nor is either one reliably free of process state,
+//! since `PATHCCH_ALLOW_LONG_PATHS` makes `PathCchCanonicalizeEx` consult the
+//! process long-path setting unless the FORCE variant is used.
+//!
+//! Recorded so the next reader does not re-derive it. If this reasoning is ever
+//! wrong -- for a consumer that genuinely wants a pure string operation and has
+//! resolved relativity some other way -- the alternatives are named here.
+//!
+//! # The drive-relative form writes process state, and touches the filesystem
+//!
+//! Measured, and it overturns what four earlier revisions of this doc asserted.
+//! Resolving `X:foo` for a drive that is **not** the current one does not
+//! merely read the `=X:` entry:
+//!
+//! * An **accepted** entry is used **verbatim**, including a directory on a
+//!   *different* drive. With `=X:` set to `C:\Windows`, `X:foo` resolves to
+//!   `C:\Windows\foo`, so "that drive's own current directory" describes the
+//!   convention the entry usually holds, not a guarantee about the result.
+//!   Verbatim really means verbatim: `C:\Windows\` yields `C:\Windows\\foo`,
+//!   with no normalisation at the join.
+//! * Otherwise the entry is **written** to the drive root and that is used --
+//!   created when absent, so this happens on a pristine host and not only on
+//!   one carrying a stale entry. The write mutates the process environment
+//!   block as a side effect of what reads like a pure query.
+//!
+//! **Acceptance needs both a shape and an existence check, and the observed
+//! necessary conditions are worth listing because they are not guessable.** An
+//! entry naming a directory that exists is still rejected unless it is already
+//! in fully-qualified `X:\...` form: measured on one build, `C:/Windows/System32`,
+//! `C:\Windows\System32\.`, `C:\Windows\System32\..\System32` and
+//! `\\?\C:\Windows\System32` were each rejected while naming the same existing
+//! directory that `C:\Windows\System32` was accepted for. An existing *file* and
+//! a missing directory are rejected too, so existence is checked as well -- but
+//! saying the gate is "a filesystem query rather than a syntax test", as a draft
+//! of this doc did, states a mechanism the evidence contradicts. It is both, and
+//! this list is a set of observations rather than a specification.
+//!
+//! For the current drive neither happens, and the guarantee is stated at the
+//! boundary observation can actually reach: **the entry makes no difference to
+//! the result, and is not rewritten.** Both halves are measured -- an entry the
+//! non-current arm would honour verbatim is installed and the process directory
+//! wins anyway, and an entry the non-current arm would replace is left
+//! untouched. Whether Windows *reads* it internally is not established, because
+//! setting a value and observing the result cannot separate "not read" from
+//! "read and ignored". An earlier revision said "not consulted", which is the
+//! same overreach this section corrects two paragraphs above.
+//!
+//! This is why the "does not verify what it produces" guarantee above is worth
+//! stating narrowly. The broad reading -- that the call touches no filesystem --
+//! is not merely unproven, it is false here. Earlier revisions said the
+//! opposite, reasoning that the current directory lives in the PEB and the
+//! `=X:` variables in the environment block and that both are ordinary process
+//! memory. The reasoning was sound and the conclusion wrong, which is the
+//! standing hazard this crate keeps meeting: a mechanism argued from the data
+//! sources rather than measured.
+//!
+//! # What a resolution costs
+//!
+//! The figure the repo's own instrument produces is a **bound, not this call's
+//! cost**, and the difference matters. On x86_64 `probe-request-cost` measures
+//! building an open request as a construct-and-drop cycle at roughly 210 ns and
+//! cloning an already-resolved path at roughly 45 ns. The ~165 ns between them
+//! is what recycling a resolved path recovers, and that is all it is.
+//!
+//! **That probe exercises [`crate::path::prepare`], not this module**, and the
+//! two have different allocation shapes -- which is itself why the gap cannot be
+//! read as this call's cost. `prepare` copies the input and then allocates a
+//! `MAX_PATH` output buffer, so two allocations against the clone's one, and the
+//! builder chain sits on top. [`ResolveFullPath`] takes its input already owned
+//! and allocates one buffer per attempt instead. Either way the allocator work
+//! is the crate's, not `GetFullPathNameW`'s, and attributing the gap to the call
+//! -- as a draft of this doc did -- credits it with the work the same sentence
+//! is busy excluding.
+//!
+//! Timed on its own -- input already marshalled, output buffer pre-allocated,
+//! so no allocation is in the loop -- the call costs about **110 ns** on this
+//! host, roughly two thirds of that gap. That measurement is a direct one taken
+//! for this note and is *not* something the probe reports; no instrument in
+//! this repository isolates the call, and the honest reading of
+//! `probe-request-cost` alone is an upper bound.
 //!
 //! It does **not** solve the session-relative drive-letter hazard, and saying
 //! so plainly matters more than the part it does solve. `GetFullPathNameW`
@@ -103,7 +323,8 @@ impl From<Win32Error> for FullPathError {
 /// use windows_namespace_request_sys::full_path::ResolveFullPath;
 /// use wtf_string::Wtf16String;
 ///
-/// // Lexical: `.` and `..` are resolved without touching the filesystem.
+/// // `.` and `..` are collapsed as string work, with no component verified:
+/// // this holds whether or not `C:\Windows\System32` exists.
 /// let resolved = ResolveFullPath::new(Wtf16String::from(r"C:\Windows\System32\..\.\Temp"))
 ///     .perform()?
 ///     .to_string_lossy();
@@ -118,9 +339,9 @@ impl From<Win32Error> for FullPathError {
 /// use windows_namespace_request_sys::full_path::ResolveFullPath;
 /// use wtf_string::Wtf16String;
 ///
-/// // A path to nothing resolves perfectly happily, because the call is
-/// // lexical. A consumer wanting a verified path wants an open plus
-/// // GetFinalPathNameByHandleW instead.
+/// // A path to nothing resolves perfectly happily, because the call
+/// // does not verify it. A consumer wanting a verified path wants an open
+/// // plus GetFinalPathNameByHandleW instead.
 /// let resolved = ResolveFullPath::new(Wtf16String::from(r"C:\no-such-directory\..\file.txt"))
 ///     .perform()?
 ///     .to_string_lossy();

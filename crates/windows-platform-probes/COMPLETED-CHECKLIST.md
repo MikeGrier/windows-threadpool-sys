@@ -93,3 +93,63 @@ piece of work rather than a correction to that one.
   The reason any of it works is that Rust's `Stdout` wraps a `LineWriter` and flushes at each
   newline even when redirected -- had stdout been block-buffered this milestone would have needed a
   per-line flush too.
+
+## Moved 2026-09-09 -- M2.6: what `GetFullPathNameW` does, and whether it stays
+
+### <a id="m26"></a>M2.6 -- Say what `GetFullPathNameW` does, in the crate that owns it, and whether it stays. *(completed 2026-09-09 22:54:01 UTC-04:00)*
+
+**Resolved.** The correction and the decision both landed in the owning crate as `D-18` in
+[../windows-namespace-request-sys/DESIGN-NOTES.md](../windows-namespace-request-sys/DESIGN-NOTES.md):
+`GetFullPathNameW` collapses `.`/`..` lexically but roots most paths that are not fully qualified against
+process state, so it is not a lexical call as a whole; `PathCchCanonicalizeEx` does not root, and is
+the wrong call for that reason, because rooting at submission is the property being bought. No cost
+comparison is claimed -- the item below asked whether the alternative "would be cheaper", and the
+answer recorded in D-18 is that nothing measures it, so the decision rests on semantics alone.
+The mechanism question this item raised is answered rather than left open: resolving a
+drive-relative path for another drive checks that drive's recorded entry against the filesystem
+and writes the entry back, so the call does touch the filesystem on that form. The item's body below is the
+request as it was written, and quotes the module doc as it read before the correction.
+
+- [x] **M2.6** -- Say precisely what `GetFullPathNameW` does, in the crate that owns it, and decide
+  whether it is still the call `prepare` wants. Two successive descriptions in the cost probe were
+  each wrong in the same direction: *a syscall cost*, which a timing loop cannot establish, and then
+  *lexical*, which it also is not. The probe now states the cost and declines the mechanism, which is
+  honest but leaves the question open one layer down.
+
+  [../windows-namespace-request-sys/src/full_path.rs](../windows-namespace-request-sys/src/full_path.rs)
+  carries the same imprecision, and is the crate that owns the answer: its module doc says "This call
+  is **lexical**. It resolves relative components and `.`/`..` against the process current
+  directory". Those two sentences disagree -- consulting the current directory is process state, and
+  for a drive-relative path (`C:foo`) it also reads the per-drive current directory held in the
+  `=C:` environment variables. "Touches no filesystem" is the claim that holds; "lexical" is not.
+
+  *(Later correction: the second half stood, the first did not. "Touches no filesystem" was measured
+  false while carrying out this item -- resolving `X:foo` for a non-current drive distinguishes an
+  existing directory from an existing file from a missing one, and rewrites the `=X:` entry when that
+  check REJECTS it -- an accepted entry is left alone, so the write is conditional rather than part of
+  every such resolution. What
+  Microsoft documents is only that the call does not VERIFY its result. Two smaller things in the
+  paragraph above also turned out to be stated too broadly: the per-drive entry is consulted for a
+  drive OTHER than the current one, and on the current drive it makes no difference to the result --
+  and "reads" is a mechanism word that observation cannot reach either way. See
+  [../windows-namespace-request-sys/DESIGN-NOTES.md](../windows-namespace-request-sys/DESIGN-NOTES.md)
+  -> `D-18`.)*
+
+  **The mono-repo rule says fix the layer, so the correction belongs in
+  `windows-namespace-request-sys`, not in the probe that consumes it.** It is queued rather than
+  taken because that crate is outside this peel and is release-managed, so a docs change there is its
+  own commit with its own scope.
+
+  The decision half is the part worth an engineer's attention rather than a sweep. A genuinely
+  lexical canonicalizer exists -- `PathCchCanonicalizeEx`, or `PathAllocCanonicalize` -- and would be
+  cheaper, with no process state read at all. **It is very likely the wrong call anyway**, because
+  resolving against the current directory *at submission* is the property the namespace design is
+  buying: the CWD is shared mutable state, so a relative path means something different depending on
+  when it is resolved, and pinning that on the submitting thread is the whole point. Record that
+  conclusion explicitly, with the alternative named, so the next reader does not re-derive it -- and
+  if it is wrong, the cheaper call is sitting there.
+
+  Also worth settling while the question is open: whether `GetFullPathNameW` can enter the kernel at
+  all on any path this crate takes. The probe measured ~212 ns for a build on x86_64 and declines to
+  say what that is made of; the owning crate could say, and a reader of either would then stop
+  guessing.

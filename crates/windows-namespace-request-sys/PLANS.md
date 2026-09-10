@@ -2,11 +2,19 @@
 
 Design decisions are in [DESIGN-NOTES.md](DESIGN-NOTES.md).
 
-This crate's work is planned in a feature-scoped checklist at the workspace root
-rather than a local one, because it lands alongside a sibling crate and a set of
-workspace-level corrections, and the workspace root is their lowest common
-source-component. That file is not the workspace
+This crate is planned in two files, and the split is deliberate. Its *creation*
+lives in a feature-scoped checklist at the workspace root, because it lands
+alongside a sibling crate and a set of workspace-level corrections whose lowest
+common source-component is the workspace root; that file is deleted when its
+feature completes. *Durable follow-up work* therefore cannot live there, and has
+a local checklist instead. Neither is the workspace
 [CHECKLIST.md](../../CHECKLIST.md), which holds unrelated deferred work.
+
+The local [CHECKLIST.md](CHECKLIST.md) has no open milestone, so it has no row
+below: its one plan so far is finished and recorded in
+[COMPLETED-PLANS.md](COMPLETED-PLANS.md). The file stays because the queue is
+durable even when it is empty, and a row here would give the same path two
+incompatible states across the two indexes.
 
 | Path to CHECKLIST.md | Status | Brief description | Design Notes |
 |---|---|---|---|

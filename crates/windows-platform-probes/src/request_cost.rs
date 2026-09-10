@@ -55,25 +55,58 @@
 //! copy. So "what does a request cost" is not only an allocation question, and
 //! measuring only the path would understate it.
 //!
-//! # Preparing a path is a Win32 call, not an allocation
+//! # Preparing a path is a Win32 call as well as an allocation
 //!
 //! This probe was written expecting `prepare` to be an allocation and a copy.
-//! It is not: it calls **`GetFullPathNameW`** to resolve the path against the
+//! It is not *only* that -- the qualifier matters, because the decomposition
+//! below charges the measured gap with one net allocation, so a heading saying
+//! flatly "not an allocation" contradicts it. This heading said exactly that
+//! for two rounds after the sentence you are reading was written to explain why
+//! it must not: the correction went into the prose and stopped one line short
+//! of the heading above it. What `prepare` additionally does is call
+//! **`GetFullPathNameW`** to resolve the path against the
 //! process working directory, because [the namespace session] settled that the
 //! path is resolved at submission -- the process CWD is mutable by any thread,
 //! so even perfect remoting would be racy.
 //!
-//! That work reads **process state**: it resolves against the current
-//! directory, and for a drive-relative path against the per-drive current
-//! directory held in the `=C:` environment variables. So the measured remainder
-//! is path resolution, not allocation -- and naming a *mechanism* for it has
-//! now been got wrong twice. Calling it a *syscall cost* claimed a kernel
-//! transition a timing loop cannot establish; calling it *lexical*, which
-//! replaced it, claimed pure string work it equally is not. A genuinely lexical
-//! canonicalizer is a different call (`PathCchCanonicalizeEx`) and is
+//! That call reads **process state** when it has to root a path -- the current
+//! directory, or for a drive-relative path naming a drive OTHER than the
+//! current one the entry recorded for that drive in the `=C:` environment
+//! variables -- on the current drive that entry makes no difference and the
+//! process directory wins. **Neither sample here is rooted**: both are
+//! fully qualified, so the rooting is why resolution happens at submission and
+//! is not what these timings contain.
+//!
+//! So the measured remainder is the **resolution step**, which is an upper
+//! bound on the call and not the call itself: it also spans one net allocation
+//! of this crate's own and the builder chain. **Net**, because the subtraction
+//! cancels one -- `prepare` allocates twice, an input copy and a `MAX_PATH`
+//! output buffer, against the clone's one, so what survives the subtraction is
+//! the difference and not both. Calling it "two allocations", as a draft did,
+//! charges the gap with allocator work the subtraction has already removed.
+//! Saying the remainder *is* the resolution,
+//! as an earlier revision did, hands the call credit for the allocator work the
+//! same sentence sets out to exclude.
+//!
+//! Naming a *mechanism* for it has now been got wrong repeatedly. A *syscall
+//! cost* claimed a kernel transition a timing loop cannot establish; *lexical*,
+//! which replaced it, claimed pure string work it equally is not. A genuinely
+//! lexical canonicalizer is a different call (`PathCchCanonicalizeEx`) and is
 //! deliberately not the one wanted here, because resolving against the CWD at
 //! submission is the property being bought. What survives either way is the
-//! part that matters: an allocator cannot remove it.
+//! part that matters: an allocator cannot remove all of it.
+//!
+//! The owning crate now settles both halves rather than leaving them to be
+//! re-derived from a probe: see `windows-namespace-request-sys`'
+//! [DESIGN-NOTES.md](../../windows-namespace-request-sys/DESIGN-NOTES.md) ->
+//! `D-18`, which states what the call actually does and records keeping it over
+//! the canonicalizers that do not root. It claims no cost comparison against
+//! those alternatives, because nothing here measures them -- but it does settle
+//! the mechanism question this module once left open: resolving a
+//! drive-relative path for another drive checks that drive's recorded entry
+//! against the filesystem, and writes the entry back **when that check rejects
+//! it** -- an accepted entry is left alone, so the write is conditional rather
+//! than part of every such resolution.
 //!
 //! The two schemes that might reduce it recover different halves. **Inline
 //! storage** removes the allocation and copy, which is what
@@ -82,6 +115,12 @@
 //! place of the whole build, so it recovers the difference between them. Naming
 //! one figure for both -- as this did -- credits an allocator with work it
 //! cannot remove. Knowing which half is which is the point of measuring both.
+//!
+//! A link-reference definition has to be its own block: abutting the paragraph
+//! above, CommonMark folds it in, so rustdoc rendered this line as literal text
+//! and left the reference to it unlinked. Pre-existing, and fixed here because
+//! this module doc is being rewritten around it.
+//!
 //! [the namespace session]: ../../../design-sessions/DESIGN-SESSION-2026-08-27-pseudo-async-namespace-operations.md
 //!
 //! Each timing is reported per operation. Absolute values are host-specific;
@@ -196,11 +235,17 @@ pub fn measure() -> Observation {
     // length that varied with the local system directory would make the figure
     // incomparable between the machines the report asks a reader to compare.
     //
-    // The `C:` is safe for the same reason the probe's own conclusion is: a
-    // fully-qualified path is normalized without consulting a device, so no
-    // volume is needed behind the letter. Two review passes read this as the
-    // portability bug fixed above, so it is now measured rather than argued --
-    // see `preparing_a_path_needs_no_volume_behind_its_drive_letter`.
+    // The `C:` is safe, and what makes it safe is an OUTCOME, not a mechanism:
+    // preparation succeeds with no volume behind the drive letter. Whether a
+    // device is consulted is neither established here nor needed. A black-box
+    // success is equally compatible with a consultation whose failure is
+    // ignored, so claiming the letter is "normalized without consulting a
+    // device" -- as this comment did -- reaches past its evidence, which is the
+    // one overreach the owning crate's `D-18` exists to remove.
+    //
+    // Two review passes read this as the portability bug fixed above, so the
+    // outcome is measured rather than argued -- see
+    // `preparing_a_path_needs_no_volume_behind_its_drive_letter`.
     let long_text = format!(r"C:\{}\file.txt", vec!["directory"; 24].join("\\"));
     let long = Wtf16String::from(long_text.as_str());
 

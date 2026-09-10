@@ -534,11 +534,142 @@ proven correct -- a bad trade on a crate whose buffers are handed to the kernel.
 If it is ever done, it must be done together with the size passed to Win32, never
 to one side alone.
 
+## <a id="d-18"></a>D-18: `GetFullPathNameW` is not lexical, and the genuinely lexical alternative is the wrong call
+
+**The correction.** This crate described `GetFullPathNameW` as **lexical** in
+**nine places across five files**, in a sentence that then went on to say it
+resolves against the process current directory. Those two claims disagree, and
+the call is better described as doing two separable things. It collapses
+`.`/`..` and normalizes separators, which *is* lexical -- `C:\a\..\b` becomes
+`C:\b` whatever the current directory is, and whether or not `C:\a` exists. It
+*also* **roots** most paths that are not fully qualified, and that reads mutable
+process state. Three forms use it three different ways -- though not from three
+different sources, since the first two both derive from the process current
+directory and so does the current-drive case of the third: a relative path
+takes the current directory; a root-relative path like `\foo` takes only that
+directory's *root*, which is `\\server\share\` when the current directory is a
+UNC path and so is not a drive at all; and a drive-relative path such as
+`C:foo` takes the entry recorded for that drive -- usually that drive's own
+current directory, though the entry is used verbatim and an accepted one may
+name a directory on another drive entirely. That rule has two arms:
+for a drive other than the current one Windows reads the hidden `=C:` entry
+recorded for it, which moves independently of the process current directory;
+for the *current* drive the entry makes no difference to the result and the
+process current directory wins. Measured -- setting `=Q:` while the process is
+on `Q:` changes nothing. ("Makes no difference" rather than "is ignored" for the
+same reason the probe no longer says "without consulting a device": an entry
+that is read and then discarded is indistinguishable from one never read.) So the call is not lexical *as a whole*, and the claim that
+holds unqualified is that it **does not verify what it produces** -- the
+documented guarantee, and narrower than the "touches no filesystem" an earlier
+draft claimed. A black-box success cannot establish that broader claim, and it
+did not need to: the drive-relative form *disproves* it outright, as the
+measurement below records.
+
+**"Most" rather than "every", because a legacy device name short-circuits the
+rooting.** `CON` resolves to `\\.\CON` and is not rooted, so it is an
+unqualified input that is nonetheless invariant -- which is why the rooting
+clause cannot be stated unconditionally. The form is looser than exact match:
+`CON:`, `CON.`, `con` and `CONIN$` all map, while `CON.txt`, `a\CON` and
+`CON:x` root normally. This matters to a crate that prepares paths on a
+caller's behalf: `prepare("CON")` returns a device.
+
+**`NUL` is the one member that clause does not describe**, and the clause was
+written from `CON` and stated of the whole set. Measured across all eight
+accepted names: seven root normally once anything precedes them, and `NUL`
+short-circuits as the final component of any path -- `\NUL`, `.\NUL`, `a\NUL`
+and `C:\NUL` all reach `\\.\NUL`, where the `CON` spellings root. Only a suffix
+(`NUL.txt`, `NUL:x`) takes it out. So a **fully qualified** path can still
+resolve to a device, which is the part a caller needs: a rooted result is not by
+itself evidence that a name refers to a file on that volume. Pinned by
+`nul_is_the_one_device_word_a_path_around_it_does_not_save`.
+
+Keeping the two halves apart matters, because the decision below turns on the
+rooting half alone. Saying the call resolves `.`/`..` "against the current
+directory" -- as a first draft of this correction did -- attributes process-state
+dependence to the one operation that has none, which is the same imprecision
+running the other way.
+
+The wrong word had spread well beyond the one file that was reported. The sweep
+that found the rest, and its arithmetic, are Tier 2:
+[DESIGN-RATIONALE.md](DESIGN-RATIONALE.md) -> `D-18`.
+
+**The decision: keep `GetFullPathNameW`.** Two canonicalizers that do not root
+exist -- `PathCchCanonicalizeEx` and `PathAllocCanonicalize`. They are the wrong
+call here for a semantic reason: resolving against the current directory *at
+submission* is what this crate is buying. A canonicalizer that does not root
+would leave a relative path relative, so its meaning would be settled on the
+worker at execution time, against a current directory any thread may have
+changed in between -- which is exactly the race preparation exists to close. What
+they omit is the part that is wanted.
+
+**No cost comparison is claimed, and that is deliberate.** An earlier draft of
+this decision called the alternatives "cheaper". Nothing here benchmarks them,
+Microsoft documents behaviour rather than relative cost, and
+`PathAllocCanonicalize` allocates its own result -- so the word was a guess
+wearing the clothes of a measurement, in a decision whose whole subject is not
+doing that. It is also unnecessary: the rooting semantics decide this alone.
+Neither is reliably free of process state either, since
+`PATHCCH_ALLOW_LONG_PATHS` makes `PathCchCanonicalizeEx` consult the process
+long-path setting unless the FORCE variant is used.
+
+Recorded with the alternatives named so the next reader does not re-derive it.
+If the reasoning is ever wrong -- a consumer wanting a pure string operation,
+having resolved relativity another way -- they are named here.
+
+**It does touch the filesystem, on one form -- measured, after four drafts said
+otherwise.** Resolving a drive-relative path for a drive that is *not* the
+current one checks that drive's `=X:` entry against the filesystem *and* against
+a required shape. An accepted entry is used **verbatim** and need not be on that
+drive -- with `=X:` set to `C:\Windows`, `X:foo` is `C:\Windows\foo`. Anything
+rejected is replaced by the drive root, and the entry is **written** back there
+-- created when absent, so this happens on a pristine host too.
+
+Both halves of the gate were measured, and one of them refuted a draft of this
+very decision. Existence matters: a missing directory and an existing *file* are
+each rejected. Shape matters too, and independently -- `C:/Windows/System32`,
+`C:\Windows\System32\.`, `C:\Windows\System32\..\System32` and
+`\\?\C:\Windows\System32` were all rejected while naming the same existing
+directory that `C:\Windows\System32` was accepted for. So the draft calling this
+"a filesystem query rather than a syntax test" named a mechanism the evidence
+contradicts: it is both, and the list is observation rather than specification. The rewrite mutates the process environment
+block as a side effect of what reads like a pure query. For the current drive
+the entry makes no difference to the result and is not rewritten -- stated as
+those two measured effects rather than as "not consulted", because installing an
+entry and observing the outcome cannot separate "not read" from "read and
+ignored", and a draft of this very paragraph said "not consulted" anyway.
+
+Earlier drafts concluded the opposite by reasoning that the current directory
+lives in the PEB and the `=X:` variables in the environment block, so both are
+ordinary process memory. The reasoning was sound and the conclusion wrong. That
+is the failure this decision exists to name: a mechanism argued from where the
+data lives rather than measured. It also means the guarantee this crate relies
+on has to be the narrow one -- the call does not *verify* what it produces --
+because the broad one is not merely unproven but false.
+
+**The constraint this decision carries, and not just its conclusion:** state
+only what the evidence reaches. Nine drafts of this entry each named a
+mechanism it did not -- the call's nature, what a number measured, what the
+alternatives cost, whether any filesystem was touched. The wordings differ; the
+error does not. A reader taking only "it is not lexical" away from D-18 has the
+answer without the thing that kept producing wrong ones.
+
+The constraint reaches further than prose, and the sharpest case was not about
+this call at all: a test helper collapsed an *empty* `=X:` entry into an absent
+one on a comment that called the equivalence measured, when the measurement had
+never cleared the last error that distinguishes them. So **"measured" is itself
+a claim, and a procedure can be wrong in ways its result never shows.** The
+practical consequence was that restoring a borrowed empty entry deleted it. See
+[DESIGN-RATIONALE.md](DESIGN-RATIONALE.md) -> "The measurement that was itself
+unmeasured".
+
+The drafts themselves, and why each failed, are Tier 2:
+[DESIGN-RATIONALE.md](DESIGN-RATIONALE.md) -> `D-18`.
+
 ## Open, and inherited rather than introduced
 
 - **Path resolution under a captured identity.** A path must be resolved on the
   calling thread, because the process current directory is mutable by any
-  thread -- but `GetFullPathNameW` is lexical and never expands a drive letter,
+  thread -- but `GetFullPathNameW` never expands a drive letter,
   and drive-letter resolution follows the *impersonated* token's logon session.
   So a root resolved on a submitter and opened on a worker under a captured
   token can name a different device. The workspace has this as an open decision;
