@@ -15,13 +15,16 @@
 //!
 //! # A resolved path is not a session-independent path
 //!
-//! `GetFullPathNameW` **does not verify what it produces**. It collapses `.`/`..`
+//! `GetFullPathNameW` **does not verify what it produces** -- though for a
+//! drive-relative path naming another drive it does query the filesystem, and
+//! may rewrite that drive's recorded entry (see [`crate::full_path`]). It
+//! collapses `.`/`..`
 //! lexically, and it *additionally* roots most paths that are not fully
 //! qualified against process state -- the current directory, or for a
 //! root-relative path that directory's *root*, or for a drive-relative path
-//! naming another drive that drive's own current directory from the `=C:`
-//! environment variables (for the current drive the process directory is used
-//! and that entry is ignored). It is
+//! naming another drive the entry recorded for it in the `=C:` environment
+//! variables -- honoured verbatim, so it need not even be on that drive (for the
+//! current drive the process directory is used and the entry is ignored). It is
 //! therefore not a lexical call as a whole, which is what makes resolving on
 //! the submitting thread meaningful.
 //!

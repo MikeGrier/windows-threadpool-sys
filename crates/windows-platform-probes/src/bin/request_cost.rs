@@ -313,15 +313,19 @@ fn render(out: &mut dyn std::fmt::Write) {
         );
         let _ = writeln!(
             out,
-            "  verifies nothing it produces -- and it is not an allocation, so most"
+            "  verifies nothing it produces. The gap between building and cloning"
         );
         let _ = writeln!(
             out,
-            "  of the cost above is work no allocation scheme can remove. Whether any"
+            "  bounds that resolution from above; it is not the call's own cost,"
         );
         let _ = writeln!(
             out,
-            "  it enters the kernel is not something this run measured."
+            "  because it also spans this crate's allocations and the builder chain."
+        );
+        let _ = writeln!(
+            out,
+            "  Whether any of it enters the kernel is not something this run measured."
         );
         let _ = writeln!(
             out,

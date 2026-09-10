@@ -62,9 +62,22 @@ producing wrong answers.
 7. **"Touches no filesystem."** The claim that survived longest, because it is
    nearly right. What Microsoft documents is that the function does not verify
    that the resulting path is valid or names an existing file -- a statement
-   about *verification*, not about I/O. Observation cannot close the gap:
-   resolving a path under a directory that does not exist shows no check was
-   made, not that no filesystem was touched.
+   about *verification*, not about I/O.
+
+8. **"Observation cannot close that gap."** The correction to (7), and wrong in
+   a more interesting way: observation *did* close it, in the affirmative
+   direction, the moment anyone looked at the right form. Resolving `X:foo` for
+   a non-current drive distinguishes an existing directory from an existing
+   *file* from a missing one, and rewrites the `=X:` entry when it is not a
+   directory. That is a filesystem query and a write to the process environment,
+   in a call four drafts had described as reading process memory.
+
+   The reasoning behind those drafts was sound -- the current directory is in
+   the PEB, the `=X:` variables are in the environment block, both are process
+   memory -- and the conclusion was false. It is the cleanest example in this
+   file of the standing failure: a mechanism argued from where the data lives
+   rather than measured. Every earlier draft at least *knew* it was asserting a
+   mechanism; this one thought it was declining to.
 
 ### Two facts that were measured, then asserted too narrowly
 
@@ -84,8 +97,18 @@ were *enumerations* -- which is the form this kind of error likes.
   spellings `COM^1`, `COM^2`, `COM^3` (U+00B9, U+00B2, U+00B3) and their `LPT`
   equivalents. Those are exactly the members a hand-written denylist misses, and
   the documentation asserted a closed list without them until a review measured
-  it. The tests in `full_path/tests.rs` now pin every documented spelling so the
+  it. The tests in [tests.rs](src/full_path/tests.rs) now pin every documented spelling so the
   next omission fails CI instead of a review.
+
+### The sweep, and its arithmetic
+
+The wrong word had spread well beyond where it was reported. The consuming
+probe's checklist item named [full_path.rs](src/full_path.rs) only; that file
+held **three of the nine** on its own -- the module doc and both doc examples --
+with two more in [path.rs](src/path.rs), two in
+[tests.rs](src/full_path/tests.rs), one in an acceptance comment and one in
+[DESIGN-NOTES.md](DESIGN-NOTES.md). Nine across five files, from a report naming
+one. The reported site was a sample, not the population.
 
 ### Why the alternatives were never seriously in contention
 

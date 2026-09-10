@@ -568,12 +568,9 @@ directory" -- as a first draft of this correction did -- attributes process-stat
 dependence to the one operation that has none, which is the same imprecision
 running the other way.
 
-The wrong word had spread well beyond where it was reported. The consuming
-probe's checklist item named [full_path.rs](src/full_path.rs) only; that file
-held three of the nine on its own -- the module doc and both doc examples --
-with two more in `path.rs`, two in [tests.rs](src/full_path/tests.rs), one in an
-acceptance comment and one in this file. The reported site was a sample, not the
-population -- which is the standing lesson, met again.
+The wrong word had spread well beyond the one file that was reported. The sweep
+that found the rest, and its arithmetic, are Tier 2:
+[DESIGN-RATIONALE.md](DESIGN-RATIONALE.md) -> `D-18`.
 
 **The decision: keep `GetFullPathNameW`.** Two canonicalizers that do not root
 exist -- `PathCchCanonicalizeEx` and `PathAllocCanonicalize`. They are the wrong
@@ -598,21 +595,23 @@ Recorded with the alternatives named so the next reader does not re-derive it.
 If the reasoning is ever wrong -- a consumer wanting a pure string operation,
 having resolved relativity another way -- they are named here.
 
-**Whether it enters the kernel: not established, and said so.** Nothing it is
-documented to consult requires a transition; the current directory lives in the
-PEB and the `=C:` variables in the process environment block, both ordinary
-process memory. Windows does not document the implementation, so that is a
-statement about the data sources rather than a measurement of the call.
-What `probe-request-cost` produces is a **bound, not this call's cost**. On
-x86_64 it measures building an open request as a construct-and-drop cycle at
-roughly 210 ns and cloning an already-resolved path at roughly 45 ns. The
-~165 ns between them is what recycling recovers, and no more than that: the gap
-spans the whole preparation step, which makes **two** heap allocations this
-crate performs -- a copy of the input and a `MAX_PATH` output buffer -- against
-the clone's one, plus the builder chain. Timed on its own with no allocation in
-the loop, the call is about **110 ns** on this host, roughly two thirds of the
-gap; that is a direct measurement taken for this note, not a probe output, and
-no instrument in this repository isolates the call.
+**It does touch the filesystem, on one form -- measured, after four drafts said
+otherwise.** Resolving a drive-relative path for a drive that is *not* the
+current one validates that drive's `=X:` entry against the filesystem: an entry
+naming an existing directory is honoured **verbatim** (and need not be on that
+drive -- with `=X:` set to `C:\Windows`, `X:foo` is `C:\Windows\foo`), while a
+missing directory or an existing *file* is rejected and the entry is
+**rewritten** to the drive root. The rewrite mutates the process environment
+block as a side effect of what reads like a pure query. For the current drive
+the entry is neither consulted nor rewritten.
+
+Earlier drafts concluded the opposite by reasoning that the current directory
+lives in the PEB and the `=X:` variables in the environment block, so both are
+ordinary process memory. The reasoning was sound and the conclusion wrong. That
+is the failure this decision exists to name: a mechanism argued from where the
+data lives rather than measured. It also means the guarantee this crate relies
+on has to be the narrow one -- the call does not *verify* what it produces --
+because the broad one is not merely unproven but false.
 
 **The constraint this decision carries, and not just its conclusion:** state
 only what the evidence reaches. Seven drafts of this entry each named a

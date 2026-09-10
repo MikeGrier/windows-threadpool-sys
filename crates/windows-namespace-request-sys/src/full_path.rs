@@ -14,10 +14,15 @@
 //! "touches no filesystem", which earlier revisions of this doc claimed.
 //! Microsoft specifies that the function does not verify that the resulting
 //! path and file name are valid or that they name an existing file; it does not
-//! specify that no I/O occurs. Observation cannot close that gap either --
-//! resolving a path under a directory that does not exist shows no *check* was
-//! made, not that no filesystem was touched. The narrower claim is the one this
-//! crate relies on, and it is sufficient: a caller wanting existence must open.
+//! specify that no I/O occurs.
+//!
+//! **And on one form it demonstrably does touch the filesystem.** Resolving a
+//! drive-relative path for a drive other than the current one validates that
+//! drive's recorded entry against the filesystem, and rewrites it when the
+//! entry does not name an existing directory -- see "The drive-relative form
+//! writes process state" below. So the narrow guarantee is the one to rely on
+//! precisely because the broad one is false, not merely unproven. A caller
+//! wanting existence must still open.
 //!
 //! It does **two** things, and keeping them apart is the whole reason this
 //! entry exists:
@@ -27,18 +32,20 @@
 //!    string work over the input, reading no process state. `C:\a\..\b` becomes
 //!    `C:\b` whatever the current directory happens to be, and whether or not
 //!    `C:\a` exists.
-//! 2. It **roots** a path that is not fully qualified, and that part reads
-//!    mutable process state. There are three such forms, and they read
-//!    different state: a relative path like `rel.txt` is rooted at the *process
-//!    current directory*; a root-relative path like `\foo` takes only the
-//!    *root* of that directory, giving `C:\foo` rather than its subtree -- and
-//!    `\\server\share\foo` when the current directory is a UNC path, which is
-//!    why this says root and not drive; and a drive-relative path like `C:foo`
-//!    is rooted at that drive's own current directory, which Windows keeps in
-//!    the hidden `=C:` environment variables. That entry is what is read for a
-//!    drive *other* than the current one, and it moves independently of the
-//!    process current directory; for the current drive it is ignored and the
-//!    process current directory wins.
+//! 2. It **roots** a path that is not fully qualified, using mutable process
+//!    state -- and on one form it also *changes* that state. There are three
+//!    such forms:
+//!
+//!    * A relative path like `rel.txt` is rooted at the *process current
+//!      directory*.
+//!    * A root-relative path like `\foo` takes only the *root* of that
+//!      directory, giving `C:\foo` rather than its subtree -- and
+//!      `\\server\share\foo` when the current directory is a UNC path, which
+//!      is why this says root and not drive.
+//!    * A drive-relative path like `C:foo` is rooted at the entry Windows
+//!      keeps for that drive in the hidden `=C:` environment variables. For
+//!      the *current* drive that entry is ignored and the process current
+//!      directory wins.
 //!
 //! **A whole class of input short-circuits both.** When the input names a
 //! legacy device and nothing else, it resolves into the device namespace and is
@@ -103,15 +110,35 @@
 //! wrong -- for a consumer that genuinely wants a pure string operation and has
 //! resolved relativity some other way -- the alternatives are named here.
 //!
-//! # Whether it can enter the kernel
+//! # The drive-relative form writes process state, and touches the filesystem
 //!
-//! Nothing it is documented to consult requires a transition. The process
-//! current directory lives in the PEB and the `=C:` variables in the process
-//! environment block; both are ordinary process memory. Windows does not
-//! document the implementation, so this is a statement about the data sources,
-//! not a measurement of the call -- a distinction worth keeping, because two
-//! successive descriptions of this call in a consuming probe were each wrong in
-//! the same direction, by naming a mechanism the evidence did not reach.
+//! Measured, and it overturns what four earlier revisions of this doc asserted.
+//! Resolving `X:foo` for a drive that is **not** the current one does not
+//! merely read the `=X:` entry:
+//!
+//! * The entry is honoured **verbatim** when it names an existing directory --
+//!   including a directory on a *different* drive. With `=X:` set to
+//!   `C:\Windows`, `X:foo` resolves to `C:\Windows\foo`. So "that drive's own
+//!   current directory" describes the convention, not a guarantee.
+//! * Otherwise the entry is **rewritten** to the drive root and that is used.
+//!   Both a missing directory and an existing *file* are rejected this way, so
+//!   the check is a filesystem query rather than a syntax or drive-existence
+//!   test -- and the rewrite mutates the process environment block as a side
+//!   effect of what reads like a pure query.
+//!
+//! For the current drive neither happens: the entry is not consulted and not
+//! rewritten.
+//!
+//! This is why the "does not verify what it produces" guarantee above is worth
+//! stating narrowly. The broad reading -- that the call touches no filesystem --
+//! is not merely unproven, it is false here. Earlier revisions said the
+//! opposite, reasoning that the current directory lives in the PEB and the
+//! `=X:` variables in the environment block and that both are ordinary process
+//! memory. The reasoning was sound and the conclusion wrong, which is the
+//! standing hazard this crate keeps meeting: a mechanism argued from the data
+//! sources rather than measured.
+//!
+//! # What a resolution costs
 //!
 //! The figure the repo's own instrument produces is a **bound, not this call's
 //! cost**, and the difference matters. On x86_64 `probe-request-cost` measures
@@ -135,11 +162,7 @@
 //! for this note and is *not* something the probe reports; no instrument in
 //! this repository isolates the call, and the honest reading of
 //! `probe-request-cost` alone is an upper bound.
-//!
-//! What the probe declines to name is the **mechanism**. No figure here says
-//! whether any part of the call entered the kernel.
-//!
-//! It does **not** solve the session-relative drive-letter hazard, and saying
+//!//! It does **not** solve the session-relative drive-letter hazard, and saying
 //! so plainly matters more than the part it does solve. `GetFullPathNameW`
 //! never expands a drive letter, and a drive letter is resolved against the
 //! logon session of whatever token is in effect at open time. A path resolved

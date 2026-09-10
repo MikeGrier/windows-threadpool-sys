@@ -4358,20 +4358,21 @@ fn a_small_handshake_completes_and_reports_a_positive_round_trip() {
 //
 // `request_cost::measure` builds its long-path sample on a hard-coded `C:`, and
 // two review passes read that as a portability bug: a machine with no `C:`
-// volume would panic on the `expect` rather than measure. It would not, because
-// resolving a fully-qualified path consults no volume -- the same fact the
-// probe's account of its own nanoseconds rests on.
+// volume would panic on the `expect` rather than measure. It does not -- and
+// that, the observable outcome, is the whole of what is claimed here.
 //
 // That was an argument, and an argument is what a reviewer had to disbelieve.
 // This is the measurement.
 //
-// **It pins less than an earlier version of this comment claimed.** That version
-// said it pinned "touches no filesystem". It cannot: succeeding against a volume
-// that does not exist shows the volume was never *consulted*, which is an
-// absence of verification, not an absence of I/O. No black-box test can
-// establish the latter, and the owning crate's `D-18` now says so. What this
-// does pin is exactly what the probe needs -- that a missing volume does not
-// make the measurement fail.
+// **It pins less than two earlier versions of this comment claimed.** The first
+// said it pinned "touches no filesystem"; the second said it showed the volume
+// was "never consulted". Neither follows. A black-box success is equally
+// compatible with a consultation whose failure is ignored, so nothing here
+// reaches the mechanism -- which is the overreach the owning crate's `D-18`
+// exists to remove, committed twice in the comment describing it.
+//
+// What this pins is the observable outcome, and it is exactly what the probe
+// needs: the absence of a volume does not make preparation fail.
 
 #[test]
 fn preparing_a_path_needs_no_volume_behind_its_drive_letter() {

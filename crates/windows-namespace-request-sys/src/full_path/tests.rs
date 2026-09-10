@@ -368,13 +368,29 @@ fn a_drive_relative_path_is_rooted_at_that_drive_and_not_the_process_directory()
     // gets missed:
     //
     //   * For a drive OTHER than the current one, Windows reads the hidden
-    //     =X: entry recorded for it.
+    //     `=X:` entry recorded for it.
     //   * For the CURRENT drive the entry is ignored entirely and the process
-    //     current directory wins. Measured: setting =Q: while the process is
-    //     on Q: changes nothing.
+    //     current directory wins. Measured: setting `=Q:` while the process is
+    //     on `Q:` changes nothing.
     //
-    // Pinned without mutating anything, since =X: is process-global and these
-    // tests share a process.
+    // **This test does not mutate `=X:`, but the call it exercises may.**
+    // Measured: resolving `X:foo` for a non-current drive validates that
+    // drive's entry against the filesystem and REWRITES it to `X:\` when it
+    // does not name an existing directory. So on a host that inherited a stale
+    // entry, merely running this test changes the process environment. That is
+    // a property of the call, documented in the module doc; it is noted here so
+    // the next reader does not take "reads process state" at face value, as
+    // four revisions of that doc did.
+    //
+    // **What that leaves unpinned, stated rather than glossed:** when the chosen
+    // drive has no `=X:` entry, an implementation that always used the drive
+    // root would satisfy every assertion below, and the current-drive arm cannot
+    // separate the two rules either because there the entry is ignored by
+    // design. Pinning the entry-reading arm needs a controlled `=X:`, which
+    // means either mutating process-global state that other test threads share
+    // or spawning a child process -- a decision about this crate's test shape
+    // rather than something to slip in here. Queued as `NR-1.1` in this
+    // crate's CHECKLIST.md.
     let cwd = current_directory();
     let cwd_drive = cwd.chars().next().filter(char::is_ascii_alphabetic);
 
@@ -389,25 +405,27 @@ fn a_drive_relative_path_is_rooted_at_that_drive_and_not_the_process_directory()
 
     // Compared case-insensitively, because the case is not this test's to
     // choose: the letter comes back as Windows recorded it, not as it was
-    // typed. This host returns q:\... for an uppercase Q: input, because the
-    // shell was started with a lowercase cd. An earlier version compared bytes
+    // typed. This host returns `q:\...` for an uppercase `Q:` input, because the
+    // shell was started with a lowercase `cd`. An earlier version compared bytes
     // and would have failed on a drive visited in lowercase.
-    let prefix = format!(r"{other}:\");
+    // Asserted against the process current directory, not against the drive
+    // letter. The entry is honoured VERBATIM when it names an existing
+    // directory, and is not constrained to live on that drive -- with `=X:`
+    // set to `C:\Windows`, `X:foo` is `C:\Windows\foo`. An earlier version
+    // required the result to start with `X:\` and carried a message claiming
+    // robustness "whatever that drive's recorded directory happens to be",
+    // which is exactly the case that broke it.
     assert!(
-        resolved.len() >= prefix.len() && resolved[..prefix.len()].eq_ignore_ascii_case(&prefix),
-        "a drive-relative path roots on ITS drive, whatever that drive's \
-         recorded directory happens to be: {resolved}"
+        !resolved.eq_ignore_ascii_case(&format!(r"{}\foo", cwd.trim_end_matches('\\'))),
+        "a drive-relative path for another drive does not use the process \
+         current directory ({cwd}): {resolved}"
     );
     assert!(
         resolved.ends_with(r"\foo"),
         "and keeps the component it was given: {resolved}"
     );
-    // Deliberately NOT asserting that esolved avoids the current directory:
-    // other differs from the current drive by construction, so such a check
-    // cannot fail, and an earlier version carried the headline claim's message
-    // on an assertion that could never go red.
 
-    // The current-drive arm, where the process directory wins over any =X:.
+    // The current-drive arm, where the process directory wins over any `=X:`.
     // Only expressible when the current directory has a drive letter at all.
     if let Some(drive) = cwd_drive {
         assert_eq!(
@@ -415,6 +433,51 @@ fn a_drive_relative_path_is_rooted_at_that_drive_and_not_the_process_directory()
             format!(r"{}\foo", cwd.trim_end_matches('\\')),
             "on the current drive, the per-drive entry is ignored and the \
              process directory is used"
+        );
+    }
+}
+
+#[test]
+fn trailing_dots_and_spaces_are_trimmed_from_ordinary_components() {
+    // The module doc says the rewrite trims trailing dots and spaces. Until now
+    // that was only exercised through a final `.` component (which is the
+    // separate `.`-collapsing rule) and through device spellings (which take
+    // the short-circuit and never reach the ordinary path). Neither pins this.
+    //
+    // Every case measured before being written down.
+    for (input, expected) in [
+        (r"C:\name.", r"C:\name"),
+        (r"C:\name ", r"C:\name"),
+        (r"C:\name...", r"C:\name"),
+        (r"C:\name   ", r"C:\name"),
+        (r"C:\name. ", r"C:\name"),
+        // Trimming applies per component, not only at the end of the path.
+        (r"C:\a.\b", r"C:\a\b"),
+        // An extension is not special: the trailing dot goes, the rest stays.
+        (r"C:\name.txt.", r"C:\name.txt"),
+    ] {
+        assert_eq!(resolve(input), expected, "trimming {input:?}");
+    }
+}
+
+#[test]
+fn a_name_containing_a_device_word_is_rooted_under_the_current_directory() {
+    // Strengthens the device-negative control. Asserting only "not `\\.\`" is
+    // too weak: an implementation that returned every relative input unchanged
+    // would satisfy it while rooting nothing. These assert the full resolved
+    // path, so the rooting guarantee is actually covered.
+    //
+    // `.\CON` is excluded deliberately -- the `.` component collapses, so its
+    // expected form is the bare name, which the loop below would have to
+    // special-case. It is covered by the device-negative test instead.
+    let base = current_directory();
+    let base = base.trim_end_matches('\\');
+    for name in ["CON.txt", "CONIN", "COM0", "COM10", r"a\CON"] {
+        assert_eq!(
+            resolve(name),
+            format!(r"{base}\{name}"),
+            "{name:?} is not a bare device name, so it roots under the current \
+             directory rather than merely avoiding the device namespace"
         );
     }
 }
