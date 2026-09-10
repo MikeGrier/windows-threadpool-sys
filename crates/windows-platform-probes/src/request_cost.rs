@@ -105,6 +105,12 @@
 //! place of the whole build, so it recovers the difference between them. Naming
 //! one figure for both -- as this did -- credits an allocator with work it
 //! cannot remove. Knowing which half is which is the point of measuring both.
+//!
+//! A link-reference definition has to be its own block: abutting the paragraph
+//! above, CommonMark folds it in, so rustdoc rendered this line as literal text
+//! and left the reference to it unlinked. Pre-existing, and fixed here because
+//! this module doc is being rewritten around it.
+//!
 //! [the namespace session]: ../../../design-sessions/DESIGN-SESSION-2026-08-27-pseudo-async-namespace-operations.md
 //!
 //! Each timing is reported per operation. Absolute values are host-specific;
