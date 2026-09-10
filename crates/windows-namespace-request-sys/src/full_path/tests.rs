@@ -547,9 +547,6 @@ fn a_name_containing_a_device_word_is_rooted_under_the_current_directory() {
     // would satisfy it while rooting nothing. These assert the full resolved
     // path, so the rooting guarantee is actually covered.
     //
-    // `.\CON` is excluded deliberately -- the `.` component collapses, so its
-    // expected form is the bare name, which the loop below would have to
-    // special-case. It is covered by the device-negative test instead.
     let base = current_directory();
     let base = base.trim_end_matches('\\');
     for name in ["CON.txt", "CONIN", "COM0", "COM10", r"a\CON"] {
@@ -560,6 +557,21 @@ fn a_name_containing_a_device_word_is_rooted_under_the_current_directory() {
              directory rather than merely avoiding the device namespace"
         );
     }
+
+    // `.\CON` is asserted separately rather than excluded from the loop, which
+    // is what an earlier version did on the grounds that the `.` collapses and
+    // the expected form would need a special case. It needs one, so it gets
+    // one: with the case left to the device-NEGATIVE test alone, the only claim
+    // made about `.\CON` was that it does not start with `\\.\` -- and an
+    // implementation returning it unchanged satisfies that, which is precisely
+    // the too-weak assertion this test exists to strengthen.
+    assert_eq!(
+        resolve(r".\CON"),
+        format!(r"{base}\CON"),
+        "the `.` collapses and the result roots under the current directory, so \
+         a leading `.\\` is enough to take the name out of the device \
+         short-circuit without taking it out of ordinary rooting"
+    );
 }
 
 /// A directory that exists, is in canonical `X:\...` form, and is neither a

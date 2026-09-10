@@ -106,8 +106,12 @@ were *enumerations* -- which is the form this kind of error likes.
   two, and finally three: a relative path takes the current directory, a
   root-relative path takes only that directory's *root* (which is
   `\\server\share\` under a UNC current directory, so "current drive" was
-  wrong), and a drive-relative path takes the entry recorded for that drive
-  from `=C:`.
+  wrong), and a drive-relative path naming a drive OTHER than the current one
+  takes the entry recorded for that drive from `=C:`, while on the current drive
+  that entry makes no difference and the process directory wins. The
+  current-drive arm is a fourth correction to the same enumeration, found the
+  same way as the first three and after them: the count "three forms" was itself
+  one of the things stated more confidently than measured.
 
 - **The device set.** The short-circuit was first described as "exact-match
   only", which `CON:` disproves; then enumerated as `CON`/`NUL`/`PRN`/`AUX`/

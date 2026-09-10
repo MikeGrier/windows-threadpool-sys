@@ -554,8 +554,11 @@ current directory, though the entry is used verbatim and an accepted one may
 name a directory on another drive entirely. That rule has two arms:
 for a drive other than the current one Windows reads the hidden `=C:` entry
 recorded for it, which moves independently of the process current directory;
-for the *current* drive the entry is ignored and the process current directory
-wins. Measured -- setting `=Q:` while the process is on `Q:` changes nothing. So the call is not lexical *as a whole*, and the claim that
+for the *current* drive the entry makes no difference to the result and the
+process current directory wins. Measured -- setting `=Q:` while the process is
+on `Q:` changes nothing. ("Makes no difference" rather than "is ignored" for the
+same reason the probe no longer says "without consulting a device": an entry
+that is read and then discarded is indistinguishable from one never read.) So the call is not lexical *as a whole*, and the claim that
 holds unqualified is that it **does not verify what it produces** -- the
 documented guarantee, and narrower than the "touches no filesystem" an earlier
 draft claimed. A black-box success cannot establish that broader claim, and it

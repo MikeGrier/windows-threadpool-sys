@@ -67,8 +67,10 @@
 //! so even perfect remoting would be racy.
 //!
 //! That call reads **process state** when it has to root a path -- the current
-//! directory, or for a drive-relative path the entry recorded for that drive in
-//! the `=C:` environment variables. **Neither sample here is rooted**: both are
+//! directory, or for a drive-relative path naming a drive OTHER than the
+//! current one the entry recorded for that drive in the `=C:` environment
+//! variables -- on the current drive that entry makes no difference and the
+//! process directory wins. **Neither sample here is rooted**: both are
 //! fully qualified, so the rooting is why resolution happens at submission and
 //! is not what these timings contain.
 //!

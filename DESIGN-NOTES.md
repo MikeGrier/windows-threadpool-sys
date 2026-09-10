@@ -1463,8 +1463,10 @@ Two corollaries that decide the design:
   still carries a session-relative reference. (It is not *lexical* as a whole
   either, which matters elsewhere but not here: it collapses `.`/`..` lexically
   but roots most paths that are not fully qualified against process state -- the
-  current directory, or for a drive-relative path the entry recorded for that
-  drive, which moves independently of it -- and that rooting is the property
+  current directory, or for a drive-relative path naming a drive OTHER than the
+  current one the entry recorded for that drive, which moves independently of
+  it; on the current drive that entry makes no difference and the process
+  current directory wins -- and that rooting is the property
   submission-time resolution buys. See
   `windows-namespace-request-sys`'
   [DESIGN-NOTES.md](crates/windows-namespace-request-sys/DESIGN-NOTES.md) ->
