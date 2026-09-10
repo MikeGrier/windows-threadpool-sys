@@ -79,6 +79,24 @@ producing wrong answers.
    rather than measured. Every earlier draft at least *knew* it was asserting a
    mechanism; this one thought it was declining to.
 
+9. **"A filesystem query rather than a syntax test."** Written in the paragraph
+   correcting (8), and wrong the same way within a single round. Having found
+   that an entry naming a missing directory or an existing *file* is rejected,
+   the draft concluded the gate was existence and not shape. Measured, shape
+   gates it too and independently: `C:/Windows/System32`,
+   `C:\Windows\System32\.`, `C:\Windows\System32\..\System32` and
+   `\\?\C:\Windows\System32` are each rejected while naming the same existing
+   directory that `C:\Windows\System32` is accepted for. Acceptance is also
+   literal -- `C:\Windows\` yields `C:\Windows\\foo`, with no normalisation at
+   the join.
+
+   The tell was the word *rather*. Ruling an alternative out is a strictly
+   stronger claim than establishing the one you measured, and needs its own
+   evidence; three observations of the existence check said nothing about
+   shape. Both halves are now pinned by
+   `a_rejected_drive_entry_is_replaced_by_the_drive_root` so the next draft
+   cannot restate this from memory.
+
 ### Two facts that were measured, then asserted too narrowly
 
 Both were found by review after the correction had already shipped, and both

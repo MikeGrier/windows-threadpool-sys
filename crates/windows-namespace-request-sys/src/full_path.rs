@@ -116,17 +116,28 @@
 //! Resolving `X:foo` for a drive that is **not** the current one does not
 //! merely read the `=X:` entry:
 //!
-//! * The entry is honoured **verbatim** when it names an existing directory --
-//!   including a directory on a *different* drive. With `=X:` set to
-//!   `C:\Windows`, `X:foo` resolves to `C:\Windows\foo`. So "that drive's own
-//!   current directory" describes the convention, not a guarantee.
+//! * An **accepted** entry is used **verbatim**, including a directory on a
+//!   *different* drive. With `=X:` set to `C:\Windows`, `X:foo` resolves to
+//!   `C:\Windows\foo`, so "that drive's own current directory" describes the
+//!   convention the entry usually holds, not a guarantee about the result.
+//!   Verbatim really means verbatim: `C:\Windows\` yields `C:\Windows\\foo`,
+//!   with no normalisation at the join.
 //! * Otherwise the entry is **written** to the drive root and that is used --
 //!   created when absent, so this happens on a pristine host and not only on
-//!   one carrying a stale entry.
-//!   Both a missing directory and an existing *file* are rejected this way, so
-//!   the check is a filesystem query rather than a syntax or drive-existence
-//!   test -- and the rewrite mutates the process environment block as a side
-//!   effect of what reads like a pure query.
+//!   one carrying a stale entry. The write mutates the process environment
+//!   block as a side effect of what reads like a pure query.
+//!
+//! **Acceptance needs both a shape and an existence check, and the observed
+//! necessary conditions are worth listing because they are not guessable.** An
+//! entry naming a directory that exists is still rejected unless it is already
+//! in fully-qualified `X:\...` form: measured on one build, `C:/Windows/System32`,
+//! `C:\Windows\System32\.`, `C:\Windows\System32\..\System32` and
+//! `\\?\C:\Windows\System32` were each rejected while naming the same existing
+//! directory that `C:\Windows\System32` was accepted for. An existing *file* and
+//! a missing directory are rejected too, so existence is checked as well -- but
+//! saying the gate is "a filesystem query rather than a syntax test", as a draft
+//! of this doc did, states a mechanism the evidence contradicts. It is both, and
+//! this list is a set of observations rather than a specification.
 //!
 //! For the current drive neither happens: the entry is not consulted and not
 //! rewritten.
@@ -164,7 +175,8 @@
 //! for this note and is *not* something the probe reports; no instrument in
 //! this repository isolates the call, and the honest reading of
 //! `probe-request-cost` alone is an upper bound.
-//!//! It does **not** solve the session-relative drive-letter hazard, and saying
+//!
+//! It does **not** solve the session-relative drive-letter hazard, and saying
 //! so plainly matters more than the part it does solve. `GetFullPathNameW`
 //! never expands a drive letter, and a drive letter is resolved against the
 //! logon session of whatever token is in effect at open time. A path resolved

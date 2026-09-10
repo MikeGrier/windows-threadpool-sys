@@ -597,12 +597,20 @@ having resolved relativity another way -- they are named here.
 
 **It does touch the filesystem, on one form -- measured, after four drafts said
 otherwise.** Resolving a drive-relative path for a drive that is *not* the
-current one validates that drive's `=X:` entry against the filesystem: an entry
-naming an existing directory is honoured **verbatim** (and need not be on that
-drive -- with `=X:` set to `C:\Windows`, `X:foo` is `C:\Windows\foo`), while a
-missing directory or an existing *file* is rejected and the entry is
-**written** to the drive root -- created when absent, so this happens on a
-pristine host too. The rewrite mutates the process environment
+current one checks that drive's `=X:` entry against the filesystem *and* against
+a required shape. An accepted entry is used **verbatim** and need not be on that
+drive -- with `=X:` set to `C:\Windows`, `X:foo` is `C:\Windows\foo`. Anything
+rejected is replaced by the drive root, and the entry is **written** back there
+-- created when absent, so this happens on a pristine host too.
+
+Both halves of the gate were measured, and one of them refuted a draft of this
+very decision. Existence matters: a missing directory and an existing *file* are
+each rejected. Shape matters too, and independently -- `C:/Windows/System32`,
+`C:\Windows\System32\.`, `C:\Windows\System32\..\System32` and
+`\\?\C:\Windows\System32` were all rejected while naming the same existing
+directory that `C:\Windows\System32` was accepted for. So the draft calling this
+"a filesystem query rather than a syntax test" named a mechanism the evidence
+contradicts: it is both, and the list is observation rather than specification. The rewrite mutates the process environment
 block as a side effect of what reads like a pure query. For the current drive
 the entry is neither consulted nor rewritten.
 

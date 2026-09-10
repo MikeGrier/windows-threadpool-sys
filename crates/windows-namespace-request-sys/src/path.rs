@@ -23,8 +23,9 @@
 //! qualified against process state -- the current directory, or for a
 //! root-relative path that directory's *root*, or for a drive-relative path
 //! naming another drive the entry recorded for it in the `=C:` environment
-//! variables -- honoured verbatim, so it need not even be on that drive (for the
-//! current drive the process directory is used and the entry is ignored). It is
+//! variables -- used verbatim when accepted, so it need not even be on that
+//! drive, and replaced by the drive root when not (for the current drive the
+//! process directory is used and the entry is ignored). It is
 //! therefore not a lexical call as a whole, which is what makes resolving on
 //! the submitting thread meaningful.
 //!

@@ -105,7 +105,9 @@ process state, so it is not a lexical call as a whole; `PathCchCanonicalizeEx` d
 the wrong call for that reason, because rooting at submission is the property being bought. No cost
 comparison is claimed -- the item below asked whether the alternative "would be cheaper", and the
 answer recorded in D-18 is that nothing measures it, so the decision rests on semantics alone.
-Whether the call enters the kernel is recorded as NOT established. The item's body below is the
+The mechanism question this item raised is answered rather than left open: resolving a
+drive-relative path for another drive checks that drive's recorded entry against the filesystem
+and writes the entry back, so the call does touch the filesystem on that form. The item's body below is the
 request as it was written, and quotes the module doc as it read before the correction.
 
 - [x] **M2.6** -- Say precisely what `GetFullPathNameW` does, in the crate that owns it, and decide

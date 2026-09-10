@@ -571,3 +571,53 @@ fn a_drive_relative_path_uses_that_drives_entry_verbatim_and_rewrites_a_bad_one(
 
     set_drive_entry(DRIVE, restore.as_deref());
 }
+
+#[test]
+fn a_rejected_drive_entry_is_replaced_by_the_drive_root() {
+    // Acceptance needs BOTH a shape and an existence check, and a draft of the
+    // module doc claimed it was "a filesystem query rather than a syntax test"
+    // -- having measured only the existence half. Every value below names an
+    // existing directory, so anything rejected here is rejected on shape alone.
+    //
+    // Pinned because the distinction is not guessable and the doc asserts it.
+    const DRIVE: char = 'V';
+    let restore = drive_entry(DRIVE);
+
+    let accepted = current_directory();
+    let accepted = accepted.trim_end_matches('\\');
+
+    // The control: this exact directory IS accepted in canonical form, so the
+    // rejections below cannot be blamed on the directory itself.
+    set_drive_entry(DRIVE, Some(accepted));
+    assert_eq!(
+        resolve(&format!("{DRIVE}:foo")),
+        format!(r"{accepted}\foo"),
+        "control: the same directory in canonical form is accepted"
+    );
+
+    // Same directory, spellings that are not fully-qualified `X:\...` form.
+    // Each names something that exists; each is rejected anyway.
+    for spelling in [
+        accepted.replace('\\', "/"),
+        format!(r"{accepted}\."),
+        format!(
+            r"{accepted}\..\{}",
+            accepted.rsplit('\\').next().unwrap_or("")
+        ),
+        format!(r"\\?\{accepted}"),
+    ] {
+        set_drive_entry(DRIVE, Some(&spelling));
+        assert_eq!(
+            resolve(&format!("{DRIVE}:foo")),
+            format!(r"{DRIVE}:\foo"),
+            "{spelling:?} names an existing directory but is rejected on shape"
+        );
+        assert_eq!(
+            drive_entry(DRIVE).as_deref(),
+            Some(format!(r"{DRIVE}:\").as_str()),
+            "and the rejected entry is written back as the drive root"
+        );
+    }
+
+    set_drive_entry(DRIVE, restore.as_deref());
+}
