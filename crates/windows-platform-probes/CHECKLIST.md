@@ -115,26 +115,42 @@ speculative list to extend by imagination -- a fourth is added when a fourth con
   > more probes. Queued as M2.9 rather than taken here, because extending the oracle past one
   > renderer is a design question about where it should live, not a mechanical follow-on.
 
-- [ ] **M2.9** -- Decide how the oracle covers more than one probe, then cover them.
-  `probe-doorbell-cost` and `probe-request-cost` each render every measured figure in both a prose
-  table and an NDJSON line, and nothing compares the two. M2.4 established the class is real and not
-  confined to the topology report.
+- [x] **M2.9** -- **Decided: if two renderings must match, they come from a common source.** Not a
+  third oracle rule set -- both cost probes now walk the same `Observation::timings` the prose table
+  walks, with a `json_key` function deciding only what the machine-readable rendering calls each
+  entry. Reasoning in [DESIGN-NOTES.md](DESIGN-NOTES.md#d-correspondence-failures).
 
-  The rule -- *a fact rendered twice must agree* -- is general. Its inputs are not: the oracle
-  currently knows topology's prose labels by hard-coded string. Covering three probes by tripling
-  that table works and scales badly; the alternatives are for a renderer to declare its
-  double-rendered pairs once, or for the NDJSON to be generated from the same values the prose
-  formats so the pairing is structural and no oracle is needed for it.
+  This is strictly stronger than extending the oracle, and cheaper. An oracle rule finds a
+  contradiction that already exists; deriving both renderings from one value means there is none to
+  find. It also deleted code rather than adding it: ten hand-named NDJSON fields and a `get` closure
+  went, because naming each figure separately was what made the two renderings independent.
 
-  **That is the engineer's decision**, and it is the one the M2.4 open question was pointing at from
-  a different direction: if the answer is a shared mechanism rather than a per-crate one, the
-  question becomes a repository convention. Decide the shape before writing the second and third rule
-  set, because the shape is what the third one will be stuck with.
+  The `json_key` gate panics on a label it does not know, so a figure added to `measure` reaches both
+  renderings or fails loudly -- it cannot reach one only. Verified by adding an unnamed timing: the
+  probe printed its prose row and then died naming the missing key. (The row appearing before the
+  panic is M1.2's streaming, which is how a reader sees how far it got.)
 
-> **-> OPEN QUESTION for the engineer:** M2.4 may show this generalises past this crate, in which case
-> the oracle belongs somewhere shared and the question becomes a repository-wide convention rather than
-> a probe-crate one. That is a design decision, not a mechanical follow-on, and is deliberately left
-> unanswered here.
+  One test remains, and its job is narrow: the derivation is structural in the source, so what is
+  left to check is that the structure survives rendering, formatting and the process boundary. It
+  reuses the crate's own `json_key` rather than restating the pairing, since a test carrying its own
+  copy would be checking the copy.
+
+  **Its emptiness guard fired on the first run**, and that is worth recording: `request_cost`'s table
+  has ratio columns after the figure, so a row parser requiring exactly two tokens matched nothing
+  and the test would have passed having compared zero rows.
+
+  > **-> REMAINING SCOPE:** this closes the class in the two cost probes. Whether the same
+  > common-source rule should be applied to `topology_report`, whose prose and NDJSON are still
+  > written separately and are guarded by the M2.1 oracle instead, is a larger change and is not
+  > queued yet -- the oracle covers it today, and the eight promoted cells are what make that
+  > coverage real.
+
+> **-> ANSWERED (M2.9):** it did generalise, and the answer was not to move the oracle. If two
+> renderings must match they come from a common source, so the pairing is structural and there is
+> nothing for an oracle to check. That is a repository-shaped answer -- it is the same rule the root
+> [DESIGN-NOTES.md](../../DESIGN-NOTES.md) states as preferring a derived fact to a restated one --
+> but it needed no shared code to apply, because what generalises is the principle rather than a
+> mechanism.
 
 - [ ] **M2.5** -- Make the banner describe the read the body describes. A probe run performs
   **three** independent `MachineMemoryTopology::discover()` calls: `Fingerprint::discover()` for the

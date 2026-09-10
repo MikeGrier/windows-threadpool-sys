@@ -107,8 +107,41 @@ pub struct Timing {
     pub nanos_per_op: f64,
 }
 
-/// Every timing taken by [`measure`].
-#[derive(Debug, Clone)]
+/// The machine-readable name for a timing's label.
+///
+/// **The one place a figure's two names are related.** Both renderings walk
+/// [`Observation::timings`] and this decides only what the machine-readable one
+/// calls each entry, so the prose row and the NDJSON field cannot disagree about
+/// a value or exist without each other.
+///
+/// Written for the same reason as `doorbell_cost::json_key`: the prose iterated
+/// what was measured while the NDJSON named each field by hand, making them two
+/// independent restatements of one measurement. The M2.4 matrix found that class
+/// unchecked here, and deriving both from one source makes the disagreement
+/// unrepresentable rather than merely detectable.
+///
+/// # Panics
+///
+/// Panics on a label it does not know, so a timing added to `measure` without a
+/// name here fails at the render rather than silently missing from the
+/// machine-readable line -- the omission a fleet survey would never notice.
+#[must_use]
+pub fn json_key(label: &str) -> &'static str {
+    match label {
+        "prepare_short_path" => "prepare_short_cycle_ns",
+        "prepare_long_path" => "prepare_long_cycle_ns",
+        "build_open_request" => "build_open_request_cycle_ns",
+        "clone_prepared_units" => "clone_prepared_units_cycle_ns",
+        "capture_handle" => "capture_handle_ns",
+        "close_handle" => "close_handle_ns",
+        other => panic!(
+            "`{other}` is measured but has no machine-readable name; add it to \
+             `json_key` so it reaches the NDJSON line too"
+        ),
+    }
+}
+
+/// Every timing taken by [`measure`].#[derive(Debug, Clone)]
 pub struct Observation {
     /// Each timed loop, in the order run.
     pub timings: Vec<Timing>,

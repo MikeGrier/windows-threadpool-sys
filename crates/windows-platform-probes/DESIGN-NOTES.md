@@ -1665,3 +1665,48 @@ topology's prose labels.
 That is a scope question rather than a mechanical follow-on, and is queued as
 M2.9 rather than taken here.
 
+### M2.9: two renderings that must match come from a common source
+
+The M2.4 finding was that both cost probes rendered every measured figure twice
+with nothing comparing the two. The obvious response was a third oracle rule
+set. **The decision was that a fact rendered twice must be derived once**, so
+both renderings now walk the same `Observation::timings` and a `json_key`
+function decides only what the machine-readable one calls each entry.
+
+That is strictly stronger than an oracle rule and it is cheaper. An oracle finds
+a contradiction that already exists; deriving both from one value means there is
+none to find. It also **deleted** code -- ten hand-named NDJSON fields and a
+`get` closure went, because naming each figure separately was exactly what made
+the two renderings independent restatements.
+
+`json_key` panics on a label it does not know, which is the whole safety of the
+scheme: a figure added to `measure` reaches both renderings or fails loudly, and
+cannot reach one only. Verified by adding an unnamed timing -- the probe printed
+its prose row and then died naming the missing key. (That the row appeared
+before the panic is M1.2's streaming; the two milestones compose.)
+
+**What is left to test is narrow, and that is the mark of the right fix.** The
+derivation is structural in the source, so the only remaining question is
+whether the structure survives rendering, formatting and the process boundary.
+One integration test per probe runs the real binary and compares each table row
+against its NDJSON field, reusing the crate's own `json_key` rather than
+restating the pairing -- a test carrying its own copy would be checking the
+copy, which is the defect this milestone is about.
+
+Its emptiness guard fired on the first run: `request_cost`'s table has ratio
+columns after the figure, so a parser requiring exactly two tokens matched
+nothing and the test would have passed having compared zero rows. That is the
+third time in M1-M2 that a check written to prevent a vacuous pass caught one
+immediately.
+
+#### Why the topology report is not converted too
+
+Its prose and NDJSON are still written separately, guarded by the M2.1 oracle.
+That is a real inconsistency and it is deliberate rather than overlooked: the
+topology renderer's two sides are not one list rendered twice but many
+individually-formatted claims, several with prose that has no NDJSON counterpart
+and vice versa, so a common source is a much larger change than a `json_key`
+map. The oracle covers it today and the eight cells M2.4 promoted are what make
+that coverage real. Converting it is a decision available later, not a gap left
+by accident.
+

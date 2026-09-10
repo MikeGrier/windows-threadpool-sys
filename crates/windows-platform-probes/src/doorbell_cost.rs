@@ -78,6 +78,44 @@ use windows_sys::Win32::System::Threading::{
 
 use crate::ioring;
 
+/// The machine-readable name for a timing's label.
+///
+/// **The one place a figure's two names are related**, so the prose row and the
+/// NDJSON field cannot drift apart or disagree about a value: both renderings
+/// walk [`Observation::timings`] and this decides what the second one calls each
+/// entry.
+///
+/// It exists because the alternative had already gone wrong twice. The prose
+/// iterated the measured timings while the NDJSON named each field by hand in a
+/// format string, so the two were independent restatements of one fact -- the
+/// arrangement that produced `"efficiency_classes":1` beside a prose `[0]` in
+/// the topology report, and that the M2.4 matrix found unchecked in both cost
+/// probes. Relating the names here makes a disagreement unrepresentable rather
+/// than detectable, which is strictly better than an oracle rule: there is
+/// nothing left to check.
+///
+/// # Panics
+///
+/// Panics on a label it does not know. That is deliberate and is the whole
+/// safety of the scheme: adding a timing to `measure` without naming it here
+/// fails loudly at the render rather than silently omitting it from the
+/// machine-readable line, which is the failure a fleet survey would never
+/// notice.
+#[must_use]
+pub fn json_key(label: &str) -> &'static str {
+    match label {
+        "atomic_fetch_add" => "atomic_ns",
+        "set_event_already_signalled" => "set_event_already_signalled_ns",
+        "set_reset_event" => "set_reset_event_ns",
+        "wait_zero_signalled" => "wait_zero_signalled_ns",
+        "submit_io_ring_empty" => "submit_io_ring_empty_ns",
+        other => panic!(
+            "`{other}` is measured but has no machine-readable name; add it to \
+             `json_key` so it reaches the NDJSON line too"
+        ),
+    }
+}
+
 /// Nanoseconds per operation for one timed loop.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Timing {

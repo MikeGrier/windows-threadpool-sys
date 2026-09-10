@@ -10,8 +10,10 @@
 //! Read alongside `probe-doorbell-cost`: together they say whether the queue's
 //! mechanics or the request's allocation model deserves the attention.
 
+use std::fmt::Write as _;
+
 use windows_platform_probes::report::emit_report;
-use windows_platform_probes::request_cost::measure;
+use windows_platform_probes::request_cost::{json_key, measure};
 
 /// Measured by `probe-doorbell-cost` on a **Snapdragon X2 (ARM64)** machine,
 /// and recorded in [the 2026-08-30 design session]. Restated here only to
@@ -366,26 +368,35 @@ fn render(out: &mut dyn std::fmt::Write) {
     // and none of these can be. Letting them say "absent" would have produced a
     // partially populated record that parses cleanly and reads, to a mining
     // pass, as a host on which the measurement did not apply.
-    let get = |label: &str| {
-        let ns = observation
-            .get(label)
-            .unwrap_or_else(|| panic!("measure always records {label}"));
-        format!("{ns:.1}")
-    };
+    // Built by walking the SAME `timings` the prose table walked, with
+    // `json_key` deciding only what each entry is called here.
+    //
+    // This replaces six hand-named fields and the `get` closure that fetched
+    // them. Both are gone for the same reason: naming each figure separately
+    // made prose and NDJSON independent restatements of one measurement, so
+    // nothing stopped them disagreeing or one omitting a figure the other
+    // showed.
+    //
+    // The `expect`-per-field the closure existed for is gone too, and is not
+    // missed -- "every label is present" was a property of a hand-written list
+    // that could name a label `measure` never recorded. Iterating what was
+    // measured cannot ask for something absent, so the question does not arise.
+    let mut fields = String::new();
+    for timing in &observation.timings {
+        let _ = write!(
+            fields,
+            r#""{}":{:.1},"#,
+            json_key(timing.label),
+            timing.nanos_per_op
+        );
+    }
+    // The trailing comma the loop leaves is trimmed rather than avoided with a
+    // separator dance, because every field here is unconditional.
+    let fields = fields.trim_end_matches(',');
+
     let _ = writeln!(
         out,
-        concat!(
-            r#"{{"reason":"x-probe-request-cost","arch":"{}","prepare_short_cycle_ns":{},"#,
-            r#""prepare_long_cycle_ns":{},"build_open_request_cycle_ns":{},"#,
-            r#""clone_prepared_units_cycle_ns":{},"capture_handle_ns":{},"#,
-            r#""close_handle_ns":{}}}"#
-        ),
+        r#"{{"reason":"x-probe-request-cost","arch":"{}",{fields}}}"#,
         std::env::consts::ARCH,
-        get("prepare_short_path"),
-        get("prepare_long_path"),
-        get("build_open_request"),
-        get("clone_prepared_units"),
-        get("capture_handle"),
-        get("close_handle"),
     );
 }
