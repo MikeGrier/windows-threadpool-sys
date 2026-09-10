@@ -75,6 +75,13 @@
 //! submission is the property being bought. What survives either way is the
 //! part that matters: an allocator cannot remove it.
 //!
+//! The owning crate now settles both halves rather than leaving them to be
+//! re-derived from a probe: see `windows-namespace-request-sys`'
+//! [DESIGN-NOTES.md](../../windows-namespace-request-sys/DESIGN-NOTES.md) ->
+//! `D-18`, which states what the call actually does, records keeping it over
+//! the cheaper lexical alternative, and says plainly that whether it enters the
+//! kernel is not established.
+//!
 //! The two schemes that might reduce it recover different halves. **Inline
 //! storage** removes the allocation and copy, which is what
 //! `clone_prepared_units` measures, and cannot touch the resolution at all.

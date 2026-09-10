@@ -119,7 +119,7 @@ fn render(out: &mut dyn std::fmt::Write) {
         );
         let _ = writeln!(
             out,
-            "  different device -- which is why lexical resolution does not"
+            "  different device -- which is why resolving the path does not"
         );
         let _ = writeln!(out, "  close that hazard.");
     } else {
