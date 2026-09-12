@@ -8,10 +8,17 @@
 //! not lift a technique out of here. See this crate's DESIGN-NOTES.md.
 //!
 //! The assertable findings are pinned by tests; this binary exists to report the
-//! same observations on a machine the test suite has not run on -- notably an
-//! x64 host, since every measurement so far was taken on ARM64 -- and to perform
-//! the one observation a test must not: the alignment bit's process-scope
-//! stickiness is irreversible, so it is demonstrated here and nowhere else.
+//! same observations on a machine the test suite has not run on -- which is
+//! worth doing on any Windows machine, because these findings are meant to hold
+//! for the platform rather than for the hosts that measured them -- and to
+//! perform the one observation a test must not: the alignment bit's
+//! process-scope stickiness is irreversible, so it is demonstrated here and
+//! nowhere else.
+//!
+//! This said "notably an x64 host, since every measurement so far was taken on
+//! ARM64", which stopped being true when the x64 CI job re-took them all. The
+//! two-host comparison is in this crate's DESIGN-NOTES.md; a disagreement on a
+//! third host is exactly what this binary is for.
 
 use windows_platform_probes::error_mode::{
     alignment_bit_is_sticky_at_process_scope, bits, combined_invalid_installs_nothing, probe_bit,

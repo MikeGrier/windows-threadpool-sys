@@ -218,6 +218,7 @@ version = "0.0.1"
 dependencies = [
  "windows-namespace-request-sys",
  "windows-placement-probe",
+ "windows-platform-probes",
  "windows-sys",
  "windows-threadpool-sys",
  "windows-topology-sys",
