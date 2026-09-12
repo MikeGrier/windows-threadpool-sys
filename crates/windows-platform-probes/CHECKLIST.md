@@ -244,7 +244,23 @@ What this milestone changes in M2:
 - **M2.17 (cross the corpus dimensions) is re-scoped by M3.5** and should be done after it, not
   before: the dimensions worth crossing are the row's, and crossing prose shapes that are about to
   stop being checked would be work aimed at the retiring half.
-- M2.4, M2.5, M2.7, M2.8, M2.9, M2.13, M2.14, M2.15 and M2.16 are unaffected.
+- **M2.4 (explore for further correspondences) is re-scoped by M3.2** and should follow it. The
+  exploration is still worth doing and its instrument is unchanged, but what it hunts for changes:
+  invariants over `Coherence`, `BracketOutcome` and `Verdict` as VALUES, and facts the row fails to
+  publish -- not correspondences between two renderings. Its closing sentence, "promote only what
+  proves meaningful into the oracle from M2.1", now means the invariant set from M3.2. The open
+  question attached to it -- whether this generalises past this crate -- survives unchanged and is
+  arguably sharpened, since a data-level invariant is easier to share than a text reader.
+- **M2.15 (second architecture in CI) keeps its conclusion but loses its evidence.** The five
+  failures it cites were all `prose: "x86_64"` against `ndjson: "x86"` -- instances of exactly the
+  correspondence M3.4 retires, so after M3.4 they would not occur and re-running it would look
+  clean. The underlying point stands on its own and does not need them: CI builds `aarch64` and
+  never tests it, and architecture is the one shape dimension a corpus cannot vary because it is
+  fixed at compile time. Restate the item on that basis when it is picked up.
+- M2.5, M2.7, M2.8, M2.9, M2.13, M2.14 and M2.16 are unaffected. M2.9 (a cross-host ratio called
+  "the finding") and M2.14 (two authoring rules) are if anything reinforced: under this decision
+  prose accuracy is a review obligation rather than a machine-checked one, which puts more weight on
+  both.
 
 - [ ] **M3.1** -- Publish each diagnostic as itself, not as a count.
 
