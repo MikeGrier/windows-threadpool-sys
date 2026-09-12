@@ -1029,6 +1029,12 @@ scheduled by this decision.
 
 <a id="d-correspondence-failures"></a>
 
+**The diagnosis here is refined by [The encoded row is the contract; the prose is
+not](#d-encoded-row-is-the-contract).** What each instrument could not see is
+unchanged and is still the reason this component has an oracle at all. What this
+section got wrong is WHERE the two defects lived: both were defects in the
+ENCODED ROW, not in the relation between two renderings of a consistent state.
+
 This probe was reviewed twenty-eight times before it opened as a pull request,
 by two independent readers per round on different models, with `cargo-mutants`
 reporting **zero surviving mutants** on both of its modules. A review on the
@@ -1177,6 +1183,13 @@ section schedules nothing on its own.
 
 ## The oracle exists, and what it deliberately refuses to know
 
+<a id="d-oracle-refuses-to-know"></a>
+
+**The artifact-reading rule below is superseded by [The encoded row is the
+contract; the prose is not](#d-encoded-row-is-the-contract).** The rest of this
+section -- what the oracle admits, the acceptance half, the failure mode that
+looks like success -- still describes what is in the tree and still holds.
+
 M2.1 built it: [src/report_oracle.rs](src/report_oracle.rs), admitting only
 correlations the report already renders twice. The defect that forced
 it is the section above.
@@ -1184,6 +1197,13 @@ it is the section above.
 **It reads the rendered artifact, never the state behind it.** Checking state
 would miss precisely this defect class -- in the original finding the state was
 consistent and the two *renderings* of it were not.
+
+That last sentence is the superseded one, and it is wrong about its own
+evidence. Re-checked against the code: the alarm has no NDJSON key, and
+`cross_check` does -- so the original finding was a run whose ENCODED ROW said
+`agree` while the probe had detected its own bug, and published nothing about
+that bug. The state was not consistent; the row was wrong. See
+[#d-encoded-row-is-the-contract](#d-encoded-row-is-the-contract).
 
 **It relates two things already visible in the report, and re-derives nothing.**
 A second implementation of the rendering rules would be a check of the copy
@@ -1437,3 +1457,135 @@ about THEM. The instruments remain exactly as good as the hand-sabotage that
 built them -- which is where several of this branch's defects were found, and
 where the next one will be. A clean sweep is evidence about the oracle, not about
 the things measuring it.
+## The encoded row is the contract; the prose is not
+
+<a id="d-encoded-row-is-the-contract"></a>
+
+A probe is a data pipeline that renders, at its tail, to two artifacts: an NDJSON
+row and prose. **They are not peers.** The row is a machine contract -- mined
+across a fleet, joined against other runs, and the thing this workspace's designs
+end up resting on. The prose is for a reader.
+
+So they carry different obligations:
+
+- **The row must be CORRECT**, and that is machine-enforced. Its values, its
+  invariants and its shape are asserted.
+- **The prose must be ACCURATE AND READABLE**, and that is enforced by review.
+  It is not required to be programmatically comparable against the row, and
+  nothing here checks that it is.
+
+This supersedes the rule in
+[#d-oracle-refuses-to-know](#d-oracle-refuses-to-know), which said the oracle
+must read the rendered artifact rather than the state behind it.
+
+### What forced it: both originating defects were defects in the row
+
+The reason the earlier rule looked right was a misreading of its own evidence.
+Re-checked against the code, for the two defects in
+[#d-correspondence-failures](#d-correspondence-failures):
+
+**The alarm beside the agreeing verdict.** `report` emits
+`BUG IN THIS PROBE: ...` with a `writeln!` into the prose, and the NDJSON row has
+**no key for it** -- while `cross_check` IS a key, and read `agree` on the
+defective run. So the row certified a clean agreeing measurement on a host where
+the probe had detected its own bug, and said nothing about the bug. A survey
+mining that row would have been wrong and had no way to know. The prose alarm was
+not the defect; it was the only trace that the row was wrong, which is why a
+human found it and no instrument did.
+
+**That defect is fixed, and what it left behind is the live gap.** Checked
+rather than assumed, because the paragraph above describes the code as it was:
+`Observation::cross_check` now pushes `PartitioningCache::SummaryMissing` onto
+`parse_incomplete`, which forces the verdict away from `agree`, so the row can no
+longer certify that run. But the row publishes `parse_incomplete` as a **count**
+-- as it does `not_compared` and `enumeration_anomalies` -- where the prose
+publishes each entry's text. A survey reading `"parse_incomplete":1` cannot tell
+*the probe detected a bug in itself* from *a core record contradicted itself*
+from *this topology was not measured from a running machine*. Those are
+categorically different facts, and only the prose distinguishes them.
+
+So the shape of the problem is not that the row is out of step with the prose. It
+is that **the row is impoverished relative to the prose** -- the artifact that
+gets mined carries less than the artifact that gets read -- which is backwards
+given which of the two the designs rest on.
+
+**`efficiency classes: [0]` against `"efficiency_classes":1`.** Both halves were
+correct derivations of one consistent value -- the prose rendered the set, the row
+rendered the cardinality -- so no invariant was violated. Note how it was
+repaired: the row now publishes `"efficiency_classes":[...]`, the set. **The fix
+was to change what the row publishes.** The prose comparison was how a reviewer
+noticed, not the repair.
+
+Neither defect needed a prose-against-row oracle to fix. Both needed the
+structured output to be made right.
+
+### The rule that falls out, and it is the load-bearing one
+
+**A renderer may not tell a reader something the row cannot tell a survey.** A
+state worth naming to a human is a state worth publishing to a mining pass; if
+only the prose can say it, the fact exists solely in the artifact nothing
+queries, and the only detector is a person reading. A cardinality is not a
+statement of the fact -- `"parse_incomplete":1` names no condition -- so a count
+beside a prose list is an instance of this rule being broken, not an exception
+to it.
+
+With that rule in place the surviving correspondences stop being text
+comparisons and become **invariants on the observation, checked before
+rendering** -- `summary_missing` implies the verdict is not `agree`, and likewise
+for the other diagnostics and the counters. No parser is involved.
+
+### What the text-reading design cost
+
+Counted in [src/report_oracle.rs](src/report_oracle.rs): of 38 top-level
+functions, ten are correspondence rules and four are comparison helpers.
+**Twenty-three exist only to extract values back out of rendered text.**
+
+That is a parser for a format this crate itself writes, and it behaved like one.
+A large share of PR #88's review rounds were defects in the READER rather than in
+the thing read: a multi-byte panic in `processors_in_banner`, a `p/` substring
+matching inside an opaque `io::Error`, `trim_matches` collapsing `[[0]]` and
+`[0]`, a prose lookup selecting the wrong line when two began alike. None of
+those is a defect in a probe. They are a defect source the design created for
+itself.
+
+### Where structure replaces checking, prefer structure
+
+Three of the four hazards this component has actually met are made
+*unrepresentable* by construction rather than detected after the fact, and that
+is the stronger move:
+
+- **Injection.** Caller text reaching the row is contamination of the mined
+  artifact. Measured on PR #88: an `io::Error` containing `{` was selected as the
+  report's machine-readable row. A typed row emitted by one writer cannot have
+  this.
+- **Field order and labelling.** The row is built today by interpolating
+  eighteen values positionally through a `concat!` template. A reordered field or
+  a miscounted `{}` yields mislabelled data that still parses. A typed row with
+  one writer cannot have this either.
+- **Value divergence.** Two renderings of one field cannot disagree about its
+  value when both read the field.
+
+What structure does NOT cover, and so still needs something reading bytes: **the
+writer itself.** Several of PR #88's defects lived there -- a disclaimer matched
+as a suffix so it could be welded onto the line above, a flattening that ate the
+disclaimer, a containment that produced `host:  host:  ...`. The residual text
+check is therefore small and about well-formedness, not about correspondence.
+
+### What this does not say
+
+It does not say the prose does not matter. An overstated finding in prose
+propagates into the design notes that cite it, which is a live concern in this
+crate rather than a hypothetical -- M2.9 in [CHECKLIST.md](CHECKLIST.md) is an
+open item about exactly that. What changes is that prose accuracy is a **review**
+obligation, discharged by a person reading the report, rather than a
+correspondence a machine asserts.
+
+It also does not delete the correspondence rules. They relocate onto the
+observation, losing the parser in front of them. The containment work in
+[src/topology_report.rs](src/topology_report.rs) matters MORE under this
+decision, not less, because what it keeps out is now keeping it out of the
+contract artifact.
+
+The work this implies is queued as M3 in [CHECKLIST.md](CHECKLIST.md). The
+session that produced it is
+[design-sessions/DESIGN-SESSION-2026-09-12-what-the-oracle-should-read.md](design-sessions/DESIGN-SESSION-2026-09-12-what-the-oracle-should-read.md).

@@ -217,27 +217,108 @@ three correlations below" while the enum already had four.)
   them. Until this lands, a shape that needs two dimensions must be added by hand, which is exactly
   the imagination-driven process M2.12 exists to replace.
 
-- [ ] **M2.18** -- Decide whether a banner should be a TYPE rather than a `&str`.
 
-  **This is a design decision for the engineer, not a defect to fix in passing.** A review observed
-  that `is_attribution_shaped` recognises a SHAPE, not a provenance: any two `host:` lines followed
-  by the exact disclaimer pass through `preamble` verbatim. Since `report` and `report_unmeasured`
-  both take `&str`, there is a public path where caller text decides a renderer-owned question.
-  Measured: a hand-built banner of `host: <arch> 999p/1c` / `host: <arch> 1p/1c` / the disclaimer
-  renders verbatim, and the oracle's exemption for unestablished attribution then skips the
-  banner-against-body processor-count check -- so the banner suppressed a correspondence.
+## M3 -- Make the encoded row the contract, and stop checking the prose against it
 
-  **The honest scope of it.** The suppression is not silent: the report visibly states that its two
-  readings disagree, which is exactly the condition under which declining to compare counts is
-  CORRECT. The oracle reads the artifact, and the artifact says so. Every production caller composes
-  its banner with `attribution()`, so nothing reaches this by accident today. Validating the
-  per-line shape more strictly does not close it either -- `attribution` legitimately emits
-  `host:  UNKNOWN -- topology discovery failed: {error}` with arbitrary error text, so arbitrary
-  text can always ride inside a well-formed banner line.
+Decided in [DESIGN-NOTES.md](DESIGN-NOTES.md) -> [The encoded row is the contract; the prose is
+not](DESIGN-NOTES.md#d-encoded-row-is-the-contract), from the session in
+[design-sessions/DESIGN-SESSION-2026-09-12-what-the-oracle-should-read.md](design-sessions/DESIGN-SESSION-2026-09-12-what-the-oracle-should-read.md).
 
-  The fix that would actually close it is a typed banner with a private constructor, so only
-  `attribution()` can produce one and the renderer's signature carries the guarantee. The cost is
-  every fixture and corpus shape that builds a banner by hand, plus a test-only escape hatch that
-  partially reopens the hole for the tests that need odd banners. Worth doing if the renderer's
-  input contract is meant to be enforced rather than documented; not worth doing if `&str` in, and
-  containment on the way out, is the intended boundary. Raise before implementing.
+The row is a machine contract mined across a fleet; the prose is for a reader. They carry different
+obligations -- the row must be **correct**, enforced by machine; the prose must be **accurate and
+readable**, enforced by review. Nothing is required to hold *between* them.
+
+Re-checked against the code rather than against M2's account of it: the original defect is fixed, and
+what it left behind is larger. The row publishes `not_compared`, `parse_incomplete` and
+`enumeration_anomalies` as **counts**, where the prose prints each entry's text. A survey reading
+`"parse_incomplete":1` cannot tell *the probe detected a bug in itself* from *a core record
+contradicted itself* from *this topology was not measured from a running machine*. **The row is
+impoverished relative to the prose** -- the artifact that gets mined carries less than the artifact
+that gets read.
+
+What this milestone changes in M2:
+
+- **M2.18 (typed banner) is dissolved into M3.3.** It was the smallest instance of "should a report
+  be a value a writer renders, or a string the renderer concatenates", and answering it alone would
+  have typed one parameter while leaving the shape everywhere else.
+- **M2.17 (cross the corpus dimensions) is re-scoped by M3.5** and should be done after it, not
+  before: the dimensions worth crossing are the row's, and crossing prose shapes that are about to
+  stop being checked would be work aimed at the retiring half.
+- M2.4, M2.5, M2.7, M2.8, M2.9, M2.13, M2.14, M2.15 and M2.16 are unaffected.
+
+- [ ] **M3.1** -- Publish each diagnostic as itself, not as a count.
+
+  `not_compared`, `parse_incomplete` and `enumeration_anomalies` reach the row as
+  `check.parse_incomplete.len()` and its two siblings, so the fact that a mining pass most needs --
+  *which* condition occurred -- exists only in prose. Publish the entries, and give each a stable
+  machine-readable discriminant rather than the human sentence, so a survey can group by condition
+  without matching on English that is free to be reworded. The sentences stay in the prose, where
+  rewording them is harmless.
+
+  **The rule this establishes, which is the durable half:** a renderer may not tell a reader
+  something the row cannot tell a survey. A cardinality is not a statement of the fact.
+
+- [ ] **M3.2** -- Assert the surviving correspondences as invariants on the observation, before
+  rendering.
+
+  Alarm-against-verdict, diagnostics-against-verdict and counters-against-verdict are the three
+  oracle rules that survive the decision. They stop being comparisons of two rendered texts and
+  become predicates over `Observation` and `CrossCheck` -- `SummaryMissing` implies the verdict is not
+  `agree`, a non-empty `parse_incomplete` implies the verdict is not `agree`, and so on. No parser is
+  involved, and the check runs whether or not anything was rendered.
+
+  Each one must be sabotage-verified on arrival: delete the invariant, confirm the suite reddens,
+  restore it. A predicate that cannot fail is the failure mode this crate keeps meeting.
+
+- [ ] **M3.3** -- Emit the row from a typed value through one writer.
+
+  The row is built today by interpolating eighteen values positionally into a `concat!` template.
+  Two defect classes follow from that construction and both are closed by replacing it, not by
+  checking it:
+
+  **Injection.** Measured on PR #88: an `io::Error` containing `{` was selected as the report's
+  machine-readable row, so the oracle checked the caller's text instead of the probe's. Caller text
+  reaching the mined artifact is contamination of the contract.
+
+  **Field order and labelling.** A reordered value or a miscounted `{}` yields mislabelled data that
+  still parses, and nothing downstream can detect it.
+
+  A typed row struct plus a single writer that escapes strings makes both unrepresentable. Write the
+  writer here rather than adding a serialization dependency -- this crate has none and the row is
+  one flat object. This subsumes M2.18: the banner becomes a typed field like any other, and the
+  question of who may construct one is answered by the row's constructor rather than separately.
+
+- [ ] **M3.4** -- Retire the prose-against-row correspondences and the parsers that serve only them.
+
+  Of 38 top-level functions in [src/report_oracle.rs](src/report_oracle.rs), ten are correspondence
+  rules, four are comparison helpers, and **twenty-three exist only to extract values back out of
+  rendered text**. With M3.2 and M3.3 landed, that extraction layer has no remaining consumer.
+
+  What stays is a thin check that the row is **well-formed** -- it parses, it carries the expected
+  key set, and it is the only such line in the report. That is not a correspondence; it is the
+  writer's own output being checked, and the writer is the one place structure cannot check itself.
+
+  Retire, do not merely stop calling. Dead extraction helpers left in place are a second grammar for
+  a format that no longer has two readers.
+
+- [ ] **M3.5** -- Re-aim the shape corpus and the fact accounting at the row.
+
+  [tests/a_real_report_agrees_with_itself.rs](tests/a_real_report_agrees_with_itself.rs) enumerates
+  the facts a report publishes and measures, by mutation, which are read. The instrument is sound and
+  the target changes: enumerate the row's fields, and require each to be read by an invariant or
+  explicitly classified as unread. Its corpus of shapes keeps its purpose -- it exists to defeat the
+  imagination-driven fixture, which the decision does not change.
+
+  The prose half becomes a rendering test: the renderer emits what it is supposed to emit, judged on
+  its own terms rather than against the row.
+
+- [ ] **M3.6** -- Split [DESIGN-NOTES.md](DESIGN-NOTES.md) into Tier 1 and Tier 2.
+
+  Measured: 88 KiB, which is **XL** on the repository's byte scale, and the default posture at XL is
+  to split unless the module is indivisible. It is not -- it carries current decisions and a large
+  volume of how-we-got-here reasoning, which is exactly the Tier 1 / Tier 2 fracture the repository
+  instructions describe.
+
+  Move the rationale to `DESIGN-RATIONALE.md`, cross-referenced by decision anchor, leaving Tier 1
+  stating what was decided and what forced it. The decision added by this milestone is written to be
+  split that way already, so it is the worked example rather than the hard case.
