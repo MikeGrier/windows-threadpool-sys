@@ -10,10 +10,31 @@ rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 homepage.workspace = true
-description = "Executable probes for the undocumented Windows behaviour this workspace's designs rest on."
+description = "Executable probes for the Windows behaviour this workspace's designs rest on -- supported, documented APIs, in the specific cases their documentation does not describe."
 
 [lib]
 path = "src/lib.rs"
+
+[features]
+# Binds the report oracle inside the renderers for INTEGRATION test builds.
+#
+# `cfg(test)` covers the unit tests, but cargo compiles this library as an
+# ordinary dependency -- without `cfg(test)` -- for anything under `tests/`, so
+# the binding does not reach them. Measured: an integration test rendered a
+# report whose banner architecture contradicted its NDJSON and did not panic.
+# This feature closes that, via the self dev-dependency below.
+#
+# Never enable it for a shipping build. A real probe run must PRINT a
+# self-contradicting report rather than panic: the contradiction is a finding
+# about the probe, and a fleet survey needs the NDJSON row rather than a crash.
+#
+# **`--all-features` enables it, and cargo offers no stable way to prevent that.**
+# So `cargo build --all-features` produces probe binaries that assert -- verified
+# by inspecting them for the panic string. That matters here because this
+# workspace does use `--all-features`, for cargo-mutants runs. The boundary is
+# stated rather than claimed away: the DEFAULT build is the one that carries the
+# print-rather-than-panic guarantee.
+oracle-in-renderer = []
 
 [[bin]]
 name = "probe-error-mode"
@@ -112,6 +133,13 @@ windows-namespace-request-sys = { path = "../windows-namespace-request-sys" }
 # over that is a vocabulary one -- the workspace's own WTF-16 type naming the
 # quantity rather than an ad-hoc count that happens to agree.
 wtf-string = { path = "../wtf-string" }
+
+[dev-dependencies]
+# A dependency on ITSELF, which cargo permits for dev-dependencies and which is
+# the only way to turn a feature on for this package's own integration tests:
+# a test under `tests/` links the library as a plain dependency, so `cfg(test)`
+# is not set for it and the renderer's oracle binding would be compiled out.
+windows-platform-probes = { path = ".", features = ["oracle-in-renderer"] }
 
 [dependencies.windows-sys]
 version = "0.61.2"

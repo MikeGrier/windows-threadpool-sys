@@ -19,31 +19,17 @@ failures](DESIGN-NOTES.md#d-correspondence-failures) for why each instrument was
 incapable of finding it, and for the matrix-as-exploration / oracle-as-durable split this milestone
 implements.
 
-The three correlations below are known to be real because each was violated. They are not a
-speculative list to extend by imagination -- a fourth is added when a fourth contradiction is found.
+Every correlation the oracle admits is one the report already renders twice, found either by
+catching a contradiction or by walking the artifact field by field. It is not a
+speculative list to extend by imagination -- one is added when a contradiction is found, and the
+authoritative set is the `Correspondence` enum rather than any count written here. (This said "the
+three correlations below" while the enum already had four.)
 
-- [ ] **M2.1** -- Add a report oracle to this crate: one shared executable definition of the
-  correlations that must hold between the parts of a rendered report, checked against the rendered
-  artifact rather than against internal state. Seed it with the three known invariants: an alarm in
-  the prose implies the verdict is not `agree`; a fact rendered in both prose and NDJSON agrees across
-  the two; an uncaveated hardware claim implies `!parse_in_doubt`. Model it on
-  [../windows-file-watcher/src/contract.rs](../windows-file-watcher/src/contract.rs)'s
-  `ContractChecker`, which is this repository's worked example and which existed unused while this
-  probe was being written.
+- [x] **M2.1** -- Add a report oracle to this crate: one shared executable definition of the correlations that must hold between the parts of a rendered report. -> [completed 2026-09-10](COMPLETED-CHECKLIST.md#m21)
 
-- [ ] **M2.2** -- Route every test that renders a report through the oracle, so the roughly
-  twenty-five existing `report()` call sites inherit the checks and every future one does too. This is
-  the step that makes it an oracle rather than three more tests: a test added beside the others checks
-  one case, whereas binding the call sites checks every case anyone writes later. Verify the binding by
-  sabotage -- change an invariant and confirm existing tests go red -- because a binding that only moves
-  when its own test moves is cosmetic.
+- [x] **M2.2** -- Route every test that renders a report through the oracle, by binding it in the renderer. -> [completed 2026-09-10](COMPLETED-CHECKLIST.md#m22)
 
-- [ ] **M2.3** -- Add the missing integration test: run `measure()` against the real host, render the
-  report, and apply the oracle. At the time of M2 the crate had one integration test, asserting only
-  that a probe writes to stdout, and none of the twenty-five `report()` calls rendered from a real
-  measurement -- every one used a hand-built `Observation`, which can only contain states its author
-  already imagined. On CI this runs across the whole hosted-runner fleet, which is where states no
-  fixture anticipates will actually appear.
+- [x] **M2.3** -- Run `measure()` against the real host, render the report, and apply the oracle. -> [completed 2026-09-10](COMPLETED-CHECKLIST.md#m23)
 
 - [ ] **M2.4** -- Explore, with the sparse matrix as the instrument, whether the same correspondence
   failures exist for `Coherence`, `BracketOutcome` and `Verdict`, and in the sibling probes' renderers.
@@ -149,3 +135,109 @@ speculative list to extend by imagination -- a fourth is added when a fourth con
   to a labelled cross-host comparison. The first is more useful and more work; the second is honest
   and cheap. Same defect class as PR #86's subject -- a claim stated more strongly than the evidence
   supports -- so whichever is chosen, the wording has to end up matching what the numbers can carry.
+
+- [x] **M2.10** -- Derive the oracle's set of checked facts from the renderer instead of extending it by hand. -> [completed 2026-09-10](COMPLETED-CHECKLIST.md#m210)
+- [x] **M2.11** -- Compare the `outermost_partitioning_cache` discriminator against the prose conclusion. -> [completed 2026-09-10](COMPLETED-CHECKLIST.md#m211)
+
+- [x] **M2.12** -- Validate the oracle and its instruments against a corpus of report SHAPES generated from the renderer. -> [completed 2026-09-11](COMPLETED-CHECKLIST.md#m212)
+- [ ] **M2.13** -- Lint the completed-checklist archive mechanically in CI.
+
+  Three bookkeeping defects reached review on this branch, and all three are decidable by a script: a
+  `###` heading concatenated onto the previous line so it did not parse as a heading at all, three
+  more headings with no blank line above them, an archived item body left `- [ ]` after being checked
+  off, and a pre-existing entry's heading rewritten -- which the file forbids in its own second line.
+
+  Assert, for every `COMPLETED-CHECKLIST.md`: every `###` heading is preceded by a blank line; no
+  `- [ ]` remains; and the file has ZERO deleted lines against the merge base. The last one is the
+  append-only invariant, and it is the one a human reviewer is least likely to notice.
+
+- [ ] **M2.14** -- Write two authoring rules into the repository instructions, both earned on this
+  branch.
+
+  **State the invariant, not the census.** "14 keys read, 3 unread" added nothing that "every key is
+  classified" does not, and it was wrong -- written by eyeballing a list rather than counting it, in
+  the commit documenting a fix for exactly that defect class. Where a number is genuinely load
+  bearing, it must come from a command run in the same action that writes it.
+
+  **A new test is not done until it has been observed to fail.** Every vacuous test on this branch was
+  written green and stayed green until a reviewer thought to break something: a guard that matched a
+  violation's VARIANT where only its FACT established the point, and a fixture whose `.replace()` of
+  `[1]` matched nothing because the report rendered `[0]`. Sabotage belongs at authoring time, not at
+  review time.
+
+- [ ] **M2.15** -- Run the probe suite on a second architecture in CI.
+
+  A reviewer asked whether the suite was portable and it was not: three renderer fixtures and the
+  shape corpus' banner builder each hard-coded `x86_64` while the row they are compared against
+  publishes `std::env::consts::ARCH`. Measured on `i686-pc-windows-msvc`: five failures, every one
+  `prose: "x86_64"` against `ndjson: "x86"`. CI BUILDS `aarch64` and never TESTS it, so a
+  build-and-clippy matrix cannot see this class at all.
+
+  Architecture is the one shape dimension the M2.12 corpus cannot vary, because it is fixed at
+  compile time rather than chosen per report -- so the corpus that exists precisely to defeat shape
+  blindness is blind here by construction, and only a second test target can close it. Add one
+  (`i686-pc-windows-msvc` runs natively on the existing runners; `aarch64` would need its own).
+
+- [ ] **M2.16** -- Repair the garbled `Report` doc comment, and drop the two counts that have already
+  rotted beside it.
+
+  [src/report.rs](src/report.rs) opens its `Report` sink doc with a dangling fragment -- "A [`Report`]
+  a renderer can `writeln!` into directly." followed by a blank line and then "is arithmetic. Every
+  renderer writes through ..." -- so a sentence was lost in an edit, and "moves only 18 renderer
+  signatures." is followed by a bare repeat of the word "signatures." Introduced 2026-09-09 by
+  `b5594860` and `3827dc32`, both already on main; found while sweeping a count defect on the report
+  -oracle branch, where the file was out of scope to touch.
+
+  Both surviving numbers in that passage are censuses that have since drifted. It claims **332
+  `writeln!` sites**; measured now, 354. [DESIGN-NOTES.md](DESIGN-NOTES.md) restates the same 332,
+  so the two must be fixed together or they drift apart again. Replace them with the invariant the
+  passage is actually arguing -- that `String` already implements `fmt::Write`, so every existing
+  write site stands untouched and only the renderer signatures move -- which is what makes the point
+  and cannot rot. This is the same defect class as M2.14's first authoring rule.
+
+- [ ] **M2.17** -- Cross the corpus dimensions instead of varying one at a time.
+
+  [tests/a_real_report_agrees_with_itself.rs](tests/a_real_report_agrees_with_itself.rs)'s `shapes()`
+  builds each shape by taking `base()` and changing ONE thing. That makes every shape easy to read and
+  is why the corpus found what it found -- but it means any renderer branch selected by TWO
+  dimensions at once is unreachable by construction, and the corpus cannot report the gap because it
+  does not know the branch exists.
+
+  Measured: `CrossCheck` tags a `parse_incomplete` entry `- {caveat}` under `INCOMPLETE` but
+  `(parse incomplete) {caveat}` under `DISAGREE`. Anomalies appeared only in an agreeing-counter
+  shape and disagreements only in a zero-anomaly shape, so the second spelling was never rendered,
+  and the anomaly-count rule was silently unread on every disagreeing report -- while the comment
+  above it said it was read for every verdict. One hand-written crossed shape closed it, and the
+  accounting test went red under sabotage only once that shape existed.
+
+  Enumerate the dimensions the renderer actually branches on (verdict, bracket, coherence, the
+  partitioning arm, presence of each diagnostic list) and generate the cross product, or a pairwise
+  covering set if the full product is too slow. The corpus already asserts self-consistency and runs
+  the fact accounting per shape, so nothing new has to be written to check them -- only to produce
+  them. Until this lands, a shape that needs two dimensions must be added by hand, which is exactly
+  the imagination-driven process M2.12 exists to replace.
+
+- [ ] **M2.18** -- Decide whether a banner should be a TYPE rather than a `&str`.
+
+  **This is a design decision for the engineer, not a defect to fix in passing.** A review observed
+  that `is_attribution_shaped` recognises a SHAPE, not a provenance: any two `host:` lines followed
+  by the exact disclaimer pass through `preamble` verbatim. Since `report` and `report_unmeasured`
+  both take `&str`, there is a public path where caller text decides a renderer-owned question.
+  Measured: a hand-built banner of `host: <arch> 999p/1c` / `host: <arch> 1p/1c` / the disclaimer
+  renders verbatim, and the oracle's exemption for unestablished attribution then skips the
+  banner-against-body processor-count check -- so the banner suppressed a correspondence.
+
+  **The honest scope of it.** The suppression is not silent: the report visibly states that its two
+  readings disagree, which is exactly the condition under which declining to compare counts is
+  CORRECT. The oracle reads the artifact, and the artifact says so. Every production caller composes
+  its banner with `attribution()`, so nothing reaches this by accident today. Validating the
+  per-line shape more strictly does not close it either -- `attribution` legitimately emits
+  `host:  UNKNOWN -- topology discovery failed: {error}` with arbitrary error text, so arbitrary
+  text can always ride inside a well-formed banner line.
+
+  The fix that would actually close it is a typed banner with a private constructor, so only
+  `attribution()` can produce one and the renderer's signature carries the guarantee. The cost is
+  every fixture and corpus shape that builds a banner by hand, plus a test-only escape hatch that
+  partially reopens the hole for the tests that need odd banners. Worth doing if the renderer's
+  input contract is meant to be enforced rather than documented; not worth doing if `&str` in, and
+  containment on the way out, is the intended boundary. Raise before implementing.

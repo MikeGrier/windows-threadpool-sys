@@ -1,13 +1,38 @@
 // Copyright (c) Mike Grier.
 
-//! Executable probes for the undocumented Windows behaviour this workspace's
-//! designs rest on.
+//! Executable probes for the Windows behaviour this workspace's designs rest on
+//! -- supported, documented APIs, in the specific cases their documentation does
+//! not describe.
 //!
-//! Several decisions in this repository are justified by measurements of
-//! behaviour Microsoft does not document, or documents differently from how it
-//! behaves. A measurement recorded only in prose decays silently: the claim
-//! stays in the design note while the platform, or our reading of it, moves.
-//! These probes exist so a claim can be re-run rather than re-argued.
+//! Several decisions in this repository rest on behaviour the Windows
+//! documentation does not describe: a guarantee stated for one case and silent
+//! about the next, an error path whose result is unstated, an interaction
+//! between two APIs that neither page covers.
+//!
+//! **Not the undocumented-API kind.** Nothing here loads `ntdll`, calls an
+//! `Nt*` entry point, or reaches past the supported surface in any other way --
+//! which is usually what "undocumented Windows behaviour" is taken to mean.
+//! Every probe calls an API Microsoft documents and supports, in a way it
+//! supports, and the manifest requests only `Win32_*` surfaces. What is
+//! undocumented is the *answer to a particular question* about that call: not
+//! whether we may make it, but what it does when we do.
+//!
+//! One probe's notes do quote an `ntdll!` frame -- [`cancel_io`] records where a
+//! stack trace showed a thread blocked while a hang was being diagnosed. That is
+//! evidence about what happened, not an entry point this crate calls.
+//!
+//! Those answers are what a measurement can settle and prose cannot. Measuring
+//! here usually means establishing a relation rather than a quantity -- whether
+//! two APIs report the same thing, whether state is shared between handles,
+//! whether one setting is independent of another -- so the result is most often
+//! a yes, a no, or a description of how two readings differ. A few probes do
+//! time something. A measurement recorded only in prose decays silently -- the
+//! claim stays in the design note while the platform, or our reading of it,
+//! moves -- so these probes exist to make a claim re-runnable rather than
+//! re-arguable.
+//!
+//! Where the platform has not committed to an answer, the probe records an
+//! observation rather than a contract, and says which it is.
 //!
 //! # Experiments, not components
 //!
@@ -124,6 +149,7 @@ pub mod long_path;
 pub mod long_path_report;
 pub mod pool_growth;
 pub mod report;
+pub mod report_oracle;
 pub mod request_cost;
 pub mod topology;
 pub mod topology_report;
