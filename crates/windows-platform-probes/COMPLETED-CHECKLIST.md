@@ -496,3 +496,30 @@ request as it was written, and quotes the module doc as it read before the corre
   `shapes()` is a sample, so a green run read as proof of coverage it does not have. The old names
   are left standing above because this file is history; this line is how a reader following them
   finds where they went.)*
+
+## Moved 2026-09-12 -- M2 completes: the report oracle, its fact set and its shape corpus
+
+M2's own work is done. Its completed items -- M2.1 (the oracle), M2.2 (the renderer binding),
+M2.3 (the real-host test), M2.6 (`GetFullPathNameW`), M2.10 (the derived fact set), M2.11 (the
+partitioning discriminator) and M2.12 (the shape corpus) -- were each archived above as they landed,
+so their stubs in [CHECKLIST.md](CHECKLIST.md) carried nothing this file does not already hold and
+were deleted with the milestone.
+
+**The ten open items were re-sequenced, not reworked.** They had accumulated under a heading none of
+them fit -- a CI `if:` condition and a doc-comment repair are not correspondence work -- and they
+split by whether [DESIGN-NOTES.md](DESIGN-NOTES.md) ->
+[#d-encoded-row-is-the-contract](DESIGN-NOTES.md#d-encoded-row-is-the-contract) gates them:
+
+- **M4** (gated on M3): M2.4, M2.5, M2.15, M2.17.
+- **M5** (gated on nothing): M2.7, M2.8, M2.9, M2.13, M2.14, M2.16.
+- **M2.18 is dissolved** into M3.3 rather than moved. It asked whether a banner should be a type;
+  M3.3 answers the general form of that question, and answering the banner alone would have typed
+  one parameter while leaving the shape everywhere else.
+
+**Their IDs deliberately keep the `M2.` prefix.** This file is append-only and its entries are
+immutable, and two entries above already cite M2.4 and M2.14 -- so renumbering would leave dangling
+references here that may not be edited to repair them. A stable ID costs a mismatch between an item
+number and its milestone heading; renumbering would cost correctness in the archive.
+
+*(Recorded 2026-09-12 18:45:27 -04:00. This entry closes a milestone rather than completing an item,
+so it carries no `###` item heading and nothing links to it by anchor.)*
