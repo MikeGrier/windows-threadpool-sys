@@ -850,7 +850,13 @@ fn a_numa_node_the_topology_crate_never_saw_is_still_reported() {
         "{check:?}"
     );
     assert_eq!(check.disagreements.len(), 1, "{check:?}");
-    assert!(check.disagreements[0].contains("NUMA nodes"), "{check:?}");
+    assert!(
+        matches!(
+            check.disagreements[0],
+            crate::topology::Disagreement::HighestNumaNode { .. }
+        ),
+        "{check:?}"
+    );
     assert!(check.not_compared.is_empty(), "{check:?}");
 }
 
@@ -869,7 +875,13 @@ fn a_topology_reporting_no_numa_node_at_all_disagrees_with_a_raw_one() {
         "{check:?}"
     );
     assert_eq!(check.disagreements.len(), 1, "{check:?}");
-    assert!(check.disagreements[0].contains("none"), "{check:?}");
+    assert!(
+        matches!(
+            check.disagreements[0],
+            crate::topology::Disagreement::HighestNumaNode { parsed: None, .. }
+        ),
+        "{check:?}"
+    );
 }
 
 // A counter that could not be read must never read as agreement. Each of these
@@ -895,7 +907,7 @@ fn a_failed_numa_read_is_incomplete_rather_than_agreement() {
     assert!(check.disagreements.is_empty(), "{check:?}");
     assert_eq!(check.not_compared.len(), 1, "{check:?}");
     assert!(
-        check.not_compared[0].contains("GetNumaHighestNodeNumber"),
+        check.not_compared[0] == crate::topology::NotCompared::HighestNumaNodeFailed,
         "{check:?}"
     );
 }
@@ -917,7 +929,7 @@ fn a_failed_processor_count_is_incomplete_rather_than_a_parse_disagreement() {
     );
     assert!(check.disagreements.is_empty(), "{check:?}");
     assert!(
-        check.not_compared[0].contains("GetActiveProcessorCount"),
+        check.not_compared[0] == crate::topology::NotCompared::ActiveProcessorCountFailed,
         "{check:?}"
     );
 }
@@ -935,7 +947,7 @@ fn a_failed_group_count_is_incomplete_rather_than_a_parse_disagreement() {
     );
     assert!(check.disagreements.is_empty(), "{check:?}");
     assert!(
-        check.not_compared[0].contains("GetActiveProcessorGroupCount"),
+        check.not_compared[0] == crate::topology::NotCompared::ActiveProcessorGroupCountFailed,
         "{check:?}"
     );
 }
@@ -1003,7 +1015,10 @@ fn disagreeing_source_enumerations_block_agreement_even_when_every_counter_match
     assert!(check.not_compared.is_empty(), "{check:?}");
     assert_eq!(check.parse_incomplete.len(), 1, "{check:?}");
     assert!(
-        check.parse_incomplete[0].contains("never agreed"),
+        matches!(
+            check.parse_incomplete[0],
+            crate::topology::ParseIncomplete::EnumerationsDisagreed { .. }
+        ),
         "{check:?}"
     );
     assert_eq!(
@@ -1374,9 +1389,11 @@ fn a_topology_with_no_processors_at_all_is_not_accused_of_hiding_packages() {
 
     let check = observation.cross_check();
     assert!(
-        !check.parse_incomplete.iter().any(
-            |c| c.contains("no packages were reported") || c.contains("no cores were reported")
-        ),
+        !check.parse_incomplete.iter().any(|c| matches!(
+            c,
+            crate::topology::ParseIncomplete::NoPackages
+                | crate::topology::ParseIncomplete::NoCores
+        )),
         "with no processors reported, absent packages and cores are not a separate finding: \
          {check:?}"
     );
@@ -1466,10 +1483,10 @@ fn observe_reports_a_numa_domain_whose_sources_number_it_differently() {
     // so the empty-survey entry fires alongside; asserting a total would couple
     // this test to causes it is not about.
     assert!(
-        check
-            .parse_incomplete
-            .iter()
-            .any(|c| c.contains("more than one distinct node number")),
+        check.parse_incomplete.iter().any(|c| matches!(
+            c,
+            crate::topology::ParseIncomplete::NumaDomainsWithConflictingLabels { .. }
+        )),
         "{check:?}"
     );
     assert_eq!(
@@ -1536,10 +1553,10 @@ fn a_machine_that_changed_still_reports_what_the_parse_itself_lost() {
         "the timing skew is still recorded: {check:?}"
     );
     assert!(
-        check
-            .parse_incomplete
-            .iter()
-            .any(|c| c.contains("enumeration anomal")),
+        check.parse_incomplete.iter().any(|c| matches!(
+            c,
+            crate::topology::ParseIncomplete::EnumerationAnomalies { .. }
+        )),
         "and the dropped record is NOT suppressed by it: {check:?}"
     );
     assert!(
@@ -1556,12 +1573,12 @@ fn a_core_or_attribute_the_sources_disagree_about_blocks_agreement() {
     // cores, or give the same processor different efficiency classes.
     for (label, mutate) in [
         (
-            "core(s) were reported only by CPU Sets",
+            "cores_only_in_cpu_sets",
             Box::new(|o: &mut crate::topology::Observation| o.cores_only_in_cpu_sets = 1)
                 as Box<dyn Fn(&mut crate::topology::Observation)>,
         ),
         (
-            "attribute(s) carry more than one distinct value",
+            "processor_attribute_conflicts",
             Box::new(|o: &mut crate::topology::Observation| o.processor_attribute_conflicts = 1),
         ),
     ] {
@@ -1575,7 +1592,7 @@ fn a_core_or_attribute_the_sources_disagree_about_blocks_agreement() {
              counter: {check:?}"
         );
         assert!(
-            check.parse_incomplete.iter().any(|c| c.contains(label)),
+            check.parse_incomplete.iter().any(|c| c.code() == label),
             "{label}: {check:?}"
         );
         assert_eq!(
@@ -1710,7 +1727,10 @@ fn observe_carries_the_crates_attribute_conflicts() {
             .cross_check()
             .parse_incomplete
             .iter()
-            .any(|c| c.contains("attribute(s) carry more than one distinct value")),
+            .any(|c| matches!(
+                c,
+                crate::topology::ParseIncomplete::ProcessorAttributeConflicts { .. }
+            )),
     );
 }
 
@@ -1773,7 +1793,7 @@ fn a_topology_nobody_measured_cannot_be_certified_against_this_machine() {
             .cross_check()
             .parse_incomplete
             .iter()
-            .any(|c| c.contains("not measured from a running machine")),
+            .any(|c| matches!(c, crate::topology::ParseIncomplete::NotMeasured)),
         "{:?}",
         synthetic.cross_check()
     );
@@ -1793,7 +1813,7 @@ fn a_topology_nobody_measured_cannot_be_certified_against_this_machine() {
             .cross_check()
             .parse_incomplete
             .iter()
-            .any(|c| c.contains("not measured from a running machine")),
+            .any(|c| matches!(c, crate::topology::ParseIncomplete::NotMeasured)),
         "{:?}",
         measured.cross_check()
     );
@@ -1856,12 +1876,12 @@ fn a_report_of_no_packages_or_no_cores_is_a_finding_not_a_machine() {
     // exactly as an empty cache survey is.
     for (label, mutate) in [
         (
-            "packages",
+            "no_packages",
             Box::new(|o: &mut crate::topology::Observation| o.packages = 0)
                 as Box<dyn Fn(&mut crate::topology::Observation)>,
         ),
         (
-            "cores",
+            "no_cores",
             Box::new(|o: &mut crate::topology::Observation| o.cores = Vec::new()),
         ),
     ] {
@@ -1874,7 +1894,7 @@ fn a_report_of_no_packages_or_no_cores_is_a_finding_not_a_machine() {
             "{label}: an absent relationship is not the crate contradicting a counter: {check:?}"
         );
         assert!(
-            check.parse_incomplete.iter().any(|c| c.contains(label)),
+            check.parse_incomplete.iter().any(|c| c.code() == label),
             "{label}: {check:?}"
         );
         assert_eq!(
@@ -1904,7 +1924,10 @@ fn a_numa_domain_no_source_reported_blocks_agreement_rather_than_accusing_the_pa
     assert!(check.disagreements.is_empty(), "{check:?}");
     assert_eq!(check.parse_incomplete.len(), 1, "{check:?}");
     assert!(
-        !check.parse_incomplete[0].contains("CPU Sets"),
+        !matches!(
+            check.parse_incomplete[0],
+            crate::topology::ParseIncomplete::NumaDomainsOnlyInCpuSets { .. }
+        ),
         "nobody reported it, so the message must not name a reporter: {check:?}"
     );
     assert_eq!(
@@ -2818,7 +2841,10 @@ fn an_empty_core_or_package_record_blocks_agreement() {
         let check = observation.cross_check();
         assert!(check.disagreements.is_empty(), "{label}: {check:?}");
         assert!(
-            check.parse_incomplete.iter().any(|c| c.contains(label)),
+            check.parse_incomplete.iter().any(|c| matches!(
+                c,
+                crate::topology::ParseIncomplete::RelationsWithoutProcessors { .. }
+            )),
             "{label}: {check:?}"
         );
         assert_eq!(
@@ -2949,7 +2975,10 @@ fn a_relation_a_caller_described_is_not_a_measurement() {
             .cross_check()
             .parse_incomplete
             .iter()
-            .any(|c| c.contains("described by a caller")),
+            .any(|c| matches!(
+                c,
+                crate::topology::ParseIncomplete::DescribedRelations { .. }
+            )),
         "a measured topology carrying a described relation is not all measured: {:?}",
         described.cross_check()
     );
@@ -2968,7 +2997,10 @@ fn a_relation_a_caller_described_is_not_a_measurement() {
             .cross_check()
             .parse_incomplete
             .iter()
-            .any(|c| c.contains("described by a caller")),
+            .any(|c| matches!(
+                c,
+                crate::topology::ParseIncomplete::DescribedRelations { .. }
+            )),
         "{:?}",
         walked.cross_check()
     );
@@ -3006,7 +3038,7 @@ fn a_bracket_left_open_is_not_the_same_as_a_machine_that_held_still() {
         check
             .not_compared
             .iter()
-            .any(|c| c.contains("bracket around the parse was not closed")),
+            .any(|c| matches!(c, crate::topology::NotCompared::BracketNotEstablished)),
         "{check:?}"
     );
     assert!(
@@ -3076,7 +3108,7 @@ fn observe_will_not_claim_a_bracket_it_was_not_given() {
         check
             .not_compared
             .iter()
-            .any(|c| c.contains("bracket around the parse was not closed")),
+            .any(|c| matches!(c, crate::topology::NotCompared::BracketNotEstablished)),
         "{check:?}"
     );
     assert_ne!(
@@ -3156,10 +3188,10 @@ fn a_relation_no_source_reported_is_counted_whatever_its_kind() {
     let check = observation.cross_check();
     assert!(check.disagreements.is_empty(), "{check:?}");
     assert!(
-        check
-            .parse_incomplete
-            .iter()
-            .any(|c| c.contains("carry no observation from any source")),
+        check.parse_incomplete.iter().any(|c| matches!(
+            c,
+            crate::topology::ParseIncomplete::UnreportedRelations { .. }
+        )),
         "{check:?}"
     );
     assert_eq!(
@@ -3203,7 +3235,10 @@ fn a_measured_topology_reporting_no_processors_or_groups_blocks_agreement() {
              {check:?}"
         );
         assert!(
-            check.parse_incomplete.iter().any(|c| c.contains(label)),
+            check.parse_incomplete.iter().any(|c| matches!(
+                c,
+                crate::topology::ParseIncomplete::MeasuredButCountsAbsent { .. }
+            )),
             "{label}: {check:?}"
         );
         assert_eq!(
@@ -3231,10 +3266,10 @@ fn both_absent_counts_are_named_together_rather_than_one_standing_for_the_pair()
 
     let check = observation.cross_check();
     assert!(
-        check
-            .parse_incomplete
-            .iter()
-            .any(|c| c.contains("no online processors and processor groups")),
+        check.parse_incomplete.iter().any(|c| matches!(
+            c,
+            crate::topology::ParseIncomplete::MeasuredButCountsAbsent { .. }
+        )),
         "{check:?}"
     );
 }
@@ -3254,17 +3289,17 @@ fn a_topology_nobody_measured_is_not_accused_of_describing_no_machine() {
 
     let check = observation.cross_check();
     assert!(
-        !check
-            .parse_incomplete
-            .iter()
-            .any(|c| c.contains("cannot have none")),
+        !check.parse_incomplete.iter().any(|c| matches!(
+            c,
+            crate::topology::ParseIncomplete::MeasuredButCountsAbsent { .. }
+        )),
         "an unmeasured topology is not held to what a running machine must have: {check:?}"
     );
     assert!(
         check
             .parse_incomplete
             .iter()
-            .any(|c| c.contains("was not measured from a running machine")),
+            .any(|c| matches!(c, crate::topology::ParseIncomplete::NotMeasured)),
         "and the reason it is exempt is itself reported: {check:?}"
     );
 }
@@ -3283,10 +3318,10 @@ fn two_walk_records_of_one_kind_claiming_a_processor_block_agreement() {
     let check = observation.cross_check();
     assert!(check.disagreements.is_empty(), "{check:?}");
     assert!(
-        check
-            .parse_incomplete
-            .iter()
-            .any(|c| c.contains("share a processor with another")),
+        check.parse_incomplete.iter().any(|c| matches!(
+            c,
+            crate::topology::ParseIncomplete::OverlappingWalkRelations { .. }
+        )),
         "{check:?}"
     );
     assert_eq!(
@@ -3637,10 +3672,10 @@ fn a_count_holding_relations_no_platform_reported_cannot_contradict_a_counter() 
              counter: {check:?}"
         );
         assert!(
-            check
-                .not_compared
-                .iter()
-                .any(|c| c.contains("could not be attributed to the parse")),
+            check.not_compared.iter().any(|c| matches!(
+                c,
+                crate::topology::NotCompared::CountsIncludeUnparsedRelations
+            )),
             "{label}: and the reason no comparison was made is reported: {check:?}"
         );
         assert_eq!(
@@ -3661,7 +3696,10 @@ fn a_wholly_parsed_topology_is_still_compared_against_its_counters() {
     assert!(!observation.counts_include_unparsed_relations());
     let check = observation.cross_check();
     assert!(
-        check.disagreements.iter().any(|c| c.contains("groups:")),
+        check
+            .disagreements
+            .iter()
+            .any(|c| matches!(c, crate::topology::Disagreement::ProcessorGroups { .. })),
         "{check:?}"
     );
     assert_eq!(check.verdict(), crate::topology::Verdict::Disagree);
@@ -3707,10 +3745,10 @@ fn a_core_whose_smt_flag_contradicts_its_own_processor_count_blocks_agreement() 
         let check = observation.cross_check();
         assert!(check.disagreements.is_empty(), "{label}: {check:?}");
         assert!(
-            check
-                .parse_incomplete
-                .iter()
-                .any(|c| c.contains("disagrees with the number of processors")),
+            check.parse_incomplete.iter().any(|c| matches!(
+                c,
+                crate::topology::ParseIncomplete::ContradictoryCores { .. }
+            )),
             "{label}: {check:?}"
         );
         assert_eq!(
@@ -3763,10 +3801,10 @@ fn a_cache_level_numbered_zero_blocks_agreement() {
     let check = observation.cross_check();
     assert!(check.disagreements.is_empty(), "{check:?}");
     assert!(
-        check
-            .parse_incomplete
-            .iter()
-            .any(|c| c.contains("numbered 0")),
+        check.parse_incomplete.iter().any(|c| matches!(
+            c,
+            crate::topology::ParseIncomplete::UnnumberedCacheLevels { .. }
+        )),
         "{check:?}"
     );
     assert_eq!(check.verdict(), crate::topology::Verdict::Incomplete);
@@ -4060,10 +4098,10 @@ fn observe_counts_walk_numa_nodes_that_claim_the_same_processor() {
         "the counter agreed, so nothing is filed against the parse: {check:?}"
     );
     assert!(
-        check
-            .parse_incomplete
-            .iter()
-            .any(|c| c.contains("share a processor with another")),
+        check.parse_incomplete.iter().any(|c| matches!(
+            c,
+            crate::topology::ParseIncomplete::OverlappingWalkRelations { .. }
+        )),
         "{check:?}"
     );
     assert!(check.parse_in_doubt(), "{check:?}");
@@ -4093,7 +4131,12 @@ fn a_conflict_count_says_what_it_counted_rather_than_which_source_said_it() {
         mutate(&mut observation);
 
         let check = observation.cross_check();
-        let entries = check.parse_incomplete.join(" ");
+        let entries = check
+            .parse_incomplete
+            .iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>()
+            .join(" ");
         assert!(
             entries.contains("more than one distinct"),
             "{label}: states what it counted: {check:?}"
@@ -4215,10 +4258,10 @@ fn a_named_level_with_no_summary_blocks_agreement_and_sizes_to_one_domain() {
     let check = observation.cross_check();
     assert!(check.disagreements.is_empty(), "{check:?}");
     assert!(
-        check
-            .parse_incomplete
-            .iter()
-            .any(|c| c.contains("carries no summary for it")),
+        check.parse_incomplete.iter().any(|c| matches!(
+            c,
+            crate::topology::ParseIncomplete::PartitioningSummaryMissing { .. }
+        )),
         "{check:?}"
     );
     assert_eq!(
@@ -4446,5 +4489,147 @@ fn preparing_a_path_needs_no_volume_behind_its_drive_letter() {
          outcome is the whole claim -- this says nothing about whether a device \
          is consulted, because a black-box success cannot -- and it is what \
          `request_cost` depends on for its hard-coded long-path sample"
+    );
+}
+
+// --- M3.1: the row names each condition, rather than counting them -----------
+
+/// The codes the row publishes for `key`, in order.
+///
+/// Reads the rendered artifact rather than the `CrossCheck` behind it, because
+/// what a survey receives is the point: an assertion against the struct would
+/// hold even if the writer published nothing at all.
+fn row_codes(text: &str, key: &str) -> Vec<String> {
+    let row = text
+        .lines()
+        .find(|line| line.starts_with('{'))
+        .unwrap_or_else(|| panic!("no machine-readable row in:\n{text}"));
+    let needle = format!("\"{key}\":[");
+    let start = row
+        .find(&needle)
+        .unwrap_or_else(|| panic!("no `{key}` list in the row:\n{row}"))
+        + needle.len();
+    let end = start
+        + row[start..]
+            .find(']')
+            .unwrap_or_else(|| panic!("unterminated `{key}` list in the row:\n{row}"));
+
+    row[start..end]
+        .split(',')
+        .map(|piece| piece.trim().trim_matches('"').to_owned())
+        .filter(|piece| !piece.is_empty())
+        .collect()
+}
+
+#[test]
+fn the_row_names_the_probes_own_bug_when_it_detects_one() {
+    // **The defect this whole milestone came from, stated as a test.** The
+    // renderer prints `BUG IN THIS PROBE ...` for a named partitioning level
+    // carrying no summary. The verdict has been forced away from `agree` since
+    // that defect was fixed -- but the row published only
+    // `"parse_incomplete":1`, so a survey could tell the run was in doubt and
+    // NOT that the doubt was this probe contradicting itself, which is a
+    // categorically different fact from a flaky host.
+    let mut observation = clean_observation();
+    observation.partitioning_cache_level = Some(9);
+
+    let text = crate::topology_report::report(BANNER, &observation);
+
+    assert!(
+        text.contains("BUG IN THIS PROBE"),
+        "the prose still alarms: {text}"
+    );
+    assert!(
+        row_codes(&text, "parse_incomplete").contains(&"partitioning_summary_missing".to_owned()),
+        "the row must name the condition the prose alarms about, not merely \
+         count it: {text}"
+    );
+}
+
+#[test]
+fn the_row_lists_exactly_the_codes_of_the_conditions_the_check_found() {
+    // **The row against the vocabulary, on a report carrying several
+    // conditions at once.** A single-condition fixture cannot show that the
+    // codes travel in order, or that one is not dropped.
+    let mut observation = clean_observation();
+    observation.caches = Vec::new();
+    observation.cores_only_in_cpu_sets = 1;
+    observation.numa_domains_unreported = 2;
+
+    let check = observation.cross_check();
+    let expected: Vec<String> = check
+        .parse_incomplete
+        .iter()
+        .map(|entry| entry.code().to_owned())
+        .collect();
+
+    assert!(
+        expected.len() >= 3,
+        "the fixture must carry several conditions or it shows nothing: {check:?}"
+    );
+
+    let text = crate::topology_report::report(BANNER, &observation);
+
+    assert_eq!(
+        row_codes(&text, "parse_incomplete"),
+        expected,
+        "every condition the check found reaches the row, in order: {text}"
+    );
+}
+
+#[test]
+fn the_row_lists_one_code_per_line_the_prose_lists() {
+    // **The rule M3.1 establishes: a renderer may not tell a reader something
+    // the row cannot tell a survey.** Asserted as a count rather than a pairing
+    // on purpose -- the code and the sentence come from one `diagnostic`
+    // variant, so they cannot name different conditions, and what is left to
+    // check is that neither rendering drops an entry the other kept.
+    let mut observation = clean_observation();
+    observation.caches = Vec::new();
+    observation.numa_domains_unreported = 2;
+
+    let text = crate::topology_report::report(BANNER, &observation);
+    let listed = text
+        .lines()
+        .filter(|line| line.starts_with("     - ") || line.starts_with("     (parse incomplete) "))
+        .count();
+
+    assert_eq!(
+        row_codes(&text, "parse_incomplete").len(),
+        listed,
+        "the prose lists {listed} conditions, so the row must publish that \
+         many: {text}"
+    );
+}
+
+#[test]
+fn an_anomaly_reaches_the_row_as_its_kind() {
+    // Anomalies are published per-anomaly, so a survey can group by WHAT failed
+    // to decode. `AnomalyKind` is `#[non_exhaustive]`, so a kind this crate has
+    // no code for lands in `unclassified` -- visible in the row rather than
+    // silently mislabelled as a kind it is not.
+    let mut observation = clean_observation();
+    observation.enumeration_anomalies = vec![
+        windows_topology_sys::EnumerationAnomaly {
+            source: windows_topology_sys::Source::RelationshipWalk,
+            offset: 0,
+            kind: windows_topology_sys::AnomalyKind::TrailingBytes { remaining: 3 },
+        },
+        windows_topology_sys::EnumerationAnomaly {
+            source: windows_topology_sys::Source::CpuSets,
+            offset: 8,
+            kind: windows_topology_sys::AnomalyKind::Undersized {
+                declared: 8,
+                minimum: 48,
+            },
+        },
+    ];
+
+    let text = crate::topology_report::report(BANNER, &observation);
+
+    assert_eq!(
+        row_codes(&text, "enumeration_anomalies"),
+        vec!["trailing_bytes".to_owned(), "undersized".to_owned()],
+        "each anomaly reaches the row as its own kind: {text}"
     );
 }

@@ -19,6 +19,7 @@ use std::io;
 
 use windows_placement_probe::fingerprint::{Fingerprint, banner_line_for};
 
+use crate::topology::diagnostic::anomaly_code;
 use crate::topology::{Observation, PartitioningCache, Verdict};
 
 /// The banner and title both reports open with.
@@ -665,6 +666,38 @@ pub fn report(banner: &str, observation: &Observation) -> String {
         .into_iter()
         .map(|(name, count)| format!(r#""{name}":{count}"#))
         .collect();
+    // **The conditions, not how many there were.** These three published
+    // `.len()`, so the row said a run was in doubt without saying why: a survey
+    // reading `"parse_incomplete":1` could not tell `partitioning_summary_missing`
+    // -- this probe detecting a bug in ITSELF -- from `contradictory_cores` or
+    // `not_measured`. Four categorically different facts, one cardinality, and
+    // only the prose separated them.
+    //
+    // Exactly the correction `efficiency_classes` already carries a few lines
+    // below, for exactly the reason given there: the list is what the name
+    // promises, and a count is still available from its length. The
+    // `windows-topology-sys recorded N enumeration anomal...` sentence the prose
+    // prints keeps that count; it does not need the row to restate it.
+    //
+    // The codes are the contract and the sentences are not -- see
+    // `topology::diagnostic`. That is what lets the prose be reworded for a
+    // reader without breaking a mining pass.
+    let quoted = |codes: Vec<&'static str>| {
+        codes
+            .into_iter()
+            .map(|code| format!(r#""{code}""#))
+            .collect::<Vec<_>>()
+            .join(",")
+    };
+    let not_compared_json = quoted(check.not_compared.iter().map(|e| e.code()).collect());
+    let parse_incomplete_json = quoted(check.parse_incomplete.iter().map(|e| e.code()).collect());
+    let anomalies_json = quoted(
+        observation
+            .enumeration_anomalies
+            .iter()
+            .map(anomaly_code)
+            .collect(),
+    );
     let _ = writeln!(
         out,
         concat!(
@@ -672,8 +705,8 @@ pub fn report(banner: &str, observation: &Observation) -> String {
             r#""packages":{},"numa_domains":{},"numa_domains_without_processors":{},"cores":{},"#,
             r#""efficiency_classes":[{}],"caches":[{}],"outermost_partitioning_cache_level":{},"#,
             r#""outermost_partitioning_cache":"{}","#,
-            r#""policies":{{{}}},"cross_check":"{}","not_compared":{},"parse_incomplete":{},"#,
-            r#""enumeration_anomalies":{},"numa_domains_only_in_cpu_sets":{}}}"#
+            r#""policies":{{{}}},"cross_check":"{}","not_compared":[{}],"parse_incomplete":[{}],"#,
+            r#""enumeration_anomalies":[{}],"numa_domains_only_in_cpu_sets":{}}}"#
         ),
         std::env::consts::ARCH,
         observation.online_processors,
@@ -737,16 +770,16 @@ pub fn report(banner: &str, observation: &Observation) -> String {
             Verdict::Disagree => "disagree",
             Verdict::Incomplete => "incomplete",
         },
-        check.not_compared.len(),
+        not_compared_json,
         // Separate from `not_compared`, because a mining pass that finds
         // `"cross_check":"incomplete"` needs to know whether this probe failed
         // to read a counter or the parse itself was short or disputed -- the
         // first is a gap in the measurement, the second a fact about the
-        // machine worth going and looking at. The two counts beside it say
-        // which kind, without a consumer having to know what `cross_check`
-        // currently pushes for.
-        check.parse_incomplete.len(),
-        observation.enumeration_anomalies.len(),
+        // machine worth going and looking at. The two lists beside it say which
+        // kind, without a consumer having to know what `cross_check` currently
+        // pushes for -- and now say which CONDITION, not merely how many.
+        parse_incomplete_json,
+        anomalies_json,
         observation.numa_domains_only_in_cpu_sets,
     );
 

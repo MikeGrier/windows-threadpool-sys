@@ -80,7 +80,7 @@ fn clean_report() -> String {
         "  GetActiveProcessorGroupCount: 1",
         "  GetNumaHighestNodeNumber    : 0",
         "  => agree. Every check this probe could make was made and matched.",
-        r#"{"reason":"x-probe-topology","arch":"x86_64","processors":16,"groups":1,"packages":1,"numa_domains":1,"numa_domains_without_processors":0,"cores":8,"efficiency_classes":[0],"caches":[{"level":1,"domains":8},{"level":3,"domains":1}],"outermost_partitioning_cache_level":1,"outermost_partitioning_cache":"level","policies":{"single":1,"by-core":8},"cross_check":"agree","parse_incomplete":0}"#,
+        r#"{"reason":"x-probe-topology","arch":"x86_64","processors":16,"groups":1,"packages":1,"numa_domains":1,"numa_domains_without_processors":0,"cores":8,"efficiency_classes":[0],"caches":[{"level":1,"domains":8},{"level":3,"domains":1}],"outermost_partitioning_cache_level":1,"outermost_partitioning_cache":"level","policies":{"single":1,"by-core":8},"cross_check":"agree","parse_incomplete":[]}"#,
     ]
     .join("\n")
 }
@@ -206,7 +206,7 @@ fn a_bare_hardware_claim_under_an_incomplete_parse_is_a_violation() {
             "  efficiency classes: [0, 1]\n  (heterogeneous: an I/O thread left unconstrained can land on an",
         )
         .replace(r#""efficiency_classes":[0]"#, r#""efficiency_classes":[0,1]"#)
-        .replace(r#""parse_incomplete":0"#, r#""parse_incomplete":2"#);
+        .replace(r#""parse_incomplete":[]"#, r#""parse_incomplete":["no_cores","no_packages"]"#);
 
     let violations = check(&report);
 
@@ -480,8 +480,8 @@ fn a_hardware_claim_with_its_caveat_under_doubt_is_accepted() {
         .replace(r#""efficiency_classes":[0]"#, r#""efficiency_classes":[0,1]"#)
         .replace(r#""cross_check":"agree""#, r#""cross_check":"incomplete""#)
         .replace(
-            r#""parse_incomplete":0}"#,
-            r#""parse_incomplete":2,"not_compared":0,"enumeration_anomalies":0}"#,
+            r#""parse_incomplete":[]}"#,
+            r#""parse_incomplete":["no_cores","no_packages"],"not_compared":[],"enumeration_anomalies":[]}"#,
         );
 
     assert_eq!(check(&report), Vec::new());
@@ -937,12 +937,15 @@ fn an_agreeing_verdict_beside_a_nonzero_parse_incomplete_is_a_violation() {
     // `cross_check == "agree"` implies no record failed to decode. An `agree`
     // beside a nonzero count is therefore the report contradicting its own
     // published rule, in the field a mining pass trusts before any other.
-    let report = clean_report().replace(r#""parse_incomplete":0"#, r#""parse_incomplete":2"#);
+    let report = clean_report().replace(
+        r#""parse_incomplete":[]"#,
+        r#""parse_incomplete":["no_cores","no_packages"]"#,
+    );
 
     assert_eq!(
         check(&report),
         vec![Correspondence::AlarmWithAgreeingVerdict {
-            alarm: r#""parse_incomplete":2"#.to_owned(),
+            alarm: r#""parse_incomplete":["no_cores","no_packages"]"#.to_owned(),
             verdict_source: "ndjson",
         }],
         "a parse that did not complete cannot sit beside a verdict saying every \
@@ -955,14 +958,14 @@ fn an_agreeing_verdict_beside_a_nonzero_anomaly_count_is_a_violation() {
     // The same rule reached through the other field it names. Anomalies populate
     // `parse_incomplete`, so an `agree` verdict rules both out.
     let report = clean_report().replace(
-        r#""parse_incomplete":0}"#,
-        r#""parse_incomplete":0,"enumeration_anomalies":1}"#,
+        r#""parse_incomplete":[]}"#,
+        r#""parse_incomplete":[],"enumeration_anomalies":["undersized"]}"#,
     );
 
     assert_eq!(
         check(&report),
         vec![Correspondence::AlarmWithAgreeingVerdict {
-            alarm: r#""enumeration_anomalies":1"#.to_owned(),
+            alarm: r#""enumeration_anomalies":["undersized"]"#.to_owned(),
             verdict_source: "ndjson",
         }],
         "a dropped enumeration record cannot sit beside an agreeing verdict"
@@ -987,8 +990,8 @@ fn a_not_compared_count_the_two_renderings_disagree_about_is_a_violation() {
         )
         .replace(r#""cross_check":"agree""#, r#""cross_check":"disagree""#)
         .replace(
-            r#""parse_incomplete":0}"#,
-            r#""parse_incomplete":0,"not_compared":4,"enumeration_anomalies":0}"#,
+            r#""parse_incomplete":[]}"#,
+            r#""parse_incomplete":[],"not_compared":["machine_changed","bracket_not_established","highest_numa_node_failed","active_processor_count_failed"],"enumeration_anomalies":[]}"#,
         );
 
     assert_eq!(
@@ -1017,8 +1020,8 @@ fn an_incomplete_verdict_listing_fewer_entries_than_it_counts_is_a_violation() {
         )
         .replace(r#""cross_check":"agree""#, r#""cross_check":"incomplete""#)
         .replace(
-            r#""parse_incomplete":0}"#,
-            r#""parse_incomplete":3,"not_compared":0,"enumeration_anomalies":0}"#,
+            r#""parse_incomplete":[]}"#,
+            r#""parse_incomplete":["no_cores","no_packages","not_measured"],"not_compared":[],"enumeration_anomalies":[]}"#,
         );
 
     assert_eq!(
@@ -1048,8 +1051,8 @@ fn a_nonzero_not_compared_beside_an_incomplete_verdict_is_accepted() {
         )
         .replace(r#""cross_check":"agree""#, r#""cross_check":"incomplete""#)
         .replace(
-            r#""parse_incomplete":0}"#,
-            r#""parse_incomplete":0,"not_compared":1,"enumeration_anomalies":0}"#,
+            r#""parse_incomplete":[]}"#,
+            r#""parse_incomplete":[],"not_compared":["machine_changed"],"enumeration_anomalies":[]}"#,
         );
 
     assert_eq!(
@@ -1384,17 +1387,17 @@ fn an_anomaly_count_the_two_renderings_disagree_about_is_a_violation() {
         )
         .replace(r#""cross_check":"agree""#, r#""cross_check":"incomplete""#)
         .replace(
-            r#""parse_incomplete":0}"#,
-            r#""parse_incomplete":1,"not_compared":0,"enumeration_anomalies":99}"#,
+            r#""parse_incomplete":[]}"#,
+            r#""parse_incomplete":["no_cores"],"not_compared":[],"enumeration_anomalies":["undersized","overruns_buffer","trailing_bytes","truncated_array","undersized"]}"#,
         );
 
     assert!(
         check(&report).contains(&Correspondence::ProseAndNdjsonDisagree {
             fact: "enumeration anomaly count",
             prose: "2".to_owned(),
-            ndjson: "99".to_owned(),
+            ndjson: "5".to_owned(),
         }),
-        "the prose says it recorded 2 and the field publishes 99: {:#?}",
+        "the prose says it recorded 2 and the field lists 5: {:#?}",
         check(&report)
     );
 }
@@ -1411,8 +1414,8 @@ fn an_anomaly_count_both_renderings_agree_about_is_accepted() {
         )
         .replace(r#""cross_check":"agree""#, r#""cross_check":"incomplete""#)
         .replace(
-            r#""parse_incomplete":0}"#,
-            r#""parse_incomplete":1,"not_compared":0,"enumeration_anomalies":2}"#,
+            r#""parse_incomplete":[]}"#,
+            r#""parse_incomplete":["no_cores"],"not_compared":[],"enumeration_anomalies":["undersized","overruns_buffer"]}"#,
         );
 
     assert_eq!(
@@ -1507,14 +1510,14 @@ fn an_agreeing_verdict_beside_skipped_work_is_a_violation() {
     // shape as a nonzero `parse_incomplete` beside `agree`, which this module
     // already read. Found by a review.
     let report = clean_report().replace(
-        r#""parse_incomplete":0}"#,
-        r#""parse_incomplete":0,"not_compared":3,"enumeration_anomalies":0}"#,
+        r#""parse_incomplete":[]}"#,
+        r#""parse_incomplete":[],"not_compared":["machine_changed","bracket_not_established","highest_numa_node_failed"],"enumeration_anomalies":[]}"#,
     );
 
     assert_eq!(
         check(&report),
         vec![Correspondence::AlarmWithAgreeingVerdict {
-            alarm: r#""not_compared":3"#.to_owned(),
+            alarm: r#""not_compared":["machine_changed","bracket_not_established","highest_numa_node_failed"]"#.to_owned(),
             verdict_source: "ndjson",
         }],
         "work the probe skipped cannot sit beside a verdict saying every check \
@@ -1794,8 +1797,8 @@ fn an_anomaly_sentence_with_no_count_names_no_count() {
         )
         .replace(r#""cross_check":"agree""#, r#""cross_check":"incomplete""#)
         .replace(
-            r#""parse_incomplete":0}"#,
-            r#""parse_incomplete":1,"not_compared":0,"enumeration_anomalies":3}"#,
+            r#""parse_incomplete":[]}"#,
+            r#""parse_incomplete":["no_cores"],"not_compared":[],"enumeration_anomalies":["undersized","overruns_buffer","trailing_bytes"]}"#,
         );
 
     assert!(
@@ -1870,8 +1873,8 @@ fn a_marker_in_the_banner_is_not_the_probe_speaking() {
 
     let anomalies = clean_report()
         .replace(
-            r#""parse_incomplete":0}"#,
-            r#""parse_incomplete":0,"not_compared":0,"enumeration_anomalies":0}"#,
+            r#""parse_incomplete":[]}"#,
+            r#""parse_incomplete":[],"not_compared":[],"enumeration_anomalies":[]}"#,
         )
         .replace(
             "host:  x86_64 16p/8c",
@@ -2110,7 +2113,7 @@ fn a_caveat_in_the_banner_does_not_excuse_an_uncaveated_claim() {
     // caveat sentence to the banner made `UncaveatedClaimUnderDoubt` vanish from
     // a report that still carried the claim and still said `parse_incomplete=2`.
     let claimed = clean_report()
-        .replace(r#""parse_incomplete":0}"#, r#""parse_incomplete":2}"#)
+        .replace(r#""parse_incomplete":[]}"#, r#""parse_incomplete":["no_cores","no_packages"]}"#)
         .replace(
             "  efficiency classes: [0]",
             "  efficiency classes: [0, 1]\n  (heterogeneous: an I/O thread left unconstrained can land on an",

@@ -431,11 +431,15 @@ fn check_diagnostics_against_verdict(
         // does. Measured, before this: `"cross_check":"agree"` beside
         // `"not_compared":3` was accepted with no violation. Found by a review.
         for key in ["parse_incomplete", "enumeration_anomalies", "not_compared"] {
-            if let Some(count) = ndjson_field(ndjson, key)
-                && count != "0"
+            // The alarm now NAMES the conditions rather than counting them, so
+            // a violation reads `"parse_incomplete":["partitioning_summary_missing"]`
+            // instead of `"parse_incomplete":1` -- which is the whole point of
+            // the change, applied to the oracle's own output.
+            if let Some(raw) = ndjson_raw_field(ndjson, key)
+                && ndjson_list_len(ndjson, key).is_some_and(|entries| entries > 0)
             {
                 found.push(Correspondence::AlarmWithAgreeingVerdict {
-                    alarm: format!("\"{key}\":{count}"),
+                    alarm: format!("\"{key}\":{raw}"),
                     verdict_source: "ndjson",
                 });
             }
@@ -455,11 +459,17 @@ fn check_diagnostics_against_verdict(
     // contradiction with the verdict; this is about the two renderings of one
     // number, which must agree whatever the verdict says.
     if let Some(prose_anomalies) = anomaly_count_in_prose(report) {
+        // The row lists each anomaly's code now, so the count it is compared
+        // against is the list's LENGTH. Rendered back to a string rather than
+        // compared as a number, because `compare` reports absence too and the
+        // prose count arrives as text.
         compare(
             found,
             "enumeration anomaly count",
             prose_anomalies,
-            ndjson_field(ndjson, "enumeration_anomalies"),
+            ndjson_list_len(ndjson, "enumeration_anomalies")
+                .map(|entries| entries.to_string())
+                .as_deref(),
         );
     }
 
@@ -485,8 +495,8 @@ fn check_diagnostics_against_verdict(
             ),
         ] {
             let listed = prose_lines_beginning(report, label);
-            match ndjson_field(ndjson, key) {
-                Some(json) => compare_counts(found, fact, listed, json.parse().unwrap_or_default()),
+            match ndjson_list_len(ndjson, key) {
+                Some(entries) => compare_counts(found, fact, listed, entries),
                 None if listed > 0 => found.push(Correspondence::RenderedOnlyInProse {
                     fact,
                     prose: listed.to_string(),
@@ -499,8 +509,8 @@ fn check_diagnostics_against_verdict(
     if has_line_beginning(report, "=> INCOMPLETE") {
         let listed = prose_lines_beginning(report, "     - ");
         let (Some(skipped), Some(caveats)) = (
-            ndjson_count(ndjson, "not_compared"),
-            ndjson_count(ndjson, "parse_incomplete"),
+            ndjson_list_len(ndjson, "not_compared"),
+            ndjson_list_len(ndjson, "parse_incomplete"),
         ) else {
             // **The prose has already listed the entries here.** This arm sums
             // two fields, so it was written to return unless BOTH are present --
@@ -544,8 +554,29 @@ fn prose_lines_beginning(report: &str, prefix: &str) -> usize {
 }
 
 /// An NDJSON field read as a count, or `None` when it renders no number.
-fn ndjson_count(ndjson: &str, key: &str) -> Option<usize> {
-    ndjson_field(ndjson, key)?.parse().ok()
+/// How many entries a list-valued field carries.
+///
+/// The three diagnostic fields were scalars and are now arrays of condition
+/// codes, so every rule that compared a count against them asks for the length
+/// here instead of parsing a number. The count is still the fact those rules
+/// check; it is simply derived from the list rather than restated beside it.
+///
+/// Splitting on `,` is safe for these fields and only these: a code is an
+/// identifier this crate mints in `topology::diagnostic`, so it carries no
+/// comma and no nesting. Pointing this at `caches`, whose entries are objects,
+/// would count members rather than entries -- `cache_rows` exists for that.
+fn ndjson_list_len(ndjson: &str, key: &str) -> Option<usize> {
+    let raw = ndjson_raw_field(ndjson, key)?;
+    if !raw.starts_with('[') {
+        return None;
+    }
+
+    let inner = normalise_list(raw);
+    Some(if inner.is_empty() {
+        0
+    } else {
+        inner.split(',').count()
+    })
 }
 
 /// Push a disagreement between two counts of the same thing.
@@ -1613,10 +1644,15 @@ fn check_claims_against_doubt(report: &str, ndjson: Option<&str>, found: &mut Ve
     // rather than a coincidence: if the definition changes and this does not,
     // the sabotage check in M2.2 is what should notice.
     let mut evidence = Vec::new();
-    if let Some(count) = ndjson_field(ndjson, "parse_incomplete")
-        && count != "0"
+    if let Some(entries) = ndjson_list_len(ndjson, "parse_incomplete")
+        && entries > 0
     {
-        evidence.push(format!("parse_incomplete={count}"));
+        // Names the conditions rather than counting them, so the violation
+        // message says WHY the parse was in doubt.
+        evidence.push(format!(
+            "parse_incomplete={}",
+            ndjson_raw_field(ndjson, "parse_incomplete").unwrap_or_default()
+        ));
     }
     if ndjson_field(ndjson, "cross_check") == Some("disagree") {
         evidence.push("cross_check=disagree".to_owned());

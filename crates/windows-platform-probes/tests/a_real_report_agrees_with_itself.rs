@@ -518,19 +518,38 @@ const FACTS: &[Fact] = &[
     // a non-zero count beside an agreeing verdict is a violation in its own
     // right. `Silence::AtValue("0")` would have excused both mutations and
     // discarded that second guarantee.
+    // **These three publish their CONDITIONS now, not a count of them**, so the
+    // value at which the prose says nothing is the empty list rather than `0`,
+    // and the mutation that changes them is a different code rather than a
+    // different digit. The guarantees are unchanged: an empty list still renders
+    // no prose entry, so deleting the key contradicts nothing, while making it
+    // non-empty is still caught by the rule that an agreeing verdict cannot sit
+    // beside published doubt.
+    //
+    // `corruptions` mutates them by APPENDING a code, so the list's length
+    // differs by one whatever the host rendered -- and the length is what the
+    // prose comparison reads.
+    //
+    // **Which conditions are listed is deliberately not compared against the
+    // prose, and needs no rule.** The code and the sentence come from one
+    // `topology::diagnostic` variant, so there is no second implementation for
+    // them to disagree through: the correspondence is guaranteed by
+    // construction rather than checked after the fact, which is the stronger
+    // form. What remains checkable -- and checked -- is that the two renderings
+    // list the same NUMBER of conditions.
     Fact {
-        absent_is_silent_at: Some("0"),
-        why: "at zero the renderer emits no `(not compared)` entry, so the \
-              absence of the field contradicts nothing",
+        absent_is_silent_at: Some("[]"),
+        why: "with no entries the renderer emits no `(not compared)` line, so \
+              the absence of the field contradicts nothing",
         ..fact(
             "not_compared",
             &["not compared count", "incomplete-verdict listing count"],
         )
     },
     Fact {
-        absent_is_silent_at: Some("0"),
-        why: "at zero the renderer emits no `(parse incomplete)` entry, so the \
-              absence of the field contradicts nothing",
+        absent_is_silent_at: Some("[]"),
+        why: "with no entries the renderer emits no `(parse incomplete)` line, \
+              so the absence of the field contradicts nothing",
         ..fact(
             "parse_incomplete",
             &["parse incomplete count", "incomplete-verdict listing count"],
@@ -548,8 +567,8 @@ const FACTS: &[Fact] = &[
     // The narrower declaration is the same one `not_compared` and
     // `parse_incomplete` needed, and this key should have been swept with them.
     Fact {
-        silence: Silence::AtValueUnlessAgreeing("0"),
-        absent_is_silent_at: Some("0"),
+        silence: Silence::AtValueUnlessAgreeing("[]"),
+        absent_is_silent_at: Some("[]"),
         why: "the count reaches the prose only inside the `windows-topology-sys \
               recorded N enumeration anomal...` sentence, which the renderer \
               emits only when there are anomalies. At zero that sentence is \
@@ -847,9 +866,33 @@ fn corruptions(report: &str, key: &str, empty_replacement: Option<&str>) -> Vec<
         if sites.is_empty() {
             // An empty container still has prose beside it, so substitute the
             // smallest value that disagrees with an empty one.
-            let mut mutations = empty_replacement
-                .map(|replacement| vec![rewrite(replacement)])
-                .unwrap_or_default();
+            //
+            // **A digit-free list is not necessarily an empty one.** The
+            // diagnostic fields publish arrays of condition CODES, which carry
+            // no digits at whatever length -- so this arm now serves two shapes,
+            // and a fixed replacement cannot serve the second: a host already
+            // listing one condition, rewritten to a one-element replacement,
+            // changes WHICH code is listed and not HOW MANY, and the length is
+            // what the prose comparison reads. That mutation went unnoticed on
+            // the `verdict incomplete` corpus shape, which is how this was
+            // found.
+            //
+            // Appending instead makes the length differ by one whatever the
+            // original was. Only where no replacement is declared: `caches` and
+            // `efficiency_classes` need their specific shapes, and an appended
+            // string would not carry the members their rules read.
+            let mut mutations = match empty_replacement {
+                Some(replacement) => vec![rewrite(replacement)],
+                None => {
+                    let inner = original.trim_start_matches('[').trim_end_matches(']');
+                    let extended = if inner.is_empty() {
+                        r#"["x-corrupted"]"#.to_owned()
+                    } else {
+                        format!(r#"[{inner},"x-corrupted"]"#)
+                    };
+                    vec![rewrite(&extended)]
+                }
+            };
             mutations.push(deleted);
             return mutations;
         }

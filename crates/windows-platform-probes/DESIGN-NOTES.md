@@ -1214,10 +1214,17 @@ the report's own published evidence of doubt.
 
 That last one is the interesting boundary. `CrossCheck::parse_in_doubt` is
 `!disagreements.is_empty() || !parse_incomplete.is_empty()`, and the NDJSON
-publishes `parse_incomplete` as a **count** rather than the predicate -- so the
-oracle reads the count and the `disagree` verdict, which are the two visible
-shadows of that definition. The coupling is deliberate, and confirming it still
-holds is what M2.2's sabotage check is for when the call sites are bound.
+publishes `parse_incomplete` as a **list of conditions** rather than the
+predicate -- so the oracle reads whether that list is empty, together with the
+`disagree` verdict, and those are the two visible shadows of that definition. The
+coupling is deliberate, and confirming it still holds is what M2.2's sabotage
+check is for when the call sites are bound.
+
+(This said "as a **count**", which M3.1 made false when the three diagnostic
+fields began publishing their conditions. The shape of the argument is
+unchanged -- the row still renders a shadow of the predicate rather than the
+predicate -- but the shadow is now a list, and an emptiness test rather than a
+comparison against `0`.)
 
 **Half the tests assert acceptance**, following
 [../windows-file-watcher/src/contract.rs](../windows-file-watcher/src/contract.rs)'s
@@ -1493,21 +1500,28 @@ mining that row would have been wrong and had no way to know. The prose alarm wa
 not the defect; it was the only trace that the row was wrong, which is why a
 human found it and no instrument did.
 
-**That defect is fixed, and what it left behind is the live gap.** Checked
+**That defect is fixed, and what it left behind was the live gap.** Checked
 rather than assumed, because the paragraph above describes the code as it was:
-`Observation::cross_check` now pushes `PartitioningCache::SummaryMissing` onto
-`parse_incomplete`, which forces the verdict away from `agree`, so the row can no
-longer certify that run. But the row publishes `parse_incomplete` as a **count**
--- as it does `not_compared` and `enumeration_anomalies` -- where the prose
-publishes each entry's text. A survey reading `"parse_incomplete":1` cannot tell
-*the probe detected a bug in itself* from *a core record contradicted itself*
-from *this topology was not measured from a running machine*. Those are
-categorically different facts, and only the prose distinguishes them.
+`Observation::cross_check` pushes `PartitioningCache::SummaryMissing` onto
+`parse_incomplete`, which forces the verdict away from `agree`, so the row could
+not certify that run. But the row published `parse_incomplete` as a **count** --
+as it did `not_compared` and `enumeration_anomalies` -- where the prose published
+each entry's text. A survey reading `"parse_incomplete":1` could not tell *the
+probe detected a bug in itself* from *a core record contradicted itself* from
+*this topology was not measured from a running machine*. Those are categorically
+different facts, and only the prose distinguished them.
 
-So the shape of the problem is not that the row is out of step with the prose. It
-is that **the row is impoverished relative to the prose** -- the artifact that
-gets mined carries less than the artifact that gets read -- which is backwards
-given which of the two the designs rest on.
+So the shape of the problem was not that the row is out of step with the prose.
+It is that **the row was impoverished relative to the prose** -- the artifact
+that gets mined carried less than the artifact that gets read -- which is
+backwards given which of the two the designs rest on.
+
+**M3.1 closed this**, and the past tense above is deliberate: the three fields
+now publish arrays of condition codes minted by `topology::diagnostic`, so
+`"parse_incomplete":["partitioning_summary_missing"]` tells a survey which
+condition fired. The count remains available as the list's length. The rest of
+this decision is unaffected -- it is about which artifact carries the contract,
+not about these three fields.
 
 **`efficiency classes: [0]` against `"efficiency_classes":1`.** Both halves were
 correct derivations of one consistent value -- the prose rendered the set, the row

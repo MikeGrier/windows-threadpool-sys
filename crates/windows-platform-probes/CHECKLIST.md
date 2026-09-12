@@ -15,13 +15,14 @@ The row is a machine contract mined across a fleet; the prose is for a reader. T
 obligations -- the row must be **correct**, enforced by machine; the prose must be **accurate and
 readable**, enforced by review. Nothing is required to hold *between* them.
 
-Re-checked against the code rather than against M2's account of it: the original defect is fixed, and
-what it left behind is larger. The row publishes `not_compared`, `parse_incomplete` and
-`enumeration_anomalies` as **counts**, where the prose prints each entry's text. A survey reading
-`"parse_incomplete":1` cannot tell *the probe detected a bug in itself* from *a core record
-contradicted itself* from *this topology was not measured from a running machine*. **The row is
-impoverished relative to the prose** -- the artifact that gets mined carries less than the artifact
-that gets read.
+Re-checked against the code rather than against M2's account of it: the original defect was fixed,
+and what it left behind was larger. The row published `not_compared`, `parse_incomplete` and
+`enumeration_anomalies` as **counts**, where the prose printed each entry's text. A survey reading
+`"parse_incomplete":1` could not tell *the probe detected a bug in itself* from *a core record
+contradicted itself* from *this topology was not measured from a running machine*. **The row was
+impoverished relative to the prose** -- the artifact that gets mined carried less than the artifact
+that gets read. M3.1 has since closed that particular gap; the rest of the milestone is about which
+artifact carries the contract, and stands whole.
 
 **M2 completed with this decision**, and its ten open items were re-sequenced rather than reworked.
 The milestone's own work -- the oracle, the binding, the real-host test, the derived fact set, the
@@ -54,7 +55,7 @@ M4 below, six in M5. M2.18 is the exception, dissolved rather than moved.
   under this decision prose accuracy is a review obligation rather than a machine-checked one, which
   puts more weight on both.
 
-- [ ] **M3.1** -- Publish each diagnostic as itself, not as a count.
+- [x] **M3.1** -- Publish each diagnostic as itself, not as a count.
 
   `not_compared`, `parse_incomplete` and `enumeration_anomalies` reach the row as
   `check.parse_incomplete.len()` and its two siblings, so the fact that a mining pass most needs --
@@ -65,6 +66,31 @@ M4 below, six in M5. M2.18 is the exception, dissolved rather than moved.
 
   **The rule this establishes, which is the durable half:** a renderer may not tell a reader
   something the row cannot tell a survey. A cardinality is not a statement of the fact.
+
+  **Done.** Three enums in `topology::diagnostic` -- 21 + 6 + 3 variants, one per condition -- each
+  carrying its data, rendering its sentence through `Display`, and naming itself through `code()`.
+  `CrossCheck`'s three `Vec<String>` became `Vec<Diagnostic>`, and the row publishes arrays of codes
+  where it published `.len()`. The prose is byte-identical: the loops write `{entry}` and `Display`
+  emits the same sentences.
+
+  **The wire format changed**, deliberately and not additively: `"parse_incomplete":1` is now
+  `"parse_incomplete":["partitioning_summary_missing"]`. The count is still available as the list's
+  length, so nothing is lost, and publishing both would be a restatement that can drift. Same shape
+  as the `efficiency_classes` correction that preceded it.
+
+  Sabotage-verified, each mutation injected on its own line and reverted: renaming
+  `PartitioningSummaryMissing`'s code reddens only
+  `the_row_names_the_probes_own_bug_when_it_detects_one`; making the row keep only the first
+  condition reddens the two list tests, through the bound oracle's count rule; mislabelling
+  `TrailingBytes` reddens only `an_anomaly_reaches_the_row_as_its_kind`.
+
+  **Which conditions are listed is deliberately not compared against the prose.** The code and the
+  sentence come from one variant, so there is no second implementation to disagree through -- the
+  correspondence holds by construction, which is stronger than a check. What remains checkable, and
+  is checked, is that both renderings list the same NUMBER. Found while converting the accounting
+  instrument: a mutation that swapped one code for another went unnoticed on the
+  `verdict incomplete` shape, because the oracle reads the length. `corruptions` now APPENDS a code
+  rather than substituting one, so the length always differs.
 
 - [ ] **M3.2** -- Assert the surviving correspondences as invariants on the observation, before
   rendering.
@@ -93,7 +119,15 @@ M4 below, six in M5. M2.18 is the exception, dissolved rather than moved.
 
   A typed row struct plus a single writer that escapes strings makes both unrepresentable. Write the
   writer here rather than adding a serialization dependency -- this crate has none and the row is
-  one flat object. This subsumes M2.18: the banner becomes a typed field like any other, and the
+  one flat object.
+
+  **Carry each diagnostic's DATA, which M3.1 left behind.** M3.1 publishes a condition's code but
+  not the values its variant holds -- a survey learns `contradictory_cores` without learning that
+  three cores contradicted themselves. The variants already carry those values, for `Display`; what
+  stopped M3.1 publishing them is that the row is still a positional `concat!` template, where a
+  nested per-entry object has to be hand-assembled. Once the row is typed this is a field like any
+  other. Not deferred for want of a consumer -- the shape of the row is the blocker, and it is this
+  item. This subsumes M2.18: the banner becomes a typed field like any other, and the
   question of who may construct one is answered by the row's constructor rather than separately.
 
 - [ ] **M3.4** -- Retire the prose-against-row correspondences and the parsers that serve only them.
