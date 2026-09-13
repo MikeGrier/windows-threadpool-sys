@@ -294,6 +294,28 @@ M4 below, six in M5. M2.18 is the exception, dissolved rather than moved.
   Both publication rules carry a corpus guard, because both skip a shape in no blocking state and a
   drifted all-healthy corpus would leave them green while checking nothing.
 
+  **The last prose parsing in the matrix is gone.** M3.5 left one site: a rule that filtered
+  rendered lines by prefix, counted them, and compared that number against the row -- the only place
+  left where the test matrix obtained structured data by reading sentences. It had a unit-test twin
+  in `src/tests.rs` that the first sweep missed and a second, wider sweep found.
+
+  Both are replaced by the same claim against `cross_check`: the row's codes must EQUAL the
+  cross-check's, in order. Strictly stronger -- a count catches only a dropped entry, this catches a
+  drop, a reorder and a substitution -- and it never reads a sentence. It also covers all three
+  lists, which the prose count could not: under INCOMPLETE the renderer gives `not_compared` and
+  `parse_incomplete` the same bare `- ` prefix, so only their total was recoverable from prose.
+
+  **The ordering half was vacuous, and the guard is what found it.** Reversing the row's
+  `parse_incomplete` order reddened nothing: every corpus shape varied one dimension, so each landed
+  at most one entry per list, and a one-element list has no order to get wrong. A first version of
+  the guard summed the three lists and passed while the sabotage still did nothing -- one entry in
+  each of two lists is two conditions and no order. Corrected to measure the largest SINGLE list,
+  and a `several conditions at once, in one list` shape added. The reorder now reddens.
+
+  What remains that touches rendered text at all: selecting the row line, and asserting positional
+  containment -- the banner is the first line, the banner is one line, there is exactly one row.
+  None reads prose for its content.
+
 
   [tests/a_real_report_agrees_with_itself.rs](tests/a_real_report_agrees_with_itself.rs) enumerates
   the facts a report publishes and measures, by mutation, which are read. The instrument is sound and

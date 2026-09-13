@@ -4532,6 +4532,38 @@ fn preparing_a_path_needs_no_volume_behind_its_drive_letter() {
 /// Reads the rendered artifact rather than the `CrossCheck` behind it, because
 /// what a survey receives is the point: an assertion against the struct would
 /// hold even if the writer published nothing at all.
+/// The codes of a diagnostic list, for comparing the row against what the
+/// cross-check found.
+///
+/// Generic over the three list types because each has its own `code`, and a
+/// helper per list would be three copies of one idea.
+fn codes_of<T: HasCode>(entries: &[T]) -> Vec<String> {
+    entries.iter().map(|entry| entry.code().to_owned()).collect()
+}
+
+/// The three diagnostic vocabularies, so `codes_of` can take any of them.
+trait HasCode {
+    fn code(&self) -> &'static str;
+}
+
+impl HasCode for crate::topology::Disagreement {
+    fn code(&self) -> &'static str {
+        Self::code(self)
+    }
+}
+
+impl HasCode for crate::topology::NotCompared {
+    fn code(&self) -> &'static str {
+        Self::code(self)
+    }
+}
+
+impl HasCode for crate::topology::ParseIncomplete {
+    fn code(&self) -> &'static str {
+        Self::code(self)
+    }
+}
+
 fn row_codes(text: &str, key: &str) -> Vec<String> {
     let row = crate::report_oracle::row(text)
         .unwrap_or_else(|| panic!("no single well-formed row in:\n{text}"));
@@ -4595,30 +4627,45 @@ fn the_row_lists_exactly_the_codes_of_the_conditions_the_check_found() {
 }
 
 #[test]
-fn the_row_lists_one_code_per_line_the_prose_lists() {
+fn the_row_lists_a_condition_for_every_kind_the_check_found() {
     // **The rule M3.1 establishes: a renderer may not tell a reader something
-    // the row cannot tell a survey.** Asserted as a count rather than a pairing
-    // on purpose -- the code and the sentence come from one `diagnostic`
-    // variant, so they cannot name different conditions, and what is left to
-    // check is that neither rendering drops an entry the other kept.
+    // the row cannot tell a survey.**
+    //
+    // This counted PROSE LINES and compared that number against the row -- the
+    // last place in the matrix that obtained structured data by reading
+    // sentences. Replaced by the same claim against the cross-check, which is
+    // stronger (it catches a reorder or a substitution, not only a drop) and
+    // never reads a sentence.
+    //
+    // Covers all three lists at once, which the prose count could not: under
+    // INCOMPLETE the renderer gives `not_compared` and `parse_incomplete` the
+    // same bare `- ` prefix, so only their total was recoverable from prose.
     let mut observation = clean_observation();
     observation.caches = Vec::new();
     observation.numa_domains_unreported = 2;
+    observation.raw_group_count = 0;
 
     let text = crate::topology_report::report(BANNER, &observation);
-    let listed = text
-        .lines()
-        .filter(|line| line.starts_with("     - ") || line.starts_with("     (parse incomplete) "))
-        .count();
+    let check = observation.cross_check();
 
-    assert_eq!(
-        row_codes(&text, "parse_incomplete").len(),
-        listed,
-        "the prose lists {listed} conditions, so the row must publish that \
-         many: {text}"
+    for (key, expected) in [
+        ("disagreements", codes_of(&check.disagreements)),
+        ("not_compared", codes_of(&check.not_compared)),
+        ("parse_incomplete", codes_of(&check.parse_incomplete)),
+    ] {
+        assert_eq!(
+            row_codes(&text, key),
+            expected,
+            "{key}: the row must publish what the check found, in order: {text}"
+        );
+    }
+
+    assert!(
+        !check.not_compared.is_empty() && check.parse_incomplete.len() >= 2,
+        "the fixture must fill more than one list, and one of them more than \
+         once, or neither the coverage nor the ordering is exercised: {check:?}"
     );
 }
-
 #[test]
 fn an_anomaly_reaches_the_row_as_its_kind() {
     // Anomalies are published per-anomaly, so a survey can group by WHAT failed

@@ -348,6 +348,22 @@ fn shapes() -> Vec<Shape> {
         anomalies_while_disagreeing,
     );
 
+    // **Several conditions in ONE list, which nothing else here reaches.** Every
+    // other shape varies one dimension, so each lands at most one entry per
+    // list -- and a one-element list has no order to get wrong. That made the
+    // ordering half of `the_row_lists_exactly_the_conditions_the_cross_check_found`
+    // vacuous: reversing the row's `parse_incomplete` reddened nothing at all.
+    //
+    // Found by the guard in `the_corpus_reaches_states_that_block_agreement`,
+    // which is there precisely because a corpus cannot report the shape it does
+    // not reach.
+    let mut several = base();
+    several.caches = Vec::new();
+    several.cores_only_in_cpu_sets = 1;
+    several.numa_domains_unreported = 2;
+    several.processor_attribute_conflicts = 1;
+    push("several conditions at once, in one list", several);
+
     shapes
 }
 
@@ -407,20 +423,6 @@ fn published_codes(text: &str, keys: &[&str]) -> Vec<String> {
         .flat_map(|key| report_oracle::list_codes(row, key))
         .collect()
 }
-/// How many diagnostic entries the PROSE lists.
-///
-/// The renderer tags each kind under DISAGREE and renders both as a bare `- `
-/// under INCOMPLETE, so this counts what a reader would count on either.
-fn prose_diagnostic_lines(text: &str) -> usize {
-    text.lines()
-        .filter(|line| {
-            line.starts_with("     - ")
-                || line.starts_with("     (not compared) ")
-                || line.starts_with("     (parse incomplete) ")
-        })
-        .count()
-}
-
 #[test]
 fn every_state_that_blocks_agreement_reaches_the_row() {
     // **This is the rule M3.1 established, given an instrument at last.** A
@@ -464,34 +466,57 @@ fn every_state_that_blocks_agreement_reaches_the_row() {
 }
 
 #[test]
-fn the_row_lists_a_condition_for_every_diagnostic_the_prose_lists() {
-    // The same rule as a count, over every shape the corpus reaches. The prose
-    // and the row render the same conditions through one `diagnostic` variant
-    // each, so they cannot name DIFFERENT ones -- what they can do is drop one,
-    // which is what this catches.
+fn the_row_lists_exactly_the_conditions_the_cross_check_found() {
+    // **The rule that replaced a prose count, and the last prose parsing in the
+    // matrix went with it.** This compared the row's condition count against a
+    // count of prose lines -- which meant filtering rendered text by line prefix
+    // and turning it into a number, the one remaining place the test matrix
+    // obtained structured data by reading prose.
     //
-    // Not a pairing: the code and the sentence come from one variant, so the
-    // correspondence between them holds by construction and checking it would
-    // be checking a copy. What remains checkable is that neither rendering
-    // dropped an entry the other kept.
+    // What replaces it is strictly stronger and never reads a sentence: the
+    // row's codes must EQUAL the cross-check's codes, in order. A count could
+    // only catch a dropped entry; this catches a dropped one, a reordered one,
+    // and a substituted one.
+    //
+    // Be clear about what it is: the row is BUILT from these lists, so this is
+    // the writer being checked against its input, not an independent reading.
+    // That is exactly the check worth having here -- the writer is the one thing
+    // no amount of typing upstream can check for itself -- but it is narrower
+    // than "the report is correct" and should not be read as that.
     for shape in shapes() {
         let text = windows_platform_probes::topology_report::report(
             &banner_for(&shape.observation),
             &shape.observation,
         );
 
+        let check = shape.observation.cross_check();
+        let expected: Vec<String> = check
+            .disagreements
+            .iter()
+            .map(|entry| entry.code().to_owned())
+            .chain(
+                check
+                    .not_compared
+                    .iter()
+                    .map(|entry| entry.code().to_owned()),
+            )
+            .chain(
+                check
+                    .parse_incomplete
+                    .iter()
+                    .map(|entry| entry.code().to_owned()),
+            )
+            .collect();
+
         assert_eq!(
-            published_codes(&text, DIAGNOSTIC_LISTS).len(),
-            prose_diagnostic_lines(&text),
-            "{}: the prose lists {} diagnostic(s) and the row publishes {:?}\n\n\
-             --- the report ---\n{text}",
-            shape.what,
-            prose_diagnostic_lines(&text),
             published_codes(&text, DIAGNOSTIC_LISTS),
+            expected,
+            "{}: the row must publish every condition the cross-check found, in \
+             order\n\n--- the report ---\n{text}",
+            shape.what,
         );
     }
 }
-
 #[test]
 fn the_corpus_reaches_states_that_block_agreement() {
     // **The guard that stops the two tests above passing for nothing.** Both
@@ -515,6 +540,39 @@ fn the_corpus_reaches_states_that_block_agreement() {
         blocking < shapes().len(),
         "every shape blocks, so the acceptance half of the publication rules \
          is never exercised"
+    );
+
+    // **ORDER is only a claim where there is more than one entry to order.**
+    // `the_row_lists_exactly_the_conditions_the_cross_check_found` compares the
+    // row's codes against the cross-check's as a SEQUENCE, which is what makes
+    // it stronger than the prose count it replaced -- but a corpus whose shapes
+    // each carry at most one condition can never tell a sequence from a set.
+    //
+    // Measured, and this is why the guard exists: reversing the row's
+    // `parse_incomplete` order reddened nothing until a multi-condition shape
+    // was in the corpus.
+    // Within ONE list, not summed across the three. Summing was the first
+    // version of this guard and it passed while the sabotage still reddened
+    // nothing: a shape carrying one `not_compared` and one `parse_incomplete`
+    // has two conditions and no order to get wrong, because reversing a
+    // one-element list is the identity.
+    let most = shapes()
+        .iter()
+        .map(|shape| {
+            let check = shape.observation.cross_check();
+            check
+                .disagreements
+                .len()
+                .max(check.not_compared.len())
+                .max(check.parse_incomplete.len())
+        })
+        .max()
+        .unwrap_or_default();
+
+    assert!(
+        most >= 2,
+        "no shape carries two conditions in ONE list, so the ordering half of \
+         the publication rule is vacuous -- it cannot tell a sequence from a set"
     );
 }
 
