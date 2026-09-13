@@ -1573,9 +1573,12 @@ is the stronger move:
   report's machine-readable row. A typed row emitted by one writer cannot have
   this.
 - **Field order and labelling.** The row is built today by interpolating
-  eighteen values positionally through a `concat!` template. A reordered field or
-  a miscounted `{}` yields mislabelled data that still parses. A typed row with
-  one writer cannot have this either.
+  seventeen values positionally through a `concat!` template. A reordered field
+  or a miscounted `{}` yields mislabelled data that still parses. A typed row
+  with one writer cannot have this either. (Seventeen placeholders, not the
+  eighteen keys the row carries: `reason` is a literal in the template and is
+  not interpolated. The placeholder count is the one that matters here, because
+  the hazard is a miscounted `{}`.)
 - **Value divergence.** Two renderings of one field cannot disagree about its
   value when both read the field.
 

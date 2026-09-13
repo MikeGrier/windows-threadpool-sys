@@ -2824,15 +2824,27 @@ fn an_empty_core_or_package_record_blocks_agreement() {
     // count and the policy derived from it while nothing else notices. The
     // live-host test already calls an empty core a parse error; without this,
     // cross_check would still certify one.
-    for (label, mutate) in [
+    // **The expected pair travels with each case, because the variant alone
+    // cannot tell them apart.** Both arms raise `RelationsWithoutProcessors`, so
+    // matching the variant would run this loop twice and establish one thing --
+    // an empty CORE record and an empty PACKAGE record would be
+    // interchangeable, and a `cross_check` that counted one for the other would
+    // pass. The old substrings did not separate them either: `Display` renders
+    // `{cores} core(s) and {packages} package(s) cover no processors` in one
+    // sentence, so both `"core(s) and"` and `"package(s) cover no processors"`
+    // matched whichever field was set. That gap predates the move to variants;
+    // the payload is what closes it.
+    for (label, mutate, expected) in [
         (
-            "core(s) and",
+            "an empty core record",
             Box::new(|o: &mut crate::topology::Observation| o.cores_without_processors = 1)
                 as Box<dyn Fn(&mut crate::topology::Observation)>,
+            (1, 0),
         ),
         (
-            "package(s) cover no processors",
+            "an empty package record",
             Box::new(|o: &mut crate::topology::Observation| o.packages_without_processors = 1),
+            (0, 1),
         ),
     ] {
         let mut observation = agreeing_observation();
@@ -2843,9 +2855,11 @@ fn an_empty_core_or_package_record_blocks_agreement() {
         assert!(
             check.parse_incomplete.iter().any(|c| matches!(
                 c,
-                crate::topology::ParseIncomplete::RelationsWithoutProcessors { .. }
+                crate::topology::ParseIncomplete::RelationsWithoutProcessors { cores, packages }
+                    if (*cores, *packages) == expected
             )),
-            "{label}: {check:?}"
+            "{label}: the entry must count the record that was empty, and only \
+             it -- expected {expected:?}: {check:?}"
         );
         assert_eq!(
             check.verdict(),
@@ -3209,16 +3223,20 @@ fn a_measured_topology_reporting_no_processors_or_groups_blocks_agreement() {
     // machine its own parse says has no processors at all. The guard on the
     // package and core checks reads `online_processors > 0`, so the impossible
     // case silently switched those off as well.
+    // The label is the name the variant must carry in `absent`, not merely a
+    // caption for the failure message: zeroing one count must name THAT count.
+    // Matching the variant alone would pass for either, so the loop would run
+    // twice and establish one thing.
     for (label, mutate) in [
         (
-            "no online processors",
+            "online processors",
             Box::new(|o: &mut crate::topology::Observation| {
                 o.online_processors = 0;
                 o.raw_active_processors = 0;
             }) as Box<dyn Fn(&mut crate::topology::Observation)>,
         ),
         (
-            "no processor groups",
+            "processor groups",
             Box::new(|o: &mut crate::topology::Observation| {
                 o.groups = 0;
                 o.raw_group_count = 0;
@@ -3237,9 +3255,10 @@ fn a_measured_topology_reporting_no_processors_or_groups_blocks_agreement() {
         assert!(
             check.parse_incomplete.iter().any(|c| matches!(
                 c,
-                crate::topology::ParseIncomplete::MeasuredButCountsAbsent { .. }
+                crate::topology::ParseIncomplete::MeasuredButCountsAbsent { absent }
+                    if absent.as_slice() == [label]
             )),
-            "{label}: {check:?}"
+            "{label}: the entry must name the count that was zero, and only it: {check:?}"
         );
         assert_eq!(
             check.verdict(),
@@ -3265,12 +3284,26 @@ fn both_absent_counts_are_named_together_rather_than_one_standing_for_the_pair()
     observation.raw_group_count = 0;
 
     let check = observation.cross_check();
-    assert!(
-        check.parse_incomplete.iter().any(|c| matches!(
-            c,
-            crate::topology::ParseIncomplete::MeasuredButCountsAbsent { .. }
-        )),
-        "{check:?}"
+    let absent = check
+        .parse_incomplete
+        .iter()
+        .find_map(|entry| match entry {
+            crate::topology::ParseIncomplete::MeasuredButCountsAbsent { absent } => Some(absent),
+            _ => None,
+        })
+        .unwrap_or_else(|| panic!("no entry for the impossible machine at all: {check:?}"));
+
+    // **The CONTENTS, not merely the variant.** Matching
+    // `MeasuredButCountsAbsent { .. }` holds when `absent` names one of the two,
+    // which is exactly what this test exists to forbid -- so it passed while
+    // establishing nothing beyond what the loop above already establishes.
+    // Measured: with `absent` truncated to its first entry, the whole suite
+    // stayed green at 249 passed. Found by a review.
+    assert_eq!(
+        absent.as_slice(),
+        ["online processors", "processor groups"],
+        "a machine missing both must name both, in the order the report states \
+         them: {check:?}"
     );
 }
 

@@ -553,7 +553,6 @@ fn prose_lines_beginning(report: &str, prefix: &str) -> usize {
         .count()
 }
 
-/// An NDJSON field read as a count, or `None` when it renders no number.
 /// How many entries a list-valued field carries.
 ///
 /// The three diagnostic fields were scalars and are now arrays of condition

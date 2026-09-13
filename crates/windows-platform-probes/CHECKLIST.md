@@ -84,6 +84,16 @@ M4 below, six in M5. M2.18 is the exception, dissolved rather than moved.
   condition reddens the two list tests, through the bound oracle's count rule; mislabelling
   `TrailingBytes` reddens only `an_anomaly_reaches_the_row_as_its_kind`.
 
+  **The substring-to-variant conversion cost two assertions their discrimination, found by review.**
+  `c.contains("no online processors and processor groups")` became
+  `matches!(c, MeasuredButCountsAbsent { .. })`, which holds when the entry names only ONE of the
+  two -- exactly what the test forbids -- and the loop's labels stopped being asserted at all.
+  Measured: with `absent` truncated to its first entry the whole suite stayed green at 249 passed.
+  Both now assert the variant's `absent` payload, and both were observed to fail -- the truncation
+  reddens the both-absent test, and swapping the two names reddens both. The general lesson is that
+  converting an assertion from a substring to a variant DROPS whatever the substring discriminated
+  inside the payload; the variant is the weaker claim unless the payload comes with it.
+
   **Which conditions are listed is deliberately not compared against the prose.** The code and the
   sentence come from one variant, so there is no second implementation to disagree through -- the
   correspondence holds by construction, which is stronger than a check. What remains checkable, and
@@ -106,7 +116,7 @@ M4 below, six in M5. M2.18 is the exception, dissolved rather than moved.
 
 - [ ] **M3.3** -- Emit the row from a typed value through one writer.
 
-  The row is built today by interpolating eighteen values positionally into a `concat!` template.
+  The row is built today by interpolating seventeen values positionally into a `concat!` template.
   Two defect classes follow from that construction and both are closed by replacing it, not by
   checking it:
 
@@ -114,8 +124,9 @@ M4 below, six in M5. M2.18 is the exception, dissolved rather than moved.
   machine-readable row, so the oracle checked the caller's text instead of the probe's. Caller text
   reaching the mined artifact is contamination of the contract.
 
-  **Field order and labelling.** A reordered value or a miscounted `{}` yields mislabelled data that
-  still parses, and nothing downstream can detect it.
+  **Field order and labelling.** The template carries seventeen positional `{}` placeholders for
+  the row's eighteen keys -- `reason` is a literal -- and a reordered value or a miscounted
+  placeholder yields mislabelled data that still parses, which nothing downstream can detect.
 
   A typed row struct plus a single writer that escapes strings makes both unrepresentable. Write the
   writer here rather than adding a serialization dependency -- this crate has none and the row is
