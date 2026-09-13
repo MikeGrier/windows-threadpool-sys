@@ -388,6 +388,12 @@ fn the_numa_counter_is_deliberately_not_held_to_the_enumeration() {
     // sparse topology. Holding it to `numa_domains` would manufacture a
     // violation on hardware reporting itself correctly, which is the same
     // over-claim `cross_check` was corrected to stop making.
+    //
+    // A sparse topology is the whole point of this case: `numa_domains` is 2
+    // while the highest node number is also 2, so the two differ by one and a
+    // count-shaped rule would fire. The highest-against-highest rule below does
+    // not, which is what makes them different rules rather than one rule that
+    // was left out.
     let mut observation = agreeing();
     observation.numa_domains = 2;
     observation.highest_numa_node = Some(2);
@@ -395,4 +401,111 @@ fn the_numa_counter_is_deliberately_not_held_to_the_enumeration() {
 
     assert_eq!(observation.cross_check().verdict(), Verdict::Agree);
     assert_eq!(check(&observation, Verdict::Agree), Vec::new());
+}
+
+#[test]
+fn an_agreeing_verdict_requires_the_numa_counter_to_have_been_read() {
+    // The branch `cross_check` takes when `GetNumaHighestNodeNumber` fails: it
+    // files `HighestNumaNodeFailed` and returns, so `agree` is unreachable.
+    // Delete that push and `agree` becomes reachable beside an unread counter,
+    // which is the defect this rule exists to name.
+    let mut observation = agreeing();
+    observation.raw_highest_numa_node = None;
+
+    assert_eq!(
+        check(&observation, Verdict::Agree),
+        vec![Violation::AgreedWithoutComparingCounter {
+            counter: "GetNumaHighestNodeNumber"
+        }]
+    );
+}
+
+#[test]
+fn an_agreeing_verdict_requires_the_numa_counter_to_have_matched() {
+    // Both directions of the mismatch, because the parse's side is an `Option`
+    // and the absent case renders differently -- a rule whose message says
+    // "carries None" where a reader expected a number is a rule that will be
+    // misread in the one situation it fires.
+    let mut mismatched = agreeing();
+    mismatched.highest_numa_node = Some(1);
+    mismatched.raw_highest_numa_node = Some(3);
+
+    assert_eq!(
+        check(&mismatched, Verdict::Agree),
+        vec![Violation::AgreedDespiteNumaMismatch {
+            parsed: Some(1),
+            counter: 3
+        }]
+    );
+
+    let mut unparsed = agreeing();
+    unparsed.highest_numa_node = None;
+    unparsed.raw_highest_numa_node = Some(3);
+
+    assert_eq!(
+        check(&unparsed, Verdict::Agree),
+        vec![Violation::AgreedDespiteNumaMismatch {
+            parsed: None,
+            counter: 3
+        }]
+    );
+    assert!(
+        Violation::AgreedDespiteNumaMismatch {
+            parsed: None,
+            counter: 3
+        }
+        .to_string()
+        .contains("no NUMA node at all"),
+        "the absent case must not render as a number"
+    );
+}
+
+#[test]
+fn every_numa_branch_in_the_real_cross_check_is_one_this_module_forbids() {
+    // **The claim in this module's header, checked rather than asserted**: a
+    // push site deleted from `cross_check` fires a rule here. For each NUMA
+    // branch, the verdict the real `cross_check` draws must already be
+    // something other than `agree`, AND this module must forbid `agree` for the
+    // same observation -- so the rule pins behaviour that exists rather than
+    // demanding behaviour that does not.
+    //
+    // This is the pairing the other states get from
+    // `every_blocking_state_is_one_the_real_cross_check_already_reports`; NUMA
+    // had neither half until a review found the header's claim was false for
+    // exactly these two branches.
+    for (what, mutate) in [
+        (
+            "counter unreadable",
+            Box::new(|o: &mut Observation| o.raw_highest_numa_node = None)
+                as Box<dyn Fn(&mut Observation)>,
+        ),
+        (
+            "counter disagrees with the parse",
+            Box::new(|o: &mut Observation| {
+                o.highest_numa_node = Some(1);
+                o.raw_highest_numa_node = Some(3);
+            }),
+        ),
+    ] {
+        let mut observation = agreeing();
+        mutate(&mut observation);
+
+        let cross_check = observation.cross_check();
+        assert_ne!(
+            cross_check.verdict(),
+            Verdict::Agree,
+            "{what}: `cross_check` must already forbid `agree`: {cross_check:?}"
+        );
+        assert_ne!(
+            check(&observation, Verdict::Agree),
+            Vec::new(),
+            "{what}: and this module must forbid it too, or a deleted push site \
+             here fires nothing"
+        );
+        assert_eq!(
+            check(&observation, cross_check.verdict()),
+            Vec::new(),
+            "{what}: the verdict the crate actually draws must hold every rule"
+        );
+    }
 }

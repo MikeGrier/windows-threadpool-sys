@@ -87,7 +87,7 @@
       "name": "prose reworded to carry the same fact",
       "file": "src/topology_report.rs",
       "expect": "survives",
-      "why": "THE CONTROL, and it encodes this component's central decision as a measurement rather than as prose: the row is the machine contract and the prose is for a reader, so no test may read the prose. If this is ever reported as caught, a test has started asserting the wording again and THAT test is the defect -- not this entry.",
+      "why": "THE CONTROL, and it encodes this component's central decision as a measurement rather than as prose: the row is the machine contract and the prose is for a reader, so no test may derive a MACHINE-CONTRACT requirement from the wording. Note the narrowness -- tests may and do assert prose (about 35 of them read report text with contains), because the human report is a deliverable and its content is worth covering. What none of them may do is parse the prose, or pin a sentence the row is separately responsible for. So this entry rewords a line no test asserts, and if it is ever reported as caught, the question to ask is WHICH test caught it: one that reads the wording to learn something the row already publishes is the defect, and one that simply covers this sentence means the entry needs a different sentence.",
       "find": [
         "            let _ = writeln!(out, \"cache boundary divides this machine.\");"
       ],

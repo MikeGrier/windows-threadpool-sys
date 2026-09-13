@@ -169,6 +169,18 @@ pub enum Violation {
         /// What the counter reported.
         read: usize,
     },
+    /// `agree` beside a NUMA highest-node number that does not match the parse.
+    ///
+    /// Separate from [`Violation::AgreedDespiteCounterMismatch`] because the
+    /// quantity is different in kind: a largest node NUMBER, optional on both
+    /// sides, rather than a count. Folding it into the count-shaped variant
+    /// would have meant inventing a `usize` for an absent parse.
+    AgreedDespiteNumaMismatch {
+        /// What the parse carried, which may be nothing.
+        parsed: Option<u32>,
+        /// What `GetNumaHighestNodeNumber` reported.
+        counter: u32,
+    },
 }
 
 impl fmt::Display for Violation {
@@ -195,6 +207,18 @@ impl fmt::Display for Violation {
                 "the verdict is `agree` but the parse carries {parsed} where \
                  {counter} read {read}"
             ),
+            Self::AgreedDespiteNumaMismatch { parsed, counter } => match parsed {
+                Some(parsed) => write!(
+                    f,
+                    "the verdict is `agree` but the parse's highest NUMA node is \
+                     {parsed} where GetNumaHighestNodeNumber read {counter}"
+                ),
+                None => write!(
+                    f,
+                    "the verdict is `agree` but the parse reports no NUMA node at \
+                     all where GetNumaHighestNodeNumber read {counter}"
+                ),
+            },
         }
     }
 }
@@ -291,11 +315,19 @@ pub fn check(observation: &Observation, verdict: Verdict) -> Vec<Violation> {
         .collect();
 
     // Zero is how both counters report failure, so a zero beside `agree` is the
-    // verdict claiming a comparison that could not have happened. The NUMA
-    // counter is deliberately absent, for the reason the renderer gives: it
-    // reports the largest node NUMBER rather than a count, so there is no
-    // enumerated quantity to hold it to, and nodes 0 and 2 are a valid sparse
-    // topology.
+    // verdict claiming a comparison that could not have happened.
+    //
+    // **The NUMA counter is held too, one rule further down, and the reason it
+    // was once absent is worth keeping because it was half right.** It reports
+    // the largest node NUMBER rather than a count, so there is no enumerated
+    // quantity to hold it to -- nodes 0 and 2 are a valid sparse topology, and
+    // comparing it against `numa_domains` would manufacture a violation on
+    // hardware reporting itself correctly. That argument rules out ONE
+    // comparison. It does not rule out the comparison `cross_check` actually
+    // makes, which is highest-against-highest, and excluding NUMA from here on
+    // the strength of it left the module's own claim -- that a push site deleted
+    // from `cross_check` fires a rule here -- false for precisely those two push
+    // sites. Found by a review.
     for (counter, parsed, read) in [
         (
             "GetActiveProcessorCount",
@@ -317,6 +349,23 @@ pub fn check(observation: &Observation, verdict: Verdict) -> Vec<Violation> {
                 read,
             });
         }
+    }
+
+    // The NUMA comparison, in the shape `cross_check` makes it: highest node
+    // number against highest node number, never against a count. `agree` is
+    // reachable only through both of that function's NUMA branches declining to
+    // fire, so beside `agree` the counter must have been readable AND equal.
+    match observation.raw_highest_numa_node {
+        None => found.push(Violation::AgreedWithoutComparingCounter {
+            counter: "GetNumaHighestNodeNumber",
+        }),
+        Some(counter) if observation.highest_numa_node != Some(counter) => {
+            found.push(Violation::AgreedDespiteNumaMismatch {
+                parsed: observation.highest_numa_node,
+                counter,
+            });
+        }
+        Some(_) => {}
     }
 
     found
