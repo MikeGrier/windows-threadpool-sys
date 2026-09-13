@@ -55,82 +55,88 @@ use super::{Coherence, CrossCheck, Observation, PartitioningCache, Verdict};
 #[cfg(test)]
 mod tests;
 
-/// A state an observation can be in that forbids an agreeing verdict.
+/// Declares [`BlockingState`]: the variants, [`BlockingState::ALL`] and
+/// [`BlockingState::described`] all from ONE list.
 ///
-/// **A type rather than a `&'static str`, so completeness is checkable.** These
-/// were strings, and the test that claimed to check every state had a
-/// perturbation derived BOTH of its sets from the perturbation table -- so a new
-/// branch in [`blocking_states`] that no mutation reached appeared in neither
-/// set and both loops stayed green. The guard could only confirm that existing
-/// labels described existing mutations.
+/// **This exists so that `ALL` cannot drift from the enum.** Writing the two by
+/// hand does not prevent it, and the difference is not cosmetic: `ALL` is what
+/// the completeness guard iterates, so a variant missing from it is a blocking
+/// state nothing tests. A hand-written `ALL` was measured to allow exactly that
+/// -- a new variant, its `described()` arm supplied because the `match` forces
+/// one, compiled cleanly and left all ten invariant tests green while being
+/// reached by none of them.
 ///
-/// With a type, [`BlockingState::ALL`] is an exhaustive list the compiler
-/// checks: adding a variant without adding it there fails to build, and the
-/// test compares the table against `ALL` rather than against itself. Found by a
-/// review, one round after the guard was added in response to an earlier one.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum BlockingState {
+/// The `match` in `described()` is genuinely exhaustive-checked, which is what
+/// made the hand-written version look safe. It is not enough: it forces a new
+/// variant to acquire an ARM, never an ENTRY in a separate array. Generating
+/// both from one list is what ties them together, because the enum itself comes
+/// from that list -- a variant that is not in it does not exist.
+macro_rules! blocking_states {
+    ($( $(#[$doc:meta])* $variant:ident => $described:literal ),+ $(,)?) => {
+        /// A state an observation can be in that forbids an agreeing verdict.
+        ///
+        /// **A type rather than a `&'static str`, so completeness is
+        /// checkable.** These were strings, and the test that claimed to check
+        /// every state had a perturbation derived BOTH of its sets from the
+        /// perturbation table -- so a new branch in [`blocking_states`] that no
+        /// mutation reached appeared in neither set and both loops stayed green.
+        /// The guard could only confirm that existing labels described existing
+        /// mutations.
+        ///
+        /// The type is declared by a macro from a single list, so
+        /// [`BlockingState::ALL`] cannot omit a variant: the variants and `ALL`
+        /// are the same list. An earlier version wrote them separately and
+        /// claimed the compiler checked the correspondence, which it did not --
+        /// found by a review, two rounds after the strings.
+        #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+        pub enum BlockingState {
+            $( $(#[$doc])* $variant, )+
+        }
+
+        impl BlockingState {
+            /// Every state, so a test can check the perturbation table covers
+            /// them all.
+            ///
+            /// Generated from the same list as the variants, so it is exhaustive
+            /// by construction rather than by anyone remembering.
+            pub const ALL: &'static [Self] = &[ $( Self::$variant, )+ ];
+
+            /// How the report names this state, for a violation a reader has to
+            /// act on.
+            #[must_use]
+            pub const fn described(self) -> &'static str {
+                match self {
+                    $( Self::$variant => $described, )+
+                }
+            }
+        }
+    };
+}
+
+blocking_states! {
     /// A level was named as the outermost partitioning cache with no summary.
     ///
     /// The state the renderer prints as `BUG IN THIS PROBE`, and the defect this
     /// component exists because of.
-    PartitioningSummaryMissing,
+    PartitioningSummaryMissing => "summary missing for the outermost partitioning cache",
     /// The enumeration recorded anomalies.
-    EnumerationAnomalies,
+    EnumerationAnomalies => "the enumeration recorded anomalies",
     /// The topology was not measured from a running machine.
-    NotMeasured,
+    NotMeasured => "the topology was not measured from a running machine",
     /// No cache levels were reported.
-    NoCacheLevels,
+    NoCacheLevels => "no cache levels were reported",
     /// No packages were reported, though the machine has one.
-    NoPackages,
+    NoPackages => "no packages were reported",
     /// No cores were reported, though the machine has one.
-    NoCores,
+    NoCores => "no cores were reported",
     /// A core record contradicts itself.
-    ContradictoryCore,
+    ContradictoryCore => "a core record contradicts itself",
     /// A cache level is numbered 0, which Windows does not report.
-    UnnumberedCacheLevel,
+    UnnumberedCacheLevel => "a cache level is numbered 0",
     /// The crate's two enumerations did not agree.
-    EnumerationsDisagreed,
+    EnumerationsDisagreed => "the crate's two enumerations did not agree",
     /// The bracket did not establish that the machine held still.
-    BracketNotHeld,
-}
-
-impl BlockingState {
-    /// Every state, so a test can check the perturbation table covers them all.
-    ///
-    /// The `match` below is what makes this exhaustive: adding a variant without
-    /// listing it here is a compile error, not a silently untested state.
-    pub const ALL: &'static [Self] = &[
-        Self::PartitioningSummaryMissing,
-        Self::EnumerationAnomalies,
-        Self::NotMeasured,
-        Self::NoCacheLevels,
-        Self::NoPackages,
-        Self::NoCores,
-        Self::ContradictoryCore,
-        Self::UnnumberedCacheLevel,
-        Self::EnumerationsDisagreed,
-        Self::BracketNotHeld,
-    ];
-
-    /// How the report names this state, for a violation a reader has to act on.
-    #[must_use]
-    pub const fn described(self) -> &'static str {
-        match self {
-            Self::PartitioningSummaryMissing => {
-                "summary missing for the outermost partitioning cache"
-            }
-            Self::EnumerationAnomalies => "the enumeration recorded anomalies",
-            Self::NotMeasured => "the topology was not measured from a running machine",
-            Self::NoCacheLevels => "no cache levels were reported",
-            Self::NoPackages => "no packages were reported",
-            Self::NoCores => "no cores were reported",
-            Self::ContradictoryCore => "a core record contradicts itself",
-            Self::UnnumberedCacheLevel => "a cache level is numbered 0",
-            Self::EnumerationsDisagreed => "the crate's two enumerations did not agree",
-            Self::BracketNotHeld => "the bracket did not establish that the machine held still",
-        }
-    }
+    BracketNotHeld => "the bracket did not establish that the machine held still",
 }
 
 /// A state that forbids an agreeing verdict, found beside one.

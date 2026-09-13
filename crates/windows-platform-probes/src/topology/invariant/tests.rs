@@ -170,8 +170,18 @@ fn every_blocking_state_has_a_perturbation() {
     // what its name claims. Found by a review, one round after the guard was
     // added in response to an earlier one.
     //
-    // `ALL` is exhaustive by compiler: `described()` matches on every variant,
-    // so adding one without listing it there fails to build.
+    // **`ALL` is exhaustive by construction, not by the `described()` match.**
+    // This comment used to claim the latter, and it was false: the match forces
+    // a new variant to acquire an ARM, never an entry in a separate array.
+    // Measured -- a variant absent from a hand-written `ALL` compiled and left
+    // all ten tests here green. `BlockingState` is now declared by a macro from
+    // one list, so the variants and `ALL` are the same list.
+    //
+    // The reverse loop below is NOT a substitute for that. It catches a state
+    // `blocking_states` produces and `ALL` omits, but only once some
+    // perturbation reaches it -- and a state with no perturbation entry is
+    // precisely the case this test exists to catch, so relying on it would be
+    // circular in exactly the case that matters.
     let mut reached: Vec<BlockingState> = Vec::new();
     for (_, mutate) in perturbations() {
         let mut observation = agreeing();

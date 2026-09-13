@@ -410,6 +410,38 @@ M4 below, six in M5. M2.18 is the exception, dissolved rather than moved.
   table. Introduced a `BlockingState` enum with `ALL`, so the guard holds the table against the
   type's variants and a new state that nobody describes fails to build past it.
 
+  (**The last clause was false, and M3.8 corrects it.** `ALL` was a hand-written array; nothing
+  tied it to the enum.)
+
+- [x] **M3.8** -- Make `BlockingState::ALL` exhaustive by construction rather than by assertion.
+
+  The same defect as M3.7's fourth finding, one level up, and introduced by the fix for it. The
+  doc on `ALL` claimed "an exhaustive list the compiler checks: adding a variant without adding it
+  there fails to build". That is not what the compiler checks. The `match` in `described()` is
+  exhaustive-checked, which is what made the claim look right -- but it forces a new variant to
+  acquire an ARM, never an ENTRY in a separate array.
+
+  Measured, not read: a new variant plus the `described()` arm the match demands compiled cleanly
+  and left all ten invariant tests green, reached by none of them. `ALL` is the list the
+  completeness guard iterates, so a variant missing from it is a blocking state nothing tests --
+  which is the exact failure the guard was added to prevent, reintroduced by the shape of its fix.
+
+  The reverse loop in the guard is not a substitute. It catches a state `blocking_states` produces
+  and `ALL` omits, but only once some perturbation reaches it -- and a state with no perturbation
+  entry is precisely what the test exists to catch, so it is circular in the case that matters.
+
+  Fixed by declaring the enum, `ALL` and `described()` from one list through a macro, so a variant
+  that is not in the list does not exist. The claim is now true rather than deleted.
+
+  Sabotage-verified in both directions: the original sabotage is now inexpressible (there is no
+  second place to omit the variant from), and its reachable equivalent -- a new state in the list
+  with no perturbation entry -- reddens `every_blocking_state_has_a_perturbation`, where before
+  the whole suite stayed green.
+
+  **Three rounds on one guard: strings, then a hand-written `ALL`, then generation.** Each fix
+  moved the census somewhere harder to see rather than removing it. Worth stating because the
+  reviewer's finding was not a new defect -- it was the same defect wearing the previous fix.
+
 ## M4 -- Carried over from M2: the items M3 gates
 
 These were written under M2 and are blocked on M3 above: each one targets the prose-against-row
