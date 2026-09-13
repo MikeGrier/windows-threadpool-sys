@@ -280,6 +280,15 @@ pub fn report(banner: &str, observation: &Observation) -> String {
     // draws. A rule with one exception is not a rule, and the exception was the
     // conclusion drawn from the one field the two sources are known to
     // contradict each other about.
+    // **Bound here as well as in `observe`, and the two cover different
+    // things.** `observe` covers every observation this crate MEASURES; this
+    // covers every observation anyone RENDERS, which on the test side is most
+    // of them -- the suite builds observations by hand rather than measuring a
+    // machine, so binding only at `observe` would leave the invariants
+    // exercised on one host shape.
+    #[cfg(any(test, feature = "oracle-in-renderer"))]
+    crate::topology::invariant::assert_holds(observation);
+
     let check = observation.cross_check();
     let parse_in_doubt = check.parse_in_doubt();
 

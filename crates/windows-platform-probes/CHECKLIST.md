@@ -102,7 +102,7 @@ M4 below, six in M5. M2.18 is the exception, dissolved rather than moved.
   `verdict incomplete` shape, because the oracle reads the length. `corruptions` now APPENDS a code
   rather than substituting one, so the length always differs.
 
-- [ ] **M3.2** -- Assert the surviving correspondences as invariants on the observation, before
+- [x] **M3.2** -- Assert the surviving correspondences as invariants on the observation, before
   rendering.
 
   Alarm-against-verdict, diagnostics-against-verdict and counters-against-verdict are the three
@@ -113,6 +113,28 @@ M4 below, six in M5. M2.18 is the exception, dissolved rather than moved.
 
   Each one must be sabotage-verified on arrival: delete the invariant, confirm the suite reddens,
   restore it. A predicate that cannot fail is the failure mode this crate keeps meeting.
+
+  **Done, and the item's own framing was wrong in a way worth recording.** It named
+  "diagnostics-against-verdict" and "counters-against-verdict" as rules to move. Two of those read
+  `CrossCheck`'s lists -- and `verdict` is a pure function of those lists, so such a rule restates
+  the definition, cannot fail for any input, and CANNOT CATCH A DELETED PUSH SITE: the deletion
+  empties the list, the rule sees nothing, and the verdict is `agree` legitimately. Written that
+  way first, with three tests that asserted acceptance under violation-sounding names.
+
+  Every rule now reads the OBSERVATION. `blocking_states` names ten states that forbid an agreeing
+  verdict, each with a push site in `cross_check` that it does not consult, plus the two counter
+  rules. `check` takes the verdict rather than deriving it, so a test can supply the answer a
+  broken `cross_check` would give -- otherwise every branch is reachable only by editing the source
+  and a green run says nothing.
+
+  Bound at `observe` (every observation MEASURED, rendered or not -- what this item asked for) and
+  at `report` (every observation RENDERED, which on the test side is most of them, since the suite
+  builds observations by hand). Not in `cross_check`, which would recurse.
+
+  Sabotage: deleting the `PartitioningSummaryMissing` push reddens four tests, two of them new --
+  the invariant's own accounting test, and a render test through `assert_holds` at the renderer
+  binding. The invariant is not the sole detector for that push site; its value is the nine others,
+  several of which have no dedicated test.
 
 - [ ] **M3.3** -- Emit the row from a typed value through one writer.
 

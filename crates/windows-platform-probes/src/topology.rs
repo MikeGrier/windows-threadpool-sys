@@ -44,6 +44,7 @@ use windows_topology_sys::{
 };
 
 pub mod diagnostic;
+pub mod invariant;
 
 pub use diagnostic::{Disagreement, NotCompared, ParseIncomplete};
 
@@ -1392,7 +1393,7 @@ pub fn observe(
         .outermost_partitioning_cache()
         .map(|(level, _)| level);
 
-    Observation {
+    let observation = Observation {
         online_processors,
         groups,
         numa_domains,
@@ -1419,5 +1420,19 @@ pub fn observe(
         raw_group_count,
         raw_highest_numa_node,
         bracket,
-    }
+    };
+
+    // **Bound here, so the invariants hold for every observation this crate
+    // MEASURES whether or not one is ever rendered.** That is the difference
+    // between these and the correspondences they came from: the oracle can only
+    // speak about a report, so a caller who measures and never renders got
+    // nothing. `report` binds them too, which is what covers the observations
+    // the tests build by hand.
+    //
+    // Never in `cross_check`: `assert_holds` asks it for the verdict, so the
+    // assertion would recurse.
+    #[cfg(any(test, feature = "oracle-in-renderer"))]
+    invariant::assert_holds(&observation);
+
+    observation
 }
