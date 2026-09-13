@@ -1147,27 +1147,43 @@ comparisons and become **invariants on the observation, checked before
 rendering** -- `summary_missing` implies the verdict is not `agree`, and likewise
 for the other diagnostics and the counters. No parser is involved.
 
-**Nothing here enforces that rule yet, and the first thing it would have caught
-was already broken.** Every instrument in this crate starts from what the row
-publishes -- the fact accounting enumerates the row's keys, the mutation sweep
-perturbs code the row's construction reaches -- so all of them ask "does
-anything read this key?" and none asks "does the prose state a fact the row
-omits?". Measured: `CrossCheck::disagreements` was rendered per-entry in the
-prose and published in the row as nothing at all, so a survey could see
-`"cross_check":"disagree"` and not which counter disagreed. It survived 41
-review rounds and a zero-survivor mutation sweep. A reviewer found it by reading
-the enum and asking who called `code()`.
+**This rule is enforced, and the first thing it would have caught was already
+broken when the rule was written.** Every instrument in this crate used to start
+from what the row publishes -- the fact accounting enumerated the row's keys, the
+mutation sweep perturbed code the row's construction reached -- so all of them
+asked "does anything read this key?" and none asked "does the prose state a fact
+the row omits?". Measured: `CrossCheck::disagreements` was rendered per-entry in
+the prose and published in the row as nothing at all, so a survey could see
+`"cross_check":"disagree"` and not which counter disagreed. It survived 41 review
+rounds and a zero-survivor mutation sweep. A reviewer found it by reading the
+enum and asking who called `code()`.
 
-The second enumeration -- prose facts to row keys -- is queued as M3.5 in
-[CHECKLIST.md](CHECKLIST.md). Until it exists the rule is a convention rather
-than a checked property, which is worth stating plainly rather than leaving a
-reader to assume the instruments cover it.
+The second enumeration -- every state that forbids agreement to a published
+condition -- now exists, in
+[tests/a_real_report_agrees_with_itself.rs](tests/a_real_report_agrees_with_itself.rs):
+`every_state_that_blocks_agreement_reaches_the_row` holds `topology::invariant`'s
+blocking states against the row's keys, and `publication_holds` is the shared
+predicate the corpus rule and its sabotage both call. Landed as M3.5, archived in
+[COMPLETED-CHECKLIST.md](COMPLETED-CHECKLIST.md).
+
+(Until M3.5 landed this section said "nothing here enforces that rule yet" and
+pointed at CHECKLIST.md for the queued item. Both statements outlived the
+milestone that made them false -- the reason this Tier 1 file is swept against
+the code rather than trusted, and an instance of the restatement drift the
+repository instructions describe.)
 
 ### What the text-reading design cost
 
-Counted in [src/report_oracle.rs](src/report_oracle.rs): of 38 top-level
-functions, ten are correspondence rules and four are comparison helpers.
-**Twenty-three exist only to extract values back out of rendered text.**
+Counted in `src/report_oracle.rs` **as it stood before this decision**: of 38
+top-level functions, ten were correspondence rules and four were comparison
+helpers. **Twenty-three existed only to extract values back out of rendered
+text.** None of them survives: [src/report_oracle.rs](src/report_oracle.rs) reads
+no rendered text at all now, and hand-writes no string scanning -- the row's
+well-formedness is a `serde_json` parse and its keys come from that parser's own
+tokens. So the counts above are what the design cost, not what the file holds.
+(They are also the only counts kept here, because they describe a file that no
+longer exists in that form and so cannot drift; a count of the CURRENT file would
+be a census, and is deliberately absent.)
 
 That is a parser for a format this crate itself writes, and it behaved like one.
 A large share of PR #88's review rounds were defects in the READER rather than in
@@ -1187,11 +1203,12 @@ is the stronger move:
   artifact. Measured on PR #88: an `io::Error` containing `{` was selected as the
   report's machine-readable row. A typed row emitted by one writer cannot have
   this.
-- **Field order and labelling.** The row is built today by interpolating every
-  value positionally through a `concat!` template, so a field's name and its
-  value are related only by counting -- and a reordered argument or a miscounted
-  `{}` yields mislabelled data that still parses. A typed row with one writer
-  cannot have this either.
+- **Field order and labelling.** The row was built by interpolating every value
+  positionally through a `concat!` template, so a field's name and its value were
+  related only by counting -- and a reordered argument or a miscounted `{}` gave
+  mislabelled data that still parses. A typed row with one writer cannot have
+  this either, and that is what M3.3 built: the template is gone, and
+  [src/row.rs](src/row.rs) is the one writer.
 
   Stated as the coupling rather than as a count, deliberately, and the reason is
   on the record: this said "eighteen values", was corrected to "seventeen" when

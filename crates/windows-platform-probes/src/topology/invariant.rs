@@ -40,7 +40,10 @@
 //! requires the verdict to have moved off `agree`. A push site deleted from
 //! `cross_check` leaves the state visible here and fires the rule; that is the
 //! whole design, and it is what the sabotage evidence in
-//! [CHECKLIST.md](../../CHECKLIST.md) M3.2 demonstrates.
+//! [COMPLETED-CHECKLIST.md](../../COMPLETED-CHECKLIST.md) M3.2 demonstrates. It
+//! is also the manifest entry `cross_check forgets the changed bracket` in
+//! [sabotage.json](../../sabotage.json), which re-runs that evidence rather than
+//! leaving it as a claim about a sabotage somebody once performed.
 //!
 //! # What that means for testing them
 //!

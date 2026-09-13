@@ -162,12 +162,23 @@ wtf-string = { path = "../wtf-string" }
 serde = { version = "1.0", optional = true }
 
 [dev-dependencies]
-# Also here, non-optional, because `cfg(test)` builds compile `report_oracle`
-# WITHOUT `oracle-in-renderer` -- the feature exists for integration tests, and
-# unit tests get the module through `cfg(test)` instead. A dev-dependency is
-# linked for every test target, so this is what makes the module's `cfg(any(test,
-# feature = "oracle-in-renderer"))` gate resolve in both halves.
-serde = "1.0"
+# Here because [tests/a_real_report_agrees_with_itself.rs] uses `serde_json`
+# DIRECTLY, to empty the row's diagnostic lists by parsing and re-rendering
+# rather than by cutting the text.
+#
+# **Not to satisfy `report_oracle`'s gate, which an earlier version of this
+# comment claimed.** That claim was backwards: it said `cfg(test)` builds compile
+# the module without `oracle-in-renderer`. They do not. The self dev-dependency
+# below is an edge from this package to itself, so under resolver 2 the feature
+# unifies onto the package in ANY build that includes dev-dependencies -- the
+# `cfg(test)` lib build included. Measured with a `compile_error!` probe in both
+# directions: `cargo check --tests` succeeds under `not(feature = ...)` and fails
+# under `feature = ...`, while a plain `--lib` build has the feature off.
+#
+# So the two arms of `cfg(any(test, feature = "oracle-in-renderer"))` are never
+# exercised separately, the optional `serde`/`serde_json` are already active in
+# every test build, and a matching `serde` dev-dependency was dead weight --
+# removed after confirming all 213 tests still pass without it.
 serde_json = "1.0"
 # A dependency on ITSELF, which cargo permits for dev-dependencies and which is
 # the only way to turn a feature on for this package's own integration tests:
