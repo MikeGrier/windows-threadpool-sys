@@ -36,7 +36,7 @@ path = "src/lib.rs"
 # print-rather-than-panic guarantee.
 # Pulls in `serde_json` because the oracle's well-formedness check IS a real
 # parse. See the `[dependencies]` entry for why that is not hand-written.
-oracle-in-renderer = ["dep:serde_json"]
+oracle-in-renderer = ["dep:serde_json", "dep:serde"]
 
 [[bin]]
 name = "probe-error-mode"
@@ -153,6 +153,13 @@ windows-namespace-request-sys = { path = "../windows-namespace-request-sys" }
 # over that is a vocabulary one -- the workspace's own WTF-16 type naming the
 # quantity rather than an ad-hoc count that happens to agree.
 wtf-string = { path = "../wtf-string" }
+# Beside `serde_json`, and gated with it, for ONE reason: `keys` must report the
+# row's top-level names in ORDER and WITH DUPLICATES, and a parsed map can give
+# neither -- `serde_json::Map` sorts, and silently keeps the last of a repeated
+# key, which is the very defect `RowDefect::RepeatedKey` exists to report. A
+# `MapAccess` visitor sees the names as the parser reads them, so the scan is
+# still the real parser's and this crate hand-writes no string walking at all.
+serde = { version = "1.0", optional = true }
 
 [dev-dependencies]
 # Also here, non-optional, because `cfg(test)` builds compile `report_oracle`
@@ -160,6 +167,7 @@ wtf-string = { path = "../wtf-string" }
 # unit tests get the module through `cfg(test)` instead. A dev-dependency is
 # linked for every test target, so this is what makes the module's `cfg(any(test,
 # feature = "oracle-in-renderer"))` gate resolve in both halves.
+serde = "1.0"
 serde_json = "1.0"
 # A dependency on ITSELF, which cargo permits for dev-dependencies and which is
 # the only way to turn a feature on for this package's own integration tests:

@@ -142,12 +142,10 @@ pub fn check(report: &str) -> Vec<RowDefect> {
         return found;
     }
 
-    let mut seen: Vec<&str> = Vec::new();
+    let mut seen: Vec<String> = Vec::new();
     for key in keys(row) {
         if seen.contains(&key) {
-            found.push(RowDefect::RepeatedKey {
-                key: key.to_owned(),
-            });
+            found.push(RowDefect::RepeatedKey { key });
         } else {
             seen.push(key);
         }
@@ -182,149 +180,91 @@ fn malformation(row: &str) -> Option<String> {
     }
 }
 
-/// Every key `row` renders at its top level, in the order it renders them.
+/// Every key `row` renders at its top level, in the order it renders them, and
+/// INCLUDING repeats.
+///
+/// **Read from the parser's own tokens, not by walking the bytes.** Both
+/// properties this returns are ones a parsed map destroys: `serde_json::Map`
+/// sorts its names, and silently keeps the last of a repeated key -- which is
+/// exactly the defect [`RowDefect::RepeatedKey`] reports, so parsing into a map
+/// would delete the evidence. A `MapAccess` visitor sees each name as the parser
+/// reads it, which keeps both while leaving every escape, quote and delimiter
+/// decision to `serde_json`.
+///
+/// The hand-written version of this was the last string scanner here, and it had
+/// already produced a real defect: it used `find('"')`, which takes `\"` for a
+/// terminator, so a `discovery_error` carrying an escaped quote shifted where it
+/// thought strings began and text INSIDE the error was emitted as top-level
+/// keys. Measured: an `io::Error` of `q":1,"q":1,"q` rendered a row that
+/// `JSON.parse` accepts with four keys, and `assert_corresponds` panicked from
+/// inside the renderer. Fixing that added escape-awareness to one of the
+/// scanners and left the others to be argued about; this removes the question.
 ///
 /// Top level only, deliberately: a nested object's members are that object's
 /// keys, and repeating one there is a different question from repeating one in
-/// the row.
+/// the row. The visitor reads nested values as [`serde::de::IgnoredAny`], which
+/// consumes them without collecting their names.
 #[must_use]
-pub fn keys(row: &str) -> Vec<&str> {
-    let mut names = Vec::new();
-    let mut depth = 0_i32;
-    let mut at = 0;
+pub fn keys(row: &str) -> Vec<String> {
+    struct TopLevelNames;
 
-    while let Some(open) = next_string(row, at) {
-        // Brackets BETWEEN strings are the only ones that count. Inside a
-        // string they are text -- a failed discovery's message may contain any
-        // of them.
-        for character in row[at..open].chars() {
-            match character {
-                '[' | '{' => depth += 1,
-                ']' | '}' => depth -= 1,
-                _ => {}
+    impl<'de> serde::de::Visitor<'de> for TopLevelNames {
+        type Value = Vec<String>;
+
+        fn expecting(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            f.write_str("the probe's machine-readable row, a JSON object")
+        }
+
+        fn visit_map<A: serde::de::MapAccess<'de>>(
+            self,
+            mut members: A,
+        ) -> Result<Self::Value, A::Error> {
+            let mut names = Vec::new();
+            while let Some(name) = members.next_key::<String>()? {
+                names.push(name);
+                members.next_value::<serde::de::IgnoredAny>()?;
             }
-        }
-
-        let Some(close) = string_end(row, open + 1) else {
-            break;
-        };
-        let name = &row[open + 1..close];
-        let tail = row[close + 1..].trim_start();
-
-        // A name followed by `:` at depth 1 is a key of the row itself. Anything
-        // else is a value, or a key of a nested object.
-        if tail.starts_with(':') && depth == 1 {
-            names.push(name);
-        }
-
-        at = close + 1;
-    }
-
-    names
-}
-
-/// Where the next string starts at or after `from`.
-///
-/// There is nothing to skip here -- a quote outside a string always opens one --
-/// but it is named so the pair with [`string_end`] reads as a scan rather than
-/// as two bare `find` calls.
-fn next_string(row: &str, from: usize) -> Option<usize> {
-    row[from..].find('"').map(|at| from + at)
-}
-
-/// Where the string opening before `from` closes, honouring `\` escapes.
-///
-/// **This is the half [`keys`] was missing, and it was reachable.** `keys` used
-/// `find('"')`, which takes `\"` for a terminator -- so a `discovery_error`
-/// carrying an escaped quote shifted the parser's idea of where strings begin
-/// and end, and text INSIDE the error was emitted as top-level keys. Two equal
-/// ones then read as a repeated key.
-///
-/// Measured before this fix: `report_unmeasured` given an `io::Error` of
-/// `q":1,"q":1,"q` rendered a row `JSON.parse` accepts with four keys, and
-/// `assert_corresponds` panicked from inside the renderer -- a correct report
-/// crashing the probe, which is the failure mode containment exists to prevent.
-/// [`balanced`] already had this state machine; `keys` did not, so the reader
-/// disagreed with the writer.
-fn string_end(row: &str, from: usize) -> Option<usize> {
-    let mut escaped = false;
-    for (at, character) in row[from..].char_indices() {
-        if escaped {
-            escaped = false;
-            continue;
-        }
-        match character {
-            '\\' => escaped = true,
-            '"' => return Some(from + at),
-            _ => {}
+            Ok(names)
         }
     }
 
-    None
+    let mut reader = serde_json::Deserializer::from_str(row);
+    serde::Deserializer::deserialize_map(&mut reader, TopLevelNames).unwrap_or_default()
 }
-
-/// Where the list opening at `start` closes, if it closes.
-///
-/// Depth-aware, because each entry is an object: the first `]` after the opening
-/// bracket may belong to a nested list rather than to this one.
-///
-/// Public alongside [`list_codes`] because an instrument that SABOTAGES a list
-/// needs the same span the reader uses. A test that cut on commas instead broke
-/// silently when the entries became objects -- and a sabotage that no longer
-/// sabotages leaves the rule it guards unguarded while still passing.
-#[must_use]
-pub fn list_span_end(row: &str, start: usize) -> Option<usize> {
-    let mut depth = 0_i32;
-    for (at, character) in row[start..].char_indices() {
-        match character {
-            '[' | '{' => depth += 1,
-            '}' => depth -= 1,
-            ']' if depth == 0 => return Some(start + at),
-            ']' => depth -= 1,
-            _ => {}
-        }
-    }
-
-    None
-}
-
 /// The `code` of every entry in `row`'s list-valued `key`.
 ///
 /// **One definition, because two instruments need it.** The diagnostic lists
-/// hold objects -- `{"code":"contradictory_cores","count":3}` -- so reading them
-/// means finding each entry's `code` member rather than splitting on commas,
-/// which nested objects break. Both the unit tests and the publication
-/// accounting ask this question, and a second implementation of it is the kind
-/// of copy that agrees until it does not.
+/// hold objects -- `{"code":"contradictory_cores","count":3}` -- and both the
+/// unit tests and the publication accounting ask this question. A second
+/// implementation of it is the kind of copy that agrees until it does not.
+///
+/// Read from a parse. The previous version searched for `"code":"` and then took
+/// the next `"` as the end, which is not escape-aware: a code containing a quote
+/// would have truncated. That was argued safe because every code is a
+/// `&'static str` from an enum and no caller text reaches a list -- an argument
+/// that was true, load-bearing, and enforced by nothing. Parsing makes the
+/// argument unnecessary rather than merely correct, which is the difference
+/// between a property and a hope.
 ///
 /// Returns empty for a key that is absent or not a list, which is the same
 /// answer as an empty list on purpose: a consumer of this is asking "what
 /// conditions are published", and "none" is the answer in both cases.
 #[must_use]
 pub fn list_codes(row: &str, key: &str) -> Vec<String> {
-    let needle = format!("\"{key}\":[");
-    let Some(start) = row.find(&needle).map(|at| at + needle.len()) else {
+    let Ok(parsed) = serde_json::from_str::<serde_json::Value>(row) else {
         return Vec::new();
     };
-    let Some(end) = list_span_end(row, start) else {
+    let Some(entries) = parsed.get(key).and_then(serde_json::Value::as_array) else {
         return Vec::new();
     };
 
-    let mut codes = Vec::new();
-    let mut rest = &row[start..end];
-    const CODE: &str = "\"code\":\"";
-    while let Some(at) = rest.find(CODE) {
-        let after = &rest[at + CODE.len()..];
-        let Some(close) = after.find('"') else {
-            break;
-        };
-        codes.push(after[..close].to_owned());
-        rest = &after[close..];
-    }
-
-    codes
+    entries
+        .iter()
+        .filter_map(|entry| entry.get("code"))
+        .filter_map(serde_json::Value::as_str)
+        .map(str::to_owned)
+        .collect()
 }
-
 /// The report's machine-readable row, if it carries exactly one well-formed one.
 ///
 /// Public because the instruments in `tests/` read the row to ask what it

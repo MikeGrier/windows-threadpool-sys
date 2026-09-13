@@ -613,29 +613,33 @@ fn a_state_the_row_does_not_publish_fails_the_accounting() {
     );
 
     // Now empty every diagnostic list in the row, which is what a renderer that
-    // forgot to publish one would produce. Done by replacing each list's whole
-    // contents rather than by editing entries: the entries are objects now, so
-    // splitting on commas cuts them in half -- which is how this sabotage broke
-    // when M3.3 landed, and is worth the note because a sabotage that no longer
-    // sabotages leaves the rule it guards unguarded while still passing.
+    // forgot to publish one would produce.
+    //
+    // **Done by parsing, emptying and re-rendering, not by cutting the text.**
+    // Two earlier versions cut it: the first split on commas, which sliced the
+    // entries in half once they became objects; the second used a span helper in
+    // the oracle that was not string-aware. Both are the same mistake -- a
+    // sabotage that hand-parses is a sabotage that can stop sabotaging while
+    // still passing, and it leaves the rule it guards unguarded. Rebuilding from
+    // a parse also produces a row that is genuinely valid, so what this feeds the
+    // accounting is a report a renderer could really have emitted.
     let stripped = text
         .lines()
         .map(|line| {
             if !line.starts_with('{') {
                 return line.to_owned();
             }
-            let mut out = line.to_owned();
+            let Ok(mut parsed) = serde_json::from_str::<serde_json::Value>(line) else {
+                return line.to_owned();
+            };
             for key in DIAGNOSTIC_LISTS {
-                let needle = format!("\"{key}\":[");
-                let Some(start) = out.find(&needle).map(|at| at + needle.len()) else {
-                    continue;
-                };
-                let Some(end) = report_oracle::list_span_end(&out, start) else {
-                    continue;
-                };
-                out.replace_range(start..end, "");
+                if let Some(list) = parsed.get_mut(*key)
+                    && list.is_array()
+                {
+                    *list = serde_json::Value::Array(Vec::new());
+                }
             }
-            out
+            parsed.to_string()
         })
         .collect::<Vec<_>>()
         .join("\n");

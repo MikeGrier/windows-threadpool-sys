@@ -486,6 +486,42 @@ M4 below, six in M5. M2.18 is the exception, dissolved rather than moved.
   contains no `serde_json`, no oracle panic string, and no parser message; the `--all-features` one
   contains all three.
 
+- [x] **M3.10** -- Delete the last hand-written string scanners in the oracle.
+
+  M3.9 removed one of six; this removes the rest. **The module hand-writes no string walking at
+  all now** -- every byte-level decision about quotes, escapes and delimiters comes from
+  `serde_json`.
+
+  **Two of the four were provably unsafe, on an argument enforced by nothing.** `list_codes` found
+  `"code":"` and took the next `"` as the end, and `list_span_end` counted brackets with no notion
+  of being inside a string. Both were safe only because every code is a `&'static str` from an enum
+  and no caller text reaches a diagnostic list -- true, load-bearing, and guarded by no test.
+  `keys` had already proved the class reachable: it made `assert_corresponds` panic from inside
+  `report_unmeasured` on a quoted `discovery_error`. Parsing makes the argument unnecessary rather
+  than merely correct, which is the difference between a property and a hope.
+
+  **`keys` needed a visitor rather than a parsed map, and the reason is a contract.** It must return
+  the row's names in ORDER and WITH DUPLICATES. `serde_json::Map` sorts, and silently keeps the last
+  of a repeated key -- which would delete the evidence for `RowDefect::RepeatedKey`, the one
+  malformation that survives a consumer's parse. A `MapAccess` visitor reads each name as the parser
+  reads it, so both properties survive while every scanning decision stays `serde_json`'s. That
+  reasoning is now a sabotage entry rather than a comment: replacing the visitor with the obvious
+  `Map` one-liner is `caught`.
+
+  **`list_span_end` was deleted, not moved.** Its only caller was a sabotage doing text surgery on a
+  list. That sabotage now parses, empties the lists and re-renders -- its third implementation, after
+  one that split on commas (which sliced entries in half once they became objects) and one that used
+  this helper. A sabotage that hand-parses is a sabotage that can quietly stop sabotaging, and it
+  leaves the rule it guards unguarded while still passing.
+
+  **The stale sabotage entry is itself the evidence.** After the change the sweep reported
+  `MANIFEST STALE: pattern found 0 times` for the escape-awareness entry -- the defect it injected
+  can no longer be expressed, because the code that could hold it is gone. Replaced with the
+  parsed-map entry above; 7 of 7 behave as declared.
+
+  Default build re-verified by binary inspection: neither `serde` nor `serde_json` appears on a
+  normal dependency edge, and `probe-topology.exe` contains no parser string.
+
 ## M4 -- Carried over from M2: the items M3 gates
 
 These were written under M2 and are blocked on M3 above: each one targets the prose-against-row

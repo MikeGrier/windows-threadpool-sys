@@ -216,6 +216,7 @@ dependencies = [
 name = "windows-platform-probes"
 version = "0.0.1"
 dependencies = [
+ "serde",
  "serde_json",
  "windows-namespace-request-sys",
  "windows-placement-probe",
