@@ -4666,3 +4666,41 @@ fn an_anomaly_reaches_the_row_as_its_kind() {
         "each anomaly reaches the row as its own kind: {text}"
     );
 }
+
+#[test]
+fn the_row_names_which_counter_disagreed() {
+    // **The list M3.1 built a vocabulary for and did not wire.** `cross_check`
+    // said `disagree`, and the prose named the counter and both readings -- but
+    // the row carried no `disagreements` field at all, so a survey could tell
+    // that a host's parse was contradicted and not WHAT contradicted it.
+    //
+    // Same shape as the defect the milestone came from, and it survived every
+    // instrument here for a structural reason worth remembering: the fact
+    // accounting in `tests/a_real_report_agrees_with_itself.rs` enumerates the
+    // ROW's keys, so a fact the row omits entirely is outside the set of things
+    // it can ask about.
+    let mut observation = clean_observation();
+    observation.raw_group_count = 2;
+
+    let text = crate::topology_report::report(BANNER, &observation);
+
+    assert!(
+        text.contains("=> DISAGREE"),
+        "the fixture must actually disagree or this shows nothing: {text}"
+    );
+    assert_eq!(
+        row_codes(&text, "disagreements"),
+        vec!["processor_groups".to_owned()],
+        "the row must name the counter that disagreed: {text}"
+    );
+}
+
+#[test]
+fn a_report_with_nothing_to_report_lists_no_disagreements() {
+    // The acceptance half: an agreeing host publishes the key with an empty
+    // list rather than omitting it, so a survey can tell "no disagreements"
+    // from "this probe is too old to say".
+    let text = crate::topology_report::report(BANNER, &clean_observation());
+
+    assert!(text.contains(r#""disagreements":[]"#), "{text}");
+}

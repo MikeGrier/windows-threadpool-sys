@@ -538,6 +538,19 @@ const FACTS: &[Fact] = &[
     // form. What remains checkable -- and checked -- is that the two renderings
     // list the same NUMBER of conditions.
     Fact {
+        silence: Silence::AtValueUnlessAgreeing("[]"),
+        absent_is_silent_at: Some("[]"),
+        why: "the prose renders these as bare `- ` lines and only under \
+              DISAGREE, which is the one verdict where that prefix is \
+              unambiguous -- so an empty list on an INCOMPLETE host has no \
+              second rendering to compare against. Under `agree` a non-empty \
+              list is a violation in its own right, and a stronger one than the \
+              other three carry: a non-empty `disagreements` makes the verdict \
+              `Disagree` by construction, so an agreeing row publishing one \
+              contradicts `CrossCheck::verdict` itself",
+        ..fact("disagreements", &["disagreement count"])
+    },
+    Fact {
         absent_is_silent_at: Some("[]"),
         why: "with no entries the renderer emits no `(not compared)` line, so \
               the absence of the field contradicts nothing",

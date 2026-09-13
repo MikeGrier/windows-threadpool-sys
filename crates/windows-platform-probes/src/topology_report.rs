@@ -689,6 +689,7 @@ pub fn report(banner: &str, observation: &Observation) -> String {
             .collect::<Vec<_>>()
             .join(",")
     };
+    let disagreements_json = quoted(check.disagreements.iter().map(|e| e.code()).collect());
     let not_compared_json = quoted(check.not_compared.iter().map(|e| e.code()).collect());
     let parse_incomplete_json = quoted(check.parse_incomplete.iter().map(|e| e.code()).collect());
     let anomalies_json = quoted(
@@ -705,7 +706,8 @@ pub fn report(banner: &str, observation: &Observation) -> String {
             r#""packages":{},"numa_domains":{},"numa_domains_without_processors":{},"cores":{},"#,
             r#""efficiency_classes":[{}],"caches":[{}],"outermost_partitioning_cache_level":{},"#,
             r#""outermost_partitioning_cache":"{}","#,
-            r#""policies":{{{}}},"cross_check":"{}","not_compared":[{}],"parse_incomplete":[{}],"#,
+            r#""policies":{{{}}},"cross_check":"{}","disagreements":[{}],"not_compared":[{}],"#,
+            r#""parse_incomplete":[{}],"#,
             r#""enumeration_anomalies":[{}],"numa_domains_only_in_cpu_sets":{}}}"#
         ),
         std::env::consts::ARCH,
@@ -770,6 +772,18 @@ pub fn report(banner: &str, observation: &Observation) -> String {
             Verdict::Disagree => "disagree",
             Verdict::Incomplete => "incomplete",
         },
+        // **The disagreements, which the row did not carry at all.** Before
+        // this, a survey could tell a run had disagreed -- `cross_check` says
+        // so -- but not WHICH counter disagreed, while the prose listed each one
+        // with both readings. That is the same shape as the defect this
+        // milestone came from, in the list nobody had noticed was missing: the
+        // vocabulary was built for all three lists and wired for two.
+        //
+        // It survived because the fact-accounting instrument enumerates the
+        // ROW's keys, so a fact the row omits entirely is outside what it can
+        // ask about. It catches a key nothing reads; it cannot catch a prose
+        // fact with no key.
+        disagreements_json,
         not_compared_json,
         // Separate from `not_compared`, because a mining pass that finds
         // `"cross_check":"incomplete"` needs to know whether this probe failed

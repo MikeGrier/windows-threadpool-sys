@@ -991,7 +991,7 @@ fn a_not_compared_count_the_two_renderings_disagree_about_is_a_violation() {
         .replace(r#""cross_check":"agree""#, r#""cross_check":"disagree""#)
         .replace(
             r#""parse_incomplete":[]}"#,
-            r#""parse_incomplete":[],"not_compared":["machine_changed","bracket_not_established","highest_numa_node_failed","active_processor_count_failed"],"enumeration_anomalies":[]}"#,
+            r#""parse_incomplete":[],"disagreements":["processor_groups"],"not_compared":["machine_changed","bracket_not_established","highest_numa_node_failed","active_processor_count_failed"],"enumeration_anomalies":[]}"#,
         );
 
     assert_eq!(

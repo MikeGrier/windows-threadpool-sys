@@ -430,7 +430,17 @@ fn check_diagnostics_against_verdict(
         // work contradicts its own rule exactly as a nonzero `parse_incomplete`
         // does. Measured, before this: `"cross_check":"agree"` beside
         // `"not_compared":3` was accepted with no violation. Found by a review.
-        for key in ["parse_incomplete", "enumeration_anomalies", "not_compared"] {
+        // `disagreements` belongs here for the same reason the other three do,
+        // and more directly: a non-empty `disagreements` makes the verdict
+        // `Disagree` by construction, so an agreeing row publishing one
+        // contradicts `CrossCheck::verdict` itself rather than merely the rule
+        // about what `agree` implies.
+        for key in [
+            "disagreements",
+            "parse_incomplete",
+            "enumeration_anomalies",
+            "not_compared",
+        ] {
             // The alarm now NAMES the conditions rather than counting them, so
             // a violation reads `"parse_incomplete":["partitioning_summary_missing"]`
             // instead of `"parse_incomplete":1` -- which is the whole point of
@@ -487,6 +497,11 @@ fn check_diagnostics_against_verdict(
         // that was previously accepted. Absence matters only where the prose
         // actually listed entries.
         for (label, key, fact) in [
+            // The DISAGREE arm renders the disagreements themselves as bare
+            // `- ` lines and tags the other two, so all three are separable
+            // here -- which is why this arm can count each of them and the
+            // INCOMPLETE arm below can only sum.
+            ("     - ", "disagreements", "disagreement count"),
             ("     (not compared) ", "not_compared", "not compared count"),
             (
                 "     (parse incomplete) ",

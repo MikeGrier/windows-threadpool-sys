@@ -116,7 +116,7 @@ M4 below, six in M5. M2.18 is the exception, dissolved rather than moved.
 
 - [ ] **M3.3** -- Emit the row from a typed value through one writer.
 
-  The row is built today by interpolating seventeen values positionally into a `concat!` template.
+  The row is built today by interpolating every value positionally into a `concat!` template.
   Two defect classes follow from that construction and both are closed by replacing it, not by
   checking it:
 
@@ -124,9 +124,10 @@ M4 below, six in M5. M2.18 is the exception, dissolved rather than moved.
   machine-readable row, so the oracle checked the caller's text instead of the probe's. Caller text
   reaching the mined artifact is contamination of the contract.
 
-  **Field order and labelling.** The template carries seventeen positional `{}` placeholders for
-  the row's eighteen keys -- `reason` is a literal -- and a reordered value or a miscounted
-  placeholder yields mislabelled data that still parses, which nothing downstream can detect.
+  **Field order and labelling.** A field's name and its value are related only by counting
+  positions, so a reordered argument or a miscounted placeholder yields mislabelled data that
+  still parses, which nothing downstream can detect. Stated as the coupling rather than as a
+  count of placeholders: that count was written twice and wrong twice within an hour.
 
   A typed row struct plus a single writer that escapes strings makes both unrepresentable. Write the
   writer here rather than adding a serialization dependency -- this crate has none and the row is
@@ -155,6 +156,23 @@ M4 below, six in M5. M2.18 is the exception, dissolved rather than moved.
   a format that no longer has two readers.
 
 - [ ] **M3.5** -- Re-aim the shape corpus and the fact accounting at the row.
+
+  **The instrument enumerates in one direction only, and the other direction is where M3.1's rule
+  lives.** `ndjson_keys` reads the ROW's keys and requires each to be classified, so it asks "does
+  anything read this key?" -- never "does the prose state a fact the row omits?". A fact with no key
+  is outside the set of things it can have an opinion about.
+
+  Measured, and this is how it was found rather than reasoned: `CrossCheck::disagreements` reached
+  the prose as a listed entry per disagreement and reached the row as nothing at all. `cross_check`
+  said `disagree` without saying WHICH counter did, which is the same shape as the defect the
+  milestone came from. It survived 41 review rounds, a zero-survivor mutation sweep and the fact
+  accounting, because every one of those instruments starts from what the row publishes. A review
+  found it by reading the enum and asking who called `code()` -- the answer was nobody.
+
+  So the accounting needs a second enumeration, from the PROSE's facts to the row's keys, or the
+  rule "a renderer may not tell a reader something the row cannot tell a survey" has no instrument
+  behind it and holds only as long as someone remembers it.
+
 
   [tests/a_real_report_agrees_with_itself.rs](tests/a_real_report_agrees_with_itself.rs) enumerates
   the facts a report publishes and measures, by mutation, which are read. The instrument is sound and

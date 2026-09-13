@@ -1548,6 +1548,22 @@ comparisons and become **invariants on the observation, checked before
 rendering** -- `summary_missing` implies the verdict is not `agree`, and likewise
 for the other diagnostics and the counters. No parser is involved.
 
+**Nothing here enforces that rule yet, and the first thing it would have caught
+was already broken.** Every instrument in this crate starts from what the row
+publishes -- the fact accounting enumerates the row's keys, the mutation sweep
+perturbs code the row's construction reaches -- so all of them ask "does
+anything read this key?" and none asks "does the prose state a fact the row
+omits?". Measured: `CrossCheck::disagreements` was rendered per-entry in the
+prose and published in the row as nothing at all, so a survey could see
+`"cross_check":"disagree"` and not which counter disagreed. It survived 41
+review rounds and a zero-survivor mutation sweep. A reviewer found it by reading
+the enum and asking who called `code()`.
+
+The second enumeration -- prose facts to row keys -- is queued as M3.5 in
+[CHECKLIST.md](CHECKLIST.md). Until it exists the rule is a convention rather
+than a checked property, which is worth stating plainly rather than leaving a
+reader to assume the instruments cover it.
+
 ### What the text-reading design cost
 
 Counted in [src/report_oracle.rs](src/report_oracle.rs): of 38 top-level
@@ -1572,13 +1588,18 @@ is the stronger move:
   artifact. Measured on PR #88: an `io::Error` containing `{` was selected as the
   report's machine-readable row. A typed row emitted by one writer cannot have
   this.
-- **Field order and labelling.** The row is built today by interpolating
-  seventeen values positionally through a `concat!` template. A reordered field
-  or a miscounted `{}` yields mislabelled data that still parses. A typed row
-  with one writer cannot have this either. (Seventeen placeholders, not the
-  eighteen keys the row carries: `reason` is a literal in the template and is
-  not interpolated. The placeholder count is the one that matters here, because
-  the hazard is a miscounted `{}`.)
+- **Field order and labelling.** The row is built today by interpolating every
+  value positionally through a `concat!` template, so a field's name and its
+  value are related only by counting -- and a reordered argument or a miscounted
+  `{}` yields mislabelled data that still parses. A typed row with one writer
+  cannot have this either.
+
+  Stated as the coupling rather than as a count, deliberately, and the reason is
+  on the record: this said "eighteen values", was corrected to "seventeen" when
+  a review counted the placeholders, and was falsified again within the hour by
+  M3.1's follow-up adding `disagreements`. The hazard is that the correspondence
+  is positional at all; how many positions there are is exactly the sort of
+  census this component keeps having to re-correct.
 - **Value divergence.** Two renderings of one field cannot disagree about its
   value when both read the field.
 
