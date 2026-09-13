@@ -84,6 +84,40 @@ fn an_escaped_quote_does_not_end_a_string() {
 }
 
 #[test]
+fn an_escaped_quote_inside_a_value_does_not_forge_a_key() {
+    // **A correct report crashed the probe, and this is the shape that did it.**
+    // `keys` used `find('"')`, which takes `\"` for a terminator, so an escaped
+    // quote shifted where it thought strings began and ended and text INSIDE a
+    // value was emitted as a top-level key. Two equal ones read as a repeated
+    // key, and `assert_corresponds` panicked from inside `report_unmeasured`.
+    //
+    // Reachable, not hypothetical: `discovery_error` carries a failed
+    // discovery's `io::Error`, whose message is whatever the OS said.
+    let forged = concat!(
+        r#"{"reason":"x-probe-topology","arch":"x86_64","#,
+        r#""discovery_error":"q\":1,\"q\":1,\"q"}"#
+    );
+
+    assert_eq!(
+        keys(forged),
+        vec!["reason", "arch", "discovery_error"],
+        "the error's contents are a VALUE, however many quotes it contains"
+    );
+    assert_eq!(check(&report_with(forged)), Vec::new());
+}
+
+#[test]
+fn a_backslash_before_the_closing_quote_does_not_swallow_the_rest_of_the_row() {
+    // The other half: a value ending in an escaped backslash closes normally,
+    // so the keys after it are still found. Getting this wrong in the other
+    // direction would silently drop every key that follows.
+    let row = r#"{"reason":"x","path":"C:\\temp\\","cross_check":"agree"}"#;
+
+    assert_eq!(keys(row), vec!["reason", "path", "cross_check"]);
+    assert_eq!(check(&report_with(row)), Vec::new());
+}
+
+#[test]
 fn a_repeated_key_is_a_defect() {
     // Not a parse error in most readers -- they take the last -- so this is
     // precisely the malformation that survives a consumer's parse and changes
@@ -142,10 +176,16 @@ fn the_row_accessor_declines_an_ambiguous_or_malformed_report() {
 }
 
 #[test]
-fn a_defect_is_reported_once_per_repeated_key_rather_than_per_occurrence() {
-    // Three renderings of one key is one defect about that key, not two. A rule
-    // that reported per occurrence would make a reader count to work out how
-    // many keys were involved.
+fn a_defect_is_reported_once_per_extra_rendering_of_a_key() {
+    // **One entry per EXTRA rendering, so the count reads as how many times the
+    // row said it again.** Three renderings of `a` give two defects, not one and
+    // not three.
+    //
+    // This was named `..._once_per_repeated_key_rather_than_per_occurrence` and
+    // opened by claiming de-duplication the code does not do -- while asserting
+    // the per-occurrence behaviour its own failure message describes. A reader
+    // taking the name for the contract got it backwards. The assertion was
+    // right; the name and the comment were the defect.
     let thrice = r#"{"a":1,"a":2,"a":3,"b":1,"b":2}"#;
 
     assert_eq!(

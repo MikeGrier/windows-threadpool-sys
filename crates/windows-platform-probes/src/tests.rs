@@ -4527,18 +4527,16 @@ fn preparing_a_path_needs_no_volume_behind_its_drive_letter() {
 
 // --- M3.1: the row names each condition, rather than counting them -----------
 
-/// The codes the row publishes for `key`, in order.
-///
-/// Reads the rendered artifact rather than the `CrossCheck` behind it, because
-/// what a survey receives is the point: an assertion against the struct would
-/// hold even if the writer published nothing at all.
 /// The codes of a diagnostic list, for comparing the row against what the
 /// cross-check found.
 ///
 /// Generic over the three list types because each has its own `code`, and a
 /// helper per list would be three copies of one idea.
 fn codes_of<T: HasCode>(entries: &[T]) -> Vec<String> {
-    entries.iter().map(|entry| entry.code().to_owned()).collect()
+    entries
+        .iter()
+        .map(|entry| entry.code().to_owned())
+        .collect()
 }
 
 /// The three diagnostic vocabularies, so `codes_of` can take any of them.
@@ -4564,6 +4562,11 @@ impl HasCode for crate::topology::ParseIncomplete {
     }
 }
 
+/// The codes the row publishes for `key`, in order.
+///
+/// Reads the rendered artifact rather than the `CrossCheck` behind it, because
+/// what a survey receives is the point: an assertion against the struct would
+/// hold even if the writer published nothing at all.
 fn row_codes(text: &str, key: &str) -> Vec<String> {
     let row = crate::report_oracle::row(text)
         .unwrap_or_else(|| panic!("no single well-formed row in:\n{text}"));

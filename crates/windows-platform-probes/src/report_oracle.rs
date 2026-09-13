@@ -181,10 +181,13 @@ fn balanced(row: &str) -> bool {
 pub fn keys(row: &str) -> Vec<&str> {
     let mut names = Vec::new();
     let mut depth = 0_i32;
-    let mut rest = row;
+    let mut at = 0;
 
-    while let Some(quote) = rest.find('"') {
-        for character in rest[..quote].chars() {
+    while let Some(open) = next_string(row, at) {
+        // Brackets BETWEEN strings are the only ones that count. Inside a
+        // string they are text -- a failed discovery's message may contain any
+        // of them.
+        for character in row[at..open].chars() {
             match character {
                 '[' | '{' => depth += 1,
                 ']' | '}' => depth -= 1,
@@ -192,12 +195,11 @@ pub fn keys(row: &str) -> Vec<&str> {
             }
         }
 
-        let after = &rest[quote + 1..];
-        let Some(end) = after.find('"') else {
+        let Some(close) = string_end(row, open + 1) else {
             break;
         };
-        let name = &after[..end];
-        let tail = after[end + 1..].trim_start();
+        let name = &row[open + 1..close];
+        let tail = row[close + 1..].trim_start();
 
         // A name followed by `:` at depth 1 is a key of the row itself. Anything
         // else is a value, or a key of a nested object.
@@ -205,10 +207,50 @@ pub fn keys(row: &str) -> Vec<&str> {
             names.push(name);
         }
 
-        rest = &after[end + 1..];
+        at = close + 1;
     }
 
     names
+}
+
+/// Where the next string starts at or after `from`.
+///
+/// There is nothing to skip here -- a quote outside a string always opens one --
+/// but it is named so the pair with [`string_end`] reads as a scan rather than
+/// as two bare `find` calls.
+fn next_string(row: &str, from: usize) -> Option<usize> {
+    row[from..].find('"').map(|at| from + at)
+}
+
+/// Where the string opening before `from` closes, honouring `\` escapes.
+///
+/// **This is the half [`keys`] was missing, and it was reachable.** `keys` used
+/// `find('"')`, which takes `\"` for a terminator -- so a `discovery_error`
+/// carrying an escaped quote shifted the parser's idea of where strings begin
+/// and end, and text INSIDE the error was emitted as top-level keys. Two equal
+/// ones then read as a repeated key.
+///
+/// Measured before this fix: `report_unmeasured` given an `io::Error` of
+/// `q":1,"q":1,"q` rendered a row `JSON.parse` accepts with four keys, and
+/// `assert_corresponds` panicked from inside the renderer -- a correct report
+/// crashing the probe, which is the failure mode containment exists to prevent.
+/// [`balanced`] already had this state machine; `keys` did not, so the reader
+/// disagreed with the writer.
+fn string_end(row: &str, from: usize) -> Option<usize> {
+    let mut escaped = false;
+    for (at, character) in row[from..].char_indices() {
+        if escaped {
+            escaped = false;
+            continue;
+        }
+        match character {
+            '\\' => escaped = true,
+            '"' => return Some(from + at),
+            _ => {}
+        }
+    }
+
+    None
 }
 
 /// Where the list opening at `start` closes, if it closes.

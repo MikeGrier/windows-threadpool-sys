@@ -1104,9 +1104,21 @@ that gets mined carried less than the artifact that gets read -- which is
 backwards given which of the two the designs rest on.
 
 **M3.1 closed this**, and the past tense above is deliberate: the three fields
-now publish arrays of condition codes minted by `topology::diagnostic`, so
-`"parse_incomplete":["partitioning_summary_missing"]` tells a survey which
-condition fired. The count remains available as the list's length. The rest of
+publish the conditions themselves, minted by `topology::diagnostic`, so a survey
+reads which one fired rather than how many there were. The count remains
+available as the list's length.
+
+M3.3 then gave each entry its DATA, so the published form is an object rather
+than a bare code:
+
+```
+"parse_incomplete":[{"code":"partitioning_summary_missing","level":9}]
+```
+
+Stated here because this is Tier 1 and the wire format is what a reader comes to
+it for. The bare-code form this paragraph first showed was M3.1-era and was
+superseded three commits later on the same branch -- the drift class this
+component keeps meeting, caught by a review. The rest of
 this decision is unaffected -- it is about which artifact carries the contract,
 not about these three fields.
 

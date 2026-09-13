@@ -20,7 +20,7 @@ again, not because the code is still there.
 <a id="d-correspondence-failures"></a>
 
 **The diagnosis here is refined by [The encoded row is the contract; the prose is
-not](#d-encoded-row-is-the-contract).** What each instrument could not see is
+not](DESIGN-NOTES.md#d-encoded-row-is-the-contract).** What each instrument could not see is
 unchanged and is still the reason this component has an oracle at all. What this
 section got wrong is WHERE the two defects lived: both were defects in the
 ENCODED ROW, not in the relation between two renderings of a consistent state.
@@ -175,10 +175,20 @@ section schedules nothing on its own.
 
 <a id="d-oracle-refuses-to-know"></a>
 
-**The artifact-reading rule below is superseded by [The encoded row is the
-contract; the prose is not](#d-encoded-row-is-the-contract).** The rest of this
-section -- what the oracle admits, the acceptance half, the failure mode that
-looks like success -- still describes what is in the tree and still holds.
+**Superseded by [The encoded row is the contract; the prose is
+not](DESIGN-NOTES.md#d-encoded-row-is-the-contract), and the code it describes no
+longer exists.** Everything below is a record of what was built and why, in the
+past tense whatever its grammar says: M3.4 deleted the prose correspondences,
+the `Correspondence` enum and the twenty-three extraction helpers, and M3.5
+replaced the fact-accounting instrument. `report_oracle` today is a
+well-formedness check on the row and nothing more.
+
+This paragraph read "the rest of this section ... still describes what is in the
+tree and still holds", which was true when it was written -- before M3.4, three
+commits earlier on the same branch -- and was carried through the Tier 1 / Tier 2
+split unchanged. Found by a review. It is the same drift this component keeps
+paying for, and it is worth leaving the correction visible rather than quietly
+deleting the sentence.
 
 M2.1 built it: [src/report_oracle.rs](src/report_oracle.rs), admitting only
 correlations the report already renders twice. The defect that forced
@@ -193,7 +203,7 @@ evidence. Re-checked against the code: the alarm has no NDJSON key, and
 `cross_check` does -- so the original finding was a run whose ENCODED ROW said
 `agree` while the probe had detected its own bug, and published nothing about
 that bug. The state was not consistent; the row was wrong. See
-[#d-encoded-row-is-the-contract](#d-encoded-row-is-the-contract).
+[#d-encoded-row-is-the-contract](DESIGN-NOTES.md#d-encoded-row-is-the-contract).
 
 **It relates two things already visible in the report, and re-derives nothing.**
 A second implementation of the rendering rules would be a check of the copy

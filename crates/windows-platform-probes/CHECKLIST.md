@@ -276,12 +276,21 @@ M4 below, six in M5. M2.18 is the exception, dissolved rather than moved.
 
   **Done, with M3.4, and the second enumeration exists.** The instrument no longer asks "which prose
   facts does the oracle read" -- there are none. It asks, for every state `topology::invariant` knows
-  forbids agreement, whether the row publishes a condition for it; and it holds the prose's
-  diagnostic line count against the row's condition count across the corpus.
+  forbids agreement, whether the row publishes a condition for it; and it holds the row's published
+  conditions against what the cross-check found, across the corpus.
+
+  (As first written this said the second rule held the row against a count of PROSE lines, which it
+  did at the time. The follow-up commit that removed the last prose parsing replaced that with the
+  comparison against the cross-check -- recorded further down this same item, so the item disagreed
+  with itself. Found by a review.)
 
   Sabotage-verified against the defect that motivated it: dropping `disagreements` from the row --
   the omission that survived 41 review rounds, a zero-survivor mutation sweep and the old accounting
-  -- now reddens `the_row_lists_a_condition_for_every_diagnostic_the_prose_lists`.
+  -- now reddens the rule that holds the row against the cross-check. That rule was named
+  `the_row_lists_a_condition_for_every_diagnostic_the_prose_lists` when this evidence was recorded
+  and is `the_row_lists_exactly_the_conditions_the_cross_check_found` now; the sabotage was re-run
+  against the current name. Recorded evidence that cannot be re-run as written is evidence nobody
+  will re-run.
 
   **One asymmetry, found by the instrument rather than reasoned.** Counting all four lists against
   prose lines failed: the prose folds every anomaly into ONE

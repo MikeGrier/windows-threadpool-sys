@@ -85,8 +85,14 @@ fn the_verdict_the_crate_actually_draws_holds_every_invariant() {
 /// Each blocking state, the field that produces it, and the name it reports.
 ///
 /// A table rather than a test each, because the property is identical and the
-/// interesting part is that NONE of them is missing -- which the count assertion
-/// below states as a relation rather than as a census.
+/// interesting part is that NONE of them is missing. That completeness is
+/// asserted by `every_blocking_state_has_a_perturbation`, which compares this
+/// table against what `blocking_states` can actually produce -- so a state added
+/// to the invariant with no entry here fails rather than going quietly
+/// unexercised.
+///
+/// This doc claimed such a relation before one existed. Found by a review: the
+/// table happened to match, which is the condition under which nobody notices.
 type Perturbation = (&'static str, Box<dyn Fn(&mut Observation)>);
 
 fn perturbations() -> Vec<Perturbation> {
@@ -151,6 +157,52 @@ fn perturbations() -> Vec<Perturbation> {
             Box::new(|o: &mut Observation| o.bracket = BracketOutcome::Changed),
         ),
     ]
+}
+
+#[test]
+fn every_blocking_state_has_a_perturbation() {
+    // **The completeness guard the table's doc claimed and did not have.**
+    // Without it, a state added to `blocking_states` with no entry in the table
+    // is never shown to fire, and never shown to be one `cross_check` already
+    // forbids -- which is the property the whole module rests on.
+    //
+    // Derived by APPLYING every perturbation and collecting what
+    // `blocking_states` then reports, rather than by counting the table against
+    // a number written here. A census would need correcting every time a state
+    // is added, which is the rot this crate keeps paying for.
+    let mut reached: Vec<&'static str> = Vec::new();
+    for (_, mutate) in perturbations() {
+        let mut observation = agreeing();
+        mutate(&mut observation);
+        for state in blocking_states(&observation) {
+            if !reached.contains(&state) {
+                reached.push(state);
+            }
+        }
+    }
+
+    // Every state the table's own labels name must be among them, and nothing
+    // the perturbations reach may be unnamed.
+    let labelled: Vec<&'static str> = perturbations()
+        .into_iter()
+        .map(|(state, _)| state)
+        .collect();
+
+    for state in &labelled {
+        assert!(
+            reached.contains(state),
+            "`{state}` is a label in the table that no perturbation actually \
+             produces, so the row for it tests nothing"
+        );
+    }
+    for state in &reached {
+        assert!(
+            labelled.contains(state),
+            "`{state}` is reported by `blocking_states` and has no entry in the \
+             perturbation table, so nothing shows it fires or that \
+             `cross_check` already forbids it"
+        );
+    }
 }
 
 #[test]
