@@ -367,6 +367,7 @@ an enumerable structure. A fact rendered only in PROSE, with no field beside it,
 is invisible here. Prose is not enumerable without parsing English, so that half
 remains a thing only a reader notices -- and saying so is better than implying a
 coverage that does not exist.
+
 ### The instrument is code too, and it is where the defects were
 
 Eleven review rounds across six models ran over this branch. Classifying every
@@ -405,6 +406,7 @@ next: M2.11's discriminator rule gave the level a second fact name, which broke
 the guard that expected one; M2.10's accounting inherited a silence assumption
 that only holds under an `agree` verdict. After a fix, re-run the derivation or
 the sweep -- not only the test that prompted it.
+
 ### Mutation testing is how the instruments got checked, and what it cannot reach
 
 Every defect on this branch was found by a person reading code -- reviewers,
