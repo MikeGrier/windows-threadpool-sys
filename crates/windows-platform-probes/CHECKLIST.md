@@ -614,8 +614,8 @@ IDs keep their M2 numbers, for the reason given under M4.
   append-only invariant, and it is the one a human reviewer is least likely to notice.
 
 
-- [ ] **M2.14** -- Make the two authoring rules this branch earned actually bite. Re-planned
-  2026-09-13; see the rationale below before implementing either sub-step.
+- [x] **M2.14** -- Make the two authoring rules this branch earned actually bite. Re-planned
+  2026-09-13; see the rationale below before implementing either sub-step. Both sub-steps done.
 
   **As originally written this item said "write two authoring rules into the repository
   instructions". Measurement says that would have been worse than useless.** The two rules it
@@ -676,8 +676,14 @@ IDs keep their M2 numbers, for the reason given under M4.
   Include at least one `expect: "survives"` control. A manifest of nothing but `caught` cannot
   distinguish a suite that is watching from a suite that fails on any edit.
 
-- [ ] **M2.14.2** -- Add to CONTRACT INTEGRITY rule 1 the one thing this branch learned that it does
+- [x] **M2.14.2** -- Add to CONTRACT INTEGRITY rule 1 the one thing this branch learned that it does
   NOT already say, and a pointer to the mechanism. A pointer, not a restatement.
+
+  **Done.** Two paragraphs added to CONTRACT INTEGRITY rule 1 in
+  [.github/copilot-instructions.md](../../.github/copilot-instructions.md). Neither restates the
+  existing rule: the first says to sabotage the CLAIM a change makes rather than the symptom it
+  cites, and the second says a sabotage is worth nothing once discarded and points at the manifest
+  and the harness. The original M2.14 wording is nowhere in the diff, which was the point.
 
   The genuinely new fact: **when a fix claims to have removed a weakness, sabotage the claim rather
   than the symptom.** Rule 1 tells an author to prefer a derived fact over a restated one; it does

@@ -1195,6 +1195,28 @@ When you add such a predicate, **verify the binding by sabotage**: change the de
 confirm the consumer's *behavior* changes. If only a test's expectation moves, or nothing moves,
 the binding is cosmetic and the copy is still there.
 
+**Sabotage the CLAIM, not the symptom.** When a change asserts that it *removed* a weakness — a
+census eliminated, a check made exhaustive, a duplicate collapsed — the sabotage that matters is
+the one that would falsify *that* assertion, which is rarely the same as the one that reproduces
+the original symptom. This is the failure mode the rule above does not cover on its own: an author
+who believes they derived a fact when they only **moved** the restatement will happily sabotage the
+old site, watch it go red, and record the class as closed. Measured on one guard in
+`windows-platform-probes`, three times in succession — strings, then a hand-written `ALL`, then
+generation — each fix relocating the census somewhere harder to see while its commit message
+claimed the class was closed, and each caught by a review rather than by its author. Ask what the
+commit message asserts, then break *that*.
+
+**A sabotage is worth nothing once it is discarded**, so record it where something re-runs it
+rather than in a terminal you will close. Put it in the component's `sabotage.json` and sweep it
+with [tools/run-sabotage.ps1](../tools/run-sabotage.ps1) — see
+[tools/README-sabotage.md](../tools/README-sabotage.md) for the manifest format and for why a
+manifest with no `expect: "survives"` control can only tell you the tests are sensitive, never that
+they are sensitive to the right things. The harness is the authority on whether a patch site is
+unique; do not re-implement that check beside it. This is not a preference: the `sabotage-harness`
+CI job exists because eleven review rounds on that harness produced thirteen later defects
+*introduced by earlier fixes*, "because every verification was a one-off command that was then
+discarded and nothing re-checked an earlier guarantee."
+
 Know the limit — but know that it is narrower than it first appears. **Sequencing rules
 (ordering, bracket entry states, what may follow what) are not value-level, and are still
 derivable**: define them once as a shared executable oracle — a state machine over the
