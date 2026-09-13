@@ -51,7 +51,8 @@ M4 below, six in M5. M2.18 is the exception, dissolved rather than moved.
 - **M2.17** is re-scoped by M3.5: the dimensions worth crossing become the row's, and crossing prose
   shapes that are about to stop being checked would aim at the retiring half.
 - **M2.7, M2.8, M2.9, M2.13, M2.14 and M2.16 are gated by nothing** and are in M5. M2.9 (a
-  cross-host ratio called "the finding") and M2.14 (two authoring rules) are if anything reinforced:
+  cross-host ratio called "the finding") and M2.14 (making two authoring rules bite) are if anything
+  reinforced:
   under this decision prose accuracy is a review obligation rather than a machine-checked one, which
   puts more weight on both.
 
@@ -613,19 +614,61 @@ IDs keep their M2 numbers, for the reason given under M4.
   append-only invariant, and it is the one a human reviewer is least likely to notice.
 
 
-- [ ] **M2.14** -- Write two authoring rules into the repository instructions, both earned on this
-  branch.
+- [ ] **M2.14** -- Make the two authoring rules this branch earned actually bite. Re-planned
+  2026-09-13; see the rationale below before implementing either sub-step.
 
-  **State the invariant, not the census.** "14 keys read, 3 unread" added nothing that "every key is
-  classified" does not, and it was wrong -- written by eyeballing a list rather than counting it, in
-  the commit documenting a fix for exactly that defect class. Where a number is genuinely load
-  bearing, it must come from a command run in the same action that writes it.
+  **As originally written this item said "write two authoring rules into the repository
+  instructions". Measurement says that would have been worse than useless.** The two rules it
+  proposed -- *state the invariant, not the census*, and *a new test is not done until it has been
+  observed to fail* -- ALREADY EXIST, in
+  [.github/copilot-instructions.md](../../.github/copilot-instructions.md) under CONTRACT INTEGRITY
+  rule 1 ("Prefer a derived fact to a restated one", and beneath it "verify the binding by
+  sabotage: change the definition and confirm the consumer's BEHAVIOR changes"). Writing them again
+  would add a second copy of a rule, which is the exact defect that section forbids and the exact
+  mechanism -- restatement drift -- it exists to prevent.
 
-  **A new test is not done until it has been observed to fail.** Every vacuous test on this branch was
-  written green and stayed green until a reviewer thought to break something: a guard that matched a
-  violation's VARIANT where only its FACT established the point, and a fixture whose `.replace()` of
-  `[1]` matched nothing because the report rendered `[0]`. Sabotage belongs at authoring time, not at
-  review time.
+  **And statement is demonstrably not the gap.** Both rules were in force on 2026-09-12 and both
+  were violated: `09da7e9` claims "Sabotage-verified, EACH against the instrument it was meant to
+  strengthen" and then names two sabotages for four fixes. The one that got none is the completeness
+  guard, which a review found broken an hour later (M3.8). A rule cited in the commit that breaks it
+  will not be repaired by a third copy of itself.
+
+  **This repository has already solved this problem once, and not with a rule.** The
+  [ci.yml](../../.github/workflows/ci.yml) `sabotage-harness` job records that the harness "accumulated
+  fixes over eleven review rounds and thirteen of the later defects were introduced by earlier fixes,
+  because every verification was a one-off command that was then discarded and nothing re-checked an
+  earlier guarantee." That is M3.8's story verbatim. The answer then was a CI ratchet.
+
+- [ ] **M2.14.1** -- Give `windows-platform-probes` a sabotage manifest, so "observed to fail" is a
+  recorded artifact rather than a habit.
+
+  `tools/run-sabotage.ps1` exists, has its own tests, and runs in CI;
+  [windows-placement-probe](../windows-placement-probe/sabotage.json) (9 entries) and
+  [windows-waitable-queues](../windows-waitable-queues/sabotage.json) (39 entries) each carry a
+  `sabotage.json`. **This crate carries none**, so every sabotage run while building M3 was ad-hoc
+  PowerShell, discarded on the spot -- which is why a `git checkout` destroyed uncommitted work
+  twice and a `.Replace` pattern silently matched two sites once. The manifest format's `find` must
+  match EXACTLY ONCE, which is precisely the guard that hand-running lacks.
+
+  Eight commits on this branch record their sabotages in the message, so the first pass is
+  transcription rather than invention: the defect, the file and the test expected to redden are
+  already written down.
+
+  Include at least one `expect: "survives"` control. A manifest of nothing but `caught` cannot
+  distinguish a suite that is watching from a suite that fails on any edit.
+
+- [ ] **M2.14.2** -- Add to CONTRACT INTEGRITY rule 1 the one thing this branch learned that it does
+  NOT already say, and a pointer to the mechanism. A pointer, not a restatement.
+
+  The genuinely new fact: **when a fix claims to have removed a weakness, sabotage the claim rather
+  than the symptom.** Rule 1 tells an author to prefer a derived fact over a restated one; it does
+  not warn that an author may believe they derived one when they only MOVED the census. That is
+  exactly what happened three times on a single guard -- strings, then a hand-written `ALL`, then
+  generation -- each fix relocating the census somewhere harder to see while its commit message
+  claimed the class was closed. The wording that would have caught it is about the CLAIM, and rule 1
+  currently has no sentence about claims.
+
+  > **-> DEPENDS ON M2.14.1:** the pointer has nothing to point at until the manifest exists.
 
 - [ ] **M2.16** -- Repair the garbled `Report` doc comment, and drop the two counts that have already
   rotted beside it.
@@ -642,4 +685,6 @@ IDs keep their M2 numbers, for the reason given under M4.
   so the two must be fixed together or they drift apart again. Replace them with the invariant the
   passage is actually arguing -- that `String` already implements `fmt::Write`, so every existing
   write site stands untouched and only the renderer signatures move -- which is what makes the point
-  and cannot rot. This is the same defect class as M2.14's first authoring rule.
+  and cannot rot. This is the same defect class as CONTRACT INTEGRITY rule 1 in
+  [.github/copilot-instructions.md](../../.github/copilot-instructions.md), which M2.14 exists to
+  make bite.
