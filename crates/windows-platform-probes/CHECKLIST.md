@@ -116,6 +116,10 @@ M4 below, six in M5. M2.18 is the exception, dissolved rather than moved.
 
 - [ ] **M3.3** -- Emit the row from a typed value through one writer.
 
+  > **-> PREREQUISITE: M3.4 lands first.** The reason is on M3.4: this item's nested per-entry data
+  > makes `ndjson_list_len` silently miscount, so the parsers it would break should be gone before
+  > the row changes shape rather than taught a shape they are about to lose.
+
   The row is built today by interpolating every value positionally into a `concat!` template.
   Two defect classes follow from that construction and both are closed by replacing it, not by
   checking it:
@@ -143,6 +147,31 @@ M4 below, six in M5. M2.18 is the exception, dissolved rather than moved.
   question of who may construct one is answered by the row's constructor rather than separately.
 
 - [ ] **M3.4** -- Retire the prose-against-row correspondences and the parsers that serve only them.
+
+  > **-> DO THIS BEFORE M3.3, and leave both IDs where they are.** M3.3 carries each diagnostic's
+  > data, which turns the flat code arrays into arrays of OBJECTS -- and `ndjson_list_len` splits on
+  > `,`, documented as safe for flat code arrays and nothing else. Pointed at
+  > `[{"code":"contradictory_cores","cores":3}]` it counts members rather than entries and returns 2
+  > for one entry. It does not fail; it silently answers wrong, and every prose-comparison rule then
+  > compares that against the prose. Running M3.3 first therefore means teaching parsers a nested
+  > shape and deleting them one item later, with a silent-wrong-answer window in between. The IDs
+  > stay put because renumbering costs more than the mismatch, the same trade as M4/M5.
+  >
+  > Intended order for the rest of M3: **M3.2 -> M3.4 -> M3.3 -> M3.5**.
+
+  > **-> CODE REVIEW RESUMES HERE.** Reviews are paused by the engineer's decision of 2026-09-12
+  > until this crate no longer depends on prose as the oracle's subject, and this is the item that
+  > ends that dependence. The reasoning: a large share of PR #88's fifteen fix commits were defects
+  > in the prose-reading machinery -- the multibyte panic in `processors_in_banner`, `trim_matches`
+  > collapsing `[[0]]` and `[0]`, `prose_field` selecting the wrong line -- and every one of them is
+  > code this item deletes. Reviewing it closely is polishing something already scheduled for
+  > demolition.
+  >
+  > Recorded with the honest counterweight, so the decision can be re-judged on evidence rather than
+  > re-argued: of the six findings across the two reviews run on 2026-09-12, none was a defect in
+  > the prose oracle. Two were documentation drift, one was a test that had lost its
+  > discrimination, and the most valuable -- `disagreements` reaching the prose and not the row at
+  > all -- was about the ROW being incomplete and survives this item untouched.
 
   Of 38 top-level functions in [src/report_oracle.rs](src/report_oracle.rs), ten are correspondence
   rules, four are comparison helpers, and **twenty-three exist only to extract values back out of
