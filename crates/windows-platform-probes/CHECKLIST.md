@@ -184,8 +184,8 @@ M4 below, six in M5. M2.18 is the exception, dissolved rather than moved.
   error now reaches the row as a `discovery_error` field, so a survey can group failures by cause
   instead of parsing the prose sentence.
 
-  The key-set check M3.4 deferred here now exists, and is derived: `Row::keys` reads the value, and
-  a test asserts the reader and the writer agree. No census.
+  The key-set check M3.4 deferred here now exists -- but NOT in the form M3.4 predicted, and the
+  first attempt at it was vacuous. See the correction recorded under M3.7.
 
   **Two silent behaviour changes were caught by checking the old code rather than trusting the
   rewrite.** `PartitioningCache` has FIVE variants, not the four a rewrite naturally reaches for;
@@ -251,10 +251,18 @@ M4 below, six in M5. M2.18 is the exception, dissolved rather than moved.
   malformation that survives a consumer's parse and changes what it reads, since most JSON readers
   take the last.
 
+  (The bracket check was weaker than this sentence implies -- it counted depth, so a trailing or
+  misplaced separator passed. Strengthened in M3.7.)
+
   **The key-set check is deliberately NOT here.** Asserting it needs a list of expected keys, and a
   list written here is a census -- this component re-corrected the same census three times in one
   day. M3.3 makes the row a typed value, at which point the key set is derivable from the type
   rather than declared beside it. Moved there rather than approximated here.
+
+  (**The second sentence is wrong, and M3.7 corrects it.** A key set is NOT derivable from a typed
+  row: the type says "a row is a map of names to values", which is satisfied by every key set,
+  including the one missing a field. The census this note was right to fear is a count; a schema is
+  not one, and refusing to write it down bought nothing.)
 
 - [x] **M3.5** -- Re-aim the shape corpus and the fact accounting at the row.
 
@@ -367,6 +375,40 @@ M4 below, six in M5. M2.18 is the exception, dissolved rather than moved.
 > pair, the topology cross-check). They do not belong in a rationale file, and filing them as
 > decisions is what keeps Tier 1 XL. Whether they want a tier of their own is a structural choice
 > about this component's documentation scheme, so it is raised rather than taken.
+
+- [x] **M3.7** -- Make four instruments as strong as their names claim.
+
+  A review of the completed M3 found no wrong behaviour and four weak instruments -- tests and
+  guards whose names assert a property they could not actually fail to satisfy. That is the
+  recurring defect class of this whole branch, so the four are recorded with what each one was
+  measured to miss.
+
+  **1. The row's key set was unenforced.** M3.3's note above claimed the check "is derived:
+  `Row::keys` reads the value, and a test asserts the reader and the writer agree". Both halves
+  read the same `Row`, so the test says only that the writer is self-consistent. Measured: deleting
+  `.with("packages", ...)` from the renderer left the ENTIRE suite green -- a field silently
+  vanishes from every downstream survey and nothing objects. Fixed by declaring
+  `MEASURED_ROW_KEYS` / `UNMEASURED_ROW_KEYS` as the contract the renderer is held to. This is not
+  the census M3.4 feared: a count is derivable from the thing it counts, so restating it is drift
+  waiting to happen; a schema is NOT derivable from the row, which is exactly why writing it down
+  buys something.
+
+  **2. The well-formedness oracle accepted invalid JSON.** `balanced()` counted bracket depth, so
+  `{"a":1,}` (trailing separator) and `{"a":1]` (mismatched closer) both passed -- and a consumer
+  would reject both. Replaced by `malformation()`, a typed delimiter stack that also checks
+  separator placement. Sabotage-verified: making the writer emit a leading separator produces a
+  balanced but invalid row, which the old check passed and the new one reddens.
+
+  **3. A sabotage asserted only that it had sabotaged.** The publication-accounting sabotage stripped
+  a condition from the report and then asserted the condition was absent -- which is a fact about
+  the string edit, not about the rule. It would have passed with the rule deleted. The rule is now
+  `publication_holds(observation, text)`, and the sabotage asserts it REJECTS the stripped report
+  and ACCEPTS the original.
+
+  **4. A completeness guard compared a table against itself.** `blocking_states` returned strings,
+  and the guard that checked every blocking state was described derived both sides from that one
+  table. Introduced a `BlockingState` enum with `ALL`, so the guard holds the table against the
+  type's variants and a new state that nobody describes fails to build past it.
 
 ## M4 -- Carried over from M2: the items M3 gates
 

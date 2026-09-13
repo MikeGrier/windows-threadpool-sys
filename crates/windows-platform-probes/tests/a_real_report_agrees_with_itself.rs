@@ -423,6 +423,20 @@ fn published_codes(text: &str, keys: &[&str]) -> Vec<String> {
         .flat_map(|key| report_oracle::list_codes(row, key))
         .collect()
 }
+/// Whether `text`'s row publishes a condition for an observation in a blocking
+/// state.
+///
+/// **Extracted so the sabotage can invoke the rule rather than restate it.**
+/// `a_state_the_row_does_not_publish_fails_the_accounting` used to strip the
+/// row's conditions and then assert only that the stripping had worked -- so it
+/// demonstrated the sabotage, never that the accounting REJECTS it. The
+/// accounting could have been deleted and that test would have stayed green.
+/// Found by a review.
+fn publication_holds(observation: &Observation, text: &str) -> bool {
+    invariant::blocking_states(observation).is_empty()
+        || !published_codes(text, DIAGNOSTIC_LISTS).is_empty()
+}
+
 #[test]
 fn every_state_that_blocks_agreement_reaches_the_row() {
     // **This is the rule M3.1 established, given an instrument at last.** A
@@ -452,9 +466,8 @@ fn every_state_that_blocks_agreement_reaches_the_row() {
             continue;
         }
 
-        let published = published_codes(&text, DIAGNOSTIC_LISTS);
         assert!(
-            !published.is_empty(),
+            publication_holds(&shape.observation, &text),
             "{}: the observation is in {} state(s) that forbid agreement -- \
              {blocking:?} -- and the row publishes no condition at all. A \
              survey reading it would see a verdict it cannot account \
@@ -630,6 +643,22 @@ fn a_state_the_row_does_not_publish_fails_the_accounting() {
     assert!(
         published_codes(&stripped, DIAGNOSTIC_LISTS).is_empty(),
         "the sabotage must actually remove the conditions: {stripped}"
+    );
+
+    // **And the accounting must REJECT it.** Asserting only that the stripping
+    // worked demonstrated the sabotage and nothing else -- the rule could have
+    // been deleted and this stayed green, which is the shape of vacuity this
+    // whole suite exists to avoid. Calling the same predicate the corpus rule
+    // calls is what makes this a test of the rule.
+    assert!(
+        !publication_holds(&observation, &stripped),
+        "a report in a blocking state whose row publishes nothing must fail the \
+         accounting: {stripped}"
+    );
+    assert!(
+        publication_holds(&observation, &text),
+        "and the unsabotaged report must pass it, or the rule rejects \
+         everything: {text}"
     );
 }
 

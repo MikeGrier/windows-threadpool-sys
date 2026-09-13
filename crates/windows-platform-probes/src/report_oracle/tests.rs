@@ -51,15 +51,72 @@ fn a_report_with_two_rows_is_a_defect() {
 }
 
 #[test]
-fn an_unbalanced_row_is_a_defect() {
+fn an_unclosed_delimiter_is_a_defect() {
     let truncated = r#"{"reason":"x-probe-topology","caches":[{"level":1}"#;
 
     assert_eq!(
         check(&report_with(truncated)),
-        vec![RowDefect::Unbalanced {
+        vec![RowDefect::Malformed {
+            what: "an unclosed delimiter",
             row: truncated.to_owned()
         }]
     );
+}
+
+#[test]
+fn a_trailing_separator_is_a_defect() {
+    // **Balanced but invalid**, which the depth-only check accepted. A writer
+    // that emitted a separator for a member it then skipped produces exactly
+    // this, and every bracket still matches.
+    let trailing = r#"{"reason":"x-probe-topology","arch":"x86_64",}"#;
+
+    assert_eq!(
+        check(&report_with(trailing)),
+        vec![RowDefect::Malformed {
+            what: "a trailing separator before a closing delimiter",
+            row: trailing.to_owned()
+        }]
+    );
+}
+
+#[test]
+fn a_mismatched_closing_delimiter_is_a_defect() {
+    // Also balanced by depth, also invalid: an object closed by a bracket.
+    let mismatched = r#"{"reason":"x-probe-topology","arch":"x86_64"]"#;
+
+    assert_eq!(
+        check(&report_with(mismatched)),
+        vec![RowDefect::Malformed {
+            what: "a closing delimiter does not match the one it closes",
+            row: mismatched.to_owned()
+        }]
+    );
+}
+
+#[test]
+fn a_nested_list_closed_as_an_object_is_a_defect() {
+    // The inner case, so the stack is shown to be a stack rather than a pair of
+    // counters that happen to agree at the end.
+    let mismatched = r#"{"reason":"x","caches":[{"level":1}}}"#;
+
+    assert!(
+        matches!(
+            check(&report_with(mismatched)).as_slice(),
+            [RowDefect::Malformed { .. }]
+        ),
+        "{:?}",
+        check(&report_with(mismatched))
+    );
+}
+
+#[test]
+fn a_brace_inside_a_string_does_not_confuse_the_delimiter_stack() {
+    // The acceptance half of the stack: `discovery_error` carries an OS message,
+    // which may contain any delimiter. Mis-stacking those would report every
+    // such host as malformed.
+    let row = r#"{"reason":"x","discovery_error":"failed at {[ and never closed"}"#;
+
+    assert_eq!(check(&report_with(row)), Vec::new());
 }
 
 #[test]

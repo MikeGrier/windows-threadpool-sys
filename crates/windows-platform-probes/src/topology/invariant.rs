@@ -55,13 +55,91 @@ use super::{Coherence, CrossCheck, Observation, PartitioningCache, Verdict};
 #[cfg(test)]
 mod tests;
 
+/// A state an observation can be in that forbids an agreeing verdict.
+///
+/// **A type rather than a `&'static str`, so completeness is checkable.** These
+/// were strings, and the test that claimed to check every state had a
+/// perturbation derived BOTH of its sets from the perturbation table -- so a new
+/// branch in [`blocking_states`] that no mutation reached appeared in neither
+/// set and both loops stayed green. The guard could only confirm that existing
+/// labels described existing mutations.
+///
+/// With a type, [`BlockingState::ALL`] is an exhaustive list the compiler
+/// checks: adding a variant without adding it there fails to build, and the
+/// test compares the table against `ALL` rather than against itself. Found by a
+/// review, one round after the guard was added in response to an earlier one.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BlockingState {
+    /// A level was named as the outermost partitioning cache with no summary.
+    ///
+    /// The state the renderer prints as `BUG IN THIS PROBE`, and the defect this
+    /// component exists because of.
+    PartitioningSummaryMissing,
+    /// The enumeration recorded anomalies.
+    EnumerationAnomalies,
+    /// The topology was not measured from a running machine.
+    NotMeasured,
+    /// No cache levels were reported.
+    NoCacheLevels,
+    /// No packages were reported, though the machine has one.
+    NoPackages,
+    /// No cores were reported, though the machine has one.
+    NoCores,
+    /// A core record contradicts itself.
+    ContradictoryCore,
+    /// A cache level is numbered 0, which Windows does not report.
+    UnnumberedCacheLevel,
+    /// The crate's two enumerations did not agree.
+    EnumerationsDisagreed,
+    /// The bracket did not establish that the machine held still.
+    BracketNotHeld,
+}
+
+impl BlockingState {
+    /// Every state, so a test can check the perturbation table covers them all.
+    ///
+    /// The `match` below is what makes this exhaustive: adding a variant without
+    /// listing it here is a compile error, not a silently untested state.
+    pub const ALL: &'static [Self] = &[
+        Self::PartitioningSummaryMissing,
+        Self::EnumerationAnomalies,
+        Self::NotMeasured,
+        Self::NoCacheLevels,
+        Self::NoPackages,
+        Self::NoCores,
+        Self::ContradictoryCore,
+        Self::UnnumberedCacheLevel,
+        Self::EnumerationsDisagreed,
+        Self::BracketNotHeld,
+    ];
+
+    /// How the report names this state, for a violation a reader has to act on.
+    #[must_use]
+    pub const fn described(self) -> &'static str {
+        match self {
+            Self::PartitioningSummaryMissing => {
+                "summary missing for the outermost partitioning cache"
+            }
+            Self::EnumerationAnomalies => "the enumeration recorded anomalies",
+            Self::NotMeasured => "the topology was not measured from a running machine",
+            Self::NoCacheLevels => "no cache levels were reported",
+            Self::NoPackages => "no packages were reported",
+            Self::NoCores => "no cores were reported",
+            Self::ContradictoryCore => "a core record contradicts itself",
+            Self::UnnumberedCacheLevel => "a cache level is numbered 0",
+            Self::EnumerationsDisagreed => "the crate's two enumerations did not agree",
+            Self::BracketNotHeld => "the bracket did not establish that the machine held still",
+        }
+    }
+}
+
 /// A state that forbids an agreeing verdict, found beside one.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Violation {
     /// The observation is in a state that must prevent `agree`, and did not.
     StateWithAgreeingVerdict {
-        /// The state, as [`blocking_states`] names it.
-        state: &'static str,
+        /// The state.
+        state: BlockingState,
     },
     /// `agree` without the comparison it asserts having been made.
     ///
@@ -87,9 +165,10 @@ impl fmt::Display for Violation {
         match self {
             Self::StateWithAgreeingVerdict { state } => write!(
                 f,
-                "the observation is in the `{state}` state, which forbids an \
+                "the observation is in the `{}` state, which forbids an \
                  agreeing verdict, but the verdict is `agree` -- so whatever in \
-                 `cross_check` should have reported this state did not"
+                 `cross_check` should have reported this state did not",
+                state.described(),
             ),
             Self::AgreedWithoutComparingCounter { counter } => write!(
                 f,
@@ -122,7 +201,7 @@ impl fmt::Display for Violation {
 /// module exists to avoid. What belongs here is a state readable from the
 /// observation on its own terms.
 #[must_use]
-pub fn blocking_states(observation: &Observation) -> Vec<&'static str> {
+pub fn blocking_states(observation: &Observation) -> Vec<BlockingState> {
     let mut states = Vec::new();
 
     // The defect this component exists because of: the renderer prints this
@@ -132,27 +211,27 @@ pub fn blocking_states(observation: &Observation) -> Vec<&'static str> {
         observation.partitioning_cache(),
         PartitioningCache::SummaryMissing(_)
     ) {
-        states.push("summary missing for the outermost partitioning cache");
+        states.push(BlockingState::PartitioningSummaryMissing);
     }
 
     if !observation.enumeration_anomalies.is_empty() {
-        states.push("the enumeration recorded anomalies");
+        states.push(BlockingState::EnumerationAnomalies);
     }
 
     if !observation.topology_was_measured {
-        states.push("the topology was not measured from a running machine");
+        states.push(BlockingState::NotMeasured);
     }
 
     if observation.caches.is_empty() {
-        states.push("no cache levels were reported");
+        states.push(BlockingState::NoCacheLevels);
     }
 
     if observation.online_processors > 0 && observation.packages == 0 {
-        states.push("no packages were reported");
+        states.push(BlockingState::NoPackages);
     }
 
     if observation.online_processors > 0 && observation.cores.is_empty() {
-        states.push("no cores were reported");
+        states.push(BlockingState::NoCores);
     }
 
     if observation
@@ -160,19 +239,19 @@ pub fn blocking_states(observation: &Observation) -> Vec<&'static str> {
         .iter()
         .any(super::CoreShape::contradicts_itself)
     {
-        states.push("a core record contradicts itself");
+        states.push(BlockingState::ContradictoryCore);
     }
 
     if observation.caches.iter().any(|cache| cache.level == 0) {
-        states.push("a cache level is numbered 0");
+        states.push(BlockingState::UnnumberedCacheLevel);
     }
 
     if !matches!(observation.coherence, Coherence::Agreed) {
-        states.push("the crate's two enumerations did not agree");
+        states.push(BlockingState::EnumerationsDisagreed);
     }
 
     if observation.bracket != super::BracketOutcome::HeldStill {
-        states.push("the bracket did not establish that the machine held still");
+        states.push(BlockingState::BracketNotHeld);
     }
 
     states

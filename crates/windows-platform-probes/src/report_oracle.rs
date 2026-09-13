@@ -66,8 +66,17 @@ pub enum RowDefect {
         /// How many lines look like a row.
         count: usize,
     },
-    /// The row's brackets do not balance, so it is not a JSON object.
-    Unbalanced {
+    /// The row is not a syntactically valid JSON object.
+    ///
+    /// **Structure, not only depth.** This checked that brackets BALANCED,
+    /// which `{"a":1,}` and `{"a":1]` both satisfy while being invalid JSON --
+    /// so a writer defect producing either was accepted by the check whose whole
+    /// job is to read the writer's output back. Delimiters are now matched by
+    /// kind, and the separators between members are checked, which covers the
+    /// defects a hand-written writer actually produces.
+    Malformed {
+        /// What is wrong, as specifically as the scan can say.
+        what: &'static str,
         /// The row, as rendered.
         row: String,
     },
@@ -91,8 +100,8 @@ impl std::fmt::Display for RowDefect {
                 "the report carries {count} machine-readable rows, so which one \
                  is the contract is ambiguous"
             ),
-            Self::Unbalanced { row } => {
-                write!(f, "the row's brackets do not balance: {row}")
+            Self::Malformed { what, row } => {
+                write!(f, "the row is not a valid JSON object -- {what}: {row}")
             }
             Self::RepeatedKey { key } => write!(
                 f,
@@ -121,8 +130,9 @@ pub fn check(report: &str) -> Vec<RowDefect> {
 
     let mut found = Vec::new();
 
-    if !balanced(row) {
-        found.push(RowDefect::Unbalanced {
+    if let Some(what) = malformation(row) {
+        found.push(RowDefect::Malformed {
+            what,
             row: (*row).to_owned(),
         });
         // Every check below reads the object's members, which is not a question
@@ -144,32 +154,90 @@ pub fn check(report: &str) -> Vec<RowDefect> {
     found
 }
 
-/// Whether every bracket in `row` is closed, in order.
-fn balanced(row: &str) -> bool {
-    let mut depth = 0_i32;
+/// What is wrong with `row` as a JSON object, if anything.
+///
+/// **Delimiters matched by KIND, and separators checked.** This only counted
+/// depth, so `{"a":1,}` and `{"a":1]` were both accepted -- each invalid JSON,
+/// each exactly the kind of defect a hand-written writer produces, and each
+/// silently passing the check whose whole job is reading that writer's output
+/// back. Found by a review.
+///
+/// Not a full JSON parser, and it does not need to be: the producer is
+/// `crate::row`, so the reachable failures are a mismatched delimiter, a stray
+/// or missing separator, and an unterminated string. Numbers and keywords come
+/// from typed values and cannot be malformed.
+fn malformation(row: &str) -> Option<&'static str> {
+    let mut stack: Vec<char> = Vec::new();
     let mut in_string = false;
     let mut escaped = false;
+    // The last structurally significant character outside a string, so a
+    // separator with nothing on one side of it is visible.
+    let mut previous = '\0';
 
     for character in row.chars() {
         if escaped {
             escaped = false;
             continue;
         }
-        match character {
-            '\\' if in_string => escaped = true,
-            '"' => in_string = !in_string,
-            '[' | '{' if !in_string => depth += 1,
-            ']' | '}' if !in_string => {
-                depth -= 1;
-                if depth < 0 {
-                    return false;
+        if in_string {
+            match character {
+                '\\' => escaped = true,
+                '"' => {
+                    in_string = false;
+                    previous = '"';
                 }
+                _ => {}
             }
-            _ => {}
+            continue;
+        }
+
+        match character {
+            '"' => {
+                if previous == '"' || previous == '}' || previous == ']' {
+                    return Some("a string follows a value with no separator");
+                }
+                in_string = true;
+            }
+            '[' | '{' => {
+                stack.push(character);
+                previous = character;
+            }
+            '}' | ']' => {
+                let opened = stack.pop();
+                let expected = if character == '}' { '{' } else { '[' };
+                if opened != Some(expected) {
+                    return Some("a closing delimiter does not match the one it closes");
+                }
+                if previous == ',' {
+                    return Some("a trailing separator before a closing delimiter");
+                }
+                previous = character;
+            }
+            ',' => {
+                if previous == ',' || previous == '{' || previous == '[' || previous == '\0' {
+                    return Some("a separator with no value before it");
+                }
+                previous = ',';
+            }
+            ':' => {
+                if previous != '"' {
+                    return Some("a name separator that does not follow a name");
+                }
+                previous = ':';
+            }
+            character if character.is_whitespace() => {}
+            _ => previous = 'v',
         }
     }
 
-    depth == 0 && !in_string
+    if in_string {
+        return Some("an unterminated string");
+    }
+    if !stack.is_empty() {
+        return Some("an unclosed delimiter");
+    }
+
+    None
 }
 
 /// Every key `row` renders at its top level, in the order it renders them.
@@ -324,7 +392,7 @@ pub fn list_codes(row: &str, key: &str) -> Vec<String> {
 pub fn row(report: &str) -> Option<&str> {
     let mut rows = report.lines().filter(|line| line.starts_with('{'));
     let row = rows.next()?;
-    (rows.next().is_none() && balanced(row)).then_some(row)
+    (rows.next().is_none() && malformation(row).is_none()).then_some(row)
 }
 
 /// [`check`], as an assertion, for tests that render a report.

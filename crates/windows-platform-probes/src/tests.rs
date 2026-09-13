@@ -4802,25 +4802,63 @@ fn the_rendered_row_carries_exactly_the_keys_the_value_declares() {
 }
 
 #[test]
-fn the_topology_rows_keys_are_what_the_renderer_declares() {
-    // The same property on the real row, which is the one a survey reads.
-    // Asserted as agreement between the reader and the writer rather than
-    // against a list here, for the reason above.
+fn the_measured_row_carries_exactly_the_contracts_keys() {
+    // **The check that was claimed and was not there.** The previous version
+    // compared `report_oracle::keys` against `Row::keys` -- the reader against
+    // the writer -- which says nothing about WHICH keys the contract requires.
+    // Measured: with `.with("packages", ...)` deleted from the builder, the
+    // entire suite stayed green.
+    //
+    // Compared as an exact SEQUENCE, so a dropped field, an added one and a
+    // reordered one all fail. Order is part of the contract here because
+    // accumulated CI output is read by humans as well as machines, and a stable
+    // order makes a diff between two runs legible.
     let text = crate::topology_report::report(BANNER, &clean_observation());
     let row = crate::report_oracle::row(&text).expect("one well-formed row");
-    let published = crate::report_oracle::keys(row);
 
-    assert_eq!(published.first().copied(), Some("reason"));
-    assert!(
-        published.contains(&"disagreements") && published.contains(&"parse_incomplete"),
-        "{published:?}"
-    );
     assert_eq!(
-        published.len(),
-        published
-            .iter()
-            .collect::<std::collections::BTreeSet<_>>()
-            .len(),
-        "no key is published twice: {published:?}"
+        crate::report_oracle::keys(row),
+        crate::topology_report::MEASURED_ROW_KEYS,
+        "the measured row must carry exactly the contract's keys: {row}"
+    );
+}
+
+#[test]
+fn the_unmeasured_row_carries_exactly_its_own_contracts_keys() {
+    // A host whose discovery FAILED publishes a different shape, and that is
+    // the point -- a survey must be able to tell it from a measured row that
+    // happens to be missing fields. So it has its own schema rather than being
+    // checked as a subset of the one above.
+    let text = crate::topology_report::report_unmeasured(
+        BANNER,
+        &std::io::Error::other("the device is not ready"),
+    );
+    let row = crate::report_oracle::row(&text).expect("one well-formed row");
+
+    assert_eq!(
+        crate::report_oracle::keys(row),
+        crate::topology_report::UNMEASURED_ROW_KEYS,
+        "the unmeasured row must carry exactly its contract's keys: {row}"
+    );
+}
+
+#[test]
+fn the_two_row_shapes_are_distinguishable_by_their_keys() {
+    // The guard that keeps the two schemas from drifting into each other. If
+    // the unmeasured shape ever became a prefix of the measured one, a survey
+    // reading a truncated measured row could not tell it from a failed
+    // discovery -- which is the distinction the unmeasured row exists to make.
+    assert_ne!(
+        crate::topology_report::MEASURED_ROW_KEYS,
+        crate::topology_report::UNMEASURED_ROW_KEYS
+    );
+    assert!(
+        crate::topology_report::UNMEASURED_ROW_KEYS.contains(&"discovery_error"),
+        "the failed-discovery shape is identified by a key the measured one \
+         does not have, rather than by absence"
+    );
+    assert!(
+        !crate::topology_report::MEASURED_ROW_KEYS.contains(&"discovery_error"),
+        "and the measured shape must not carry it"
     );
 }

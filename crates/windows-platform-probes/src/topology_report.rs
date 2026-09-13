@@ -20,6 +20,53 @@ use std::io;
 use windows_placement_probe::fingerprint::{Fingerprint, banner_line_for};
 
 use crate::row::{Row, Value};
+
+/// Every key a MEASURED topology row carries, in order.
+///
+/// **This is the contract, not a census of the code.** The anti-census rule this
+/// crate keeps relearning is about restating facts that can be DERIVED -- a
+/// count of placeholders, a tally of variants. A schema is not derivable from
+/// anything: it IS the agreement with the survey that reads these rows, so
+/// writing it down is what makes it checkable at all.
+///
+/// It was missing, and the gap was measured: with `packages` deleted from the
+/// builder entirely, the whole suite stayed green. `Row::keys` reports what the
+/// builder happened to supply, so a test comparing the two only ever showed the
+/// reader and the writer agreeing with each other -- never that a field the
+/// survey depends on is still there. Found by a review.
+///
+/// Changing this list is a breaking change to the row, and
+/// `the_measured_row_carries_exactly_the_contracts_keys` is what makes that
+/// visible in a diff rather than in a mining pass six months later.
+pub const MEASURED_ROW_KEYS: &[&str] = &[
+    "reason",
+    "arch",
+    "processors",
+    "groups",
+    "packages",
+    "numa_domains",
+    "numa_domains_without_processors",
+    "cores",
+    "efficiency_classes",
+    "caches",
+    "outermost_partitioning_cache_level",
+    "outermost_partitioning_cache",
+    "policies",
+    "cross_check",
+    "disagreements",
+    "not_compared",
+    "parse_incomplete",
+    "enumeration_anomalies",
+    "numa_domains_only_in_cpu_sets",
+];
+
+/// Every key an UNMEASURED topology row carries, in order.
+///
+/// Deliberately short, and deliberately its own schema rather than a subset of
+/// the one above: a row from a host whose discovery FAILED is a different shape,
+/// and a survey must be able to tell it from a measured row that happens to be
+/// missing fields.
+pub const UNMEASURED_ROW_KEYS: &[&str] = &["reason", "arch", "cross_check", "discovery_error"];
 use crate::topology::diagnostic::published_anomaly;
 use crate::topology::{
     Disagreement, NotCompared, Observation, ParseIncomplete, PartitioningCache, Verdict,

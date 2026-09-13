@@ -13,7 +13,7 @@
 //! costs a reader more than one that misses an illegal one, because noise trains
 //! them to ignore the instrument -- the same rule the report oracle is built on.
 
-use super::{Violation, blocking_states, check};
+use super::{BlockingState, Violation, blocking_states, check};
 use crate::topology::{
     BracketOutcome, CacheLevel, CoreShape, Observation, PartitioningCache, Verdict,
 };
@@ -67,7 +67,7 @@ fn the_observation_this_crate_produces_is_in_no_blocking_state() {
     // The acceptance half, and the premise every perturbation below rests on:
     // if the fixture already blocked agreement, each test would be asserting
     // against two states instead of the one it introduced.
-    assert_eq!(blocking_states(&agreeing()), Vec::<&str>::new());
+    assert_eq!(blocking_states(&agreeing()), Vec::<BlockingState>::new());
     assert_eq!(check(&agreeing(), Verdict::Agree), Vec::new());
 }
 
@@ -93,16 +93,16 @@ fn the_verdict_the_crate_actually_draws_holds_every_invariant() {
 ///
 /// This doc claimed such a relation before one existed. Found by a review: the
 /// table happened to match, which is the condition under which nobody notices.
-type Perturbation = (&'static str, Box<dyn Fn(&mut Observation)>);
+type Perturbation = (BlockingState, Box<dyn Fn(&mut Observation)>);
 
 fn perturbations() -> Vec<Perturbation> {
     vec![
         (
-            "summary missing for the outermost partitioning cache",
+            BlockingState::PartitioningSummaryMissing,
             Box::new(|o: &mut Observation| o.partitioning_cache_level = Some(9)),
         ),
         (
-            "the enumeration recorded anomalies",
+            BlockingState::EnumerationAnomalies,
             Box::new(|o: &mut Observation| {
                 o.enumeration_anomalies = vec![windows_topology_sys::EnumerationAnomaly {
                     source: windows_topology_sys::Source::CpuSets,
@@ -112,23 +112,23 @@ fn perturbations() -> Vec<Perturbation> {
             }),
         ),
         (
-            "the topology was not measured from a running machine",
+            BlockingState::NotMeasured,
             Box::new(|o: &mut Observation| o.topology_was_measured = false),
         ),
         (
-            "no cache levels were reported",
+            BlockingState::NoCacheLevels,
             Box::new(|o: &mut Observation| o.caches = Vec::new()),
         ),
         (
-            "no packages were reported",
+            BlockingState::NoPackages,
             Box::new(|o: &mut Observation| o.packages = 0),
         ),
         (
-            "no cores were reported",
+            BlockingState::NoCores,
             Box::new(|o: &mut Observation| o.cores = Vec::new()),
         ),
         (
-            "a core record contradicts itself",
+            BlockingState::ContradictoryCore,
             Box::new(|o: &mut Observation| {
                 o.cores = vec![CoreShape {
                     simultaneous_multithreading: false,
@@ -138,7 +138,7 @@ fn perturbations() -> Vec<Perturbation> {
             }),
         ),
         (
-            "a cache level is numbered 0",
+            BlockingState::UnnumberedCacheLevel,
             Box::new(|o: &mut Observation| {
                 o.caches = vec![CacheLevel {
                     level: 0,
@@ -147,13 +147,13 @@ fn perturbations() -> Vec<Perturbation> {
             }),
         ),
         (
-            "the crate's two enumerations did not agree",
+            BlockingState::EnumerationsDisagreed,
             Box::new(|o: &mut Observation| {
                 o.coherence = windows_topology_sys::Coherence::NotCollected;
             }),
         ),
         (
-            "the bracket did not establish that the machine held still",
+            BlockingState::BracketNotHeld,
             Box::new(|o: &mut Observation| o.bracket = BracketOutcome::Changed),
         ),
     ]
@@ -161,16 +161,18 @@ fn perturbations() -> Vec<Perturbation> {
 
 #[test]
 fn every_blocking_state_has_a_perturbation() {
-    // **The completeness guard the table's doc claimed and did not have.**
-    // Without it, a state added to `blocking_states` with no entry in the table
-    // is never shown to fire, and never shown to be one `cross_check` already
-    // forbids -- which is the property the whole module rests on.
+    // **Compared against `BlockingState::ALL`, not against the table itself.**
+    // The first version of this guard derived BOTH of its sets from
+    // `perturbations()` -- the reached set by applying them, the labelled set by
+    // reading them -- so a new branch in `blocking_states` that no mutation
+    // activated appeared in neither, and both loops stayed green. It could only
+    // confirm that existing labels described existing mutations, which is not
+    // what its name claims. Found by a review, one round after the guard was
+    // added in response to an earlier one.
     //
-    // Derived by APPLYING every perturbation and collecting what
-    // `blocking_states` then reports, rather than by counting the table against
-    // a number written here. A census would need correcting every time a state
-    // is added, which is the rot this crate keeps paying for.
-    let mut reached: Vec<&'static str> = Vec::new();
+    // `ALL` is exhaustive by compiler: `described()` matches on every variant,
+    // so adding one without listing it there fails to build.
+    let mut reached: Vec<BlockingState> = Vec::new();
     for (_, mutate) in perturbations() {
         let mut observation = agreeing();
         mutate(&mut observation);
@@ -181,26 +183,30 @@ fn every_blocking_state_has_a_perturbation() {
         }
     }
 
-    // Every state the table's own labels name must be among them, and nothing
-    // the perturbations reach may be unnamed.
-    let labelled: Vec<&'static str> = perturbations()
+    let labelled: Vec<BlockingState> = perturbations()
         .into_iter()
         .map(|(state, _)| state)
         .collect();
 
-    for state in &labelled {
-        assert!(
-            reached.contains(state),
-            "`{state}` is a label in the table that no perturbation actually \
-             produces, so the row for it tests nothing"
-        );
-    }
-    for state in &reached {
+    for state in BlockingState::ALL {
         assert!(
             labelled.contains(state),
-            "`{state}` is reported by `blocking_states` and has no entry in the \
-             perturbation table, so nothing shows it fires or that \
-             `cross_check` already forbids it"
+            "`{state:?}` is a blocking state with no entry in the perturbation \
+             table, so nothing shows that it fires or that `cross_check` \
+             already forbids it"
+        );
+        assert!(
+            reached.contains(state),
+            "`{state:?}` has a table entry whose mutation does not actually \
+             produce it, so the row for it tests nothing"
+        );
+    }
+
+    for state in &reached {
+        assert!(
+            BlockingState::ALL.contains(state),
+            "`{state:?}` is reported by `blocking_states` and missing from \
+             `BlockingState::ALL`"
         );
     }
 }
@@ -213,13 +219,13 @@ fn every_blocking_state_forbids_an_agreeing_verdict() {
 
         assert!(
             blocking_states(&observation).contains(&state),
-            "{state}: the observation is in this state and `blocking_states` \
+            "{state:?}: the observation is in this state and `blocking_states` \
              did not say so"
         );
         assert!(
             check(&observation, Verdict::Agree)
                 .contains(&Violation::StateWithAgreeingVerdict { state }),
-            "{state}: the state is present beside an agreeing verdict and the \
+            "{state:?}: the state is present beside an agreeing verdict and the \
              invariant did not fire"
         );
     }
@@ -244,13 +250,13 @@ fn every_blocking_state_is_one_the_real_cross_check_already_reports() {
         assert_ne!(
             cross_check.verdict(),
             Verdict::Agree,
-            "{state}: the invariant forbids `agree` here, so `cross_check` must \
+            "{state:?}: the invariant forbids `agree` here, so `cross_check` must \
              already forbid it: {cross_check:?}"
         );
         assert_eq!(
             check(&observation, cross_check.verdict()),
             Vec::new(),
-            "{state}: and against the real verdict there is nothing to report"
+            "{state:?}: and against the real verdict there is nothing to report"
         );
     }
 }
@@ -268,7 +274,7 @@ fn a_blocking_state_is_silent_when_the_verdict_already_admits_it() {
             assert_eq!(
                 check(&observation, verdict),
                 Vec::new(),
-                "{state}: {verdict:?} admits the doubt, so there is nothing to \
+                "{state:?}: {verdict:?} admits the doubt, so there is nothing to \
                  contradict"
             );
         }
@@ -292,8 +298,7 @@ fn the_partitioning_state_is_read_from_the_observation_not_the_list() {
         PartitioningCache::SummaryMissing(9)
     ));
     assert!(
-        blocking_states(&observation)
-            .contains(&"summary missing for the outermost partitioning cache"),
+        blocking_states(&observation).contains(&BlockingState::PartitioningSummaryMissing),
         "read from the observation, with the cross-check never consulted"
     );
 }
