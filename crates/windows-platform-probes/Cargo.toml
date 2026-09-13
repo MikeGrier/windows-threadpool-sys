@@ -34,7 +34,9 @@ path = "src/lib.rs"
 # workspace does use `--all-features`, for cargo-mutants runs. The boundary is
 # stated rather than claimed away: the DEFAULT build is the one that carries the
 # print-rather-than-panic guarantee.
-oracle-in-renderer = []
+# Pulls in `serde_json` because the oracle's well-formedness check IS a real
+# parse. See the `[dependencies]` entry for why that is not hand-written.
+oracle-in-renderer = ["dep:serde_json"]
 
 [[bin]]
 name = "probe-error-mode"
@@ -92,6 +94,24 @@ name = "probe-long-path-unaware"
 path = "src/bin/long_path_unaware.rs"
 
 [dependencies]
+# **Optional, and reached only through `oracle-in-renderer`.** The report
+# oracle's job is to answer "would a consumer be able to parse this row", and
+# the honest way to answer that is to PARSE IT with the kind of parser a
+# consumer uses. This replaced a hand-written structural check.
+#
+# That check was not obviously wrong; it had been through a review, which
+# strengthened it after finding it accepted `{"a":1,}`. Then a generated test --
+# 1807 single-character corruptions of a real row, judged against this crate --
+# found **159 more disagreements, every one a false accept**: a stray backslash
+# forming an invalid escape, a missing `:`, a `,` where a `:` belonged. Closing
+# the last of those meant tracking whether an object expects a name or a value,
+# which is a JSON parser. So the choice was to write one or to depend on one.
+#
+# It is NOT in the default build, because the oracle is not: the gate here is
+# the same one at the call sites in `topology_report`, and a shipping probe must
+# print a self-contradicting report rather than panic on it. The module itself
+# carries the gate, which is also the clearest statement of what that module is.
+serde_json = { version = "1.0", optional = true }
 # **Every workspace dependency below is path-only, with no `version`**, because
 # this crate is never distributed at all -- not to a registry, and not as a
 # released binary either, unlike `windows-placement-probe` next door. These
@@ -135,6 +155,12 @@ windows-namespace-request-sys = { path = "../windows-namespace-request-sys" }
 wtf-string = { path = "../wtf-string" }
 
 [dev-dependencies]
+# Also here, non-optional, because `cfg(test)` builds compile `report_oracle`
+# WITHOUT `oracle-in-renderer` -- the feature exists for integration tests, and
+# unit tests get the module through `cfg(test)` instead. A dev-dependency is
+# linked for every test target, so this is what makes the module's `cfg(any(test,
+# feature = "oracle-in-renderer"))` gate resolve in both halves.
+serde_json = "1.0"
 # A dependency on ITSELF, which cargo permits for dev-dependencies and which is
 # the only way to turn a feature on for this package's own integration tests:
 # a test under `tests/` links the library as a plain dependency, so `cfg(test)`

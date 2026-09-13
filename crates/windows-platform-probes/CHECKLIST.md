@@ -400,6 +400,10 @@ M4 below, six in M5. M2.18 is the exception, dissolved rather than moved.
   separator placement. Sabotage-verified: making the writer emit a leading separator produces a
   balanced but invalid row, which the old check passed and the new one reddens.
 
+  (**That replacement was itself replaced, by M3.9.** The typed delimiter stack was a second
+  hand-written opinion about what JSON is, and a generated test found 159 more rows it accepted
+  and a real parser rejected.)
+
   **3. A sabotage asserted only that it had sabotaged.** The publication-accounting sabotage stripped
   a condition from the report and then asserted the condition was absent -- which is a fact about
   the string edit, not about the rule. It would have passed with the rule deleted. The rule is now
@@ -442,6 +446,45 @@ M4 below, six in M5. M2.18 is the exception, dissolved rather than moved.
   **Three rounds on one guard: strings, then a hand-written `ALL`, then generation.** Each fix
   moved the census somewhere harder to see rather than removing it. Worth stating because the
   reviewer's finding was not a new defect -- it was the same defect wearing the previous fix.
+
+- [x] **M3.9** -- Decide the row's well-formedness by a real parse, and delete the hand-written one.
+
+  **The question the oracle asks is "could a consumer read this row", and a consumer uses a JSON
+  parser.** Anything hand-written here is a second opinion about what JSON is, and a second opinion
+  is a thing that can disagree -- so `malformation` now calls `serde_json` and the scanner is gone.
+
+  **Measured, and the measurement is why this happened at all.** The hand-written check had already
+  been through a review, which strengthened it after finding it accepted `{"a":1,}`. A generated
+  test -- 1807 single-character corruptions of a real row, judged against `serde_json` -- then found
+  **159 more disagreements, every single one a FALSE ACCEPT**: 129 stray backslashes forming invalid
+  escapes, 10 missing `:`, 13 `,` where a `:` belonged, 3 the reverse, 3 missing values, 1 string
+  following a number. The review had found one instance of a class with 160 members.
+
+  Closing the last ~26 required tracking whether an object expects a name or a value next, which is
+  a JSON parser. So the choice was to write one or to depend on one.
+
+  **The agreement test was deleted in the same commit, deliberately.** With the parse delegated it
+  would compare `serde_json` against `serde_json` -- green by construction, and exactly the
+  tautology this milestone keeps deleting. What replaced it asks a question that is still open: not
+  "is the verdict right" but "does the verdict REACH the caller", which is a property of `check` and
+  not guaranteed by any parser. It found a real boundary while being written: 8 corruptions destroy
+  the leading brace, and those are `Missing` rather than `Malformed` -- not a row at all, which for
+  a survey asking "did this host report a row" is the right answer and a different one. Both
+  branches are asserted.
+
+  **Three tests stopped asserting the defect's wording.** The message is `serde_json`'s now, so
+  this crate does not own it; pinning it would let a dependency's patch release redden tests about
+  unclosed delimiters, a false finding about this crate. They assert rejection and the carried row.
+
+  **A parse does NOT subsume `RepeatedKey`,** which is why that check stays hand-written:
+  `serde_json` accepts a duplicated key and silently keeps the last, which is precisely the
+  malformation that survives a consumer's parse and changes what it reads.
+
+  `report_oracle` is now gated `cfg(any(test, feature = "oracle-in-renderer"))` -- every caller
+  already was -- which is what keeps the parser out of a shipping probe. Verified by inspecting the
+  binaries, per the precedent in that feature's own comment: the default `probe-topology.exe`
+  contains no `serde_json`, no oracle panic string, and no parser message; the `--all-features` one
+  contains all three.
 
 ## M4 -- Carried over from M2: the items M3 gates
 

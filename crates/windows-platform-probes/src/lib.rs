@@ -149,6 +149,14 @@ pub mod long_path;
 pub mod long_path_report;
 pub mod pool_growth;
 pub mod report;
+/// The report oracle. **Test-support: present only where it is used.**
+///
+/// Every caller is already behind this gate -- the renderers' `assert_corresponds`
+/// bindings, the unit tests, and the integration tests, which reach it through the
+/// self dev-dependency. Stating that here rather than leaving it implied is what
+/// lets the module depend on a real JSON parser without putting one in a shipping
+/// probe binary.
+#[cfg(any(test, feature = "oracle-in-renderer"))]
 pub mod report_oracle;
 pub mod request_cost;
 pub mod row;

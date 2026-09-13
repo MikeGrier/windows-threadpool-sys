@@ -50,6 +50,23 @@ fn a_report_with_two_rows_is_a_defect() {
     assert_eq!(check(&two), vec![RowDefect::Duplicated { count: 2 }]);
 }
 
+/// What the parser says about `row`, for a test asserting a defect's identity
+/// rather than its wording.
+///
+/// **The wording is `serde_json`'s, so this crate does not get to assert it.**
+/// These three tests used to name the message, which was right while the check
+/// was ours -- the message WAS the finding, and a test naming it pinned which
+/// branch fired. It is now a dependency's string, and pinning it would assert a
+/// thing we neither own nor promise: a wording change in a patch release would
+/// redden tests about unclosed delimiters, which is a false finding about this
+/// crate. What survives is what these tests are actually for -- that this input
+/// is rejected, and that the whole row is carried back for a reader.
+fn malformation_of(row: &str) -> String {
+    serde_json::from_str::<serde_json::Map<String, serde_json::Value>>(row)
+        .expect_err("the fixture is meant to be malformed")
+        .to_string()
+}
+
 #[test]
 fn an_unclosed_delimiter_is_a_defect() {
     let truncated = r#"{"reason":"x-probe-topology","caches":[{"level":1}"#;
@@ -57,7 +74,7 @@ fn an_unclosed_delimiter_is_a_defect() {
     assert_eq!(
         check(&report_with(truncated)),
         vec![RowDefect::Malformed {
-            what: "an unclosed delimiter",
+            what: malformation_of(truncated),
             row: truncated.to_owned()
         }]
     );
@@ -73,7 +90,7 @@ fn a_trailing_separator_is_a_defect() {
     assert_eq!(
         check(&report_with(trailing)),
         vec![RowDefect::Malformed {
-            what: "a trailing separator before a closing delimiter",
+            what: malformation_of(trailing),
             row: trailing.to_owned()
         }]
     );
@@ -87,7 +104,7 @@ fn a_mismatched_closing_delimiter_is_a_defect() {
     assert_eq!(
         check(&report_with(mismatched)),
         vec![RowDefect::Malformed {
-            what: "a closing delimiter does not match the one it closes",
+            what: malformation_of(mismatched),
             row: mismatched.to_owned()
         }]
     );
@@ -260,5 +277,126 @@ fn a_defect_is_reported_once_per_extra_rendering_of_a_key() {
         ],
         "one entry per EXTRA rendering, so the count reads as how many times the \
          row said it again"
+    );
+}
+
+/// Every single-character corruption of `row`, as (what was done, the result).
+///
+/// Deletion and structural substitution, which between them reach the defects a
+/// writer actually produces: a lost delimiter, a doubled separator, a `:` where
+/// a `,` belonged, a quote that ends a string early.
+fn corruptions(row: &str) -> Vec<(String, String)> {
+    const STRUCTURAL: [char; 8] = ['{', '}', '[', ']', ',', ':', '"', '\\'];
+    let mut out = Vec::new();
+
+    for (at, character) in row.char_indices() {
+        let after = at + character.len_utf8();
+
+        let mut deleted = String::with_capacity(row.len());
+        deleted.push_str(&row[..at]);
+        deleted.push_str(&row[after..]);
+        out.push((format!("deleted {character:?} at {at}"), deleted));
+
+        for replacement in STRUCTURAL {
+            if replacement == character {
+                continue;
+            }
+            let mut swapped = String::with_capacity(row.len() + 1);
+            swapped.push_str(&row[..at]);
+            swapped.push(replacement);
+            swapped.push_str(&row[after..]);
+            out.push((
+                format!("replaced {character:?} at {at} with {replacement:?}"),
+                swapped,
+            ));
+        }
+    }
+
+    out
+}
+
+#[test]
+fn every_unparseable_row_reaches_the_caller_as_a_defect() {
+    // **This is a WIRING test, and saying so matters.** An earlier version of it
+    // compared `malformation` against `serde_json` and was worth running,
+    // because `malformation` was then a hand-written check that could disagree
+    // -- it generated 1807 corruptions and found 159 disagreements, every one a
+    // false accept, which is why the hand-written version is gone.
+    //
+    // With the parse itself delegated, that comparison would be `serde_json`
+    // against `serde_json`: green by construction, and exactly the kind of
+    // tautology this crate keeps having to delete. So the question changed. It
+    // is no longer "is the verdict right" -- nothing here is entitled to an
+    // opinion on that -- but "does the verdict REACH the caller", which is a
+    // property of `check` and is not guaranteed by anything upstream. A `check`
+    // that dropped the result, or looked at the wrong line, would still be
+    // delegating to a correct parser.
+    let clean = clean_row();
+    assert!(
+        serde_json::from_str::<serde_json::Value>(&clean).is_ok(),
+        "the fixture must be valid JSON before corrupting it means anything"
+    );
+
+    // A corruption that destroys the LEADING BRACE is a different finding, and
+    // both halves are asserted rather than one being waved through. `check`
+    // selects the row by `starts_with('{')`, so such a line is not a malformed
+    // row -- it is not a row, and the report has none. `Missing` is the right
+    // answer there and `Malformed` would be the wrong one, because a survey's
+    // question is "did this host report a row", not "was the text well-formed".
+    // Measured: exactly the 8 corruptions of position 0, which is what makes the
+    // two branches worth separating instead of accepting any defect at all.
+    let mut escaped = Vec::new();
+    let cases = corruptions(&clean);
+    for (what, candidate) in &cases {
+        if serde_json::from_str::<serde_json::Value>(candidate).is_ok() {
+            continue;
+        }
+        let defects = check(&report_with(candidate));
+        let expected = if candidate.starts_with('{') {
+            defects
+                .iter()
+                .any(|defect| matches!(defect, RowDefect::Malformed { .. }))
+        } else {
+            defects.contains(&RowDefect::Missing)
+        };
+        if !expected {
+            escaped.push(format!("{what}: got {defects:?}"));
+        }
+    }
+
+    assert!(
+        escaped.is_empty(),
+        "{} of {} corruptions are unparseable and were not reported as the \
+         defect they are:\n{}",
+        escaped.len(),
+        cases.len(),
+        escaped.join("\n")
+    );
+}
+
+#[test]
+fn the_corruption_generator_reaches_defects_of_every_kind() {
+    // **A generator that produced nothing, or only legal strings, would leave the
+    // test above vacuous and green.** A generator cannot report the shape it
+    // never reaches, so it has to be asked what it reached.
+    let cases = corruptions(&clean_row());
+    assert!(cases.len() > 500, "only {} corruptions", cases.len());
+
+    let unparseable = cases
+        .iter()
+        .filter(|(_, candidate)| serde_json::from_str::<serde_json::Value>(candidate).is_err())
+        .count();
+    assert!(
+        unparseable > 100,
+        "only {unparseable} of {} corruptions are unparseable, so the wiring \
+         test is mostly skipping its own body",
+        cases.len()
+    );
+
+    let parseable = cases.len() - unparseable;
+    assert!(
+        parseable > 0,
+        "every corruption is unparseable, so a `check` that reported `Malformed` \
+         unconditionally would satisfy the wiring test"
     );
 }

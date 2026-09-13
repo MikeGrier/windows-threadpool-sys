@@ -38,12 +38,13 @@
 //! That is not a correspondence. It is the writer's own output being read back,
 //! which is the one thing no amount of typing upstream can do for itself.
 //!
-//! **The key SET is deliberately not checked here yet.** Asserting it needs a
-//! list of expected keys, and a list written here would be a census that rots --
-//! this component has re-corrected the same census three times in one day. Once
-//! M3.3 makes the row a typed value, the key set is derivable from the type
-//! rather than declared beside it, and the check belongs there. Queued in
-//! [CHECKLIST.md](../CHECKLIST.md) M3.3 rather than approximated here.
+//! **The key set is checked, but not here.** This module reads a row it is
+//! handed and has no way to know which keys were owed; the contract lives beside
+//! the renderer that owes them, as `topology_report::MEASURED_ROW_KEYS`. An
+//! earlier version of this paragraph said the check was deferred until the row
+//! became a typed value, "at which point the key set is derivable from the type"
+//! -- which is false, and was measured to be: a type says "a map of names to
+//! values", which every key set satisfies, including the one missing a field.
 
 /// A way the report's machine-readable row is not well-formed.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -68,15 +69,16 @@ pub enum RowDefect {
     },
     /// The row is not a syntactically valid JSON object.
     ///
-    /// **Structure, not only depth.** This checked that brackets BALANCED,
-    /// which `{"a":1,}` and `{"a":1]` both satisfy while being invalid JSON --
-    /// so a writer defect producing either was accepted by the check whose whole
-    /// job is to read the writer's output back. Delimiters are now matched by
-    /// kind, and the separators between members are checked, which covers the
-    /// defects a hand-written writer actually produces.
+    /// **Decided by a real parse, not by a check written here.** The question
+    /// this answers is "could a consumer read this row", and a consumer uses a
+    /// JSON parser -- so the only answer that cannot drift from the question is
+    /// one a JSON parser gives. Two hand-written versions preceded this: the
+    /// first counted bracket depth, which `{"a":1,}` and `{"a":1]` both satisfy;
+    /// the second matched delimiters by kind and checked separators, and a
+    /// generated test still found 159 rows it accepted and `serde_json` did not.
     Malformed {
-        /// What is wrong, as specifically as the scan can say.
-        what: &'static str,
+        /// What is wrong, in the parser's own words.
+        what: String,
         /// The row, as rendered.
         row: String,
     },
@@ -156,88 +158,28 @@ pub fn check(report: &str) -> Vec<RowDefect> {
 
 /// What is wrong with `row` as a JSON object, if anything.
 ///
-/// **Delimiters matched by KIND, and separators checked.** This only counted
-/// depth, so `{"a":1,}` and `{"a":1]` were both accepted -- each invalid JSON,
-/// each exactly the kind of defect a hand-written writer produces, and each
-/// silently passing the check whose whole job is reading that writer's output
-/// back. Found by a review.
+/// **A real parse, because the question is whether a consumer can parse it.**
+/// Anything else here is a second opinion about what JSON is, and a second
+/// opinion is a thing that can disagree. Both hand-written predecessors did:
+/// the first counted bracket depth and accepted `{"a":1,}`; the second matched
+/// delimiters by kind and checked separators, and a test that generated 1807
+/// single-character corruptions of a real row found **159 it accepted and
+/// `serde_json` rejected -- every one a false accept.** Closing the last of them
+/// required tracking whether an object expects a name or a value next, which is
+/// a JSON parser; so this depends on one rather than growing one.
 ///
-/// Not a full JSON parser, and it does not need to be: the producer is
-/// `crate::row`, so the reachable failures are a mismatched delimiter, a stray
-/// or missing separator, and an unterminated string. Numbers and keywords come
-/// from typed values and cannot be malformed.
-fn malformation(row: &str) -> Option<&'static str> {
-    let mut stack: Vec<char> = Vec::new();
-    let mut in_string = false;
-    let mut escaped = false;
-    // The last structurally significant character outside a string, so a
-    // separator with nothing on one side of it is visible.
-    let mut previous = '\0';
-
-    for character in row.chars() {
-        if escaped {
-            escaped = false;
-            continue;
-        }
-        if in_string {
-            match character {
-                '\\' => escaped = true,
-                '"' => {
-                    in_string = false;
-                    previous = '"';
-                }
-                _ => {}
-            }
-            continue;
-        }
-
-        match character {
-            '"' => {
-                if previous == '"' || previous == '}' || previous == ']' {
-                    return Some("a string follows a value with no separator");
-                }
-                in_string = true;
-            }
-            '[' | '{' => {
-                stack.push(character);
-                previous = character;
-            }
-            '}' | ']' => {
-                let opened = stack.pop();
-                let expected = if character == '}' { '{' } else { '[' };
-                if opened != Some(expected) {
-                    return Some("a closing delimiter does not match the one it closes");
-                }
-                if previous == ',' {
-                    return Some("a trailing separator before a closing delimiter");
-                }
-                previous = character;
-            }
-            ',' => {
-                if previous == ',' || previous == '{' || previous == '[' || previous == '\0' {
-                    return Some("a separator with no value before it");
-                }
-                previous = ',';
-            }
-            ':' => {
-                if previous != '"' {
-                    return Some("a name separator that does not follow a name");
-                }
-                previous = ':';
-            }
-            character if character.is_whitespace() => {}
-            _ => previous = 'v',
-        }
+/// **A parse does not subsume [`RowDefect::RepeatedKey`].** `serde_json` accepts
+/// a duplicated key and silently keeps the last, which is exactly why that
+/// defect is worth a check of its own: it survives the consumer's parse and
+/// changes what the consumer reads. The two checks answer different questions
+/// and neither replaces the other.
+fn malformation(row: &str) -> Option<String> {
+    // The row is required to be an OBJECT, not merely valid JSON. A bare `[1,2]`
+    // parses and would satisfy a laxer check, while carrying no keys at all.
+    match serde_json::from_str::<serde_json::Map<String, serde_json::Value>>(row) {
+        Ok(_) => None,
+        Err(error) => Some(error.to_string()),
     }
-
-    if in_string {
-        return Some("an unterminated string");
-    }
-    if !stack.is_empty() {
-        return Some("an unclosed delimiter");
-    }
-
-    None
 }
 
 /// Every key `row` renders at its top level, in the order it renders them.

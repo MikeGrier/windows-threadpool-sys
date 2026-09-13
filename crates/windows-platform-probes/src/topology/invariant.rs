@@ -4,7 +4,9 @@
 //!
 //! # These are the correspondences that survived, moved off the text
 //!
-//! [`crate::report_oracle`] checks relations between a report's two rendered
+//! The report oracle (`crate::report_oracle`, present only in builds that run
+//! it, so deliberately not a link from here) once checked relations between a
+//! report's two rendered
 //! halves. The rules worth keeping are not really about rendering -- they relate
 //! a STATE to the verdict, and the report is only where that relation became
 //! visible. They are here instead, as predicates over [`Observation`], per
