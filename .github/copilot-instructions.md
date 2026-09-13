@@ -1456,12 +1456,43 @@ step breakdowns described during planning.
 
 When a group of related items is fully complete:
 1. Move the completed group to `COMPLETED-CHECKLIST.md` in the same directory.
-2. Prefix the moved block with a heading: `## Moved YYYY-MM-DD — <brief description of what was done>`.
+2. Prefix the moved block with a heading:
+   `## Moved YYYY-MM-DD HH:MM:SS ±hh:mm — <brief description of what was done>`, taken from
+   `Get-Date -Format "yyyy-MM-dd HH:mm:ss zzz"`. Carry the offset, per "Timestamps carry their
+   offset" below; existing headings without one are fine and are not worth going back to change.
 3. `COMPLETED-CHECKLIST.md` is **append-only**; always add new groups at the bottom.
 4. Leave only the remaining pending or in-progress items in the source `CHECKLIST.md`.
 
 Named feature files (`CHECKLIST-<feature>.md`) should be **deleted entirely** once all items are
 complete. Move their content to `COMPLETED-CHECKLIST.md` in the same directory before deleting.
+
+### Timestamps carry their offset
+
+**When you write a date into a repository file, make it UTC or give it its offset.** This governs
+`## Moved`, `## Resolved`, and the completed-item stamp. It costs a few characters and it is worth
+them.
+
+**This is a presentation concern, not a correctness one.** A timestamp with an offset is
+self-describing: two readers in different zones, or one reader on a machine whose zone is set
+wrongly, still agree on the instant it denotes. A bare local date leaves that to be inferred. Nothing
+is *wrong* with a bare date — the event happened when it happened — it is just ambiguous in a way
+that a few extra characters remove.
+
+Note what the offset does and does not buy. It does **not** prevent a misconfigured machine from
+writing a misleading date; it makes that date convertible afterwards. Worked example from this
+repository: a laptop reporting `-04:00` while its owner sat in `-07:00` ran three hours fast, so
+timestamps taken late in the evening carried the next day's date. Every affected commit was still
+unambiguous, because git stores the instant with its offset — `2026-09-13T01:14:28-04:00` is exactly
+`2026-09-12 22:14 -07:00`. A bare `2026-09-13` in a checklist was the only thing that had to be
+re-derived from elsewhere.
+
+- **Do not go back and repair bare dates already written**, and do not rewrite history to relabel an
+  offset. The instants are correct either way, the ambiguity is small, and rewriting changes every
+  hash — on the branch that prompted this, two tracked files cited commit hashes, one of them a
+  split's mandatory `Split from ... at <hash>` provenance line, and both would have dangled. Fix such
+  a date only when something visible actually depends on it.
+- **`Get-Date` reports what the machine believes.** If its offset looks implausible for where the
+  engineer actually is, say so rather than quietly writing the date down.
 
 ## Design note files
 

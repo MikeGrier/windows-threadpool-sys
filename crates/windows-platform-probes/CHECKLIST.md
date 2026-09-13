@@ -202,7 +202,7 @@ IDs keep their M2 numbers, for the reason given under M4.
 
 
 - [x] **M2.14** -- Make the two authoring rules this branch earned actually bite. Re-planned
-  2026-09-13; see the rationale below before implementing either sub-step. Both sub-steps done.
+  2026-09-12; see the rationale below before implementing either sub-step. Both sub-steps done.
 
   **As originally written this item said "write two authoring rules into the repository
   instructions". Measurement says that would have been worse than useless.** The two rules it
