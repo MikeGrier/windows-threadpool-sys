@@ -639,8 +639,27 @@ IDs keep their M2 numbers, for the reason given under M4.
   because every verification was a one-off command that was then discarded and nothing re-checked an
   earlier guarantee." That is M3.8's story verbatim. The answer then was a CI ratchet.
 
-- [ ] **M2.14.1** -- Give `windows-platform-probes` a sabotage manifest, so "observed to fail" is a
+- [x] **M2.14.1** -- Give `windows-platform-probes` a sabotage manifest, so "observed to fail" is a
   recorded artifact rather than a habit.
+
+  **Done.** [sabotage.json](sabotage.json), 7 entries, swept green: six `caught`, one `survives`,
+  all behaving as declared. Not wired into CI, matching the two sibling manifests and the
+  `sabotage-harness` job's own note that a sweep "rebuilds a crate per entry and is deliberately an
+  occasional instrument".
+
+  **The control is the entry that matters most here.** It rewords a prose line to carry the same
+  fact and must SURVIVE, which turns this component's central decision -- the row is the machine
+  contract, the prose is for a reader -- from a sentence into a measurement. If it is ever reported
+  as caught, a test has started reading the prose again and that test is the defect.
+
+  **The harness found a defect in the manifest that the authoring script missed, which is the
+  lesson.** The entry for the escape-aware key reader anchored on `'\\' => escaped = true,`; the
+  script checked uniqueness by whole-LINE equality and found one match, while the harness matches by
+  SUBSTRING and found two -- the same arm appears in `malformation` at a deeper indent, and the
+  shallower line is a substring of the deeper one. The script's check was a second, weaker
+  implementation of the harness's rule, which is precisely the defect class this manifest exists to
+  catch. The anchor was widened to the function signature; the harness remains the only authority on
+  uniqueness.
 
   `tools/run-sabotage.ps1` exists, has its own tests, and runs in CI;
   [windows-placement-probe](../windows-placement-probe/sabotage.json) (9 entries) and
