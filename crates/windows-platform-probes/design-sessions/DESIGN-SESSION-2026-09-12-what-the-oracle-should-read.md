@@ -5,7 +5,7 @@ Decisions resulting from this session:
 - [DESIGN-NOTES.md](../DESIGN-NOTES.md) -> [The encoded row is the contract; the prose is
   not](../DESIGN-NOTES.md#d-encoded-row-is-the-contract) (new, and supersedes the
   artifact-reading rule recorded in [The oracle exists, and what it deliberately refuses to
-  know](../DESIGN-NOTES.md#d-oracle-refuses-to-know)).
+  know](../DESIGN-RATIONALE.md#d-oracle-refuses-to-know)).
 
 Work queued from it: [CHECKLIST.md](../CHECKLIST.md) milestone M3.
 
@@ -28,7 +28,7 @@ The oracle's charter names two originating defects, both found by a pull-request
 after twenty-eight rounds of per-artifact review and a zero-surviving-mutant `cargo-mutants`
 result had passed over them. They are recorded in [DESIGN-NOTES.md](../DESIGN-NOTES.md) ->
 [The defects that survived were correspondence
-failures](../DESIGN-NOTES.md#d-correspondence-failures).
+failures](../DESIGN-RATIONALE.md#d-correspondence-failures).
 
 ### Defect 1 -- the alarm beside the agreeing verdict
 

@@ -326,7 +326,7 @@ M4 below, six in M5. M2.18 is the exception, dissolved rather than moved.
   The prose half becomes a rendering test: the renderer emits what it is supposed to emit, judged on
   its own terms rather than against the row.
 
-- [ ] **M3.6** -- Split [DESIGN-NOTES.md](DESIGN-NOTES.md) into Tier 1 and Tier 2.
+- [x] **M3.6** -- Split [DESIGN-NOTES.md](DESIGN-NOTES.md) into Tier 1 and Tier 2.
 
   Measured: 88 KiB, which is **XL** on the repository's byte scale, and the default posture at XL is
   to split unless the module is indivisible. It is not -- it carries current decisions and a large
@@ -336,6 +336,28 @@ M4 below, six in M5. M2.18 is the exception, dissolved rather than moved.
   Move the rationale to `DESIGN-RATIONALE.md`, cross-referenced by decision anchor, leaving Tier 1
   stating what was decided and what forced it. The decision added by this milestone is written to be
   split that way already, so it is the worked example rather than the hard case.
+
+  **Done, and the result is still XL -- say so rather than imply otherwise.** 25,942 bytes moved;
+  DESIGN-NOTES.md went 92,467 -> 67,807, which is over the 64 KiB threshold still. The split was
+  made at the one unambiguous Tier 2 fracture rather than trimmed to hit a number.
+
+  The fracture: the correspondence-oracle investigation. It is Tier 2 on both tests -- a record of
+  how a decision was reached rather than a statement of one, AND a decision since superseded by
+  [#d-encoded-row-is-the-contract](DESIGN-NOTES.md#d-encoded-row-is-the-contract). Moving it also
+  resolved latent drift: it cites `Correspondence`, the fact-accounting instrument and the prose
+  rules, none of which survived M3.4 and M3.5. As history those sentences are accurate; as Tier 1
+  they described deleted code.
+
+  Pure relocation, verified byte-for-byte against the pre-split file (439 lines, identical). The
+  two moved anchors are kept in Tier 1 beside a pointer, so existing links land somewhere that says
+  where the content went, and every in-repo reference was repointed at the content.
+
+> **-> OPEN QUESTION for the engineer:** the remaining bulk of DESIGN-NOTES.md is neither current
+> decisions nor rationale -- it is FINDINGS, measurements about Windows that are this crate's actual
+> product (the completion-port fork, the thread-agnosticism probe, the x64 comparison, the long-path
+> pair, the topology cross-check). They do not belong in a rationale file, and filing them as
+> decisions is what keeps Tier 1 XL. Whether they want a tier of their own is a structural choice
+> about this component's documentation scheme, so it is raised rather than taken.
 
 ## M4 -- Carried over from M2: the items M3 gates
 
