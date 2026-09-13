@@ -211,6 +211,68 @@ pub fn keys(row: &str) -> Vec<&str> {
     names
 }
 
+/// Where the list opening at `start` closes, if it closes.
+///
+/// Depth-aware, because each entry is an object: the first `]` after the opening
+/// bracket may belong to a nested list rather than to this one.
+///
+/// Public alongside [`list_codes`] because an instrument that SABOTAGES a list
+/// needs the same span the reader uses. A test that cut on commas instead broke
+/// silently when the entries became objects -- and a sabotage that no longer
+/// sabotages leaves the rule it guards unguarded while still passing.
+#[must_use]
+pub fn list_span_end(row: &str, start: usize) -> Option<usize> {
+    let mut depth = 0_i32;
+    for (at, character) in row[start..].char_indices() {
+        match character {
+            '[' | '{' => depth += 1,
+            '}' => depth -= 1,
+            ']' if depth == 0 => return Some(start + at),
+            ']' => depth -= 1,
+            _ => {}
+        }
+    }
+
+    None
+}
+
+/// The `code` of every entry in `row`'s list-valued `key`.
+///
+/// **One definition, because two instruments need it.** The diagnostic lists
+/// hold objects -- `{"code":"contradictory_cores","count":3}` -- so reading them
+/// means finding each entry's `code` member rather than splitting on commas,
+/// which nested objects break. Both the unit tests and the publication
+/// accounting ask this question, and a second implementation of it is the kind
+/// of copy that agrees until it does not.
+///
+/// Returns empty for a key that is absent or not a list, which is the same
+/// answer as an empty list on purpose: a consumer of this is asking "what
+/// conditions are published", and "none" is the answer in both cases.
+#[must_use]
+pub fn list_codes(row: &str, key: &str) -> Vec<String> {
+    let needle = format!("\"{key}\":[");
+    let Some(start) = row.find(&needle).map(|at| at + needle.len()) else {
+        return Vec::new();
+    };
+    let Some(end) = list_span_end(row, start) else {
+        return Vec::new();
+    };
+
+    let mut codes = Vec::new();
+    let mut rest = &row[start..end];
+    const CODE: &str = "\"code\":\"";
+    while let Some(at) = rest.find(CODE) {
+        let after = &rest[at + CODE.len()..];
+        let Some(close) = after.find('"') else {
+            break;
+        };
+        codes.push(after[..close].to_owned());
+        rest = &after[close..];
+    }
+
+    codes
+}
+
 /// The report's machine-readable row, if it carries exactly one well-formed one.
 ///
 /// Public because the instruments in `tests/` read the row to ask what it

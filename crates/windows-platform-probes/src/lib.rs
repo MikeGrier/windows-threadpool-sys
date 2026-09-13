@@ -151,6 +151,7 @@ pub mod pool_growth;
 pub mod report;
 pub mod report_oracle;
 pub mod request_cost;
+pub mod row;
 pub mod topology;
 pub mod topology_report;
 pub mod worker_context;

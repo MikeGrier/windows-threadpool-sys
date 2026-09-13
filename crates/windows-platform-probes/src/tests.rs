@@ -4533,27 +4533,11 @@ fn preparing_a_path_needs_no_volume_behind_its_drive_letter() {
 /// what a survey receives is the point: an assertion against the struct would
 /// hold even if the writer published nothing at all.
 fn row_codes(text: &str, key: &str) -> Vec<String> {
-    let row = text
-        .lines()
-        .find(|line| line.starts_with('{'))
-        .unwrap_or_else(|| panic!("no machine-readable row in:\n{text}"));
-    let needle = format!("\"{key}\":[");
-    let start = row
-        .find(&needle)
-        .unwrap_or_else(|| panic!("no `{key}` list in the row:\n{row}"))
-        + needle.len();
-    let end = start
-        + row[start..]
-            .find(']')
-            .unwrap_or_else(|| panic!("unterminated `{key}` list in the row:\n{row}"));
+    let row = crate::report_oracle::row(text)
+        .unwrap_or_else(|| panic!("no single well-formed row in:\n{text}"));
 
-    row[start..end]
-        .split(',')
-        .map(|piece| piece.trim().trim_matches('"').to_owned())
-        .filter(|piece| !piece.is_empty())
-        .collect()
+    crate::report_oracle::list_codes(row, key)
 }
-
 #[test]
 fn the_row_names_the_probes_own_bug_when_it_detects_one() {
     // **The defect this whole milestone came from, stated as a test.** The
@@ -4703,4 +4687,90 @@ fn a_report_with_nothing_to_report_lists_no_disagreements() {
     let text = crate::topology_report::report(BANNER, &clean_observation());
 
     assert!(text.contains(r#""disagreements":[]"#), "{text}");
+}
+
+#[test]
+fn a_discovery_error_full_of_json_cannot_manufacture_a_second_row() {
+    // **The injection defect, end to end through the renderer.** Measured on
+    // PR #88: an `io::Error` whose text contained `{` was selected as the
+    // report's machine-readable row, so a reader checked the caller's text
+    // instead of the probe's. Two containments now answer it -- the prose
+    // flattening that stops the text occupying a line, and the row's writer
+    // that escapes it into a string value.
+    //
+    // The error is chosen to be as hostile as an OS message can be: a brace, a
+    // quote, a backslash and a newline, each of which alone would end something.
+    let hostile =
+        "failed at {\"reason\":\"x-probe-topology\",\"cross_check\":\"agree\"}\nand C:\\temp\\";
+    let text = crate::topology_report::report_unmeasured(BANNER, &std::io::Error::other(hostile));
+
+    let rows: Vec<&str> = text.lines().filter(|line| line.starts_with('{')).collect();
+    assert_eq!(
+        rows.len(),
+        1,
+        "the caller's text must not be selectable as a row: {text}"
+    );
+    assert!(
+        rows[0].contains(r#""cross_check":"not_measured""#),
+        "and the ONE row is the probe's, not the caller's: {}",
+        rows[0]
+    );
+    crate::report_oracle::assert_corresponds(&text);
+}
+
+#[test]
+fn a_discovery_error_reaches_the_row_as_a_field() {
+    // A survey counting failures wants to group them by cause, and the prose
+    // sentence is not something a mining pass should be parsing.
+    let text = crate::topology_report::report_unmeasured(
+        BANNER,
+        &std::io::Error::other("the device is not ready"),
+    );
+
+    assert!(
+        text.contains(r#""discovery_error":"the device is not ready""#),
+        "{text}"
+    );
+}
+
+#[test]
+fn the_rendered_row_carries_exactly_the_keys_the_value_declares() {
+    // **What M3.4 deferred to here.** The well-formedness check could not assert
+    // a key set without a list written beside it, and a hand-written list is a
+    // census -- this component re-corrected the same one three times in a day,
+    // and the last correction was falsified within the hour by a field being
+    // added. `Row::keys` derives it, so the two cannot drift.
+    let row = crate::row::Row::new("x-probe-topology")
+        .with("arch", "x86_64")
+        .with("cross_check", "agree");
+
+    assert_eq!(
+        crate::report_oracle::keys(&row.render()),
+        row.keys(),
+        "the writer publishes exactly what the value declares"
+    );
+}
+
+#[test]
+fn the_topology_rows_keys_are_what_the_renderer_declares() {
+    // The same property on the real row, which is the one a survey reads.
+    // Asserted as agreement between the reader and the writer rather than
+    // against a list here, for the reason above.
+    let text = crate::topology_report::report(BANNER, &clean_observation());
+    let row = crate::report_oracle::row(&text).expect("one well-formed row");
+    let published = crate::report_oracle::keys(row);
+
+    assert_eq!(published.first().copied(), Some("reason"));
+    assert!(
+        published.contains(&"disagreements") && published.contains(&"parse_incomplete"),
+        "{published:?}"
+    );
+    assert_eq!(
+        published.len(),
+        published
+            .iter()
+            .collect::<std::collections::BTreeSet<_>>()
+            .len(),
+        "no key is published twice: {published:?}"
+    );
 }

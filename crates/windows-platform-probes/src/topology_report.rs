@@ -19,8 +19,11 @@ use std::io;
 
 use windows_placement_probe::fingerprint::{Fingerprint, banner_line_for};
 
-use crate::topology::diagnostic::anomaly_code;
-use crate::topology::{Observation, PartitioningCache, Verdict};
+use crate::row::{Row, Value};
+use crate::topology::diagnostic::published_anomaly;
+use crate::topology::{
+    Disagreement, NotCompared, Observation, ParseIncomplete, PartitioningCache, Verdict,
+};
 
 /// The banner and title both reports open with.
 ///
@@ -252,10 +255,24 @@ pub fn report_unmeasured(banner: &str, error: &io::Error) -> String {
         out,
         "subject must say so instead of printing a misleading shape.)"
     );
+    // **Through the same writer, and this is the shape that most needs it.**
+    // The only caller text in any report reaches THIS renderer -- a failed
+    // discovery's `io::Error`, whose message is whatever the OS said. Publishing
+    // it as a `Value::Text` is what makes a brace in that message inert rather
+    // than the start of a second row, which is the contamination measured on
+    // PR #88.
+    //
+    // The error is published as a field rather than only printed, because a
+    // survey counting failures wants to group them by cause, and the prose
+    // sentence above is not something a mining pass should be parsing.
     let _ = writeln!(
         out,
-        r#"{{"reason":"x-probe-topology","arch":"{}","cross_check":"not_measured"}}"#,
-        std::env::consts::ARCH
+        "{}",
+        Row::new("x-probe-topology")
+            .with("arch", std::env::consts::ARCH)
+            .with("cross_check", "not_measured")
+            .with("discovery_error", error.to_string())
+            .render()
     );
 
     // Bound here too, for the reason given on `report` below. This renderer
@@ -665,146 +682,138 @@ pub fn report(banner: &str, observation: &Observation) -> String {
     // anything sizing itself by cache boundary, on a row already certified.
     // Hence the `outermost_partitioning_cache` field beside it, which a
     // consumer must read rather than inferring from the level being absent.
-    let cache_json: Vec<String> = observation
-        .caches
-        .iter()
-        .map(|c| format!(r#"{{"level":{},"domains":{}}}"#, c.level, c.domains()))
-        .collect();
-    let policy_json: Vec<String> = observation
-        .domain_counts()
-        .into_iter()
-        .map(|(name, count)| format!(r#""{name}":{count}"#))
-        .collect();
-    // **The conditions, not how many there were.** These three published
-    // `.len()`, so the row said a run was in doubt without saying why: a survey
-    // reading `"parse_incomplete":1` could not tell `partitioning_summary_missing`
-    // -- this probe detecting a bug in ITSELF -- from `contradictory_cores` or
-    // `not_measured`. Four categorically different facts, one cardinality, and
-    // only the prose separated them.
+    // **One writer, one value, no positions.** The row was built by
+    // interpolating every value positionally into a `concat!` template, where a
+    // field's name and its value were related only by counting -- so a reordered
+    // argument or a miscounted placeholder yielded mislabelled data that still
+    // parses. Here a name and its value are one pair. See `crate::row`.
     //
-    // Exactly the correction `efficiency_classes` already carries a few lines
-    // below, for exactly the reason given there: the list is what the name
-    // promises, and a count is still available from its length. The
-    // `windows-topology-sys recorded N enumeration anomal...` sentence the prose
-    // prints keeps that count; it does not need the row to restate it.
-    //
-    // The codes are the contract and the sentences are not -- see
-    // `topology::diagnostic`. That is what lets the prose be reworded for a
-    // reader without breaking a mining pass.
-    let quoted = |codes: Vec<&'static str>| {
-        codes
-            .into_iter()
-            .map(|code| format!(r#""{code}""#))
-            .collect::<Vec<_>>()
-            .join(",")
-    };
-    let disagreements_json = quoted(check.disagreements.iter().map(|e| e.code()).collect());
-    let not_compared_json = quoted(check.not_compared.iter().map(|e| e.code()).collect());
-    let parse_incomplete_json = quoted(check.parse_incomplete.iter().map(|e| e.code()).collect());
-    let anomalies_json = quoted(
-        observation
-            .enumeration_anomalies
-            .iter()
-            .map(anomaly_code)
-            .collect(),
-    );
-    let _ = writeln!(
-        out,
-        concat!(
-            r#"{{"reason":"x-probe-topology","arch":"{}","processors":{},"groups":{},"#,
-            r#""packages":{},"numa_domains":{},"numa_domains_without_processors":{},"cores":{},"#,
-            r#""efficiency_classes":[{}],"caches":[{}],"outermost_partitioning_cache_level":{},"#,
-            r#""outermost_partitioning_cache":"{}","#,
-            r#""policies":{{{}}},"cross_check":"{}","disagreements":[{}],"not_compared":[{}],"#,
-            r#""parse_incomplete":[{}],"#,
-            r#""enumeration_anomalies":[{}],"numa_domains_only_in_cpu_sets":{}}}"#
-        ),
-        std::env::consts::ARCH,
-        observation.online_processors,
-        observation.groups,
-        observation.packages,
-        observation.numa_domains,
-        observation.numa_domains_without_processors,
-        observation.cores.len(),
+    // The diagnostics publish their DATA now, not only their code: a survey
+    // learns `contradictory_cores` AND that three cores contradicted themselves.
+    // What stopped M3.1 doing that was this template.
+    let row = Row::new("x-probe-topology")
+        .with("arch", std::env::consts::ARCH)
+        .with("processors", observation.online_processors)
+        .with("groups", observation.groups)
+        .with("packages", observation.packages)
+        .with("numa_domains", observation.numa_domains)
+        .with(
+            "numa_domains_without_processors",
+            observation.numa_domains_without_processors,
+        )
+        .with("cores", observation.cores.len())
         // The CLASSES, not how many there are. A plural name over a count is
-        // ambiguous in the one way that matters here: on a single-class host
-        // this emitted `"efficiency_classes":1`, which reads exactly like a
-        // machine whose one class is class *1* -- while the prose two lines
-        // above printed `efficiency classes: [0]`. Same fact, same report, two
-        // renderings a consumer cannot reconcile. The list is what the name
-        // promises, agrees with the prose, and carries strictly more: a fleet
-        // survey can still get the count from its length, and can now also see
-        // WHICH classes a host reported.
-        classes
-            .iter()
-            .map(u8::to_string)
-            .collect::<Vec<_>>()
-            .join(","),
-        cache_json.join(","),
-        // The level the prose names, read per variant rather than through
-        // `outermost_partitioning_cache`, whose `None` covers the
-        // summary-missing case too. Routing through it emitted
-        // `"outermost_partitioning_cache_level":null` beside
-        // `"outermost_partitioning_cache":"summary_missing"` while the prose
-        // printed the number -- one fact, two renderings, no way to reconcile
-        // them. `domain_counts` was taken off the same accessor for the same
-        // reason; this consumer was not swept with it.
-        match observation.partitioning_cache() {
-            PartitioningCache::Level(cache) => cache.level.to_string(),
-            PartitioningCache::SummaryMissing(level) => level.to_string(),
-            PartitioningCache::NoLevelsReported
-            | PartitioningCache::NoLevelPartitions
-            | PartitioningCache::NoUniqueOutermost => "null".to_string(),
-        },
-        // The level alone said `null` for every absent case alike, on a line
-        // the verdict had already certified as "agree" -- an incomparable
+        // ambiguous in the one way that matters: on a single-class host this
+        // emitted `"efficiency_classes":1`, which reads exactly like a machine
+        // whose one class is class *1* -- while the prose printed
+        // `efficiency classes: [0]`. Same fact, two renderings a consumer cannot
+        // reconcile. A survey can still get the count from the length.
+        .with(
+            "efficiency_classes",
+            classes.iter().copied().collect::<Value>(),
+        )
+        .with(
+            "caches",
+            observation
+                .caches
+                .iter()
+                .map(|cache| {
+                    Value::Object(vec![
+                        ("level", Value::from(cache.level)),
+                        ("domains", Value::from(cache.domains())),
+                    ])
+                })
+                .collect::<Value>(),
+        )
+        // The level alone said `null` for every absent case alike, on a line the
+        // verdict had already certified as `agree` -- an incomparable
         // partitioning touches nothing `cross_check` consults. A query counting
         // nulls as "machines no cache level partitions" then folded in machines
-        // where a level DOES partition, which is the opposite conclusion for
-        // anything sizing itself by cache boundary. Always a string, so a
-        // consumer filters on `== "none"` rather than on the absence of a
-        // number.
-        match observation.partitioning_cache() {
-            PartitioningCache::Level(_) => "level",
-            PartitioningCache::NoLevelsReported => "no_levels_reported",
-            PartitioningCache::NoLevelPartitions => "none",
-            PartitioningCache::NoUniqueOutermost => "not_unique",
-            PartitioningCache::SummaryMissing(_) => "summary_missing",
-        },
-        policy_json.join(","),
-        // A tri-state rather than a boolean, for the reason the prose above
-        // gives: a log-mining pass over accumulated CI output must be able to
-        // tell "all three counters agreed" from "two agreed and the third was
-        // never compared". `cross_check_ok:true` said the same thing for both.
-        match check.verdict() {
-            Verdict::Agree => "agree",
-            Verdict::Disagree => "disagree",
-            Verdict::Incomplete => "incomplete",
-        },
-        // **The disagreements, which the row did not carry at all.** Before
-        // this, a survey could tell a run had disagreed -- `cross_check` says
-        // so -- but not WHICH counter disagreed, while the prose listed each one
-        // with both readings. That is the same shape as the defect this
-        // milestone came from, in the list nobody had noticed was missing: the
-        // vocabulary was built for all three lists and wired for two.
-        //
-        // It survived because the fact-accounting instrument enumerates the
-        // ROW's keys, so a fact the row omits entirely is outside what it can
-        // ask about. It catches a key nothing reads; it cannot catch a prose
-        // fact with no key.
-        disagreements_json,
-        not_compared_json,
-        // Separate from `not_compared`, because a mining pass that finds
-        // `"cross_check":"incomplete"` needs to know whether this probe failed
-        // to read a counter or the parse itself was short or disputed -- the
-        // first is a gap in the measurement, the second a fact about the
-        // machine worth going and looking at. The two lists beside it say which
-        // kind, without a consumer having to know what `cross_check` currently
-        // pushes for -- and now say which CONDITION, not merely how many.
-        parse_incomplete_json,
-        anomalies_json,
-        observation.numa_domains_only_in_cpu_sets,
-    );
+        // where a level DOES partition, the opposite conclusion for anything
+        // sizing itself by cache boundary. Hence the discriminator beside it,
+        // which a consumer must read rather than inferring from the absence.
+        // **The level a SummaryMissing arm names is published too**, not
+        // `null`: the two renderings of WHICH level went unchecked are what a
+        // reader needs when the report is telling them the probe has a bug.
+        .with(
+            "outermost_partitioning_cache_level",
+            match observation.partitioning_cache() {
+                PartitioningCache::Level(cache) => Value::from(cache.level),
+                PartitioningCache::SummaryMissing(level) => Value::from(level),
+                PartitioningCache::NoLevelsReported
+                | PartitioningCache::NoLevelPartitions
+                | PartitioningCache::NoUniqueOutermost => Value::Null,
+            },
+        )
+        .with(
+            "outermost_partitioning_cache",
+            match observation.partitioning_cache() {
+                PartitioningCache::Level(_) => "level",
+                PartitioningCache::NoLevelsReported => "no_levels_reported",
+                PartitioningCache::NoLevelPartitions => "none",
+                PartitioningCache::NoUniqueOutermost => "not_unique",
+                PartitioningCache::SummaryMissing(_) => "summary_missing",
+            },
+        )
+        .with(
+            "policies",
+            Value::Object(
+                observation
+                    .domain_counts()
+                    .into_iter()
+                    .map(|(name, count)| (name, Value::from(count)))
+                    .collect(),
+            ),
+        )
+        // A tri-state rather than a boolean: a mining pass must be able to tell
+        // "all three counters agreed" from "two agreed and the third was never
+        // compared". `cross_check_ok:true` said the same thing for both.
+        .with(
+            "cross_check",
+            match check.verdict() {
+                Verdict::Agree => "agree",
+                Verdict::Disagree => "disagree",
+                Verdict::Incomplete => "incomplete",
+            },
+        )
+        .with(
+            "disagreements",
+            check
+                .disagreements
+                .iter()
+                .map(Disagreement::published)
+                .collect::<Value>(),
+        )
+        .with(
+            "not_compared",
+            check
+                .not_compared
+                .iter()
+                .map(NotCompared::published)
+                .collect::<Value>(),
+        )
+        .with(
+            "parse_incomplete",
+            check
+                .parse_incomplete
+                .iter()
+                .map(ParseIncomplete::published)
+                .collect::<Value>(),
+        )
+        .with(
+            "enumeration_anomalies",
+            observation
+                .enumeration_anomalies
+                .iter()
+                .map(published_anomaly)
+                .collect::<Value>(),
+        )
+        .with(
+            "numa_domains_only_in_cpu_sets",
+            observation.numa_domains_only_in_cpu_sets,
+        );
+
+    let _ = writeln!(out, "{}", row.render());
 
     // **Bound here rather than called from each test, which is the difference
     // between an oracle and three more tests.** A test added beside the others

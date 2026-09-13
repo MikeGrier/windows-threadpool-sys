@@ -136,7 +136,7 @@ M4 below, six in M5. M2.18 is the exception, dissolved rather than moved.
   binding. The invariant is not the sole detector for that push site; its value is the nine others,
   several of which have no dedicated test.
 
-- [ ] **M3.3** -- Emit the row from a typed value through one writer.
+- [x] **M3.3** -- Emit the row from a typed value through one writer.
 
   > **-> PREREQUISITE: M3.4 lands first.** The reason is on M3.4: this item's nested per-entry data
   > makes `ndjson_list_len` silently miscount, so the parsers it would break should be gone before
@@ -167,6 +167,35 @@ M4 below, six in M5. M2.18 is the exception, dissolved rather than moved.
   other. Not deferred for want of a consumer -- the shape of the row is the blocker, and it is this
   item. This subsumes M2.18: the banner becomes a typed field like any other, and the
   question of who may construct one is answered by the row's constructor rather than separately.
+
+  **Done.** `crate::row` holds a `Value` and a `Row` whose members are name-and-value pairs, with
+  one writer that escapes strings. Both defect classes are now unrepresentable rather than
+  detected: a name and its value move together or not at all, and a `Value::Text` cannot end the
+  string it is in.
+
+  Each diagnostic publishes its DATA through `published()`, so a survey learns
+  `{"code":"contradictory_cores","count":3}` rather than the code alone -- what M3.1 had to leave
+  behind because the row was a positional template. Anomalies carry `source` and `offset` too:
+  the same kind at the same offset across a fleet is a different finding from the same kind
+  scattered, and neither is visible from a count.
+
+  `report_unmeasured` goes through the same writer, and that is the shape that most needed it --
+  it is the only renderer that interpolates caller text, a failed discovery's `io::Error`. The
+  error now reaches the row as a `discovery_error` field, so a survey can group failures by cause
+  instead of parsing the prose sentence.
+
+  The key-set check M3.4 deferred here now exists, and is derived: `Row::keys` reads the value, and
+  a test asserts the reader and the writer agree. No census.
+
+  **Two silent behaviour changes were caught by checking the old code rather than trusting the
+  rewrite.** `PartitioningCache` has FIVE variants, not the four a rewrite naturally reaches for;
+  and `SummaryMissing` publishes its level rather than `null` -- which matters precisely because
+  that arm is the report telling a reader the probe has a bug, and WHICH level went unchecked is
+  what they need.
+
+  Sabotage-verified: removing the quote escape reddens three row tests, including the
+  brace-injection one. The clean row is byte-identical to what the template produced, confirmed
+  against a real `probe-topology` run.
 
 - [x] **M3.4** -- Retire the prose-against-row correspondences and the parsers that serve only them.
 

@@ -403,26 +403,10 @@ fn published_codes(text: &str, keys: &[&str]) -> Vec<String> {
         panic!("no single well-formed row in:\n{text}");
     };
 
-    let mut codes = Vec::new();
-    for key in keys {
-        let needle = format!("\"{key}\":[");
-        let Some(start) = row.find(&needle).map(|at| at + needle.len()) else {
-            continue;
-        };
-        let Some(end) = row[start..].find(']').map(|at| start + at) else {
-            continue;
-        };
-        codes.extend(
-            row[start..end]
-                .split(',')
-                .map(|piece| piece.trim().trim_matches('"').to_owned())
-                .filter(|piece| !piece.is_empty()),
-        );
-    }
-
-    codes
+    keys.iter()
+        .flat_map(|key| report_oracle::list_codes(row, key))
+        .collect()
 }
-
 /// How many diagnostic entries the PROSE lists.
 ///
 /// The renderer tags each kind under DISAGREE and renders both as a bare `- `
@@ -557,31 +541,37 @@ fn a_state_the_row_does_not_publish_fails_the_accounting() {
         "the row publishes it today, which is what the rule requires"
     );
 
-    // Now strip every condition from the row, which is what a renderer that
-    // forgot to publish one would produce.
+    // Now empty every diagnostic list in the row, which is what a renderer that
+    // forgot to publish one would produce. Done by replacing each list's whole
+    // contents rather than by editing entries: the entries are objects now, so
+    // splitting on commas cuts them in half -- which is how this sabotage broke
+    // when M3.3 landed, and is worth the note because a sabotage that no longer
+    // sabotages leaves the rule it guards unguarded while still passing.
     let stripped = text
         .lines()
         .map(|line| {
-            if line.starts_with('{') {
-                line.replace(
-                    r#""parse_incomplete":["#,
-                    r#""parse_incomplete":["x-removed-"#,
-                )
-                .replace("x-removed-", "")
-                .split(',')
-                .filter(|piece| !piece.contains("partitioning_summary_missing"))
-                .collect::<Vec<_>>()
-                .join(",")
-            } else {
-                line.to_owned()
+            if !line.starts_with('{') {
+                return line.to_owned();
             }
+            let mut out = line.to_owned();
+            for key in DIAGNOSTIC_LISTS {
+                let needle = format!("\"{key}\":[");
+                let Some(start) = out.find(&needle).map(|at| at + needle.len()) else {
+                    continue;
+                };
+                let Some(end) = report_oracle::list_span_end(&out, start) else {
+                    continue;
+                };
+                out.replace_range(start..end, "");
+            }
+            out
         })
         .collect::<Vec<_>>()
         .join("\n");
 
     assert!(
         published_codes(&stripped, DIAGNOSTIC_LISTS).is_empty(),
-        "the sabotage must actually remove the condition: {stripped}"
+        "the sabotage must actually remove the conditions: {stripped}"
     );
 }
 

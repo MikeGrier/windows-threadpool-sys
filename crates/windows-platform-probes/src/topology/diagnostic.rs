@@ -36,7 +36,25 @@
 
 use std::fmt;
 
-use windows_topology_sys::{AnomalyKind, EnumerationAnomaly};
+use windows_topology_sys::{AnomalyKind, EnumerationAnomaly, Source};
+
+use crate::row::Value;
+
+/// A diagnostic as the row publishes it: its code, and the values it carries.
+///
+/// **The data, not only the code.** M3.1 published the code alone, so a survey
+/// learned `contradictory_cores` without learning that three cores contradicted
+/// themselves. The variants already carry those values, for `Display`; what
+/// stopped M3.1 publishing them is that the row was a positional template where
+/// a nested object had to be hand-assembled.
+///
+/// `code` is always first, so a reader scanning accumulated output sees the
+/// identity before the detail.
+fn entry(code: &'static str, fields: Vec<(&'static str, Value)>) -> Value {
+    let mut members = vec![("code", Value::Text(code.to_owned()))];
+    members.extend(fields);
+    Value::Object(members)
+}
 
 /// A counter comparison that was made and did not match.
 ///
@@ -82,6 +100,32 @@ impl Disagreement {
             Self::ProcessorGroups { .. } => "processor_groups",
             Self::HighestNumaNode { .. } => "highest_numa_node",
         }
+    }
+}
+
+impl Disagreement {
+    /// This disagreement as the row publishes it.
+    #[must_use]
+    pub fn published(&self) -> Value {
+        let fields = match self {
+            Self::OnlineProcessors { parsed, counter } => vec![
+                ("parsed", Value::Number(*parsed)),
+                ("counter", Value::Number(*counter as usize)),
+            ],
+            Self::ProcessorGroups { parsed, counter } => vec![
+                ("parsed", Value::Number(*parsed)),
+                ("counter", Value::Number(*counter as usize)),
+            ],
+            Self::HighestNumaNode { parsed, counter } => vec![
+                (
+                    "parsed",
+                    parsed.map_or(Value::Null, |node| Value::Number(node as usize)),
+                ),
+                ("counter", Value::Number(*counter as usize)),
+            ],
+        };
+
+        entry(self.code(), fields)
     }
 }
 
@@ -144,6 +188,18 @@ impl NotCompared {
             Self::ActiveProcessorGroupCountFailed => "active_processor_group_count_failed",
             Self::HighestNumaNodeFailed => "highest_numa_node_failed",
         }
+    }
+}
+
+impl NotCompared {
+    /// This entry as the row publishes it.
+    ///
+    /// Every variant is a bare condition with no values of its own, so each
+    /// publishes its code and nothing else -- which is the honest rendering
+    /// rather than an object padded to look like the others.
+    #[must_use]
+    pub fn published(&self) -> Value {
+        entry(self.code(), Vec::new())
     }
 }
 
@@ -331,6 +387,56 @@ impl ParseIncomplete {
     }
 }
 
+impl ParseIncomplete {
+    /// This entry as the row publishes it, with the values its variant carries.
+    #[must_use]
+    pub fn published(&self) -> Value {
+        let count = |value: &usize| vec![("count", Value::Number(*value))];
+        let fields = match self {
+            Self::EnumerationAnomalies { count: n }
+            | Self::NumaDomainsOnlyInCpuSets { count: n }
+            | Self::ContradictoryCores { count: n }
+            | Self::UnnumberedCacheLevels { count: n }
+            | Self::UnreportedRelations { count: n }
+            | Self::DescribedRelations { count: n }
+            | Self::CoresOnlyInCpuSets { count: n }
+            | Self::OverlappingWalkRelations { count: n }
+            | Self::ProcessorAttributeConflicts { count: n }
+            | Self::NumaDomainsWithConflictingLabels { count: n }
+            | Self::NumaDomainsUnreported { count: n } => count(n),
+            Self::NoCacheLevels
+            | Self::NoPackages
+            | Self::NoCores
+            | Self::NotMeasured
+            | Self::CoherenceNotCollected => Vec::new(),
+            Self::CacheLevelsWithoutPartitions { levels } => {
+                vec![("levels", levels.iter().copied().collect())]
+            }
+            Self::MeasuredButCountsAbsent { absent } => {
+                vec![("absent", absent.iter().copied().collect())]
+            }
+            Self::PartitioningSummaryMissing { level } => {
+                vec![("level", Value::Number(*level as usize))]
+            }
+            Self::RelationsWithoutProcessors { cores, packages } => vec![
+                ("cores", Value::Number(*cores)),
+                ("packages", Value::Number(*packages)),
+            ],
+            Self::EnumerationsDisagreed {
+                attempts,
+                walk_only,
+                cpu_sets_only,
+            } => vec![
+                ("attempts", Value::Number(*attempts as usize)),
+                ("walk_only", Value::Number(*walk_only)),
+                ("cpu_sets_only", Value::Number(*cpu_sets_only)),
+            ],
+        };
+
+        entry(self.code(), fields)
+    }
+}
+
 impl fmt::Display for ParseIncomplete {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
@@ -471,4 +577,53 @@ pub fn anomaly_code(anomaly: &EnumerationAnomaly) -> &'static str {
         AnomalyKind::TruncatedArray { .. } => "truncated_array",
         _ => "unclassified",
     }
+}
+
+/// An anomaly as the row publishes it.
+///
+/// Carries WHERE as well as what: the enumeration it was reading and the byte
+/// offset it stopped at. A survey grouping by kind across a fleet wants both --
+/// the same kind at the same offset on many hosts is a different finding from
+/// the same kind scattered, and neither is visible from a count.
+///
+/// `AnomalyKind` is `#[non_exhaustive]`, so a kind added upstream lands in
+/// `unclassified` and publishes no fields rather than a guess at which ones it
+/// has. That is the honest rendering: the code says the vocabulary is older than
+/// the crate, and inventing fields for it would say more than is known.
+#[must_use]
+pub fn published_anomaly(anomaly: &EnumerationAnomaly) -> Value {
+    let source = match anomaly.source {
+        Source::RelationshipWalk => "relationship_walk",
+        Source::CpuSets => "cpu_sets",
+        _ => "unclassified",
+    };
+
+    let mut fields = vec![
+        ("source", Value::Text(source.to_owned())),
+        ("offset", Value::Number(anomaly.offset)),
+    ];
+
+    fields.extend(match anomaly.kind {
+        AnomalyKind::Undersized { declared, minimum } => vec![
+            ("declared", Value::Number(declared)),
+            ("minimum", Value::Number(minimum)),
+        ],
+        AnomalyKind::OverrunsBuffer {
+            declared,
+            remaining,
+        } => vec![
+            ("declared", Value::Number(declared)),
+            ("remaining", Value::Number(remaining)),
+        ],
+        AnomalyKind::TrailingBytes { remaining } => {
+            vec![("remaining", Value::Number(remaining))]
+        }
+        AnomalyKind::TruncatedArray { declared, decoded } => vec![
+            ("declared", Value::Number(declared)),
+            ("decoded", Value::Number(decoded)),
+        ],
+        _ => Vec::new(),
+    });
+
+    entry(anomaly_code(anomaly), fields)
 }
