@@ -168,7 +168,7 @@ M4 below, six in M5. M2.18 is the exception, dissolved rather than moved.
   item. This subsumes M2.18: the banner becomes a typed field like any other, and the
   question of who may construct one is answered by the row's constructor rather than separately.
 
-- [ ] **M3.4** -- Retire the prose-against-row correspondences and the parsers that serve only them.
+- [x] **M3.4** -- Retire the prose-against-row correspondences and the parsers that serve only them.
 
   > **-> DO THIS BEFORE M3.3, and leave both IDs where they are.** M3.3 carries each diagnostic's
   > data, which turns the flat code arrays into arrays of OBJECTS -- and `ndjson_list_len` splits on
@@ -206,7 +206,28 @@ M4 below, six in M5. M2.18 is the exception, dissolved rather than moved.
   Retire, do not merely stop calling. Dead extraction helpers left in place are a second grammar for
   a format that no longer has two readers.
 
-- [ ] **M3.5** -- Re-aim the shape corpus and the fact accounting at the row.
+  **Done, together with M3.5, because they cannot be separated.** The fact-accounting instrument is
+  built entirely on `report_oracle::check` and the `Correspondence` variants, so deleting the
+  correspondences leaves it measuring nothing and the suite red between the two items. Committed as
+  one commit citing both IDs, per the checklist rule for coupled items, rather than split into a
+  commit that does not pass.
+
+  Measured: `report_oracle.rs` 79,394 -> 8,874 bytes, its tests 105,299 -> 5,598, the integration
+  instrument 71,007 -> 25,689. All eight prose correspondences and all twenty-three extraction
+  helpers are gone.
+
+  What survives is the row's well-formedness: exactly one machine-readable line, brackets balanced
+  (string-aware, because a failed discovery's `io::Error` is interpolated into a string value and an
+  OS message is free to contain a bracket), and no repeated top-level key. That last one is the
+  malformation that survives a consumer's parse and changes what it reads, since most JSON readers
+  take the last.
+
+  **The key-set check is deliberately NOT here.** Asserting it needs a list of expected keys, and a
+  list written here is a census -- this component re-corrected the same census three times in one
+  day. M3.3 makes the row a typed value, at which point the key set is derivable from the type
+  rather than declared beside it. Moved there rather than approximated here.
+
+- [x] **M3.5** -- Re-aim the shape corpus and the fact accounting at the row.
 
   **The instrument enumerates in one direction only, and the other direction is where M3.1's rule
   lives.** `ndjson_keys` reads the ROW's keys and requires each to be classified, so it asks "does
@@ -223,6 +244,26 @@ M4 below, six in M5. M2.18 is the exception, dissolved rather than moved.
   So the accounting needs a second enumeration, from the PROSE's facts to the row's keys, or the
   rule "a renderer may not tell a reader something the row cannot tell a survey" has no instrument
   behind it and holds only as long as someone remembers it.
+
+  **Done, with M3.4, and the second enumeration exists.** The instrument no longer asks "which prose
+  facts does the oracle read" -- there are none. It asks, for every state `topology::invariant` knows
+  forbids agreement, whether the row publishes a condition for it; and it holds the prose's
+  diagnostic line count against the row's condition count across the corpus.
+
+  Sabotage-verified against the defect that motivated it: dropping `disagreements` from the row --
+  the omission that survived 41 review rounds, a zero-survivor mutation sweep and the old accounting
+  -- now reddens `the_row_lists_a_condition_for_every_diagnostic_the_prose_lists`.
+
+  **One asymmetry, found by the instrument rather than reasoned.** Counting all four lists against
+  prose lines failed: the prose folds every anomaly into ONE
+  `windows-topology-sys recorded N enumeration anomal...` sentence while the row lists one code per
+  anomaly, so three anomalies read as two dropped entries. `enumeration_anomalies` counts on its own
+  axis and is checked against the OBSERVATION -- one published code per anomaly recorded -- which is
+  the artifact the row owes fidelity to. Checking it against the number inside that sentence would
+  be the prose-reading this milestone retired.
+
+  Both publication rules carry a corpus guard, because both skip a shape in no blocking state and a
+  drifted all-healthy corpus would leave them green while checking nothing.
 
 
   [tests/a_real_report_agrees_with_itself.rs](tests/a_real_report_agrees_with_itself.rs) enumerates
