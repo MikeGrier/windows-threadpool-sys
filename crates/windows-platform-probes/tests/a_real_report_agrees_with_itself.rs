@@ -315,6 +315,25 @@ fn shapes() -> Vec<Shape> {
     uncollected.coherence = windows_topology_sys::Coherence::NotCollected;
     push("coherence that was never collected", uncollected);
 
+    // **The three states the corpus declared and never rendered.** `codes_for`
+    // named a code for each, and no shape produced any of them, so those arms
+    // were never held against a real row -- the same gap that let
+    // `CoherenceNotCollected` carry the wrong code. Found by a review.
+    let mut no_packages = base();
+    no_packages.packages = 0;
+    push("processors reported, no packages", no_packages);
+
+    let mut no_cores = base();
+    no_cores.cores = Vec::new();
+    push("processors reported, no cores", no_cores);
+
+    let mut unnumbered = base();
+    unnumbered.caches = vec![CacheLevel {
+        level: 0,
+        processors_per_domain: vec![4],
+    }];
+    push("a cache level Windows does not number", unnumbered);
+
     let mut anomalies = base();
     anomalies.enumeration_anomalies = vec![
         windows_topology_sys::EnumerationAnomaly {
@@ -550,6 +569,35 @@ fn every_state_that_blocks_agreement_reaches_the_row() {
             unpublished.join(", "),
         );
     }
+}
+
+#[test]
+fn the_corpus_reaches_every_blocking_state() {
+    // **The per-state rule proves a mapping was WRITTEN; this proves it was
+    // EXERCISED.** `codes_for` is exhaustive, so every state names a code -- but
+    // an arm whose state no shape produces is never compared against a rendered
+    // row, and a wrong code there sits undetected. That is not hypothetical: it
+    // is exactly how `CoherenceNotCollected` came to be mapped to
+    // `enumerations_disagreed`, caught only when a shape finally reached it.
+    //
+    // Found by a review, which observed that this corpus omitted several
+    // declared states outright.
+    let mut unreached: Vec<String> = Vec::new();
+    for state in invariant::BlockingState::ALL {
+        let reached = shapes()
+            .iter()
+            .any(|shape| invariant::blocking_states(&shape.observation).contains(state));
+        if !reached {
+            unreached.push(format!("{state:?}"));
+        }
+    }
+
+    assert!(
+        unreached.is_empty(),
+        "no corpus shape reaches {}, so `codes_for`'s arm(s) for them are never \
+         held against a rendered row",
+        unreached.join(", ")
+    );
 }
 
 #[test]

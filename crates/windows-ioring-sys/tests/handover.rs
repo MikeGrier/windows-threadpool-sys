@@ -477,6 +477,10 @@ fn attaching_while_unbuffered_reads_are_still_in_flight_strands_nothing() {
             let mut ring = IoRing::new(64, 64).expect("create ring");
             let mut contract = RingContract::new();
             let mut pending: Pending<Aligned> = Pending::new();
+            // Assigned once inside the block below and read after it, so no
+            // initial value is needed -- and giving it one would be a value
+            // nothing reads.
+            let submitted;
 
             {
                 let mut batch = Batch::new(&mut ring);
@@ -496,11 +500,15 @@ fn attaching_while_unbuffered_reads_are_still_in_flight_strands_nothing() {
                     contract.observe_push(token.id());
                     pending.insert(token.id(), token);
                 }
+                // **Started BEFORE the submit, not after it.** The reads begin
+                // executing inside `submit_and_wait`, so a clock started once it
+                // returns omits part of the very window the precondition depends
+                // on -- and a read that finished during the call is invisible to
+                // it. Measuring from here spans every instant a read could have
+                // used.
+                submitted = std::time::Instant::now();
                 batch.submit_and_wait(0, 0).expect("submit without waiting");
             }
-            // Started the instant the reads are in flight, so it measures the window
-            // this test's precondition actually depends on.
-            let submitted = std::time::Instant::now();
 
             let event = ring.completion_event().expect(
             "this host must report IORING_FEATURE_SET_COMPLETION_EVENT to run the handover tests",
@@ -515,6 +523,11 @@ fn attaching_while_unbuffered_reads_are_still_in_flight_strands_nothing() {
                 attempt,
                 already_queued,
                 attached.duration_since(submitted),
+                // The NON-BLOCKING poll only. `wait_and_drain` runs after this
+                // and is not included, so the label says `polled` rather than
+                // `drained`: the earlier name claimed the whole drain, and a
+                // reader chasing a slow one would have been misled by a number
+                // that never contained it.
                 attached.elapsed(),
             ));
             if already_queued < width {
@@ -549,10 +562,10 @@ fn attaching_while_unbuffered_reads_are_still_in_flight_strands_nothing() {
 
     let observed = trace
         .iter()
-        .map(|(width, attempt, queued, to_attach, to_drained)| {
+        .map(|(width, attempt, queued, to_attach, to_polled)| {
             format!(
                 "  {width} reads, attempt {attempt}: {queued}/{width} already queued at attach; \
-                 submit->attach {to_attach:?}, attach->drained {to_drained:?}"
+                 submit+attach {to_attach:?}, attach->polled {to_polled:?}"
             )
         })
         .collect::<Vec<_>>()
@@ -570,7 +583,8 @@ fn attaching_while_unbuffered_reads_are_still_in_flight_strands_nothing() {
          escalation is for, since widening the flight multiplies the stall needed to beat it. \
          Reaching the widest row above means the stall outlasted {widest} reads, which a shared \
          runner does not usually manage, or the device now resolves them faster than one \
-         `completion_event` call. Read `submit->attach`: large says the ATTACH was starved and \
+         `completion_event` call. Read `submit+attach`, which spans from just before the \
+         submit to the completed attach: large says the ATTACH was starved and \
          this host is pathologically loaded; small says the DEVICE won, and the fix is a larger \
          `DIRECT_LEN` rather than more attempts."
     );

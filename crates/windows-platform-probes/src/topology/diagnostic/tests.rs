@@ -151,11 +151,54 @@ fn every_disagreement_publishes_the_pair_it_carries() {
     );
 }
 
+/// Every `ParseIncomplete` variant, one instance each.
+///
+/// **Shared, because two tests need the same completeness and a second
+/// hand-written list is a second chance to omit a variant.** The presence test
+/// carried its own seven-element sample and so exercised `Display` for a third
+/// of the enum; blanking any omitted arm would have rendered `UNDESCRIBED` in a
+/// real report while that test stayed green. Found by a review.
+///
+/// The exhaustive `match` in the code test forces a new variant to acquire a
+/// golden; this forces it to be EXERCISED. Neither implies the other, which is
+/// why both exist.
+fn every_parse_incomplete() -> Vec<ParseIncomplete> {
+    vec![
+        ParseIncomplete::EnumerationAnomalies { count: 1 },
+        ParseIncomplete::NumaDomainsOnlyInCpuSets { count: 1 },
+        ParseIncomplete::NoCacheLevels,
+        ParseIncomplete::CacheLevelsWithoutPartitions { levels: vec![1] },
+        ParseIncomplete::MeasuredButCountsAbsent { absent: vec!["x"] },
+        ParseIncomplete::NoPackages,
+        ParseIncomplete::NoCores,
+        ParseIncomplete::ContradictoryCores { count: 1 },
+        ParseIncomplete::UnnumberedCacheLevels { count: 1 },
+        ParseIncomplete::PartitioningSummaryMissing { level: 1 },
+        ParseIncomplete::NotMeasured,
+        ParseIncomplete::RelationsWithoutProcessors {
+            cores: 1,
+            packages: 1,
+        },
+        ParseIncomplete::UnreportedRelations { count: 1 },
+        ParseIncomplete::DescribedRelations { count: 1 },
+        ParseIncomplete::CoresOnlyInCpuSets { count: 1 },
+        ParseIncomplete::OverlappingWalkRelations { count: 1 },
+        ParseIncomplete::ProcessorAttributeConflicts { count: 1 },
+        ParseIncomplete::NumaDomainsWithConflictingLabels { count: 1 },
+        ParseIncomplete::NumaDomainsUnreported { count: 1 },
+        ParseIncomplete::EnumerationsDisagreed {
+            attempts: 1,
+            walk_only: 1,
+            cpu_sets_only: 1,
+        },
+        ParseIncomplete::CoherenceNotCollected,
+    ]
+}
 #[test]
 fn every_parse_incomplete_variant_has_the_code_the_row_promises() {
     // **Every variant, not every payload SHAPE.** The test below covers shapes,
     // on the argument that the counted variants share one helper -- true of the
-    // PAYLOAD and false of the CODE, which is per-variant. So twelve variants
+    // PAYLOAD and false of the CODE, which is per-variant. So the counted variants
     // could be given a wrong code with nothing to notice: the report corpus
     // builds its expectation through `code()` itself, so both sides move
     // together. Found by a review of the pull request.
@@ -189,36 +232,7 @@ fn every_parse_incomplete_variant_has_the_code_the_row_promises() {
         ParseIncomplete::CoherenceNotCollected => "coherence_not_collected",
     };
 
-    let every = [
-        ParseIncomplete::EnumerationAnomalies { count: 1 },
-        ParseIncomplete::NumaDomainsOnlyInCpuSets { count: 1 },
-        ParseIncomplete::NoCacheLevels,
-        ParseIncomplete::CacheLevelsWithoutPartitions { levels: vec![1] },
-        ParseIncomplete::MeasuredButCountsAbsent { absent: vec!["x"] },
-        ParseIncomplete::NoPackages,
-        ParseIncomplete::NoCores,
-        ParseIncomplete::ContradictoryCores { count: 1 },
-        ParseIncomplete::UnnumberedCacheLevels { count: 1 },
-        ParseIncomplete::PartitioningSummaryMissing { level: 1 },
-        ParseIncomplete::NotMeasured,
-        ParseIncomplete::RelationsWithoutProcessors {
-            cores: 1,
-            packages: 1,
-        },
-        ParseIncomplete::UnreportedRelations { count: 1 },
-        ParseIncomplete::DescribedRelations { count: 1 },
-        ParseIncomplete::CoresOnlyInCpuSets { count: 1 },
-        ParseIncomplete::OverlappingWalkRelations { count: 1 },
-        ParseIncomplete::ProcessorAttributeConflicts { count: 1 },
-        ParseIncomplete::NumaDomainsWithConflictingLabels { count: 1 },
-        ParseIncomplete::NumaDomainsUnreported { count: 1 },
-        ParseIncomplete::EnumerationsDisagreed {
-            attempts: 1,
-            walk_only: 1,
-            cpu_sets_only: 1,
-        },
-        ParseIncomplete::CoherenceNotCollected,
-    ];
+    let every = every_parse_incomplete();
 
     let mut seen: Vec<&str> = Vec::new();
     for entry in &every {
@@ -235,9 +249,14 @@ fn every_parse_incomplete_variant_has_the_code_the_row_promises() {
 
 #[test]
 fn every_parse_incomplete_shape_publishes_the_fields_its_variant_carries() {
-    // One instance of each PAYLOAD SHAPE rather than of each variant: the twelve
-    // counted variants share a single helper, and it was rewriting every one of
-    // them wrongly that left 218 tests green.
+    // One instance of each PAYLOAD SHAPE rather than of each variant: the
+    // count-carrying variants all share a single helper, and it was rewriting
+    // every one of them wrongly that left 218 tests green.
+    //
+    // No number here on purpose. Two comments in this file said "twelve counted
+    // variants" and there are eleven -- a census, wrong, in the tests written to
+    // stop exactly that. The shape argument does not depend on how many there
+    // are, so stating it buys nothing and rots.
     let cases = [
         (
             ParseIncomplete::ContradictoryCores { count: 3 },
@@ -463,25 +482,19 @@ fn every_diagnostic_describes_itself() {
         assert!(!text.trim().is_empty(), "{entry:?} renders blank");
     }
 
-    for entry in [
-        ParseIncomplete::ContradictoryCores { count: 3 },
-        ParseIncomplete::NoPackages,
-        ParseIncomplete::CacheLevelsWithoutPartitions { levels: vec![1, 2] },
-        ParseIncomplete::MeasuredButCountsAbsent {
-            absent: vec!["packages"],
-        },
-        ParseIncomplete::PartitioningSummaryMissing { level: 3 },
-        ParseIncomplete::RelationsWithoutProcessors {
-            cores: 4,
-            packages: 7,
-        },
-        ParseIncomplete::EnumerationsDisagreed {
-            attempts: 2,
-            walk_only: 5,
-            cpu_sets_only: 9,
-        },
-    ] {
-        let text = described(&entry);
+    // **Every variant, from the shared fixture.** This carried its own
+    // seven-element sample, so it exercised `Display` for a third of the enum --
+    // `NoCacheLevels`, `EnumerationAnomalies`, `NoCores` and the rest were never
+    // rendered here, and blanking any of their arms would have put UNDESCRIBED
+    // in a real report while this test stayed green. Found by a review.
+    let every = every_parse_incomplete();
+    assert!(
+        every.len() > 15,
+        "the fixture should carry the whole enum, not a sample: {}",
+        every.len()
+    );
+    for entry in &every {
+        let text = described(entry);
         assert_ne!(text, UNDESCRIBED, "{entry:?} renders blank");
         assert!(!text.trim().is_empty(), "{entry:?} renders blank");
     }

@@ -32,8 +32,11 @@
 //! which is the stronger move. What structure cannot check is **the writer** --
 //! whatever turns values into bytes is downstream of every type, and several of
 //! this crate's defects lived exactly there. So one check survives: the report
-//! carries exactly one machine-readable row, and that row is a well-formed flat
-//! JSON object.
+//! carries exactly one machine-readable row, and that row is a well-formed JSON
+//! object. **Not flat** -- an earlier version of this sentence said flat, which
+//! the row has not been since it began publishing diagnostics: `caches`,
+//! `policies` and the three diagnostic lists are nested arrays and objects. A
+//! reader who believed it would have taken the nested data for a defect.
 //!
 //! That is not a correspondence. It is the writer's own output being read back,
 //! which is the one thing no amount of typing upstream can do for itself.
