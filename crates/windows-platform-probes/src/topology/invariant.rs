@@ -373,6 +373,25 @@ pub fn check(observation: &Observation, verdict: Verdict) -> Vec<Violation> {
 
 /// [`check`], as an assertion, for the call sites that are bound to it.
 ///
+/// **Replacing this body with `()` survives a mutation sweep, and no test can
+/// change that.** Recorded here rather than left for the next sweep to
+/// re-discover, because the argument is short and the alternative is a test
+/// manufactured to reach code nothing can reach.
+///
+/// It derives the verdict from `observation.cross_check()`, so the pair it
+/// checks is always the pair the crate itself produces -- and [`check`]'s rules
+/// hold for every such pair by construction, as the module header explains: they
+/// are reachable by CODE CHANGE, not by data. That is precisely why [`check`]
+/// takes the verdict as a PARAMETER, letting a test supply the answer a broken
+/// `cross_check` would give; this function has no such seam, so there is no
+/// observation for which it panics and nothing to distinguish it from `()`.
+///
+/// The same survivor was recorded for `assert_corresponds` on PR #88 -- see
+/// [DESIGN-RATIONALE.md](../../DESIGN-RATIONALE.md) -- for the same reason: every
+/// instrument that would notice goes THROUGH it. A binding that cannot fail on
+/// data is checked by the sweep's `caught` results on [`check`] itself, which is
+/// where the behaviour lives.
+///
 /// # Panics
 ///
 /// Panics listing every invariant the observation violated.

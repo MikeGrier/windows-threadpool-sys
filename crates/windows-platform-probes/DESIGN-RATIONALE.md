@@ -431,13 +431,30 @@ coverage: not *was this branch executed* but *does anything DETECT a change to
 it*. On a branch whose recurring defect is a test that runs code without
 establishing anything about it, that difference is the whole point.
 
-Three sweeps, run through [tools/run-mutants.ps1](../../tools/run-mutants.ps1):
+Five sweeps, run through [tools/run-mutants.ps1](../../tools/run-mutants.ps1). The
+first three predate the M3 rewrite and are kept for the arithmetic note below;
+the last two cover modules M3 created, which no sweep had ever reached:
 
 | file | tested | caught | unviable | survivors |
 |---|---|---|---|---|
 | `topology_report.rs` | 28 | 28 | 0 | 2, then none |
 | `report_oracle.rs` | 143 | 138 | 5 | 6, then none |
 | `topology.rs` | 186 | 180 | 6 | none, first run |
+| `row.rs` | 25 | 19 | 6 | none, first run |
+| `topology/invariant.rs` | 26 | 21 | 2 | 3, then one equivalent |
+
+**The two later sweeps are the argument for running them at all.** `row.rs` --
+the crate's only defence against caller text reaching the mined artifact -- came
+back clean on its first run, which no amount of review could have established.
+`topology/invariant.rs` gave up a real gap that five review rounds across four
+models had not: relaxing `online_processors > 0` to `>= 0` survived, because the
+test that NAMES that boundary asserts on `cross_check` and so covered only one of
+the two deliberate copies of the condition. A reviewer reasons about what code
+claims; a sweep asks what nothing notices, and those find different things.
+
+The remaining survivor is `assert_holds`, for the same reason `assert_corresponds`
+survived below, and the argument is now recorded at the function rather than left
+for the next sweep to rediscover.
 
 The unviable column is why a caught-count does not equal a tested-count: those
 mutants did not compile, so they say nothing either way. An earlier version of

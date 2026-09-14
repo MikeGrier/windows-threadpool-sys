@@ -94,6 +94,18 @@
       "replace": [
         "            let _ = writeln!(out, \"cache boundary splits this machine.\");"
       ]
+    },
+    {
+      "name": "blocking_states relaxes the processor guard",
+      "file": "src/topology/invariant.rs",
+      "expect": "caught",
+      "why": "The guard says a machine with processors and no packages is a finding; relaxing it to >= makes a topology that reported NOTHING a finding too, accusing a synthetic observation of hiding packages it never claimed. This condition exists TWICE on purpose -- cross_check has its own copy, and blocking_states must recompute rather than read cross_check's output, or it restates verdict() and goes blind to a deleted push site. Independence is the design; agreement is the property. A mutation sweep found the property untested: the test that names this boundary asserts on cross_check, so it covered only the other copy, and this mutation survived five review rounds across four models. Kept here so the pairing is re-run rather than re-discovered.",
+      "find": [
+        "    if observation.online_processors > 0 && observation.packages == 0 {"
+      ],
+      "replace": [
+        "    if observation.online_processors >= 0 && observation.packages == 0 {"
+      ]
     }
   ]
 }

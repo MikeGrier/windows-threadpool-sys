@@ -14,6 +14,9 @@
 //! them to ignore the instrument -- the same rule the report oracle is built on.
 
 use super::{BlockingState, Violation, blocking_states, check};
+
+/// A named mutation of an observation, for the tests that build a corpus.
+type Perturb = Box<dyn Fn(&mut Observation)>;
 use crate::topology::{
     BracketOutcome, CacheLevel, CoreShape, Observation, PartitioningCache, Verdict,
 };
@@ -93,7 +96,7 @@ fn the_verdict_the_crate_actually_draws_holds_every_invariant() {
 ///
 /// This doc claimed such a relation before one existed. Found by a review: the
 /// table happened to match, which is the condition under which nobody notices.
-type Perturbation = (BlockingState, Box<dyn Fn(&mut Observation)>);
+type Perturbation = (BlockingState, Perturb);
 
 fn perturbations() -> Vec<Perturbation> {
     vec![
@@ -401,6 +404,103 @@ fn the_numa_counter_is_deliberately_not_held_to_the_enumeration() {
 
     assert_eq!(observation.cross_check().verdict(), Verdict::Agree);
     assert_eq!(check(&observation, Verdict::Agree), Vec::new());
+}
+
+#[test]
+fn the_processor_guard_agrees_with_the_one_cross_check_applies() {
+    // **Two copies of one boundary, deliberately, and nothing held them to each
+    // other.** `blocking_states` recomputes `online_processors > 0 && packages
+    // == 0` rather than asking `cross_check`, and it MUST: a rule that reads
+    // `cross_check`'s output restates `verdict()` and is blind to a deleted push
+    // site, which is the whole reason this module exists. Independence is the
+    // design; agreement is the property, and the property was untested.
+    //
+    // Found by a mutation sweep, not by review. Relaxing either `>` to `>=` here
+    // survived five review rounds across four models, because the test that
+    // names this boundary --
+    // `a_topology_with_no_processors_at_all_is_not_accused_of_hiding_packages`
+    // -- asserts on `cross_check` and so covers only the OTHER copy.
+    //
+    // Written as a correspondence over a corpus that spans the boundary rather
+    // than as a single case, so a future guard whose condition drifts on either
+    // side is caught wherever it drifts.
+    let shapes: [(&str, Perturb); 4] = [
+        (
+            "no processors, and nothing else reported either",
+            Box::new(|o: &mut Observation| {
+                o.online_processors = 0;
+                o.raw_active_processors = 0;
+                o.packages = 0;
+                o.cores = Vec::new();
+            }),
+        ),
+        (
+            "no processors, but packages and cores reported",
+            Box::new(|o: &mut Observation| {
+                o.online_processors = 0;
+                o.raw_active_processors = 0;
+            }),
+        ),
+        (
+            "processors reported, packages absent",
+            Box::new(|o: &mut Observation| o.packages = 0),
+        ),
+        (
+            "processors reported, cores absent",
+            Box::new(|o: &mut Observation| o.cores = Vec::new()),
+        ),
+    ];
+
+    for (shape, mutate) in shapes {
+        let mut observation = agreeing();
+        mutate(&mut observation);
+
+        let states = blocking_states(&observation);
+        let parse = observation.cross_check().parse_incomplete;
+
+        assert_eq!(
+            states.contains(&BlockingState::NoPackages),
+            parse.contains(&crate::topology::ParseIncomplete::NoPackages),
+            "{shape}: this module and `cross_check` disagree about whether \
+             absent packages are a finding -- states {states:?}, parse {parse:?}"
+        );
+        assert_eq!(
+            states.contains(&BlockingState::NoCores),
+            parse.contains(&crate::topology::ParseIncomplete::NoCores),
+            "{shape}: this module and `cross_check` disagree about whether \
+             absent cores are a finding -- states {states:?}, parse {parse:?}"
+        );
+    }
+}
+
+#[test]
+fn a_corpus_spanning_the_processor_guard_reaches_both_of_its_answers() {
+    // The correspondence above compares two computations, so it passes
+    // vacuously if every shape lands on the same side of the boundary. Assert
+    // that the corpus reaches BOTH answers, or the test is a comparison of two
+    // constants.
+    let mut absent = agreeing();
+    absent.packages = 0;
+    absent.cores = Vec::new();
+    assert!(
+        blocking_states(&absent).contains(&BlockingState::NoPackages),
+        "a machine with processors and no packages must be in the state"
+    );
+
+    let mut unmeasured = agreeing();
+    unmeasured.online_processors = 0;
+    unmeasured.raw_active_processors = 0;
+    unmeasured.packages = 0;
+    unmeasured.cores = Vec::new();
+    assert!(
+        !blocking_states(&unmeasured).contains(&BlockingState::NoPackages),
+        "a topology that reported no processors is not accused of hiding \
+         packages -- this is the `> 0` the sweep found unguarded"
+    );
+    assert!(
+        !blocking_states(&unmeasured).contains(&BlockingState::NoCores),
+        "nor of hiding cores"
+    );
 }
 
 #[test]
