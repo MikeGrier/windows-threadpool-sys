@@ -74,7 +74,7 @@ predicate was violated. At first reading this looks like the strongest case for 
 that reads text -- a contradiction that exists only in the representation.
 
 But look at how it was actually repaired. The row now emits
-`"efficiency_classes":[{}]` -- a list. **The fix was to change what the row publishes.**
+`"efficiency_classes":[0]` -- the class LABELS as a list. **The fix was to change what the row publishes.**
 The prose comparison was the route by which a reviewer noticed, not the repair.
 
 ### A correction made while writing this up, and it strengthened the case

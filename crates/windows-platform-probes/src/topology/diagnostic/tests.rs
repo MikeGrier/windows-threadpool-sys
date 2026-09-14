@@ -151,6 +151,42 @@ fn every_disagreement_publishes_the_pair_it_carries() {
     );
 }
 
+/// Asserts that `fixture` contains an instance of EVERY variant, by the codes it
+/// covers rather than by how many entries it has.
+///
+/// **A count proves nothing.** This replaced `assert!(every.len() > 15)`, which
+/// a fixture of any size passes while omitting a variant -- so a variant added
+/// to the enum could go unrendered with the suite green, which is exactly the
+/// hole the fixture existed to close. Found by a review.
+///
+/// `ALL_CODES` is generated beside `code` from one list, so a new variant
+/// reaches this check without anyone remembering to widen it. Compared as a SET
+/// because a fixture may legitimately carry two instances of one variant to
+/// exercise a payload that differs, as the `Disagreement` one does.
+fn covers_every_variant(what: &str, covered: &[&str], all: &[&str]) {
+    let missing: Vec<&str> = all
+        .iter()
+        .filter(|code| !covered.contains(*code))
+        .copied()
+        .collect();
+    assert!(
+        missing.is_empty(),
+        "the {what} fixture omits {missing:?}, so those variants are never rendered here"
+    );
+
+    // The other direction, so a code retired from the enum does not linger in a
+    // fixture that then silently tests nothing.
+    let stale: Vec<&str> = covered
+        .iter()
+        .filter(|code| !all.contains(*code))
+        .copied()
+        .collect();
+    assert!(
+        stale.is_empty(),
+        "the {what} fixture carries {stale:?}, which no variant produces"
+    );
+}
+
 /// Every `ParseIncomplete` variant, one instance each.
 ///
 /// **Shared, because two tests need the same completeness and a second
@@ -233,6 +269,17 @@ fn every_parse_incomplete_variant_has_the_code_the_row_promises() {
     };
 
     let every = every_parse_incomplete();
+
+    // This test's NAME claims every variant, and the exhaustive `golden` above
+    // does not deliver that: a `match` obliges a variant to HAVE an arm, never
+    // obliges the fixture to reach it, so an omitted variant's code would go
+    // unchecked here. Stated independently rather than leaned on from the
+    // presence test, which could be deleted without this one noticing.
+    covers_every_variant(
+        "ParseIncomplete",
+        &every.iter().map(ParseIncomplete::code).collect::<Vec<_>>(),
+        ParseIncomplete::ALL_CODES,
+    );
 
     let mut seen: Vec<&str> = Vec::new();
     for entry in &every {
@@ -462,22 +509,44 @@ fn every_diagnostic_describes_itself() {
             counter: 3,
         },
     ];
+    covers_every_variant(
+        "Disagreement",
+        &disagreements
+            .iter()
+            .map(Disagreement::code)
+            .collect::<Vec<_>>(),
+        Disagreement::ALL_CODES,
+    );
     for entry in &disagreements {
         let text = described(entry);
         assert_ne!(text, UNDESCRIBED, "{entry:?} renders blank");
         assert!(!text.trim().is_empty(), "{entry:?} renders blank");
     }
 
-    // Exhaustive, so a seventh `NotCompared` must describe itself to compile.
-    for entry in [
+    // The comment here used to read "Exhaustive, so a seventh `NotCompared` must
+    // describe itself to compile" -- of an ARRAY LITERAL, which forces nothing.
+    // A seventh variant compiles fine and is simply never rendered. Same defect
+    // as the one a review reported against the count below, in a comment that
+    // claimed the guarantee outright; found by sweeping the class rather than
+    // the reported instance.
+    let not_compared = [
         NotCompared::MachineChanged,
         NotCompared::BracketNotEstablished,
         NotCompared::CountsIncludeUnparsedRelations,
         NotCompared::ActiveProcessorCountFailed,
         NotCompared::ActiveProcessorGroupCountFailed,
         NotCompared::HighestNumaNodeFailed,
-    ] {
-        let text = described(&entry);
+    ];
+    covers_every_variant(
+        "NotCompared",
+        &not_compared
+            .iter()
+            .map(NotCompared::code)
+            .collect::<Vec<_>>(),
+        NotCompared::ALL_CODES,
+    );
+    for entry in &not_compared {
+        let text = described(entry);
         assert_ne!(text, UNDESCRIBED, "{entry:?} renders blank");
         assert!(!text.trim().is_empty(), "{entry:?} renders blank");
     }
@@ -488,10 +557,10 @@ fn every_diagnostic_describes_itself() {
     // rendered here, and blanking any of their arms would have put UNDESCRIBED
     // in a real report while this test stayed green. Found by a review.
     let every = every_parse_incomplete();
-    assert!(
-        every.len() > 15,
-        "the fixture should carry the whole enum, not a sample: {}",
-        every.len()
+    covers_every_variant(
+        "ParseIncomplete",
+        &every.iter().map(ParseIncomplete::code).collect::<Vec<_>>(),
+        ParseIncomplete::ALL_CODES,
     );
     for entry in &every {
         let text = described(entry);

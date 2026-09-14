@@ -201,86 +201,11 @@ IDs keep their M2 numbers, for the reason given under M4.
   append-only invariant, and it is the one a human reviewer is least likely to notice.
 
 
-- [x] **M2.14** -- Make the two authoring rules this branch earned actually bite. Re-planned
-  2026-09-12; see the rationale below before implementing either sub-step. Both sub-steps done.
+- [x] **M2.14** -- Make the two authoring rules this branch earned actually bite. -> [completed 2026-09-13](COMPLETED-CHECKLIST.md#m214)
 
-  **As originally written this item said "write two authoring rules into the repository
-  instructions". Measurement says that would have been worse than useless.** The two rules it
-  proposed -- *state the invariant, not the census*, and *a new test is not done until it has been
-  observed to fail* -- ALREADY EXIST, in
-  [.github/copilot-instructions.md](../../.github/copilot-instructions.md) under CONTRACT INTEGRITY
-  rule 1 ("Prefer a derived fact to a restated one", and beneath it "verify the binding by
-  sabotage: change the definition and confirm the consumer's BEHAVIOR changes"). Writing them again
-  would add a second copy of a rule, which is the exact defect that section forbids and the exact
-  mechanism -- restatement drift -- it exists to prevent.
+- [x] **M2.14.1** -- Give this crate a sabotage manifest, so "observed to fail" is a recorded artifact rather than a habit. -> [completed 2026-09-13](COMPLETED-CHECKLIST.md#m2141)
 
-  **And statement is demonstrably not the gap.** Both rules were in force on 2026-09-12 and both
-  were violated: `09da7e9` claims "Sabotage-verified, EACH against the instrument it was meant to
-  strengthen" and then names two sabotages for four fixes. The one that got none is the completeness
-  guard, which a review found broken an hour later (M3.8). A rule cited in the commit that breaks it
-  will not be repaired by a third copy of itself.
-
-  **This repository has already solved this problem once, and not with a rule.** The
-  [ci.yml](../../.github/workflows/ci.yml) `sabotage-harness` job records that the harness "accumulated
-  fixes over eleven review rounds and thirteen of the later defects were introduced by earlier fixes,
-  because every verification was a one-off command that was then discarded and nothing re-checked an
-  earlier guarantee." That is M3.8's story verbatim. The answer then was a CI ratchet.
-
-- [x] **M2.14.1** -- Give `windows-platform-probes` a sabotage manifest, so "observed to fail" is a
-  recorded artifact rather than a habit.
-
-  **Done.** [sabotage.json](sabotage.json), 7 entries, swept green: six `caught`, one `survives`,
-  all behaving as declared. Not wired into CI, matching the two sibling manifests and the
-  `sabotage-harness` job's own note that a sweep "rebuilds a crate per entry and is deliberately an
-  occasional instrument".
-
-  **The control is the entry that matters most here.** It rewords a prose line to carry the same
-  fact and must SURVIVE, which turns this component's central decision -- the row is the machine
-  contract, the prose is for a reader -- from a sentence into a measurement. If it is ever reported
-  as caught, a test has started reading the prose again and that test is the defect.
-
-  **The harness found a defect in the manifest that the authoring script missed, which is the
-  lesson.** The entry for the escape-aware key reader anchored on `'\\' => escaped = true,`; the
-  script checked uniqueness by whole-LINE equality and found one match, while the harness matches by
-  SUBSTRING and found two -- the same arm appears in `malformation` at a deeper indent, and the
-  shallower line is a substring of the deeper one. The script's check was a second, weaker
-  implementation of the harness's rule, which is precisely the defect class this manifest exists to
-  catch. The anchor was widened to the function signature; the harness remains the only authority on
-  uniqueness.
-
-  `tools/run-sabotage.ps1` exists, has its own tests, and runs in CI;
-  [windows-placement-probe](../windows-placement-probe/sabotage.json) (9 entries) and
-  [windows-waitable-queues](../windows-waitable-queues/sabotage.json) (39 entries) each carry a
-  `sabotage.json`. **This crate carried none**, so every sabotage run while building M3 was ad-hoc
-  PowerShell, discarded on the spot -- which is why a `git checkout` destroyed uncommitted work
-  twice and a `.Replace` pattern silently matched two sites once. The manifest format's `find` must
-  match EXACTLY ONCE, which is precisely the guard that hand-running lacked.
-
-  Eight commits on this branch recorded their sabotages in the message, so the first pass was
-  transcription rather than invention: the defect, the file and the test expected to redden were
-  already written down.
-
-  Include at least one `expect: "survives"` control. A manifest of nothing but `caught` cannot
-  distinguish a suite that is watching from a suite that fails on any edit.
-
-- [x] **M2.14.2** -- Add to CONTRACT INTEGRITY rule 1 the one thing this branch learned that it does
-  NOT already say, and a pointer to the mechanism. A pointer, not a restatement.
-
-  **Done.** Two paragraphs added to CONTRACT INTEGRITY rule 1 in
-  [.github/copilot-instructions.md](../../.github/copilot-instructions.md). Neither restates the
-  existing rule: the first says to sabotage the CLAIM a change makes rather than the symptom it
-  cites, and the second says a sabotage is worth nothing once discarded and points at the manifest
-  and the harness. The original M2.14 wording is nowhere in the diff, which was the point.
-
-  The genuinely new fact: **when a fix claims to have removed a weakness, sabotage the claim rather
-  than the symptom.** Rule 1 tells an author to prefer a derived fact over a restated one; it does
-  not warn that an author may believe they derived one when they only MOVED the census. That is
-  exactly what happened three times on a single guard -- strings, then a hand-written `ALL`, then
-  generation -- each fix relocating the census somewhere harder to see while its commit message
-  claimed the class was closed. The wording that would have caught it is about the CLAIM, and rule 1
-  currently has no sentence about claims.
-
-  > **-> DEPENDS ON M2.14.1:** the pointer has nothing to point at until the manifest exists.
+- [x] **M2.14.2** -- Add to CONTRACT INTEGRITY rule 1 the one thing this branch learned that it does NOT already say. -> [completed 2026-09-13](COMPLETED-CHECKLIST.md#m2142)
 
 - [ ] **M2.16** -- Repair the garbled `Report` doc comment, and drop the two counts that have already
   rotted beside it.

@@ -56,6 +56,40 @@ fn entry(code: &'static str, fields: Vec<(&'static str, Value)>) -> Value {
     Value::Object(members)
 }
 
+/// Defines `code` and `ALL_CODES` for a diagnostic enum from one list.
+///
+/// The `match` is exhaustive, so a variant added to the enum does not compile
+/// until it has a line here -- and that line reaches `ALL_CODES` without anyone
+/// having to remember. That is the whole point. The tests assert that a fixture
+/// covers `ALL_CODES`, so a new variant is not merely obliged to HAVE a code, it
+/// is obliged to be EXERCISED; a hand-written `ALL_CODES` would have relocated
+/// the omission rather than closed it.
+///
+/// What this deliberately does not do is state the codes twice. The goldens in
+/// the tests remain the independent second statement of the VALUES. This is the
+/// single statement of the SET, and the two answer different questions.
+macro_rules! diagnostic_codes {
+    ($enum:ident { $($pattern:pat => $code:literal,)+ }) => {
+        impl $enum {
+            /// The stable discriminant a survey groups by.
+            ///
+            /// Changing one of these is a breaking change to the NDJSON row.
+            #[must_use]
+            pub const fn code(&self) -> &'static str {
+                match self {
+                    $($pattern => $code,)+
+                }
+            }
+
+            /// Every code this enum can produce, one per variant.
+            ///
+            /// Generated beside `code` from the same list, so it cannot omit a
+            /// variant the enum has.
+            pub const ALL_CODES: &'static [&'static str] = &[$($code,)+];
+        }
+    };
+}
+
 /// A counter comparison that was made and did not match.
 ///
 /// Each is a finding about the shipping crate's parse, and is the only list
@@ -89,19 +123,11 @@ pub enum Disagreement {
     },
 }
 
-impl Disagreement {
-    /// The stable discriminant a survey groups by.
-    ///
-    /// Changing one of these is a breaking change to the NDJSON row.
-    #[must_use]
-    pub const fn code(&self) -> &'static str {
-        match self {
-            Self::OnlineProcessors { .. } => "online_processors",
-            Self::ProcessorGroups { .. } => "processor_groups",
-            Self::HighestNumaNode { .. } => "highest_numa_node",
-        }
-    }
-}
+diagnostic_codes!(Disagreement {
+    Self::OnlineProcessors { .. } => "online_processors",
+    Self::ProcessorGroups { .. } => "processor_groups",
+    Self::HighestNumaNode { .. } => "highest_numa_node",
+});
 
 impl Disagreement {
     /// This disagreement as the row publishes it.
@@ -210,22 +236,14 @@ pub fn described(entry: &impl fmt::Display) -> String {
     }
 }
 
-impl NotCompared {
-    /// The stable discriminant a survey groups by.
-    ///
-    /// Changing one of these is a breaking change to the NDJSON row.
-    #[must_use]
-    pub const fn code(&self) -> &'static str {
-        match self {
-            Self::MachineChanged => "machine_changed",
-            Self::BracketNotEstablished => "bracket_not_established",
-            Self::CountsIncludeUnparsedRelations => "counts_include_unparsed_relations",
-            Self::ActiveProcessorCountFailed => "active_processor_count_failed",
-            Self::ActiveProcessorGroupCountFailed => "active_processor_group_count_failed",
-            Self::HighestNumaNodeFailed => "highest_numa_node_failed",
-        }
-    }
-}
+diagnostic_codes!(NotCompared {
+    Self::MachineChanged => "machine_changed",
+    Self::BracketNotEstablished => "bracket_not_established",
+    Self::CountsIncludeUnparsedRelations => "counts_include_unparsed_relations",
+    Self::ActiveProcessorCountFailed => "active_processor_count_failed",
+    Self::ActiveProcessorGroupCountFailed => "active_processor_group_count_failed",
+    Self::HighestNumaNodeFailed => "highest_numa_node_failed",
+});
 
 impl NotCompared {
     /// This entry as the row publishes it.
@@ -391,37 +409,29 @@ pub enum ParseIncomplete {
     CoherenceNotCollected,
 }
 
-impl ParseIncomplete {
-    /// The stable discriminant a survey groups by.
-    ///
-    /// Changing one of these is a breaking change to the NDJSON row.
-    #[must_use]
-    pub const fn code(&self) -> &'static str {
-        match self {
-            Self::EnumerationAnomalies { .. } => "enumeration_anomalies",
-            Self::NumaDomainsOnlyInCpuSets { .. } => "numa_domains_only_in_cpu_sets",
-            Self::NoCacheLevels => "no_cache_levels",
-            Self::CacheLevelsWithoutPartitions { .. } => "cache_levels_without_partitions",
-            Self::MeasuredButCountsAbsent { .. } => "measured_but_counts_absent",
-            Self::NoPackages => "no_packages",
-            Self::NoCores => "no_cores",
-            Self::ContradictoryCores { .. } => "contradictory_cores",
-            Self::UnnumberedCacheLevels { .. } => "unnumbered_cache_levels",
-            Self::PartitioningSummaryMissing { .. } => "partitioning_summary_missing",
-            Self::NotMeasured => "not_measured",
-            Self::RelationsWithoutProcessors { .. } => "relations_without_processors",
-            Self::UnreportedRelations { .. } => "unreported_relations",
-            Self::DescribedRelations { .. } => "described_relations",
-            Self::CoresOnlyInCpuSets { .. } => "cores_only_in_cpu_sets",
-            Self::OverlappingWalkRelations { .. } => "overlapping_walk_relations",
-            Self::ProcessorAttributeConflicts { .. } => "processor_attribute_conflicts",
-            Self::NumaDomainsWithConflictingLabels { .. } => "numa_domains_with_conflicting_labels",
-            Self::NumaDomainsUnreported { .. } => "numa_domains_unreported",
-            Self::EnumerationsDisagreed { .. } => "enumerations_disagreed",
-            Self::CoherenceNotCollected => "coherence_not_collected",
-        }
-    }
-}
+diagnostic_codes!(ParseIncomplete {
+    Self::EnumerationAnomalies { .. } => "enumeration_anomalies",
+    Self::NumaDomainsOnlyInCpuSets { .. } => "numa_domains_only_in_cpu_sets",
+    Self::NoCacheLevels => "no_cache_levels",
+    Self::CacheLevelsWithoutPartitions { .. } => "cache_levels_without_partitions",
+    Self::MeasuredButCountsAbsent { .. } => "measured_but_counts_absent",
+    Self::NoPackages => "no_packages",
+    Self::NoCores => "no_cores",
+    Self::ContradictoryCores { .. } => "contradictory_cores",
+    Self::UnnumberedCacheLevels { .. } => "unnumbered_cache_levels",
+    Self::PartitioningSummaryMissing { .. } => "partitioning_summary_missing",
+    Self::NotMeasured => "not_measured",
+    Self::RelationsWithoutProcessors { .. } => "relations_without_processors",
+    Self::UnreportedRelations { .. } => "unreported_relations",
+    Self::DescribedRelations { .. } => "described_relations",
+    Self::CoresOnlyInCpuSets { .. } => "cores_only_in_cpu_sets",
+    Self::OverlappingWalkRelations { .. } => "overlapping_walk_relations",
+    Self::ProcessorAttributeConflicts { .. } => "processor_attribute_conflicts",
+    Self::NumaDomainsWithConflictingLabels { .. } => "numa_domains_with_conflicting_labels",
+    Self::NumaDomainsUnreported { .. } => "numa_domains_unreported",
+    Self::EnumerationsDisagreed { .. } => "enumerations_disagreed",
+    Self::CoherenceNotCollected => "coherence_not_collected",
+});
 
 impl ParseIncomplete {
     /// This entry as the row publishes it, with the values its variant carries.
