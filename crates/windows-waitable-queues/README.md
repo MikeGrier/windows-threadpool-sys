@@ -176,9 +176,14 @@ proportionally longer to reach its wrap.
 
 **What to do about it.**
 
-- **Name a layout.** `Perpetual` puts the recurrence about twenty years out at
-  no measured cost, which takes it past any real deployment. This is the answer
-  for almost every caller who is exposed at all.
+- **Name a layout.** `Perpetual` puts the recurrence about twenty years out,
+  which takes it past any real deployment. This is the answer for almost every
+  caller who is exposed at all. **What it costs in throughput is not
+  established** -- it issues the same `lock cmpxchg` on the same `u64` as the
+  default, and measured indistinguishable from it up to eight producers, but a
+  seven-run measurement on a single host put it near 1.26x at sixteen and
+  thirty-two producers against a same-code control that itself reached 1.12x.
+  Measure on your own target if throughput at high producer counts matters.
 - **`slotwise_mpsc` does not have this hazard** under any layout. Its positions
   are 64 bits on every target, so the equivalent wrap needs 2^64 claims. Prefer
   it unless you need `Reserving`.
@@ -342,7 +347,8 @@ both rather than picking one for you.
 - **Pushing more than ~4 billion items in one run, from two or more producers?**
   Either use `slotwise_mpsc`, whose positions are 64 bits under every
   configuration, or name a deeper layout on `reserving_mpsc` -- `Perpetual`
-  puts the recurrence about twenty years out at no measured cost. Under its
+  puts the recurrence about twenty years out, though what it costs in throughput
+  is not established. Under its
   default layout `reserving_mpsc` can lose an item past that volume; see
   [the section on recurrence](#how-long-reserving_mpsc-runs-before-its-claim-position-recurs)
   above, which you should read before choosing.
