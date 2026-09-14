@@ -431,9 +431,10 @@ coverage: not *was this branch executed* but *does anything DETECT a change to
 it*. On a branch whose recurring defect is a test that runs code without
 establishing anything about it, that difference is the whole point.
 
-Five sweeps, run through [tools/run-mutants.ps1](../../tools/run-mutants.ps1). The
+Six sweeps, run through [tools/run-mutants.ps1](../../tools/run-mutants.ps1). The
 first three predate the M3 rewrite and are kept for the arithmetic note below;
-the last two cover modules M3 created, which no sweep had ever reached:
+the last three cover the three modules M3 created, none of which any sweep had
+reached:
 
 | file | tested | caught | unviable | survivors |
 |---|---|---|---|---|
@@ -442,17 +443,46 @@ the last two cover modules M3 created, which no sweep had ever reached:
 | `topology.rs` | 186 | 180 | 6 | none, first run |
 | `row.rs` | 25 | 19 | 6 | none, first run |
 | `topology/invariant.rs` | 26 | 21 | 2 | 3, then one equivalent |
+| `topology/diagnostic.rs` | 26 | 9 | 5 | **12**, then two prose |
 
-**The two later sweeps are the argument for running them at all.** `row.rs` --
-the crate's only defence against caller text reaching the mined artifact -- came
-back clean on its first run, which no amount of review could have established.
-`topology/invariant.rs` gave up a real gap that five review rounds across four
-models had not: relaxing `online_processors > 0` to `>= 0` survived, because the
-test that NAMES that boundary asserts on `cross_check` and so covered only one of
-the two deliberate copies of the condition. A reviewer reasons about what code
-claims; a sweep asks what nothing notices, and those find different things.
+**The three later sweeps are the argument for running them at all**, and each
+made a different case. `row.rs` -- the crate's only defence against caller text
+reaching the mined artifact -- came back clean on its first run, which no amount
+of review could have established. `topology/invariant.rs` gave up a real gap that
+five review rounds across four models had not: relaxing `online_processors > 0`
+to `>= 0` survived, because the test that NAMES that boundary asserts on
+`cross_check` and so covered only one of the two deliberate copies of the
+condition.
 
-The remaining survivor is `assert_holds`, for the same reason `assert_corresponds`
+**`topology/diagnostic.rs` is the one that mattered.** It survived 12 of 26 --
+46% -- and the survivors were the row's own payloads: `NotCompared::code` could
+be replaced wholesale with `""`, every arm of `published_anomaly` deleted, and
+two arms of `anomaly_code` deleted so that a real buffer overrun would publish as
+`unclassified`, whose documented meaning is the opposite. Measured separately:
+rewriting the `count` helper so every published count was wrong left 218 tests
+green.
+
+This is the field-labelling defect [src/row.rs](src/row.rs) exists to make
+unrepresentable, reappearing one level down. `row.rs` pairs a name with its value
+so position cannot mislabel them; these functions then hand-pair names with
+values INSIDE each entry, and nothing was watching. The tests that looked like
+they covered it built their expectation from `code()` and compared it against a
+row the writer had built from `code()` -- both sides moving together, which is
+the tautology class this branch deletes elsewhere.
+
+Closed with goldens in [src/topology/diagnostic/tests.rs](src/topology/diagnostic/tests.rs),
+written as literals on purpose: a code is a SCHEMA, not a predicate, and a schema
+is not derivable from the thing that emits it. Completeness is compiler-checked
+where the enum belongs to this crate, via an exhaustive `match` in the test.
+
+Two survivors remain and both are `Display` impls -- the PROSE rendering, which
+under [DESIGN-NOTES.md](DESIGN-NOTES.md) -> `d-encoded-row-is-the-contract` is a
+review obligation rather than a machine-checked one. They are left open
+deliberately rather than by oversight; whether the prose deserves machine
+coverage of its own is a decision about where that line sits, not a gap to close
+in passing.
+
+The `assert_holds` survivor is equivalent, for the same reason `assert_corresponds`
 survived below, and the argument is now recorded at the function rather than left
 for the next sweep to rediscover.
 

@@ -174,6 +174,9 @@ pub enum NotCompared {
     HighestNumaNodeFailed,
 }
 
+#[cfg(test)]
+mod tests;
+
 impl NotCompared {
     /// The stable discriminant a survey groups by.
     ///
