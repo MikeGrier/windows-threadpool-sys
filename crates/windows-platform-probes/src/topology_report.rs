@@ -371,11 +371,14 @@ pub fn report_unmeasured(banner: &str, error: &io::Error) -> String {
     // correspondences apply". There are no correspondences left to apply -- M3
     // retired the prose/row relation, and what is checked is that the row is
     // well formed, which is not a thing a renderer can make less of.
+    //
+    // The SHAPES are bound here too, for the reason given on `report` below:
+    // names alone leave a consumer's field types unconstrained.
     #[cfg(any(test, feature = "oracle-in-renderer"))]
-    crate::report_oracle::assert_row_is_well_formed(&out);
-    // The SHAPES too, for the reason on eport below: names alone leave a
-    // consumer's field types unconstrained.
-    crate::report_oracle::assert_row_has_the_schemas_shapes(&out, UNMEASURED_ROW_SHAPES);
+    {
+        crate::report_oracle::assert_row_is_well_formed(&out);
+        crate::report_oracle::assert_row_has_the_schemas_shapes(&out, UNMEASURED_ROW_SHAPES);
+    }
     out
 }
 
@@ -976,12 +979,25 @@ pub fn report(banner: &str, observation: &Observation) -> String {
     // case, because the assertion's message carries the whole report -- what is
     // lost is the NDJSON row a survey would have mined, which is why the default
     // build is the one that matters and is the one pinned above.
+    //
+    // **The schema's SHAPES are bound here for the same reason.** Well-formed
+    // says the row parses; the schema says `processors` is a number and each
+    // diagnostic entry carries a code. Measured: publishing `processors` through
+    // `.to_string()` left all 230 library tests and all 10 real-host integration
+    // tests green before this line existed. Found by a review.
+    //
+    // **Both inside ONE `cfg` block, which the first attempt got wrong.** A
+    // `#[cfg]` attribute governs the single statement that follows it, so
+    // adding a second call beneath the gated one left that call ungated -- and
+    // `report_oracle` does not exist in a default build. Nothing local caught
+    // it: this crate's dev-dependency on itself turns `oracle-in-renderer` on
+    // for every `cargo test` and `cargo check --all-targets`, so the
+    // feature-off arm is never compiled here. CI's `cargo run --bin` is, and
+    // that is where it broke.
     #[cfg(any(test, feature = "oracle-in-renderer"))]
-    crate::report_oracle::assert_row_is_well_formed(&out);
-    // **And the schema's SHAPES, bound here for the same reason.** Well-formed
-    // says the row parses; the schema says processors is a number and each
-    // diagnostic entry carries a code. Measured: publishing processors`n    // through .to_string() left all 230 library tests and all 10 real-host
-    // integration tests green before this line existed. Found by a review.
-    crate::report_oracle::assert_row_has_the_schemas_shapes(&out, MEASURED_ROW_SHAPES);
+    {
+        crate::report_oracle::assert_row_is_well_formed(&out);
+        crate::report_oracle::assert_row_has_the_schemas_shapes(&out, MEASURED_ROW_SHAPES);
+    }
     out
 }
