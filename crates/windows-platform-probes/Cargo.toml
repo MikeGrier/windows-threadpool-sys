@@ -10,10 +10,33 @@ rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 homepage.workspace = true
-description = "Executable probes for the undocumented Windows behaviour this workspace's designs rest on."
+description = "Executable probes for the Windows behaviour this workspace's designs rest on -- supported, documented APIs, in the specific cases their documentation does not describe."
 
 [lib]
 path = "src/lib.rs"
+
+[features]
+# Binds the report oracle inside the renderers for INTEGRATION test builds.
+#
+# `cfg(test)` covers the unit tests, but cargo compiles this library as an
+# ordinary dependency -- without `cfg(test)` -- for anything under `tests/`, so
+# the binding does not reach them. Measured: an integration test rendered a
+# report whose banner architecture contradicted its NDJSON and did not panic.
+# This feature closes that, via the self dev-dependency below.
+#
+# Never enable it for a shipping build. A real probe run must PRINT a
+# self-contradicting report rather than panic: the contradiction is a finding
+# about the probe, and a fleet survey needs the NDJSON row rather than a crash.
+#
+# **`--all-features` enables it, and cargo offers no stable way to prevent that.**
+# So `cargo build --all-features` produces probe binaries that assert -- verified
+# by inspecting them for the panic string. That matters here because this
+# workspace does use `--all-features`, for cargo-mutants runs. The boundary is
+# stated rather than claimed away: the DEFAULT build is the one that carries the
+# print-rather-than-panic guarantee.
+# Pulls in `serde_json` because the oracle's well-formedness check IS a real
+# parse. See the `[dependencies]` entry for why that is not hand-written.
+oracle-in-renderer = ["dep:serde_json", "dep:serde"]
 
 [[bin]]
 name = "probe-core-affinity"
@@ -83,6 +106,24 @@ name = "probe-long-path-unaware"
 path = "src/bin/long_path_unaware.rs"
 
 [dependencies]
+# **Optional, and reached only through `oracle-in-renderer`.** The report
+# oracle's job is to answer "would a consumer be able to parse this row", and
+# the honest way to answer that is to PARSE IT with the kind of parser a
+# consumer uses. This replaced a hand-written structural check.
+#
+# That check was not obviously wrong; it had been through a review, which
+# strengthened it after finding it accepted `{"a":1,}`. Then a generated test --
+# 1807 single-character corruptions of a real row, judged against this crate --
+# found **159 more disagreements, every one a false accept**: a stray backslash
+# forming an invalid escape, a missing `:`, a `,` where a `:` belonged. Closing
+# the last of those meant tracking whether an object expects a name or a value,
+# which is a JSON parser. So the choice was to write one or to depend on one.
+#
+# It is NOT in the default build, because the oracle is not: the gate here is
+# the same one at the call sites in `topology_report`, and a shipping probe must
+# print a self-contradicting report rather than panic on it. The module itself
+# carries the gate, which is also the clearest statement of what that module is.
+serde_json = { version = "1.0", optional = true }
 # **Every workspace dependency below is path-only, with no `version`**, because
 # this crate is never distributed at all -- not to a registry, and not as a
 # released binary either, unlike `windows-placement-probe` next door. These
@@ -141,6 +182,38 @@ windows-waitable-queues = { path = "../windows-waitable-queues", features = [
 # over that is a vocabulary one -- the workspace's own WTF-16 type naming the
 # quantity rather than an ad-hoc count that happens to agree.
 wtf-string = { path = "../wtf-string" }
+# Beside `serde_json`, and gated with it, for ONE reason: `keys` must report the
+# row's top-level names in ORDER and WITH DUPLICATES, and a parsed map can give
+# neither -- `serde_json::Map` sorts, and silently keeps the last of a repeated
+# key, which is the very defect `RowDefect::RepeatedKey` exists to report. A
+# `MapAccess` visitor sees the names as the parser reads them, so the scan is
+# still the real parser's and this crate hand-writes no string walking at all.
+serde = { version = "1.0", optional = true }
+
+[dev-dependencies]
+# Here because [tests/a_real_report_agrees_with_itself.rs] uses `serde_json`
+# DIRECTLY, to empty the row's diagnostic lists by parsing and re-rendering
+# rather than by cutting the text.
+#
+# **Not to satisfy `report_oracle`'s gate, which an earlier version of this
+# comment claimed.** That claim was backwards: it said `cfg(test)` builds compile
+# the module without `oracle-in-renderer`. They do not. The self dev-dependency
+# below is an edge from this package to itself, so under resolver 2 the feature
+# unifies onto the package in ANY build that includes dev-dependencies -- the
+# `cfg(test)` lib build included. Measured with a `compile_error!` probe in both
+# directions: `cargo check --tests` succeeds under `not(feature = ...)` and fails
+# under `feature = ...`, while a plain `--lib` build has the feature off.
+#
+# So the two arms of `cfg(any(test, feature = "oracle-in-renderer"))` are never
+# exercised separately, the optional `serde`/`serde_json` are already active in
+# every test build, and a matching `serde` dev-dependency was dead weight --
+# removed after confirming all 213 tests still pass without it.
+serde_json = "1.0"
+# A dependency on ITSELF, which cargo permits for dev-dependencies and which is
+# the only way to turn a feature on for this package's own integration tests:
+# a test under `tests/` links the library as a plain dependency, so `cfg(test)`
+# is not set for it and the renderer's oracle binding would be compiled out.
+windows-platform-probes = { path = ".", features = ["oracle-in-renderer"] }
 
 [dependencies.windows-sys]
 version = "0.61.2"

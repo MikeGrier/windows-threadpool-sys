@@ -1360,324 +1360,248 @@ it: it closes over the whole run including both banner reads, where `measure`
 closes only over the counters. Neither subsumes the other, and no work is
 scheduled by this decision.
 
-## The defects that survived were correspondence failures, and no instrument here could see them
+## The correspondence-oracle investigation, and what it concluded
 
 <a id="d-correspondence-failures"></a>
+<a id="d-oracle-refuses-to-know"></a>
 
-This probe was reviewed twenty-eight times before it opened as a pull request,
-by two independent readers per round on different models, with `cargo-mutants`
-reporting **zero surviving mutants** on both of its modules. A review on the
-pull request then found, in code none of that had touched, a state where the
-renderer printed
+**Superseded by [The encoded row is the contract; the prose is not](#d-encoded-row-is-the-contract).**
+
+**Moved to Tier 2: [DESIGN-RATIONALE.md](DESIGN-RATIONALE.md).** The anchors
+above are kept here so every existing link still lands somewhere that says where
+the content went.
+
+What it covers: the two defects a pull-request review found after twenty-eight
+rounds of per-artifact review and a zero-surviving-mutant sweep; why each
+instrument in use was structurally incapable of seeing them; the sparse-matrix
+and oracle split that followed; and the oracle's own design, failure modes and
+mutation evidence.
+
+It is Tier 2 rather than Tier 1 for two reasons. It is a record of how a decision
+was reached rather than a statement of one -- and the decision it reached has
+since been superseded by
+[The encoded row is the contract; the prose is not](#d-encoded-row-is-the-contract).
+The code it describes is also gone: the prose-reading oracle, its correspondence
+enum and its fact-accounting instrument were retired by M3.4 and M3.5, so several
+of its sentences name types that no longer exist.
+
+What survives into Tier 1 is the conclusion the two defects actually support,
+which is the decision below.
+
+## The encoded row is the contract; the prose is not
+
+<a id="d-encoded-row-is-the-contract"></a>
+
+A probe is a data pipeline that renders, at its tail, to two artifacts: an NDJSON
+row and prose. **They are not peers.** The row is a machine contract -- mined
+across a fleet, joined against other runs, and the thing this workspace's designs
+end up resting on. The prose is for a reader.
+
+So they carry different obligations:
+
+- **The row must be CORRECT**, and that is machine-enforced. Its values, its
+  invariants and its shape are asserted.
+- **The prose must be ACCURATE AND READABLE**, and that is enforced by review.
+  It is not required to be programmatically comparable against the row, and
+  nothing here checks that it is.
+
+This supersedes the rule in
+[#d-oracle-refuses-to-know](DESIGN-RATIONALE.md#d-oracle-refuses-to-know), which said the oracle
+must read the rendered artifact rather than the state behind it.
+
+### What forced it: both originating defects were defects in the row
+
+The reason the earlier rule looked right was a misreading of its own evidence.
+Re-checked against the code, for the two defects in
+[#d-correspondence-failures](DESIGN-RATIONALE.md#d-correspondence-failures):
+
+**The alarm beside the agreeing verdict.** `report` emits
+`BUG IN THIS PROBE: ...` with a `writeln!` into the prose, and the NDJSON row has
+**no key for it** -- while `cross_check` IS a key, and read `agree` on the
+defective run. So the row certified a clean agreeing measurement on a host where
+the probe had detected its own bug, and said nothing about the bug. A survey
+mining that row would have been wrong and had no way to know. The prose alarm was
+not the defect; it was the only trace that the row was wrong, which is why a
+human found it and no instrument did.
+
+**That defect is fixed, and what it left behind was the live gap.** Checked
+rather than assumed, because the paragraph above describes the code as it was:
+`Observation::cross_check` pushes `PartitioningCache::SummaryMissing` onto
+`parse_incomplete`, which forces the verdict away from `agree`, so the row could
+not certify that run. But the row published `parse_incomplete` as a **count** --
+as it did `not_compared` and `enumeration_anomalies` -- where the prose published
+each entry's text. A survey reading `"parse_incomplete":1` could not tell *the
+probe detected a bug in itself* from *a core record contradicted itself* from
+*this topology was not measured from a running machine*. Those are categorically
+different facts, and only the prose distinguished them.
+
+So the shape of the problem was not that the row is out of step with the prose.
+It is that **the row was impoverished relative to the prose** -- the artifact
+that gets mined carried less than the artifact that gets read -- which is
+backwards given which of the two the designs rest on.
+
+**M3.1 closed this**, and the past tense above is deliberate: the three fields
+publish the conditions themselves, minted by `topology::diagnostic`, so a survey
+reads which one fired rather than how many there were. The count remains
+available as the list's length.
+
+M3.3 then gave each entry its DATA, so the published form is an object rather
+than a bare code:
 
 ```
-BUG IN THIS PROBE: the topology crate named L3 as the outermost
-partitioning cache and this survey carries no summary for it. Nothing
-below about cache partitioning can be trusted.
+"parse_incomplete":[{"code":"partitioning_summary_missing","level":9}]
 ```
 
-while `cross_check` had no branch for that state at all, so `verdict()` could
-return `Agree` for the same run and print `=> agree` two paragraphs below. A
-second finding in the same review had the same shape: one fact rendered twice
-in one report -- `efficiency classes: [0]` in prose, `"efficiency_classes":1`
-in the NDJSON -- in two shapes a consumer cannot reconcile, where the numeral
-happens to read as a plausible class *label*.
+Stated here because this is Tier 1 and the wire format is what a reader comes to
+it for. The bare-code form this paragraph first showed was M3.1-era and was
+superseded three commits later on the same branch -- the drift class this
+component keeps meeting, caught by a review. The rest of
+this decision is unaffected -- it is about which artifact carries the contract,
+not about these three fields.
 
-Neither is a bug inside a function. Every function involved was correct on its
-own terms, and each had been read repeatedly and found so. The defect lived in
-the **relation between two artifacts**, and that is a place none of the
-instruments in use could look.
+**`efficiency classes: [0]` against `"efficiency_classes":1`.** Both halves were
+correct derivations of one consistent value -- the prose rendered the set, the row
+rendered the cardinality -- so no invariant was violated. Note how it was
+repaired: the row now publishes `"efficiency_classes":[...]`, the set. **The fix
+was to change what the row publishes.** The prose comparison was how a reviewer
+noticed, not the repair.
 
-### Why each instrument was structurally incapable, not merely unlucky
+Neither defect needed a prose-against-row oracle to fix. Both needed the
+structured output to be made right.
 
-**Mutation testing cannot find absent code.** `cargo-mutants` perturbs what is
-written and asks whether a test notices. A missing branch has no mutants, so
-the missing `SummaryMissing` check did not lower the score -- it was invisible
-to it. The 180/0 result was true and said nothing about the gap. A perfect
-mutation score is compatible with an entirely missing feature, and this
-component is the proof.
+### The rule that falls out, and it is the load-bearing one
 
-The same run also shows the weaker half of what a mutation score means. A test
-existed asserting `"efficiency_classes":2`, so every mutant of that line died.
-It was pinning the wrong shape faithfully. **Mutation testing measures whether
-behavior is pinned by tests; it is silent on whether the pinned behavior is
-right.** Both halves were over-read here for many rounds as though they were
-evidence of correctness.
+**A renderer may not tell a reader something the row cannot tell a survey.** A
+state worth naming to a human is a state worth publishing to a mining pass; if
+only the prose can say it, the fact exists solely in the artifact nothing
+queries, and the only detector is a person reading. A cardinality is not a
+statement of the fact -- `"parse_incomplete":1` names no condition -- so a count
+beside a prose list is an instance of this rule being broken, not an exception
+to it.
 
-**Exhaustiveness checking protects `match` expressions, not concepts.**
-`PartitioningCache` exists precisely to force a decision -- its own doc says a
-renderer or serialiser "cannot emit the absent case without having decided
-which absent case it is" -- and it worked, in the two consumers that wrote a
-`match`. It bought nothing in the two that did not: `domain_counts` reached the
-same information through `outermost_partitioning_cache`, a second accessor
-returning `Option`, which launders five states into two; and `cross_check`
-never asked. A type can only compel a consumer that consults it.
+With that rule in place the surviving correspondences stop being text
+comparisons and become **invariants on the observation, checked before
+rendering** -- `summary_missing` implies the verdict is not `agree`, and likewise
+for the other diagnostics and the counters. No parser is involved.
 
-**Per-artifact review finds per-artifact defects.** Two readers checking each
-function against its own documentation will confirm both sides of a
-contradiction, because each side is locally true. Worse, the readers were
-answering questions posed in a prompt, and across rounds that prompt
-accumulated focus areas and "already verified, do not re-litigate" facts. The
-shared prompt correlated the readers far more strongly than their differing
-models decorrelated them; the instrument was being shaped to agree with its
-author. Removing that framing in the final round is what got a reader to trace
-`simultaneous_multithreading` out of this crate into `windows-topology-sys` and
-check it against the Win32 `LTP_PC_SMT` contract.
+**This rule is enforced, and the first thing it would have caught was already
+broken when the rule was written.** Every instrument in this crate used to start
+from what the row publishes -- the fact accounting enumerated the row's keys, the
+mutation sweep perturbed code the row's construction reached -- so all of them
+asked "does anything read this key?" and none asked "does the prose state a fact
+the row omits?". Measured: `CrossCheck::disagreements` was rendered per-entry in
+the prose and published in the row as nothing at all, so a survey could see
+`"cross_check":"disagree"` and not which counter disagreed. It survived 41 review
+rounds and a zero-survivor mutation sweep. A reviewer found it by reading the
+enum and asking who called `code()`.
 
-The single sentence that covers all three: **every instrument in use verified
-properties of things that exist.** Tests assert existing behavior, mutation
-perturbs existing code, reviewers check written claims. A correspondence
-failure is a property of a *pair*, and an absent branch is not a thing at all.
+The second enumeration -- every state that forbids agreement to a published
+condition -- now exists, in
+[tests/a_real_report_agrees_with_itself.rs](tests/a_real_report_agrees_with_itself.rs):
+`every_state_that_blocks_agreement_reaches_the_row` holds `topology::invariant`'s
+blocking states against the row's keys, and `publication_holds` is the shared
+predicate the corpus rule and its sabotage both call. Landed as M3.5, archived in
+[COMPLETED-CHECKLIST.md](COMPLETED-CHECKLIST.md).
 
-### Integration-level analysis was absent, which is where these live
+(Until M3.5 landed this section said "nothing here enforces that rule yet" and
+pointed at CHECKLIST.md for the queued item. Both statements outlived the
+milestone that made them false -- the reason this Tier 1 file is swept against
+the code rather than trusted, and an instance of the restatement drift the
+repository instructions describe.)
 
-At the time of the pull request the crate had one integration test, asserting
-that a probe writes something to stdout. Of twenty-five `report()` calls in the
-suite, **none rendered from a real host's `measure()`** -- every one used a
-synthetic `Observation` built by hand. A hand-built fixture can only contain
-states its author already imagined, and each assertion checked one local fact
-about it. Nothing anywhere rendered the artifact a consumer actually reads and
-asked whether it was self-consistent.
+### What the text-reading design cost
 
-### What to do instead: a sparse matrix to explore with, an oracle to keep
+Counted in [src/report_oracle.rs](src/report_oracle.rs) **as it stood before this decision**: of 38
+top-level functions, ten were correspondence rules and four were comparison
+helpers. **Twenty-three existed only to extract values back out of rendered
+text.** None of them survives: [src/report_oracle.rs](src/report_oracle.rs) reads no
+rendered PROSE at all now, and hand-writes no string scanning -- the row's
+well-formedness is a `serde_json` parse and its keys come from that parser's own
+tokens. (This said "reads no rendered text at all", which a review correctly read
+as contradicting the module: the prose reader is gone, the ROW parser is not, and
+the row is rendered text. What changed is that nothing here infers a value from a
+sentence -- the one parse left is of a format with a specification, performed by a
+library rather than by this crate.) So the counts above are what the design cost, not what the file holds.
+(They are also the only counts kept here, because they describe a file that no
+longer exists in that form and so cannot drift; a count of the CURRENT file would
+be a census, and is deliberately absent.)
 
-The obvious response -- tabulate every state against every consumer and fill
-the grid -- is wrong, and was proposed and rejected during this analysis. Such
-a table grows combinatorially, most of its cells are meaningless, and a version
-of it committed beside the code would be a second copy of the code's structure
-that nothing verifies. It would rot exactly as every restatement in this
-component rotted, and a stale "all cells covered" table is more dangerous than
-no table.
+That is a parser for a format this crate itself writes, and it behaved like one.
+A large share of PR #88's review rounds were defects in the READER rather than in
+the thing read: a multi-byte panic in `processors_in_banner`, a `p/` substring
+matching inside an opaque `io::Error`, `trim_matches` collapsing `[[0]]` and
+`[0]`, a prose lookup selecting the wrong line when two began alike. None of
+those is a defect in a probe. They are a defect source the design created for
+itself.
 
-The division that does work:
+### Where structure replaces checking, prefer structure
 
-- **The matrix is a transient, exploratory instrument.** Draw it for one type
-  at one boundary to find out which correlations exist. It is expected to be
-  **sparse**; most cells are empty and discovering that is cheap. Correlations
-  cannot be derived -- which is why twenty-eight rounds of reading produced
-  none -- so populating it is exploration, not specification.
-- **An oracle is the durable artifact.** Only cells that turn out to mean
-  something graduate into it. It stays small because discovery, not
-  enumeration, fills it.
+Three of the four hazards this component has actually met are made
+*unrepresentable* by construction rather than detected after the fact, and that
+is the stronger move:
 
-`windows-file-watcher`'s `ContractChecker` is this repository's worked example
-of the oracle half: a shared executable definition of the rules, owned by the
-crate that owns the contract, that the producing crate's own tests and every
-consumer's test doubles all bind to. It already existed while this probe was
-being written, and was not reached for.
+- **Injection.** Caller text reaching the row is contamination of the mined
+  artifact. Measured on PR #88: an `io::Error` containing `{` was selected as the
+  report's machine-readable row. A typed row emitted by one writer cannot have
+  this.
+- **Field order and labelling.** The row was built by interpolating every value
+  positionally through a `concat!` template, so a field's name and its value were
+  related only by counting -- and a reordered argument or a miscounted `{}` gave
+  mislabelled data that still parses. A typed row with one writer cannot have
+  this either, and that is what M3.3 built: the template is gone, and
+  [src/row.rs](src/row.rs) is the one writer.
 
-Three correlations are known to be real here, each because it was violated:
+  Stated as the coupling rather than as a count, deliberately, and the reason is
+  on the record: this said "eighteen values", was corrected to "seventeen" when
+  a review counted the placeholders, and was falsified again within the hour by
+  M3.1's follow-up adding `disagreements`. The hazard is that the correspondence
+  is positional at all; how many positions there are is exactly the sort of
+  census this component keeps having to re-correct.
+- **Value divergence.** Two renderings of one field cannot disagree about its
+  value when both read the field.
 
-1. an alarm in the report implies the verdict is not `agree`;
-2. a fact rendered twice must agree across its renderings;
-3. an uncaveated hardware claim implies `!parse_in_doubt`.
+What structure does NOT cover, and so still needs something reading bytes: **the
+writer itself.** Several of PR #88's defects lived there -- a disclaimer matched
+as a suffix so it could be welded onto the line above, a flattening that ate the
+disclaimer, a containment that produced `host:  host:  ...`. The residual text
+check is therefore small and about well-formedness, not about correspondence.
 
-What makes an oracle different from three more tests is where it is invoked: if
-every test renders *through* it, all twenty-five existing call sites inherit
-the checks and so does every future one. A test added beside them checks one
-case; an oracle checks every case anyone ever writes.
+### What this does not say
 
-**Record the vacuous findings too.** "We examined whether X and Y must
-correspond, and they need not" is a result, and it is the half that normally
-evaporates -- without it the next person re-explores the same empty cells.
+It does not say the prose does not matter. An overstated finding in prose
+propagates into the design notes that cite it, which is a live concern in this
+crate rather than a hypothetical -- M2.9 in [CHECKLIST.md](CHECKLIST.md) is an
+open item about exactly that. What changes is that prose accuracy is a **review**
+obligation, discharged by a person reading the report, rather than a
+correspondence a machine asserts.
 
-An oracle is a forcing function for correlations already discovered. It will
-not find a new one. The discipline that makes it compound is that each newly
-found cross-artifact contradiction adds an invariant to the oracle rather than
-a one-off test.
+It also does not delete the correspondence rules. They relocate onto the
+observation, losing the parser in front of them. The containment work in
+[src/topology_report.rs](src/topology_report.rs) matters MORE under this
+decision, not less, because what it keeps out is now keeping it out of the
+contract artifact.
 
-Whether this generalises to `Coherence`, `BracketOutcome`, `Verdict` and the
-sibling probes is **an open question, deliberately not answered here.** The work
-this decision implies is queued as M2 in [CHECKLIST.md](CHECKLIST.md); this
-section schedules nothing on its own.
+The work this implies was M3, which is complete and archived in
+[COMPLETED-CHECKLIST.md](COMPLETED-CHECKLIST.md). (This said "is queued as M3 in
+CHECKLIST.md" until a review pointed out that the canonical design note was
+advertising landed work as pending.) The session that produced it is
+[design-sessions/DESIGN-SESSION-2026-09-12-what-the-oracle-should-read.md](design-sessions/DESIGN-SESSION-2026-09-12-what-the-oracle-should-read.md).
 
-### The oracle exists, and what it deliberately refuses to know
+## Decisions carried in from the deferred-namespace-ops branch
 
-M2.1 built it: [src/report_oracle.rs](src/report_oracle.rs), seeded with the
-three correlations that are known to be real because each was violated.
+These were recorded on `mikegrier/deferred-namespace-ops` while the probe work ran in parallel on
+`main`, and the merge brought them across because `main` has no copy of them: M2.5 and M2.9 are still
+OPEN items there, and M2.7 was archived on the branch alone.
 
-**It reads the rendered artifact, never the state behind it.** Checking state
-would miss precisely this defect class -- in the original finding the state was
-consistent and the two *renderings* of it were not.
+**The branch's other design sections were deliberately NOT carried in.** Its oracle-era notes -- the
+oracle's refusal to know, the M2.4 correspondence matrix, the binding measurement -- already exist on
+`main` in [DESIGN-RATIONALE.md](DESIGN-RATIONALE.md), where M3 relocated them as Tier 2 history.
+Re-inserting them here would have put one decision in two tiers at once, which is the restatement
+drift this component spends its review rounds on.
 
-**It relates two things already visible in the report, and re-derives nothing.**
-A second implementation of the rendering rules would be a check of the copy
-rather than of the contract, and would drift the moment either moved. So the
-alarm rule compares an alarm line against a verdict line, the double-rendering
-rule compares prose against NDJSON, and the gating rule compares a claim against
-the report's own published evidence of doubt.
-
-That last one is the interesting boundary. `CrossCheck::parse_in_doubt` is
-`!disagreements.is_empty() || !parse_incomplete.is_empty()`, and the NDJSON
-publishes `parse_incomplete` as a **count** rather than the predicate -- so the
-oracle reads the count and the `disagree` verdict, which are the two visible
-shadows of that definition. The coupling is deliberate and is the thing M2.2's
-sabotage check must confirm still holds.
-
-**Half the tests assert acceptance**, following `ContractChecker`: an alarm
-beside a non-agreeing verdict is legal and is what the fix produced, a caveated
-claim under doubt is legal and is what the renderer emits on every heterogeneous
-host with a short parse, and a prose-only report is silence rather than
-violation. Over-constraining is the same defect as under-specifying and fails in
-the more expensive direction, because noise trains a reader to ignore the
-instrument.
-
-#### The failure mode that would look exactly like success
-
-An oracle whose prose labels do not match the renderer reads nothing, finds
-nothing, and passes everything. So the labels were confirmed against a real
-`probe-topology` run, and a test corrupts each double-rendered value in turn and
-requires a violation -- if a label ever drifts, that test fails rather than the
-oracle going quietly blind.
-
-Then the oracle was run against a **real rendered report** with the historical
-defect injected into it. It reported the contradiction twice, once for the prose
-verdict and once for the NDJSON, and reported nothing on the same report
-unmodified.
-
-**The first attempt at that injection silently did nothing**, and is worth
-recording because it nearly produced the opposite conclusion. The anchor used
-was `cross-check:`, which does not occur -- the real text is `cross-check
-against independently read Win32 counters:` -- so the "defective" report was
-identical to the clean one, the oracle correctly reported no violation, and the
-reading was almost "the oracle is blind". A sabotage that fails to apply is
-indistinguishable from an instrument that fails to fire, unless the injection
-asserts it changed something. It now does.
-
-### Binding the oracle, and the measurement that shows it is not cosmetic
-
-M2.2 bound the oracle inside `topology_report::report` and `report_unmeasured`
-under `cfg(test)`, rather than at each of the 26 test call sites.
-
-The placement is the whole difference between an oracle and three more tests.
-Asserting at each site checks 26 cases and relies on the 27th author
-remembering; asserting in the renderer checks every case anyone writes later,
-**including the ones written to exercise something else**. That last part is not
-incidental -- the original defect was found by a reviewer reading two paragraphs
-together, not by a test aimed at it, so the cases most likely to catch the next
-one are the cases nobody pointed at it.
-
-**Both directions were measured**, because a binding that only moves when its
-own test moves is cosmetic:
-
-| | tests red |
-|---|---|
-| correspondence defect, binding in place | **13**, all in `tests`, none in `report_oracle::tests` |
-| same defect, binding removed | **0** of 173 |
-
-The defect used was the NDJSON emitting the processor count where the core count
-belongs -- both renderings individually well-formed, so no per-part assertion
-can see it. One of the 13 is `every_report_carries_the_banner_and_title`, which
-exists to check the banner.
-
-The second row is the one that matters. It says the existing suite cannot see
-this class of defect at all, so the detection is genuinely new rather than a
-restatement of assertions already present. Had only `report_oracle::tests` gone
-red, the binding would have been reaching nothing.
-
-**`cfg(test)` rather than always-on** is deliberate. A real probe run must still
-print a contradictory report: a self-contradicting report is a finding *about
-this probe*, and a panic that suppressed it would destroy the evidence a reader
-needs. The real-host path is covered separately, by an integration test that
-applies the oracle explicitly.
-
-### The real-host test, and the guard that stops it passing for nothing
-
-M2.3 added [tests/a_real_report_agrees_with_itself.rs](tests/a_real_report_agrees_with_itself.rs).
-It composes the report the way `probe-topology` does and applies the oracle
-explicitly, because an integration test links the library without `cfg(test)`
-and so does not inherit M2.2's binding.
-
-**Why it had to exist.** All 26 in-crate call sites build their `Observation` by
-hand, and a hand-built observation can only contain a state its author already
-imagined. The oracle bound to those sites was therefore checking correspondences
-over cases chosen by the same person who wrote the renderer. The defect the
-oracle exists for was a state nobody had imagined. `measure()` reads the actual
-host, and on CI that is the whole hosted-runner fleet -- the population where an
-unimagined shape actually turns up.
-
-**It asserts nothing about the machine**, deliberately. A test expecting a
-processor count, a cache level or a verdict would fail on the next runner shape
-rather than on a defect, and would be loosened until it asserted nothing. "The
-report does not contradict itself" is checkable without knowing anything about
-the host, including a host whose topology cannot be read at all.
-
-#### The primary assertion can pass having checked nothing
-
-If the renderer's prose labels drift from the oracle's, every lookup returns
-`None`, every comparison is skipped, and the test passes. So a second test
-corrupts each of the four double-rendered counts in **this host's own report**
-and requires a violation for each. Corrupting one would have left the other
-three pairs unguarded.
-
-That guard was verified by widening one prose label by a single space. It failed,
-naming `"packages":` and pointing at label drift -- **and the primary test passed
-in the same run.** That pairing is the whole argument for the guard: the
-assertion that matters went green while checking one fact fewer than it thought.
-
-The corruption asserts it changed something before concluding anything, which is
-the lesson from M2.1's first injection.
-
-### The M2.4 matrix: what was examined, including what needed nothing
-
-The instrument was a walk of every NDJSON field against the report's prose, and
-every state enum against both. Recorded in full because **the cells that needed
-nothing are the half that normally evaporates** -- without them the next person
-re-explores the same ground and cannot tell an unexamined cell from an examined
-one.
-
-The prediction in M2.4 was that the matrix would be mostly empty. It was, along
-the axis the item named, and was not along an axis the item did not.
-
-#### Empty, and why
-
-| cell | why nothing correlates |
-|---|---|
-| `Coherence` | Never rendered. It feeds the verdict and appears in no prose line and no NDJSON field, so it has one rendering and cannot contradict itself. |
-| `BracketOutcome` | Rendered once, in the banner, as `HOST READINGS DISAGREE` / `HOST NOT ESTABLISHED`. No NDJSON counterpart. |
-| `Verdict` | Already covered by M2.1's prose-against-`cross_check` rule. |
-| `reason`, `arch` | NDJSON only. No prose renders them, so there is nothing to disagree with. |
-| `cores with SMT` | Prose only. |
-| `not_compared`, `parse_incomplete`, `enumeration_anomalies` | NDJSON only as counts. `parse_incomplete` is read by the gating rule, but as evidence rather than as a second rendering of a prose fact. |
-| `GetNumaHighestNodeNumber` against `numa_domains` | **Examined and deliberately not correlated.** It reports the largest node *number*, which the report itself says is not a count, so comparing the two would manufacture a disagreement on any machine with sparse node numbering. A test pins this exclusion so it is not "fixed" later. |
-
-#### Not empty, and promoted
-
-The productive axis was not the state enums the item named but the **facts**: six
-more were rendered twice with nothing comparing them.
-
-| fact | prose | NDJSON |
-|---|---|---|
-| NUMA domains, and those without processors | `NUMA domains        : 1 (0 with no processors)` | `numa_domains`, `numa_domains_without_processors` |
-| cache domains per level | the `caches:` table | `caches[]` |
-| outermost partitioning level | `outermost cache that partitions...: L2` | `outermost_partitioning_cache_level` |
-| domains per policy | the policy table | `policies{}` |
-| active processor count | `GetActiveProcessorCount` | `processors` |
-| active group count | `GetActiveProcessorGroupCount` | `groups` |
-
-The last two are a **different rule shape** and the closest to what this probe is
-for. The counters are read independently precisely so a mismatch is a finding, so
-a counter contradicting the enumeration while the verdict reads `agree` is the
-original defect in its purest form: the report printing its own contradicting
-evidence directly above a verdict denying it. A must-accept test pins the legal
-case, where the verdict reports the disagreement.
-
-Reading `caches` and `policies` also forced the field reader to balance brackets
-rather than stop at the first closer -- `caches` is an array *of objects*, so the
-naive read returned its first entry and would have silently skipped every later
-cache level.
-
-#### The finding that goes beyond this milestone
-
-`probe-doorbell-cost` and `probe-request-cost` render **every measured figure
-twice** -- once in their prose table and once in their NDJSON line -- with
-nothing comparing the two. That is the same class as the topology defect, in two
-more probes, and it is not covered: the oracle's rules are written against
-topology's prose labels.
-
-That is a scope question rather than a mechanical follow-on, and is queued as
-M2.9 rather than taken here.
-
+Read them against M3: the row is the machine contract and the prose is reviewed rather than parsed,
+so where one of these notes says "correspondence between two renderings", the surviving form is an
+invariant over the observation or a rule in the row schema.
 ### M2.9: two renderings that must match come from a common source
 
 The M2.4 finding was that both cost probes rendered every measured figure twice

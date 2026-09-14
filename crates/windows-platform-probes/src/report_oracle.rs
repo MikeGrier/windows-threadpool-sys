@@ -1,603 +1,453 @@
 // Copyright (c) Mike Grier.
 
-//! Correspondences a rendered report must satisfy *between* its parts.
+//! Whether a rendered report's machine-readable row is well-formed.
 //!
-//! # Why this exists rather than more per-part tests
+//! # What this used to be, and why it is not that any more
 //!
-//! A pull-request review found [`crate::topology_report`] printing
-//! `BUG IN THIS PROBE ... Nothing below about cache partitioning can be
-//! trusted` while the verdict two paragraphs below read `=> agree`. Twenty-eight
-//! rounds of per-artifact review and a zero-surviving-mutant `cargo-mutants` run
-//! had both passed over it, because **every function involved was correct on its
-//! own terms** and the defect lived in the relation between two of them.
+//! This module was an oracle over the report's PROSE: it read the rendered
+//! sentences, extracted values back out of them, and compared those against the
+//! NDJSON row. It was built after a pull-request review found a report calling a
+//! state a bug while the verdict two paragraphs below certified the same run as
+//! `agree`.
 //!
-//! That is the shape no per-part instrument can see. A test asserts one
-//! function's output; a mutant perturbs one function's behaviour; a reviewer
-//! reads one artifact and finds it locally true. A contradiction between two
-//! locally-true parts is invisible to all three.
+//! [DESIGN-NOTES.md](../DESIGN-NOTES.md#d-encoded-row-is-the-contract) retired
+//! that design. The row is a machine contract -- mined across a fleet, and what
+//! this workspace's designs rest on -- and the prose is for a reader. They carry
+//! different obligations: the row must be CORRECT, machine-enforced; the prose
+//! must be ACCURATE AND READABLE, enforced by review. Nothing is required to
+//! hold *between* them.
 //!
-//! # It reads the artifact, not the state that produced it
+//! The correspondences worth keeping were never about rendering. They related a
+//! STATE to the verdict, and they live in [`crate::topology::invariant`] now, as
+//! predicates over the observation that run whether or not anything was
+//! rendered. Of the thirty-eight functions this module carried, twenty-three
+//! existed only to extract values back out of rendered text -- a parser for a
+//! format this crate itself writes, and it behaved like one: a multi-byte panic,
+//! a substring matching inside an opaque `io::Error`, a `trim_matches`
+//! collapsing `[[0]]` and `[0]`. None of those was a defect in a probe.
 //!
-//! Every check here works on the **rendered text** -- the thing a reader and a
-//! log-mining pass actually receive. Checking internal state instead would miss
-//! precisely the defect class this exists for: the state was consistent in the
-//! case above, and the two renderings of it were not.
+//! # What is left, and why anything is left at all
 //!
-//! # What it deliberately does not do
+//! Structure makes most of the old checks unrepresentable rather than detected,
+//! which is the stronger move. What structure cannot check is **the writer** --
+//! whatever turns values into bytes is downstream of every type, and several of
+//! this crate's defects lived exactly there. So one check survives: the report
+//! carries exactly one machine-readable row, and that row is a well-formed JSON
+//! object. **Not flat** -- an earlier version of this sentence said flat, which
+//! the row has not been since it began publishing diagnostics: `caches`,
+//! `policies` and the three diagnostic lists are nested arrays and objects. A
+//! reader who believed it would have taken the nested data for a defect.
 //!
-//! It does not re-derive what the renderer should have printed. A second
-//! implementation of the rendering rules would be a check of the copy rather
-//! than of the contract, and would drift from the original the moment either
-//! moved. Each rule below relates **two things already visible in the report**,
-//! so the oracle has no opinion of its own to go stale.
+//! That is not a correspondence. It is the writer's own output being read back,
+//! which is the one thing no amount of typing upstream can do for itself.
 //!
-//! Over-constraining is the same defect as under-specifying, so a report that
-//! omits a fact is not a violation -- absence is checked only where the report
-//! itself makes a claim that requires the other part to agree.
-//!
-//! Seeded with three correlations, each of which is known to be real **because
-//! it was violated**. It is not a speculative list to extend by imagination: a
-//! fourth is added when a fourth contradiction is found.
+//! **The key set is checked, but not here.** This module reads a row it is
+//! handed and has no way to know which keys were owed; the contract lives beside
+//! the renderer that owes them, as `topology_report::MEASURED_ROW_KEYS`. An
+//! earlier version of this paragraph said the check was deferred until the row
+//! became a typed value, "at which point the key set is derivable from the type"
+//! -- which is false, and was measured to be: a type says "a map of names to
+//! values", which every key set satisfies, including the one missing a field.
 
-/// A correspondence between two parts of a report that did not hold.
+/// A way the report's machine-readable row is not well-formed.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub enum Correspondence {
-    /// The prose raised an alarm while the verdict said everything matched.
+pub enum RowDefect {
+    /// The report carries no machine-readable row.
     ///
-    /// The original defect. An alarm is a statement that some part of the
-    /// report cannot be trusted; a verdict of `agree` is a statement that every
-    /// check made was made and matched. Both can be locally true and they
-    /// cannot both describe the same run.
-    AlarmWithAgreeingVerdict {
-        /// The alarm line found in the prose.
-        alarm: String,
-        /// Where the agreeing verdict was found: `prose` or `ndjson`.
-        verdict_source: &'static str,
+    /// Every report has one, including the unmeasured shape -- that is what lets
+    /// a fleet survey tell a host where discovery FAILED from a job that never
+    /// ran the probe. A report without one silently excludes exactly the hosts
+    /// most worth counting.
+    Missing,
+    /// The report carries more than one.
+    ///
+    /// A mining pass reads the first line that looks like a row, so a second one
+    /// is not extra data -- it is an ambiguity about which line is the contract.
+    /// Measured before containment existed: an `io::Error` whose text contained
+    /// `{` was selected as the row, so a reader checked the caller's text
+    /// instead of the probe's.
+    Duplicated {
+        /// How many lines look like a row.
+        count: usize,
     },
-    /// One fact rendered twice, with the two renderings disagreeing.
+    /// The row is not a syntactically valid JSON object.
     ///
-    /// A report carries its findings for a human in prose and for a mining pass
-    /// in NDJSON. A consumer that reconciles the two cannot, and neither
-    /// rendering is self-evidently the wrong one.
-    ProseAndNdjsonDisagree {
-        /// What the fact is called, for the reader of the failure.
-        fact: &'static str,
-        /// As the prose rendered it.
-        prose: String,
-        /// As the NDJSON rendered it.
-        ndjson: String,
+    /// **Decided by a real parse, not by a check written here.** The question
+    /// this answers is "could a consumer read this row", and a consumer uses a
+    /// JSON parser -- so the only answer that cannot drift from the question is
+    /// one a JSON parser gives. Two hand-written versions preceded this: the
+    /// first counted bracket depth, which `{"a":1,}` and `{"a":1]` both satisfy;
+    /// the second matched delimiters by kind and checked separators, and a
+    /// generated test still found 159 rows it accepted and `serde_json` did not.
+    Malformed {
+        /// What is wrong, in the parser's own words.
+        what: String,
+        /// The row, as rendered.
+        row: String,
     },
-    /// A hardware claim was stated without its caveat while the report's own
-    /// evidence says the parse was in doubt.
+    /// The row repeats a key.
     ///
-    /// The renderer's rule is that every hardware conclusion is gated on the
-    /// parse being whole. A claim printed bare, in a report that elsewhere
-    /// reports doubt, is that rule with an exception -- and a rule with an
-    /// exception is not a rule.
-    UncaveatedClaimUnderDoubt {
-        /// The claim that was stated bare.
-        claim: &'static str,
-        /// The report's own visible evidence of doubt.
-        evidence: String,
-    },
-    /// The banner names one machine and the body describes another.
-    ///
-    /// The banner is the line a reader uses to decide whether two runs are
-    /// comparable at all, so a banner describing a different machine from the
-    /// body under it invalidates every comparison drawn from the report --
-    /// while each half stays locally correct, which is what let this survive
-    /// review.
-    BannerDisagreesWithBody {
-        /// The processor count the banner named.
-        banner: String,
-        /// The processor count the body reported.
-        body: String,
+    /// A repeated key is not a parse error in every JSON reader -- most take the
+    /// last -- so this is precisely the kind of malformation that survives a
+    /// consumer's parse and changes what it reads.
+    RepeatedKey {
+        /// The key rendered more than once.
+        key: String,
     },
 }
 
-/// Every correspondence `report` violates, in the order they were checked.
-///
-/// An empty result means every correlation this oracle knows about held. It
-/// does **not** mean the report is correct: an oracle is a floor, not a
-/// specification.
-#[must_use]
-pub fn check(report: &str) -> Vec<Correspondence> {
-    let mut found = Vec::new();
-    let ndjson = ndjson_line(report);
+impl std::fmt::Display for RowDefect {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Missing => f.write_str("the report carries no machine-readable row"),
+            Self::Duplicated { count } => write!(
+                f,
+                "the report carries {count} machine-readable rows, so which one \
+                 is the contract is ambiguous"
+            ),
+            Self::Malformed { what, row } => {
+                write!(f, "the row is not a valid JSON object -- {what}: {row}")
+            }
+            Self::RepeatedKey { key } => write!(
+                f,
+                "the row renders `{key}` more than once, which most JSON readers \
+                 resolve silently by taking the last"
+            ),
+        }
+    }
+}
 
-    check_alarm_against_verdict(report, ndjson, &mut found);
-    check_prose_against_ndjson(report, ndjson, &mut found);
-    check_claims_against_doubt(report, ndjson, &mut found);
-    check_structured_pairs(report, ndjson, &mut found);
-    check_counters_against_verdict(report, ndjson, &mut found);
-    check_banner_against_body(report, ndjson, &mut found);
+/// Every way `report`'s machine-readable row is not well-formed.
+#[must_use]
+pub fn check(report: &str) -> Vec<RowDefect> {
+    let rows: Vec<&str> = report
+        .lines()
+        .filter(|line| line.starts_with('{'))
+        .collect();
+
+    let [row] = rows.as_slice() else {
+        return vec![if rows.is_empty() {
+            RowDefect::Missing
+        } else {
+            RowDefect::Duplicated { count: rows.len() }
+        }];
+    };
+
+    let mut found = Vec::new();
+
+    if let Some(what) = malformation(row) {
+        found.push(RowDefect::Malformed {
+            what,
+            row: (*row).to_owned(),
+        });
+        // Every check below reads the object's members, which is not a question
+        // that means anything about text that is not an object.
+        return found;
+    }
+
+    let mut seen: Vec<String> = Vec::new();
+    for key in keys(row) {
+        if seen.contains(&key) {
+            found.push(RowDefect::RepeatedKey { key });
+        } else {
+            seen.push(key);
+        }
+    }
 
     found
 }
 
-/// The banner names the machine the body describes.
+/// What is wrong with `row` as a JSON object, if anything.
 ///
-/// A run makes three discoveries of the host -- one before the measurement,
-/// `measure`'s own, and one after -- and the banner used to be built from an
-/// endpoint, so it could name a different topology from the body beneath it
-/// with nothing in the report saying so.
+/// **A real parse, because the question is whether a consumer can parse it.**
+/// Anything else here is a second opinion about what JSON is, and a second
+/// opinion is a thing that can disagree. Both hand-written predecessors did:
+/// the first counted bracket depth and accepted `{"a":1,}`; the second matched
+/// delimiters by kind and checked separators, and a test that generated 1807
+/// single-character corruptions of a real row found **159 it accepted and
+/// `serde_json` rejected -- every one a false accept.** Closing the last of them
+/// required tracking whether an object expects a name or a value next, which is
+/// a JSON parser; so this depends on one rather than growing one.
 ///
-/// **This rule survives the fix that made that unrepresentable, and is not
-/// redundant with it.** `measure_observed` now builds the banner from the body's
-/// own topology, so the two cannot come from different reads; but they are still
-/// two independent *derivations* from that one topology --
-/// `Fingerprint::from_topology` and `observe`, each with its own filter for
-/// which processors count. Those have already disagreed once, when
-/// `from_topology` summed core-domain membership and printed `0p` for a machine
-/// about to be measured on four processors. Construction closes the read gap;
-/// this closes the derivation gap, on every report rather than in one test.
-///
-/// Reads the FIRST banner line only. When the endpoint readings disagree the
-/// banner carries a second line naming the other reading, which is a reading the
-/// body deliberately does not describe -- comparing it here would report a
-/// contradiction the renderer went to some trouble to state honestly.
-fn check_banner_against_body(report: &str, ndjson: Option<&str>, found: &mut Vec<Correspondence>) {
-    let (Some(banner), Some(ndjson)) = (
-        report.lines().find(|line| line.starts_with("host:")),
-        ndjson,
-    ) else {
-        return;
-    };
-    // Absent on a report whose discovery failed: the banner reads `UNKNOWN` and
-    // `report_unmeasured` emits no processor count, so there is nothing to
-    // relate and no violation to claim.
-    let (Some(banner_count), Some(body_count)) = (
-        processors_in_banner(banner),
-        ndjson_field(ndjson, "processors"),
-    ) else {
-        return;
-    };
-
-    if banner_count != body_count {
-        found.push(Correspondence::BannerDisagreesWithBody {
-            banner: banner_count.to_owned(),
-            body: body_count.to_owned(),
-        });
+/// **A parse does not subsume [`RowDefect::RepeatedKey`].** `serde_json` accepts
+/// a duplicated key and silently keeps the last, which is exactly why that
+/// defect is worth a check of its own: it survives the consumer's parse and
+/// changes what the consumer reads. The two checks answer different questions
+/// and neither replaces the other.
+fn malformation(row: &str) -> Option<String> {
+    // The row is required to be an OBJECT, not merely valid JSON. A bare `[1,2]`
+    // parses and would satisfy a laxer check, while carrying no keys at all.
+    match serde_json::from_str::<serde_json::Map<String, serde_json::Value>>(row) {
+        Ok(_) => None,
+        Err(error) => Some(error.to_string()),
     }
 }
 
-/// The processor count a banner line names, as it was rendered.
+/// Every key `row` renders at its top level, in the order it renders them, and
+/// INCLUDING repeats.
 ///
-/// The fingerprint renders as `<arch> <N>p/<M>c smt<S>`, optionally behind a
-/// `!!taint!! ` prefix, so the count is the digits immediately before `p/`.
-/// Returned as text rather than parsed, so a malformed count is reported as the
-/// mismatch it is instead of being silently discarded by a failed parse.
-fn processors_in_banner(banner: &str) -> Option<&str> {
-    let before = &banner[..banner.find("p/")?];
-    let start = before
-        .rfind(|c: char| !c.is_ascii_digit())
-        .map_or(0, |i| i + 1);
-    let digits = &before[start..];
-    (!digits.is_empty()).then_some(digits)
+/// **Read from the parser's own tokens, not by walking the bytes.** Both
+/// properties this returns are ones a parsed map destroys: `serde_json::Map`
+/// sorts its names, and silently keeps the last of a repeated key -- which is
+/// exactly the defect [`RowDefect::RepeatedKey`] reports, so parsing into a map
+/// would delete the evidence. A `MapAccess` visitor sees each name as the parser
+/// reads it, which keeps both while leaving every escape, quote and delimiter
+/// decision to `serde_json`.
+///
+/// The hand-written version of this was the last string scanner here, and it had
+/// already produced a real defect: it used `find('"')`, which takes `\"` for a
+/// terminator, so a `discovery_error` carrying an escaped quote shifted where it
+/// thought strings began and text INSIDE the error was emitted as top-level
+/// keys. Measured: an `io::Error` of `q":1,"q":1,"q` rendered a row that
+/// `JSON.parse` accepts with four keys, and `assert_row_is_well_formed` panicked from
+/// inside the renderer. Fixing that added escape-awareness to one of the
+/// scanners and left the others to be argued about; this removes the question.
+///
+/// Top level only, deliberately: a nested object's members are that object's
+/// keys, and repeating one there is a different question from repeating one in
+/// the row. The visitor reads nested values as [`serde::de::IgnoredAny`], which
+/// consumes them without collecting their names.
+#[must_use]
+pub fn keys(row: &str) -> Vec<String> {
+    struct TopLevelNames;
+
+    impl<'de> serde::de::Visitor<'de> for TopLevelNames {
+        type Value = Vec<String>;
+
+        fn expecting(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            f.write_str("the probe's machine-readable row, a JSON object")
+        }
+
+        fn visit_map<A: serde::de::MapAccess<'de>>(
+            self,
+            mut members: A,
+        ) -> Result<Self::Value, A::Error> {
+            let mut names = Vec::new();
+            while let Some(name) = members.next_key::<String>()? {
+                names.push(name);
+                members.next_value::<serde::de::IgnoredAny>()?;
+            }
+            Ok(names)
+        }
+    }
+
+    // **`end` matters, and its absence made two public functions disagree.**
+    // `serde_json` stops at the end of the first value and does not care what
+    // follows, so `{"reason":"x"}garbage` yielded `["reason"]` here while
+    // `check` reported `Malformed { what: "trailing characters ..." }` for the
+    // same row. A caller reading keys directly was told a malformed artifact
+    // was readable. Measured, then fixed; reported by a review.
+    //
+    // The block below is one sabotage anchor and is deliberately free of
+    // comments, so replacing the visitor with a parsed map stays a single
+    // contiguous substitution that still compiles.
+    let mut reader = serde_json::Deserializer::from_str(row);
+    let Ok(names) = serde::Deserializer::deserialize_map(&mut reader, TopLevelNames) else {
+        return Vec::new();
+    };
+    if reader.end().is_err() {
+        return Vec::new();
+    }
+    names
+}
+/// The `code` of every entry in `row`'s list-valued `key`.
+///
+/// **One definition, because two instruments need it.** The diagnostic lists
+/// hold objects -- `{"code":"contradictory_cores","count":3}` -- and both the
+/// unit tests and the publication accounting ask this question. A second
+/// implementation of it is the kind of copy that agrees until it does not.
+///
+/// Read from a parse. The previous version searched for `"code":"` and then took
+/// the next `"` as the end, which is not escape-aware: a code containing a quote
+/// would have truncated. That was argued safe because every code is a
+/// `&'static str` from an enum and no caller text reaches a list -- an argument
+/// that was true, load-bearing, and enforced by nothing. Parsing makes the
+/// argument unnecessary rather than merely correct, which is the difference
+/// between a property and a hope.
+///
+/// Returns empty for a key that is absent or not a list, which is the same
+/// answer as an empty list on purpose: a consumer of this is asking "what
+/// conditions are published", and "none" is the answer in both cases.
+#[must_use]
+pub fn list_codes(row: &str, key: &str) -> Vec<String> {
+    let Ok(parsed) = serde_json::from_str::<serde_json::Value>(row) else {
+        return Vec::new();
+    };
+    let Some(entries) = parsed.get(key).and_then(serde_json::Value::as_array) else {
+        return Vec::new();
+    };
+
+    entries
+        .iter()
+        .filter_map(|entry| entry.get("code"))
+        .filter_map(serde_json::Value::as_str)
+        .map(str::to_owned)
+        .collect()
+}
+/// The report's machine-readable row, if it carries exactly one well-formed one.
+///
+/// Public because the instruments in `tests/` read the row to ask what it
+/// publishes, and a second implementation of "which line is the row" is the kind
+/// of copy that agrees until it does not.
+///
+/// **Defined by [`check`], so the accessor and the oracle cannot disagree.** It
+/// ran its own subset -- one row, and `malformation` -- and `serde_json` accepts
+/// a duplicated key, so a row that `check` reported as
+/// [`RowDefect::RepeatedKey`] was handed back here as well-formed. A caller
+/// asking "may I read this row" got yes for a row the crate had already judged
+/// ambiguous, which is the one malformation that survives a consumer's parse and
+/// changes what it reads. Found by a review.
+///
+/// This is the same defect the module keeps warning about, in the function whose
+/// doc comment warns about it: two implementations of one question, agreeing
+/// until they did not.
+#[must_use]
+pub fn row(report: &str) -> Option<&str> {
+    if !check(report).is_empty() {
+        return None;
+    }
+    report.lines().find(|line| line.starts_with('{'))
+}
+
+use crate::row::Shape;
+
+/// Every way `row` departs from `schema`'s value SHAPES, as sentences.
+///
+/// **The half the key contract was missing.** `MEASURED_ROW_KEYS` pins which
+/// names appear and in what order, and says nothing about what they hold -- so
+/// a renderer could publish `"processors":"16"` and satisfy the key test, the
+/// well-formedness check and every renderer assertion at once. Measured before
+/// this existed: rendering that one field through `.to_string()` left all 230
+/// library tests and all 10 real-host integration tests green. Reported by a
+/// review.
+///
+/// Keys are not re-checked here; that is the key test's job, and doing it in
+/// both places would make one of them the copy. A key the schema names and the
+/// row lacks is reported, because a shape cannot be checked against nothing.
+#[must_use]
+pub fn shape_violations(row: &str, schema: &[(&str, Shape)]) -> Vec<String> {
+    use serde_json::Value as Json;
+
+    let Ok(parsed) = serde_json::from_str::<serde_json::Map<String, Json>>(row) else {
+        return vec![format!("the row is not a JSON object: {row}")];
+    };
+
+    let mut found = Vec::new();
+    for (name, shape) in schema {
+        let Some(value) = parsed.get(*name) else {
+            found.push(format!("`{name}` is missing, so its shape cannot hold"));
+            continue;
+        };
+        check_shape(name, *shape, value, &mut found);
+    }
+
+    found
+}
+
+/// Whether `value` has `shape`, appending one sentence per departure.
+///
+/// **Recursive, and reporting WHERE rather than only THAT.** A lone
+/// "`caches` should be a list of objects" cannot tell a reader which element
+/// lost which member -- and the nested contract is the half a review found
+/// unchecked, because `[{}]` satisfied "a list of objects" while publishing
+/// none of the cache fields a survey mines.
+fn check_shape(at: &str, shape: Shape, value: &serde_json::Value, found: &mut Vec<String>) {
+    use serde_json::Value as Json;
+
+    fn is_number(value: &Json) -> bool {
+        value.is_u64() || value.is_i64()
+    }
+
+    let holds = match shape {
+        Shape::Text => value.is_string(),
+        Shape::Number => is_number(value),
+        Shape::NumberOrNull => is_number(value) || value.is_null(),
+        Shape::ListOfNumbers => value.as_array().is_some_and(|l| l.iter().all(is_number)),
+        Shape::ObjectOfNumbers => value.as_object().is_some_and(|o| o.values().all(is_number)),
+        Shape::ListOfObjectsWith(required) => {
+            let Some(entries) = value.as_array() else {
+                found.push(format!("`{at}` should be a list but is `{value}`"));
+                return;
+            };
+
+            for (index, entry) in entries.iter().enumerate() {
+                let Some(members) = entry.as_object() else {
+                    found.push(format!(
+                        "`{at}`[{index}] should be an object but is `{entry}`"
+                    ));
+                    continue;
+                };
+
+                for (member, member_shape) in required {
+                    let Some(held) = members.get(*member) else {
+                        found.push(format!("`{at}`[{index}] is missing `{member}`"));
+                        continue;
+                    };
+                    check_shape(
+                        &format!("{at}[{index}].{member}"),
+                        *member_shape,
+                        held,
+                        found,
+                    );
+                }
+            }
+
+            return;
+        }
+    };
+
+    if !holds {
+        found.push(format!("`{at}` should be {shape:?} but is `{value}`"));
+    }
+}
+
+/// [`shape_violations`], as an assertion.
+///
+/// # Panics
+///
+/// Panics listing every value whose shape the schema forbids.
+pub fn assert_row_has_the_schemas_shapes(report: &str, schema: &[(&str, Shape)]) {
+    let row = row(report).unwrap_or_else(|| panic!("no single well-formed row in:\n{report}"));
+    let violations = shape_violations(row, schema);
+    assert!(
+        violations.is_empty(),
+        "the row departs from its schema in {} way(s):\n{}\n\n--- the row ---\n{row}",
+        violations.len(),
+        violations
+            .iter()
+            .map(|what| format!("  - {what}"))
+            .collect::<Vec<_>>()
+            .join("\n"),
+    );
 }
 
 /// [`check`], as an assertion, for tests that render a report.
 ///
+/// **Named `assert_corresponds` until 2026-09-13, and the name outlived what it
+/// did.** Before M3 this compared a report's prose against its encoded row; M3
+/// made the row the machine contract and retired that comparison, leaving a
+/// function that validates ONE thing -- that the report carries exactly one
+/// well-formed JSON row. The old name went on promising a cross-part guarantee
+/// to every reader of its four call sites. Renamed after a review read those
+/// call sites as still enforcing correspondence, which is exactly the mistake
+/// the name invited.
+///
 /// # Panics
 ///
-/// Panics listing every correspondence the report violated.
-pub fn assert_corresponds(report: &str) {
-    let violations = check(report);
+/// Panics listing every way the row is malformed.
+pub fn assert_row_is_well_formed(report: &str) {
+    let defects = check(report);
     assert!(
-        violations.is_empty(),
-        "the report's parts contradict each other: {violations:#?}\n\n\
-         --- the report ---\n{report}"
+        defects.is_empty(),
+        "a rendered report's machine-readable row is malformed in {} way(s):\n{}\n\n\
+         --- the report ---\n{report}",
+        defects.len(),
+        defects
+            .iter()
+            .map(|defect| format!("  - {defect}"))
+            .collect::<Vec<_>>()
+            .join("\n"),
     );
-}
-
-/// The report's machine-readable line, if it has one.
-///
-/// A report is prose with at most one NDJSON line in it. `report_unmeasured`
-/// emits a much shorter object than `report`, so every field read below is
-/// optional by construction.
-fn ndjson_line(report: &str) -> Option<&str> {
-    report.lines().find(|line| line.starts_with('{'))
-}
-
-/// The raw text of one field of a flat JSON object.
-///
-/// Hand-written rather than pulled from a JSON crate because this crate has no
-/// such dependency and the object is emitted a few lines away in this same
-/// crate: flat, unnested, and machine-generated. It returns the value's source
-/// text -- quotes stripped for a string, otherwise verbatim -- so a caller
-/// compares renderings rather than parsed values, which is the point.
-fn ndjson_field<'a>(line: &'a str, key: &str) -> Option<&'a str> {
-    let needle = format!("\"{key}\":");
-    let start = line.find(&needle)? + needle.len();
-    let rest = &line[start..];
-
-    let value = if let Some(stripped) = rest.strip_prefix('"') {
-        let end = stripped.find('"')?;
-        &stripped[..end]
-    } else if rest.starts_with('[') || rest.starts_with('{') {
-        // Balanced, not first-closer. `caches` is an array OF objects and
-        // `policies` is an object, so stopping at the first `]` or `}` would
-        // truncate both -- returning `[{"level":1,"domains":8` for a three-level
-        // machine, which then compares unequal against anything and reports a
-        // contradiction that is the reader's own parse.
-        let end = balanced_end(rest)?;
-        &rest[1..end]
-    } else {
-        let end = rest.find([',', '}']).unwrap_or(rest.len());
-        &rest[..end]
-    };
-
-    Some(value.trim())
-}
-
-/// The index of the bracket closing the one `text` opens with.
-fn balanced_end(text: &str) -> Option<usize> {
-    let mut depth = 0_i32;
-    for (index, character) in text.char_indices() {
-        match character {
-            '[' | '{' => depth += 1,
-            ']' | '}' => {
-                depth -= 1;
-                if depth == 0 {
-                    return Some(index);
-                }
-            }
-            _ => {}
-        }
-    }
-    None
-}
-
-/// The text after `label` on the line that begins with it.
-fn prose_field<'a>(report: &'a str, label: &str) -> Option<&'a str> {
-    report
-        .lines()
-        .find(|line| line.starts_with(label))
-        .map(|line| line[label.len()..].trim())
-}
-
-/// Alarms the prose can raise. Each is a statement that part of the report is
-/// not to be trusted.
-const ALARMS: &[&str] = &["BUG IN THIS PROBE"];
-
-fn check_alarm_against_verdict(
-    report: &str,
-    ndjson: Option<&str>,
-    found: &mut Vec<Correspondence>,
-) {
-    let Some(alarm) = report
-        .lines()
-        .find(|line| ALARMS.iter().any(|marker| line.contains(marker)))
-    else {
-        return;
-    };
-
-    if report.contains("=> agree") {
-        found.push(Correspondence::AlarmWithAgreeingVerdict {
-            alarm: alarm.trim().to_owned(),
-            verdict_source: "prose",
-        });
-    }
-
-    if ndjson.and_then(|line| ndjson_field(line, "cross_check")) == Some("agree") {
-        found.push(Correspondence::AlarmWithAgreeingVerdict {
-            alarm: alarm.trim().to_owned(),
-            verdict_source: "ndjson",
-        });
-    }
-}
-
-/// Facts this report renders twice: the prose label, the NDJSON key, and the
-/// name to use when they disagree.
-///
-/// Counts only. A prose line reads `processors (online) : 16` and the NDJSON
-/// `"processors":16`, so the comparison is of the rendered values with the
-/// prose label removed.
-const DOUBLE_RENDERED: &[(&str, &str, &str)] = &[
-    ("processors (online) : ", "processors", "online processors"),
-    ("processor groups    : ", "groups", "processor groups"),
-    ("packages            : ", "packages", "packages"),
-    ("physical cores      : ", "cores", "physical cores"),
-];
-
-fn check_prose_against_ndjson(report: &str, ndjson: Option<&str>, found: &mut Vec<Correspondence>) {
-    let Some(ndjson) = ndjson else {
-        return;
-    };
-
-    for (label, key, fact) in DOUBLE_RENDERED {
-        let (Some(prose), Some(json)) = (prose_field(report, label), ndjson_field(ndjson, key))
-        else {
-            continue;
-        };
-        if prose != json {
-            found.push(Correspondence::ProseAndNdjsonDisagree {
-                fact,
-                prose: prose.to_owned(),
-                ndjson: json.to_owned(),
-            });
-        }
-    }
-
-    // The efficiency classes, whose two renderings differ in punctuation and so
-    // cannot be compared as text. This pair is here because it was wrong: the
-    // NDJSON once emitted the class COUNT under a plural name, so a
-    // single-class host printed `"efficiency_classes":1` beside a prose
-    // `efficiency classes: [0]` -- the same fact, in one report, in two
-    // renderings a consumer cannot reconcile.
-    if let (Some(prose), Some(json)) = (
-        prose_field(report, "  efficiency classes: "),
-        ndjson_field(ndjson, "efficiency_classes"),
-    ) {
-        let prose_classes = normalise_list(prose);
-        let json_classes = normalise_list(json);
-        if prose_classes != json_classes {
-            found.push(Correspondence::ProseAndNdjsonDisagree {
-                fact: "efficiency classes",
-                prose: prose_classes,
-                ndjson: json_classes,
-            });
-        }
-    }
-
-    // The verdict, which the prose states as a sentence and the NDJSON as a
-    // token.
-    let prose_verdict = if report.contains("=> agree") {
-        Some("agree")
-    } else if report.contains("=> DISAGREE") {
-        Some("disagree")
-    } else if report.contains("=> INCOMPLETE") {
-        Some("incomplete")
-    } else {
-        None
-    };
-
-    if let (Some(prose), Some(json)) = (prose_verdict, ndjson_field(ndjson, "cross_check"))
-        && prose != json
-    {
-        found.push(Correspondence::ProseAndNdjsonDisagree {
-            fact: "cross-check verdict",
-            prose: prose.to_owned(),
-            ndjson: json.to_owned(),
-        });
-    }
-}
-
-/// The facts whose two renderings differ in shape rather than punctuation.
-///
-/// Found by the M2.4 matrix rather than by a defect. The four counts already
-/// checked above were the ones a reviewer had happened to look at; walking every
-/// NDJSON field against the prose showed these carrying the same fact twice as
-/// well, with nothing comparing them.
-fn check_structured_pairs(report: &str, ndjson: Option<&str>, found: &mut Vec<Correspondence>) {
-    let Some(ndjson) = ndjson else {
-        return;
-    };
-
-    // `NUMA domains        : 1 (0 with no processors)` against two fields.
-    if let Some(prose) = prose_field(report, "NUMA domains        : ") {
-        let total = prose.split_whitespace().next().unwrap_or_default();
-        let without = prose
-            .split_once('(')
-            .and_then(|(_, rest)| rest.split_whitespace().next())
-            .unwrap_or_default();
-
-        compare(
-            found,
-            "NUMA domains",
-            total,
-            ndjson_field(ndjson, "numa_domains"),
-        );
-        compare(
-            found,
-            "NUMA domains without processors",
-            without,
-            ndjson_field(ndjson, "numa_domains_without_processors"),
-        );
-    }
-
-    // `outermost cache that partitions the processors it covers: L2 (8 domains)`
-    // against the level the NDJSON names. This pair is the one the original
-    // defect lived next to: the prose can name a level the machine-readable
-    // line does not.
-    if let Some(prose) = prose_field(
-        report,
-        "outermost cache that partitions the processors it covers: ",
-    ) {
-        let level = prose
-            .trim_start_matches('L')
-            .split_whitespace()
-            .next()
-            .unwrap_or_default();
-        compare(
-            found,
-            "outermost partitioning cache level",
-            level,
-            ndjson_field(ndjson, "outermost_partitioning_cache_level"),
-        );
-    }
-
-    // The policy table against the `policies` object. A policy's domain count is
-    // what the whole report is for, so two renderings of it disagreeing would
-    // mislead exactly the reader who came for the answer.
-    if let Some(policies) = ndjson_field(ndjson, "policies") {
-        for (name, count) in policy_rows(report) {
-            let key = format!("\"{name}\":");
-            let json = policies
-                .find(&key)
-                .map(|at| &policies[at + key.len()..])
-                .map(|rest| {
-                    let end = rest.find(',').unwrap_or(rest.len());
-                    rest[..end].trim()
-                });
-            compare(found, "policy domain count", &count, json);
-        }
-    }
-
-    // The cache table against the `caches` array, level by level.
-    if let Some(caches) = ndjson_field(ndjson, "caches") {
-        for (level, domains) in cache_rows(report) {
-            let key = format!("\"level\":{level},\"domains\":");
-            let json = caches
-                .find(&key)
-                .map(|at| &caches[at + key.len()..])
-                .map(|rest| {
-                    let end = rest.find([',', '}']).unwrap_or(rest.len());
-                    rest[..end].trim()
-                });
-            compare(found, "cache domain count", &domains, json);
-        }
-    }
-}
-
-/// Push a disagreement when both renderings are present and differ.
-fn compare(found: &mut Vec<Correspondence>, fact: &'static str, prose: &str, json: Option<&str>) {
-    let Some(json) = json else {
-        return;
-    };
-    if prose != json {
-        found.push(Correspondence::ProseAndNdjsonDisagree {
-            fact,
-            prose: prose.to_owned(),
-            ndjson: json.to_owned(),
-        });
-    }
-}
-
-/// `(policy name, domain count)` for each row of the policy table.
-fn policy_rows(report: &str) -> Vec<(String, String)> {
-    report
-        .lines()
-        .skip_while(|line| !line.starts_with("domains each policy would produce:"))
-        .skip(1)
-        .take_while(|line| line.starts_with("  "))
-        .filter_map(|line| {
-            let mut parts = line.split_whitespace();
-            Some((parts.next()?.to_owned(), parts.next()?.to_owned()))
-        })
-        .collect()
-}
-
-/// `(level, domain count)` for each row of the cache table.
-fn cache_rows(report: &str) -> Vec<(String, String)> {
-    report
-        .lines()
-        .skip_while(|line| !line.starts_with("caches:"))
-        .skip(1)
-        .take_while(|line| line.starts_with("  "))
-        .filter_map(|line| {
-            let mut parts = line.split_whitespace();
-            let level = parts.next()?.strip_prefix('L')?.to_owned();
-            Some((level, parts.next()?.to_owned()))
-        })
-        .collect()
-}
-
-/// The independently-read Win32 counters against the verdict drawn from them.
-///
-/// A different shape from the rules above, and the one closest to what this
-/// probe is *for*. The prose prints each counter beside the enumerated value it
-/// was read to check; the whole point of the run is that a mismatch is a
-/// finding. So a counter that disagrees with the enumeration while the verdict
-/// reads `agree` is the original defect in its purest form -- the report
-/// showing its own contradicting evidence directly above a verdict denying it.
-fn check_counters_against_verdict(
-    report: &str,
-    ndjson: Option<&str>,
-    found: &mut Vec<Correspondence>,
-) {
-    let Some(ndjson) = ndjson else {
-        return;
-    };
-    if ndjson_field(ndjson, "cross_check") != Some("agree") {
-        return;
-    }
-
-    // Only the two counters that are a direct count of an enumerated quantity.
-    // `GetNumaHighestNodeNumber` is deliberately absent: it reports the largest
-    // node NUMBER, which the report itself says is not a count, so comparing it
-    // against `numa_domains` would manufacture a disagreement on any machine
-    // with sparse node numbering.
-    for (label, key, fact) in [
-        (
-            "  GetActiveProcessorCount     : ",
-            "processors",
-            "active processor count against the enumeration",
-        ),
-        (
-            "  GetActiveProcessorGroupCount: ",
-            "groups",
-            "active group count against the enumeration",
-        ),
-    ] {
-        let (Some(counter), Some(enumerated)) =
-            (prose_field(report, label), ndjson_field(ndjson, key))
-        else {
-            continue;
-        };
-        if counter != enumerated {
-            found.push(Correspondence::ProseAndNdjsonDisagree {
-                fact,
-                prose: counter.to_owned(),
-                ndjson: enumerated.to_owned(),
-            });
-        }
-    }
-}
-
-/// A list of numbers as a comparable string, whichever way it was punctuated.
-fn normalise_list(rendered: &str) -> String {
-    rendered
-        .trim_matches(['[', ']'])
-        .split(',')
-        .map(str::trim)
-        .filter(|piece| !piece.is_empty())
-        .collect::<Vec<_>>()
-        .join(",")
-}
-
-/// Hardware claims the prose can make, each with the caveat that must accompany
-/// it when the parse is in doubt.
-const GATED_CLAIMS: &[(&str, &str, &str)] = &[(
-    "(heterogeneous: an I/O thread left unconstrained can land on an",
-    "This run did not establish that the parse is whole",
-    "heterogeneity",
-)];
-
-fn check_claims_against_doubt(report: &str, ndjson: Option<&str>, found: &mut Vec<Correspondence>) {
-    let Some(ndjson) = ndjson else {
-        return;
-    };
-
-    // The report's own visible evidence that its parse was in doubt.
-    //
-    // These two are exactly what `CrossCheck::parse_in_doubt` is defined as --
-    // a non-empty `parse_incomplete` or a non-empty `disagreements`, the latter
-    // being what makes the verdict `disagree`. That correspondence is the point
-    // rather than a coincidence: if the definition changes and this does not,
-    // the sabotage check in M2.2 is what should notice.
-    let mut evidence = Vec::new();
-    if let Some(count) = ndjson_field(ndjson, "parse_incomplete")
-        && count != "0"
-    {
-        evidence.push(format!("parse_incomplete={count}"));
-    }
-    if ndjson_field(ndjson, "cross_check") == Some("disagree") {
-        evidence.push("cross_check=disagree".to_owned());
-    }
-
-    if evidence.is_empty() {
-        return;
-    }
-
-    for (claim, caveat, name) in GATED_CLAIMS {
-        if report.contains(claim) && !report.contains(caveat) {
-            found.push(Correspondence::UncaveatedClaimUnderDoubt {
-                claim: name,
-                evidence: evidence.join(", "),
-            });
-        }
-    }
 }
 
 #[cfg(test)]
