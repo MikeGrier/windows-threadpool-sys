@@ -598,6 +598,16 @@ fn codes_for(state: invariant::BlockingState) -> &'static [&'static str] {
     use invariant::BlockingState as State;
     match state {
         State::PartitioningSummaryMissing => &["partitioning_summary_missing"],
+        // **A CODE inside `parse_incomplete`, not the row key of the same
+        // name.** `cross_check` pushes `ParseIncomplete::EnumerationAnomalies`
+        // when the observation records any, and that variant's code is this
+        // string -- so `publication_holds` finds it while scanning
+        // `DIAGNOSTIC_LISTS`, which deliberately excludes the
+        // `enumeration_anomalies` LIST. A review read this as the key and
+        // concluded the assertion must fail for the `anomalies` shape; it does
+        // not, and `every_state_that_blocks_agreement_reaches_the_row` covers
+        // exactly that shape. Noted here because the collision is real even
+        // though the conclusion was not.
         State::EnumerationAnomalies => &["enumeration_anomalies"],
         State::NotMeasured => &["not_measured"],
         State::NoCacheLevels => &["no_cache_levels"],
