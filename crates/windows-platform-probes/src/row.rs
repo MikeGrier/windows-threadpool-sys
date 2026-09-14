@@ -237,8 +237,14 @@ impl Row {
     /// `JSON.parse` both accept it and silently keep the last value -- so a row
     /// carrying one is not a broken artifact a survey discards but an ambiguous
     /// one it mines, which is worse. The crate reports it as
-    /// [`RowDefect::RepeatedKey`](crate::report_oracle::RowDefect::RepeatedKey);
-    /// this is the writer being unable to produce it in the first place.
+    /// `report_oracle::RowDefect::RepeatedKey`; this is the writer being unable
+    /// to produce it in the first place.
+    ///
+    /// (Deliberately not an intra-doc link. `report_oracle` is compiled only
+    /// under `cfg(any(test, feature = "oracle-in-renderer"))` while this module
+    /// is always built, so a link here cannot resolve in a default `cargo doc`
+    /// and emits a broken-intra-doc-link warning. Found by a review, and
+    /// confirmed by running `cargo doc -p windows-platform-probes --lib`.)
     ///
     /// **Why a panic and not a `Result`.** Every caller is a renderer in this
     /// crate composing a fixed schema, so a repeat is a programming error at the

@@ -47,8 +47,12 @@ Checked during the session, in the code as it stands on `main`:
   review reported it as a stale census, and it is not one. The diagnosis below turns on
   what the row held AT THE TIME, so correcting the number to nineteen would make the next
   bullet -- "there is no key for the alarm" -- read as an error rather than as the finding.
-  For the current schema read `MEASURED_ROW_KEYS` in
-  [src/topology_report.rs](../src/topology_report.rs), which is the one authority:
+  For the current schema read `MEASURED_ROW_KEYS` and `MEASURED_ROW_SHAPES` in
+  [src/topology_report.rs](../src/topology_report.rs), which are the one authority; the list
+  that follows is **the eighteen as they stood at this session** and is not reproduced here as
+  current. (A review read it as a current-schema list missing `disagreements`, which is a fair
+  reading of how it was introduced -- hence this sentence.)
+
   `reason`, `arch`, `processors`, `groups`,
   `packages`, `numa_domains`, `numa_domains_without_processors`, `cores`,
   `efficiency_classes`, `caches`, `outermost_partitioning_cache_level`,

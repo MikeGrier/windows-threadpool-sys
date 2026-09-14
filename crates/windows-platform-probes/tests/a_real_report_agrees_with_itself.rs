@@ -463,6 +463,94 @@ fn published_codes(text: &str, keys: &[&str]) -> Vec<String> {
         .flat_map(|key| report_oracle::list_codes(row, key))
         .collect()
 }
+/// Every diagnostic entry in `text`'s row, as rendered JSON, for one key.
+///
+/// **The whole object, not just its `code`.** `published_codes` above discards
+/// every payload field, so the renderer-to-row path stayed green if
+/// `topology_report` dropped or reshaped `parsed`, `counter`, `level` or an
+/// anomaly's metadata. The per-variant tests cover `published()` in isolation;
+/// nothing covered it through the renderer until this. Found by a review.
+fn published_entries(text: &str, key: &str) -> Vec<String> {
+    let Some(row) = report_oracle::row(text) else {
+        panic!("no single well-formed row in:\n{text}");
+    };
+
+    let parsed: serde_json::Value = serde_json::from_str(row).expect("the row parses");
+    parsed[key]
+        .as_array()
+        .unwrap_or_else(|| panic!("`{key}` should be a list in:\n{row}"))
+        .iter()
+        .map(ToString::to_string)
+        .collect()
+}
+
+/// One diagnostic value as the row writer renders it.
+///
+/// Derived from `published()` rather than written out, so the expectation
+/// cannot drift from the publisher it is checking; what this pins is that the
+/// RENDERER carries that value through unchanged.
+fn as_rendered(value: windows_platform_probes::row::Value) -> String {
+    let row = windows_platform_probes::row::Row::new("x").with("entry", value);
+    let text = row.render();
+    let parsed: serde_json::Value = serde_json::from_str(&text).expect("the row parses");
+    parsed["entry"].to_string()
+}
+
+#[test]
+fn the_row_carries_each_diagnostic_entry_whole_and_not_only_its_code() {
+    use windows_platform_probes::topology::diagnostic::{
+        Disagreement, NotCompared, ParseIncomplete, published_anomaly,
+    };
+
+    for shape in shapes() {
+        let text = report(&banner_for(&shape.observation), &shape.observation);
+        let check = shape.observation.cross_check();
+
+        for (key, expected) in [
+            (
+                "disagreements",
+                check
+                    .disagreements
+                    .iter()
+                    .map(Disagreement::published)
+                    .collect::<Vec<_>>(),
+            ),
+            (
+                "not_compared",
+                check
+                    .not_compared
+                    .iter()
+                    .map(NotCompared::published)
+                    .collect::<Vec<_>>(),
+            ),
+            (
+                "parse_incomplete",
+                check
+                    .parse_incomplete
+                    .iter()
+                    .map(ParseIncomplete::published)
+                    .collect::<Vec<_>>(),
+            ),
+            (
+                "enumeration_anomalies",
+                shape
+                    .observation
+                    .enumeration_anomalies
+                    .iter()
+                    .map(published_anomaly)
+                    .collect::<Vec<_>>(),
+            ),
+        ] {
+            assert_eq!(
+                published_entries(&text, key),
+                expected.into_iter().map(as_rendered).collect::<Vec<_>>(),
+                "{}: the row's `{key}` must carry each entry whole",
+                shape.what
+            );
+        }
+    }
+}
+
 /// Whether `text`'s row publishes a condition for an observation in a blocking
 /// state.
 ///
