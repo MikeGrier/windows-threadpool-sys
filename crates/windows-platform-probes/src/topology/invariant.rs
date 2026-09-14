@@ -140,6 +140,16 @@ blocking_states! {
     UnnumberedCacheLevel => "a cache level is numbered 0",
     /// The crate's two enumerations did not agree.
     EnumerationsDisagreed => "the crate's two enumerations did not agree",
+    /// Coherence between the two enumerations was never established.
+    ///
+    /// **Distinct from `EnumerationsDisagreed`, and the separation is load
+    /// bearing.** One branch covered both, on the reading that anything other
+    /// than `Agreed` forbids agreement -- true of the VERDICT and false of the
+    /// ROW, which publishes `coherence_not_collected` here and
+    /// `enumerations_disagreed` there. A state that names the wrong code makes
+    /// the per-state publication rule demand something the renderer never emits.
+    /// Latent until a corpus shape reached it. Found by a review.
+    CoherenceNotCollected => "coherence between the two enumerations was not collected",
     /// The bracket did not establish that the machine held still.
     BracketNotHeld => "the bracket did not establish that the machine held still",
 }
@@ -281,8 +291,16 @@ pub fn blocking_states(observation: &Observation) -> Vec<BlockingState> {
         states.push(BlockingState::UnnumberedCacheLevel);
     }
 
-    if !matches!(observation.coherence, Coherence::Agreed) {
-        states.push(BlockingState::EnumerationsDisagreed);
+    // **Matched by variant rather than by `!= Agreed`**, because `cross_check`
+    // files these under different codes and a state must name the code its own
+    // condition emits. `Coherence` is not `#[non_exhaustive]`, so this match is
+    // compiler-exhaustive and a fourth variant cannot be silently folded into
+    // whichever arm happens to be nearest -- which is what the `!= Agreed` form
+    // did to `NotCollected`.
+    match observation.coherence {
+        Coherence::Agreed => {}
+        Coherence::Disagreed { .. } => states.push(BlockingState::EnumerationsDisagreed),
+        Coherence::NotCollected => states.push(BlockingState::CoherenceNotCollected),
     }
 
     if observation.bracket != super::BracketOutcome::HeldStill {

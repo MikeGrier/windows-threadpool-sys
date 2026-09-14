@@ -304,6 +304,17 @@ fn shapes() -> Vec<Shape> {
     };
     push("two sources that described different processors", disagreed);
 
+    // **The shape whose absence hid a wrong state-to-code mapping.** The corpus
+    // carried `Agreed` and `Disagreed` and never `NotCollected`, and
+    // `blocking_states` lumped the latter two together as
+    // `EnumerationsDisagreed` -- while `cross_check` publishes
+    // `coherence_not_collected` for it. The per-state rule therefore demanded a
+    // code the row does not emit for this observation, and nothing noticed,
+    // because no shape reached it. Found by a review.
+    let mut uncollected = base();
+    uncollected.coherence = windows_topology_sys::Coherence::NotCollected;
+    push("coherence that was never collected", uncollected);
+
     let mut anomalies = base();
     anomalies.enumeration_anomalies = vec![
         windows_topology_sys::EnumerationAnomaly {
@@ -478,6 +489,7 @@ fn codes_for(state: invariant::BlockingState) -> &'static [&'static str] {
         State::ContradictoryCore => &["contradictory_cores"],
         State::UnnumberedCacheLevel => &["unnumbered_cache_levels"],
         State::EnumerationsDisagreed => &["enumerations_disagreed"],
+        State::CoherenceNotCollected => &["coherence_not_collected"],
         State::BracketNotHeld => &["machine_changed", "bracket_not_established"],
     }
 }
@@ -511,14 +523,31 @@ fn every_state_that_blocks_agreement_reaches_the_row() {
             continue;
         }
 
+        // **Names the state whose code is missing, and what was published
+        // instead.** The message used to say "publishes no condition at all",
+        // which was wrong in the case that actually fired: the row DID publish a
+        // condition, just not the one the failing state maps to. A reader
+        // debugging a wrong mapping was told the opposite of the symptom.
+        let published = published_codes(&text, DIAGNOSTIC_LISTS);
+        let unpublished: Vec<String> = blocking
+            .iter()
+            .filter(|state| {
+                !codes_for(**state)
+                    .iter()
+                    .any(|code| published.iter().any(|found| found == code))
+            })
+            .map(|state| format!("{state:?} (wants one of {:?})", codes_for(*state)))
+            .collect();
+
         assert!(
             publication_holds(&shape.observation, &text),
             "{}: the observation is in {} state(s) that forbid agreement -- \
-             {blocking:?} -- and the row publishes no condition at all. A \
-             survey reading it would see a verdict it cannot account \
-             for.\n\n--- the report ---\n{text}",
+             {blocking:?} -- and the row publishes no code for {}. Published: \
+             {published:?}. A survey reading it would see a verdict it cannot \
+             account for.\n\n--- the report ---\n{text}",
             shape.what,
             blocking.len(),
+            unpublished.join(", "),
         );
     }
 }

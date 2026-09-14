@@ -152,6 +152,20 @@ fn perturbations() -> Vec<Perturbation> {
         (
             BlockingState::EnumerationsDisagreed,
             Box::new(|o: &mut Observation| {
+                o.coherence = windows_topology_sys::Coherence::Disagreed {
+                    attempts: 2,
+                    walk_only: Vec::new(),
+                    cpu_sets_only: Vec::new(),
+                };
+            }),
+        ),
+        (
+            // Kept distinct from the `Disagreed` row above, because the row
+            // publishes a different code for each and a shared perturbation
+            // would leave one of the two codes unexercised -- which is exactly
+            // how the states came to be conflated.
+            BlockingState::CoherenceNotCollected,
+            Box::new(|o: &mut Observation| {
                 o.coherence = windows_topology_sys::Coherence::NotCollected;
             }),
         ),
