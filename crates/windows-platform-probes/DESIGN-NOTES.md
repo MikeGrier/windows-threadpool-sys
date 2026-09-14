@@ -505,6 +505,15 @@ overhead of a debug build swamps the cache-coherence effects that *are* the find
 not merely lose precision: it reports the two shapes as equivalent, which is a confident wrong answer of
 exactly the kind this crate's `doorbell_cost` notes warn about.
 
+**Those four figures predate a correction to the timing window and have not been retaken.** The
+qualitative finding is unaffected -- a debug build still swamps the effect -- but the numbers themselves
+were measured while the probe timed from this thread's clock rather than from the producers' own, which
+overstated throughput at high producer counts. Measured on `x86_64 16p/8c` after the correction, with a
+second run of the same build as the noise control: `reserving_mpsc` at sixteen producers moved from
+35.0 to 49.8-52.8 ns/push, against a run-to-run spread of 2-6%. So the correction is worth roughly 45%
+at the producer counts where the curve is the finding, and any figure in this note taken before it
+should be read as optimistic until retaken on a known host.
+
 **That is a constraint on HOW it runs, not an argument for keeping it out**, and an earlier draft of this
 paragraph confused the two -- it said the CI job "runs `cargo run` without `--release`", which is not true
 of the job it describes: `probe-doorbell-cost` and `probe-request-cost` already run there with `--release`,
@@ -520,7 +529,10 @@ So this one is run by hand, on a known machine, and its numbers are recorded wit
 Two regimes, and the pair is the point.
 
 **Isolated** gives producers a capacity large enough that nothing is ever refused and runs no consumer, so
-whatever curve appears against N is the claim and nothing else. **Drained** runs a consumer popping
+whatever curve appears against N is the producer side alone, with no consumer traffic in it. It is not
+the claim alone -- what is timed is each shape's whole push path, tail claim and slot write and
+publication and doorbell together, so a difference here is a difference in PUSH COST rather than
+evidence about the claim on its own. **Drained** runs a consumer popping
 continuously, which is the only regime that can price `reserving_mpsc`'s read of `head` -- that read is
 cheap until a consumer is *writing* the line, and measuring it in isolation would report it as free.
 

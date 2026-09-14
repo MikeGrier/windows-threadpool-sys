@@ -29,9 +29,16 @@
 //! Producers are timed twice, and the pair is the point.
 //!
 //! - **Isolated** -- capacity large enough that nothing is ever refused, and no
-//!   consumer running. This is the *cleanest* measurement of tail-claim
-//!   contention: nothing else touches the queue, so whatever curve appears
-//!   against N is the compare-and-swap and nothing else.
+//!   consumer running. Nothing else touches the queue, so the curve against N
+//!   is the producer side alone, with no consumer traffic in it.
+//!
+//!   **It is not the compare-and-swap alone, and an earlier draft said it
+//!   was.** What is timed is each shape's whole push path: the tail claim, but
+//!   also the slot-sequence load, the item write, the publication store, and
+//!   the doorbell's fence. `permit_mpsc` takes two shared read-modify-writes
+//!   where the others take one. So a difference between shapes here is a
+//!   difference in PUSH COST, and attributing it to the claim alone would be
+//!   reading more out of the number than is in it. Found by a review.
 //!
 //! - **Drained** -- a consumer popping continuously while the producers push.
 //!   This is the one that can price `reserving_mpsc`, because its producer reads
@@ -269,21 +276,27 @@ fn time_contended_atomic(producers: usize) -> Repetition {
     // nor a solo head start by an early worker is inside the measurement. See
     // `start_barrier`'s note for why that matters at these producer counts.
     let gate = Arc::new(Barrier::new(producers + 1));
-    let started = thread::scope(|scope| {
+    let spans = thread::scope(|scope| {
+        let mut workers = Vec::with_capacity(producers);
         for _ in 0..producers {
             let counter = Arc::clone(&counter);
             let gate = Arc::clone(&gate);
-            scope.spawn(move || {
+            workers.push(scope.spawn(move || {
                 gate.wait();
+                let began = Instant::now();
                 for _ in 0..PUSHES_PER_PRODUCER {
                     counter.fetch_add(1, Ordering::Relaxed);
                 }
-            });
+                (began, Instant::now())
+            }));
         }
         gate.wait();
-        Instant::now()
+        workers
+            .into_iter()
+            .map(|worker| worker.join().expect("a producer must not panic"))
+            .collect::<Vec<_>>()
     });
-    (started.elapsed().as_nanos() as f64, 0)
+    (measured_span(&spans), 0)
 }
 
 /// Capacity big enough that a whole run fits, so nothing is ever refused.
@@ -302,32 +315,75 @@ fn capacity_for(producers: usize) -> usize {
 /// output of this probe, and both effects bend it downward exactly where it is
 /// steepest.
 ///
-/// The count includes this thread: the workers arrive and block, this thread
-/// arrives last, and the clock starts as the barrier releases them together.
+/// The count includes this thread, so no worker can start before the last one
+/// exists. It does NOT start the clock -- see [`measured_span`] for why that is
+/// a separate job.
 fn start_barrier(participants: usize) -> Arc<Barrier> {
     Arc::new(Barrier::new(participants + 1))
+}
+
+/// The wall-clock window the producers were actually inside: from the first to
+/// begin to the last to finish.
+///
+/// **Each worker times itself, because this thread cannot time them.** The
+/// obvious arrangement -- release the barrier, call `Instant::now()` here, and
+/// read `elapsed()` after the scope ends -- is wrong at both ends, and a review
+/// caught it:
+///
+/// - `Barrier::wait` releases every party together, and this thread is just
+///   another party. A worker can return from `wait` and run an arbitrary prefix
+///   of its pushes before this thread is scheduled again to read the clock, so
+///   the start could land after work had already happened. That understates the
+///   interval, which OVERSTATES throughput.
+/// - `thread::scope` joins every worker before it returns, so an `elapsed()`
+///   read after it includes thread exit and join. That overstates the interval,
+///   which understates throughput.
+///
+/// Neither error is bounded by anything this probe controls, and both bite
+/// hardest on the fast low-producer rows where a run is only hundreds of
+/// microseconds. Taking the earliest start and the latest finish measures the
+/// span the producers were contending over and nothing else.
+fn measured_span(spans: &[(Instant, Instant)]) -> f64 {
+    let began = spans
+        .iter()
+        .map(|(began, _)| *began)
+        .min()
+        .expect("a run has at least one producer");
+    let ended = spans
+        .iter()
+        .map(|(_, ended)| *ended)
+        .max()
+        .expect("a run has at least one producer");
+
+    ended.duration_since(began).as_nanos() as f64
 }
 
 fn time_isolated_mpsc(producers: usize) -> Repetition {
     let (tx, rx) =
         slotwise_mpsc::bounded::<u64>(capacity_for(producers)).expect("a valid capacity");
     let gate = start_barrier(producers);
-    let started = thread::scope(|scope| {
+    let spans = thread::scope(|scope| {
+        let mut workers = Vec::with_capacity(producers);
         for producer in 0..producers {
             let tx = tx.clone();
             let gate = Arc::clone(&gate);
-            scope.spawn(move || {
+            workers.push(scope.spawn(move || {
                 gate.wait();
+                let began = Instant::now();
                 for index in 0..PUSHES_PER_PRODUCER {
                     tx.push((producer * PUSHES_PER_PRODUCER + index) as u64)
                         .expect("the run fits in the capacity");
                 }
-            });
+                (began, Instant::now())
+            }));
         }
         gate.wait();
-        Instant::now()
+        workers
+            .into_iter()
+            .map(|worker| worker.join().expect("a producer must not panic"))
+            .collect::<Vec<_>>()
     });
-    let elapsed = started.elapsed().as_nanos() as f64;
+    let elapsed = measured_span(&spans);
     let refusals = tx.refused();
     // Drain before dropping: teardown would otherwise walk every slot, and that
     // is not part of what is being timed.
@@ -339,22 +395,28 @@ fn time_isolated_reserving(producers: usize) -> Repetition {
     let (tx, rx) =
         reserving_mpsc::bounded::<u64>(capacity_for(producers)).expect("a valid capacity");
     let gate = start_barrier(producers);
-    let started = thread::scope(|scope| {
+    let spans = thread::scope(|scope| {
+        let mut workers = Vec::with_capacity(producers);
         for producer in 0..producers {
             let tx = tx.clone();
             let gate = Arc::clone(&gate);
-            scope.spawn(move || {
+            workers.push(scope.spawn(move || {
                 gate.wait();
+                let began = Instant::now();
                 for index in 0..PUSHES_PER_PRODUCER {
                     tx.push((producer * PUSHES_PER_PRODUCER + index) as u64)
                         .expect("the run fits in the capacity");
                 }
-            });
+                (began, Instant::now())
+            }));
         }
         gate.wait();
-        Instant::now()
+        workers
+            .into_iter()
+            .map(|worker| worker.join().expect("a producer must not panic"))
+            .collect::<Vec<_>>()
     });
-    let elapsed = started.elapsed().as_nanos() as f64;
+    let elapsed = measured_span(&spans);
     let refusals = tx.refused();
     while rx.pop().is_ok() {}
     (elapsed, refusals)
@@ -370,22 +432,28 @@ fn time_isolated_reserving(producers: usize) -> Repetition {
 fn time_isolated_permit(producers: usize) -> Repetition {
     let (tx, rx) = permit_mpsc::bounded::<u64>(capacity_for(producers)).expect("a valid capacity");
     let gate = start_barrier(producers);
-    let started = thread::scope(|scope| {
+    let spans = thread::scope(|scope| {
+        let mut workers = Vec::with_capacity(producers);
         for producer in 0..producers {
             let tx = tx.clone();
             let gate = Arc::clone(&gate);
-            scope.spawn(move || {
+            workers.push(scope.spawn(move || {
                 gate.wait();
+                let began = Instant::now();
                 for index in 0..PUSHES_PER_PRODUCER {
                     tx.push((producer * PUSHES_PER_PRODUCER + index) as u64)
                         .expect("the run fits in the capacity");
                 }
-            });
+                (began, Instant::now())
+            }));
         }
         gate.wait();
-        Instant::now()
+        workers
+            .into_iter()
+            .map(|worker| worker.join().expect("a producer must not panic"))
+            .collect::<Vec<_>>()
     });
-    let elapsed = started.elapsed().as_nanos() as f64;
+    let elapsed = measured_span(&spans);
     let refusals = tx.refused();
     while rx.pop().is_ok() {}
     (elapsed, refusals)
@@ -418,27 +486,44 @@ fn time_drained_mpsc(producers: usize) -> Repetition {
         rx.refused()
     });
 
-    let started = thread::scope(|scope| {
+    let spans = thread::scope(|scope| {
+        let mut workers = Vec::with_capacity(producers);
         for producer in 0..producers {
             let tx = tx.clone();
             let gate = Arc::clone(&gate);
-            scope.spawn(move || {
+            workers.push(scope.spawn(move || {
                 gate.wait();
+                let began = Instant::now();
                 for index in 0..PUSHES_PER_PRODUCER {
                     let mut item = (producer * PUSHES_PER_PRODUCER + index) as u64;
-                    // Retry on a full queue, which is what a real producer
-                    // does. The refusal count is what makes that visible.
+                    // Retry a FULL queue, which is what a real producer does;
+                    // the refusal count is what makes that visible. Anything
+                    // else is not retryable -- a disconnected queue never
+                    // drains -- and retrying it is an infinite spin that
+                    // presents as a hung probe rather than as the consumer
+                    // failure it actually is. The queue crate says so itself:
+                    // "retrying the first is sensible and retrying the second
+                    // is a spin".
                     while let Err(error) = tx.push(item) {
+                        assert!(
+                            error.is_retryable(),
+                            "the consumer is gone, so this push can never \
+                             succeed: {error}"
+                        );
                         item = error.into_inner();
                         std::hint::spin_loop();
                     }
                 }
-            });
+                (began, Instant::now())
+            }));
         }
         gate.wait();
-        Instant::now()
+        workers
+            .into_iter()
+            .map(|worker| worker.join().expect("a producer must not panic"))
+            .collect::<Vec<_>>()
     });
-    let elapsed = started.elapsed().as_nanos() as f64;
+    let elapsed = measured_span(&spans);
 
     done.store(true, Ordering::Relaxed);
     drop(tx);
@@ -478,25 +563,38 @@ fn time_drained_reserving(producers: usize) -> Repetition {
         rx.refused()
     });
 
-    let started = thread::scope(|scope| {
+    let spans = thread::scope(|scope| {
+        let mut workers = Vec::with_capacity(producers);
         for producer in 0..producers {
             let tx = tx.clone();
             let gate = Arc::clone(&gate);
-            scope.spawn(move || {
+            workers.push(scope.spawn(move || {
                 gate.wait();
+                let began = Instant::now();
                 for index in 0..PUSHES_PER_PRODUCER {
                     let mut item = (producer * PUSHES_PER_PRODUCER + index) as u64;
                     while let Err(error) = tx.push(item) {
+                        // Only a FULL queue is retryable; see the note on the
+                        // first of these loops.
+                        assert!(
+                            error.is_retryable(),
+                            "the consumer is gone, so this push can never \
+                             succeed: {error}"
+                        );
                         item = error.into_inner();
                         std::hint::spin_loop();
                     }
                 }
-            });
+                (began, Instant::now())
+            }));
         }
         gate.wait();
-        Instant::now()
+        workers
+            .into_iter()
+            .map(|worker| worker.join().expect("a producer must not panic"))
+            .collect::<Vec<_>>()
     });
-    let elapsed = started.elapsed().as_nanos() as f64;
+    let elapsed = measured_span(&spans);
 
     done.store(true, Ordering::Relaxed);
     drop(tx);
@@ -530,25 +628,38 @@ fn time_drained_permit(producers: usize) -> Repetition {
         rx.refused()
     });
 
-    let started = thread::scope(|scope| {
+    let spans = thread::scope(|scope| {
+        let mut workers = Vec::with_capacity(producers);
         for producer in 0..producers {
             let tx = tx.clone();
             let gate = Arc::clone(&gate);
-            scope.spawn(move || {
+            workers.push(scope.spawn(move || {
                 gate.wait();
+                let began = Instant::now();
                 for index in 0..PUSHES_PER_PRODUCER {
                     let mut item = (producer * PUSHES_PER_PRODUCER + index) as u64;
                     while let Err(error) = tx.push(item) {
+                        // Only a FULL queue is retryable; see the note on the
+                        // first of these loops.
+                        assert!(
+                            error.is_retryable(),
+                            "the consumer is gone, so this push can never \
+                             succeed: {error}"
+                        );
                         item = error.into_inner();
                         std::hint::spin_loop();
                     }
                 }
-            });
+                (began, Instant::now())
+            }));
         }
         gate.wait();
-        Instant::now()
+        workers
+            .into_iter()
+            .map(|worker| worker.join().expect("a producer must not panic"))
+            .collect::<Vec<_>>()
     });
-    let elapsed = started.elapsed().as_nanos() as f64;
+    let elapsed = measured_span(&spans);
 
     done.store(true, Ordering::Relaxed);
     drop(tx);
@@ -575,22 +686,28 @@ fn time_isolated_layout<L: ClaimLayout>(producers: usize) -> Repetition {
     let (tx, rx) =
         reserving_mpsc::bounded_as::<u64, L>(capacity_for(producers)).expect("a valid capacity");
     let gate = start_barrier(producers);
-    let started = thread::scope(|scope| {
+    let spans = thread::scope(|scope| {
+        let mut workers = Vec::with_capacity(producers);
         for producer in 0..producers {
             let tx = tx.clone();
             let gate = Arc::clone(&gate);
-            scope.spawn(move || {
+            workers.push(scope.spawn(move || {
                 gate.wait();
+                let began = Instant::now();
                 for index in 0..PUSHES_PER_PRODUCER {
                     tx.push((producer * PUSHES_PER_PRODUCER + index) as u64)
                         .expect("the run fits in the capacity");
                 }
-            });
+                (began, Instant::now())
+            }));
         }
         gate.wait();
-        Instant::now()
+        workers
+            .into_iter()
+            .map(|worker| worker.join().expect("a producer must not panic"))
+            .collect::<Vec<_>>()
     });
-    let elapsed = started.elapsed().as_nanos() as f64;
+    let elapsed = measured_span(&spans);
     let refusals = tx.refused();
     while rx.pop().is_ok() {}
     (elapsed, refusals)
@@ -619,25 +736,38 @@ fn time_drained_layout<L: ClaimLayout + 'static>(producers: usize) -> Repetition
         rx.refused()
     });
 
-    let started = thread::scope(|scope| {
+    let spans = thread::scope(|scope| {
+        let mut workers = Vec::with_capacity(producers);
         for producer in 0..producers {
             let tx = tx.clone();
             let gate = Arc::clone(&gate);
-            scope.spawn(move || {
+            workers.push(scope.spawn(move || {
                 gate.wait();
+                let began = Instant::now();
                 for index in 0..PUSHES_PER_PRODUCER {
                     let mut item = (producer * PUSHES_PER_PRODUCER + index) as u64;
                     while let Err(error) = tx.push(item) {
+                        // Only a FULL queue is retryable; see the note on the
+                        // first of these loops.
+                        assert!(
+                            error.is_retryable(),
+                            "the consumer is gone, so this push can never \
+                             succeed: {error}"
+                        );
                         item = error.into_inner();
                         std::hint::spin_loop();
                     }
                 }
-            });
+                (began, Instant::now())
+            }));
         }
         gate.wait();
-        Instant::now()
+        workers
+            .into_iter()
+            .map(|worker| worker.join().expect("a producer must not panic"))
+            .collect::<Vec<_>>()
     });
-    let elapsed = started.elapsed().as_nanos() as f64;
+    let elapsed = measured_span(&spans);
     done.store(true, Ordering::Relaxed);
     let refusals = consumer.join().expect("the consumer must not panic");
     (elapsed, refusals)
