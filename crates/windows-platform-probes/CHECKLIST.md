@@ -41,17 +41,53 @@ so renumbering would leave dangling references in a file that may not be edited 
 Stable IDs cost a mismatch between an item number and its milestone; renumbering would cost
 correctness in the archive.
 
-- [ ] **M2.4** -- Explore, with the sparse matrix as the instrument, whether the same correspondence
-  failures exist for `Coherence`, `BracketOutcome` and `Verdict`, and in the sibling probes' renderers.
-  Expect the matrix to be mostly empty; that is the expected shape and not a sign the exercise failed.
-  **Record the vacuous results as well as the findings** -- "X and Y were examined and need not
-  correspond" is what stops the next person re-exploring the same cells, and is the half that normally
-  evaporates. Promote only what proves meaningful into the oracle from M2.1.
+- [ ] **M2.4** -- Explore, with the sparse matrix as the instrument, whether `Coherence`,
+  `BracketOutcome` and `Verdict` carry invariants the row does not yet publish -- as VALUES on the
+  observation, not as correspondences between two renderings -- and whether the sibling probes'
+  renderers have the same gaps. Expect the matrix to be mostly empty; that is the expected shape and
+  not a sign the exercise failed. **Record the vacuous results as well as the findings** -- "X and Y
+  were examined and need not be related" is what stops the next person re-exploring the same cells,
+  and is the half that normally evaporates. Promote only what proves meaningful into the invariant
+  set from M3.2.
+
+  Re-scoped by M3.2; the note at the top of this milestone gives the reasoning. **The item text
+  above was rewritten on 2026-09-13 to match**: it still asked for "the same correspondence
+  failures" and for promotion "into the oracle from M2.1", both retired by M3, so a reader working
+  the list linearly would have been sent after the half that no longer exists. Found by a review --
+  and the lesson generalises, since a re-scoping note 25 lines above an item does not reach someone
+  executing the item.
 
 > **-> OPEN QUESTION for the engineer:** M2.4 may show this generalises past this crate, in which case
 > the oracle belongs somewhere shared and the question becomes a repository-wide convention rather than
 > a probe-crate one. That is a design decision, not a mechanical follow-on, and is deliberately left
 > unanswered here.
+
+- [ ] **M4.1** -- Model the observation-readable `ParseIncomplete` conditions that
+  `blocking_states` currently omits, so a deleted push site in `cross_check` is caught for all of
+  them rather than for the subset.
+
+  **Gap:** `blocking_states` justified its absentees as "derived counts whose only source IS the
+  cross-check's own arithmetic". That is false for most of them --
+  `CacheLevelsWithoutPartitions`, `NumaDomainsOnlyInCpuSets`, `CoresOnlyInCpuSets`,
+  `RelationsWithoutProcessors`, `UnreportedRelations`, `DescribedRelations`,
+  `OverlappingWalkRelations`, `ProcessorAttributeConflicts`, `NumaDomainsWithConflictingLabels`,
+  `NumaDomainsUnreported` and `MeasuredButCountsAbsent` all read fields sitting on `Observation`
+  in plain sight. Deleting one of those push sites lets `verdict()` reach `agree` with
+  `blocking_states` silent. Reported across three review rounds against two wordings of the claim;
+  the claims in [src/topology/invariant.rs](src/topology/invariant.rs) and in
+  `every_numa_counter_branch_...` were narrowed on 2026-09-13 to stop overstating the coverage,
+  which is why this item is the fix rather than the discovery.
+
+  **Target:** each gains a `BlockingState` variant, a `blocking_states` branch, a `codes_for` arm,
+  a perturbation in the invariant tests, and a corpus shape in
+  [tests/a_real_report_agrees_with_itself.rs](tests/a_real_report_agrees_with_itself.rs) so
+  `the_corpus_reaches_every_blocking_state` still holds. **Do not add a variant without its corpus
+  shape** -- that test is what stops the mapping being written and never exercised, which is the
+  defect this whole area keeps producing.
+
+  Apply the tautology test to each before adding it: a state whose only source is the cross-check's
+  own arithmetic does NOT belong, and the honest outcome for such a one is a line in the module
+  header saying so by name rather than a silent absence.
 
 - [ ] **M2.5** -- Make the banner describe the read the body describes. A probe run performs
   **three** independent `MachineMemoryTopology::discover()` calls: `Fingerprint::discover()` for the

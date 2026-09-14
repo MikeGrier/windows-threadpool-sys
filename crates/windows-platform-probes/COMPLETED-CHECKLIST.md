@@ -1028,7 +1028,7 @@ M4 below, six in M5. M2.18 is the exception, dissolved rather than moved.
   Default build re-verified by binary inspection: neither `serde` nor `serde_json` appears on a
   normal dependency edge, and `probe-topology.exe` contains no parser string.
 
-## Moved 2026-09-13 -- M2.14: making the two authoring rules this branch earned actually bite
+## Moved 2026-09-13 22:03:09 -07:00 -- M2.14: making the two authoring rules this branch earned actually bite
 
 ### <a id="m214"></a>M2.14 -- Make the two authoring rules this branch earned actually bite. *(completed 2026-09-13 22:03:09 UTC-07:00)*
 

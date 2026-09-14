@@ -1177,10 +1177,14 @@ repository instructions describe.)
 Counted in `src/report_oracle.rs` **as it stood before this decision**: of 38
 top-level functions, ten were correspondence rules and four were comparison
 helpers. **Twenty-three existed only to extract values back out of rendered
-text.** None of them survives: [src/report_oracle.rs](src/report_oracle.rs) reads
-no rendered text at all now, and hand-writes no string scanning -- the row's
+text.** None of them survives: [src/report_oracle.rs](src/report_oracle.rs) reads no
+rendered PROSE at all now, and hand-writes no string scanning -- the row's
 well-formedness is a `serde_json` parse and its keys come from that parser's own
-tokens. So the counts above are what the design cost, not what the file holds.
+tokens. (This said "reads no rendered text at all", which a review correctly read
+as contradicting the module: the prose reader is gone, the ROW parser is not, and
+the row is rendered text. What changed is that nothing here infers a value from a
+sentence -- the one parse left is of a format with a specification, performed by a
+library rather than by this crate.) So the counts above are what the design cost, not what the file holds.
 (They are also the only counts kept here, because they describe a file that no
 longer exists in that form and so cannot drift; a count of the CURRENT file would
 be a census, and is deliberately absent.)
@@ -1240,6 +1244,8 @@ observation, losing the parser in front of them. The containment work in
 decision, not less, because what it keeps out is now keeping it out of the
 contract artifact.
 
-The work this implies is queued as M3 in [CHECKLIST.md](CHECKLIST.md). The
-session that produced it is
+The work this implies was M3, which is complete and archived in
+[COMPLETED-CHECKLIST.md](COMPLETED-CHECKLIST.md). (This said "is queued as M3 in
+CHECKLIST.md" until a review pointed out that the canonical design note was
+advertising landed work as pending.) The session that produced it is
 [design-sessions/DESIGN-SESSION-2026-09-12-what-the-oracle-should-read.md](design-sessions/DESIGN-SESSION-2026-09-12-what-the-oracle-should-read.md).

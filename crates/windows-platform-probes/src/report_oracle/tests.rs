@@ -7,7 +7,7 @@
 //! ignore the instrument -- and the reports this runs against are the ones a
 //! fleet survey mines, so a false alarm is a false finding about a host.
 
-use super::{RowDefect, check, keys, row};
+use super::{RowDefect, check, keys, malformation, row};
 
 /// A well-formed row, in the shape the renderer emits.
 fn clean_row() -> String {
@@ -94,6 +94,32 @@ fn a_trailing_separator_is_a_defect() {
             row: trailing.to_owned()
         }]
     );
+}
+
+#[test]
+fn valid_json_that_is_not_an_object_is_a_malformation() {
+    // **Pins the `Map` in `malformation`, which the corpus cannot reach.** The
+    // generated corruptions are one-character mutations of a row, and none can
+    // turn an object into a valid NON-object -- so a regression from
+    // `serde_json::Map` to `serde_json::Value` would have left every test green.
+    // Reported by a review.
+    //
+    // Called directly rather than through `check`, because `check` selects rows
+    // by a leading `{` and these never get that far: through the public path a
+    // bare list is `RowDefect::Missing`, not a malformed row. That makes the
+    // requirement defence in depth rather than a reachable case -- said plainly
+    // here, because the comment beside it reads as though `[1,2]` arrives, and
+    // the honest claim is that the type is what stops it ever mattering.
+    for not_an_object in [r#"[1,2]"#, "null", "3", r#""a string""#, "true"] {
+        assert!(
+            malformation(not_an_object).is_some(),
+            "{not_an_object} is valid JSON but carries no keys, so it is not a row"
+        );
+    }
+
+    // The control: the same call accepts an object, so the assertions above are
+    // not passing merely because `malformation` rejects everything.
+    assert_eq!(malformation(&clean_row()), None);
 }
 
 #[test]

@@ -41,7 +41,15 @@ Checked during the session, in the code as it stands on `main`:
 
 - The alarm is emitted by a `writeln!` into the prose, in `report`'s
   `PartitioningCache::Level` arm of [src/topology_report.rs](../src/topology_report.rs).
-- The NDJSON row carries eighteen keys: `reason`, `arch`, `processors`, `groups`,
+- The NDJSON row carries eighteen keys **as of this session** -- it carries nineteen now,
+  because the work this session set off added `disagreements` (in `77a83fc`, after
+  [4d7544e](../DESIGN-NOTES.md) recorded this). The count is left at eighteen on purpose: a
+  review reported it as a stale census, and it is not one. The diagnosis below turns on
+  what the row held AT THE TIME, so correcting the number to nineteen would make the next
+  bullet -- "there is no key for the alarm" -- read as an error rather than as the finding.
+  For the current schema read `MEASURED_ROW_KEYS` in
+  [src/topology_report.rs](../src/topology_report.rs), which is the one authority:
+  `reason`, `arch`, `processors`, `groups`,
   `packages`, `numa_domains`, `numa_domains_without_processors`, `cores`,
   `efficiency_classes`, `caches`, `outermost_partitioning_cache_level`,
   `outermost_partitioning_cache`, `policies`, `cross_check`, `not_compared`,

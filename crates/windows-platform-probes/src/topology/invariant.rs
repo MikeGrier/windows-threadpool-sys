@@ -240,11 +240,21 @@ impl fmt::Display for Violation {
 /// enumerating them separately is that a deleted push site leaves the state
 /// here and the list empty -- so this is what notices, and the list could not.
 ///
-/// Not every entry in `parse_incomplete` appears here, and that is deliberate
-/// rather than an omission: some are derived counts whose only source IS the
-/// cross-check's own arithmetic, so restating them would be the tautology this
-/// module exists to avoid. What belongs here is a state readable from the
-/// observation on its own terms.
+/// **The converse does NOT hold, and the wording here used to imply it did.**
+/// This said the absentees were "derived counts whose only source IS the
+/// cross-check's own arithmetic", which would make their exclusion principled.
+/// It is false for most of them: `CacheLevelsWithoutPartitions`,
+/// `NumaDomainsOnlyInCpuSets`, `CoresOnlyInCpuSets`, `RelationsWithoutProcessors`
+/// and the rest read fields that sit on [`Observation`] in plain sight. So
+/// deleting one of THOSE push sites is not caught here -- the verdict can reach
+/// `agree` with `blocking_states` silent -- and the guarantee above covers the
+/// states actually listed below, not every condition `cross_check` can find.
+/// Reported by three review rounds against two different variants of the claim.
+///
+/// The tautology argument is still the right test for what belongs here; it
+/// simply was not what excluded these. Closing the gap is queued as **M4.1** in
+/// [CHECKLIST.md](../../CHECKLIST.md) rather than recorded only here, because a
+/// decision written in a comment schedules nothing.
 #[must_use]
 pub fn blocking_states(observation: &Observation) -> Vec<BlockingState> {
     let mut states = Vec::new();

@@ -180,8 +180,30 @@ impl Row {
     ///
     /// Takes the name and the value together, which is the point: they cannot be
     /// reordered apart, and there is no position to miscount.
+    ///
+    /// # Panics
+    ///
+    /// If `name` is already present. A repeated top-level key is the one
+    /// malformation that SURVIVES a consumer's parse -- `serde_json` and
+    /// `JSON.parse` both accept it and silently keep the last value -- so a row
+    /// carrying one is not a broken artifact a survey discards but an ambiguous
+    /// one it mines, which is worse. The crate reports it as
+    /// [`RowDefect::RepeatedKey`](crate::report_oracle::RowDefect::RepeatedKey);
+    /// this is the writer being unable to produce it in the first place.
+    ///
+    /// **Why a panic and not a `Result`.** Every caller is a renderer in this
+    /// crate composing a fixed schema, so a repeat is a programming error at the
+    /// call site, not a condition to handle -- and a fallible builder would put
+    /// a `?` on nineteen infallible calls to describe a case that must never
+    /// happen. Reported by a review, which observed that this public writer
+    /// could emit a row the crate's own oracle faults.
     #[must_use]
     pub fn with(mut self, name: &'static str, value: impl Into<Value>) -> Self {
+        assert!(
+            !self.members.iter().any(|(present, _)| *present == name),
+            "the row already carries `{name}`, and a repeated key survives a \
+             consumer's parse as whichever value happened to come last"
+        );
         self.members.push((name, value.into()));
         self
     }

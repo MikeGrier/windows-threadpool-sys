@@ -575,13 +575,22 @@ fn an_agreeing_verdict_requires_the_numa_counter_to_have_matched() {
 }
 
 #[test]
-fn every_numa_branch_in_the_real_cross_check_is_one_this_module_forbids() {
+fn every_numa_counter_branch_in_the_real_cross_check_is_one_this_module_forbids() {
     // **The claim in this module's header, checked rather than asserted**: a
     // push site deleted from `cross_check` fires a rule here. For each NUMA
-    // branch, the verdict the real `cross_check` draws must already be
+    // COUNTER branch, the verdict the real `cross_check` draws must already be
     // something other than `agree`, AND this module must forbid `agree` for the
     // same observation -- so the rule pins behaviour that exists rather than
     // demanding behaviour that does not.
+    //
+    // **Named for the counter on purpose.** This was
+    // `every_numa_branch_...`, which was false: `cross_check` also pushes
+    // `NumaDomainsOnlyInCpuSets`, `NumaDomainsUnreported` and
+    // `NumaDomainsWithConflictingLabels`, none of which has a `BlockingState`,
+    // so deleting one of those push sites is not caught. A review found the
+    // name claiming the whole family while the body covered the two branches
+    // that read `raw_highest_numa_node`. The absentees are queued as M4.1; the
+    // name now says which half is guarded.
     //
     // This is the pairing the other states get from
     // `every_blocking_state_is_one_the_real_cross_check_already_reports`; NUMA

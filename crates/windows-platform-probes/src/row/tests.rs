@@ -5,6 +5,19 @@
 use super::{Row, Value};
 
 #[test]
+#[should_panic(expected = "the row already carries `processors`")]
+fn the_writer_refuses_to_render_a_key_twice() {
+    // **The one malformation that survives a consumer's parse**, so the writer
+    // is made unable to produce it rather than the oracle being left to notice.
+    // `serde_json` and `JSON.parse` both accept a repeated key and keep the
+    // last, which turns a broken row into an AMBIGUOUS one -- mined rather than
+    // discarded. Reported by a review against this public builder.
+    let _ = Row::new("x")
+        .with("processors", 16_usize)
+        .with("processors", 32_usize);
+}
+
+#[test]
 fn a_row_renders_its_members_in_the_order_they_were_added() {
     let row = Row::new("x-probe-topology")
         .with("arch", "x86_64")
