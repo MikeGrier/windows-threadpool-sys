@@ -827,7 +827,18 @@ host:  x86_64 16p/8c smt+ L2[2,2,2,2,2,2,2,2] ec[0:16] numa[16]
 ```
 
 Seven runs, median of the per-run ratios with the observed range beside it,
-release build. **The banner's `numa[16]` is load-bearing here: it means a single
+release build. **The sampling parameters are capture parameters too**: each run
+is a whole probe invocation, within which every configuration is measured five
+times and the median reported, each measurement being 50,000 pushes per producer
+thread, preceded by one untimed pass that exists to fault in the fresh
+allocation's pages. So a figure below rests on 35 timed passes per
+configuration, and "seven runs" alone would not let anyone reproduce it. These
+are fixed at
+[src/queue_contention.rs](src/queue_contention.rs)`::PUSHES_PER_PRODUCER` and
+`REPETITIONS`; M4.2 in [CHECKLIST.md](CHECKLIST.md) makes them adjustable, which
+is what the first diagnostic step above needs and cannot currently do.
+
+**The banner's `numa[16]` is load-bearing here: it means a single
 NUMA node holding all sixteen processors**, so every figure below was taken
 inside one memory domain and says nothing about cross-domain behaviour. What is
 not pinned down at all is memory configuration and BIOS state; NUMA *distances*
