@@ -7,8 +7,8 @@
 //! do not lift a technique out of here. See this crate's DESIGN-NOTES.md.
 //!
 //! This decides two things that are otherwise decided by taste: whether the
-//! linked and sharded MPSC shapes are ever needed, and whether `mpsc` and
-//! `reserving_mpsc` should merge. See `queue_contention`'s module docs.
+//! linked and sharded MPSC shapes are ever needed, and whether `slotwise_mpsc`
+//! and `reserving_mpsc` should merge. See `queue_contention`'s module docs.
 
 use windows_platform_probes::queue_contention::{PRODUCER_COUNTS, Run, measure, shapes};
 use windows_platform_probes::report::emit_report;
@@ -132,13 +132,16 @@ fn render(out: &mut dyn std::fmt::Write) {
     );
     let _ = writeln!(
         out,
-        "     `mpsc` does not, which is the entire reason they ship as two"
+        "     `slotwise_mpsc` does not, which is the entire reason they ship as"
     );
     let _ = writeln!(
         out,
-        "     shapes. This regime is the one that can price that read, because"
+        "     two shapes. This regime is the one that can price that read,"
     );
-    let _ = writeln!(out, "     a consumer is writing the line being read.");
+    let _ = writeln!(
+        out,
+        "     because a consumer is writing the line being read."
+    );
     let _ = writeln!(
         out,
         "\n     `permit_mpsc` is experimental and is the candidate replacement"

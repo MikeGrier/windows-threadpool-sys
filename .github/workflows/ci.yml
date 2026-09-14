@@ -500,6 +500,45 @@ jobs:
           RUSTDOCFLAGS: "-D rustdoc::broken_intra_doc_links -D rustdoc::private_intra_doc_links"
         run: cargo doc -p windows-placement-probe --no-deps --no-default-features --locked
 
+  waitable-queues-default-features:
+    name: windows-waitable-queues (default features)
+    runs-on: windows-latest
+    # **This job exists because adding `probe-queue-contention` took the default
+    # configuration away from every other job.** That probe needs `dwcas` and
+    # `experimental-permit-claim`, and enabling them on a workspace member
+    # unifies them across the whole workspace -- so the `--workspace` steps that
+    # deliberately omit `--all-features` stopped being a default-features build
+    # of THIS crate, and no job was left compiling it without `dwcas`.
+    #
+    # That matters because `dwcas` is additive: `Wide` and its `ClaimLayout` impl
+    # exist only under it, so the configuration that loses them is the one that
+    # can break unnoticed. The crate's manifest says `dwcas` is "non-default so
+    # nothing depends on it by accident" and is "the only thing in this crate
+    # that costs a third-party dependency" -- a claim that is only true while
+    # something still builds without it.
+    #
+    # Named per-crate rather than fixed by making the probe's dependency
+    # optional: the probe must stay buildable by a plain `cargo build`, and a
+    # feature that has to be remembered before the probe compiles is a worse
+    # trade than a job that cannot be forgotten.
+    env:
+      RUSTUP_TOOLCHAIN: stable
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+      - name: cargo build
+        run: cargo build -p windows-waitable-queues --all-targets --locked
+      - name: cargo clippy
+        run: cargo clippy -p windows-waitable-queues --all-targets --locked -- -D warnings
+      - name: cargo test
+        env:
+          RUST_BACKTRACE: 1
+          RUST_LIB_BACKTRACE: 1
+        run: cargo test -p windows-waitable-queues --locked --no-fail-fast
+
   fmt:
     name: rustfmt
     runs-on: windows-latest

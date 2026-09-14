@@ -9,8 +9,11 @@
 //! # The two decisions this exists to force
 //!
 //! **1. Are the linked and sharded MPSC shapes needed at all?** They are parked
-//! in `CHECKLIST-io-domains.md` as `M-inf.1`, gated on this measurement rather
-//! than on taste. If N threads compare-and-swapping one tail does not collapse
+//! in a plan that is not in this repository yet, gated on this measurement
+//! rather than on taste. (The named checklist file arrives with the rest of the
+//! queue work; naming a path that does not resolve is what this crate's own
+//! link rule forbids, and an earlier draft did it here.)
+//! If N threads compare-and-swapping one tail does not collapse
 //! at the producer counts a real system reaches, the bounded array queue is the
 //! only MPSC the queue crate ever needs, and two speculative shapes never get
 //! written.

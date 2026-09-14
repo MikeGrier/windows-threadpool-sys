@@ -493,17 +493,25 @@ rest of the queue work -- so this note deliberately names the QUESTIONS rather t
 that would dangle. The probe is the instrument; it is useful before the plan that consumes it lands,
 and it is landed first precisely so the decision is made against measurement rather than argument.
 
-**It is deliberately absent from the `platform-probes` CI job, unlike every other probe, and the reason is
-a measurement rather than a preference.** That job runs `cargo run` without `--release`. Measured in a
-debug build, `mpsc` and `reserving_mpsc` come out at 249.7 and 254.0 ns/push at sixteen producers --
-indistinguishable. In release, on the same machine in the same minute, they are 193.5 and 52.2. The
-un-inlined overhead of a debug build swamps the cache-coherence effects that *are* the finding, so a debug
-run of this probe does not merely lose precision: it reports the two shapes as equivalent, which is a
-confident wrong answer of exactly the kind this crate's `doorbell_cost` notes warn about.
+**It is deliberately absent from the `platform-probes` CI job, and the reasons are a core count and a
+clock rather than a preference.** A contention curve needs more cores than a hosted runner has: the
+sixteen- and thirty-two-producer rows on a four-core runner would measure the scheduler and report it as
+contention. And the run costs about 65 seconds, against a job whose other probes are seconds apiece.
 
-Two further reasons it stays out. A contention curve needs more cores than a hosted runner has, and the
-32-producer rows on a four-core runner would measure the scheduler. And the run costs about two minutes in
-release, against a job whose other probes are seconds.
+**It must be run in release, which is a measurement and not a preference.** In a debug build
+`slotwise_mpsc` and `reserving_mpsc` come out at 249.7 and 254.0 ns/push at sixteen producers --
+indistinguishable. In release, on the same machine in the same minute, 193.5 and 52.2. The un-inlined
+overhead of a debug build swamps the cache-coherence effects that *are* the finding, so a debug run does
+not merely lose precision: it reports the two shapes as equivalent, which is a confident wrong answer of
+exactly the kind this crate's `doorbell_cost` notes warn about.
+
+**That is a constraint on HOW it runs, not an argument for keeping it out**, and an earlier draft of this
+paragraph confused the two -- it said the CI job "runs `cargo run` without `--release`", which is not true
+of the job it describes: `probe-doorbell-cost` and `probe-request-cost` already run there with `--release`,
+under a comment establishing exactly the rule this probe would fall under. It also said "unlike every other
+probe", and `probe-cancel-io` is likewise absent. Corrected by a review. The release precedent exists; what
+keeps this one out is that it costs an order of magnitude more than the two probes that use it, on hardware
+that cannot answer the question anyway.
 
 So this one is run by hand, on a known machine, and its numbers are recorded with the machine attached.
 
