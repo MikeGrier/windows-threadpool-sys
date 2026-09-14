@@ -151,7 +151,7 @@ pub mod pool_growth;
 pub mod report;
 /// The report oracle. **Test-support: present only where it is used.**
 ///
-/// Every caller is already behind this gate -- the renderers' `assert_corresponds`
+/// Every caller is already behind this gate -- the renderers' `assert_row_is_well_formed`
 /// bindings, the unit tests, and the integration tests, which reach it through the
 /// self dev-dependency. Stating that here rather than leaving it implied is what
 /// lets the module depend on a real JSON parser without putting one in a shipping

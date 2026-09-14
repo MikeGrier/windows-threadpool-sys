@@ -39,10 +39,18 @@
 //! Where the enum belongs to this crate, the expectation is written as an
 //! exhaustive `match`, so a variant added without a golden does not compile.
 //! `AnomalyKind` and `Source` are `#[non_exhaustive]` upstream and cannot be
-//! matched exhaustively; for those the goldens are explicit instances, and the
-//! `unclassified` fallback is asserted directly so that the arm which is
-//! SUPPOSED to catch an unknown kind is distinguished from an arm that fell
-//! through by accident.
+//! matched exhaustively; for those the goldens are explicit instances, and each
+//! named kind is asserted NOT to return `unclassified`, so an arm deleted from
+//! the classifier is caught rather than quietly becoming a fall-through.
+//!
+//! **What that does not cover, stated because the wording here used to claim it
+//! did.** This said the `unclassified` fallback "is asserted directly". It is
+//! not, and from this crate it cannot be: `#[non_exhaustive]` is precisely the
+//! attribute that stops a downstream crate constructing a variant it does not
+//! know, so no unknown kind can be built here to drive that arm. The arm is
+//! reachable only from a future upstream release, and what is checked is the
+//! half that is checkable -- that nothing this crate DOES name reaches it.
+//! Found by a review.
 
 use super::{
     Disagreement, NotCompared, ParseIncomplete, UNDESCRIBED, anomaly_code, described,
@@ -84,14 +92,25 @@ fn every_not_compared_code_is_the_one_the_row_promises() {
         NotCompared::HighestNumaNodeFailed => "highest_numa_node_failed",
     };
 
-    for reason in [
+    // The exhaustive `golden` above obliges a new variant to have a code; it does
+    // NOT oblige this array to carry one, so a seventh variant could take a wrong
+    // code with this `every...` test green. Reported by a review against exactly
+    // this loop.
+    let every = [
         NotCompared::MachineChanged,
         NotCompared::BracketNotEstablished,
         NotCompared::CountsIncludeUnparsedRelations,
         NotCompared::ActiveProcessorCountFailed,
         NotCompared::ActiveProcessorGroupCountFailed,
         NotCompared::HighestNumaNodeFailed,
-    ] {
+    ];
+    covers_every_variant(
+        "NotCompared",
+        &every.iter().map(NotCompared::code).collect::<Vec<_>>(),
+        NotCompared::ALL_CODES,
+    );
+
+    for reason in every {
         assert_eq!(reason.code(), golden(&reason), "{reason:?}");
         assert_eq!(
             rendered(reason.published()),
@@ -106,36 +125,44 @@ fn every_disagreement_publishes_the_pair_it_carries() {
     // `parsed` and `counter` are the two numbers a survey compares, so swapping
     // the labels is the mislabelling defect in its purest form: the row still
     // parses and says the opposite of the truth.
-    assert_eq!(
-        rendered(
+    //
+    // A cases array rather than free-standing assertions, so the set this test
+    // exercises can be DERIVED and held against `ALL_CODES`. Written out, the
+    // name's "every disagreement" rested on nobody adding a fourth variant.
+    let cases = [
+        (
             Disagreement::OnlineProcessors {
                 parsed: 12,
                 counter: 16,
-            }
-            .published()
+            },
+            r#"{"code":"online_processors","parsed":12,"counter":16}"#,
         ),
-        r#"{"code":"online_processors","parsed":12,"counter":16}"#
-    );
-    assert_eq!(
-        rendered(
+        (
             Disagreement::ProcessorGroups {
                 parsed: 1,
                 counter: 2,
-            }
-            .published()
+            },
+            r#"{"code":"processor_groups","parsed":1,"counter":2}"#,
         ),
-        r#"{"code":"processor_groups","parsed":1,"counter":2}"#
-    );
-    assert_eq!(
-        rendered(
+        (
             Disagreement::HighestNumaNode {
                 parsed: Some(2),
                 counter: 3,
-            }
-            .published()
+            },
+            r#"{"code":"highest_numa_node","parsed":2,"counter":3}"#,
         ),
-        r#"{"code":"highest_numa_node","parsed":2,"counter":3}"#
+    ];
+    covers_every_variant(
+        "Disagreement",
+        &cases
+            .iter()
+            .map(|(found, _)| found.code())
+            .collect::<Vec<_>>(),
+        Disagreement::ALL_CODES,
     );
+    for (found, golden) in &cases {
+        assert_eq!(rendered(found.published()), *golden, "{found:?}");
+    }
     // The absent parse renders as `null`, not as a number and not as an omitted
     // field: a survey must be able to tell "the parse saw no NUMA node" from
     // "the parse saw node 0".
@@ -164,6 +191,32 @@ fn every_disagreement_publishes_the_pair_it_carries() {
 /// because a fixture may legitimately carry two instances of one variant to
 /// exercise a payload that differs, as the `Disagreement` one does.
 fn covers_every_variant(what: &str, covered: &[&str], all: &[&str]) {
+    // **Distinctness, checked on `ALL_CODES` rather than on the fixture**, and
+    // checked here so all three enums get it from one site. Set membership
+    // alone cannot see a duplicate: if two variants were given the same
+    // literal, `ALL_CODES` would carry it twice and a single fixture entry
+    // would satisfy both copies in both directions below. `ParseIncomplete`
+    // had a separate uniqueness assertion; `Disagreement` and `NotCompared`
+    // had none, so for those two a shared code was invisible. Found by a
+    // review.
+    //
+    // The harm is the same one the row exists to prevent: two conditions that
+    // publish one code cannot be told apart by a survey.
+    let mut seen: Vec<&str> = Vec::new();
+    let mut repeated: Vec<&str> = Vec::new();
+    for code in all {
+        if seen.contains(code) {
+            repeated.push(code);
+        } else {
+            seen.push(code);
+        }
+    }
+    assert!(
+        repeated.is_empty(),
+        "two {what} variants publish {repeated:?}, so a survey cannot tell those \
+         conditions apart"
+    );
+
     let missing: Vec<&str> = all
         .iter()
         .filter(|code| !covered.contains(*code))

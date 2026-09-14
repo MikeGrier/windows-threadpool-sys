@@ -1,34 +1,44 @@
 // Copyright (c) Mike Grier.
 
-//! The report this crate renders from a *real* measurement, checked against the
-//! oracle.
+//! The report this crate renders from a *real* measurement, checked against
+//! the OBSERVATION it was rendered from.
+//!
+//! # What "agrees with itself" means here, since it changed
+//!
+//! It used to mean the report's two renderings agreed: prose against encoded
+//! row. M3 retired that relation -- the row is the machine contract and the
+//! prose is reviewed rather than parsed -- and this file's tests moved with it
+//! without its header following. Reported by a review, which read the paragraphs
+//! below as still describing what the file does.
+//!
+//! It now means the row agrees with the observation that produced it: every
+//! condition `cross_check` found reaches the row, every state that blocks
+//! agreement is published, one code per anomaly, and the row is well formed.
+//! The two halves being compared are a value and its encoding, not two
+//! sentences -- and that is still self-agreement, which is why the target keeps
+//! its name.
 //!
 //! # Why this is not a unit test
 //!
-//! The oracle's own tests pin it against fixtures. A fixture is a report
-//! somebody wrote down, so a fixture-bound oracle checks correspondences over
-//! states its author already imagined -- and the defect the oracle exists for
-//! was a state nobody had imagined: `topology_report` printing `BUG IN THIS
-//! PROBE ... Nothing below about cache partitioning can be trusted` while the
-//! verdict two paragraphs below printed `=> agree`.
-//!
-//! More narrowly, a fixture cannot notice the **renderer** drifting away from
-//! the prose labels the oracle looks for. Both sides would still agree with
-//! each other; only the real artifact disagrees.
+//! The other tests pin the renderer against fixtures. A fixture is an
+//! observation somebody wrote down, so it exercises states its author already
+//! imagined -- and the defect this file exists for was a state nobody had
+//! imagined: `topology_report` printing `BUG IN THIS PROBE ... Nothing below
+//! about cache partitioning can be trusted` while the verdict two paragraphs
+//! below printed `=> agree`.
 //!
 //! Some unit tests in this crate do call `measure()` and so do read this host.
-//! What none of them does is run the ORACLE over a report rendered from that
-//! reading, which is the gap this file closes. On CI it runs across the hosted
-//! runner fleet -- a slow survey of shapes no fixture anticipates.
+//! What none of them does is check a report rendered from that reading, which
+//! is the gap this file closes. On CI it runs across the hosted runner fleet --
+//! a slow survey of shapes no fixture anticipates.
 //!
 //! # It asserts nothing about this machine
 //!
 //! Deliberately. A test that expected a processor count, a cache level or a
 //! verdict would fail on the next runner shape rather than on a defect, and
 //! would have to be loosened until it asserted nothing. What it checks is that
-//! whatever this host produced, the report's parts agree **with each other** --
-//! a property every host must satisfy, including one whose topology cannot be
-//! read at all.
+//! whatever this host produced, the row accounts for it -- a property every
+//! host must satisfy, including one whose topology cannot be read at all.
 
 use windows_placement_probe::fingerprint::Fingerprint;
 use windows_platform_probes::report_oracle;
@@ -69,7 +79,7 @@ fn a_report_rendered_from_this_host_is_well_formed() {
     // including one whose topology cannot be read at all.
     let (text, measured) = real_report();
 
-    report_oracle::assert_corresponds(&text);
+    report_oracle::assert_row_is_well_formed(&text);
     assert!(
         report_oracle::row(&text).is_some(),
         "every report carries exactly one row, including an unmeasured one -- \

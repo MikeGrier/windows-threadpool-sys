@@ -199,7 +199,7 @@ fn malformation(row: &str) -> Option<String> {
 /// terminator, so a `discovery_error` carrying an escaped quote shifted where it
 /// thought strings began and text INSIDE the error was emitted as top-level
 /// keys. Measured: an `io::Error` of `q":1,"q":1,"q` rendered a row that
-/// `JSON.parse` accepts with four keys, and `assert_corresponds` panicked from
+/// `JSON.parse` accepts with four keys, and `assert_row_is_well_formed` panicked from
 /// inside the renderer. Fixing that added escape-awareness to one of the
 /// scanners and left the others to be argued about; this removes the question.
 ///
@@ -295,10 +295,19 @@ pub fn row(report: &str) -> Option<&str> {
 
 /// [`check`], as an assertion, for tests that render a report.
 ///
+/// **Named `assert_corresponds` until 2026-09-13, and the name outlived what it
+/// did.** Before M3 this compared a report's prose against its encoded row; M3
+/// made the row the machine contract and retired that comparison, leaving a
+/// function that validates ONE thing -- that the report carries exactly one
+/// well-formed JSON row. The old name went on promising a cross-part guarantee
+/// to every reader of its four call sites. Renamed after a review read those
+/// call sites as still enforcing correspondence, which is exactly the mistake
+/// the name invited.
+///
 /// # Panics
 ///
 /// Panics listing every way the row is malformed.
-pub fn assert_corresponds(report: &str) {
+pub fn assert_row_is_well_formed(report: &str) {
     let defects = check(report);
     assert!(
         defects.is_empty(),

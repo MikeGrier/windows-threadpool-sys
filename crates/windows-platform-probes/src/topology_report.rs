@@ -322,12 +322,15 @@ pub fn report_unmeasured(banner: &str, error: &io::Error) -> String {
             .render()
     );
 
-    // Bound here too, for the reason given on `report` below. This renderer
-    // makes fewer claims, so fewer correspondences apply -- but "fewer apply"
-    // is a conclusion the oracle should reach by looking, not one assumed by
-    // leaving the call out.
+    // Bound here too, for the reason given on `report` below: an unmeasured
+    // report is still a report, and a survey still has to parse its row.
+    //
+    // This used to say the renderer "makes fewer claims, so fewer
+    // correspondences apply". There are no correspondences left to apply -- M3
+    // retired the prose/row relation, and what is checked is that the row is
+    // well formed, which is not a thing a renderer can make less of.
     #[cfg(any(test, feature = "oracle-in-renderer"))]
-    crate::report_oracle::assert_corresponds(&out);
+    crate::report_oracle::assert_row_is_well_formed(&out);
     out
 }
 
@@ -867,28 +870,33 @@ pub fn report(banner: &str, observation: &Observation) -> String {
     // checks one case; binding the renderer checks every case anyone writes
     // later, including the ones nobody thought to add.
     //
-    // **Measured, not assumed.** Re-introducing a cross-part contradiction --
-    // the NDJSON processor count one higher than the prose -- turns 13 existing
-    // tests red through this line, none of which was written about processor
-    // counts: they are about cache notes, efficiency classes and caveats, and
-    // they inherit the check purely by rendering a report. With the same
-    // contradiction in place and this line removed, EVERY LIBRARY TEST PASSES:
-    // the per-part tests cannot see the defect at all.
+    // **What it catches: a renderer that emits a malformed row.** Nothing here
+    // compares the prose against the row. M3 retired that relation -- the row is
+    // the machine contract and the prose is reviewed, not parsed -- so the only
+    // claim this line supports is that every report this renderer produces
+    // carries exactly one well-formed JSON row.
     //
-    // That sentence used to say THE WHOLE SUITE passes, which was true when it
-    // was written and stopped being true in the same commit -- this branch adds
-    // `tests/a_real_report_agrees_with_itself.rs`, whose tests call the oracle
-    // explicitly and so go red without the binding. Measured just now: the
-    // library suite is entirely green under that sabotage while the real-host
-    // integration tests fail. Named without a count on purpose, because the
-    // count moved between a reviewer measuring it and this correction being
-    // written, for exactly the reason the next paragraph gives.
+    // **Measured, not assumed** (2026-09-13, by sabotaging `Row::render` to drop
+    // the closing brace): 42 library tests fail with this line, 29 without it.
+    // The 13 that only this line catches are about cache notes, efficiency
+    // classes, caveats, NUMA lines and partitioning levels -- not one of them
+    // mentions the row's syntax. They inherit the check purely by rendering a
+    // report, which is the whole argument for binding the renderer instead of
+    // adding a test beside the others.
     //
-    // Stated as the invariant rather than as a count, because the count rots.
-    // This read "all 190 pass" when the suite held 190 tests, and it has grown
-    // several times since -- so a reviewer had to run the suite three times to
-    // establish that the sentence was merely stale rather than wrong. The
-    // number was never the point; that nothing else catches the defect is.
+    // **The previous version of this paragraph was false, and that is worth
+    // recording.** It claimed a prose/NDJSON processor-count contradiction turned
+    // 13 tests red through this line. That was true before M3 and silently
+    // stopped being true when the oracle stopped reading prose: re-run in full,
+    // the sabotage it names now leaves all 228 library tests AND all 10 real-host
+    // integration tests green. A reviewer inferred it from the code; the check
+    // that settled it was running it. An evidence paragraph nothing executes is
+    // the same rot as a test nothing runs -- so when this mechanism changes
+    // again, re-measure rather than re-word.
+    //
+    // The counts above are dated for that reason. The invariant is the durable
+    // half: nothing else in the library catches a malformed row, because no
+    // per-part test parses one.
     //
     // **Why the gate is not `cfg(test)` alone.** It was, and the claim above was
     // then false for half of what "every test" means: cargo compiles this
@@ -924,6 +932,6 @@ pub fn report(banner: &str, observation: &Observation) -> String {
     // lost is the NDJSON row a survey would have mined, which is why the default
     // build is the one that matters and is the one pinned above.
     #[cfg(any(test, feature = "oracle-in-renderer"))]
-    crate::report_oracle::assert_corresponds(&out);
+    crate::report_oracle::assert_row_is_well_formed(&out);
     out
 }

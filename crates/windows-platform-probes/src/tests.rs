@@ -4587,14 +4587,26 @@ fn the_row_names_the_probes_own_bug_when_it_detects_one() {
 
     let text = crate::topology_report::report(BANNER, &observation);
 
+    // **The precondition is read off the OBSERVATION, not off the prose.** This
+    // asserted `text.contains("BUG IN THIS PROBE")` first, which made a
+    // row-contract test depend on the wording of a sentence -- the one thing M3
+    // says the row exists to stop. A reword of that line would have reddened
+    // this test, and the crate's `survives` sabotage control did not notice
+    // because it is anchored on a different prose line. Found by a review.
+    //
+    // The typed condition is the honest precondition anyway: it is what the
+    // renderer itself reads to decide whether to alarm.
+    let check = observation.cross_check();
     assert!(
-        text.contains("BUG IN THIS PROBE"),
-        "the prose still alarms: {text}"
+        check.parse_incomplete.iter().any(|entry| matches!(
+            entry,
+            crate::topology::diagnostic::ParseIncomplete::PartitioningSummaryMissing { .. }
+        )),
+        "the probe must have detected its own bug for this test to mean anything: {check:?}"
     );
     assert!(
         row_codes(&text, "parse_incomplete").contains(&"partitioning_summary_missing".to_owned()),
-        "the row must name the condition the prose alarms about, not merely \
-         count it: {text}"
+        "the row must name the condition, not merely count it: {text}"
     );
 }
 
@@ -4765,7 +4777,7 @@ fn a_discovery_error_full_of_json_cannot_manufacture_a_second_row() {
         "and the ONE row is the probe's, not the caller's: {}",
         rows[0]
     );
-    crate::report_oracle::assert_corresponds(&text);
+    crate::report_oracle::assert_row_is_well_formed(&text);
 }
 
 #[test]

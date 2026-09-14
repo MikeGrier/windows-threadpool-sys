@@ -163,7 +163,7 @@ fn an_escaped_quote_inside_a_value_does_not_forge_a_key() {
     // `keys` used `find('"')`, which takes `\"` for a terminator, so an escaped
     // quote shifted where it thought strings began and ended and text INSIDE a
     // value was emitted as a top-level key. Two equal ones read as a repeated
-    // key, and `assert_corresponds` panicked from inside `report_unmeasured`.
+    // key, and `assert_row_is_well_formed` panicked from inside `report_unmeasured`.
     //
     // Reachable, not hypothetical: `discovery_error` carries a failed
     // discovery's `io::Error`, whose message is whatever the OS said.

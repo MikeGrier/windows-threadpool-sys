@@ -404,7 +404,7 @@ pub fn check(observation: &Observation, verdict: Verdict) -> Vec<Violation> {
 /// `cross_check` would give; this function has no such seam, so there is no
 /// observation for which it panics and nothing to distinguish it from `()`.
 ///
-/// The same survivor was recorded for `assert_corresponds` on PR #88 -- see
+/// The same survivor was recorded for `assert_row_is_well_formed` on PR #88 -- see
 /// [DESIGN-RATIONALE.md](../../DESIGN-RATIONALE.md) -- for the same reason: every
 /// instrument that would notice goes THROUGH it. A binding that cannot fail on
 /// data is checked by the sweep's `caught` results on [`check`] itself, which is
