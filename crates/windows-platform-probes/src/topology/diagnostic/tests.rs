@@ -1,0 +1,648 @@
+// Copyright (c) Mike Grier.
+
+//! Tests for what the diagnostics publish into the row.
+//!
+//! # Why these are literals
+//!
+//! Every assertion here writes the expected wire form out by hand. That is
+//! deliberate, and it is the opposite of what this crate does elsewhere: a rule
+//! that is a PREDICATE over values is defined once and asked, never restated,
+//! because a hand-written second copy checks the copy rather than the contract.
+//!
+//! A code and a field name are not predicates. They are a SCHEMA -- the names a
+//! fleet survey groups by, which this module's own docs call "a breaking change
+//! to the NDJSON row" -- and a schema is not derivable from the thing that emits
+//! it. Writing it down twice is how a golden works: the test disagrees when the
+//! writer moves, which is the entire point.
+//!
+//! The distinction matters because the tests that existed before these did the
+//! derivable thing to the non-derivable one. They built their expectation from
+//! `code()` and compared it against a row the writer had built from `code()`, so
+//! both sides moved together and neither pinned anything.
+//!
+//! # What that left open, measured
+//!
+//! A mutation sweep of the parent module returned **12 survivors of 26** --
+//! `NotCompared::code` could be replaced wholesale with `""` or `"xyzzy"`, and
+//! every arm of `published_anomaly` and two of `anomaly_code` could be deleted,
+//! all with a green suite. Separately, rewriting `published`'s count helper to
+//! `*value * 7 + 1` -- every count in every entry wrong -- left 218 tests
+//! passing.
+//!
+//! That is the field-labelling defect `row.rs` exists to make unrepresentable,
+//! reappearing one level down: `row.rs` pairs a name with its value so position
+//! cannot mislabel them, and then these functions hand-pair names with values
+//! inside each entry, where nothing was watching.
+//!
+//! # Completeness
+//!
+//! Where the enum belongs to this crate, the expectation is written as an
+//! exhaustive `match`, so a variant added without a golden does not compile.
+//! `AnomalyKind` and `Source` are `#[non_exhaustive]` upstream and cannot be
+//! matched exhaustively; for those the goldens are explicit instances, and each
+//! named kind is asserted NOT to return `unclassified`, so an arm deleted from
+//! the classifier is caught rather than quietly becoming a fall-through.
+//!
+//! **What that does not cover, stated because the wording here used to claim it
+//! did.** This said the `unclassified` fallback "is asserted directly". It is
+//! not, and from this crate it cannot be: `#[non_exhaustive]` is precisely the
+//! attribute that stops a downstream crate constructing a variant it does not
+//! know, so no unknown kind can be built here to drive that arm. The arm is
+//! reachable only from a future upstream release, and what is checked is the
+//! half that is checkable -- that nothing this crate DOES name reaches it.
+//! Found by a review.
+
+use super::{
+    Disagreement, NotCompared, ParseIncomplete, UNDESCRIBED, anomaly_code, described,
+    published_anomaly,
+};
+use crate::row::Row;
+use windows_topology_sys::{AnomalyKind, EnumerationAnomaly, Source};
+
+/// The published value, rendered through the row's own writer.
+///
+/// Wrapped in a row rather than rendered directly, so the bytes under test are
+/// the bytes a survey reads -- escaping, separators and all -- rather than a
+/// second rendering written for the test.
+fn rendered(value: crate::row::Value) -> String {
+    let row = Row::new("x-test").with("entry", value).render();
+    let opened = row.find("\"entry\":").expect("the entry is present") + "\"entry\":".len();
+    row[opened..row.len() - 1].to_owned()
+}
+
+fn anomaly(source: Source, offset: usize, kind: AnomalyKind) -> EnumerationAnomaly {
+    EnumerationAnomaly {
+        source,
+        offset,
+        kind,
+    }
+}
+
+#[test]
+fn every_not_compared_code_is_the_one_the_row_promises() {
+    // Exhaustive, so a seventh variant does not compile until it has a code
+    // here. All six were unpinned: the sweep replaced the whole function with
+    // `""` and with `"xyzzy"` and nothing noticed.
+    let golden = |reason: &NotCompared| match reason {
+        NotCompared::MachineChanged => "machine_changed",
+        NotCompared::BracketNotEstablished => "bracket_not_established",
+        NotCompared::CountsIncludeUnparsedRelations => "counts_include_unparsed_relations",
+        NotCompared::ActiveProcessorCountFailed => "active_processor_count_failed",
+        NotCompared::ActiveProcessorGroupCountFailed => "active_processor_group_count_failed",
+        NotCompared::HighestNumaNodeFailed => "highest_numa_node_failed",
+    };
+
+    // The exhaustive `golden` above obliges a new variant to have a code; it does
+    // NOT oblige this array to carry one, so a seventh variant could take a wrong
+    // code with this `every...` test green. Reported by a review against exactly
+    // this loop.
+    let every = [
+        NotCompared::MachineChanged,
+        NotCompared::BracketNotEstablished,
+        NotCompared::CountsIncludeUnparsedRelations,
+        NotCompared::ActiveProcessorCountFailed,
+        NotCompared::ActiveProcessorGroupCountFailed,
+        NotCompared::HighestNumaNodeFailed,
+    ];
+    covers_every_variant(
+        "NotCompared",
+        &every.iter().map(NotCompared::code).collect::<Vec<_>>(),
+        NotCompared::ALL_CODES,
+    );
+
+    for reason in every {
+        assert_eq!(reason.code(), golden(&reason), "{reason:?}");
+        assert_eq!(
+            rendered(reason.published()),
+            format!("{{\"code\":\"{}\"}}", golden(&reason)),
+            "{reason:?}: a bare condition publishes its code and nothing else"
+        );
+    }
+}
+
+#[test]
+fn every_disagreement_publishes_the_pair_it_carries() {
+    // `parsed` and `counter` are the two numbers a survey compares, so swapping
+    // the labels is the mislabelling defect in its purest form: the row still
+    // parses and says the opposite of the truth.
+    //
+    // A cases array rather than free-standing assertions, so the set this test
+    // exercises can be DERIVED and held against `ALL_CODES`. Written out, the
+    // name's "every disagreement" rested on nobody adding a fourth variant.
+    let cases = [
+        (
+            Disagreement::OnlineProcessors {
+                parsed: 12,
+                counter: 16,
+            },
+            r#"{"code":"online_processors","parsed":12,"counter":16}"#,
+        ),
+        (
+            Disagreement::ProcessorGroups {
+                parsed: 1,
+                counter: 2,
+            },
+            r#"{"code":"processor_groups","parsed":1,"counter":2}"#,
+        ),
+        (
+            Disagreement::HighestNumaNode {
+                parsed: Some(2),
+                counter: 3,
+            },
+            r#"{"code":"highest_numa_node","parsed":2,"counter":3}"#,
+        ),
+    ];
+    covers_every_variant(
+        "Disagreement",
+        &cases
+            .iter()
+            .map(|(found, _)| found.code())
+            .collect::<Vec<_>>(),
+        Disagreement::ALL_CODES,
+    );
+    for (found, golden) in &cases {
+        assert_eq!(rendered(found.published()), *golden, "{found:?}");
+    }
+    // The absent parse renders as `null`, not as a number and not as an omitted
+    // field: a survey must be able to tell "the parse saw no NUMA node" from
+    // "the parse saw node 0".
+    assert_eq!(
+        rendered(
+            Disagreement::HighestNumaNode {
+                parsed: None,
+                counter: 3,
+            }
+            .published()
+        ),
+        r#"{"code":"highest_numa_node","parsed":null,"counter":3}"#
+    );
+}
+
+/// Asserts that `fixture` contains an instance of EVERY variant, by the codes it
+/// covers rather than by how many entries it has.
+///
+/// **A count proves nothing.** This replaced `assert!(every.len() > 15)`, which
+/// a fixture of any size passes while omitting a variant -- so a variant added
+/// to the enum could go unrendered with the suite green, which is exactly the
+/// hole the fixture existed to close. Found by a review.
+///
+/// `ALL_CODES` is generated beside `code` from one list, so a new variant
+/// reaches this check without anyone remembering to widen it. Compared as a SET
+/// because a fixture may legitimately carry two instances of one variant to
+/// exercise a payload that differs, as the `Disagreement` one does.
+fn covers_every_variant(what: &str, covered: &[&str], all: &[&str]) {
+    // **Distinctness, checked on `ALL_CODES` rather than on the fixture**, and
+    // checked here so all three enums get it from one site. Set membership
+    // alone cannot see a duplicate: if two variants were given the same
+    // literal, `ALL_CODES` would carry it twice and a single fixture entry
+    // would satisfy both copies in both directions below. `ParseIncomplete`
+    // had a separate uniqueness assertion; `Disagreement` and `NotCompared`
+    // had none, so for those two a shared code was invisible. Found by a
+    // review.
+    //
+    // The harm is the same one the row exists to prevent: two conditions that
+    // publish one code cannot be told apart by a survey.
+    let mut seen: Vec<&str> = Vec::new();
+    let mut repeated: Vec<&str> = Vec::new();
+    for code in all {
+        if seen.contains(code) {
+            repeated.push(code);
+        } else {
+            seen.push(code);
+        }
+    }
+    assert!(
+        repeated.is_empty(),
+        "two {what} variants publish {repeated:?}, so a survey cannot tell those \
+         conditions apart"
+    );
+
+    let missing: Vec<&str> = all
+        .iter()
+        .filter(|code| !covered.contains(*code))
+        .copied()
+        .collect();
+    assert!(
+        missing.is_empty(),
+        "the {what} fixture omits {missing:?}, so those variants are never rendered here"
+    );
+
+    // The other direction, so a code retired from the enum does not linger in a
+    // fixture that then silently tests nothing.
+    let stale: Vec<&str> = covered
+        .iter()
+        .filter(|code| !all.contains(*code))
+        .copied()
+        .collect();
+    assert!(
+        stale.is_empty(),
+        "the {what} fixture carries {stale:?}, which no variant produces"
+    );
+}
+
+/// Every `ParseIncomplete` variant, one instance each.
+///
+/// **Shared, because two tests need the same completeness and a second
+/// hand-written list is a second chance to omit a variant.** The presence test
+/// carried its own seven-element sample and so exercised `Display` for a third
+/// of the enum; blanking any omitted arm would have rendered `UNDESCRIBED` in a
+/// real report while that test stayed green. Found by a review.
+///
+/// The exhaustive `match` in the code test forces a new variant to acquire a
+/// golden; this forces it to be EXERCISED. Neither implies the other, which is
+/// why both exist.
+fn every_parse_incomplete() -> Vec<ParseIncomplete> {
+    vec![
+        ParseIncomplete::EnumerationAnomalies { count: 1 },
+        ParseIncomplete::NumaDomainsOnlyInCpuSets { count: 1 },
+        ParseIncomplete::NoCacheLevels,
+        ParseIncomplete::CacheLevelsWithoutPartitions { levels: vec![1] },
+        ParseIncomplete::MeasuredButCountsAbsent { absent: vec!["x"] },
+        ParseIncomplete::NoPackages,
+        ParseIncomplete::NoCores,
+        ParseIncomplete::ContradictoryCores { count: 1 },
+        ParseIncomplete::UnnumberedCacheLevels { count: 1 },
+        ParseIncomplete::PartitioningSummaryMissing { level: 1 },
+        ParseIncomplete::NotMeasured,
+        ParseIncomplete::RelationsWithoutProcessors {
+            cores: 1,
+            packages: 1,
+        },
+        ParseIncomplete::UnreportedRelations { count: 1 },
+        ParseIncomplete::DescribedRelations { count: 1 },
+        ParseIncomplete::CoresOnlyInCpuSets { count: 1 },
+        ParseIncomplete::OverlappingWalkRelations { count: 1 },
+        ParseIncomplete::ProcessorAttributeConflicts { count: 1 },
+        ParseIncomplete::NumaDomainsWithConflictingLabels { count: 1 },
+        ParseIncomplete::NumaDomainsUnreported { count: 1 },
+        ParseIncomplete::EnumerationsDisagreed {
+            attempts: 1,
+            walk_only: 1,
+            cpu_sets_only: 1,
+        },
+        ParseIncomplete::CoherenceNotCollected,
+    ]
+}
+#[test]
+fn every_parse_incomplete_variant_has_the_code_the_row_promises() {
+    // **Every variant, not every payload SHAPE.** The test below covers shapes,
+    // on the argument that the counted variants share one helper -- true of the
+    // PAYLOAD and false of the CODE, which is per-variant. So the counted variants
+    // could be given a wrong code with nothing to notice: the report corpus
+    // builds its expectation through `code()` itself, so both sides move
+    // together. Found by a review of the pull request.
+    //
+    // Exhaustive, so a variant added without a code here does not compile. The
+    // shape arguments are `..` because this pins the discriminant only; the
+    // payloads are the test below.
+    let golden = |entry: &ParseIncomplete| match entry {
+        ParseIncomplete::EnumerationAnomalies { .. } => "enumeration_anomalies",
+        ParseIncomplete::NumaDomainsOnlyInCpuSets { .. } => "numa_domains_only_in_cpu_sets",
+        ParseIncomplete::NoCacheLevels => "no_cache_levels",
+        ParseIncomplete::CacheLevelsWithoutPartitions { .. } => "cache_levels_without_partitions",
+        ParseIncomplete::MeasuredButCountsAbsent { .. } => "measured_but_counts_absent",
+        ParseIncomplete::NoPackages => "no_packages",
+        ParseIncomplete::NoCores => "no_cores",
+        ParseIncomplete::ContradictoryCores { .. } => "contradictory_cores",
+        ParseIncomplete::UnnumberedCacheLevels { .. } => "unnumbered_cache_levels",
+        ParseIncomplete::PartitioningSummaryMissing { .. } => "partitioning_summary_missing",
+        ParseIncomplete::NotMeasured => "not_measured",
+        ParseIncomplete::RelationsWithoutProcessors { .. } => "relations_without_processors",
+        ParseIncomplete::UnreportedRelations { .. } => "unreported_relations",
+        ParseIncomplete::DescribedRelations { .. } => "described_relations",
+        ParseIncomplete::CoresOnlyInCpuSets { .. } => "cores_only_in_cpu_sets",
+        ParseIncomplete::OverlappingWalkRelations { .. } => "overlapping_walk_relations",
+        ParseIncomplete::ProcessorAttributeConflicts { .. } => "processor_attribute_conflicts",
+        ParseIncomplete::NumaDomainsWithConflictingLabels { .. } => {
+            "numa_domains_with_conflicting_labels"
+        }
+        ParseIncomplete::NumaDomainsUnreported { .. } => "numa_domains_unreported",
+        ParseIncomplete::EnumerationsDisagreed { .. } => "enumerations_disagreed",
+        ParseIncomplete::CoherenceNotCollected => "coherence_not_collected",
+    };
+
+    let every = every_parse_incomplete();
+
+    // This test's NAME claims every variant, and the exhaustive `golden` above
+    // does not deliver that: a `match` obliges a variant to HAVE an arm, never
+    // obliges the fixture to reach it, so an omitted variant's code would go
+    // unchecked here. Stated independently rather than leaned on from the
+    // presence test, which could be deleted without this one noticing.
+    covers_every_variant(
+        "ParseIncomplete",
+        &every.iter().map(ParseIncomplete::code).collect::<Vec<_>>(),
+        ParseIncomplete::ALL_CODES,
+    );
+
+    let mut seen: Vec<&str> = Vec::new();
+    for entry in &every {
+        let code = entry.code();
+        assert_eq!(code, golden(entry), "{entry:?}");
+        assert!(
+            !seen.contains(&code),
+            "{entry:?}: `{code}` is already another variant's code, so a survey \
+             cannot tell the two conditions apart"
+        );
+        seen.push(code);
+    }
+}
+
+#[test]
+fn every_parse_incomplete_shape_publishes_the_fields_its_variant_carries() {
+    // One instance of each PAYLOAD SHAPE rather than of each variant: the
+    // count-carrying variants all share a single helper, and it was rewriting
+    // every one of them wrongly that left 218 tests green.
+    //
+    // No number here on purpose. Two comments in this file said "twelve counted
+    // variants" and there are eleven -- a census, wrong, in the tests written to
+    // stop exactly that. The shape argument does not depend on how many there
+    // are, so stating it buys nothing and rots.
+    let cases = [
+        (
+            ParseIncomplete::ContradictoryCores { count: 3 },
+            r#"{"code":"contradictory_cores","count":3}"#,
+        ),
+        (ParseIncomplete::NoPackages, r#"{"code":"no_packages"}"#),
+        (
+            ParseIncomplete::CacheLevelsWithoutPartitions { levels: vec![1, 2] },
+            r#"{"code":"cache_levels_without_partitions","levels":[1,2]}"#,
+        ),
+        (
+            ParseIncomplete::MeasuredButCountsAbsent {
+                absent: vec!["packages"],
+            },
+            r#"{"code":"measured_but_counts_absent","absent":["packages"]}"#,
+        ),
+        (
+            ParseIncomplete::PartitioningSummaryMissing { level: 3 },
+            r#"{"code":"partitioning_summary_missing","level":3}"#,
+        ),
+        (
+            ParseIncomplete::RelationsWithoutProcessors {
+                cores: 4,
+                packages: 7,
+            },
+            r#"{"code":"relations_without_processors","cores":4,"packages":7}"#,
+        ),
+        (
+            ParseIncomplete::EnumerationsDisagreed {
+                attempts: 2,
+                walk_only: 5,
+                cpu_sets_only: 9,
+            },
+            r#"{"code":"enumerations_disagreed","attempts":2,"walk_only":5,"cpu_sets_only":9}"#,
+        ),
+    ];
+
+    for (entry, golden) in cases {
+        assert_eq!(rendered(entry.published()), golden, "{entry:?}");
+    }
+}
+
+#[test]
+fn distinct_values_in_one_entry_are_not_interchangeable() {
+    // **The labelling check, stated as a property rather than as another
+    // golden.** The goldens above would still pass if two fields were swapped
+    // AND both goldens were updated to match -- which is exactly what an author
+    // mid-refactor does. This asks the narrower question a golden cannot: with
+    // every value distinct, does each name carry ITS value?
+    let relations = rendered(
+        ParseIncomplete::RelationsWithoutProcessors {
+            cores: 4,
+            packages: 7,
+        }
+        .published(),
+    );
+    assert!(
+        relations.contains(r#""cores":4"#) && relations.contains(r#""packages":7"#),
+        "cores and packages must not be interchanged: {relations}"
+    );
+
+    let undersized = rendered(published_anomaly(&anomaly(
+        Source::RelationshipWalk,
+        64,
+        AnomalyKind::Undersized {
+            declared: 8,
+            minimum: 48,
+        },
+    )));
+    assert!(
+        undersized.contains("\"declared\":8") && undersized.contains("\"minimum\":48"),
+        "declared and minimum must not be interchanged: {undersized}"
+    );
+}
+
+#[test]
+fn every_named_anomaly_kind_has_a_code_of_its_own() {
+    // A deleted arm here does not fail loudly -- it falls through to
+    // `unclassified`, whose documented meaning is "this probe's vocabulary is
+    // older than the crate". A real overrun would then be filed as an unknown
+    // kind and mis-attributed across a fleet. Two of these arms were deletable
+    // with a green suite.
+    let cases = [
+        (
+            AnomalyKind::Undersized {
+                declared: 1,
+                minimum: 2,
+            },
+            "undersized",
+        ),
+        (
+            AnomalyKind::OverrunsBuffer {
+                declared: 3,
+                remaining: 4,
+            },
+            "overruns_buffer",
+        ),
+        (
+            AnomalyKind::TrailingBytes { remaining: 5 },
+            "trailing_bytes",
+        ),
+        (
+            AnomalyKind::TruncatedArray {
+                declared: 6,
+                decoded: 7,
+            },
+            "truncated_array",
+        ),
+    ];
+
+    for (kind, golden) in cases {
+        let described = format!("{kind:?}");
+        let found = anomaly_code(&anomaly(Source::RelationshipWalk, 0, kind));
+        assert_eq!(found, golden, "{described}");
+        assert_ne!(
+            found, "unclassified",
+            "{described}: a kind this crate names must not fall through to the \
+             catch-all, which says the vocabulary is older than the crate"
+        );
+    }
+}
+
+#[test]
+fn every_anomaly_publishes_where_it_was_found_as_well_as_what() {
+    // `source` and `offset` are the fields the module's docs give the reason
+    // for -- the same kind at the same offset across a fleet is a different
+    // finding from the same kind scattered. Every arm below was deletable.
+    let cases = [
+        (
+            anomaly(
+                Source::RelationshipWalk,
+                64,
+                AnomalyKind::Undersized {
+                    declared: 8,
+                    minimum: 48,
+                },
+            ),
+            r#"{"code":"undersized","source":"relationship_walk","offset":64,"declared":8,"minimum":48}"#,
+        ),
+        (
+            anomaly(
+                Source::CpuSets,
+                128,
+                AnomalyKind::OverrunsBuffer {
+                    declared: 96,
+                    remaining: 32,
+                },
+            ),
+            r#"{"code":"overruns_buffer","source":"cpu_sets","offset":128,"declared":96,"remaining":32}"#,
+        ),
+        (
+            anomaly(
+                Source::RelationshipWalk,
+                256,
+                AnomalyKind::TrailingBytes { remaining: 12 },
+            ),
+            r#"{"code":"trailing_bytes","source":"relationship_walk","offset":256,"remaining":12}"#,
+        ),
+        (
+            anomaly(
+                Source::CpuSets,
+                512,
+                AnomalyKind::TruncatedArray {
+                    declared: 10,
+                    decoded: 6,
+                },
+            ),
+            r#"{"code":"truncated_array","source":"cpu_sets","offset":512,"declared":10,"decoded":6}"#,
+        ),
+    ];
+
+    for (found, golden) in cases {
+        assert_eq!(rendered(published_anomaly(&found)), golden, "{found:?}");
+    }
+}
+
+#[test]
+fn every_diagnostic_describes_itself() {
+    // **Presence is machine-checked here; WORDING is not, and that is the
+    // whole point of the seam.** This asserts only that each entry renders as
+    // something a reader can act on -- never what it says -- so the prose stays
+    // a review obligation while a blank stops being possible to ship.
+    //
+    // Two `Display` impls could be blanked with a green suite, and a reader
+    // would have got `     - ` with nothing after the dash: indistinguishable
+    // from a rendering bug, from a finding with nothing to say, and from a
+    // stray newline. This test names that case and nothing else.
+    let disagreements = [
+        Disagreement::OnlineProcessors {
+            parsed: 12,
+            counter: 16,
+        },
+        Disagreement::ProcessorGroups {
+            parsed: 1,
+            counter: 2,
+        },
+        Disagreement::HighestNumaNode {
+            parsed: Some(2),
+            counter: 3,
+        },
+        Disagreement::HighestNumaNode {
+            parsed: None,
+            counter: 3,
+        },
+    ];
+    covers_every_variant(
+        "Disagreement",
+        &disagreements
+            .iter()
+            .map(Disagreement::code)
+            .collect::<Vec<_>>(),
+        Disagreement::ALL_CODES,
+    );
+    for entry in &disagreements {
+        let text = described(entry);
+        assert_ne!(text, UNDESCRIBED, "{entry:?} renders blank");
+        assert!(!text.trim().is_empty(), "{entry:?} renders blank");
+    }
+
+    // The comment here used to read "Exhaustive, so a seventh `NotCompared` must
+    // describe itself to compile" -- of an ARRAY LITERAL, which forces nothing.
+    // A seventh variant compiles fine and is simply never rendered. Same defect
+    // as the one a review reported against the count below, in a comment that
+    // claimed the guarantee outright; found by sweeping the class rather than
+    // the reported instance.
+    let not_compared = [
+        NotCompared::MachineChanged,
+        NotCompared::BracketNotEstablished,
+        NotCompared::CountsIncludeUnparsedRelations,
+        NotCompared::ActiveProcessorCountFailed,
+        NotCompared::ActiveProcessorGroupCountFailed,
+        NotCompared::HighestNumaNodeFailed,
+    ];
+    covers_every_variant(
+        "NotCompared",
+        &not_compared
+            .iter()
+            .map(NotCompared::code)
+            .collect::<Vec<_>>(),
+        NotCompared::ALL_CODES,
+    );
+    for entry in &not_compared {
+        let text = described(entry);
+        assert_ne!(text, UNDESCRIBED, "{entry:?} renders blank");
+        assert!(!text.trim().is_empty(), "{entry:?} renders blank");
+    }
+
+    // **Every variant, from the shared fixture.** This carried its own
+    // seven-element sample, so it exercised `Display` for a third of the enum --
+    // `NoCacheLevels`, `EnumerationAnomalies`, `NoCores` and the rest were never
+    // rendered here, and blanking any of their arms would have put UNDESCRIBED
+    // in a real report while this test stayed green. Found by a review.
+    let every = every_parse_incomplete();
+    covers_every_variant(
+        "ParseIncomplete",
+        &every.iter().map(ParseIncomplete::code).collect::<Vec<_>>(),
+        ParseIncomplete::ALL_CODES,
+    );
+    for entry in &every {
+        let text = described(entry);
+        assert_ne!(text, UNDESCRIBED, "{entry:?} renders blank");
+        assert!(!text.trim().is_empty(), "{entry:?} renders blank");
+    }
+}
+
+#[test]
+fn an_entry_that_says_nothing_is_called_out_rather_than_left_blank() {
+    // The other half, and without it the test above cannot distinguish a
+    // working `described` from one that returns its input unchanged.
+    struct Silent;
+    impl std::fmt::Display for Silent {
+        fn fmt(&self, _: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            Ok(())
+        }
+    }
+
+    struct Blank;
+    impl std::fmt::Display for Blank {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            // Whitespace, not emptiness: a reader cannot tell the two apart on
+            // the page, so neither may the check.
+            f.write_str("   ")
+        }
+    }
+
+    assert_eq!(described(&Silent), UNDESCRIBED);
+    assert_eq!(described(&Blank), UNDESCRIBED);
+    assert_eq!(described(&"a real description"), "a real description");
+}

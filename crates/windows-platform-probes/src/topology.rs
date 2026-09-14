@@ -43,6 +43,11 @@ use windows_topology_sys::{
     Source,
 };
 
+pub mod diagnostic;
+pub mod invariant;
+
+pub use diagnostic::{Disagreement, NotCompared, ParseIncomplete};
+
 /// One cache level, summarised across the machine.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CacheLevel {
@@ -536,36 +541,24 @@ impl Observation {
         let mut check = CrossCheck::default();
 
         if !self.enumeration_anomalies.is_empty() {
-            check.parse_incomplete.push(format!(
-                // States the CONDITION, not a direction. "Records were dropped
-                // and the counts are short" was true of the two anomaly kinds
-                // that decode to nothing and false of `TruncatedArray`, which
-                // keeps the record with the entries that fit -- and a cache
-                // record kept with a partial affinity mask can INFLATE a
-                // partition count rather than shorten it, so the old message
-                // pointed a reader the wrong way. `AnomalyKind` is
-                // `#[non_exhaustive]`, so classifying here would need a
-                // catch-all arm that a future variant falls into silently;
-                // saying only what is true of all of them cannot rot that way.
-                "windows-topology-sys recorded {} enumeration anomal{}, so what Windows returned \
-                 was not fully decoded and the counts above may be short, or overstated where a \
-                 record was kept with an incomplete processor set",
-                self.enumeration_anomalies.len(),
-                if self.enumeration_anomalies.len() == 1 {
-                    "y"
-                } else {
-                    "ies"
-                },
-            ));
+            // The wording's reasoning lives on the variant now, with the rest of
+            // this vocabulary. `AnomalyKind` is `#[non_exhaustive]`, so this
+            // entry deliberately says only what is true of every kind; the row
+            // publishes each anomaly's own code separately, where the catch-all
+            // is visible as `unclassified` rather than hidden in a sentence.
+            check
+                .parse_incomplete
+                .push(ParseIncomplete::EnumerationAnomalies {
+                    count: self.enumeration_anomalies.len(),
+                });
         }
 
         if self.numa_domains_only_in_cpu_sets > 0 {
-            check.parse_incomplete.push(format!(
-                "{} NUMA domain(s) were reported only by CPU Sets and never by the relationship \
-                 walk, so the two sources group nodes differently -- which no counter and no \
-                 coherence check reaches, since coherence compares processor sets",
-                self.numa_domains_only_in_cpu_sets,
-            ));
+            check
+                .parse_incomplete
+                .push(ParseIncomplete::NumaDomainsOnlyInCpuSets {
+                    count: self.numa_domains_only_in_cpu_sets,
+                });
         }
 
         // No cache levels at all. Distinct from the per-level case below, and
@@ -576,11 +569,7 @@ impl Observation {
         // conclusion the report draws about cache structure would be drawn from
         // nothing.
         if self.caches.is_empty() {
-            check.parse_incomplete.push(
-                "no cache levels were reported at all, so what divides this machine by cache \
-                 was not established in either direction"
-                    .to_string(),
-            );
+            check.parse_incomplete.push(ParseIncomplete::NoCacheLevels);
         }
 
         // A level the survey DOES carry, with no partitions at all.
@@ -599,18 +588,27 @@ impl Observation {
             .map(|c| c.level)
             .collect();
         if !empty_levels.is_empty() {
-            check.parse_incomplete.push(format!(
-                "cache level(s) {empty_levels:?} decoded to no partitions at all, so what \
-                 divides this machine at those levels was not established"
-            ));
+            check
+                .parse_incomplete
+                .push(ParseIncomplete::CacheLevelsWithoutPartitions {
+                    levels: empty_levels,
+                });
         }
 
         // A running machine has processors and groups whatever the enumeration
         // said, so a MEASURED topology reporting none of either did not describe
-        // its host. Nothing below reaches this: both raw counters report failure
-        // as zero, so a zero parse beside a failed read is filed as
-        // `not_compared` -- leaving `parse_in_doubt` false, and the report free
-        // to state an impossible machine without a caveat.
+        // its host.
+        //
+        // **The gap this closes, in the past tense it belongs in.** Nothing else
+        // reaches the case: both raw counters report failure as zero, so a zero
+        // parse beside a failed read WAS filed as `not_compared` alone -- which
+        // left `parse_in_doubt` false and the report free to state an impossible
+        // machine without a caveat. The push below is what changed that, and it
+        // makes `parse_in_doubt` true for exactly this case.
+        //
+        // The paragraph above described the old behaviour in the present tense,
+        // so it read as though this rule did not exist while sitting directly
+        // over it. Found by a review.
         //
         // Stated over the LIST rather than once per count, so a third such count
         // joins the array instead of needing its own rule to be remembered.
@@ -623,11 +621,9 @@ impl Observation {
         .map(|(name, _)| name)
         .collect();
         if self.topology_was_measured && !absent.is_empty() {
-            check.parse_incomplete.push(format!(
-                "this topology was measured from a running machine, which cannot have none, but \
-                 it reported no {}",
-                absent.join(" and "),
-            ));
+            check
+                .parse_incomplete
+                .push(ParseIncomplete::MeasuredButCountsAbsent { absent });
         }
 
         // The machine has packages and cores whatever the enumeration said, so
@@ -637,14 +633,10 @@ impl Observation {
         // simply not report the relationship, in which case no anomaly fires
         // and nothing else here notices.
         if self.online_processors > 0 && self.packages == 0 {
-            check
-                .parse_incomplete
-                .push("no packages were reported at all, though the machine has one".to_string());
+            check.parse_incomplete.push(ParseIncomplete::NoPackages);
         }
         if self.online_processors > 0 && self.cores.is_empty() {
-            check
-                .parse_incomplete
-                .push("no cores were reported at all, though the machine has one".to_string());
+            check.parse_incomplete.push(ParseIncomplete::NoCores);
         }
 
         // A record that contradicts ITSELF, which no counter reaches: nothing
@@ -660,20 +652,22 @@ impl Observation {
             .filter(|core| core.contradicts_itself())
             .count();
         if contradictory_cores > 0 {
-            check.parse_incomplete.push(format!(
-                "{contradictory_cores} core(s) report an SMT flag that disagrees with the number \
-                 of processors recorded beside it, so the record contradicts itself"
-            ));
+            check
+                .parse_incomplete
+                .push(ParseIncomplete::ContradictoryCores {
+                    count: contradictory_cores,
+                });
         }
 
         // Windows numbers cache levels from 1, so a level of 0 is a level the
         // parse did not read rather than one the machine has.
         let unnumbered_levels = self.caches.iter().filter(|c| c.level == 0).count();
         if unnumbered_levels > 0 {
-            check.parse_incomplete.push(format!(
-                "{unnumbered_levels} cache level(s) are numbered 0, which is not a level Windows \
-                 reports, so what they describe was not established"
-            ));
+            check
+                .parse_incomplete
+                .push(ParseIncomplete::UnnumberedCacheLevels {
+                    count: unnumbered_levels,
+                });
         }
 
         // The renderer prints this state as "BUG IN THIS PROBE ... Nothing
@@ -687,83 +681,77 @@ impl Observation {
         // `partitioning_cache` are both public, which is the same reason the
         // clamps in `domain_counts` exist.
         if let PartitioningCache::SummaryMissing(level) = self.partitioning_cache() {
-            check.parse_incomplete.push(format!(
-                "L{level} was named as the outermost partitioning cache and this survey carries \
-                 no summary for it, so what it divides was not established"
-            ));
+            check
+                .parse_incomplete
+                .push(ParseIncomplete::PartitioningSummaryMissing { level });
         }
 
         if !self.topology_was_measured {
-            check.parse_incomplete.push(
-                "this topology was not measured from a running machine, so nothing here \
-                 describes the host it is reported on"
-                    .to_string(),
-            );
+            check.parse_incomplete.push(ParseIncomplete::NotMeasured);
         }
 
         if self.cores_without_processors > 0 || self.packages_without_processors > 0 {
-            check.parse_incomplete.push(format!(
-                "{} core(s) and {} package(s) cover no processors, so they raise those counts \
-                 and the policies derived from them without describing any part of the machine",
-                self.cores_without_processors, self.packages_without_processors,
-            ));
+            check
+                .parse_incomplete
+                .push(ParseIncomplete::RelationsWithoutProcessors {
+                    cores: self.cores_without_processors,
+                    packages: self.packages_without_processors,
+                });
         }
 
         if self.unreported_relations > 0 {
-            check.parse_incomplete.push(format!(
-                "{} relation(s) carry no observation from any source, so they are counted here \
-                 without any platform API having described them",
-                self.unreported_relations,
-            ));
+            check
+                .parse_incomplete
+                .push(ParseIncomplete::UnreportedRelations {
+                    count: self.unreported_relations,
+                });
         }
 
         if self.described_relations > 0 {
-            check.parse_incomplete.push(format!(
-                "{} relation(s) were described by a caller rather than reported by any platform \
-                 API, so the counts above are not all of them measured",
-                self.described_relations,
-            ));
+            check
+                .parse_incomplete
+                .push(ParseIncomplete::DescribedRelations {
+                    count: self.described_relations,
+                });
         }
 
         if self.cores_only_in_cpu_sets > 0 {
-            check.parse_incomplete.push(format!(
-                "{} core(s) were reported only by CPU Sets and never by the relationship walk, so \
-                 the two group processors into cores differently and the core count above holds \
-                 both groupings",
-                self.cores_only_in_cpu_sets,
-            ));
+            check
+                .parse_incomplete
+                .push(ParseIncomplete::CoresOnlyInCpuSets {
+                    count: self.cores_only_in_cpu_sets,
+                });
         }
 
         if self.overlapping_walk_relations > 0 {
-            check.parse_incomplete.push(format!(
-                "{} relation(s) reported by the relationship walk share a processor with another \
-                 of the same kind, so one processor is claimed by two packages, two cores or two \
-                 NUMA nodes and the counts above hold both",
-                self.overlapping_walk_relations,
-            ));
+            check
+                .parse_incomplete
+                .push(ParseIncomplete::OverlappingWalkRelations {
+                    count: self.overlapping_walk_relations,
+                });
         }
         if self.processor_attribute_conflicts > 0 {
-            check.parse_incomplete.push(format!(
-                "{} per-processor attribute(s) carry more than one distinct value, so the \
-                 efficiency classes above are one claim rather than an agreed one",
-                self.processor_attribute_conflicts,
-            ));
+            check
+                .parse_incomplete
+                .push(ParseIncomplete::ProcessorAttributeConflicts {
+                    count: self.processor_attribute_conflicts,
+                });
         }
 
         if self.numa_domains_with_conflicting_labels > 0 {
-            check.parse_incomplete.push(format!(
-                "{} NUMA domain(s) carry more than one distinct node number, so what node they \
-                 are was not established and the highest below takes the larger",
-                self.numa_domains_with_conflicting_labels,
-            ));
+            check
+                .parse_incomplete
+                .push(ParseIncomplete::NumaDomainsWithConflictingLabels {
+                    count: self.numa_domains_with_conflicting_labels,
+                });
         }
 
         if self.numa_domains_unreported > 0 {
-            check.parse_incomplete.push(format!(
-                "{} NUMA domain(s) carry no observation from either source, so they raise the \
-                 domain count while contributing no node number to compare",
-                self.numa_domains_unreported,
-            ));
+            check
+                .parse_incomplete
+                .push(ParseIncomplete::NumaDomainsUnreported {
+                    count: self.numa_domains_unreported,
+                });
         }
 
         match &self.coherence {
@@ -772,22 +760,20 @@ impl Observation {
                 walk_only,
                 cpu_sets_only,
                 attempts,
-            } => check.parse_incomplete.push(format!(
-                "windows-topology-sys reports its two enumerations never agreed within {attempts} \
-                 attempt(s): {} processor(s) seen only by the relationship walk, {} seen only by \
-                 CPU Sets and so absent from the parsed list entirely",
-                walk_only.len(),
-                cpu_sets_only.len(),
-            )),
+            } => check
+                .parse_incomplete
+                .push(ParseIncomplete::EnumerationsDisagreed {
+                    attempts: *attempts,
+                    walk_only: walk_only.len(),
+                    cpu_sets_only: cpu_sets_only.len(),
+                }),
             // Unreachable from `discover`, which returns `Agreed` or
             // `Disagreed`. Reported rather than ignored because reaching it
             // would mean the parse came from somewhere that read nothing
             // twice, and a cross-check cannot certify that either.
-            Coherence::NotCollected => check.parse_incomplete.push(
-                "windows-topology-sys reports its coherence was never collected, so nothing \
-                 established that its two enumerations describe the same machine"
-                    .to_string(),
-            ),
+            Coherence::NotCollected => check
+                .parse_incomplete
+                .push(ParseIncomplete::CoherenceNotCollected),
         }
 
         // Everything above is about the PARSE and is evaluated unconditionally.
@@ -806,19 +792,11 @@ impl Observation {
         match self.bracket {
             BracketOutcome::HeldStill => {}
             BracketOutcome::Changed => {
-                check.not_compared.push(
-                    "the machine changed while this ran -- the counters moved across the parse, \
-                     so the two readings describe different instants"
-                        .to_string(),
-                );
+                check.not_compared.push(NotCompared::MachineChanged);
                 return check;
             }
             BracketOutcome::NotEstablished => {
-                check.not_compared.push(
-                    "the bracket around the parse was not closed -- a counter failed one of its \
-                     two reads, so nothing established that the machine held still"
-                        .to_string(),
-                );
+                check.not_compared.push(NotCompared::BracketNotEstablished);
                 return check;
             }
         }
@@ -835,11 +813,9 @@ impl Observation {
         // Filed as `not_compared` rather than skipped silently: this is a
         // reading that could not be trusted, which is exactly what that list is.
         if self.counts_include_unparsed_relations() {
-            check.not_compared.push(
-                "these counts include relations no platform API reported, so a counter mismatch \
-                 could not be attributed to the parse"
-                    .to_string(),
-            );
+            check
+                .not_compared
+                .push(NotCompared::CountsIncludeUnparsedRelations);
             return check;
         }
 
@@ -848,31 +824,29 @@ impl Observation {
         // count to compare against. Treating it as a count reported a failed
         // measurement as though the crate's parse were wrong.
         if self.raw_active_processors == 0 {
-            check.not_compared.push(
-                "GetActiveProcessorCount returned 0, which is its failure report".to_string(),
-            );
+            check
+                .not_compared
+                .push(NotCompared::ActiveProcessorCountFailed);
         } else if self.online_processors != self.raw_active_processors as usize {
-            check.disagreements.push(format!(
-                "online processors: topology crate says {}, GetActiveProcessorCount says {}",
-                self.online_processors, self.raw_active_processors
-            ));
+            check.disagreements.push(Disagreement::OnlineProcessors {
+                parsed: self.online_processors,
+                counter: self.raw_active_processors,
+            });
         }
 
         if self.raw_group_count == 0 {
-            check.not_compared.push(
-                "GetActiveProcessorGroupCount returned 0, which is its failure report".to_string(),
-            );
+            check
+                .not_compared
+                .push(NotCompared::ActiveProcessorGroupCountFailed);
         } else if self.groups != self.raw_group_count as usize {
-            check.disagreements.push(format!(
-                "groups: topology crate says {}, GetActiveProcessorGroupCount says {}",
-                self.groups, self.raw_group_count
-            ));
+            check.disagreements.push(Disagreement::ProcessorGroups {
+                parsed: self.groups,
+                counter: self.raw_group_count,
+            });
         }
 
         let Some(highest) = self.raw_highest_numa_node else {
-            check.not_compared.push(
-                "GetNumaHighestNodeNumber failed, so no NUMA comparison was made".to_string(),
-            );
+            check.not_compared.push(NotCompared::HighestNumaNodeFailed);
             return check;
         };
 
@@ -883,12 +857,10 @@ impl Observation {
             // nodes 0 and 2 are a valid sparse topology, and the count form
             // would report a regression on hardware that is reporting itself
             // correctly.
-            check.disagreements.push(format!(
-                "NUMA nodes: topology crate's highest node is {}, GetNumaHighestNodeNumber says {}",
-                self.highest_numa_node
-                    .map_or_else(|| "none".to_string(), |n| n.to_string()),
-                highest
-            ));
+            check.disagreements.push(Disagreement::HighestNumaNode {
+                parsed: self.highest_numa_node,
+                counter: highest,
+            });
         }
         check
     }
@@ -902,7 +874,7 @@ impl Observation {
 pub struct CrossCheck {
     /// Counters that were compared and did not match. Each is a finding about
     /// the shipping crate's parse.
-    pub disagreements: Vec<String>,
+    pub disagreements: Vec<Disagreement>,
     /// Comparisons this run could not make, or could not trust. Each is a gap
     /// in this measurement, not a finding about the parse.
     ///
@@ -913,7 +885,7 @@ pub struct CrossCheck {
     /// relations no platform API reported. Both are comparisons that were not
     /// made; neither is a counter that failed. The causes are enumerated in
     /// exactly one place, [`Observation::cross_check`]'s body.
-    pub not_compared: Vec<String>,
+    pub not_compared: Vec<NotCompared>,
     /// Ways the parse is short, or its claims mutually inconsistent, such that
     /// agreeing counters cannot certify it.
     ///
@@ -926,7 +898,7 @@ pub struct CrossCheck {
     /// while every entry happened to be a crate self-assessment. One is not:
     /// a NUMA domain only CPU Sets described is derived here, from provenance
     /// the crate carries but draws no conclusion about.
-    pub parse_incomplete: Vec<String>,
+    pub parse_incomplete: Vec<ParseIncomplete>,
 }
 
 impl CrossCheck {
@@ -1429,7 +1401,7 @@ pub fn observe(
         .outermost_partitioning_cache()
         .map(|(level, _)| level);
 
-    Observation {
+    let observation = Observation {
         online_processors,
         groups,
         numa_domains,
@@ -1456,5 +1428,19 @@ pub fn observe(
         raw_group_count,
         raw_highest_numa_node,
         bracket,
-    }
+    };
+
+    // **Bound here, so the invariants hold for every observation this crate
+    // MEASURES whether or not one is ever rendered.** That is the difference
+    // between these and the correspondences they came from: the oracle can only
+    // speak about a report, so a caller who measures and never renders got
+    // nothing. `report` binds them too, which is what covers the observations
+    // the tests build by hand.
+    //
+    // Never in `cross_check`: `assert_holds` asks it for the verdict, so the
+    // assertion would recurse.
+    #[cfg(any(test, feature = "oracle-in-renderer"))]
+    invariant::assert_holds(&observation);
+
+    observation
 }

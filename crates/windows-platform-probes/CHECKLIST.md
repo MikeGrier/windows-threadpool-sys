@@ -5,45 +5,76 @@ separately, in the workspace [CHECKLIST-thread-ambient.md](../../CHECKLIST-threa
 M27; that file is feature-scoped and is deleted when its feature completes, so durable follow-up work
 for the crate belongs here instead.
 
-## M2 -- Check correspondence between the report's parts, not just each part
+## M4 -- Carried over from M2: the items M3 gated
 
-A pull-request review found a state where [src/topology_report.rs](src/topology_report.rs) printed
-`BUG IN THIS PROBE ... Nothing below about cache partitioning can be trusted` while `cross_check` had
-no branch for that state, so the verdict could print `=> agree` two paragraphs below. Twenty-eight
-rounds of per-artifact review and a zero-surviving-mutant `cargo-mutants` result had both passed over
-it, because every function involved was correct on its own terms and the defect lived in the relation
-between two of them.
+These were written under M2 and were blocked on M3, which is **now complete and archived** in
+[COMPLETED-CHECKLIST.md](COMPLETED-CHECKLIST.md). They are unblocked, and each was RE-SCOPED rather
+than merely delayed -- so each item below carries its own re-scoping note, in the item, where
+somebody executing the list will actually meet it.
 
-See [DESIGN-NOTES.md](DESIGN-NOTES.md) -> [The defects that survived were correspondence
-failures](DESIGN-NOTES.md#d-correspondence-failures) for why each instrument was structurally
-incapable of finding it, and for the matrix-as-exploration / oracle-as-durable split this milestone
-implements.
+**The IDs keep their M2 numbers deliberately.** [COMPLETED-CHECKLIST.md](COMPLETED-CHECKLIST.md) is
+append-only and its entries are immutable, and two archived entries already cite M2.4 and M2.14 --
+so renumbering would leave dangling references in a file that may not be edited to repair them.
+Stable IDs cost a mismatch between an item number and its milestone; renumbering would cost
+correctness in the archive.
 
-Every correlation the oracle admits is one the report already renders twice, found either by
-catching a contradiction or by walking the artifact field by field. It is not a
-speculative list to extend by imagination -- one is added when a contradiction is found, and the
-authoritative set is the `Correspondence` enum rather than any count written here. (This said "the
-three correlations below" while the enum already had four.)
+- [ ] **M2.4** -- Explore, with the sparse matrix as the instrument, whether `Coherence`,
+  `BracketOutcome` and `Verdict` carry invariants the row does not yet publish -- as VALUES on the
+  observation, not as correspondences between two renderings -- and whether the sibling probes'
+  renderers have the same gaps. Expect the matrix to be mostly empty; that is the expected shape and
+  not a sign the exercise failed. **Record the vacuous results as well as the findings** -- "X and Y
+  were examined and need not be related" is what stops the next person re-exploring the same cells,
+  and is the half that normally evaporates. Promote only what proves meaningful into the invariant
+  set from M3.2.
 
-- [x] **M2.1** -- Add a report oracle to this crate: one shared executable definition of the correlations that must hold between the parts of a rendered report. -> [completed 2026-09-10](COMPLETED-CHECKLIST.md#m21)
-
-- [x] **M2.2** -- Route every test that renders a report through the oracle, by binding it in the renderer. -> [completed 2026-09-10](COMPLETED-CHECKLIST.md#m22)
-
-- [x] **M2.3** -- Run `measure()` against the real host, render the report, and apply the oracle. -> [completed 2026-09-10](COMPLETED-CHECKLIST.md#m23)
-
-- [ ] **M2.4** -- Explore, with the sparse matrix as the instrument, whether the same correspondence
-  failures exist for `Coherence`, `BracketOutcome` and `Verdict`, and in the sibling probes' renderers.
-  Expect the matrix to be mostly empty; that is the expected shape and not a sign the exercise failed.
-  **Record the vacuous results as well as the findings** -- "X and Y were examined and need not
-  correspond" is what stops the next person re-exploring the same cells, and is the half that normally
-  evaporates. Promote only what proves meaningful into the oracle from M2.1.
+  Re-scoped by M3.2; the note at the top of this milestone gives the reasoning. **The item text
+  above was rewritten when M3 was archived, to match**: it still asked for "the same correspondence
+  failures" and for promotion "into the oracle from M2.1", both retired by M3, so a reader working
+  the list linearly would have been sent after the half that no longer exists. Found by a review --
+  and the lesson generalises, since a re-scoping note 25 lines above an item does not reach someone
+  executing the item.
 
 > **-> OPEN QUESTION for the engineer:** M2.4 may show this generalises past this crate, in which case
 > the oracle belongs somewhere shared and the question becomes a repository-wide convention rather than
 > a probe-crate one. That is a design decision, not a mechanical follow-on, and is deliberately left
 > unanswered here.
 
-- [ ] **M2.5** -- Make the banner describe the read the body describes. A probe run performs
+- [ ] **M4.1** -- Model the observation-readable `ParseIncomplete` conditions that
+  `blocking_states` currently omits, so a deleted push site in `cross_check` is caught for all of
+  them rather than for the subset.
+
+  **Gap:** `blocking_states` justified its absentees as "derived counts whose only source IS the
+  cross-check's own arithmetic". That is false for most of them --
+  `CacheLevelsWithoutPartitions`, `NumaDomainsOnlyInCpuSets`, `CoresOnlyInCpuSets`,
+  `RelationsWithoutProcessors`, `UnreportedRelations`, `DescribedRelations`,
+  `OverlappingWalkRelations`, `ProcessorAttributeConflicts`, `NumaDomainsWithConflictingLabels`,
+  `NumaDomainsUnreported` and `MeasuredButCountsAbsent` all read fields sitting on `Observation`
+  in plain sight. Deleting one of those push sites lets `verdict()` reach `agree` with
+  `blocking_states` silent. Reported across three review rounds against two wordings of the claim;
+  the claims in [src/topology/invariant.rs](src/topology/invariant.rs) and in
+  `every_numa_counter_branch_...` were narrowed in the same review round that reported this,
+  to stop overstating the coverage,
+  which is why this item is the fix rather than the discovery.
+
+  **Target:** each gains a `BlockingState` variant, a `blocking_states` branch, a `codes_for` arm,
+  a perturbation in the invariant tests, and a corpus shape in
+  [tests/a_real_report_agrees_with_itself.rs](tests/a_real_report_agrees_with_itself.rs) so
+  `the_corpus_reaches_every_blocking_state` still holds. **Do not add a variant without its corpus
+  shape** -- that test is what stops the mapping being written and never exercised, which is the
+  defect this whole area keeps producing.
+
+  Apply the tautology test to each before adding it: a state whose only source is the cross-check's
+  own arithmetic does NOT belong, and the honest outcome for such a one is a line in the module
+  header saying so by name rather than a silent absence.
+
+- [ ] **M2.5** -- Make the banner describe the read the body describes.
+
+  Gated by M3.1 and M3.3, both landed: establishing that the middle of three discoveries agreed
+  produces a new FACT, which M3.1 says must reach the row rather than only the banner, and M3.3
+  changed how the banner is built. Written before those, it would have been written into machinery
+  about to move.
+
+  A probe run performs
   **three** independent `MachineMemoryTopology::discover()` calls: `Fingerprint::discover()` for the
   banner, `measure()`'s own discovery for the body, and `Fingerprint::discover()` again. `attribution`
   compares only the two endpoints, so equal endpoints print an unqualified banner without establishing
@@ -65,16 +96,72 @@ three correlations below" while the enum already had four.)
   comparison that is itself new prose able to drift. The endpoint reads still earn their place: they
   catch structural change across the wider window that the counter bracket cannot see.
 
-  **This belongs to M2 rather than beside it:** "the banner describes the measured read" is a
-  correspondence invariant, so it should be expressed in the M2.1 oracle and checked on every rendered
-  report, not asserted once in a single test.
+  **Express it where M3 put the invariants, not in the M2.1 oracle.** "The banner describes the
+  measured read" is an invariant over the OBSERVATION, so it belongs in the invariant set from M3.2
+  and, if the fact reaches the artifact, in the row schema -- checked on every rendered report through
+  the renderer binding rather than asserted once in a single test. **These two paragraphs were
+  rewritten when M3 landed**: they asked for the relation to be expressed in the M2.1 prose oracle,
+  which M3.4 deleted, so an executor would have gone looking for machinery that no longer exists.
+  Found by a review, and the same defect M2.4 carried.
 
   Reviewer disagreement is recorded deliberately, because it is evidence about the instrument rather
   than noise: across two rounds one reader raised this twice while two others cleared it, one of them
   explicitly after being pointed at the question. Nothing in the suite decides it either way, which is
-  itself the argument for the oracle.
+  itself the argument for making it an invariant rather than a test.
 
-- [x] **M2.6** -- Say what `GetFullPathNameW` does, in the crate that owns it, and whether it stays. -> [completed 2026-09-09](COMPLETED-CHECKLIST.md#m26)
+- [ ] **M2.15** -- Run the probe suite on a second architecture in CI.
+
+  **Keeps its conclusion but loses its evidence.** The five failures cited below were all
+  `prose: "x86_64"` against `ndjson: "x86"` -- instances of exactly the correspondence M3.4
+  retired, so they can no longer occur and a re-run now looks clean. The point stands without them:
+  CI builds `aarch64` and never tests it, and architecture is the one shape dimension a corpus
+  cannot vary because it is fixed at compile time. Restate it on that basis when picked up.
+
+  A reviewer asked whether the suite was portable and it was not: three renderer fixtures and the
+  shape corpus' banner builder each hard-coded `x86_64` while the row they are compared against
+  publishes `std::env::consts::ARCH`. Measured on `i686-pc-windows-msvc`: five failures, every one
+  `prose: "x86_64"` against `ndjson: "x86"`. CI BUILDS `aarch64` and never TESTS it, so a
+  build-and-clippy matrix cannot see this class at all.
+
+  Architecture is the one shape dimension the M2.12 corpus cannot vary, because it is fixed at
+  compile time rather than chosen per report -- so the corpus that exists precisely to defeat shape
+  blindness is blind here by construction, and only a second test target can close it. Add one
+  (`i686-pc-windows-msvc` runs natively on the existing runners; `aarch64` would need its own).
+
+- [ ] **M2.17** -- Cross the corpus dimensions instead of varying one at a time.
+
+  Re-scoped by M3.5: the dimensions worth crossing are the ROW's. Crossing prose shapes that have
+  since stopped being checked would have aimed at the retiring half.
+
+  [tests/a_real_report_agrees_with_itself.rs](tests/a_real_report_agrees_with_itself.rs)'s `shapes()`
+  builds each shape by taking `base()` and changing ONE thing. That makes every shape easy to read and
+  is why the corpus found what it found -- but it means any renderer branch selected by TWO
+  dimensions at once is unreachable by construction, and the corpus cannot report the gap because it
+  does not know the branch exists.
+
+  Measured: `CrossCheck` tags a `parse_incomplete` entry `- {caveat}` under `INCOMPLETE` but
+  `(parse incomplete) {caveat}` under `DISAGREE`. Anomalies appeared only in an agreeing-counter
+  shape and disagreements only in a zero-anomaly shape, so the second spelling was never rendered,
+  and the anomaly-count rule was silently unread on every disagreeing report -- while the comment
+  above it said it was read for every verdict. One hand-written crossed shape closed it, and the
+  accounting test went red under sabotage only once that shape existed.
+
+  Enumerate the dimensions the renderer actually branches on (verdict, bracket, coherence, the
+  partitioning arm, presence of each diagnostic list) and generate the cross product, or a pairwise
+  covering set if the full product is too slow. The corpus already asserts self-consistency and runs
+  the fact accounting per shape, so nothing new has to be written to check them -- only to produce
+  them. Until this lands, a shape that needs two dimensions must be added by hand, which is exactly
+  the imagination-driven process M2.12 exists to replace.
+
+
+## M5 -- Carried over from M2: unblocked hygiene
+
+**Nothing gates these.** They are grouped last by priority, not by dependency -- none of them touches
+the report pipeline, so any of them may be pulled forward ahead of M4 at any time. They were
+discovered during M2 and parked there under a heading none of them fit. M3, which gated M4 but never
+gated these, is complete and archived.
+
+IDs keep their M2 numbers, for the reason given under M4.
 
 - [ ] **M2.7** -- Decide whether the other nine probe steps in CI should carry `if: '!cancelled()'`,
   and apply or record the decision.
@@ -136,10 +223,6 @@ three correlations below" while the enum already had four.)
   and cheap. Same defect class as PR #86's subject -- a claim stated more strongly than the evidence
   supports -- so whichever is chosen, the wording has to end up matching what the numbers can carry.
 
-- [x] **M2.10** -- Derive the oracle's set of checked facts from the renderer instead of extending it by hand. -> [completed 2026-09-10](COMPLETED-CHECKLIST.md#m210)
-- [x] **M2.11** -- Compare the `outermost_partitioning_cache` discriminator against the prose conclusion. -> [completed 2026-09-10](COMPLETED-CHECKLIST.md#m211)
-
-- [x] **M2.12** -- Validate the oracle and its instruments against a corpus of report SHAPES generated from the renderer. -> [completed 2026-09-11](COMPLETED-CHECKLIST.md#m212)
 - [ ] **M2.13** -- Lint the completed-checklist archive mechanically in CI.
 
   Three bookkeeping defects reached review on this branch, and all three are decidable by a script: a
@@ -151,32 +234,12 @@ three correlations below" while the enum already had four.)
   `- [ ]` remains; and the file has ZERO deleted lines against the merge base. The last one is the
   append-only invariant, and it is the one a human reviewer is least likely to notice.
 
-- [ ] **M2.14** -- Write two authoring rules into the repository instructions, both earned on this
-  branch.
 
-  **State the invariant, not the census.** "14 keys read, 3 unread" added nothing that "every key is
-  classified" does not, and it was wrong -- written by eyeballing a list rather than counting it, in
-  the commit documenting a fix for exactly that defect class. Where a number is genuinely load
-  bearing, it must come from a command run in the same action that writes it.
+- [x] **M2.14** -- Make the two authoring rules this branch earned actually bite. -> [completed 2026-09-13](COMPLETED-CHECKLIST.md#m214)
 
-  **A new test is not done until it has been observed to fail.** Every vacuous test on this branch was
-  written green and stayed green until a reviewer thought to break something: a guard that matched a
-  violation's VARIANT where only its FACT established the point, and a fixture whose `.replace()` of
-  `[1]` matched nothing because the report rendered `[0]`. Sabotage belongs at authoring time, not at
-  review time.
+- [x] **M2.14.1** -- Give this crate a sabotage manifest, so "observed to fail" is a recorded artifact rather than a habit. -> [completed 2026-09-13](COMPLETED-CHECKLIST.md#m2141)
 
-- [ ] **M2.15** -- Run the probe suite on a second architecture in CI.
-
-  A reviewer asked whether the suite was portable and it was not: three renderer fixtures and the
-  shape corpus' banner builder each hard-coded `x86_64` while the row they are compared against
-  publishes `std::env::consts::ARCH`. Measured on `i686-pc-windows-msvc`: five failures, every one
-  `prose: "x86_64"` against `ndjson: "x86"`. CI BUILDS `aarch64` and never TESTS it, so a
-  build-and-clippy matrix cannot see this class at all.
-
-  Architecture is the one shape dimension the M2.12 corpus cannot vary, because it is fixed at
-  compile time rather than chosen per report -- so the corpus that exists precisely to defeat shape
-  blindness is blind here by construction, and only a second test target can close it. Add one
-  (`i686-pc-windows-msvc` runs natively on the existing runners; `aarch64` would need its own).
+- [x] **M2.14.2** -- Add to CONTRACT INTEGRITY rule 1 the one thing this branch learned that it does NOT already say. -> [completed 2026-09-13](COMPLETED-CHECKLIST.md#m2142)
 
 - [ ] **M2.16** -- Repair the garbled `Report` doc comment, and drop the two counts that have already
   rotted beside it.
@@ -193,51 +256,6 @@ three correlations below" while the enum already had four.)
   so the two must be fixed together or they drift apart again. Replace them with the invariant the
   passage is actually arguing -- that `String` already implements `fmt::Write`, so every existing
   write site stands untouched and only the renderer signatures move -- which is what makes the point
-  and cannot rot. This is the same defect class as M2.14's first authoring rule.
-
-- [ ] **M2.17** -- Cross the corpus dimensions instead of varying one at a time.
-
-  [tests/a_real_report_agrees_with_itself.rs](tests/a_real_report_agrees_with_itself.rs)'s `shapes()`
-  builds each shape by taking `base()` and changing ONE thing. That makes every shape easy to read and
-  is why the corpus found what it found -- but it means any renderer branch selected by TWO
-  dimensions at once is unreachable by construction, and the corpus cannot report the gap because it
-  does not know the branch exists.
-
-  Measured: `CrossCheck` tags a `parse_incomplete` entry `- {caveat}` under `INCOMPLETE` but
-  `(parse incomplete) {caveat}` under `DISAGREE`. Anomalies appeared only in an agreeing-counter
-  shape and disagreements only in a zero-anomaly shape, so the second spelling was never rendered,
-  and the anomaly-count rule was silently unread on every disagreeing report -- while the comment
-  above it said it was read for every verdict. One hand-written crossed shape closed it, and the
-  accounting test went red under sabotage only once that shape existed.
-
-  Enumerate the dimensions the renderer actually branches on (verdict, bracket, coherence, the
-  partitioning arm, presence of each diagnostic list) and generate the cross product, or a pairwise
-  covering set if the full product is too slow. The corpus already asserts self-consistency and runs
-  the fact accounting per shape, so nothing new has to be written to check them -- only to produce
-  them. Until this lands, a shape that needs two dimensions must be added by hand, which is exactly
-  the imagination-driven process M2.12 exists to replace.
-
-- [ ] **M2.18** -- Decide whether a banner should be a TYPE rather than a `&str`.
-
-  **This is a design decision for the engineer, not a defect to fix in passing.** A review observed
-  that `is_attribution_shaped` recognises a SHAPE, not a provenance: any two `host:` lines followed
-  by the exact disclaimer pass through `preamble` verbatim. Since `report` and `report_unmeasured`
-  both take `&str`, there is a public path where caller text decides a renderer-owned question.
-  Measured: a hand-built banner of `host: <arch> 999p/1c` / `host: <arch> 1p/1c` / the disclaimer
-  renders verbatim, and the oracle's exemption for unestablished attribution then skips the
-  banner-against-body processor-count check -- so the banner suppressed a correspondence.
-
-  **The honest scope of it.** The suppression is not silent: the report visibly states that its two
-  readings disagree, which is exactly the condition under which declining to compare counts is
-  CORRECT. The oracle reads the artifact, and the artifact says so. Every production caller composes
-  its banner with `attribution()`, so nothing reaches this by accident today. Validating the
-  per-line shape more strictly does not close it either -- `attribution` legitimately emits
-  `host:  UNKNOWN -- topology discovery failed: {error}` with arbitrary error text, so arbitrary
-  text can always ride inside a well-formed banner line.
-
-  The fix that would actually close it is a typed banner with a private constructor, so only
-  `attribution()` can produce one and the renderer's signature carries the guarantee. The cost is
-  every fixture and corpus shape that builds a banner by hand, plus a test-only escape hatch that
-  partially reopens the hole for the tests that need odd banners. Worth doing if the renderer's
-  input contract is meant to be enforced rather than documented; not worth doing if `&str` in, and
-  containment on the way out, is the intended boundary. Raise before implementing.
+  and cannot rot. This is the same defect class as CONTRACT INTEGRITY rule 1 in
+  [.github/copilot-instructions.md](../../.github/copilot-instructions.md), which M2.14 exists to
+  make bite.

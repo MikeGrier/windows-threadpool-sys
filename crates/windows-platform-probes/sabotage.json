@@ -1,0 +1,117 @@
+{
+  "description": "Sabotage manifest for windows-platform-probes. Each entry is a defect that was actually run by hand while building M3; the manifest exists so those one-off verifications stop being discarded. See CHECKLIST.md M2.14.1.",
+  "package": "windows-platform-probes",
+  "sabotages": [
+    {
+      "name": "row drops the packages field",
+      "file": "src/topology_report.rs",
+      "expect": "caught",
+      "why": "A field silently vanishes from every mined row. This is the defect that was MEASURED to leave the whole suite green before MEASURED_ROW_KEYS existed, so this entry is the regression test for the key-set contract itself.",
+      "find": [
+        "        .with(\"packages\", observation.packages)"
+      ],
+      "replace": []
+    },
+    {
+      "name": "row writer emits a leading separator",
+      "file": "src/row.rs",
+      "expect": "caught",
+      "why": "Produces a row that is bracket-balanced but not valid JSON, so a consumer's parser rejects it. The oracle's old `balanced` check counted depth and passed exactly this; `malformation` must not.",
+      "find": [
+        "            Self::Object(members) => {",
+        "                out.push('{');",
+        "                for (at, (name, value)) in members.iter().enumerate() {",
+        "                    if at > 0 {",
+        "                        out.push(',');",
+        "                    }"
+      ],
+      "replace": [
+        "            Self::Object(members) => {",
+        "                out.push('{');",
+        "                for (_at, (name, value)) in members.iter().enumerate() {",
+        "                    out.push(',');"
+      ]
+    },
+    {
+      "name": "row writer does not escape quotes",
+      "file": "src/row.rs",
+      "expect": "caught",
+      "why": "A quote in a caller's `io::Error` ends the JSON string early and lets the rest of the message forge keys in the mined row. `write_escaped` is the whole of the injection fix.",
+      "find": [
+        "            '\"' => out.push_str(\"\\\\\\\"\"),"
+      ],
+      "replace": [
+        "            '\"' => out.push('\"'),"
+      ]
+    },
+    {
+      "name": "the row's key reader uses a parsed map",
+      "file": "src/report_oracle.rs",
+      "expect": "caught",
+      "why": "The obvious simplification, and it is wrong twice over: a serde_json::Map SORTS its names and silently keeps the LAST of a repeated key -- so this loses the row's key ORDER, which is part of the contract MEASURED_ROW_KEYS states, and it deletes the evidence for RowDefect::RepeatedKey, the one malformation that survives a consumer's parse. This entry exists so that the reason the visitor is not a map cannot be forgotten.",
+      "find": [
+        "    let mut reader = serde_json::Deserializer::from_str(row);",
+        "    let Ok(names) = serde::Deserializer::deserialize_map(&mut reader, TopLevelNames) else {",
+        "        return Vec::new();",
+        "    };",
+        "    if reader.end().is_err() {",
+        "        return Vec::new();",
+        "    }",
+        "    names"
+      ],
+      "replace": [
+        "    serde_json::from_str::<serde_json::Map<String, serde_json::Value>>(row)",
+        "        .map(|members| members.into_iter().map(|(name, _)| name).collect())",
+        "        .unwrap_or_default()"
+      ]
+    },
+    {
+      "name": "cross_check forgets the changed bracket",
+      "file": "src/topology.rs",
+      "expect": "caught",
+      "why": "THE entry this crate's invariant module exists for. Deleting the push empties the list, so `verdict()` -- a pure function of the lists -- legitimately returns `agree` beside an observation whose bracket did not hold. Any rule reading the LISTS is blind to this by construction; only a rule reading the OBSERVATION catches it.",
+      "find": [
+        "                check.not_compared.push(NotCompared::MachineChanged);"
+      ],
+      "replace": []
+    },
+    {
+      "name": "a blocking state with no perturbation",
+      "file": "src/topology/invariant.rs",
+      "expect": "caught",
+      "why": "An untested blocking state. Adds rather than deletes, deliberately: the completeness guard exists to catch an ADDITION, and a hand-written `ALL` was measured to let exactly this through while all ten invariant tests stayed green.",
+      "find": [
+        "    BracketNotHeld => \"the bracket did not establish that the machine held still\","
+      ],
+      "replace": [
+        "    BracketNotHeld => \"the bracket did not establish that the machine held still\",",
+        "    /// A state added by a sabotage, with no perturbation behind it.",
+        "    SabotageSentinel => \"a state no perturbation produces\","
+      ]
+    },
+    {
+      "name": "prose reworded to carry the same fact",
+      "file": "src/topology_report.rs",
+      "expect": "survives",
+      "why": "THE CONTROL, and it encodes this component's central decision as a measurement rather than as prose: the row is the machine contract and the prose is for a reader, so no test may derive a MACHINE-CONTRACT requirement from the wording. Note the narrowness -- tests may and do assert prose (about 35 of them read report text with contains), because the human report is a deliverable and its content is worth covering. What none of them may do is parse the prose, or pin a sentence the row is separately responsible for. So this entry rewords a line no test asserts, and if it is ever reported as caught, the question to ask is WHICH test caught it: one that reads the wording to learn something the row already publishes is the defect, and one that simply covers this sentence means the entry needs a different sentence.",
+      "find": [
+        "            let _ = writeln!(out, \"cache boundary divides this machine.\");"
+      ],
+      "replace": [
+        "            let _ = writeln!(out, \"cache boundary splits this machine.\");"
+      ]
+    },
+    {
+      "name": "blocking_states relaxes the processor guard",
+      "file": "src/topology/invariant.rs",
+      "expect": "caught",
+      "why": "The guard says a machine with processors and no packages is a finding; relaxing it to >= makes a topology that reported NOTHING a finding too, accusing a synthetic observation of hiding packages it never claimed. This condition exists TWICE on purpose -- cross_check has its own copy, and blocking_states must recompute rather than read cross_check's output, or it restates verdict() and goes blind to a deleted push site. Independence is the design; agreement is the property. A mutation sweep found the property untested: the test that names this boundary asserts on cross_check, so it covered only the other copy, and this mutation survived five review rounds across four models. Kept here so the pairing is re-run rather than re-discovered.",
+      "find": [
+        "    if observation.online_processors > 0 && observation.packages == 0 {"
+      ],
+      "replace": [
+        "    if observation.online_processors >= 0 && observation.packages == 0 {"
+      ]
+    }
+  ]
+}
