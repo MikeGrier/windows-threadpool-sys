@@ -72,13 +72,20 @@ pub enum Shape {
     NumberOrNull,
     /// A list whose every element is a number.
     ListOfNumbers,
-    /// A list whose every element is an object.
-    ListOfObjects,
-    /// A list whose every element is an object carrying a string `code`.
+    /// A list whose every element is an object carrying at least these members,
+    /// each with the shape named beside it.
     ///
-    /// The diagnostic lists. `code` is the stable discriminant a survey groups
-    /// by, so an entry without one is unmineable even though it is valid JSON.
-    ListOfCoded,
+    /// **Recursive, because "a list of objects" was not a contract.** That is
+    /// what this replaced, and `[{}]` satisfied it -- so `caches` could stop
+    /// publishing `level` and `domains` with the shape oracle green, and a
+    /// diagnostic entry could lose the `code` a survey groups by. Reported by a
+    /// review, and measured: an empty cache object produced zero violations.
+    ///
+    /// Extra members are allowed. What a schema owes a consumer is that the
+    /// fields it promises are present and typed; forbidding additions would
+    /// make every new field a breaking change to the checker rather than to the
+    /// contract.
+    ListOfObjectsWith(&'static [(&'static str, Shape)]),
     /// An object whose every member is a number.
     ObjectOfNumbers,
 }
@@ -105,6 +112,42 @@ pub enum Value {
     List(Vec<Value>),
     /// An ordered set of named members.
     Object(Vec<(&'static str, Value)>),
+}
+
+/// Panics if any object anywhere inside `value` repeats a member name.
+///
+/// **Every level, because the row's guarantee is about the artifact, not about
+/// its first level.** `Row::with` rejects a repeat among the row's own members;
+/// this is the same rule applied to what those members contain. Without it a
+/// diagnostic entry could render `{"code":"a","code":"b"}` -- measured, exactly
+/// that -- which `serde_json` and `JSON.parse` both accept while keeping one
+/// value, and which the oracle cannot report either, because `keys` reads
+/// top-level names by design. Reported by a review.
+///
+/// Uniqueness is PER OBJECT, not across the row: every diagnostic entry carries
+/// its own `code`, and a rule that forbade that would reject every real report.
+fn assert_unique_names(at: &str, value: &Value) {
+    match value {
+        Value::Object(members) => {
+            let mut seen: Vec<&str> = Vec::new();
+            for (name, held) in members {
+                assert!(
+                    !seen.contains(name),
+                    "the object at `{at}` already carries `{name}`, and a repeated \
+                     key survives a consumer's parse as whichever value happened \
+                     to come last"
+                );
+                seen.push(name);
+                assert_unique_names(name, held);
+            }
+        }
+        Value::List(entries) => {
+            for entry in entries {
+                assert_unique_names(at, entry);
+            }
+        }
+        Value::Text(_) | Value::Number(_) | Value::Null => {}
+    }
 }
 
 impl From<&str> for Value {
@@ -259,7 +302,9 @@ impl Row {
             "the row already carries `{name}`, and a repeated key survives a \
              consumer's parse as whichever value happened to come last"
         );
-        self.members.push((name, value.into()));
+        let value = value.into();
+        assert_unique_names(name, &value);
+        self.members.push((name, value));
         self
     }
 

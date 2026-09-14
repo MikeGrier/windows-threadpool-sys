@@ -4890,9 +4890,9 @@ fn every_row_value_has_the_shape_its_schema_declares() {
 
 #[test]
 fn a_diagnostic_entry_without_a_code_is_a_shape_violation() {
-    // The control for `ListOfCoded`, and the reason it is not merely
-    // `ListOfObjects`: `code` is the stable discriminant a survey groups by, so
-    // an entry lacking one is unmineable while still being valid JSON.
+    // The control for the coded schema, and the reason a list of objects was
+    // not enough on its own: `code` is the stable discriminant a survey groups
+    // by, so an entry lacking one is unmineable while still being valid JSON.
     let row = crate::row::Row::new("x-probe-topology")
         .with(
             "parse_incomplete",
@@ -4905,7 +4905,10 @@ fn a_diagnostic_entry_without_a_code_is_a_shape_violation() {
 
     let violations = crate::report_oracle::shape_violations(
         &row,
-        &[("parse_incomplete", crate::row::Shape::ListOfCoded)],
+        &[(
+            "parse_incomplete",
+            crate::row::Shape::ListOfObjectsWith(&[("code", crate::row::Shape::Text)]),
+        )],
     );
     assert_eq!(violations.len(), 1, "{violations:?}");
     assert!(violations[0].contains("parse_incomplete"), "{violations:?}");
@@ -4924,10 +4927,85 @@ fn a_diagnostic_entry_without_a_code_is_a_shape_violation() {
     assert_eq!(
         crate::report_oracle::shape_violations(
             &coded,
-            &[("parse_incomplete", crate::row::Shape::ListOfCoded)]
+            &[(
+                "parse_incomplete",
+                crate::row::Shape::ListOfObjectsWith(&[("code", crate::row::Shape::Text)])
+            )]
         ),
         Vec::<String>::new()
     );
+}
+
+#[test]
+fn a_cache_entry_missing_its_numeric_members_is_a_shape_violation() {
+    // **`[{}]` used to satisfy `caches`.** The shape said "a list of objects"
+    // and stopped there, so the renderer could drop `level` and `domains`, or
+    // publish them as strings, with the schema oracle green -- measured, zero
+    // violations for an empty cache object. Reported by a review.
+    //
+    // `[{}]` is also, exactly, the bogus shape a design session claimed the row
+    // emitted and which was corrected earlier on this branch. It was never a
+    // real rendering; it was reachable through the checker.
+    let empty = crate::row::Row::new("x-probe-topology")
+        .with(
+            "caches",
+            crate::row::Value::List(vec![crate::row::Value::Object(Vec::new())]),
+        )
+        .render();
+    let violations = crate::report_oracle::shape_violations(&empty, &measured_caches());
+    assert_eq!(violations.len(), 2, "{violations:?}");
+    assert!(
+        violations
+            .iter()
+            .any(|what| what.contains("is missing `level`")),
+        "{violations:?}"
+    );
+
+    // A wrongly TYPED member, not merely an absent one.
+    let stringly = crate::row::Row::new("x-probe-topology")
+        .with(
+            "caches",
+            crate::row::Value::List(vec![crate::row::Value::Object(vec![
+                ("level", crate::row::Value::Text("L1".to_owned())),
+                ("domains", crate::row::Value::Number(8)),
+            ])]),
+        )
+        .render();
+    let violations = crate::report_oracle::shape_violations(&stringly, &measured_caches());
+    assert_eq!(violations.len(), 1, "{violations:?}");
+    assert!(violations[0].contains("caches[0].level"), "{violations:?}");
+
+    // The control: a real cache entry passes, so the rule is not rejecting
+    // everything.
+    let good = crate::row::Row::new("x-probe-topology")
+        .with(
+            "caches",
+            crate::row::Value::List(vec![crate::row::Value::Object(vec![
+                ("level", crate::row::Value::Number(1)),
+                ("domains", crate::row::Value::Number(8)),
+            ])]),
+        )
+        .render();
+    assert_eq!(
+        crate::report_oracle::shape_violations(&good, &measured_caches()),
+        Vec::<String>::new()
+    );
+}
+
+/// The `caches` entry OF the measured schema, taken from the schema rather than
+/// restated beside it.
+///
+/// Written out, this test would have pinned a shape of its own and passed while
+/// `MEASURED_ROW_SHAPES` declared something else -- the copy checking the copy.
+fn measured_caches() -> Vec<(&'static str, crate::row::Shape)> {
+    let entry: Vec<_> = crate::topology_report::MEASURED_ROW_SHAPES
+        .iter()
+        .copied()
+        .filter(|(key, _)| *key == "caches")
+        .collect();
+
+    assert_eq!(entry.len(), 1, "the schema declares `caches` exactly once");
+    entry
 }
 
 #[test]

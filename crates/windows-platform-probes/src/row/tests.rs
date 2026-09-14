@@ -18,6 +18,46 @@ fn the_writer_refuses_to_render_a_key_twice() {
 }
 
 #[test]
+#[should_panic(expected = "already carries `code`")]
+fn the_writer_refuses_a_repeated_name_inside_a_nested_object_too() {
+    // **The other half of the duplicate-key guarantee.** `with` rejected a
+    // repeat at the TOP level only, so a nested entry could render
+    // `{"code":"a","code":"b"}` -- measured, exactly that string -- and the
+    // oracle could not see it either, because `keys` reads top-level names by
+    // design. A consumer's parser keeps whichever came last.
+    //
+    // Reported by a review as the gap left by the top-level check, which is
+    // what it was: the guarantee was stated for the row and enforced for one
+    // level of it.
+    let _ = Row::new("x").with(
+        "parse_incomplete",
+        Value::List(vec![Value::Object(vec![
+            ("code", Value::Text("a".to_owned())),
+            ("code", Value::Text("b".to_owned())),
+        ])]),
+    );
+}
+
+#[test]
+fn a_repeated_name_in_two_sibling_objects_is_fine() {
+    // The control. Uniqueness is per object, not across the row -- every
+    // diagnostic entry carries its own `code`, and a check that forbade that
+    // would reject every real report.
+    let row = Row::new("x").with(
+        "parse_incomplete",
+        Value::List(vec![
+            Value::Object(vec![("code", Value::Text("a".to_owned()))]),
+            Value::Object(vec![("code", Value::Text("b".to_owned()))]),
+        ]),
+    );
+
+    assert_eq!(
+        row.render(),
+        r#"{"reason":"x","parse_incomplete":[{"code":"a"},{"code":"b"}]}"#
+    );
+}
+
+#[test]
 fn a_row_renders_its_members_in_the_order_they_were_added() {
     let row = Row::new("x-probe-topology")
         .with("arch", "x86_64")

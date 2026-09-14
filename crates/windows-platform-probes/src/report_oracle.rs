@@ -316,40 +316,73 @@ pub fn shape_violations(row: &str, schema: &[(&str, Shape)]) -> Vec<String> {
         return vec![format!("the row is not a JSON object: {row}")];
     };
 
-    let is_number = |value: &Json| value.is_u64() || value.is_i64();
-    let coded = |value: &Json| {
-        value
-            .as_object()
-            .is_some_and(|entry| entry.get("code").is_some_and(Json::is_string))
-    };
-
     let mut found = Vec::new();
     for (name, shape) in schema {
         let Some(value) = parsed.get(*name) else {
             found.push(format!("`{name}` is missing, so its shape cannot hold"));
             continue;
         };
-
-        let holds = match shape {
-            Shape::Text => value.is_string(),
-            Shape::Number => is_number(value),
-            Shape::NumberOrNull => is_number(value) || value.is_null(),
-            Shape::ListOfNumbers => value.as_array().is_some_and(|l| l.iter().all(is_number)),
-            Shape::ListOfObjects => value
-                .as_array()
-                .is_some_and(|l| l.iter().all(Json::is_object)),
-            Shape::ListOfCoded => value.as_array().is_some_and(|l| l.iter().all(coded)),
-            Shape::ObjectOfNumbers => value
-                .as_object()
-                .is_some_and(|o| o.values().all(&is_number)),
-        };
-
-        if !holds {
-            found.push(format!("`{name}` should be {shape:?} but is `{value}`"));
-        }
+        check_shape(name, *shape, value, &mut found);
     }
 
     found
+}
+
+/// Whether `value` has `shape`, appending one sentence per departure.
+///
+/// **Recursive, and reporting WHERE rather than only THAT.** A lone
+/// "`caches` should be a list of objects" cannot tell a reader which element
+/// lost which member -- and the nested contract is the half a review found
+/// unchecked, because `[{}]` satisfied "a list of objects" while publishing
+/// none of the cache fields a survey mines.
+fn check_shape(at: &str, shape: Shape, value: &serde_json::Value, found: &mut Vec<String>) {
+    use serde_json::Value as Json;
+
+    fn is_number(value: &Json) -> bool {
+        value.is_u64() || value.is_i64()
+    }
+
+    let holds = match shape {
+        Shape::Text => value.is_string(),
+        Shape::Number => is_number(value),
+        Shape::NumberOrNull => is_number(value) || value.is_null(),
+        Shape::ListOfNumbers => value.as_array().is_some_and(|l| l.iter().all(is_number)),
+        Shape::ObjectOfNumbers => value.as_object().is_some_and(|o| o.values().all(is_number)),
+        Shape::ListOfObjectsWith(required) => {
+            let Some(entries) = value.as_array() else {
+                found.push(format!("`{at}` should be a list but is `{value}`"));
+                return;
+            };
+
+            for (index, entry) in entries.iter().enumerate() {
+                let Some(members) = entry.as_object() else {
+                    found.push(format!(
+                        "`{at}`[{index}] should be an object but is `{entry}`"
+                    ));
+                    continue;
+                };
+
+                for (member, member_shape) in required {
+                    let Some(held) = members.get(*member) else {
+                        found.push(format!("`{at}`[{index}] is missing `{member}`"));
+                        continue;
+                    };
+                    check_shape(
+                        &format!("{at}[{index}].{member}"),
+                        *member_shape,
+                        held,
+                        found,
+                    );
+                }
+            }
+
+            return;
+        }
+    };
+
+    if !holds {
+        found.push(format!("`{at}` should be {shape:?} but is `{value}`"));
+    }
 }
 
 /// [`shape_violations`], as an assertion.

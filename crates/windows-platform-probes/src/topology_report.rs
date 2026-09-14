@@ -21,6 +21,15 @@ use windows_placement_probe::fingerprint::{Fingerprint, banner_line_for};
 
 use crate::row::{Row, Shape, Value};
 
+/// What every entry in one of the four diagnostic lists must carry.
+///
+/// `code` is the stable discriminant a survey groups by, so an entry without one
+/// is unmineable even though it is valid JSON. The payload beside it is
+/// per-variant and so is not a member of this schema -- it is checked against
+/// the typed publisher by
+/// `the_row_carries_each_diagnostic_entry_whole_and_not_only_its_code`.
+const CODED: &[(&str, Shape)] = &[("code", Shape::Text)];
+
 /// Declares a row schema once, as names WITH shapes, and derives the key list.
 ///
 /// One list, so a key cannot gain a shape without gaining a name or the reverse.
@@ -81,15 +90,15 @@ row_schema!(
     "numa_domains_without_processors" => Shape::Number,
     "cores" => Shape::Number,
     "efficiency_classes" => Shape::ListOfNumbers,
-    "caches" => Shape::ListOfObjects,
+    "caches" => Shape::ListOfObjectsWith(&[("level", Shape::Number), ("domains", Shape::Number)]),
     "outermost_partitioning_cache_level" => Shape::NumberOrNull,
     "outermost_partitioning_cache" => Shape::Text,
     "policies" => Shape::ObjectOfNumbers,
     "cross_check" => Shape::Text,
-    "disagreements" => Shape::ListOfCoded,
-    "not_compared" => Shape::ListOfCoded,
-    "parse_incomplete" => Shape::ListOfCoded,
-    "enumeration_anomalies" => Shape::ListOfCoded,
+    "disagreements" => Shape::ListOfObjectsWith(CODED),
+    "not_compared" => Shape::ListOfObjectsWith(CODED),
+    "parse_incomplete" => Shape::ListOfObjectsWith(CODED),
+    "enumeration_anomalies" => Shape::ListOfObjectsWith(CODED),
     "numa_domains_only_in_cpu_sets" => Shape::Number,
 });
 
