@@ -293,6 +293,85 @@ pub fn row(report: &str) -> Option<&str> {
     report.lines().find(|line| line.starts_with('{'))
 }
 
+use crate::row::Shape;
+
+/// Every way `row` departs from `schema`'s value SHAPES, as sentences.
+///
+/// **The half the key contract was missing.** `MEASURED_ROW_KEYS` pins which
+/// names appear and in what order, and says nothing about what they hold -- so
+/// a renderer could publish `"processors":"16"` and satisfy the key test, the
+/// well-formedness check and every renderer assertion at once. Measured before
+/// this existed: rendering that one field through `.to_string()` left all 230
+/// library tests and all 10 real-host integration tests green. Reported by a
+/// review.
+///
+/// Keys are not re-checked here; that is the key test's job, and doing it in
+/// both places would make one of them the copy. A key the schema names and the
+/// row lacks is reported, because a shape cannot be checked against nothing.
+#[must_use]
+pub fn shape_violations(row: &str, schema: &[(&str, Shape)]) -> Vec<String> {
+    use serde_json::Value as Json;
+
+    let Ok(parsed) = serde_json::from_str::<serde_json::Map<String, Json>>(row) else {
+        return vec![format!("the row is not a JSON object: {row}")];
+    };
+
+    let is_number = |value: &Json| value.is_u64() || value.is_i64();
+    let coded = |value: &Json| {
+        value
+            .as_object()
+            .is_some_and(|entry| entry.get("code").is_some_and(Json::is_string))
+    };
+
+    let mut found = Vec::new();
+    for (name, shape) in schema {
+        let Some(value) = parsed.get(*name) else {
+            found.push(format!("`{name}` is missing, so its shape cannot hold"));
+            continue;
+        };
+
+        let holds = match shape {
+            Shape::Text => value.is_string(),
+            Shape::Number => is_number(value),
+            Shape::NumberOrNull => is_number(value) || value.is_null(),
+            Shape::ListOfNumbers => value.as_array().is_some_and(|l| l.iter().all(is_number)),
+            Shape::ListOfObjects => value
+                .as_array()
+                .is_some_and(|l| l.iter().all(Json::is_object)),
+            Shape::ListOfCoded => value.as_array().is_some_and(|l| l.iter().all(coded)),
+            Shape::ObjectOfNumbers => value
+                .as_object()
+                .is_some_and(|o| o.values().all(&is_number)),
+        };
+
+        if !holds {
+            found.push(format!("`{name}` should be {shape:?} but is `{value}`"));
+        }
+    }
+
+    found
+}
+
+/// [`shape_violations`], as an assertion.
+///
+/// # Panics
+///
+/// Panics listing every value whose shape the schema forbids.
+pub fn assert_row_has_the_schemas_shapes(report: &str, schema: &[(&str, Shape)]) {
+    let row = row(report).unwrap_or_else(|| panic!("no single well-formed row in:\n{report}"));
+    let violations = shape_violations(row, schema);
+    assert!(
+        violations.is_empty(),
+        "the row departs from its schema in {} way(s):\n{}\n\n--- the row ---\n{row}",
+        violations.len(),
+        violations
+            .iter()
+            .map(|what| format!("  - {what}"))
+            .collect::<Vec<_>>()
+            .join("\n"),
+    );
+}
+
 /// [`check`], as an assertion, for tests that render a report.
 ///
 /// **Named `assert_corresponds` until 2026-09-13, and the name outlived what it

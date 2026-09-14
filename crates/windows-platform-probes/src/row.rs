@@ -34,6 +34,43 @@ use std::fmt::Write as _;
 #[cfg(test)]
 mod tests;
 
+/// The shape a row's value must have, as a schema states it.
+///
+/// **The type-level counterpart of [`Value`], and the half the key list was
+/// missing.** A schema of names alone pins WHICH fields a row carries and says
+/// nothing about what they hold, so a renderer could publish `"processors"` as
+/// a string and satisfy every check the crate had. Measured, before this
+/// existed: `.with("processors", observation.online_processors.to_string())`
+/// left all 230 library tests and all 10 real-host integration tests green.
+/// Reported by a review.
+///
+/// **Stated independently rather than derived from the renderer**, which is the
+/// same reasoning as the diagnostic goldens: a shape read back out of the
+/// `Value` the renderer produced would move whenever the renderer moved, and so
+/// could never disagree with it. A schema is not derivable from the thing it
+/// constrains -- writing it down twice is what makes it a schema rather than a
+/// restatement.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Shape {
+    /// A JSON string.
+    Text,
+    /// A JSON number.
+    Number,
+    /// A number, or `null` where the answer is genuinely "there is none".
+    NumberOrNull,
+    /// A list whose every element is a number.
+    ListOfNumbers,
+    /// A list whose every element is an object.
+    ListOfObjects,
+    /// A list whose every element is an object carrying a string `code`.
+    ///
+    /// The diagnostic lists. `code` is the stable discriminant a survey groups
+    /// by, so an entry without one is unmineable even though it is valid JSON.
+    ListOfCoded,
+    /// An object whose every member is a number.
+    ObjectOfNumbers,
+}
+
 /// A value the row can carry.
 ///
 /// Deliberately not every JSON shape: there is no floating point, because every

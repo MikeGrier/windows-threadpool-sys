@@ -4855,6 +4855,76 @@ fn the_unmeasured_row_carries_exactly_its_own_contracts_keys() {
 }
 
 #[test]
+fn every_row_value_has_the_shape_its_schema_declares() {
+    // **The half the key contract could not state.** `MEASURED_ROW_KEYS` pins
+    // which names appear and in what order and says nothing about what they
+    // hold, so a renderer could publish `"processors":"16"` and satisfy the key
+    // test, the well-formedness check and every renderer assertion at once.
+    // Measured: rendering that one field through `.to_string()` left all 230
+    // library tests and all 10 real-host integration tests green. Found by a
+    // review.
+    //
+    // Both shapes, because the unmeasured row is its own schema rather than a
+    // subset, and a check that only ever saw the measured one would leave the
+    // failed-discovery artifact -- the one a fleet survey sees most on a broken
+    // host -- unconstrained.
+    crate::report_oracle::assert_row_has_the_schemas_shapes(
+        &crate::topology_report::report(BANNER, &clean_observation()),
+        crate::topology_report::MEASURED_ROW_SHAPES,
+    );
+
+    crate::report_oracle::assert_row_has_the_schemas_shapes(
+        &crate::topology_report::report_unmeasured(
+            BANNER,
+            &std::io::Error::other("the device is not ready"),
+        ),
+        crate::topology_report::UNMEASURED_ROW_SHAPES,
+    );
+}
+
+#[test]
+fn a_diagnostic_entry_without_a_code_is_a_shape_violation() {
+    // The control for `ListOfCoded`, and the reason it is not merely
+    // `ListOfObjects`: `code` is the stable discriminant a survey groups by, so
+    // an entry lacking one is unmineable while still being valid JSON.
+    let row = crate::row::Row::new("x-probe-topology")
+        .with(
+            "parse_incomplete",
+            crate::row::Value::List(vec![crate::row::Value::Object(vec![(
+                "level",
+                crate::row::Value::Number(9),
+            )])]),
+        )
+        .render();
+
+    let violations = crate::report_oracle::shape_violations(
+        &row,
+        &[("parse_incomplete", crate::row::Shape::ListOfCoded)],
+    );
+    assert_eq!(violations.len(), 1, "{violations:?}");
+    assert!(violations[0].contains("parse_incomplete"), "{violations:?}");
+
+    // And the same list WITH a code is accepted, so the rule is not simply
+    // rejecting every list of objects.
+    let coded = crate::row::Row::new("x-probe-topology")
+        .with(
+            "parse_incomplete",
+            crate::row::Value::List(vec![crate::row::Value::Object(vec![(
+                "code",
+                crate::row::Value::Text("not_measured".to_owned()),
+            )])]),
+        )
+        .render();
+    assert_eq!(
+        crate::report_oracle::shape_violations(
+            &coded,
+            &[("parse_incomplete", crate::row::Shape::ListOfCoded)]
+        ),
+        Vec::<String>::new()
+    );
+}
+
+#[test]
 fn the_two_row_shapes_are_distinguishable_by_their_keys() {
     // The guard that keeps the two schemas from drifting into each other. If
     // the unmeasured shape ever became a prefix of the measured one, a survey

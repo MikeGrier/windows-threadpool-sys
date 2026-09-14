@@ -19,54 +19,96 @@ use std::io;
 
 use windows_placement_probe::fingerprint::{Fingerprint, banner_line_for};
 
-use crate::row::{Row, Value};
+use crate::row::{Row, Shape, Value};
 
-/// Every key a MEASURED topology row carries, in order.
+/// Declares a row schema once, as names WITH shapes, and derives the key list.
 ///
-/// **This is the contract, not a census of the code.** The anti-census rule this
-/// crate keeps relearning is about restating facts that can be DERIVED -- a
-/// count of placeholders, a tally of variants. A schema is not derivable from
-/// anything: it IS the agreement with the survey that reads these rows, so
-/// writing it down is what makes it checkable at all.
-///
-/// It was missing, and the gap was measured: with `packages` deleted from the
-/// builder entirely, the whole suite stayed green. `Row::keys` reports what the
-/// builder happened to supply, so a test comparing the two only ever showed the
-/// reader and the writer agreeing with each other -- never that a field the
-/// survey depends on is still there. Found by a review.
-///
-/// Changing this list is a breaking change to the row, and
-/// `the_measured_row_carries_exactly_the_contracts_keys` is what makes that
-/// visible in a diff rather than in a mining pass six months later.
-pub const MEASURED_ROW_KEYS: &[&str] = &[
-    "reason",
-    "arch",
-    "processors",
-    "groups",
-    "packages",
-    "numa_domains",
-    "numa_domains_without_processors",
-    "cores",
-    "efficiency_classes",
-    "caches",
-    "outermost_partitioning_cache_level",
-    "outermost_partitioning_cache",
-    "policies",
-    "cross_check",
-    "disagreements",
-    "not_compared",
-    "parse_incomplete",
-    "enumeration_anomalies",
-    "numa_domains_only_in_cpu_sets",
-];
+/// One list, so a key cannot gain a shape without gaining a name or the reverse.
+/// The alternative -- a `_KEYS` const beside a `_SHAPES` const -- is two
+/// statements of one schema, which is the restatement this crate keeps paying
+/// for.
+macro_rules! row_schema {
+    (
+        $(#[$keys_doc:meta])* $keys:ident,
+        $(#[$shapes_doc:meta])* $shapes:ident { $($name:literal => $shape:expr,)+ }
+    ) => {
+        $(#[$keys_doc])*
+        pub const $keys: &[&str] = &[$($name,)+];
 
-/// Every key an UNMEASURED topology row carries, in order.
-///
-/// Deliberately short, and deliberately its own schema rather than a subset of
-/// the one above: a row from a host whose discovery FAILED is a different shape,
-/// and a survey must be able to tell it from a measured row that happens to be
-/// missing fields.
-pub const UNMEASURED_ROW_KEYS: &[&str] = &["reason", "arch", "cross_check", "discovery_error"];
+        $(#[$shapes_doc])*
+        pub const $shapes: &[(&str, Shape)] = &[$(($name, $shape),)+];
+    };
+}
+
+row_schema!(
+    /// Every key a MEASURED topology row carries, in order.
+    ///
+    /// **This is the contract, not a census of the code.** The anti-census rule
+    /// this crate keeps relearning is about restating facts that can be DERIVED
+    /// -- a count of placeholders, a tally of variants. A schema is not
+    /// derivable from anything: it IS the agreement with the survey that reads
+    /// these rows, so writing it down is what makes it checkable at all.
+    ///
+    /// It was missing, and the gap was measured: with `packages` deleted from
+    /// the builder entirely, the whole suite stayed green. `Row::keys` reports
+    /// what the builder happened to supply, so a test comparing the two only
+    /// ever showed the reader and the writer agreeing with each other -- never
+    /// that a field the survey depends on is still there. Found by a review.
+    ///
+    /// Changing this list is a breaking change to the row, and
+    /// `the_measured_row_carries_exactly_the_contracts_keys` is what makes that
+    /// visible in a diff rather than in a mining pass six months later.
+    MEASURED_ROW_KEYS,
+    /// The same schema with each key's value SHAPE, which is the half the key
+    /// list alone could not state.
+    ///
+    /// Names and order say WHICH fields a row carries; they say nothing about
+    /// what those fields hold. Measured before this existed: publishing
+    /// `processors` through `.to_string()` -- a number becoming a string in the
+    /// mined artifact -- left all 230 library tests and all 10 real-host
+    /// integration tests green. Found by a review.
+    ///
+    /// Changing a shape here is a breaking change to the row exactly as
+    /// changing a name is.
+    MEASURED_ROW_SHAPES
+{
+    "reason" => Shape::Text,
+    "arch" => Shape::Text,
+    "processors" => Shape::Number,
+    "groups" => Shape::Number,
+    "packages" => Shape::Number,
+    "numa_domains" => Shape::Number,
+    "numa_domains_without_processors" => Shape::Number,
+    "cores" => Shape::Number,
+    "efficiency_classes" => Shape::ListOfNumbers,
+    "caches" => Shape::ListOfObjects,
+    "outermost_partitioning_cache_level" => Shape::NumberOrNull,
+    "outermost_partitioning_cache" => Shape::Text,
+    "policies" => Shape::ObjectOfNumbers,
+    "cross_check" => Shape::Text,
+    "disagreements" => Shape::ListOfCoded,
+    "not_compared" => Shape::ListOfCoded,
+    "parse_incomplete" => Shape::ListOfCoded,
+    "enumeration_anomalies" => Shape::ListOfCoded,
+    "numa_domains_only_in_cpu_sets" => Shape::Number,
+});
+
+row_schema!(
+    /// Every key an UNMEASURED topology row carries, in order.
+    ///
+    /// Deliberately short, and deliberately its own schema rather than a subset
+    /// of the one above: a row from a host whose discovery FAILED is a
+    /// different shape, and a survey must be able to tell it from a measured
+    /// row that happens to be missing fields.
+    UNMEASURED_ROW_KEYS,
+    /// The same schema with each key's value shape.
+    UNMEASURED_ROW_SHAPES
+{
+    "reason" => Shape::Text,
+    "arch" => Shape::Text,
+    "cross_check" => Shape::Text,
+    "discovery_error" => Shape::Text,
+});
 use crate::topology::diagnostic::{described, published_anomaly};
 use crate::topology::{
     Disagreement, NotCompared, Observation, ParseIncomplete, PartitioningCache, Verdict,
@@ -331,6 +373,9 @@ pub fn report_unmeasured(banner: &str, error: &io::Error) -> String {
     // well formed, which is not a thing a renderer can make less of.
     #[cfg(any(test, feature = "oracle-in-renderer"))]
     crate::report_oracle::assert_row_is_well_formed(&out);
+    // The SHAPES too, for the reason on eport below: names alone leave a
+    // consumer's field types unconstrained.
+    crate::report_oracle::assert_row_has_the_schemas_shapes(&out, UNMEASURED_ROW_SHAPES);
     out
 }
 
@@ -933,5 +978,10 @@ pub fn report(banner: &str, observation: &Observation) -> String {
     // build is the one that matters and is the one pinned above.
     #[cfg(any(test, feature = "oracle-in-renderer"))]
     crate::report_oracle::assert_row_is_well_formed(&out);
+    // **And the schema's SHAPES, bound here for the same reason.** Well-formed
+    // says the row parses; the schema says processors is a number and each
+    // diagnostic entry carries a code. Measured: publishing processors`n    // through .to_string() left all 230 library tests and all 10 real-host
+    // integration tests green before this line existed. Found by a review.
+    crate::report_oracle::assert_row_has_the_schemas_shapes(&out, MEASURED_ROW_SHAPES);
     out
 }
