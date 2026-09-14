@@ -538,6 +538,30 @@ fn attaching_while_unbuffered_reads_are_still_in_flight_strands_nothing() {
                 // that never contained it.
                 attached.elapsed(),
             ));
+            // **Why this proves the precondition, stated because a review read
+            // it the other way round.** The concern was that a read finishing
+            // between the attach and this poll makes the test pass while only
+            // exercising the already-completed case. It cannot, and the
+            // direction is what settles it.
+            //
+            // `drain_to_empty` loops until `try_pop` reports the queue EMPTY --
+            // no cap, no early exit -- so `already_queued` is the total observed
+            // at a moment strictly AFTER the attach. A read that finishes in
+            // that window is therefore COUNTED, which pushes `already_queued`
+            // toward `width` and makes this branch LESS likely to be taken. The
+            // already-completed case it warns about is exactly the case where
+            // all `width` are drained and the flag is never set.
+            //
+            // So the error this can make is a false NEGATIVE, never a false
+            // positive -- and completion is monotonic, so a read outstanding at
+            // the (later) poll was outstanding at the (earlier) attach. The
+            // escalation over widths and attempts exists for the false
+            // negatives.
+            //
+            // The one assumption is that `try_pop` reports emptiness truthfully.
+            // A ring that claimed empty while holding completions would forge
+            // this precondition -- but that is a defect in the crate under test,
+            // and `contract.assert_quiescent()` below is what would catch it.
             if already_queued < width {
                 caught_in_flight = true;
             }
