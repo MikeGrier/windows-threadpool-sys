@@ -231,8 +231,24 @@ pub fn keys(row: &str) -> Vec<String> {
         }
     }
 
+    // **`end` matters, and its absence made two public functions disagree.**
+    // `serde_json` stops at the end of the first value and does not care what
+    // follows, so `{"reason":"x"}garbage` yielded `["reason"]` here while
+    // `check` reported `Malformed { what: "trailing characters ..." }` for the
+    // same row. A caller reading keys directly was told a malformed artifact
+    // was readable. Measured, then fixed; reported by a review.
+    //
+    // The block below is one sabotage anchor and is deliberately free of
+    // comments, so replacing the visitor with a parsed map stays a single
+    // contiguous substitution that still compiles.
     let mut reader = serde_json::Deserializer::from_str(row);
-    serde::Deserializer::deserialize_map(&mut reader, TopLevelNames).unwrap_or_default()
+    let Ok(names) = serde::Deserializer::deserialize_map(&mut reader, TopLevelNames) else {
+        return Vec::new();
+    };
+    if reader.end().is_err() {
+        return Vec::new();
+    }
+    names
 }
 /// The `code` of every entry in `row`'s list-valued `key`.
 ///

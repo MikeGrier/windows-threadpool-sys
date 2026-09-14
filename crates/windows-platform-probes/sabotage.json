@@ -51,7 +51,13 @@
       "why": "The obvious simplification, and it is wrong twice over: a serde_json::Map SORTS its names and silently keeps the LAST of a repeated key -- so this loses the row's key ORDER, which is part of the contract MEASURED_ROW_KEYS states, and it deletes the evidence for RowDefect::RepeatedKey, the one malformation that survives a consumer's parse. This entry exists so that the reason the visitor is not a map cannot be forgotten.",
       "find": [
         "    let mut reader = serde_json::Deserializer::from_str(row);",
-        "    serde::Deserializer::deserialize_map(&mut reader, TopLevelNames).unwrap_or_default()"
+        "    let Ok(names) = serde::Deserializer::deserialize_map(&mut reader, TopLevelNames) else {",
+        "        return Vec::new();",
+        "    };",
+        "    if reader.end().is_err() {",
+        "        return Vec::new();",
+        "    }",
+        "    names"
       ],
       "replace": [
         "    serde_json::from_str::<serde_json::Map<String, serde_json::Value>>(row)",

@@ -597,10 +597,18 @@ impl Observation {
 
         // A running machine has processors and groups whatever the enumeration
         // said, so a MEASURED topology reporting none of either did not describe
-        // its host. Nothing below reaches this: both raw counters report failure
-        // as zero, so a zero parse beside a failed read is filed as
-        // `not_compared` -- leaving `parse_in_doubt` false, and the report free
-        // to state an impossible machine without a caveat.
+        // its host.
+        //
+        // **The gap this closes, in the past tense it belongs in.** Nothing else
+        // reaches the case: both raw counters report failure as zero, so a zero
+        // parse beside a failed read WAS filed as `not_compared` alone -- which
+        // left `parse_in_doubt` false and the report free to state an impossible
+        // machine without a caveat. The push below is what changed that, and it
+        // makes `parse_in_doubt` true for exactly this case.
+        //
+        // The paragraph above described the old behaviour in the present tense,
+        // so it read as though this rule did not exist while sitting directly
+        // over it. Found by a review.
         //
         // Stated over the LIST rather than once per count, so a third such count
         // joins the array instead of needing its own rule to be remembered.

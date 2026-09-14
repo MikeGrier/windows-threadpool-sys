@@ -97,6 +97,31 @@ fn a_trailing_separator_is_a_defect() {
 }
 
 #[test]
+fn the_key_reader_and_the_oracle_agree_about_trailing_garbage() {
+    // **Two public readers disagreed about the same row.** `serde_json` stops
+    // at the end of the first value and does not care what follows, so without
+    // `Deserializer::end()` this row gave `keys` a clean `["reason"]` while
+    // `check` reported `Malformed { what: "trailing characters ..." }`.
+    // Measured before the fix, exactly that pair. A caller reading keys
+    // directly was told a malformed artifact was readable. Found by a review.
+    let row = r#"{"reason":"x-probe-topology"}garbage"#;
+
+    assert!(malformation(row).is_some(), "the oracle rejects it");
+    assert_eq!(
+        keys(row),
+        Vec::<String>::new(),
+        "and the key reader must not read it as though it were whole"
+    );
+
+    // The control: the same row WITHOUT the garbage is read normally, so the
+    // rule is not simply refusing everything.
+    assert_eq!(
+        keys(r#"{"reason":"x-probe-topology"}"#),
+        vec!["reason".to_owned()]
+    );
+}
+
+#[test]
 fn valid_json_that_is_not_an_object_is_a_malformation() {
     // **Pins the `Map` in `malformation`, which the corpus cannot reach.** The
     // generated corruptions are one-character mutations of a row, and none can

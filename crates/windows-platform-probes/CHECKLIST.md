@@ -28,7 +28,7 @@ correctness in the archive.
   set from M3.2.
 
   Re-scoped by M3.2; the note at the top of this milestone gives the reasoning. **The item text
-  above was rewritten on 2026-09-13 to match**: it still asked for "the same correspondence
+  above was rewritten when M3 was archived, to match**: it still asked for "the same correspondence
   failures" and for promotion "into the oracle from M2.1", both retired by M3, so a reader working
   the list linearly would have been sent after the half that no longer exists. Found by a review --
   and the lesson generalises, since a re-scoping note 25 lines above an item does not reach someone
@@ -52,7 +52,8 @@ correctness in the archive.
   in plain sight. Deleting one of those push sites lets `verdict()` reach `agree` with
   `blocking_states` silent. Reported across three review rounds against two wordings of the claim;
   the claims in [src/topology/invariant.rs](src/topology/invariant.rs) and in
-  `every_numa_counter_branch_...` were narrowed on 2026-09-13 to stop overstating the coverage,
+  `every_numa_counter_branch_...` were narrowed in the same review round that reported this,
+  to stop overstating the coverage,
   which is why this item is the fix rather than the discovery.
 
   **Target:** each gains a `BlockingState` variant, a `blocking_states` branch, a `codes_for` arm,
@@ -95,14 +96,18 @@ correctness in the archive.
   comparison that is itself new prose able to drift. The endpoint reads still earn their place: they
   catch structural change across the wider window that the counter bracket cannot see.
 
-  **This belongs to M2 rather than beside it:** "the banner describes the measured read" is a
-  correspondence invariant, so it should be expressed in the M2.1 oracle and checked on every rendered
-  report, not asserted once in a single test.
+  **Express it where M3 put the invariants, not in the M2.1 oracle.** "The banner describes the
+  measured read" is an invariant over the OBSERVATION, so it belongs in the invariant set from M3.2
+  and, if the fact reaches the artifact, in the row schema -- checked on every rendered report through
+  the renderer binding rather than asserted once in a single test. **These two paragraphs were
+  rewritten when M3 landed**: they asked for the relation to be expressed in the M2.1 prose oracle,
+  which M3.4 deleted, so an executor would have gone looking for machinery that no longer exists.
+  Found by a review, and the same defect M2.4 carried.
 
   Reviewer disagreement is recorded deliberately, because it is evidence about the instrument rather
   than noise: across two rounds one reader raised this twice while two others cleared it, one of them
   explicitly after being pointed at the question. Nothing in the suite decides it either way, which is
-  itself the argument for the oracle.
+  itself the argument for making it an invariant rather than a test.
 
 - [ ] **M2.15** -- Run the probe suite on a second architecture in CI.
 
