@@ -19,6 +19,56 @@ concentrated form: a hand-written second copy of a platform check is not a check
 of the platform, it is a check of the copy. When the two disagree, nothing
 detects it.
 
+## A probe reports observations parameterized by their capture; it does not draw the client's conclusion
+
+<a id="d-observations-not-verdicts"></a>
+
+Every figure this crate publishes is **what one machine did on one day**, and it
+is recorded together with the parameters of its capture -- at minimum the probe's
+host banner (architecture, logical and core counts, SMT, cache groupings,
+efficiency classes, NUMA nodes), the build profile, and the number of runs with
+their dispersion. A ratio quoted without those is an anecdote, not data a reader
+can compare against their own hardware.
+
+**Some capture parameters are approximated, and some are simply absent; the
+difference is stated rather than elided.** Windows exposes no NUMA *distance*
+table -- there is no Win32 equivalent of reading ACPI SLIT, as recorded at the
+`proximity` site in
+[core_affinity.rs](../windows-placement-probe/src/core_affinity.rs). What it does
+expose, and what this crate uses as the best available analog, is the
+**assignment of processors to NUMA nodes** -- which is what the banner's
+`numa[...]` field carries, as processors-per-node. Device-to-node mapping is
+obtainable on the same footing. That analog answers "are these two things in the
+same domain", which is the question most placement decisions actually turn on; it
+does not answer "how much further is node 2 than node 1", and no amount of
+probing on Windows will. Memory configuration and BIOS state are not captured at
+all.
+
+**Reading the analog is part of reading the figure.** A banner of `numa[16]` is
+a *single-domain* machine, so measurements taken on it say nothing whatever about
+cross-domain behaviour -- not "a little", nothing. A figure is only evidence
+about the domain structure its banner records.
+
+**The conclusions this crate is willing to draw are coarse, mechanically
+reasoned, and observation-backed** -- "the buffers should be in the same memory
+domain as the executor" is the shape of a claim that earns its place, because it
+follows from how the hardware works *and* the measurements agree. **Fine-grained
+topological and layout choices are handed to the client, not made for them.**
+Which position/reservation apportionment a queue should use is exactly such a
+choice: the layout is a type parameter of the shipping queue, the probe measures
+every candidate, and the note reports what it saw. It does not name a winner.
+
+This is why the apportionment claim in the queue-contention section was
+*withdrawn in both directions* rather than reversed. The measurement stopped
+supporting "re-apportioning is free", but it equally did not support "it costs
+30%" -- one host, seven runs, against a control that wanders. The correct output
+of a probe that cannot call something is a flag saying *measure this on your own
+hardware*, never a verdict chosen because a verdict reads better.
+
+The failure this prevents is a reader inheriting a number as though it were a
+property of the code. It is a property of the code **on that machine**, and the
+distinction is the whole value of shipping the probe rather than only its output.
+
 ## Three tiers, because "run all the probes" is not a safe instruction
 
 <a id="d-three-tiers"></a>
@@ -508,11 +558,17 @@ exactly the kind this crate's `doorbell_cost` notes warn about.
 **Those four figures predate a correction to the timing window and have not been retaken.** The
 qualitative finding is unaffected -- a debug build still swamps the effect -- but the numbers themselves
 were measured while the probe timed from this thread's clock rather than from the producers' own, which
-overstated throughput at high producer counts. Measured on `x86_64 16p/8c` after the correction, with a
-second run of the same build as the noise control: `reserving_mpsc` at sixteen producers moved from
-35.0 to 49.8-52.8 ns/push, against a run-to-run spread of 2-6%. So the correction is worth roughly 45%
-at the producer counts where the curve is the finding, and any figure in this note taken before it
-should be read as optimistic until retaken on a known host.
+overstated throughput at high producer counts. Measured on `x86_64 16p/8c` after the correction:
+`reserving_mpsc` at sixteen producers moved from 35.0 to a median of 52.3 ns/push across seven runs
+(46.3-55.6). The move is larger than that shape's own run-to-run spread on this host, so the direction
+is not in doubt; the magnitude is a single host's observation. Any figure in this note taken before the
+correction should be read as optimistic until retaken.
+
+**An earlier version of this paragraph put that run-to-run spread at "2-6%", which seven runs do not
+support** -- the same shape and configuration ranges 18% at sixteen producers, and the layout rows below
+range considerably wider. The 2-6% figure came from comparing two runs, which cannot measure a spread; it
+is corrected here rather than quietly dropped because several conclusions in this note were written
+against it, and one of them did not survive the correction (see the layout section below).
 
 **That is a constraint on HOW it runs, not an argument for keeping it out**, and an earlier draft of this
 paragraph confused the two -- it said the CI job "runs `cargo run` without `--release`", which is not true
@@ -571,18 +627,24 @@ branch was measured as though it were the algorithm.
 | 16 | 0.88x | 2.37x | 1.00x |
 | 32 | 0.98x | 2.99x | 1.11x |
 
-**Re-apportioning the bits is free.** 16/48 tracks 32/32 within noise in both
-regimes, which is the expected result and worth stating as a confirmed
-prediction rather than a discovery: both issue the same `lock cmpxchg` on the
-same `u64`, so only the shift and mask constants differ. The 48-bit position
-does force `head` and the per-slot `sequence` to 64 bits, and that cost does not
-show up either. What this buys is the recurrence moving from 2^32 to 2^48 --
-from about 37 seconds of sustained maximum-rate pushing to about 28 days.
+**Re-apportioning the bits looked free here, and that reading was withdrawn.**
+The reasoning was that both layouts issue the same `lock cmpxchg` on the same
+`u64`, so only the shift and mask constants differ, and the table above was read
+as confirming it. The table cannot carry that weight: these are single-run
+figures, and the same-code control measured later ranges 0.69-1.27x, which is
+wider than most of the differences being called "noise" -- note that this very
+table has 16/48 at 1.14x and 1.21x while the prose beneath it says "within
+noise". See
+[Re-measured on the shipping type](#d-queue-layout-observations)
+below for the seven-run figures and the withdrawal. What the re-apportionment
+buys is not in dispute: the recurrence moves from 2^32 to 2^48, from about 37
+seconds of sustained maximum-rate pushing to about 28 days.
 
 **Widening the word is not free, and how much it costs depends entirely on the
 regime.** Isolated, where the claim is the only thing happening, `cmpxchg16b`
 costs 2-3x and the penalty *grows* with contention. Drained, with a consumer
-running, it is 5-12%.
+running, it is 5-12%. This is the one conclusion in this section that the
+seven-run re-measurement strengthened rather than withdrew.
 
 ### The drained regime flatters the slower layout, and the refusal counts say so
 
@@ -646,52 +708,117 @@ worth least.** Outstanding reservations are bounded by how many producers are
 mid-flight -- hundreds, perhaps thousands -- and the field currently holds four
 billion. Giving up reservations nobody will allocate is what buys the position
 bits: 2^21 reservations leaves about a day, 2^12 leaves over a year, and 2^8
-leaves twenty years. The last is the same practical answer a 128-bit word gives,
-on a plain `AtomicU64`, at no measured cost, without a third-party dependency and
-without reopening `D-18`'s i686 question.
+leaves twenty years. The last reaches the same practical headroom a 128-bit word
+gives, on a plain `AtomicU64`, without a third-party dependency and without
+reopening `D-18`'s i686 question.
+
+**This paragraph previously added "at no measured cost", and that clause is
+withdrawn** -- it was the same claim the layout section below withdrew, restated
+a third time in a section about counter arithmetic rather than about speed. The
+arithmetic above is unaffected, because time-to-wrap follows from the field width
+and a rate, not from a measurement of either layout; what does not follow is any
+statement about what the re-apportionment costs to run. See
+[Re-measured on the shipping type](#d-queue-layout-observations).
 
 So the candidates worth considering are **12/52 and 8/56**, not the 16/48 first
 sketched here: 16/48's 12.7 days at the conservative floor is still reachable by
 a busy long-lived process, and 12/52 is the first row that is not.
 
-### Re-measured on the shipping type, and the duplicate had understated the wide word
+### Re-measured on the shipping type, with the probe's own control to read it against
+
+<a id="d-queue-layout-observations"></a>
 
 `CW-1.6` deleted the duplicated protocol in this crate once
 `windows-waitable-queues` took the layout as a parameter, so the probe now
 instantiates the real type at each layout. The numbers below supersede the ones
 above, which were taken from the stand-in.
 
+**Read every figure here as one host's observation, not as a portable result.**
+The capture parameters are the probe's own banner, reproduced in full because a
+ratio without them is an anecdote rather than data someone else can use:
+
+```
+host:  x86_64 16p/8c smt+ L2[2,2,2,2,2,2,2,2] ec[0:16] numa[16]
+```
+
+Seven runs, median of the per-run ratios with the observed range beside it,
+release build. **The banner's `numa[16]` is load-bearing here: it means a single
+NUMA node holding all sixteen processors**, so every figure below was taken
+inside one memory domain and says nothing about cross-domain behaviour. What is
+not pinned down at all is memory configuration and BIOS state; NUMA *distances*
+are unavailable on Windows by platform limit rather than by omission, and the
+processor-to-node assignment in the banner is the analog this crate uses in their
+place (see [A probe reports observations parameterized by their
+capture](#d-observations-not-verdicts)).
+
+The layout is a *parameter* of the shipping type, so this note's job is to report
+what this machine did and hand the reader the tooling -- the probe -- to measure
+the machine they actually care about. It is not to pick a winner on their behalf.
+
+**The probe emits its own noise control, and it is the only honest yardstick for
+these ratios.** The `reserving_mpsc` row and the `reserving(32/32)` row are the
+same code at the same layout, measured twice in the same run, so their ratio is
+what "no difference" looks like on this host:
+
+| regime | same-code control (`reserving_mpsc` vs `32/32`) |
+|---|---|
+| isolated | median 0.94-1.05x, observed 0.69-1.12x |
+| drained | median 0.98-1.07x, observed 0.68-1.27x |
+
+So a ratio inside roughly 0.9-1.1x is indistinguishable from zero effect here,
+and at sixteen and thirty-two producers the control alone wanders past 1.12x.
+
 | producers | 16/48 vs 32/32 | 8/56 vs 32/32 | 64/64 vs 32/32 |
 |---|---|---|---|
-| 1 | 1.02x | 0.98x | 1.45x |
-| 4 | 1.04x | 1.01x | 1.33x |
-| 8 | 1.05x | 1.05x | 1.59x |
-| 16 | 1.21x | 1.21x | **3.83x** |
-| 32 | 1.05x | 1.13x | **3.99x** |
+| 1 | 1.00x [0.74-1.00] | 1.00x [0.67-1.04] | 1.37x [1.16-1.57] |
+| 2 | 0.94x [0.89-1.05] | 0.96x [0.80-0.98] | 1.13x [1.02-1.15] |
+| 4 | 0.96x [0.83-1.03] | 1.00x [0.90-1.10] | 1.29x [1.14-1.36] |
+| 8 | 1.01x [0.95-1.13] | 0.94x [0.92-1.08] | 1.82x [1.64-2.20] |
+| 16 | 1.23x [1.09-1.35] | 1.26x [1.16-1.33] | **3.45x [2.91-4.27]** |
+| 32 | 1.30x [1.15-1.41] | 1.28x [1.11-1.42] | **3.81x [2.70-4.31]** |
 
-**The finding about apportionment survives contact with the real type.** Both
-`u64` re-apportionments track the default within noise, including `Perpetual`'s
-8/56 -- so buying twenty years of headroom really is free, and it is now
-measured on the code that ships rather than on something resembling it.
+In the drained regime nothing separates at all -- every u64 layout *and* the
+128-bit word sit inside the control band at every producer count (the widest
+median is 1.13x at one producer, against a control that reaches 1.27x).
 
-**The finding about width did not survive unchanged.** The duplicate reported
-the 128-bit exchange at 2.37x and 2.99x at sixteen and thirty-two producers; the
-real type reports 3.83x and 3.99x. The stand-in was *understating* the cost of
-the layout it was built to evaluate, and by the widest margin exactly where the
-decision is most sensitive. The conclusion is unaltered in direction and firmer
-in degree.
+**Widening the word is the one effect this probe establishes.** At sixteen and
+thirty-two producers the isolated 128-bit rows sit three to four times the
+64-bit rows, an order of magnitude outside anything the same-code control does.
+That is a real effect on this machine, and its direction is mechanically
+unsurprising -- `cmpxchg16b` against `lock cmpxchg`. Whether it reproduces on
+another microarchitecture is a question for the probe, not for this note.
+
+**The apportionment claim is withdrawn, in both directions.** This section
+previously said the `u64` re-apportionments "track the default within noise" and
+that twenty years of headroom is therefore "free". That was asserted from a
+single run against a noise floor quoted as 2-6%, and neither half holds: the
+measured control is far wider than 2-6%, and the re-apportionments do not sit
+inside it at sixteen and thirty-two producers. But the replacement is *not* the
+opposite claim. 1.23-1.30x against a control that itself reaches 1.12x is a
+flag, not a finding -- it says this is the configuration worth measuring on your
+own hardware before choosing, and it says this probe, on this host, at seven
+runs, could not call it. A client who needs the headroom should measure the
+layouts on their target rather than inherit either verdict from here. This is
+[the rule for what this crate concludes](#d-observations-not-verdicts) applied to
+the case that earned it.
 
 **The residual offset is gone, which is the point of the deletion.** The
 duplicate ran about 1.26x slower than `reserving_mpsc` at high producer counts,
-an error that had to be carried as a caveat on every figure. Running the same
-configuration twice through the shipping type now agrees within noise -- 50.3 ns
-against 52.1 ns at thirty-two producers -- because both rows are the same code.
+an error that had to be carried as a caveat on every figure. That the same-code
+control now sits on 1.00x is what says the offset is gone -- and building that
+control into the probe's output, rather than asserting a noise floor in prose,
+is what let every ratio above be read honestly.
 
 The general lesson is worth keeping even though the duplicate is gone:
 **a stand-in is only evidence about the thing it stands in for while something
 checks that it still does.** This one was checked, which is how the missing
 cache padding was caught; but the checking only ever bounded the error, and the
 bound was loose enough to hide a third of the wide word's cost.
+
+A second lesson the correction above earned: **a ratio means nothing without the
+dispersion of the thing it is a ratio of.** Two runs cannot measure a spread, so
+quoting one to two decimal places invites exactly the over-reading that produced
+the withdrawn claim. Where this note gives a ratio it now gives the range too.
 
 ## The report is buffered, and what that costs
 

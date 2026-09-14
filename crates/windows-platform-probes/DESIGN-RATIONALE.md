@@ -528,3 +528,59 @@ about THEM. The instruments remain exactly as good as the hand-sabotage that
 built them -- which is where several of this branch's defects were found, and
 where the next one will be. A clean sweep is evidence about the oracle, not about
 the things measuring it.
+
+## Why the crate reports observations instead of verdicts
+
+Recorded for [D-observations-not-verdicts](DESIGN-NOTES.md#d-observations-not-verdicts).
+
+The rule was earned, not designed. The queue-contention note had carried the
+claim that re-apportioning a queue's position/reservation bits was **free** --
+that 16/48 and 8/56 "track the default within noise" -- and therefore that buying
+twenty years of counter headroom cost nothing. Two independent defects sat under
+that sentence.
+
+The first was arithmetic-shaped: the table directly beneath it showed 1.21x and
+1.13x, against a noise floor the same document put at 2-6%. The prose
+contradicted its own evidence, in adjacent lines, and survived several review
+passes anyway -- because "within noise" reads as a conclusion rather than as a
+claim about a measured quantity, so nobody checked it against the number.
+
+The second was deeper. The 2-6% floor had itself been obtained by comparing **two
+runs**, which cannot measure a spread at all. Re-running the probe seven times
+put the same-configuration spread at 7-61% depending on producer count. So the
+floor every "within noise" judgement in the section had been made against was off
+by roughly an order of magnitude, and the judgements were not recoverable by
+adjusting it.
+
+What made the repair possible was already in the probe's output. `reserving_mpsc`
+and `reserving(32/32)` are the same code at the same layout, measured twice per
+run, so their ratio is an *empirical* answer to "what does no difference look
+like here" -- 0.68-1.27x across seven runs. That is a control the instrument
+derives rather than a floor the prose asserts, which is
+[D-derived-not-restated](DESIGN-NOTES.md#d-derived-not-restated) applied to a
+measurement instead of to a fact.
+
+**The tempting repair was to invert the claim**, since the seven-run medians put
+the re-apportionments at 1.23-1.30x at high producer counts. That would have been
+the same error with the opposite sign: one host, one microarchitecture, a single
+NUMA domain, against a control whose own excursions reach 1.12x. The claim was
+withdrawn in both directions instead, and the section now says which
+configuration is worth measuring locally rather than what the answer is.
+
+This generalises to where the crate draws its line. Coarse claims that follow
+from how the hardware works *and* are backed by observation -- "the buffers
+should be in the same memory domain as the executor" -- are worth making, and
+portable enough to be useful. Fine-grained topological and layout choices are
+not: they depend on parameters the capture does not record and the reader's
+machine does not share. The shipping queue takes its layout as a type parameter
+precisely so that choice belongs to the client; a design note that quietly picks
+one on their behalf takes it back.
+
+**On the capture parameters themselves.** Windows exposes no NUMA distance table,
+so "how far apart are these nodes" is unanswerable on this platform. The analog
+the crate uses is the processor-to-node assignment carried in the banner's
+`numa[...]` field, with device-to-node mapping available on the same footing. It
+answers the same-domain question, which is what most placement decisions turn on,
+and it is why `numa[16]` on the measurement host is worth stating plainly: a
+single domain means the queue figures say nothing about cross-domain behaviour at
+all.
