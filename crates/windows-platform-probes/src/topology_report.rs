@@ -67,7 +67,7 @@ pub const MEASURED_ROW_KEYS: &[&str] = &[
 /// and a survey must be able to tell it from a measured row that happens to be
 /// missing fields.
 pub const UNMEASURED_ROW_KEYS: &[&str] = &["reason", "arch", "cross_check", "discovery_error"];
-use crate::topology::diagnostic::published_anomaly;
+use crate::topology::diagnostic::{described, published_anomaly};
 use crate::topology::{
     Disagreement, NotCompared, Observation, ParseIncomplete, PartitioningCache, Verdict,
 };
@@ -669,15 +669,15 @@ pub fn report(banner: &str, observation: &Observation) -> String {
         Verdict::Disagree => {
             let _ = writeln!(out, "  => DISAGREE. This is a finding, not a nuisance:");
             for complaint in &check.disagreements {
-                let _ = writeln!(out, "     - {complaint}");
+                let _ = writeln!(out, "     - {}", described(complaint));
             }
             // Listed even here, so a reader knows the disagreement above is not
             // the whole picture.
             for skipped in &check.not_compared {
-                let _ = writeln!(out, "     (not compared) {skipped}");
+                let _ = writeln!(out, "     (not compared) {}", described(skipped));
             }
             for caveat in &check.parse_incomplete {
-                let _ = writeln!(out, "     (parse incomplete) {caveat}");
+                let _ = writeln!(out, "     (parse incomplete) {}", described(caveat));
             }
         }
         Verdict::Incomplete => {
@@ -687,10 +687,10 @@ pub fn report(banner: &str, observation: &Observation) -> String {
             );
             let _ = writeln!(out, "     did not establish that the parse is consistent:");
             for skipped in &check.not_compared {
-                let _ = writeln!(out, "     - {skipped}");
+                let _ = writeln!(out, "     - {}", described(skipped));
             }
             for caveat in &check.parse_incomplete {
-                let _ = writeln!(out, "     - {caveat}");
+                let _ = writeln!(out, "     - {}", described(caveat));
             }
         }
     }

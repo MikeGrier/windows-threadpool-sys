@@ -177,6 +177,39 @@ pub enum NotCompared {
 #[cfg(test)]
 mod tests;
 
+/// What a report should print instead of an entry that describes itself as
+/// nothing.
+///
+/// **The wording of a diagnostic is a review obligation; its PRESENCE is not.**
+/// Under the decision that the row is the machine contract, no test pins the
+/// sentence a `Display` impl produces -- and a mutation sweep showed the cost of
+/// stopping there: blanking `Display for Disagreement` or `Display for
+/// NotCompared` left the suite green, and a reader would have got `     - ` with
+/// nothing after the dash.
+///
+/// A blank is the worst of the available answers. It is indistinguishable from a
+/// rendering bug, from a finding with genuinely nothing to say, and from a stray
+/// newline, so a reader cannot tell whether the probe found something it failed
+/// to describe. Saying so explicitly costs one branch and turns an invisible
+/// defect into a visible one.
+///
+/// This is the seam that lets presence be machine-checked without wording being
+/// checked: a test can assert that no diagnostic renders as this string, which
+/// pins THAT each entry describes itself without pinning WHAT it says.
+pub const UNDESCRIBED: &str =
+    "BUG IN THIS PROBE: a finding was recorded with nothing to say about it";
+
+/// `entry` as the report should print it, or [`UNDESCRIBED`] if it prints blank.
+#[must_use]
+pub fn described(entry: &impl fmt::Display) -> String {
+    let text = entry.to_string();
+    if text.trim().is_empty() {
+        UNDESCRIBED.to_owned()
+    } else {
+        text
+    }
+}
+
 impl NotCompared {
     /// The stable discriminant a survey groups by.
     ///

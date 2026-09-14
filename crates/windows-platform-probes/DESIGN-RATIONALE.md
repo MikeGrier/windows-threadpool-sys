@@ -443,7 +443,7 @@ reached:
 | `topology.rs` | 186 | 180 | 6 | none, first run |
 | `row.rs` | 25 | 19 | 6 | none, first run |
 | `topology/invariant.rs` | 26 | 21 | 2 | 3, then one equivalent |
-| `topology/diagnostic.rs` | 26 | 9 | 5 | **12**, then two prose |
+| `topology/diagnostic.rs` | 28 | 23 | 5 | **12**, then two prose, then none |
 
 **The three later sweeps are the argument for running them at all**, and each
 made a different case. `row.rs` -- the crate's only defence against caller text
@@ -475,12 +475,27 @@ written as literals on purpose: a code is a SCHEMA, not a predicate, and a schem
 is not derivable from the thing that emits it. Completeness is compiler-checked
 where the enum belongs to this crate, via an exhaustive `match` in the test.
 
-Two survivors remain and both are `Display` impls -- the PROSE rendering, which
-under [DESIGN-NOTES.md](DESIGN-NOTES.md) -> `d-encoded-row-is-the-contract` is a
-review obligation rather than a machine-checked one. They are left open
-deliberately rather than by oversight; whether the prose deserves machine
-coverage of its own is a decision about where that line sits, not a gap to close
-in passing.
+**The last two survivors were both `Display` impls, and how they were closed is
+the part worth keeping.** Blanking either left the suite green, and a reader
+would have got `     - ` with nothing after the dash. Both obvious fixes were
+wrong: pinning the sentences would make the prose machine-checked, which
+[DESIGN-NOTES.md](DESIGN-NOTES.md) -> `d-encoded-row-is-the-contract` deliberately
+does not do, and leaving them ships a blank line.
+
+The engineer's question -- "a blank line is perhaps wrong, perhaps it should be
+called out?" -- named a third answer better than either. **A diagnostic's WORDING
+is a review obligation; its PRESENCE is not.** The renderer now routes every
+entry through `described`, which substitutes an explicit `BUG IN THIS PROBE` line
+for a rendering that is empty or blank, and a test asserts that no diagnostic
+renders as that line. That pins THAT each entry describes itself without pinning
+WHAT it says.
+
+Both improvements fall out of the same branch. A reader gets a stated defect
+instead of a blank -- which is indistinguishable from a rendering bug, from a
+finding with genuinely nothing to say, and from a stray newline -- and the
+mutants become catchable, because blanking a `Display` now produces the callout
+the test forbids. The sweep went to **zero survivors**, including the two mutants
+`described` itself introduced.
 
 The `assert_holds` survivor is equivalent, for the same reason `assert_corresponds`
 survived below, and the argument is now recorded at the function rather than left

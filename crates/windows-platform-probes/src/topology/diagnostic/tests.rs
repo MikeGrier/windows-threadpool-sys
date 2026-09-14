@@ -44,7 +44,10 @@
 //! SUPPOSED to catch an unknown kind is distinguished from an arm that fell
 //! through by accident.
 
-use super::{Disagreement, NotCompared, ParseIncomplete, anomaly_code, published_anomaly};
+use super::{
+    Disagreement, NotCompared, ParseIncomplete, UNDESCRIBED, anomaly_code, described,
+    published_anomaly,
+};
 use crate::row::Row;
 use windows_topology_sys::{AnomalyKind, EnumerationAnomaly, Source};
 
@@ -327,4 +330,102 @@ fn every_anomaly_publishes_where_it_was_found_as_well_as_what() {
     for (found, golden) in cases {
         assert_eq!(rendered(published_anomaly(&found)), golden, "{found:?}");
     }
+}
+
+#[test]
+fn every_diagnostic_describes_itself() {
+    // **Presence is machine-checked here; WORDING is not, and that is the
+    // whole point of the seam.** This asserts only that each entry renders as
+    // something a reader can act on -- never what it says -- so the prose stays
+    // a review obligation while a blank stops being possible to ship.
+    //
+    // Two `Display` impls could be blanked with a green suite, and a reader
+    // would have got `     - ` with nothing after the dash: indistinguishable
+    // from a rendering bug, from a finding with nothing to say, and from a
+    // stray newline. This test names that case and nothing else.
+    let disagreements = [
+        Disagreement::OnlineProcessors {
+            parsed: 12,
+            counter: 16,
+        },
+        Disagreement::ProcessorGroups {
+            parsed: 1,
+            counter: 2,
+        },
+        Disagreement::HighestNumaNode {
+            parsed: Some(2),
+            counter: 3,
+        },
+        Disagreement::HighestNumaNode {
+            parsed: None,
+            counter: 3,
+        },
+    ];
+    for entry in &disagreements {
+        let text = described(entry);
+        assert_ne!(text, UNDESCRIBED, "{entry:?} renders blank");
+        assert!(!text.trim().is_empty(), "{entry:?} renders blank");
+    }
+
+    // Exhaustive, so a seventh `NotCompared` must describe itself to compile.
+    for entry in [
+        NotCompared::MachineChanged,
+        NotCompared::BracketNotEstablished,
+        NotCompared::CountsIncludeUnparsedRelations,
+        NotCompared::ActiveProcessorCountFailed,
+        NotCompared::ActiveProcessorGroupCountFailed,
+        NotCompared::HighestNumaNodeFailed,
+    ] {
+        let text = described(&entry);
+        assert_ne!(text, UNDESCRIBED, "{entry:?} renders blank");
+        assert!(!text.trim().is_empty(), "{entry:?} renders blank");
+    }
+
+    for entry in [
+        ParseIncomplete::ContradictoryCores { count: 3 },
+        ParseIncomplete::NoPackages,
+        ParseIncomplete::CacheLevelsWithoutPartitions { levels: vec![1, 2] },
+        ParseIncomplete::MeasuredButCountsAbsent {
+            absent: vec!["packages"],
+        },
+        ParseIncomplete::PartitioningSummaryMissing { level: 3 },
+        ParseIncomplete::RelationsWithoutProcessors {
+            cores: 4,
+            packages: 7,
+        },
+        ParseIncomplete::EnumerationsDisagreed {
+            attempts: 2,
+            walk_only: 5,
+            cpu_sets_only: 9,
+        },
+    ] {
+        let text = described(&entry);
+        assert_ne!(text, UNDESCRIBED, "{entry:?} renders blank");
+        assert!(!text.trim().is_empty(), "{entry:?} renders blank");
+    }
+}
+
+#[test]
+fn an_entry_that_says_nothing_is_called_out_rather_than_left_blank() {
+    // The other half, and without it the test above cannot distinguish a
+    // working `described` from one that returns its input unchanged.
+    struct Silent;
+    impl std::fmt::Display for Silent {
+        fn fmt(&self, _: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            Ok(())
+        }
+    }
+
+    struct Blank;
+    impl std::fmt::Display for Blank {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            // Whitespace, not emptiness: a reader cannot tell the two apart on
+            // the page, so neither may the check.
+            f.write_str("   ")
+        }
+    }
+
+    assert_eq!(described(&Silent), UNDESCRIBED);
+    assert_eq!(described(&Blank), UNDESCRIBED);
+    assert_eq!(described(&"a real description"), "a real description");
 }
