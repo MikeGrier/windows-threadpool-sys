@@ -238,6 +238,52 @@ fn the_rows_keys_are_read_at_the_top_level_only() {
 }
 
 #[test]
+fn the_row_accessor_declines_every_report_the_oracle_faults() {
+    // **The accessor and the oracle answer one question, so they may not
+    // disagree.** `row` ran its own subset -- one row, and `malformation` -- and
+    // `serde_json` accepts a duplicated key, so a report `check` faulted as
+    // `RepeatedKey` was handed back here as readable. A caller asking "may I
+    // read this row" got yes for a row already judged ambiguous.
+    //
+    // Stated as the correspondence rather than as the one case, because the
+    // gap was not in the case anyone wrote down: it was in the SECOND
+    // implementation existing at all. Any future defect `check` learns is
+    // covered here without a new test.
+    let faulted = [
+        report_with(r#"{"reason":"x","processors":4,"processors":8}"#),
+        report_with(r#"{"reason":"x","arch":"x86_64",}"#),
+        report_with(r#"{"reason":"x","arch":"x86_64"]"#),
+        report_with(r#"{"unclosed":["#),
+        "a report with no row at all".to_owned(),
+        format!(
+            "{}\n{}",
+            r#"{"reason":"x","arch":"x86_64"}"#, r#"{"reason":"y","arch":"x86"}"#
+        ),
+    ];
+
+    for report in &faulted {
+        let defects = check(report);
+        assert!(
+            !defects.is_empty(),
+            "the fixture must be faulted for this to mean anything: {report}"
+        );
+        assert_eq!(
+            row(report),
+            None,
+            "`check` reports {defects:?} and `row` handed the row back anyway"
+        );
+    }
+
+    // And the other direction, or the rule is satisfied by refusing everything.
+    let clean = report_with(&clean_row());
+    assert!(check(&clean).is_empty());
+    assert!(
+        row(&clean).is_some(),
+        "a clean report must still be readable"
+    );
+}
+
+#[test]
 fn the_row_accessor_declines_an_ambiguous_or_malformed_report() {
     let one = report_with(&clean_row());
     let two = format!("{}\n{}", report_with(&clean_row()), clean_row());

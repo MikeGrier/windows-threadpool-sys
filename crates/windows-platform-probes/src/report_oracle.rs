@@ -273,11 +273,24 @@ pub fn list_codes(row: &str, key: &str) -> Vec<String> {
 /// Public because the instruments in `tests/` read the row to ask what it
 /// publishes, and a second implementation of "which line is the row" is the kind
 /// of copy that agrees until it does not.
+///
+/// **Defined by [`check`], so the accessor and the oracle cannot disagree.** It
+/// ran its own subset -- one row, and `malformation` -- and `serde_json` accepts
+/// a duplicated key, so a row that `check` reported as
+/// [`RowDefect::RepeatedKey`] was handed back here as well-formed. A caller
+/// asking "may I read this row" got yes for a row the crate had already judged
+/// ambiguous, which is the one malformation that survives a consumer's parse and
+/// changes what it reads. Found by a review.
+///
+/// This is the same defect the module keeps warning about, in the function whose
+/// doc comment warns about it: two implementations of one question, agreeing
+/// until they did not.
 #[must_use]
 pub fn row(report: &str) -> Option<&str> {
-    let mut rows = report.lines().filter(|line| line.starts_with('{'));
-    let row = rows.next()?;
-    (rows.next().is_none() && malformation(row).is_none()).then_some(row)
+    if !check(report).is_empty() {
+        return None;
+    }
+    report.lines().find(|line| line.starts_with('{'))
 }
 
 /// [`check`], as an assertion, for tests that render a report.
