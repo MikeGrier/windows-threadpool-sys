@@ -8,32 +8,9 @@ for the crate belongs here instead.
 ## M4 -- Carried over from M2: the items M3 gated
 
 These were written under M2 and were blocked on M3, which is **now complete and archived** in
-[COMPLETED-CHECKLIST.md](COMPLETED-CHECKLIST.md). They are unblocked.
-
-Each targeted the prose-against-row machinery M3 retired or relocated, so none was merely delayed --
-each was RE-SCOPED, and the re-scoping is what makes them safe to pick up. Those notes are below.
-They were written in M3's preamble and moved here when M3 was archived, because they describe work
-that is still open: an instruction for a pending item is not history, and leaving it in the archive
-would have left this milestone pointing at a file it may not edit.
-
-- **M2.4** was re-scoped by M3.2. The exploration is still worth doing and its instrument is
-  unchanged, but what it hunts for changed: invariants over `Coherence`, `BracketOutcome` and
-  `Verdict` as VALUES, and facts the row fails to publish -- not correspondences between two
-  renderings. Its closing sentence, "promote only what proves meaningful into the oracle from M2.1",
-  now means the invariant set from M3.2. The open question attached to it -- whether this generalises
-  past this crate -- survives unchanged and is arguably sharpened, since a data-level invariant is
-  easier to share than a text reader.
-- **M2.5** was gated by M3.1 and M3.3, both landed. Establishing that the middle of three discoveries
-  agreed produces a new FACT, which M3.1 says must reach the row rather than only the banner; and
-  M3.3 changed how the banner is built. Written before those, it would have been written into
-  machinery about to move.
-- **M2.15** keeps its conclusion but loses its evidence. The five failures it cites were all
-  `prose: "x86_64"` against `ndjson: "x86"` -- instances of exactly the correspondence M3.4 retired,
-  so they can no longer occur and a re-run now looks clean. The underlying point stands without
-  them: CI builds `aarch64` and never tests it, and architecture is the one shape dimension a corpus
-  cannot vary because it is fixed at compile time. Restate it on that basis when picked up.
-- **M2.17** was re-scoped by M3.5: the dimensions worth crossing are the row's, and crossing prose
-  shapes that have since stopped being checked would have aimed at the retiring half.
+[COMPLETED-CHECKLIST.md](COMPLETED-CHECKLIST.md). They are unblocked, and each was RE-SCOPED rather
+than merely delayed -- so each item below carries its own re-scoping note, in the item, where
+somebody executing the list will actually meet it.
 
 **The IDs keep their M2 numbers deliberately.** [COMPLETED-CHECKLIST.md](COMPLETED-CHECKLIST.md) is
 append-only and its entries are immutable, and two archived entries already cite M2.4 and M2.14 --
@@ -89,7 +66,14 @@ correctness in the archive.
   own arithmetic does NOT belong, and the honest outcome for such a one is a line in the module
   header saying so by name rather than a silent absence.
 
-- [ ] **M2.5** -- Make the banner describe the read the body describes. A probe run performs
+- [ ] **M2.5** -- Make the banner describe the read the body describes.
+
+  Gated by M3.1 and M3.3, both landed: establishing that the middle of three discoveries agreed
+  produces a new FACT, which M3.1 says must reach the row rather than only the banner, and M3.3
+  changed how the banner is built. Written before those, it would have been written into machinery
+  about to move.
+
+  A probe run performs
   **three** independent `MachineMemoryTopology::discover()` calls: `Fingerprint::discover()` for the
   banner, `measure()`'s own discovery for the body, and `Fingerprint::discover()` again. `attribution`
   compares only the two endpoints, so equal endpoints print an unqualified banner without establishing
@@ -122,6 +106,12 @@ correctness in the archive.
 
 - [ ] **M2.15** -- Run the probe suite on a second architecture in CI.
 
+  **Keeps its conclusion but loses its evidence.** The five failures cited below were all
+  `prose: "x86_64"` against `ndjson: "x86"` -- instances of exactly the correspondence M3.4
+  retired, so they can no longer occur and a re-run now looks clean. The point stands without them:
+  CI builds `aarch64` and never tests it, and architecture is the one shape dimension a corpus
+  cannot vary because it is fixed at compile time. Restate it on that basis when picked up.
+
   A reviewer asked whether the suite was portable and it was not: three renderer fixtures and the
   shape corpus' banner builder each hard-coded `x86_64` while the row they are compared against
   publishes `std::env::consts::ARCH`. Measured on `i686-pc-windows-msvc`: five failures, every one
@@ -134,6 +124,9 @@ correctness in the archive.
   (`i686-pc-windows-msvc` runs natively on the existing runners; `aarch64` would need its own).
 
 - [ ] **M2.17** -- Cross the corpus dimensions instead of varying one at a time.
+
+  Re-scoped by M3.5: the dimensions worth crossing are the ROW's. Crossing prose shapes that have
+  since stopped being checked would have aimed at the retiring half.
 
   [tests/a_real_report_agrees_with_itself.rs](tests/a_real_report_agrees_with_itself.rs)'s `shapes()`
   builds each shape by taking `base()` and changing ONE thing. That makes every shape easy to read and

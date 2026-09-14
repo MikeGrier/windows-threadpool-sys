@@ -21,13 +21,25 @@
 //! yielded mislabelled data that still parses and that nothing downstream can
 //! detect. Here a name and its value are one pair, moved together or not at all.
 //!
-//! # The key set becomes derivable
+//! # What [`Row::keys`] derives, and what it cannot
 //!
-//! [`Row::keys`] reads the value, so the well-formedness check no longer needs a
-//! list of expected keys written beside it. That matters more than it sounds:
-//! this component re-corrected the same hand-written census three times in one
-//! day, and the last correction was falsified within the hour by a field being
-//! added. A derived set cannot rot.
+//! It reads back the names a caller actually supplied, which is what the
+//! writer's own tests need: a row renders the members it was given, in order,
+//! and that property is derivable rather than restated.
+//!
+//! **It is NOT the contract, and this section used to say it was.** The claim
+//! here was that the well-formedness check "no longer needs a list of expected
+//! keys written beside it". That is false, and falsifiably so: `keys` reports
+//! what the builder happened to supply, so a row missing a required field is
+//! still perfectly self-consistent. Measured -- with `.with("packages", ...)`
+//! deleted from the renderer, the whole suite stayed green.
+//!
+//! The contract is `topology_report::MEASURED_ROW_KEYS` and its `_SHAPES`
+//! sibling, owned by the renderer that owes those fields and stated
+//! independently of it. A schema is not derivable from the thing it constrains;
+//! the anti-census rule is about facts that CAN be derived, and this is not one.
+//! Reported by a review, which found this passage still steering a reader back
+//! toward the vacuous check.
 
 use std::fmt::Write as _;
 

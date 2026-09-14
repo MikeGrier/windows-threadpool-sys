@@ -31,7 +31,16 @@ fn a_row_renders_its_members_in_the_order_they_were_added() {
 
 #[test]
 fn the_key_set_is_derived_from_the_value() {
-    // The property that lets the well-formedness check stop carrying a census.
+    // **What `keys` is for, and what it is not.** It reports the names the
+    // builder was given, in order -- a property of the writer, worth pinning
+    // because the row's key ORDER is part of the contract.
+    //
+    // This said it was "the property that lets the well-formedness check stop
+    // carrying a census". It is not: a row missing a required field is still
+    // self-consistent, so a check reading `keys` back would only ever watch the
+    // writer agree with itself. The contract lives in
+    // `topology_report::MEASURED_ROW_KEYS` and its `_SHAPES` sibling, checked
+    // against the renderer that owes those fields. Found by a review.
     let row = Row::new("x-probe-topology")
         .with("arch", "x86_64")
         .with("cores", 8_usize);

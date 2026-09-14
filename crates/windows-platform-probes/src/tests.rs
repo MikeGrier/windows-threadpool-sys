@@ -4797,11 +4797,17 @@ fn a_discovery_error_reaches_the_row_as_a_field() {
 
 #[test]
 fn the_rendered_row_carries_exactly_the_keys_the_value_declares() {
-    // **What M3.4 deferred to here.** The well-formedness check could not assert
-    // a key set without a list written beside it, and a hand-written list is a
-    // census -- this component re-corrected the same one three times in a day,
-    // and the last correction was falsified within the hour by a field being
-    // added. `Row::keys` derives it, so the two cannot drift.
+    // **The READER against the WRITER, and nothing more than that.** What this
+    // pins is that `report_oracle::keys` reads back exactly the names the value
+    // declared, in order -- a round-trip through the renderer and the parser.
+    //
+    // It is deliberately NOT the contract check, and this comment used to claim
+    // it was: it said a hand-written key list was a census that `Row::keys`
+    // derives away. False, and the next test is the correction -- a row missing
+    // a required field is still self-consistent, so two sides agreeing says
+    // nothing about WHICH keys the survey is owed. That is
+    // `MEASURED_ROW_KEYS`, checked below. Found by a review, which read this
+    // paragraph as still steering future edits back to the vacuous check.
     let row = crate::row::Row::new("x-probe-topology")
         .with("arch", "x86_64")
         .with("cross_check", "agree");
