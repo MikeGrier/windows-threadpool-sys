@@ -67,43 +67,43 @@ correctness in the archive.
   own arithmetic does NOT belong, and the honest outcome for such a one is a line in the module
   header saying so by name rather than a silent absence.
 
-- [ ] **M4.2** -- Find out why the probe's own same-code control varies by tens of percent, and
-  record the answer whatever it turns out to be.
+- [ ] **M4.2** -- Give the measurement probes the controls needed to act on a dispersion finding,
+  so "gather more data along this axis" does not require editing a `const` and rebuilding.
 
-  **Gap:** `queue_contention` emits `reserving_mpsc` and `reserving(32/32)`, which are the same code
-  at the same layout measured twice in one run. Their ratio should be 1.00x. Measured across seven
-  runs it spans 0.68-1.27x, and the same-configuration spread on a single shape reaches 61%. That
-  control is currently load-bearing -- the layout conclusions in
-  [DESIGN-NOTES.md](DESIGN-NOTES.md) are read against it, and it is wide enough that the
-  apportionment question could not be called either way. A control that wanders this far is evidence
-  about the instrument before it is evidence about the queue.
+  **This item is deliberately small in software and large in guidance.** The diagnostic method
+  belongs in [DESIGN-NOTES.md](DESIGN-NOTES.md) -- see
+  [What to try first, and how to tell when you have reached the
+  floor](DESIGN-NOTES.md#d-variance-is-a-finding) -- and this item exists only to make that method
+  executable. The judgement stays with the person; the probe stops being the obstacle.
 
-  **This is a diagnosis item, not a fix item.** The dispersion alone cannot distinguish the
-  candidates, so the deliverable is *which one it is*, with the measurement that shows it:
+  **Gap:** [src/queue_contention.rs](src/queue_contention.rs) fixes every sampling parameter as a
+  private constant -- `PUSHES_PER_PRODUCER` (50,000) and `REPETITIONS` (5) -- and `measure()` takes
+  no arguments. The first move the design note prescribes on seeing a wide control is to lengthen
+  the span and raise the repetition count on the unchanged configuration, which is currently a
+  source edit and a rebuild. A control that cannot be turned is not a control, and the cheapest
+  diagnostic step is the one being blocked.
 
-  - the probe moving more than the variable under test (wrong instrument for the question);
-  - a residual defect in the probe, as with the timing window corrected in `d49a71f`, which was
-    invisible in the numbers and worth roughly 45% at high producer counts;
-  - insufficient runs or too short a measured span -- plain hygiene, and the cheapest to rule out,
-    so rule it out first by raising both and seeing whether the control narrows;
-  - machine noise, these being nanosecond-scale measurements on a shared desktop under ordinary
-    load. Testable by re-running pinned, on a quiesced machine, or both.
+  **Target:** `measure()` takes a settings value carrying at least the pushes-per-producer count,
+  the repetition count, and the producer counts to sweep (`PRODUCER_COUNTS` is already public and
+  is the model for the others). Existing defaults stay exactly as they are, so a default run remains
+  the run the notes describe and every published figure stays reproducible. The binary exposes the
+  same knobs so a human or an agent can act without a rebuild.
 
-  **A negative result is a real result here and must be recorded, not discarded.** If the answer is
-  "this is what a shared desktop does at this timescale and the probe is sound", that belongs in
-  [DESIGN-NOTES.md](DESIGN-NOTES.md) beside the figures, because it tells every future reader how
-  much weight the numbers carry. The failure mode to avoid is quietly widening the band again and
-  moving on.
+  Apply the same treatment to the sibling cost probes where the sampling parameters are equally
+  fixed; the axes we anticipate varying are **duration, repetitions, and concurrency**, so those are
+  the ones that need to be reachable. Do not add knobs beyond what a stated diagnostic step needs --
+  an unused parameter is a configuration surface to maintain and a way for two runs to differ
+  without anyone noticing.
 
-  **Do not resolve this by suppressing the dispersion.** Reporting a median without its range, or
-  discarding outlying runs, would hide the open question rather than answer it. Whatever is found,
-  the ranges stay published.
+  **Report what was used.** Whatever settings a run was given must appear in its output beside the
+  host banner, for the reason
+  [D-observations-not-verdicts](DESIGN-NOTES.md#d-observations-not-verdicts) already gives: a figure
+  is only interpretable with its capture parameters, and these are now among them. Making the
+  sampling adjustable without recording it would turn one reproducibility problem into a worse one.
 
-  Decision: [High variance in our own control is a finding about the
-  instrument](DESIGN-NOTES.md#d-variance-is-a-finding). Note that per that decision the *calibration*
-  is already settled and is not part of this item: a spread this wide would disqualify a benchmarking
-  claim, while remaining a usable input for planning on comparable hardware. This item asks why it is
-  there, not whether the data may be published.
+  **Not in scope:** deciding why the control is wide. That is the judgement this tooling supports,
+  and per the design note a negative result -- "lengthening and repeating do not narrow it, so the
+  floor is here" -- is a real answer that gets recorded beside the figures.
 
 - [ ] **M2.5** -- Make the banner describe the read the body describes.
 

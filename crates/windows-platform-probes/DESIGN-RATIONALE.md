@@ -609,8 +609,43 @@ plausible here: the probe may be moving more than the variable under test; it ma
 carry a residual defect, as it demonstrably did until the timing window was
 corrected; seven runs of a ~65-second probe may simply be too few; or a
 nanosecond-scale measurement on a shared desktop running everything else may be
-dominated by the machine. Only the third is cheap to rule out, which is why the
-checklist item says to try it first.
+dominated by the machine.
+
+**The ordering of the diagnosis is the practical content, and it follows from
+cost rather than from likelihood.** Lengthening the span and raising the
+repetition count is the only step that changes nothing about what is being
+measured -- so it is the only step whose result is interpretable before the
+others have been tried. Pinning threads, quiescing the machine, or altering the
+probe all move the measurement as well as the noise, and a change made ahead of
+the cheap check cannot be evaluated against anything. That this also happens to
+be the least effortful step is a convenience, not the reason.
+
+The other half is knowing when to stop. Every setup has a floor, and past it more
+runs buy nothing; the failure mode is a week spent establishing that two numbers
+are the same. What makes the floor easy to misjudge is the assumption that it
+scales with the measured value -- that small numbers are inherently noisy. It can
+just as well be set by the sampling regime: clock granularity, how many
+independent samples the run takes, how the span is constructed. This probe takes
+two timestamps per worker per repetition and divides by the pass, so what limits
+resolution at small values is the number of passes, not a fraction of the
+nanoseconds printed. The distinction matters because the two readings prescribe
+opposite actions -- one says the measurement is hopeless, the other says take
+more samples.
+
+**A warmup pass looks like it contradicts the "some noise is inherent" position,
+and the objection is worth answering rather than smoothing over.** If dispersion
+were genuinely inherent to a shared machine, warming could not remove it -- so
+proposing a warmup appears to concede that it is really an artifact after all.
+The resolution is that the two are different quantities that happen to widen the
+same spread. A warmup addresses *transients*: page faults on a fresh allocation,
+cold caches and predictors, frequency ramp -- all front-loaded, all one-time, none
+a property of the steady state. Contention with other tenants is not front-loaded;
+it continues for the whole run and no amount of warming touches it. Removing the
+transients therefore does not hide the inherent floor, it uncovers it, which is
+why the expected signature is a spread that narrows as warming and length
+increase and then stops narrowing. The plateau is the inherent part. This probe
+already discards one untimed pass, though only for the allocation's pages, so
+part of this is done and the rest is unmeasured.
 
 **The calibration is the part worth writing down, because it is not obvious and
 it cuts both ways.** A spread like this in a benchmark or a marketing document

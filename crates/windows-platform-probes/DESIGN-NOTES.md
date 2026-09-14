@@ -106,6 +106,50 @@ honest treatment is neither to suppress the data nor to promote it: **record it,
 record the dispersion beside it, and record that the dispersion is itself
 unexplained.**
 
+### What to try first, and how to tell when you have reached the floor
+
+**The cheapest move is always to gather more of the same before gathering
+anything different.** Lengthen the timed span, raise the repetition count, or
+both, on the *unchanged* configuration. This costs only wall time and it
+partitions the problem in one step: if the control narrows, the dispersion was
+sampling noise and the previous run simply had too few samples to resolve
+anything; if it does not, the width is structural and the remaining candidates
+are the interesting ones. Do this before pinning threads, before quiescing the
+machine, and before suspecting the probe -- each of those changes what is being
+measured, and a change made before the cheap check cannot be evaluated.
+
+**A warmup pass separates transient cost from ongoing noise, and the two are
+different things.** This probe already discards one untimed pass, but only to
+fault in a fresh allocation's pages. Cold caches, branch predictors, and CPU
+frequency ramp are the same *kind* of cost -- one-time, front-loaded, not a
+property of the steady state -- and lengthening the timed span dilutes them
+whether or not a warmup removes them.
+
+It is worth being clear that this does **not** contradict the position that some
+noise is inherent to a shared machine. A warmup removes *transients*; contention
+with other tenants continues for the whole run and is not removable by any amount
+of warming. The two widen dispersion for unrelated reasons, and removing the
+transients is what makes the inherent floor *visible* rather than what hides it.
+Expect warming and lengthening to shrink the spread to some value and then stop
+shrinking it, and treat that plateau as the interesting result.
+
+**There is always a floor, and recognising it is the skill this decision is
+really about.** A measurement cannot resolve a difference smaller than the noise
+in the quantity being differenced, and past that point more runs buy nothing --
+continuing to gather them is how a project spends a week proving that two numbers
+are the same. The floor is a real, findable property of the setup, not a failure.
+
+**The floor is not necessarily a percentage of the measured value**, and assuming
+it is will mislead you in both directions. It can be set by the sampling regime
+instead: the granularity of the clock, how many independent samples the run
+actually takes, or how the measured span is constructed. This probe times a whole
+pass and divides -- two timestamps per worker per repetition -- so at small
+absolute values the resolvable difference is governed by how many independent
+passes were taken, not by any fixed fraction of the nanoseconds reported. That is
+why "the 1-producer rows are noisy because the numbers are small" is a guess
+rather than a diagnosis, and why the first move above is to add samples: it tests
+that guess directly.
+
 What this decision forbids is the quiet version -- reporting a wide control as
 though a wide control were normal. It is not normal. It is an open question, and
 where it is open, the note says so and the checklist carries the work.
@@ -820,8 +864,9 @@ few runs or too short a measured span, or simply that these are nanosecond-scale
 measurements taken on a shared desktop that is doing other things. The dispersion
 alone cannot distinguish them, and this note does not guess. See
 [High variance in our own control is a finding about the
-instrument](#d-variance-is-a-finding), and M4.2 in
-[CHECKLIST.md](CHECKLIST.md) for the work.
+instrument](#d-variance-is-a-finding) for what to try first and how to recognise
+the floor, and M4.2 in [CHECKLIST.md](CHECKLIST.md) for the probe controls that
+make those steps executable without a source edit.
 
 What follows is therefore reported as *data with a known-unexplained spread*,
 which is a reasonable input for planning a deployment on comparable hardware and
