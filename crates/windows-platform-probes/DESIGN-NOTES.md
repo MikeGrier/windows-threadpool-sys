@@ -69,6 +69,47 @@ The failure this prevents is a reader inheriting a number as though it were a
 property of the code. It is a property of the code **on that machine**, and the
 distinction is the whole value of shipping the probe rather than only its output.
 
+### High variance in our own control is a finding about the instrument, not just a wider yardstick
+
+<a id="d-variance-is-a-finding"></a>
+
+When the same code measured twice in the same run disagrees by tens of percent,
+the first thing that has been measured is **the method**. It is tempting to treat
+a wide control as merely a coarser ruler -- to widen the band and carry on
+judging ratios against it -- and that is the mistake this decision exists to stop.
+A control that wanders is a defect report against the measurement, and it is
+logged as one even when the measurement is still used.
+
+The candidate causes are not distinguishable from the dispersion alone, and all
+of them are live here:
+
+- **The wrong instrument for the variable.** A probe that moves several things at
+  once cannot attribute a difference to the one under test.
+- **A defect in the probe itself.** This crate has already shipped one -- the
+  timing window that read the coordinator's clock rather than the producers'.
+  That defect was invisible in the numbers until it was found by reading, and it
+  moved high-producer figures by roughly 45%.
+- **Insufficient runs or too short a duration** -- straightforward hygiene, and
+  the cheapest to rule out.
+- **A noisy machine.** These are fine-grained measurements taken on a shared,
+  general-purpose desktop running everything else it normally runs. Scheduling,
+  frequency scaling, and other tenants all land inside the timed region.
+
+**How much this matters depends entirely on what the number is for, and that
+calibration is recorded rather than assumed.** In benchmarking or marketing
+literature it would be disqualifying: those documents exist to support a
+comparative claim, and a comparative claim resting on a control this wide is not
+supported. Here the purpose is *planning for deployment environments resembling
+the measured one* -- and a figure gathered on an ordinary loaded machine is not
+obviously the wrong input for planning on ordinary loaded machines. So the
+honest treatment is neither to suppress the data nor to promote it: **record it,
+record the dispersion beside it, and record that the dispersion is itself
+unexplained.**
+
+What this decision forbids is the quiet version -- reporting a wide control as
+though a wide control were normal. It is not normal. It is an open question, and
+where it is open, the note says so and the checklist carries the work.
+
 ## Three tiers, because "run all the probes" is not a safe instruction
 
 <a id="d-three-tiers"></a>
@@ -767,6 +808,24 @@ what "no difference" looks like on this host:
 
 So a ratio inside roughly 0.9-1.1x is indistinguishable from zero effect here,
 and at sixteen and thirty-two producers the control alone wanders past 1.12x.
+
+**That control is far too wide, and saying so is part of reporting it.** Two
+measurements of *the same code in the same run* should not differ by 27%, and
+the same-configuration spread across seven runs reaches 61%. Used above as a
+yardstick, this is the honest yardstick available -- but a yardstick this elastic
+is first a defect report against the probe, not a fact about the queue. The cause
+is not determined: it could be the probe measuring more than the variable under
+test, a residual defect like the timing window already found and fixed here, too
+few runs or too short a measured span, or simply that these are nanosecond-scale
+measurements taken on a shared desktop that is doing other things. The dispersion
+alone cannot distinguish them, and this note does not guess. See
+[High variance in our own control is a finding about the
+instrument](#d-variance-is-a-finding), and M4.2 in
+[CHECKLIST.md](CHECKLIST.md) for the work.
+
+What follows is therefore reported as *data with a known-unexplained spread*,
+which is a reasonable input for planning a deployment on comparable hardware and
+an unreasonable basis for a comparative claim about the layouts.
 
 | producers | 16/48 vs 32/32 | 8/56 vs 32/32 | 64/64 vs 32/32 |
 |---|---|---|---|

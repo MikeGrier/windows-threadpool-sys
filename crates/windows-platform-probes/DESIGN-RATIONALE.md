@@ -584,3 +584,47 @@ answers the same-domain question, which is what most placement decisions turn on
 and it is why `numa[16]` on the measurement host is worth stating plainly: a
 single domain means the queue figures say nothing about cross-domain behaviour at
 all.
+
+### Why a wide control is logged as a defect rather than absorbed
+
+Recorded for [D-variance-is-a-finding](DESIGN-NOTES.md#d-variance-is-a-finding).
+
+The queue-contention repair produced a genuinely useful artifact -- a noise
+control the probe derives rather than asserts, built from two rows that are the
+same code at the same layout. It immediately did its job, withdrawing a claim
+that had survived several reviews.
+
+It also very nearly produced a second error. Having found that the control spans
+0.68-1.27x, the natural next move is to use it: judge every ratio against that
+band, mark what falls outside, and report the result. That is what the first
+draft of the section did. But two measurements of identical code in the same run
+differing by 27% is not a fact about the queue at all -- it is the instrument
+telling you something, and using it as a ruler while declining to ask why it is
+elastic is how a methodological problem becomes permanent. The control had been
+promoted from *symptom* to *tool* without anyone deciding to do that.
+
+The causes are not separable from the dispersion itself, which is precisely why
+the decision refuses to guess among them. The list is short and every entry is
+plausible here: the probe may be moving more than the variable under test; it may
+carry a residual defect, as it demonstrably did until the timing window was
+corrected; seven runs of a ~65-second probe may simply be too few; or a
+nanosecond-scale measurement on a shared desktop running everything else may be
+dominated by the machine. Only the third is cheap to rule out, which is why the
+checklist item says to try it first.
+
+**The calibration is the part worth writing down, because it is not obvious and
+it cuts both ways.** A spread like this in a benchmark or a marketing document
+would be fatal -- such documents exist to carry a comparative claim, and a
+comparative claim resting on a control this wide is simply unsupported. But this
+crate's figures exist to support *planning for deployment environments like the
+measured one*, and the measured one is an ordinary machine under ordinary load.
+Data gathered there is not obviously the wrong input for planning there. So the
+answer is neither suppression nor promotion: publish it, publish the dispersion,
+and publish the fact that the dispersion is unexplained. A reader can then weigh
+it for their own purpose, which is the same principle as
+[D-observations-not-verdicts](DESIGN-NOTES.md#d-observations-not-verdicts) applied
+to the quality of the measurement instead of to its portability.
+
+The rule exists to forbid the quiet version: reporting a wide control as though a
+wide control were ordinary. It is not ordinary, and the moment it stops being
+remarked upon is the moment nobody investigates it.

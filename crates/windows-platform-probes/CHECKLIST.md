@@ -67,6 +67,44 @@ correctness in the archive.
   own arithmetic does NOT belong, and the honest outcome for such a one is a line in the module
   header saying so by name rather than a silent absence.
 
+- [ ] **M4.2** -- Find out why the probe's own same-code control varies by tens of percent, and
+  record the answer whatever it turns out to be.
+
+  **Gap:** `queue_contention` emits `reserving_mpsc` and `reserving(32/32)`, which are the same code
+  at the same layout measured twice in one run. Their ratio should be 1.00x. Measured across seven
+  runs it spans 0.68-1.27x, and the same-configuration spread on a single shape reaches 61%. That
+  control is currently load-bearing -- the layout conclusions in
+  [DESIGN-NOTES.md](DESIGN-NOTES.md) are read against it, and it is wide enough that the
+  apportionment question could not be called either way. A control that wanders this far is evidence
+  about the instrument before it is evidence about the queue.
+
+  **This is a diagnosis item, not a fix item.** The dispersion alone cannot distinguish the
+  candidates, so the deliverable is *which one it is*, with the measurement that shows it:
+
+  - the probe moving more than the variable under test (wrong instrument for the question);
+  - a residual defect in the probe, as with the timing window corrected in `d49a71f`, which was
+    invisible in the numbers and worth roughly 45% at high producer counts;
+  - insufficient runs or too short a measured span -- plain hygiene, and the cheapest to rule out,
+    so rule it out first by raising both and seeing whether the control narrows;
+  - machine noise, these being nanosecond-scale measurements on a shared desktop under ordinary
+    load. Testable by re-running pinned, on a quiesced machine, or both.
+
+  **A negative result is a real result here and must be recorded, not discarded.** If the answer is
+  "this is what a shared desktop does at this timescale and the probe is sound", that belongs in
+  [DESIGN-NOTES.md](DESIGN-NOTES.md) beside the figures, because it tells every future reader how
+  much weight the numbers carry. The failure mode to avoid is quietly widening the band again and
+  moving on.
+
+  **Do not resolve this by suppressing the dispersion.** Reporting a median without its range, or
+  discarding outlying runs, would hide the open question rather than answer it. Whatever is found,
+  the ranges stay published.
+
+  Decision: [High variance in our own control is a finding about the
+  instrument](DESIGN-NOTES.md#d-variance-is-a-finding). Note that per that decision the *calibration*
+  is already settled and is not part of this item: a spread this wide would disqualify a benchmarking
+  claim, while remaining a usable input for planning on comparable hardware. This item asks why it is
+  there, not whether the data may be published.
+
 - [ ] **M2.5** -- Make the banner describe the read the body describes.
 
   Gated by M3.1 and M3.3, both landed: establishing that the middle of three discoveries agreed
