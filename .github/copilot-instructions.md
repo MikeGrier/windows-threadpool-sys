@@ -1254,6 +1254,10 @@ files, 4 updated, 9 incidental mentions"). Do **not** fix only the site a review
 the reported site is a sample, not the population. This is cheap and it works: run once
 voluntarily on this repository, a sweep immediately found a stale site no reviewer had reported.
 
+**And sweep the change set, not only the file you noticed it in:** when you fix a defect of any
+kind in one file of a commit, grep the commit's other files for the same defect before committing
+-- the file you happened to be reading is a sample of your own change too.
+
 Two corollaries that have each already cost a review round:
 
 - **An analysis document never restates normative content.** An audit, review response, or design
