@@ -152,6 +152,88 @@ fn every_disagreement_publishes_the_pair_it_carries() {
 }
 
 #[test]
+fn every_parse_incomplete_variant_has_the_code_the_row_promises() {
+    // **Every variant, not every payload SHAPE.** The test below covers shapes,
+    // on the argument that the counted variants share one helper -- true of the
+    // PAYLOAD and false of the CODE, which is per-variant. So twelve variants
+    // could be given a wrong code with nothing to notice: the report corpus
+    // builds its expectation through `code()` itself, so both sides move
+    // together. Found by a review of the pull request.
+    //
+    // Exhaustive, so a variant added without a code here does not compile. The
+    // shape arguments are `..` because this pins the discriminant only; the
+    // payloads are the test below.
+    let golden = |entry: &ParseIncomplete| match entry {
+        ParseIncomplete::EnumerationAnomalies { .. } => "enumeration_anomalies",
+        ParseIncomplete::NumaDomainsOnlyInCpuSets { .. } => "numa_domains_only_in_cpu_sets",
+        ParseIncomplete::NoCacheLevels => "no_cache_levels",
+        ParseIncomplete::CacheLevelsWithoutPartitions { .. } => "cache_levels_without_partitions",
+        ParseIncomplete::MeasuredButCountsAbsent { .. } => "measured_but_counts_absent",
+        ParseIncomplete::NoPackages => "no_packages",
+        ParseIncomplete::NoCores => "no_cores",
+        ParseIncomplete::ContradictoryCores { .. } => "contradictory_cores",
+        ParseIncomplete::UnnumberedCacheLevels { .. } => "unnumbered_cache_levels",
+        ParseIncomplete::PartitioningSummaryMissing { .. } => "partitioning_summary_missing",
+        ParseIncomplete::NotMeasured => "not_measured",
+        ParseIncomplete::RelationsWithoutProcessors { .. } => "relations_without_processors",
+        ParseIncomplete::UnreportedRelations { .. } => "unreported_relations",
+        ParseIncomplete::DescribedRelations { .. } => "described_relations",
+        ParseIncomplete::CoresOnlyInCpuSets { .. } => "cores_only_in_cpu_sets",
+        ParseIncomplete::OverlappingWalkRelations { .. } => "overlapping_walk_relations",
+        ParseIncomplete::ProcessorAttributeConflicts { .. } => "processor_attribute_conflicts",
+        ParseIncomplete::NumaDomainsWithConflictingLabels { .. } => {
+            "numa_domains_with_conflicting_labels"
+        }
+        ParseIncomplete::NumaDomainsUnreported { .. } => "numa_domains_unreported",
+        ParseIncomplete::EnumerationsDisagreed { .. } => "enumerations_disagreed",
+        ParseIncomplete::CoherenceNotCollected => "coherence_not_collected",
+    };
+
+    let every = [
+        ParseIncomplete::EnumerationAnomalies { count: 1 },
+        ParseIncomplete::NumaDomainsOnlyInCpuSets { count: 1 },
+        ParseIncomplete::NoCacheLevels,
+        ParseIncomplete::CacheLevelsWithoutPartitions { levels: vec![1] },
+        ParseIncomplete::MeasuredButCountsAbsent { absent: vec!["x"] },
+        ParseIncomplete::NoPackages,
+        ParseIncomplete::NoCores,
+        ParseIncomplete::ContradictoryCores { count: 1 },
+        ParseIncomplete::UnnumberedCacheLevels { count: 1 },
+        ParseIncomplete::PartitioningSummaryMissing { level: 1 },
+        ParseIncomplete::NotMeasured,
+        ParseIncomplete::RelationsWithoutProcessors {
+            cores: 1,
+            packages: 1,
+        },
+        ParseIncomplete::UnreportedRelations { count: 1 },
+        ParseIncomplete::DescribedRelations { count: 1 },
+        ParseIncomplete::CoresOnlyInCpuSets { count: 1 },
+        ParseIncomplete::OverlappingWalkRelations { count: 1 },
+        ParseIncomplete::ProcessorAttributeConflicts { count: 1 },
+        ParseIncomplete::NumaDomainsWithConflictingLabels { count: 1 },
+        ParseIncomplete::NumaDomainsUnreported { count: 1 },
+        ParseIncomplete::EnumerationsDisagreed {
+            attempts: 1,
+            walk_only: 1,
+            cpu_sets_only: 1,
+        },
+        ParseIncomplete::CoherenceNotCollected,
+    ];
+
+    let mut seen: Vec<&str> = Vec::new();
+    for entry in &every {
+        let code = entry.code();
+        assert_eq!(code, golden(entry), "{entry:?}");
+        assert!(
+            !seen.contains(&code),
+            "{entry:?}: `{code}` is already another variant's code, so a survey \
+             cannot tell the two conditions apart"
+        );
+        seen.push(code);
+    }
+}
+
+#[test]
 fn every_parse_incomplete_shape_publishes_the_fields_its_variant_carries() {
     // One instance of each PAYLOAD SHAPE rather than of each variant: the twelve
     // counted variants share a single helper, and it was rewriting every one of

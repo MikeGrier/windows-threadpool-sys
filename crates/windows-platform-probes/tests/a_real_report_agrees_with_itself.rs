@@ -432,9 +432,54 @@ fn published_codes(text: &str, keys: &[&str]) -> Vec<String> {
 /// demonstrated the sabotage, never that the accounting REJECTS it. The
 /// accounting could have been deleted and that test would have stayed green.
 /// Found by a review.
+///
+/// **Per state, not "at least one".** This asked only whether the row published
+/// SOME code, which an observation in five blocking states satisfies by
+/// publishing one -- so dropping four states' conditions left the rule that
+/// names itself `every_state_...` perfectly happy. Measured: truncating the
+/// row's `parse_incomplete` to its first entry is caught by three tests that
+/// compare the row against `cross_check`, and by this one not at all. That
+/// matters because this is the only instrument running the other enumeration --
+/// from `invariant`'s states INTO the row -- so its weakness was invisible to
+/// everything else. Found by a review of the pull request.
 fn publication_holds(observation: &Observation, text: &str) -> bool {
-    invariant::blocking_states(observation).is_empty()
-        || !published_codes(text, DIAGNOSTIC_LISTS).is_empty()
+    let published = published_codes(text, DIAGNOSTIC_LISTS);
+    invariant::blocking_states(observation)
+        .into_iter()
+        .all(|state| {
+            codes_for(state)
+                .iter()
+                .any(|code| published.iter().any(|found| found == code))
+        })
+}
+
+/// The row code(s) that answer `state`.
+///
+/// **A schema, written down, and exhaustive so it cannot fall behind.** This is
+/// the correspondence the milestone exists to enforce -- a state the invariants
+/// know about must reach a survey -- and it is not derivable from either side:
+/// `blocking_states` computes states from an observation and the renderer emits
+/// codes, with nothing in between that already knows the pairing. Writing it
+/// here is what makes the check possible; a new state that names no code fails
+/// to compile.
+///
+/// `BracketNotHeld` answers to either code because `cross_check` files a
+/// different one depending on how the bracket failed, and both are honest
+/// reports of the same blocking state.
+fn codes_for(state: invariant::BlockingState) -> &'static [&'static str] {
+    use invariant::BlockingState as State;
+    match state {
+        State::PartitioningSummaryMissing => &["partitioning_summary_missing"],
+        State::EnumerationAnomalies => &["enumeration_anomalies"],
+        State::NotMeasured => &["not_measured"],
+        State::NoCacheLevels => &["no_cache_levels"],
+        State::NoPackages => &["no_packages"],
+        State::NoCores => &["no_cores"],
+        State::ContradictoryCore => &["contradictory_cores"],
+        State::UnnumberedCacheLevel => &["unnumbered_cache_levels"],
+        State::EnumerationsDisagreed => &["enumerations_disagreed"],
+        State::BracketNotHeld => &["machine_changed", "bracket_not_established"],
+    }
 }
 
 #[test]
@@ -476,6 +521,34 @@ fn every_state_that_blocks_agreement_reaches_the_row() {
             blocking.len(),
         );
     }
+}
+
+#[test]
+fn the_corpus_reaches_an_observation_in_several_blocking_states_at_once() {
+    // **The rule above is per-state, and a corpus of single-state shapes cannot
+    // tell that apart from "at least one".** Its previous form was satisfied by
+    // any one published code, and no shape with two states would have exposed
+    // that -- which is why the reachability is asserted rather than assumed: a
+    // corpus cannot report the shape it never reaches.
+    let deepest = shapes()
+        .into_iter()
+        .map(|shape| {
+            (
+                shape.what,
+                invariant::blocking_states(&shape.observation).len(),
+            )
+        })
+        .max_by_key(|(_, states)| *states)
+        .expect("the corpus is not empty");
+
+    assert!(
+        deepest.1 >= 2,
+        "the deepest shape in the corpus is `{}` with {} blocking state(s), so \
+         the per-state rule is never asked to distinguish one state from \
+         several",
+        deepest.0,
+        deepest.1,
+    );
 }
 
 #[test]
