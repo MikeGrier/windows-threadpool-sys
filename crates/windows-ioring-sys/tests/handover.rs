@@ -63,6 +63,18 @@ const CHUNKS: usize = 8;
 const CHUNK_LEN: usize = 512;
 const WAVES: usize = 3;
 
+/// Why a host cannot run these tests, named once because two sites say it.
+///
+/// A `const` rather than the literal at each site because the literal does not
+/// FIT at the deeper one: nested in a loop it pushes the line past `max_width`,
+/// rustfmt responds by leaving the whole expression alone, and the result is
+/// mis-indented code that `cargo fmt --check` reports as clean. Found by a
+/// review, which read the misalignment as a formatting failure that would break
+/// CI -- it would not, and that is the more interesting half: rustfmt giving up
+/// is silent, so the only guard here is the shorter line.
+const NEEDS_COMPLETION_EVENT: &str =
+    "this host must report IORING_FEATURE_SET_COMPLETION_EVENT to run the handover tests";
+
 /// Generous, because a positive wait must not flake on a loaded machine.
 /// Every test that pays it in full is one that would otherwise hang.
 const SIGNAL_TIMEOUT_MS: u32 = 5_000;
@@ -340,9 +352,7 @@ fn an_attach_serves_both_the_backlog_and_the_wave_that_follows_it() {
     // signal can account for it.
     submit_wave(&mut ring, &file, 0, &mut contract, &mut pending);
 
-    let event = ring.completion_event().expect(
-        "this host must report IORING_FEATURE_SET_COMPLETION_EVENT to run the handover tests",
-    );
+    let event = ring.completion_event().expect(NEEDS_COMPLETION_EVENT);
 
     // Wave 1 lands *after* the attach, into a queue wave 0 already made
     // non-empty -- so it raises no edge of its own and is only ever seen by a
@@ -510,9 +520,7 @@ fn attaching_while_unbuffered_reads_are_still_in_flight_strands_nothing() {
                 batch.submit_and_wait(0, 0).expect("submit without waiting");
             }
 
-            let event = ring.completion_event().expect(
-            "this host must report IORING_FEATURE_SET_COMPLETION_EVENT to run the handover tests",
-        );
+            let event = ring.completion_event().expect(NEEDS_COMPLETION_EVENT);
             let attached = std::time::Instant::now();
 
             // Non-blocking, so this measures what the attach actually found rather
