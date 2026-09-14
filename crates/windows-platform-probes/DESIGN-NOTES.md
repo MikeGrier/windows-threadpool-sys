@@ -1030,6 +1030,8 @@ scheduled by this decision.
 <a id="d-correspondence-failures"></a>
 <a id="d-oracle-refuses-to-know"></a>
 
+**Superseded by [The encoded row is the contract; the prose is not](#d-encoded-row-is-the-contract).**
+
 **Moved to Tier 2: [DESIGN-RATIONALE.md](DESIGN-RATIONALE.md).** The anchors
 above are kept here so every existing link still lands somewhere that says where
 the content went.
@@ -1174,7 +1176,7 @@ repository instructions describe.)
 
 ### What the text-reading design cost
 
-Counted in `src/report_oracle.rs` **as it stood before this decision**: of 38
+Counted in [src/report_oracle.rs](src/report_oracle.rs) **as it stood before this decision**: of 38
 top-level functions, ten were correspondence rules and four were comparison
 helpers. **Twenty-three existed only to extract values back out of rendered
 text.** None of them survives: [src/report_oracle.rs](src/report_oracle.rs) reads no

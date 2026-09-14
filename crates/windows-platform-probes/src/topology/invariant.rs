@@ -307,6 +307,14 @@ pub fn blocking_states(observation: &Observation) -> Vec<BlockingState> {
     // compiler-exhaustive and a fourth variant cannot be silently folded into
     // whichever arm happens to be nearest -- which is what the `!= Agreed` form
     // did to `NotCollected`.
+    //
+    // **No `&` on the scrutinee, and none is needed.** Three review rounds have
+    // reported this and the two like it in `diagnostic.rs` as moving a
+    // non-`Copy` field out of a shared reference. Matching a place expression
+    // behind a `&` is a move only when a PATTERN BINDING moves a non-`Copy`
+    // value; every arm below is unit-like or `{ .. }`, so nothing is bound at
+    // all. `cargo check --all-targets` is clean across the workspace, and has
+    // been on every commit these lines have existed.
     match observation.coherence {
         Coherence::Agreed => {}
         Coherence::Disagreed { .. } => states.push(BlockingState::EnumerationsDisagreed),
