@@ -148,6 +148,7 @@ pub mod ioring;
 pub mod long_path;
 pub mod long_path_report;
 pub mod pool_growth;
+pub mod queue_contention;
 pub mod report;
 /// The report oracle. **Test-support: present only where it is used.**
 ///

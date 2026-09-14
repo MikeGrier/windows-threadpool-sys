@@ -481,6 +481,198 @@ architecture. It would fail on any host with a longer user name, on either
 architecture. Recorded here because it is exactly the kind of result this
 comparison exists to classify correctly: a red build that is **not** a finding.
 
+## The queue-contention probe, and why it must not run in the CI probe job
+
+`probe-queue-contention` measures two things a design decision is waiting on: whether the bounded
+array queue's tail claim contends badly enough to justify the linked and sharded MPSC shapes, and
+what [`reserving_mpsc`](../windows-waitable-queues/src/reserving_mpsc.rs)'s extra read of the
+consumer's position actually costs.
+
+**The checklists carrying those decisions are not in this repository yet** -- they arrive with the
+rest of the queue work -- so this note deliberately names the QUESTIONS rather than linking to items
+that would dangle. The probe is the instrument; it is useful before the plan that consumes it lands,
+and it is landed first precisely so the decision is made against measurement rather than argument.
+
+**It is deliberately absent from the `platform-probes` CI job, unlike every other probe, and the reason is
+a measurement rather than a preference.** That job runs `cargo run` without `--release`. Measured in a
+debug build, `mpsc` and `reserving_mpsc` come out at 249.7 and 254.0 ns/push at sixteen producers --
+indistinguishable. In release, on the same machine in the same minute, they are 193.5 and 52.2. The
+un-inlined overhead of a debug build swamps the cache-coherence effects that *are* the finding, so a debug
+run of this probe does not merely lose precision: it reports the two shapes as equivalent, which is a
+confident wrong answer of exactly the kind this crate's `doorbell_cost` notes warn about.
+
+Two further reasons it stays out. A contention curve needs more cores than a hosted runner has, and the
+32-producer rows on a four-core runner would measure the scheduler. And the run costs about two minutes in
+release, against a job whose other probes are seconds.
+
+So this one is run by hand, on a known machine, and its numbers are recorded with the machine attached.
+
+### Reading it
+
+Two regimes, and the pair is the point.
+
+**Isolated** gives producers a capacity large enough that nothing is ever refused and runs no consumer, so
+whatever curve appears against N is the claim and nothing else. **Drained** runs a consumer popping
+continuously, which is the only regime that can price `reserving_mpsc`'s read of `head` -- that read is
+cheap until a consumer is *writing* the line, and measuring it in isolation would report it as free.
+
+The drained regime has a **single** consumer, because that is what MPSC means, so at high producer counts
+it becomes consumer-bound and a plateau there says nothing about the claim. Each row carries the refusal
+count from the queue's own `Observable` counters precisely so that is visible as a fact rather than
+mistaken for contention: the sixteen- and thirty-two-producer drained rows show millions of refusals and
+should be read as measurements of the consumer.
+
+## The claim word's width costs 2-3x in isolation and much less in use
+
+Measured by `probe-queue-contention` on one host, `x86_64-pc-windows-msvc`.
+Three apportionments of `reserving_mpsc`'s claim word: 32/32 and 16/48 over
+`AtomicU64`, and 64/64 over `AtomicU128`.
+
+**These were duplicated scaffolding when the measurement was taken, and they
+ship now.** The layouts were built as copies so the shipping crate was not
+disturbed while the question was open; the measurement below is what closed it,
+and they are now
+[`ClaimLayout`](../windows-waitable-queues/src/reserving_mpsc.rs) with
+`Balanced`, `Enduring`, `Perpetual` and `Wide` as its implementations -- which is
+what this probe imports. Recorded because the original wording still described
+the scaffolding, and a reader who went looking for `claim_layout.rs` would not
+find it.
+
+`AtomicU128::is_always_lock_free()` is **true** on this target and
+`cfg(target_feature = "cmpxchg16b")` is enabled by default, so the 128-bit
+exchange is a compile-time-guaranteed native instruction here and no CPUID
+branch was measured as though it were the algorithm.
+
+| producers | 16/48 vs 32/32 (isolated) | 64/64 vs 32/32 (isolated) | 64/64 vs 32/32 (drained) |
+|---|---|---|---|
+| 1 | 1.14x | 2.05x | 1.05x |
+| 4 | 1.21x | 1.37x | 1.12x |
+| 8 | 1.00x | 2.33x | 1.07x |
+| 16 | 0.88x | 2.37x | 1.00x |
+| 32 | 0.98x | 2.99x | 1.11x |
+
+**Re-apportioning the bits is free.** 16/48 tracks 32/32 within noise in both
+regimes, which is the expected result and worth stating as a confirmed
+prediction rather than a discovery: both issue the same `lock cmpxchg` on the
+same `u64`, so only the shift and mask constants differ. The 48-bit position
+does force `head` and the per-slot `sequence` to 64 bits, and that cost does not
+show up either. What this buys is the recurrence moving from 2^32 to 2^48 --
+from about 37 seconds of sustained maximum-rate pushing to about 28 days.
+
+**Widening the word is not free, and how much it costs depends entirely on the
+regime.** Isolated, where the claim is the only thing happening, `cmpxchg16b`
+costs 2-3x and the penalty *grows* with contention. Drained, with a consumer
+running, it is 5-12%.
+
+### The drained regime flatters the slower layout, and the refusal counts say so
+
+The two regimes must not be averaged, and the drained one must not be read as
+the answer on its own. **A slower producer is less backpressured**, so it earns
+fewer refusals, and refusal retries are inside the timed region. At eight
+producers the 64/64 layout took 12,149 refusals against 32/32's 74,181 -- so
+part of what makes its per-push number look close is that it spent less time
+being turned away. The drained figures are therefore an *understatement* of the
+128-bit word's cost, not a measurement of it under load.
+
+The isolated regime is the clean measurement of the claim itself; the drained
+one shows that in a queue doing real work the claim is not the dominant cost. A
+real application sits between them, nearer the drained end the more
+consumer-bound it is.
+
+### What the control caught
+
+The first run reported 3.7x against the shipping shape and a completely
+different scaling curve. The cause was that the duplicate had not padded `head`
+and the claim word onto separate cache lines, which `reserving_mpsc` does
+deliberately -- every producer reads `head` on every push, so sharing a line
+puts the consumer's writes in their path. Aligned, the duplicate tracks the
+shipping shape's curve.
+
+A residual gap remains: the duplicate runs about 1.26x slower than
+`reserving_mpsc` at high producer counts. That offset applies equally to all
+three layouts, so the ratios above stand, but it means these figures are **not**
+absolute numbers for the shipping shape and must not be quoted as such.
+
+**Comparing a duplicate against the original it stands in for is what made both
+of these visible.** A run of three layouts that agreed with each other and
+disagreed with reality would have looked entirely healthy.
+
+### What each apportionment actually buys
+
+The rollover figures for candidate splits, computed from the rates above. The
+rate model reproduces the crate's own published figure -- 32/32 at 116M/s gives
+37 seconds, which is what `reserving_mpsc`'s module documentation discloses -- so
+these are an extension of that disclosure rather than a competing estimate.
+
+| split (reserved/position) | max outstanding reservations | @257M/s | @116M/s | @33M/s |
+|---|---|---|---|---|
+| 32/32 (ships) | 2^32 | 17 s | 37 s | 2.2 min |
+| 24/40 | 2^24 | 71 min | 2.6 hr | 9.2 hr |
+| 21/43 | 2^21 | 9.5 hr | 21.1 hr | 3.1 days |
+| 20/44 | 2^20 | 19.0 hr | 42.1 hr | 6.1 days |
+| 16/48 | 2^16 | 12.7 days | 28.1 days | 98 days |
+| 12/52 | 2^12 | 202 days | 449 days | 4 yr |
+| 8/56 | 2^8 | 9 yr | 20 yr | 69 yr |
+| 64/64 (`u128`) | 2^64 | 2,270 yr | 5,039 yr | 17,607 yr |
+
+Rates: 257M/s is the measured isolated peak at one producer, which has no
+consumer and so is not a rate any draining queue can sustain -- it is a
+conservative floor on time-to-wrap. 33M/s is the measured drained rate at one
+producer. 116M/s is the crate's own disclosed figure and is the honest planning
+number.
+
+**The reservation half is where the bits are being spent, and it is the half
+worth least.** Outstanding reservations are bounded by how many producers are
+mid-flight -- hundreds, perhaps thousands -- and the field currently holds four
+billion. Giving up reservations nobody will allocate is what buys the position
+bits: 2^21 reservations leaves about a day, 2^12 leaves over a year, and 2^8
+leaves twenty years. The last is the same practical answer a 128-bit word gives,
+on a plain `AtomicU64`, at no measured cost, without a third-party dependency and
+without reopening `D-18`'s i686 question.
+
+So the candidates worth considering are **12/52 and 8/56**, not the 16/48 first
+sketched here: 16/48's 12.7 days at the conservative floor is still reachable by
+a busy long-lived process, and 12/52 is the first row that is not.
+
+### Re-measured on the shipping type, and the duplicate had understated the wide word
+
+`CW-1.6` deleted the duplicated protocol in this crate once
+`windows-waitable-queues` took the layout as a parameter, so the probe now
+instantiates the real type at each layout. The numbers below supersede the ones
+above, which were taken from the stand-in.
+
+| producers | 16/48 vs 32/32 | 8/56 vs 32/32 | 64/64 vs 32/32 |
+|---|---|---|---|
+| 1 | 1.02x | 0.98x | 1.45x |
+| 4 | 1.04x | 1.01x | 1.33x |
+| 8 | 1.05x | 1.05x | 1.59x |
+| 16 | 1.21x | 1.21x | **3.83x** |
+| 32 | 1.05x | 1.13x | **3.99x** |
+
+**The finding about apportionment survives contact with the real type.** Both
+`u64` re-apportionments track the default within noise, including `Perpetual`'s
+8/56 -- so buying twenty years of headroom really is free, and it is now
+measured on the code that ships rather than on something resembling it.
+
+**The finding about width did not survive unchanged.** The duplicate reported
+the 128-bit exchange at 2.37x and 2.99x at sixteen and thirty-two producers; the
+real type reports 3.83x and 3.99x. The stand-in was *understating* the cost of
+the layout it was built to evaluate, and by the widest margin exactly where the
+decision is most sensitive. The conclusion is unaltered in direction and firmer
+in degree.
+
+**The residual offset is gone, which is the point of the deletion.** The
+duplicate ran about 1.26x slower than `reserving_mpsc` at high producer counts,
+an error that had to be carried as a caveat on every figure. Running the same
+configuration twice through the shipping type now agrees within noise -- 50.3 ns
+against 52.1 ns at thirty-two producers -- because both rows are the same code.
+
+The general lesson is worth keeping even though the duplicate is gone:
+**a stand-in is only evidence about the thing it stands in for while something
+checks that it still does.** This one was checked, which is how the missing
+cache padding was caught; but the checking only ever bounded the error, and the
+bound was loose enough to hide a third of the wide word's cost.
+
 ## The report is buffered, and what that costs
 
 <a id="d-buffered-report"></a>
