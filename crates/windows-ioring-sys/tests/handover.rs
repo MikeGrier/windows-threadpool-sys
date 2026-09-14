@@ -82,11 +82,31 @@ type Pending<B = Vec<u8>> = HashMap<usize, Token<B>>;
 const DIRECT_OPS: usize = 8;
 const DIRECT_LEN: usize = 1024 * 1024;
 
-/// Attempts at catching the unbuffered reads mid-flight. A handful, because
-/// each one issues `DIRECT_OPS * DIRECT_LEN` of real device I/O; the test
-/// asserts that *at least one* attempt reached the in-flight state rather than
-/// requiring every attempt to, so an unlucky one cannot make it flake.
+/// Attempts at catching the unbuffered reads mid-flight, at each width in
+/// [`DIRECT_WIDTHS`]. The test asserts that *at least one* attempt reached the
+/// in-flight state rather than requiring every attempt to, so an unlucky one
+/// cannot make it flake.
 const DIRECT_ATTEMPTS: usize = 4;
+
+/// How many reads to have in flight, escalating until one attempt catches them.
+///
+/// **Four attempts at one width was not enough, and the reason is worth stating
+/// because it is not the obvious one.** Eight 1 MiB unbuffered reads cannot
+/// finish inside the ~6us an attach takes on an idle machine -- measured, with
+/// zero of eight landed. What defeats the test is not a fast device but a
+/// DESCHEDULED THREAD: if this thread loses its quantum between `submit` and
+/// `completion_event`, the reads have milliseconds to finish and the attempt
+/// degenerates. A shared CI runner does that occasionally, and four attempts in
+/// a row were unlucky once.
+///
+/// More attempts at the same width only buys more coin flips against the same
+/// coin. Widening the flight buys HEADROOM: at 64 reads the device has eight
+/// times the work to get through, so a stall has to be eight times longer to
+/// beat it. So escalate rather than merely repeat, and stop at the first width
+/// that works -- the common case still costs one attempt at eight.
+///
+/// Bounded by the ring, which is created with 64 submission entries.
+const DIRECT_WIDTHS: [usize; 4] = [8, 16, 32, 64];
 
 /// `FILE_FLAG_NO_BUFFERING` requires the buffer address, the file offset, and
 /// the length to be sector-aligned. 4096 satisfies both 512e and 4Kn devices.
@@ -429,60 +449,130 @@ fn attaching_while_unbuffered_reads_are_still_in_flight_strands_nothing() {
     let handle = file.as_raw_handle();
 
     let mut caught_in_flight = false;
+    // **What each attempt observed, kept so a failure can say WHY it
+    // degenerated rather than only THAT it did.**
+    //
+    // This guard fires when every read landed before the completion event was
+    // attached, and the interesting question is then which side moved: did the
+    // reads get faster, or did the attach get slower? Observed once in CI on a
+    // shared runner while passing on an idle developer machine, where the answer
+    // could not be recovered from the failure message at all -- it reported the
+    // conclusion and none of the evidence, so the only way to investigate was to
+    // re-run and hope.
+    //
+    // `submit_to_attach` is the number that usually settles it. It spans exactly
+    // the window this test depends on: the reads are in flight for it, so a
+    // large value means the attach was starved rather than the device being
+    // quick.
+    let mut trace: Vec<(
+        usize,
+        usize,
+        usize,
+        std::time::Duration,
+        std::time::Duration,
+    )> = Vec::new();
 
-    for attempt in 0..DIRECT_ATTEMPTS {
-        let mut ring = IoRing::new(64, 64).expect("create ring");
-        let mut contract = RingContract::new();
-        let mut pending: Pending<Aligned> = Pending::new();
+    'widths: for width in DIRECT_WIDTHS {
+        for attempt in 0..DIRECT_ATTEMPTS {
+            let mut ring = IoRing::new(64, 64).expect("create ring");
+            let mut contract = RingContract::new();
+            let mut pending: Pending<Aligned> = Pending::new();
 
-        {
-            let mut batch = Batch::new(&mut ring);
-            for index in 0..DIRECT_OPS {
-                let buffer = Aligned::new(DIRECT_LEN);
-                let offset = (index * DIRECT_LEN) as u64;
-                // SAFETY: `file` outlives every operation queued here -- this
-                // attempt drains to completion before the next one starts, and
-                // the handle lives for the whole test.
-                let token = unsafe { batch.read_raw(handle, buffer, offset, PushOptions::new()) }
-                    .expect("queue unbuffered read");
-                contract.observe_push(token.id());
-                pending.insert(token.id(), token);
+            {
+                let mut batch = Batch::new(&mut ring);
+                for index in 0..width {
+                    let buffer = Aligned::new(DIRECT_LEN);
+                    // Wraps, so a wider flight re-reads the fixture rather than
+                    // needing a proportionally larger one. This test cares only
+                    // that the reads are real and outstanding, never what they
+                    // return.
+                    let offset = ((index % DIRECT_OPS) * DIRECT_LEN) as u64;
+                    // SAFETY: `file` outlives every operation queued here -- this
+                    // attempt drains to completion before the next one starts, and
+                    // the handle lives for the whole test.
+                    let token =
+                        unsafe { batch.read_raw(handle, buffer, offset, PushOptions::new()) }
+                            .expect("queue unbuffered read");
+                    contract.observe_push(token.id());
+                    pending.insert(token.id(), token);
+                }
+                batch.submit_and_wait(0, 0).expect("submit without waiting");
             }
-            batch.submit_and_wait(0, 0).expect("submit without waiting");
-        }
+            // Started the instant the reads are in flight, so it measures the window
+            // this test's precondition actually depends on.
+            let submitted = std::time::Instant::now();
 
-        let event = ring.completion_event().expect(
+            let event = ring.completion_event().expect(
             "this host must report IORING_FEATURE_SET_COMPLETION_EVENT to run the handover tests",
         );
+            let attached = std::time::Instant::now();
 
-        // Non-blocking, so this measures what the attach actually found rather
-        // than waiting for a state to develop.
-        let already_queued = drain_to_empty(&mut ring, &mut contract, &mut pending);
-        if already_queued < DIRECT_OPS {
-            caught_in_flight = true;
+            // Non-blocking, so this measures what the attach actually found rather
+            // than waiting for a state to develop.
+            let already_queued = drain_to_empty(&mut ring, &mut contract, &mut pending);
+            trace.push((
+                width,
+                attempt,
+                already_queued,
+                attached.duration_since(submitted),
+                attached.elapsed(),
+            ));
+            if already_queued < width {
+                caught_in_flight = true;
+            }
+
+            wait_and_drain(
+                &mut ring,
+                &event,
+                &mut contract,
+                &mut pending,
+                width - already_queued,
+                &format!(
+                    "width {width}, attempt {attempt}, {already_queued} already queued at attach"
+                ),
+            );
+
+            assert!(
+                pending.is_empty(),
+                "width {width}, attempt {attempt}: a token was never claimed"
+            );
+            contract.assert_quiescent();
+
+            // The state was reached, and every assertion above has now run
+            // against it. Wider flights would only cost device I/O to
+            // re-establish what this one already showed.
+            if caught_in_flight {
+                break 'widths;
+            }
         }
-
-        wait_and_drain(
-            &mut ring,
-            &event,
-            &mut contract,
-            &mut pending,
-            DIRECT_OPS - already_queued,
-            &format!("attempt {attempt}, {already_queued} already queued at attach"),
-        );
-
-        assert!(
-            pending.is_empty(),
-            "attempt {attempt}: a token was never claimed"
-        );
-        contract.assert_quiescent();
     }
+
+    let observed = trace
+        .iter()
+        .map(|(width, attempt, queued, to_attach, to_drained)| {
+            format!(
+                "  {width} reads, attempt {attempt}: {queued}/{width} already queued at attach; \
+                 submit->attach {to_attach:?}, attach->drained {to_drained:?}"
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    let widest = DIRECT_WIDTHS[DIRECT_WIDTHS.len() - 1];
 
     assert!(
         caught_in_flight,
-        "no attempt caught a read in flight: every unbuffered read had already completed by the \
-         time the event was attached, so this test degenerated into the already-queued case and \
-         is no longer covering what it claims"
+        "no attempt caught a read in flight at ANY width: every unbuffered read had already \
+         completed by the time the event was attached, so this test degenerated into the \
+         already-queued case and is no longer covering what it claims.\n\n\
+         Escalated to {widest} reads of {DIRECT_LEN} bytes, {DIRECT_ATTEMPTS} attempt(s) per \
+         width:\n{observed}\n\n\
+         **Do not simply re-run.** A busy machine is already accounted for -- that is what the \
+         escalation is for, since widening the flight multiplies the stall needed to beat it. \
+         Reaching the widest row above means the stall outlasted {widest} reads, which a shared \
+         runner does not usually manage, or the device now resolves them faster than one \
+         `completion_event` call. Read `submit->attach`: large says the ATTACH was starved and \
+         this host is pathologically loaded; small says the DEVICE won, and the fix is a larger \
+         `DIRECT_LEN` rather than more attempts."
     );
 
     drop(file);
