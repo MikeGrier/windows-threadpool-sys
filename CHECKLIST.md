@@ -189,7 +189,8 @@ written before it was stated.
 
 **Why now, and what this is not.** The workspace's concurrency is checked today by reasoning recorded
 beside the code, an extensive unit suite, a sabotage suite that injects defects and requires each to
-be caught, and a cargo-mutants sweep. That combination has found real bugs -- `D-15`'s lost wakeup
+be caught, and a cargo-mutants sweep. That combination has found real bugs --
+[D-15](crates/windows-waitable-queues/DESIGN-NOTES.md#d-15)'s lost wakeup
 among them. It also has a measured blind spot:
 [crates/windows-waitable-queues/README.md](crates/windows-waitable-queues/README.md) records that
 weakening a producer's `Acquire` load of the consumer's position to `Relaxed` left the entire suite
@@ -231,11 +232,24 @@ once. Any tool this milestone recommends has to be read against that.
 - [ ] **M30.2** -- Pilot exactly one, chosen because parameter shrinking turns an untestable property
   into an exhaustive one.
 
-  `reserving_mpsc`'s claim-position recurrence (`SH-14.1`) is the strongest candidate: the defect
-  needs 2^32 pushes to manifest and is therefore beyond any test, but a model whose position wraps at
-  8 makes the same interleaving reachable in seconds and yields a counterexample trace rather than a
-  suspicion. `capacity == 1` is a second such case -- the design notes record that two of the three
-  sequence states collapse to the same number there.
+  `reserving_mpsc`'s claim-position recurrence (`SH-14.1`) is the strongest candidate, and the reason
+  is the interleaving rather than the count. Reaching the wrap takes 2^32 pushes -- about 37 seconds
+  of sustained maximum-rate pushing on the host the crate publishes, which is far outside a unit
+  suite budgeted in milliseconds but is not in itself beyond a long integration test. What is beyond
+  any test is the rest of the condition:
+  [crates/windows-waitable-queues/README.md](crates/windows-waitable-queues/README.md) records that
+  reaching the wrap is necessary but *not sufficient* -- a producer must also be stalled inside a
+  window a few instructions wide, and no test can schedule that deliberately. A model whose position
+  wraps at 8 makes the whole interleaving reachable in seconds and *exhaustive* rather than sampled,
+  and yields a counterexample trace rather than a suspicion.
+
+  An earlier version of this item said the defect "needs 2^32 pushes to manifest and is therefore
+  beyond any test", which overstated the limitation and named the wrong reason for it. It also
+  offered `capacity == 1` as a second candidate; that is
+  [D-12](crates/windows-waitable-queues/DESIGN-NOTES.md#d-12), an edge case of `slotwise_mpsc`'s slot
+  *sequence* protocol and unrelated to `reserving_mpsc`'s claim position -- and one already resolved
+  by that shape refusing a capacity below two, with a sabotage entry holding it. Pointing the pilot
+  at it would have sent it after a different shape's settled property.
 
   Success is a counterexample for a deliberately broken variant, not a green run on the correct one.
   A model that cannot produce the known bug when the bug is reintroduced has not been shown to be
@@ -256,10 +270,11 @@ once. Any tool this milestone recommends has to be read against that.
 
   `windows-waitable-queues`' design notes reference `M31.6` in three places as the planned `loom`
   verification, and [crates/windows-waitable-queues/README.md](crates/windows-waitable-queues/README.md)
-  tells adopters it is planned before 1.0. There is no live checklist item for it anywhere in the
-  repository -- the crate has only a `COMPLETED-CHECKLIST.md`. That is the "design notes are not a
-  work queue" failure the repository instructions name: a public commitment that nothing will cause
-  anyone to pick up.
+  tells adopters it is planned before 1.0. Until this item, there was no live checklist item for it
+  anywhere in the repository -- the crate has only a
+  [COMPLETED-CHECKLIST.md](crates/windows-waitable-queues/COMPLETED-CHECKLIST.md). That was the
+  "design notes are not a work queue" failure the repository instructions name: a public commitment
+  that nothing will cause anyone to pick up.
 
   Give it a real item in a real checklist, with its scope as D-31 describes it (both MPSC shapes or
   neither), and make the design-note references point at it.
@@ -277,6 +292,7 @@ once. Any tool this milestone recommends has to be read against that.
   So the decision has to answer: what keeps the model and the code in step, who re-runs it, and what
   happens when they disagree. "Adopt nothing, and say why" is a legitimate outcome -- D-31 reached it
   once already on narrower grounds.
+
 ## M-inf -- Parked
 
 Ungated work with no identified predecessor deliverable.
