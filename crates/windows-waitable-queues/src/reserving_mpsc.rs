@@ -186,7 +186,7 @@ use crate::options::Options;
 /// measured, so treat these as a floor on time rather than a forecast.
 ///
 /// **Choosing a deeper position is the same instruction on the same word.** All
-/// three issue the same `lock cmpxchg` on the same `u64` and differ only in
+/// three issue the same atomic compare-exchange on the same `u64` and differ
 /// shift and mask constants, so there is no structural reason for one to be
 /// slower. **What that costs in throughput is not established**: a probe
 /// comparing them found them indistinguishable at low producer counts, and at

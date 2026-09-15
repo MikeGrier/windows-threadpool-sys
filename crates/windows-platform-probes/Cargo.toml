@@ -190,14 +190,24 @@ serde = { version = "1.0", optional = true }
 # added to remove.
 #
 # `target_has_atomic = "128"` would be the WRONG condition -- `D-37` records that
-# rustc emits it even with `cmpxchg16b` disabled. The architectures are named
-# instead, matching the two the queue crate documents as natively lock-free:
-# x86-64 via `cmpxchg16b`, aarch64 via `ldxp`/`stxp`.
+# rustc emits it even with `cmpxchg16b` disabled, and that is measured here:
+# `rustc --print cfg --target x86_64-pc-windows-msvc -C target-feature=-cmpxchg16b`
+# still prints `target_has_atomic="128"` while dropping
+# `target_feature="cmpxchg16b"`. So the feature is the discriminator, and the
+# x86-64 branch tests it: naming the architecture alone would enable `dwcas` on a
+# build with the instruction switched off, where `AtomicU128` does not exist and
+# the queue crate fails to compile. aarch64 needs no such test -- `ldxp`/`stxp` is
+# ARMv8-A baseline and requires no target feature.
 #
-# `src/queue_contention.rs` gates the `Wide` rows on the SAME condition. The two
+# `src/queue_contention.rs` gates the `Wide` rows on the SAME conditions. The two
 # must agree; the source side names this comment so a reader changing one finds
 # the other.
-[target.'cfg(any(target_arch = "x86_64", target_arch = "aarch64"))'.dependencies]
+[target.'cfg(all(target_arch = "x86_64", target_feature = "cmpxchg16b"))'.dependencies]
+windows-waitable-queues = { path = "../windows-waitable-queues", features = [
+	"dwcas",
+] }
+
+[target.'cfg(target_arch = "aarch64")'.dependencies]
 windows-waitable-queues = { path = "../windows-waitable-queues", features = [
 	"dwcas",
 ] }

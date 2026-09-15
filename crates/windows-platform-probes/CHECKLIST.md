@@ -142,6 +142,36 @@ correctness in the archive.
   Reported by review against this branch; the comment at the slotwise twin now states what the
   barrier actually guarantees rather than implying the window is closed.
 
+- [ ] **M4.4** -- Interleave each candidate with a nearby control instead of measuring the control
+  four runs away from it, and re-measure everything that changes.
+
+  **Gap:** `measure()` runs, per producer count, `baseline_fetch_add`, `slotwise_mpsc`,
+  `reserving_mpsc`, `permit_mpsc`, then the three drained shapes, then the layout rows starting with
+  `reserving(32/32)`. The same-code control is the `reserving_mpsc` row against the
+  `reserving(32/32)` row -- **four measurements apart**, each five repetitions of 50,000 pushes per
+  producer. Frequency, thermal and scheduler drift across that interval is folded into the control,
+  and into every candidate the control is used to judge. At sixteen and thirty-two producers, where
+  the machine is oversubscribed and the layout differences are smallest, that is exactly where it
+  matters most.
+
+  This is the first *specific* mechanism proposed for the 7-61% same-configuration spread recorded in
+  [DESIGN-NOTES.md](DESIGN-NOTES.md#d-variance-is-a-finding); the other candidates there are general.
+  Reported by review.
+
+  **Target:** measure each candidate adjacent to a control run of the same code, or randomise and
+  balance the order across repetitions so drift cannot align with position in the sequence. Whichever
+  is chosen, the control must end up measuring the same interval the candidate did.
+
+  **BLOCKER, same as M4.3:** interleaving changes the measurement, so every figure published in
+  [DESIGN-NOTES.md](DESIGN-NOTES.md) becomes a measurement of a different procedure. The item is
+  "change it *and* re-run the sweep *and* rewrite the sections", not a reordering. Doing it
+  mid-branch would invalidate figures that ten review rounds have been read against. Raised rather
+  than silently deferred, per the PRIME DIRECTIVE.
+
+  **Do this before M4.2's diagnosis work if both are taken**, since a control that is not paired
+  cannot answer whether lengthening the run narrows the spread -- the answer would be confounded by
+  the same drift.
+
 - [ ] **M2.5** -- Make the banner describe the read the body describes.
 
   Gated by M3.1 and M3.3, both landed: establishing that the middle of three discoveries agreed

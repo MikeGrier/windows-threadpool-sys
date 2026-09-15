@@ -158,7 +158,7 @@
 //!
 //! - **Naming a layout moves it.** `Perpetual` puts the recurrence about twenty
 //!   years out. **What it costs in throughput is not
-//!   established** -- it issues the same `lock cmpxchg` on the same `u64` as
+//!   established** -- it issues the same atomic compare-exchange on the same
 //!   the default, and measured indistinguishable from it at low producer
 //!   counts; at high counts the difference did not clearly exceed the
 //!   run-to-run variation of the same code measured twice.
@@ -281,9 +281,11 @@
 //!   positions are 64 bits under every configuration, and naming a deeper layout
 //!   on [`reserving_mpsc`] moves the recurrence out. The mechanism is in the
 //!   section above.
-//! - **[`Reserving`] exists only on [`reserving_mpsc`]**; [`slotwise_mpsc`]
-//!   structurally cannot offer it. Naming a layout addresses the recurrence, so
-//!   that no longer trades against this capability.
+//! - **Of the two MPSC shapes, only [`reserving_mpsc`] implements
+//!   [`Reserving`]**; [`slotwise_mpsc`] structurally cannot. ([`spsc`]
+//!   implements it too, and the experimental `permit_mpsc` exposes its own
+//!   `reserve`.) Naming a layout addresses the recurrence, so that no longer
+//!   trades against this capability.
 //! - **[`spsc`] requires exactly one producer and one consumer**, and does less
 //!   work than either MPSC shape because of it.
 //!

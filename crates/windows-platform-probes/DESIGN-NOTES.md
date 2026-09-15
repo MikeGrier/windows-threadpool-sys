@@ -134,6 +134,16 @@ of them are live here:
 
 - **The wrong instrument for the variable.** A probe that moves several things at
   once cannot attribute a difference to the one under test.
+- **A control that is not a paired control.** This probe's same-code control is
+  the `reserving_mpsc` row against the `reserving(32/32)` row, and `measure()`
+  runs them **four measurements apart** -- the permit shape and all three drained
+  shapes fall between them, each five repetitions of 50,000 pushes per producer.
+  Any frequency, thermal or scheduler drift across that interval lands inside the
+  control, and by the same token inside every candidate row it is compared
+  against. This is a specific, mechanical candidate for the spread above rather
+  than a general worry, and it was proposed by review rather than found here.
+  Queued as M4.4 in [CHECKLIST.md](CHECKLIST.md), because interleaving changes the
+  measurement and so obsoletes the published figures.
 - **A defect in the probe itself.** This crate has already shipped one -- the
   timing window that read the coordinator's clock rather than the producers'.
   That defect was invisible in the numbers until it was found by reading, and it

@@ -186,7 +186,7 @@ proportionally longer to reach its wrap.
 
 - **Naming a layout moves it.** `Perpetual` puts the recurrence about twenty
   years out. **What it costs in throughput is not established** -- it issues the
-  same `lock cmpxchg` on the same `u64` as the
+  same atomic compare-exchange on the same `u64` as the
   default, and measured indistinguishable from it at low producer counts; at
   high counts the difference did not clearly exceed the run-to-run variation of
   the same code measured twice.
@@ -360,9 +360,10 @@ both rather than picking one for you.
   The mechanism is in
   [the section on recurrence](#how-long-reserving_mpsc-runs-before-its-claim-position-recurs)
   above.
-- **`reserve` exists only on `reserving_mpsc`**; `slotwise_mpsc` structurally
-  cannot offer it. That no longer forces a trade against the recurrence, since
-  naming a layout addresses it.
+- **Of the two MPSC shapes, only `reserving_mpsc` offers `reserve`**;
+  `slotwise_mpsc` structurally cannot. (`spsc` has it too, and the experimental
+  `permit_mpsc` exposes its own.) That no longer forces a trade against the
+  recurrence, since naming a layout addresses it.
 - **`spsc` requires exactly one producer and one consumer**, and does less work
   than either MPSC shape because of it.
 

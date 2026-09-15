@@ -94,7 +94,10 @@ use windows_waitable_queues::reserving_mpsc::{Balanced, ClaimLayout, Enduring, P
 /// why enabling the feature unconditionally breaks the workspace's deliberately
 /// supported `i686-pc-windows-msvc` build. Changing one without the other yields
 /// either a missing type or an unused feature.
-#[cfg(any(target_arch = "x86_64", target_arch = "aarch64"))]
+#[cfg(any(
+    all(target_arch = "x86_64", target_feature = "cmpxchg16b"),
+    target_arch = "aarch64"
+))]
 use windows_waitable_queues::reserving_mpsc::Wide;
 
 #[cfg(test)]
@@ -260,7 +263,10 @@ pub fn measure() -> Observation {
         // Gated on the architectures where a 128-bit exchange is native; see the
         // `Wide` import above. `#[cfg]` governs only the statement that follows
         // it, so each of the two pushes carries its own.
-        #[cfg(any(target_arch = "x86_64", target_arch = "aarch64"))]
+        #[cfg(any(
+            all(target_arch = "x86_64", target_feature = "cmpxchg16b"),
+            target_arch = "aarch64"
+        ))]
         isolated.push(median_run(shapes::CLAIM_WIDE, producers, |count| {
             time_isolated_layout::<Wide>(count)
         }));
@@ -274,7 +280,10 @@ pub fn measure() -> Observation {
         drained.push(median_run(shapes::CLAIM_PERPETUAL, producers, |count| {
             time_drained_layout::<Perpetual>(count)
         }));
-        #[cfg(any(target_arch = "x86_64", target_arch = "aarch64"))]
+        #[cfg(any(
+            all(target_arch = "x86_64", target_feature = "cmpxchg16b"),
+            target_arch = "aarch64"
+        ))]
         drained.push(median_run(shapes::CLAIM_WIDE, producers, |count| {
             time_drained_layout::<Wide>(count)
         }));
