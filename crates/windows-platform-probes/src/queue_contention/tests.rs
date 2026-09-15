@@ -250,13 +250,19 @@ fn every_shape_name_is_distinct() {
 
 /// `capacity_for` must leave room for every push, or the isolated regime would
 /// refuse and stop being the regime it claims to be.
+///
+/// `>=` rather than `>`: a `bounded(n)` queue accepts exactly `n` items
+/// (measured, not assumed), so an exact fit is sufficient. Today the product is
+/// never a power of two, so the distinction is unreachable -- but M4.2 makes the
+/// push count settable, and a stricter assertion than the contract requires would
+/// reject a valid configuration then.
 #[test]
-fn capacity_for_exceeds_the_pushes_every_producer_count_will_make() {
+fn capacity_for_leaves_room_for_every_push_at_every_producer_count() {
     for &producers in PRODUCER_COUNTS {
         let capacity = capacity_for(producers);
         let pushes = producers * PUSHES_PER_PRODUCER;
         assert!(
-            capacity > pushes,
+            capacity >= pushes,
             "{producers} producers push {pushes} but capacity is {capacity}"
         );
         assert!(

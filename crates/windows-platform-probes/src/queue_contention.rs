@@ -1,6 +1,11 @@
 // Copyright (c) Mike Grier.
 
-//! Does the array queue's tail claim contend at realistic producer counts?
+//! How does the array queue's push path scale with producer count?
+//!
+//! The question behind it is whether the **tail claim** contends badly enough to
+//! justify other MPSC shapes -- but what is timed is each shape's whole push
+//! path, so the curve is push-path scaling and the claim is one term in it. See
+//! the regime notes below before attributing any difference to the claim.
 //!
 //! **An experiment, not a component.** These probes measure platform behaviour
 //! and are not for production use. Do not call them from production code, and
@@ -125,7 +130,12 @@ pub mod shapes {
     /// The experimental permit-claiming MPSC, measured against
     /// [`RESERVING_MPSC`] because it is a candidate replacement for it.
     pub const PERMIT_MPSC: &str = "permit_mpsc";
-    /// The uncontended-atomic floor the queues are measured against.
+    /// The contended-atomic floor the queues are measured against.
+    ///
+    /// Contended, not uncontended: every producer thread increments the **same**
+    /// `AtomicU64`, which is the point -- it is the cheapest possible thing N
+    /// threads can do to one cache line, so it separates what the queue costs
+    /// from what this processor does to a fought-over line.
     pub const BASELINE_FETCH_ADD: &str = "baseline_fetch_add";
     /// `reserving_mpsc` on its default layout: a `u64` split 32 / 32.
     ///

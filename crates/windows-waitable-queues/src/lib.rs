@@ -114,9 +114,10 @@
 //! established**: a probe comparing them found them indistinguishable at low
 //! producer counts, and at high counts a difference that did not clearly exceed
 //! the run-to-run variation of the same code measured twice. `Wide` is a separate
-//! matter: it needs a 128-bit exchange, whose cost
-//! grows with producer count -- near parity at one or two, several times by
-//! thirty-two, in isolation -- and it is the only thing in
+//! matter: it needs a 128-bit exchange, and choosing it measured slower on the
+//! whole push path as producer count rises -- near parity at one or two,
+//! several times by thirty-two, in the isolated regime -- and it is the only
+//! thing in
 //! this crate
 //! that costs a third-party dependency. Prefer `Perpetual` unless you want the
 //! guarantee rather than the twenty years.

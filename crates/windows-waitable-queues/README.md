@@ -146,8 +146,9 @@ one to be slower -- but **what that costs in throughput is not established**: a
 probe comparing them found them indistinguishable at low producer counts, and at
 high counts a difference that did not clearly exceed the run-to-run variation of
 the same code measured twice. `Wide` is a separate matter: it needs a 128-bit exchange,
-whose cost grows with producer count -- near parity at one or two, several times
-by thirty-two, in isolation -- and it is the only thing in
+and choosing it measured slower on the whole push path as producer count rises
+-- near parity at one or two, several times by thirty-two, in the isolated
+regime -- and it is the only thing in
 this crate that costs a third-party dependency.
 
 The default remains `Balanced` so that no existing caller's behaviour changed
@@ -213,9 +214,9 @@ dependency: Rust's standard library has no 128-bit atomic -- `core::sync::atomic
 stops at 64 bits -- so the double-width compare-and-swap comes from
 `portable-atomic`. Most callers do not need it; `Perpetual` reaches roughly
 twenty years before its claim position recurs with no dependency, though what
-that costs in throughput is not established, while the 128-bit exchange measured
-a cost that grows with producer count -- near parity at one or two,
-several times by thirty-two. Take
+that costs in throughput is not established, while choosing `Wide` measured
+slower on the whole push path as producer count rises -- near parity at one or
+two, several times by thirty-two, in the isolated regime. Take
 it when you want the recurrence gone as a guarantee rather than deferred by an
 argument about deployment lifetimes.
 

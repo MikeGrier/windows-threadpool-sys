@@ -93,7 +93,10 @@ fn render(out: &mut dyn std::fmt::Write) {
     let _ = writeln!(out, "\ninterpretation:\n");
 
     // Question 1: does the claim collapse as producers are added?
-    let _ = writeln!(out, "  1. tail-claim contention (isolated regime)\n");
+    let _ = writeln!(
+        out,
+        "  1. push-path scaling with producer count (isolated regime)\n"
+    );
     let _ = writeln!(
         out,
         "     {:<18} {:>12} {:>12} {:>12} {:>14}",
@@ -282,16 +285,27 @@ fn render(out: &mut dyn std::fmt::Write) {
     );
     let _ = writeln!(
         out,
-        "     the 32/32 row above are the same code, so their gap is this"
-    );
-    let _ = writeln!(out, "     host's zero.");
-    let _ = writeln!(
-        out,
-        "     64/64 vs 32/32 prices the double-width exchange -- what removing"
+        "     the 32/32 row above are the same code, so the gap between them is"
     );
     let _ = writeln!(
         out,
-        "     the recurrence outright costs, against 8/56 merely deferring it.\n"
+        "     what 'no difference' looks like on this host -- which across seven"
+    );
+    let _ = writeln!(
+        out,
+        "     runs was not zero, and was wide enough to swallow the layout rows."
+    );
+    let _ = writeln!(
+        out,
+        "     64/64 vs 32/32 is the double-width layout's effect on the whole"
+    );
+    let _ = writeln!(
+        out,
+        "     push path -- what removing the recurrence outright costs, against"
+    );
+    let _ = writeln!(
+        out,
+        "     8/56 merely deferring it. Not the exchange in isolation.\n"
     );
     for (label, regime) in [
         ("isolated", &observation.isolated),

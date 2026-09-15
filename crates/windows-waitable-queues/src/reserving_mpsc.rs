@@ -191,8 +191,8 @@ use crate::options::Options;
 /// comparing them found them indistinguishable at low producer counts, and at
 /// high counts a difference that did not clearly exceed the run-to-run
 /// variation of the same code measured twice. Measure on your target if
-/// throughput at high producer counts matters. The trade is otherwise entirely
-/// against the reservation ceiling.
+/// throughput at high producer counts matters. The one trade that IS settled is
+/// the reservation ceiling; throughput remains target-dependent.
 ///
 /// This trait is sealed: the layouts are a fixed set because each one's
 /// constants are checked against each other at compile time, and a caller
@@ -528,12 +528,14 @@ impl ClaimLayout for Perpetual {
 /// pushes to recur, which no deployment reaches -- not "not for twenty years",
 /// but not at all.
 ///
-/// **Read the cost before choosing it.** The 128-bit exchange measured slower
-/// than a `u64` one on the claim itself, and the penalty **grows with producer
-/// count** -- near parity at one or two, several times by thirty-two, on one
-/// x86-64 host; against a draining consumer the difference fell inside that
-/// host's same-code control and could not be called at all. The per-count table
-/// is in the queue-contention section of
+/// **Read the cost before choosing it.** Choosing `Wide` measured slower on the
+/// whole push path than a `u64` layout does, and the penalty **grows with
+/// producer count** -- near parity at one or two, several times by thirty-two,
+/// in the isolated regime on one x86-64 host; against a draining consumer the
+/// difference fell inside that host's same-code control and could not be called
+/// at all. The probe times the complete push, so this is the layout's effect on
+/// that path and not a measurement of the 128-bit exchange on its own. The
+/// per-count table is in the queue-contention section of
 /// [DESIGN-NOTES.md](../../windows-platform-probes/DESIGN-NOTES.md), which is
 /// the one place it is recorded.
 /// [`Perpetual`] reaches about twenty years on a plain `AtomicU64`, and **what
