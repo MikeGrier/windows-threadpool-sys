@@ -93,10 +93,10 @@
 //!
 //! | Layout | Outstanding reservations | Pushes to recurrence | At sustained maximum rate |
 //! |---|---|---|---|
-//! | `Balanced` (default) | 2^32 | 2^32 | about 37 seconds |
+//! | `Balanced` (default) | 4,294,967,295 | 2^32 | about 37 seconds |
 //! | `Enduring` | 65,535 | 2^48 | about 28 days |
 //! | `Perpetual` | 255 | 2^56 | about 20 years |
-//! | `Wide` (needs `dwcas`) | 2^32 | 2^64 | unreachable |
+//! | `Wide` (needs `dwcas`) | 4,294,967,295 | 2^64 | unreachable |
 //!
 //! ```
 //! use windows_waitable_queues::reserving_mpsc::{self, Perpetual};
@@ -120,7 +120,8 @@
 //! thing in
 //! this crate
 //! that costs a third-party dependency. What it provides that `Perpetual` does
-//! not is the recurrence removed outright rather than deferred.
+//! not is a 64-bit position: the recurrence moves to 2^64 pushes, which no
+//! deployment reaches, rather than to a horizon measured in years.
 //!
 //! The default remains `Balanced` so that no existing caller's behaviour
 //! changed when the choice was introduced. Under it, a queue driven past 2^32

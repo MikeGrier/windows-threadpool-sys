@@ -334,7 +334,7 @@ fn render(out: &mut dyn std::fmt::Write) {
     );
     let _ = writeln!(
         out,
-        "     push path -- what removing the recurrence outright costs, against"
+        "     push path -- what moving the recurrence to 2^64 costs, against"
     );
     let _ = writeln!(
         out,

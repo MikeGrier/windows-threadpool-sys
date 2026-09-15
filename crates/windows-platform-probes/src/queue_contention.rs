@@ -620,11 +620,18 @@ fn time_drained_reserving(producers: usize) -> Repetition {
     // **Defaults on both sides, and that is a correction.** This row previously
     // enabled high-water tracking here and nowhere else, to "also price the
     // switch M31.4 made opt-in". But the number it feeds is presented as the
-    // cost of *reservation*, and tracking adds an unrelated operation to this
-    // shape's push path alone -- a load of the consumer's position, which is
-    // exactly the shared line the other shape's push is built to avoid
-    // touching. The ratio therefore measured reservation plus a handicap, with
-    // no way for a reader to separate them.
+    // cost of *reservation*, and tracking adds work to this shape's push path
+    // alone, so the ratio measured reservation plus a handicap with no way for a
+    // reader to separate them.
+    //
+    // **What the handicap actually is, corrected:** an earlier version of this
+    // comment said tracking adds a load of the consumer's position. It does not.
+    // `reserving_mpsc::publish` loads `head` **unconditionally** -- the slot
+    // write needs that acquire edge whether or not anything is measured, as the
+    // comment at that load says in as many words. What the switch adds is the
+    // depth arithmetic and the metric update on the far side of a branch that is
+    // taken either way. Smaller than claimed, and still not part of what this row
+    // is presented as measuring.
     //
     // Nothing consumes the high-water figure here either, so the tracking was
     // paying a cost to produce a number nobody read. Pricing that switch is a

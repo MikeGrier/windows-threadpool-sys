@@ -125,10 +125,10 @@ positions:
 
 | Layout | Outstanding reservations | Pushes to recurrence | At sustained maximum rate |
 |---|---|---|---|
-| `Balanced` (default) | 2^32 | 2^32 | about 37 seconds |
+| `Balanced` (default) | 4,294,967,295 | 2^32 | about 37 seconds |
 | `Enduring` | 65,535 | 2^48 | about 28 days |
 | `Perpetual` | 255 | 2^56 | about 20 years |
-| `Wide` (needs `dwcas`) | 2^32 | 2^64 | unreachable |
+| `Wide` (needs `dwcas`) | 4,294,967,295 | 2^64 | unreachable |
 
 ```rust
 use windows_waitable_queues::reserving_mpsc::{self, Perpetual};
@@ -218,8 +218,9 @@ twenty years before its claim position recurs with no dependency, though what
 that costs in throughput is not established, while under `Wide` the whole push
 path was measured as slower as producer count rises -- near parity at one or
 two, several times by thirty-two, in the isolated regime. What `Wide` provides
-that the `u64` layouts do not is the recurrence removed outright rather than
-deferred.
+that the `u64` layouts do not is a 64-bit position: the recurrence moves to
+2^64 pushes, which no deployment reaches, rather than to a horizon measured in
+years.
 
 **`experimental-permit-claim`** adds `permit_mpsc`, a different claim protocol in
 which the decision and the operation are one atomic rather than two. It is

@@ -30,8 +30,8 @@
 //! ceiling of 255 -- it is the same exchange on
 //! the same word, differing only in shift constants, though what that costs in
 //! throughput is not established (see [`ClaimLayout`]). [`Enduring`] sits between
-//! them, and the `dwcas` feature adds a 128-bit word that removes the
-//! recurrence outright.
+//! them, and the `dwcas` feature adds a 128-bit word whose 64-bit position moves
+//! the recurrence to 2^64 pushes, which no deployment reaches.
 //!
 //! ```
 //! use windows_waitable_queues::reserving_mpsc::{self, Perpetual};
@@ -175,7 +175,7 @@ use crate::options::Options;
 ///
 /// | Layout | reserved / position | Outstanding reservations | Pushes to recurrence |
 /// |---|---|---|---|
-/// | [`Balanced`] | 32 / 32 | 2^32 | 2^32 |
+/// | [`Balanced`] | 32 / 32 | 4,294,967,295 | 2^32 |
 /// | [`Enduring`] | 16 / 48 | 65,535 | 2^48 |
 /// | [`Perpetual`] | 8 / 56 | 255 | 2^56 |
 ///
@@ -486,7 +486,7 @@ impl ClaimWord for u128 {
 /// beyond any use this crate has seen, and the exposure is what pays for it.
 /// [`Enduring`] and [`Perpetual`] spend that ceiling the other way --
 /// [`Enduring`] holds 65,535 outstanding reservations, [`Perpetual`] 255 --
-/// and `Wide` removes the recurrence rather than deferring it. (`Wide` exists
+/// and `Wide` moves it to 2^64 pushes rather than to a horizon in years. (`Wide` exists
 /// only under the `dwcas` feature, so this names it without linking: an
 /// intra-doc link here would not resolve in a default-feature rustdoc build.)
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -532,9 +532,9 @@ impl ClaimLayout for Perpetual {
 /// A 128-bit claim word: 64 bits of position, and the count in the other half.
 ///
 /// Requires the `dwcas` feature, which is what brings in the `portable-atomic`
-/// dependency this crate otherwise does not have. The position needs 2^64
-/// pushes to recur, which no deployment reaches -- not "not for twenty years",
-/// but not at all.
+/// dependency this crate otherwise does not have. The position is 64 bits, so it
+/// recurs after 2^64 pushes -- a bound that exists but that no deployment
+/// reaches, rather than the twenty years [`Perpetual`] buys.
 ///
 /// The whole push path was measured as slower under this layout than under a
 /// `u64` one, and the difference **grows with producer count** -- near parity
@@ -549,8 +549,9 @@ impl ClaimLayout for Perpetual {
 ///
 /// [`Perpetual`] reaches about twenty years on a plain `AtomicU64`, and what
 /// that costs in throughput is not established -- see [`ClaimLayout`]. What this
-/// layout provides that the others do not is the recurrence removed outright
-/// rather than deferred.
+/// layout provides that the others do not is a 64-bit position: the recurrence
+/// moves to 2^64 pushes, which no deployment reaches, rather than to a horizon
+/// measured in years.
 ///
 /// The reservation ceiling is [`u32::MAX`] rather than the 64 bits the field
 /// could hold, because the count is reported to callers as a `u32`.
