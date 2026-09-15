@@ -528,12 +528,15 @@ impl ClaimLayout for Perpetual {
 /// pushes to recur, which no deployment reaches -- not "not for twenty years",
 /// but not at all.
 ///
-/// **Read the cost before choosing it.** The 128-bit exchange measured 2-3x
-/// slower than a `u64` one on the claim itself, and the penalty grows with
-/// producer count; against a draining consumer the difference is much smaller.
-/// [`Perpetual`] reaches about twenty years on a plain `AtomicU64` at no
-/// measured cost, so this is worth taking only when a guarantee is wanted in
-/// place of an argument about deployment lifetimes.
+/// **Read the cost before choosing it.** The 128-bit exchange measured slower
+/// than a `u64` one on the claim itself -- about 1.1x at one or two producers
+/// rising to roughly 3.8x at thirty-two on one x86-64 host, so the penalty grows
+/// with producer count; against a draining consumer the difference fell inside
+/// that host's same-code control and could not be called at all.
+/// [`Perpetual`] reaches about twenty years on a plain `AtomicU64`, and **what
+/// that costs in throughput is not established** -- see [`ClaimLayout`]. So this
+/// is worth taking when a guarantee is wanted in place of an argument about
+/// deployment lifetimes, not because the narrow alternative is known to be free.
 ///
 /// The reservation ceiling is [`u32::MAX`] rather than the 64 bits the field
 /// could hold, because the count is reported to callers as a `u32`.

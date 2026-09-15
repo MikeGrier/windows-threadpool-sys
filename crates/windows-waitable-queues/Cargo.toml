@@ -58,8 +58,9 @@ experimental-permit-claim = []
 # target and the build fails naming it.
 #
 # Most callers should not need this. `Perpetual` reaches roughly twenty years
-# before its claim position recurs, on a plain `AtomicU64` at no measured cost,
-# whereas the 128-bit exchange measured 2-3x slower on the claim itself. See
+# before its claim position recurs, on a plain `AtomicU64`; what that costs in
+# throughput is not established, and the 128-bit exchange measured roughly 1.1x
+# to 3.8x slower on the claim itself depending on producer count. See
 # `ClaimLayout` for the comparison.
 dwcas = ["dep:portable-atomic"]
 
