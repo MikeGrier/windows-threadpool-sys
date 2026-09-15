@@ -59,10 +59,19 @@
 //! is what `slotwise_mpsc` avoids and why it cannot offer reservation at all.
 //!
 //! **That cost is not what makes either shape slower.** This one measured
-//! *faster* than `slotwise_mpsc` under contention on both architectures tried, by up to
-//! 6.4x, because the slot sequence `slotwise_mpsc` reads instead marches through memory
-//! while other producers write it. See the crate documentation for the numbers
-//! and for how to choose.
+//! *faster* than `slotwise_mpsc` under contention on the hosts tried. The
+//! magnitude belongs with the capture that produced it rather than here, so see
+//! the crate documentation's attributed table for the figures and the conditions
+//! they were taken under.
+//!
+//! An earlier version of this paragraph gave a figure ("by up to 6.4x") taken
+//! from a two-host comparison that has since been withdrawn for predating a
+//! correction to the probe's timing window, and attributed the difference to
+//! `slotwise_mpsc`'s slot sequence marching through memory while other producers
+//! write it. That mechanism is plausible and is **not** established: the probe
+//! times the complete push and cannot isolate or bound that read, so the causal
+//! claim went further than the measurement supports. The direction survives; the
+//! magnitude and the cause do not.
 //!
 //! `slotwise_mpsc`'s producer never reads the consumer's position. It asks a different
 //! question -- "is the slot I am about to claim free?" -- and reads that from

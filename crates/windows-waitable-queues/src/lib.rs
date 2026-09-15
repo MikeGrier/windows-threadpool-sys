@@ -176,9 +176,13 @@
 //!   positions are 64 bits on every target, so the equivalent wrap needs 2^64
 //!   claims. It does not offer [`Reserving`].
 //! - **[`spsc`] never had it**, having no contended claim to race.
-//! - **The default layout is sound below its wrap.** A queue that will not push
-//!   4.3 billion items in one run, or that is not driven at sustained maximum
-//!   rate by two or more producers, is not exposed even on `Balanced`.
+//! - **The default layout's exposure is a count, not a rate.** Two conditions
+//!   must both hold: two or more producers (one producer has no race to lose),
+//!   and 4.3 billion pushes accumulated over the life of one queue. A lower
+//!   sustained rate does not remove the exposure -- the position advances once
+//!   per push regardless of how fast they arrive, so a slow queue with two or
+//!   more producers reaches the same wrap, just later. An earlier version of
+//!   this bullet listed a low rate as its own exemption, which was wrong.
 //!
 //! This is disclosed on the same principle as the ordering gap below: an
 //! adopter gets the information we have rather than an assurance we cannot

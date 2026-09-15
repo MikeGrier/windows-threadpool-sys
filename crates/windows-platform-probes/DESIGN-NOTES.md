@@ -910,14 +910,25 @@ conservative floor on time-to-wrap. 33M/s is the measured drained rate at one
 producer. 116M/s is the crate's own disclosed figure and is the honest planning
 number.
 
-**The reservation half is where the bits are being spent, and it is the half
-worth least.** Outstanding reservations are bounded by how many producers are
-mid-flight -- hundreds, perhaps thousands -- and the field currently holds four
-billion. Giving up reservations nobody will allocate is what buys the position
-bits: 2^21 reservations leaves about a day, 2^12 leaves over a year, and 2^8
-leaves twenty years. The last reaches the same practical headroom a 128-bit word
-gives, on a plain `AtomicU64`, without a third-party dependency and without
-reopening `D-18`'s i686 question.
+**The reservation half is where the bits are being spent, and the trade it makes
+is a real one.** The field currently holds four billion outstanding reservations.
+Narrowing it is what buys the position bits: 2^21 reservations leaves about a
+day, 2^12 leaves over a year, and 2^8 leaves twenty years. The last reaches the
+same practical headroom a 128-bit word gives, on a plain `AtomicU64`, without a
+third-party dependency and without reopening `D-18`'s i686 question.
+
+**An earlier version of this paragraph called the reservation half "the half
+worth least", on the premise that outstanding reservations are bounded by how
+many producers are mid-flight -- hundreds, perhaps thousands -- so that narrowing
+the field gave up "reservations nobody will allocate". That premise is
+withdrawn as false.** `Producer::reserve` takes `&self` and returns an owned
+`Reservation`, so one producer can hold as many as the field allows: the bound is
+the lesser of the ring capacity and the field, not a producer count. The queue
+crate's `one_producer_alone_can_exhaust_the_reservation_field` fills `Perpetual`'s
+255 from a single thread and is then refused. The arithmetic above is unaffected,
+but what it costs is not free -- a caller holding many simultaneous reservations
+is choosing against the narrower layouts. See
+[D-41](../windows-waitable-queues/DESIGN-NOTES.md#d-41).
 
 **This paragraph previously added "at no measured cost", and that clause is
 withdrawn** -- it was the same claim the layout section below withdrew, restated

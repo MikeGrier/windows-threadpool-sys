@@ -193,8 +193,12 @@ pub fn bounded<T>(capacity: usize) -> Result<(Producer<T>, Consumer<T>), Capacit
 ///
 /// That avoidance is what distinguishes the two multi-producer shapes, but
 /// **it is not what makes either one faster**: measurement found this shape the
-/// slower of the two under contention, by up to 6.4x. See the crate
-/// documentation for the numbers and for how to choose.
+/// slower of the two under contention on the hosts tried. See the crate
+/// documentation's attributed table for the figures and the conditions they were
+/// taken under. (An earlier version of this sentence gave "by up to 6.4x", a
+/// figure from a two-host capture withdrawn for predating a correction to the
+/// probe's timing window, and pointed at the crate documentation "for how to
+/// choose"; which shape suits a deployment is the deployment's question.)
 ///
 /// # Errors
 ///

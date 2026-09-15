@@ -1887,8 +1887,14 @@ produced most of the review findings, single facts are restated like this:
 | `4,294,967,295` (the `Balanced` field ceiling) | 5 | 3 |
 | `about 20 years` | 3 | 3 |
 
-**Every one of these is derivable from `ClaimLayout`'s associated constants, and every one is
-hand-maintained with nothing checking it.** The error surface is proportional to that column, not to
+**All of these are restated by hand with nothing checking them, and most are derivable from
+`ClaimLayout`'s associated constants.** The two time rows are not: `37 seconds` and `about 20 years`
+follow from a field width *and* an assumed sustained push rate, so a constants-versus-table check
+would validate the first three rows outright and the time rows only once the rate is also pinned
+somewhere single. That distinction matters because it bounds what the cheapest remedy below can
+actually do -- an earlier version of this paragraph said every row was derivable from the constants,
+which overstated it, in a note about overstatement. The error surface is proportional to that column,
+not to
 total prose volume. Halving the prose uniformly would leave roughly half of each row and fix
 nothing structural.
 
@@ -1940,12 +1946,15 @@ conversation despite fixing different things.
 
 ### The cheapest available move, recorded but not scheduled
 
-`README.md` is already a build input for `windows-waitable-queues` (`#[doc = include_str!]` in
+[README.md](crates/windows-waitable-queues/README.md) is already a build input for
+`windows-waitable-queues` (`#[doc = include_str!]` in
 [lib.rs](crates/windows-waitable-queues/src/lib.rs)), so a test can parse the published layout
 tables and assert every row against `ClaimLayout`'s constants -- converting 19 hand-written `255`s
 into one definition and N checked derivations, with no generator and no new tooling. Mechanically,
-that would have caught the `2^31`/`2^30` error, the `MAX_RESERVED`-as-capacity conflation, and both
-stale recurrence tables.
+that would have caught the `2^31`/`2^30` error, the `MAX_RESERVED`-as-capacity conflation, and the
+ceiling and push-count columns of both stale recurrence tables. The time columns need the assumed
+rate pinned somewhere single before they can be checked the same way, which is a second and smaller
+piece of work rather than a reason not to do the first.
 
 **No work is scheduled by this note.** It was written to inform a decision that has not been taken,
 and the deliberate absence of a checklist item is per the "design notes are not a work queue" rule
