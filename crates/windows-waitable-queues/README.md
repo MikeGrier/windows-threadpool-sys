@@ -64,12 +64,12 @@ how many threads push, whether a slot can be claimed before the message exists
 -- decides its *algorithm*, not merely its configuration, so these are separate
 shapes rather than one type with switches. A caller names the shape it wants.
 
-| Shape | Producers | What it adds | Choose it when |
+| Shape | Producers | What it adds | Applies when |
 |---|---|---|---|
 | `spsc` | one | nothing -- no compare-and-swap on either side | exactly one thread pushes |
-| `slotwise_mpsc` | many | Vyukov's per-slot sequence protocol, so producers push without a lock | **the default** for many producers |
+| `slotwise_mpsc` | many | Vyukov's per-slot sequence protocol, so producers push without a lock | many threads push and a full queue may refuse |
 | `reserving_mpsc` | many | claiming a slot *before* the message exists | a message must not be lost to a full queue |
-| `permit_mpsc` | many | an experimental claim protocol | never in production -- see below |
+| `permit_mpsc` | many | an experimental claim protocol | behind `experimental-permit-claim`, outside the semver promise -- see below |
 
 Every shape has one consumer. `permit_mpsc` is behind the non-default
 `experimental-permit-claim` feature and is outside the semver promise; it will
@@ -119,9 +119,11 @@ to correct that misreading once.
 **This is a property of the default layout, not of the shape**, and that is a
 change: it was previously a defect a caller had to live with. The claim word
 packs an outstanding-reservation count beside the position, and how its bits are
-divided is now a caller's choice. Reservations are bounded by how many producers
-are mid-send -- hundreds at most -- so giving up a ceiling nobody reaches buys
-positions:
+divided is now a caller's choice. A narrower count field buys position bits, and
+what it costs is reservations held simultaneously: `Producer::reserve` takes
+`&self` and returns an owned `Reservation`, so a single producer can hold as
+many as the field allows, and a caller that holds many at once is choosing
+against the narrower layouts rather than against a producer count.
 
 | Layout | Reservation-count field ceiling | Pushes to recurrence | At sustained maximum rate |
 |---|---|---|---|

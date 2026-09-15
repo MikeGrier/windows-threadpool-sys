@@ -140,9 +140,15 @@
 //! The reason for keeping it out of the default is unchanged: widening this
 //! shape's word unconditionally would change what the module offers depending on
 //! the target, because `i686-pc-windows-msvc` has no lock-free 128-bit exchange
-//! and neither does an x86-64 build without `cmpxchg16b`. The same module would
-//! be lock-free on one target and silently mutex-backed on another. So `Wide`
-//! (which exists only under `dwcas`, so this names it without linking) is
+//! and neither does an x86-64 build without `cmpxchg16b`. On such a target this
+//! crate does not silently substitute a lock: the `portable-atomic` dependency
+//! is taken with `default-features = false`, which is load-bearing precisely
+//! because its defaults *would* supply a global lock and still compile. With
+//! them off, `AtomicU128` does not exist there and enabling `dwcas` fails the
+//! build naming it. So the hazard an unconditional wide word would carry is a
+//! module that is lock-free on one target and mutex-backed on another; the
+//! hazard the feature gate actually trades it for is a build that stops. So
+//! `Wide` (which exists only under `dwcas`, so this names it without linking) is
 //! reached by naming it, and the
 //! narrow word's contract is identical on every target -- a caller gets the wide
 //! one by asking, never by accident of where they compiled.
@@ -178,8 +184,16 @@ use crate::options::Options;
 ///
 /// **The two things being traded are not equally valuable, and the shipping
 /// default spends the bits on the less valuable one.** The reservation count
-/// bounds how many messages may be held in flight at once -- in practice the
-/// number of producers mid-send, so hundreds or thousands. The position decides
+/// bounds how many messages may be held in flight at once. That bound is the
+/// lesser of the ring's capacity and the layout's count field, and it is
+/// reachable by a *single* producer: [`Producer::reserve`] takes `&self` and
+/// returns an owned [`Reservation`], so one thread can hold as many as the
+/// field allows. (An earlier version of this paragraph said the practical bound
+/// was "the number of producers mid-send, so hundreds or thousands". That was
+/// wrong, and it mattered -- it made the narrower fields look unreachable. One
+/// producer alone fills `Perpetual`'s 255 and is then refused, which
+/// `one_producer_alone_can_exhaust_the_reservation_field` pins.) The position
+/// decides
 /// how many pushes occur before it recurs, and a recurrence is the `SH-14.1`
 /// hazard: a producer descheduled across a full wrap can claim against a
 /// numerically identical but generations-later value.

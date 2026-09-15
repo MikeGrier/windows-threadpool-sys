@@ -87,9 +87,12 @@
 //! **This is a property of the default layout, not of the shape**, and that is
 //! a change: it was previously a defect a caller had to live with. The claim
 //! word packs an outstanding-reservation count beside the position, and how its
-//! bits are divided is now a caller's choice. Reservations are bounded by how
-//! many producers are mid-send -- hundreds at most -- so giving up a ceiling
-//! nobody reaches buys positions:
+//! bits are divided is now a caller's choice. A narrower count field buys
+//! position bits, and what it costs is reservations held simultaneously:
+//! `Producer::reserve` takes `&self` and returns an owned `Reservation`, so a
+//! single producer can hold as many as the field allows, and a caller that
+//! holds many at once is choosing against the narrower layouts rather than
+//! against a producer count.
 //!
 //! | Layout | Reservation-count field ceiling | Pushes to recurrence | At sustained maximum rate |
 //! |---|---|---|---|
