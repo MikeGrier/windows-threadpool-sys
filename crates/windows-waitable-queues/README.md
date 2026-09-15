@@ -418,6 +418,11 @@ this host's 8 physical cores, and the spread across the three runs is not small:
 probe's own same-code control has been measured at 0.68-1.27x over seven runs,
 which is wide enough to swallow small differences; see
 [DESIGN-NOTES.md](../windows-platform-probes/DESIGN-NOTES.md#d-variance-is-a-finding).
+That seven-run sweep is a **separate capture** taken to size the noise floor, not
+a longer version of this table -- its medians differ from the ones above, which is
+the point it was making. Where the two disagree, this table is the attributed
+figure for this crate and the sweep is the evidence about how much such a figure
+moves.
 
 **A previous version of this table compared two hosts** -- an AMD EPYC 7763 slice
 and a Snapdragon X2 Elite -- and has been removed rather than carried forward. Its

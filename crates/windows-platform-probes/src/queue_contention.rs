@@ -76,6 +76,7 @@
 //! scaling with producer count, and the drained one for the end-to-end shape
 //! comparison taken while `head` is being written.
 
+use std::fmt;
 use std::sync::Arc;
 use std::sync::Barrier;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -219,6 +220,71 @@ impl Observation {
         let many = self.find(regime, shape, producers)?;
         Some(many.pushes_per_second / one.pushes_per_second)
     }
+}
+
+/// Renders one regime's rows as the report's table body.
+///
+/// Here rather than in the binary so it can be tested without running the
+/// measurement. It takes a sink rather than writing to stdout for the reason
+/// [`crate::report`] records: a helper writing to stdout while its caller
+/// composes a string emits its lines first, reordering the report without losing
+/// any of it.
+pub fn render_table(out: &mut dyn fmt::Write, runs: &[Run]) {
+    let _ = writeln!(
+        out,
+        "{:<18} {:>10} {:>14} {:>16} {:>14}",
+        "shape", "producers", "ns/push", "pushes/sec", "refusals"
+    );
+    for run in runs {
+        let _ = writeln!(
+            out,
+            "{:<18} {:>10} {:>14.1} {:>16.0} {:>14}",
+            run.shape, run.producers, run.nanos_per_push, run.pushes_per_second, run.refusals
+        );
+    }
+}
+
+/// A scaling factor, or `--` when it is missing or not a number.
+///
+/// Guards non-finite values for the same reason [`format_ratio`] guards its
+/// denominator, and the guard belongs here rather than in [`Observation::scaling`]:
+/// a shape whose one-producer row reports zero makes the quotient infinite, and
+/// `infx` in a column of measurements reads as a measurement. `scaling` is
+/// deliberately allowed to return the non-finite value -- it is arithmetic, not
+/// a renderer -- so the display layer is where it has to be caught.
+#[must_use]
+pub fn format_scaling(scaling: Option<f64>) -> String {
+    match scaling {
+        Some(value) if value.is_finite() => format!("{value:.2}x"),
+        _ => "--".to_owned(),
+    }
+}
+
+/// `numerator / denominator` as a cost ratio, or `--` when either is missing.
+///
+/// Guards the denominator rather than trusting it: a shape that failed to run
+/// reports zero, and a division by it would print `inf` or `NaN` in a column a
+/// reader would otherwise take for a measurement.
+#[must_use]
+pub fn format_ratio(numerator: Option<Run>, denominator: Option<Run>) -> String {
+    match (numerator, denominator) {
+        (Some(numerator), Some(denominator)) if denominator.nanos_per_push > 0.0 => {
+            format!(
+                "{:.2}x",
+                numerator.nanos_per_push / denominator.nanos_per_push
+            )
+        }
+        _ => "--".to_owned(),
+    }
+}
+
+/// One row's nanoseconds per push, or `--` when the row is missing.
+#[must_use]
+pub fn format_nanos(run: Option<Run>) -> String {
+    run.map_or_else(
+        || "--".to_owned(),
+        |run| format!("{:.1}", run.nanos_per_push),
+    )
 }
 
 /// Time every configuration.

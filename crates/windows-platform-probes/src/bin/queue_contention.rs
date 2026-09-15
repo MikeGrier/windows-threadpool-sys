@@ -13,7 +13,8 @@
 //! cannot separate.
 
 use windows_platform_probes::queue_contention::{
-    DRAINED_CAPACITY, PRODUCER_COUNTS, PUSHES_PER_PRODUCER, REPETITIONS, Run, measure, shapes,
+    DRAINED_CAPACITY, PRODUCER_COUNTS, PUSHES_PER_PRODUCER, REPETITIONS, format_nanos,
+    format_ratio, format_scaling, measure, render_table, shapes,
 };
 use windows_platform_probes::report::emit_report;
 
@@ -430,63 +431,4 @@ fn render(out: &mut dyn std::fmt::Write) {
         out,
         "  many refusals was waiting for the consumer, not for the tail."
     );
-}
-
-/// Append one regime's table to `out`.
-///
-/// Takes the buffer rather than printing, for the reason `pool_growth`'s twin
-/// records: a helper writing to stdout while its caller composes a string emits
-/// its lines first, reordering the report without losing any of it.
-fn render_table(out: &mut dyn std::fmt::Write, runs: &[Run]) {
-    let _ = writeln!(
-        out,
-        "{:<18} {:>10} {:>14} {:>16} {:>14}",
-        "shape", "producers", "ns/push", "pushes/sec", "refusals"
-    );
-    for run in runs {
-        let _ = writeln!(
-            out,
-            "{:<18} {:>10} {:>14.1} {:>16.0} {:>14}",
-            run.shape, run.producers, run.nanos_per_push, run.pushes_per_second, run.refusals
-        );
-    }
-}
-
-/// A scaling factor, or `--` when it is missing or not a number.
-///
-/// Guards non-finite values for the same reason [`format_ratio`] guards its
-/// denominator, and the guard belongs here rather than in `scaling`: a shape
-/// whose one-producer row reports zero makes the quotient infinite, and
-/// `infx` in a column of measurements reads as a measurement. `scaling` is
-/// deliberately allowed to return the non-finite value -- it is arithmetic, not
-/// a renderer -- so the display layer is where it has to be caught.
-fn format_scaling(scaling: Option<f64>) -> String {
-    match scaling {
-        Some(value) if value.is_finite() => format!("{value:.2}x"),
-        _ => "--".to_owned(),
-    }
-}
-
-/// `numerator / denominator` as a cost ratio, or `--` when either is missing.
-///
-/// Guards the denominator rather than trusting it: a shape that failed to run
-/// reports zero, and a division by it would print `inf` or `NaN` in a column a
-/// reader would otherwise take for a measurement.
-fn format_ratio(numerator: Option<Run>, denominator: Option<Run>) -> String {
-    match (numerator, denominator) {
-        (Some(numerator), Some(denominator)) if denominator.nanos_per_push > 0.0 => {
-            format!(
-                "{:.2}x",
-                numerator.nanos_per_push / denominator.nanos_per_push
-            )
-        }
-        _ => "--".to_owned(),
-    }
-}
-
-fn format_nanos(run: Option<Run>) -> String {
-    run.map_or_else(
-        || "--".to_owned(),
-        |run| format!("{:.1}", run.nanos_per_push),
-    )
 }
