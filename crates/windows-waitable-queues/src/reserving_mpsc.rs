@@ -42,7 +42,8 @@
 //! ```
 //!
 //! The default stays `Balanced` so that introducing the choice changed no
-//! existing caller's behaviour; it carries the recurrence described above.
+//! existing caller's behaviour; under it the queue can silently lose an item past
+//! 2^32 pushes from two or more producers.
 //! [`slotwise_mpsc`](crate::slotwise_mpsc) does not have this hazard under any
 //! layout, its positions being 64 bits on every target; [`spsc`](crate::spsc)
 //! never had it. The full statement is in the [crate documentation](crate).
@@ -475,11 +476,16 @@ impl ClaimWord for u128 {
 /// The shipping division: 32 bits each.
 ///
 /// Holds 2^32 outstanding reservations and recurs after 2^32 pushes -- about
-/// **37 seconds** of sustained maximum-rate pushing. This is the default
-/// because it is what the shape shipped with: the reservation ceiling it buys
-/// is far beyond any use this crate has seen, and it is paid for with the whole
-/// of the `SH-14.1` exposure. [`Enduring`] and [`Perpetual`] trade ceiling for
-/// recurrence in the other direction; [`Enduring`]'s ceiling is 65,535.
+/// **37 seconds** of sustained maximum-rate pushing. Past that point, with two
+/// or more producers, the queue can **silently lose an item**: that is the whole
+/// of the `SH-14.1` exposure, and this layout carries it.
+///
+/// It is the default because it is what the shape shipped with, not because the
+/// division is a good one: the 2^32 reservation ceiling it buys is far beyond
+/// any use this crate has seen, and the exposure is what pays for it.
+/// [`Enduring`] and [`Perpetual`] spend that ceiling the other way --
+/// [`Enduring`] holds 65,535 outstanding reservations, [`Perpetual`] 255 --
+/// and [`Wide`] removes the recurrence rather than deferring it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Balanced;
 impl sealed::Sealed for Balanced {}

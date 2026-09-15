@@ -26,8 +26,11 @@
 //! **2. Should `slotwise_mpsc` and `reserving_mpsc` merge?** They ship as peers because
 //! honouring a reservation costs the producer a read of the consumer's
 //! position -- one line every thread touches -- and *how much* that costs was a
-//! judgement rather than a measurement. If it is cheap, the two shapes merge and
-//! the non-reserving one goes; if it is expensive, the split is vindicated.
+//! judgement rather than a measurement. This probe does not turn it into one:
+//! the drained rows compare two complete push paths and cannot separate that
+//! read from the other differences between the shapes. What they supply is an
+//! end-to-end comparison in the regime where the read is most expensive, which
+//! is an input to that decision rather than the decision.
 //!
 //! # Two regimes, because one of them cannot answer the second question
 //!
@@ -69,8 +72,9 @@
 //! consumer-bound, and a throughput plateau there says nothing about the tail
 //! claim. The probe reports each run's refusal count -- from the queue's own
 //! `Observable` counters -- so a backpressure-bound run is visible as a fact
-//! rather than mistaken for contention. Read the isolated regime for the
-//! contention question, and the drained one for the cost of `head`.
+//! rather than mistaken for contention. Read the isolated regime for push-path
+//! scaling with producer count, and the drained one for the end-to-end shape
+//! comparison taken while `head` is being written.
 
 use std::sync::Arc;
 use std::sync::Barrier;

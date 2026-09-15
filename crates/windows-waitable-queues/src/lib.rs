@@ -123,7 +123,10 @@
 //! not is the recurrence removed outright rather than deferred.
 //!
 //! The default remains `Balanced` so that no existing caller's behaviour
-//! changed when the choice was introduced. It carries the recurrence above.
+//! changed when the choice was introduced. Under it, a queue driven past 2^32
+//! pushes by two or more producers can **silently lose an item** -- the defect
+//! described above. `Enduring` and `Perpetual` move that point out, and `Wide`
+//! removes it.
 //!
 //! **What happens.** A producer checks that there is room, is descheduled, and
 //! resumes after other producers have driven the position field through a
@@ -286,6 +289,14 @@
 //!
 //! The measurements below are what this workspace observed on the hosts named;
 //! they are not a ranking.
+//!
+//! **They predate a correction to the probe's timing window and have not been
+//! retaken.** The probe timed from the coordinator's clock rather than from the
+//! producers' own, which overstated throughput, and the error grew with producer
+//! count. The direction of the comparison survived re-measurement on the x64
+//! host; the absolute numbers here are optimistic, the high-producer rows most
+//! so. Retaking them needs the two hosts named below, neither of which is the
+//! machine the correction was measured on.
 //!
 //! Measured ns per push, isolated regime, median of three. An AMD EPYC 7763
 //! slice (8 cores, 16 threads) and a Snapdragon X2 Elite (12 cores, no SMT):

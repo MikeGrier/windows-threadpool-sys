@@ -6,9 +6,11 @@
 //! and are not for production use. Do not call them from production code, and
 //! do not lift a technique out of here. See this crate's DESIGN-NOTES.md.
 //!
-//! This decides two things that are otherwise decided by taste: whether the
-//! linked and sharded MPSC shapes are ever needed, and whether `slotwise_mpsc`
-//! and `reserving_mpsc` should merge. See `queue_contention`'s module docs.
+//! This reports observations that bear on two questions otherwise settled by
+//! taste: whether the linked and sharded MPSC shapes are ever needed, and
+//! whether `slotwise_mpsc` and `reserving_mpsc` should merge. It does not settle
+//! either -- see `queue_contention`'s module docs for what the regimes can and
+//! cannot separate.
 
 use windows_platform_probes::queue_contention::{
     DRAINED_CAPACITY, PRODUCER_COUNTS, PUSHES_PER_PRODUCER, REPETITIONS, Run, measure, shapes,

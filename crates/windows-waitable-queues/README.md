@@ -152,7 +152,10 @@ regime -- and it is the only thing in
 this crate that costs a third-party dependency.
 
 The default remains `Balanced` so that no existing caller's behaviour changed
-when the choice was introduced. It carries the recurrence described above.
+when the choice was introduced. Under it, a queue driven past 2^32 pushes by two
+or more producers can **silently lose an item** -- the defect described above.
+`Enduring` and `Perpetual` move that point out by 2^16 and 2^24 respectively, and
+`Wide` removes it.
 
 **What happens.** A producer checks that there is room, is descheduled, and
 resumes after other producers have driven the position field through a complete
@@ -366,6 +369,15 @@ both rather than picking one for you.
 The measurements below are what this workspace observed on the hosts named; they
 are not a ranking, and which shape suits a given deployment is the deployment's
 question.
+
+**These figures predate a correction to the probe's timing window and have not
+been retaken.** The probe timed from the coordinator's clock rather than from the
+producers' own, which overstated throughput, and the error grew with producer
+count. The direction of the comparison survived re-measurement on the x64 host;
+the absolute numbers here are optimistic and the high-producer rows most so.
+Retaking them needs the two hosts named below, neither of which is the machine the
+correction was measured on. See the queue-contention section of
+[DESIGN-NOTES.md](../windows-platform-probes/DESIGN-NOTES.md).
 
 **What we measured**, in ns per push, isolated regime, median of three runs.
 Higher producer counts oversubscribe both hosts:
