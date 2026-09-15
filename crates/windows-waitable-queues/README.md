@@ -152,7 +152,7 @@ regime -- and it is the only thing in
 this crate that costs a third-party dependency.
 
 The default remains `Balanced` so that no existing caller's behaviour changed
-when the choice was introduced. It is not the recommended layout.
+when the choice was introduced. It carries the recurrence described above.
 
 **What happens.** A producer checks that there is room, is descheduled, and
 resumes after other producers have driven the position field through a complete
@@ -179,19 +179,17 @@ width, so they are a floor on time rather than a forecast: a queue that must
 drain cannot sustain the fastest rate measured, and a slower producer takes
 proportionally longer to reach its wrap.
 
-**What to do about it.**
+**What bears on it.**
 
-- **Name a layout.** `Perpetual` puts the recurrence about twenty years out,
-  which takes it past any real deployment. This is the answer for almost every
-  caller who is exposed at all. **What it costs in throughput is not
-  established** -- it issues the same `lock cmpxchg` on the same `u64` as the
+- **Naming a layout moves it.** `Perpetual` puts the recurrence about twenty
+  years out. **What it costs in throughput is not established** -- it issues the
+  same `lock cmpxchg` on the same `u64` as the
   default, and measured indistinguishable from it at low producer counts; at
   high counts the difference did not clearly exceed the run-to-run variation of
   the same code measured twice.
-  Measure on your own target if throughput at high producer counts matters.
 - **`slotwise_mpsc` does not have this hazard** under any layout. Its positions
-  are 64 bits on every target, so the equivalent wrap needs 2^64 claims. Prefer
-  it unless you need `Reserving`.
+  are 64 bits on every target, so the equivalent wrap needs 2^64 claims. It does
+  not offer `Reserving`.
 - **`spsc` never had it**, having no contended claim to race.
 - **The default layout is sound below its wrap.** A queue that will not push 4.3
   billion items in one run, or that is not driven at sustained maximum rate by
@@ -212,7 +210,7 @@ Both are off by default, and the default build depends on `windows-sys` alone.
 `reserving_mpsc`. This is the only thing in the crate that costs a third-party
 dependency: Rust's standard library has no 128-bit atomic -- `core::sync::atomic`
 stops at 64 bits -- so the double-width compare-and-swap comes from
-`portable-atomic`. Most callers do not need it; `Perpetual` reaches roughly
+`portable-atomic`. `Perpetual` reaches roughly
 twenty years before its claim position recurs with no dependency, though what
 that costs in throughput is not established, while choosing `Wide` measured
 slower on the whole push path as producer count rises -- near parity at one or
@@ -349,23 +347,25 @@ position, which is the only way a reservation can be answered at all. Both are
 well-studied designs in production use elsewhere, which is why this crate ships
 both rather than picking one for you.
 
-**Start here:**
+**What distinguishes them:**
 
 - **Pushing more than ~4 billion items in one run, from two or more producers?**
-  Either use `slotwise_mpsc`, whose positions are 64 bits under every
-  configuration, or name a deeper layout on `reserving_mpsc` -- `Perpetual`
-  puts the recurrence about twenty years out, though what it costs in throughput
-  is not established. Under its
-  default layout `reserving_mpsc` can lose an item past that volume; see
+  Under its default layout `reserving_mpsc` can lose an item past that volume.
+  `slotwise_mpsc`'s positions are 64 bits under every configuration, and naming a
+  deeper layout on `reserving_mpsc` moves the recurrence out -- `Perpetual` to
+  about twenty years -- though what that costs in throughput is not established.
+  The mechanism is in
   [the section on recurrence](#how-long-reserving_mpsc-runs-before-its-claim-position-recurs)
-  above, which you should read before choosing.
-- Need `reserve`? Only `reserving_mpsc` has it, and `slotwise_mpsc` structurally
-  cannot. That no longer forces a trade against the recurrence: choosing a
-  layout addresses it, so the capability can settle the choice on its own
-  merits.
-- Otherwise, **start with `reserving_mpsc`.** It was the faster of the two at
-  every producer count we measured above one.
-- Only one producer *and* one consumer? Use `spsc`, which beats both.
+  above.
+- **`reserve` exists only on `reserving_mpsc`**; `slotwise_mpsc` structurally
+  cannot offer it. That no longer forces a trade against the recurrence, since
+  naming a layout addresses it.
+- **`spsc` requires exactly one producer and one consumer**, and does less work
+  than either MPSC shape because of it.
+
+The measurements below are what this workspace observed on the hosts named; they
+are not a ranking, and which shape suits a given deployment is the deployment's
+question.
 
 **What we measured**, in ns per push, isolated regime, median of three runs.
 Higher producer counts oversubscribe both hosts:

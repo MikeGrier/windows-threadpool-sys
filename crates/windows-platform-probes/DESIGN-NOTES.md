@@ -58,12 +58,38 @@ Which position/reservation apportionment a queue should use is exactly such a
 choice: the layout is a type parameter of the shipping queue, the probe measures
 every candidate, and the note reports what it saw. It does not name a winner.
 
+### Do not tell a reader what to do about a measurement
+
+<a id="d-no-client-prescriptions"></a>
+
+State what was observed, under what parameters, and what the procedure could not
+determine. Stop there. Advice built on top of a measurement -- "prefer this
+layout", "most callers do not need that", "measure on your own target if
+throughput matters", "start with this shape" -- **takes on a responsibility this
+crate has no standing to hold**: it has measured one machine, and the reader's
+deployment is not that machine. A recommendation converts an observation into an
+undertaking, and the undertaking is one nobody here can honour.
+
+This is not the same as withholding information. Everything needed to decide
+still gets published: the figures, their capture parameters, their dispersion,
+the hazards, the structural differences between the shapes, and the limits of
+what the instrument can separate. What is removed is the imperative mood.
+
+Two forms are easy to miss because they sound like caution rather than advice.
+"Measure on your own hardware before choosing" is still an instruction, and it
+implies the reader's not having done so is a mistake we warned them about.
+"This is the answer for almost every caller" is a recommendation wearing a
+hedge. Both are struck. A statement about what a *layout provides* is a fact and
+stays; a statement about what a *reader should pick* is not.
+
 This is why the apportionment claim in the queue-contention section was
 *withdrawn in both directions* rather than reversed. The measurement stopped
 supporting "re-apportioning is free", but it equally did not support "it costs
 30%" -- one host, seven runs, against a control that wanders. The correct output
-of a probe that cannot call something is a flag saying *measure this on your own
-hardware*, never a verdict chosen because a verdict reads better.
+of a probe that cannot call something is **the record that it could not**, never
+a verdict chosen because a verdict reads better. What a reader does with that is
+the reader's decision, and stating it for them would take a responsibility this
+crate has no standing to hold: it has measured one machine.
 
 The failure this prevents is a reader inheriting a number as though it were a
 property of the code. It is a property of the code **on that machine**, and the
@@ -961,10 +987,9 @@ single run against a noise floor quoted as 2-6%, and neither half holds: the
 measured control is far wider than 2-6%, and the re-apportionments do not sit
 inside it at sixteen and thirty-two producers. But the replacement is *not* the
 opposite claim. 1.23-1.30x against a control that itself reaches 1.12x is a
-flag, not a finding -- it says this is the configuration worth measuring on your
-own hardware before choosing, and it says this probe, on this host, at seven
-runs, could not call it. A client who needs the headroom should measure the
-layouts on their target rather than inherit either verdict from here. This is
+flag, not a finding -- what it records is that this probe, on this host, at seven
+runs, could not separate the layouts at high producer counts. Nothing here
+establishes an ordering between them, in either direction. This is
 [the rule for what this crate concludes](#d-observations-not-verdicts) applied to
 the case that earned it.
 

@@ -57,7 +57,7 @@ experimental-permit-claim = []
 # while still compiling. With them off, `AtomicU128` does not exist on such a
 # target and the build fails naming it.
 #
-# Most callers should not need this. `Perpetual` reaches roughly twenty years
+# `Perpetual` reaches roughly twenty years
 # before its claim position recurs, on a plain `AtomicU64`; what that costs in
 # throughput is not established, and choosing it measured slower on the
 # whole push path as producer count rises -- near parity at one or two, several

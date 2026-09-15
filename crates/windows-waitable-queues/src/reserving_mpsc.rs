@@ -42,7 +42,7 @@
 //! ```
 //!
 //! The default stays `Balanced` so that introducing the choice changed no
-//! existing caller's behaviour; it is not the recommended layout.
+//! existing caller's behaviour; it carries the recurrence described above.
 //! [`slotwise_mpsc`](crate::slotwise_mpsc) does not have this hazard under any
 //! layout, its positions being 64 bits on every target; [`spsc`](crate::spsc)
 //! never had it. The full statement is in the [crate documentation](crate).
@@ -190,9 +190,9 @@ use crate::options::Options;
 /// slower. **What that costs in throughput is not established**: a probe
 /// comparing them found them indistinguishable at low producer counts, and at
 /// high counts a difference that did not clearly exceed the run-to-run
-/// variation of the same code measured twice. Measure on your target if
-/// throughput at high producer counts matters. The one trade that IS settled is
-/// the reservation ceiling; throughput remains target-dependent.
+/// variation of the same code measured twice. The settled trade is the
+/// reservation ceiling; throughput is target-dependent and this crate does not
+/// characterise it beyond the one host in the note above.
 ///
 /// This trait is sealed: the layouts are a fixed set because each one's
 /// constants are checked against each other at compile time, and a caller
@@ -476,11 +476,10 @@ impl ClaimWord for u128 {
 ///
 /// Holds 2^32 outstanding reservations and recurs after 2^32 pushes -- about
 /// **37 seconds** of sustained maximum-rate pushing. This is the default
-/// because it is what the shape shipped with, not because it is the best
-/// choice: the reservation ceiling it buys is far beyond any real use, and it
-/// is paid for with the whole of the `SH-14.1` exposure. Prefer [`Enduring`] or
-/// [`Perpetual`] unless you genuinely hold more than 65,535 reservations at
-/// once.
+/// because it is what the shape shipped with: the reservation ceiling it buys
+/// is far beyond any use this crate has seen, and it is paid for with the whole
+/// of the `SH-14.1` exposure. [`Enduring`] and [`Perpetual`] trade ceiling for
+/// recurrence in the other direction; [`Enduring`]'s ceiling is 65,535.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Balanced;
 impl sealed::Sealed for Balanced {}
@@ -528,20 +527,21 @@ impl ClaimLayout for Perpetual {
 /// pushes to recur, which no deployment reaches -- not "not for twenty years",
 /// but not at all.
 ///
-/// **Read the cost before choosing it.** Choosing `Wide` measured slower on the
-/// whole push path than a `u64` layout does, and the penalty **grows with
-/// producer count** -- near parity at one or two, several times by thirty-two,
-/// in the isolated regime on one x86-64 host; against a draining consumer the
-/// difference fell inside that host's same-code control and could not be called
-/// at all. The probe times the complete push, so this is the layout's effect on
-/// that path and not a measurement of the 128-bit exchange on its own. The
-/// per-count table is in the queue-contention section of
+/// The 128-bit exchange measured slower on the whole push path than a `u64`
+/// layout does, and the difference **grows with producer count** -- near parity
+/// at one or two, several times by thirty-two, in the isolated regime on one
+/// x86-64 host; against a draining consumer the difference fell inside that
+/// host's same-code control and could not be called at all. The probe times the
+/// complete push, so this is the layout's effect on that path and not a
+/// measurement of the 128-bit exchange on its own. The per-count table is in the
+/// queue-contention section of
 /// [DESIGN-NOTES.md](../../windows-platform-probes/DESIGN-NOTES.md), which is
 /// the one place it is recorded.
-/// [`Perpetual`] reaches about twenty years on a plain `AtomicU64`, and **what
-/// that costs in throughput is not established** -- see [`ClaimLayout`]. So this
-/// is worth taking when a guarantee is wanted in place of an argument about
-/// deployment lifetimes, not because the narrow alternative is known to be free.
+///
+/// [`Perpetual`] reaches about twenty years on a plain `AtomicU64`, and what
+/// that costs in throughput is not established -- see [`ClaimLayout`]. What this
+/// layout provides that the others do not is the recurrence removed outright
+/// rather than deferred.
 ///
 /// The reservation ceiling is [`u32::MAX`] rather than the 64 bits the field
 /// could hold, because the count is reported to callers as a `u32`.
