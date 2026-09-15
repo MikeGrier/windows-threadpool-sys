@@ -1859,3 +1859,49 @@ written. The rule is about **discarded failure information**, not about discarde
 
 The audit this decision implies is queued as
 [CHECKLIST.md](CHECKLIST.md) -> `M22.1`; it is not scheduled by this note alone.
+
+## <a id="machine-checking-what-is-argued"></a>Machine-checking what is currently argued: why M30 exists and what it is not
+
+Context for [CHECKLIST.md](CHECKLIST.md) -> `M30`. It lives here rather than in the checklist
+because a checklist is an action queue, and this is rationale.
+
+**What checks this workspace's concurrency today.** Reasoning recorded beside the code, an extensive
+unit suite, a sabotage suite that injects defects and requires each to be caught, and a
+cargo-mutants sweep. That combination is not weak, and it has found real bugs --
+[D-15](crates/windows-waitable-queues/DESIGN-NOTES.md#d-15)'s lost wakeup among them.
+
+**It has a measured blind spot, and the measurement is the reason for the milestone.**
+[crates/windows-waitable-queues/README.md](crates/windows-waitable-queues/README.md) records that
+weakening a producer's `Acquire` load of the consumer's position to `Relaxed` left the entire suite
+green, while every *logic* defect injected beside it was caught. That asymmetry is not a gap in the
+suite's thoroughness; it is what a test is. A test observes what a run happened to do, and cannot
+observe an ordering that a run happened not to need.
+
+The general form of that asymmetry -- classes with an oracle converge, classes without one do not --
+is worth keeping in view when reading the survey's results. Memory ordering has no oracle here.
+
+**The goal is to narrow where hand-inspection has to look, not to replace it.** A method that proves
+a protocol correct for three producers and a capacity of two does not prove the shipping code
+correct. What it does is move a class of question out of "argued carefully" and into "checked", so
+that what remains uncheckable is a short, named list rather than the whole surface. **That list is
+the deliverable**, which is why `M30.3` is the item the milestone exists for rather than a tidying
+step after the pilot. Formal methods here are a scoping instrument.
+
+**This does not commit the workspace to any tool, and must not pre-empt
+[D-31](crates/windows-waitable-queues/DESIGN-NOTES.md#d-31)**, which decided on considered grounds
+that 0.1.0 ships without machine-checked orderings. D-31's reasoning is the starting point rather
+than something to overturn, and its central objection survives any tool choice: a model checker
+covers atomics and cannot cover `SetEvent`/`ResetEvent`, so stubbing them verifies a model of
+`SetEvent` rather than `SetEvent` itself. That is the "measures the model, not the thing" trap this
+workspace has already been caught by once, and the doorbell is precisely where its one real ordering
+bug lived. Any tool the milestone recommends has to be read against that.
+
+**The same trap has a second costume, which `M30.2` now guards against explicitly.** Shrinking a
+model's parameters -- a position that wraps at 8 rather than 2^32 -- is itself a claim: that the
+protocol's correctness does not depend on the width of that field. If nobody states why the shipping
+code refines the reduced model, a green run proves something about the model alone. A reduced model
+that has not been tied to the code can pass and mean nothing.
+
+**No decision is recorded here yet.** This section is context for queued work, not an outcome;
+`M30.5` is what produces the decision, and "adopt nothing, and say why" remains a legitimate result
+of it.
