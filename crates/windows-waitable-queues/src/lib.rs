@@ -107,11 +107,16 @@
 //! # Ok::<(), windows_waitable_queues::CapacityError>(())
 //! ```
 //!
-//! **A deeper position costs nothing measurable.** `Balanced`, `Enduring`, and
-//! `Perpetual` all issue the same exchange on the same 64-bit word and differ
-//! only in shift and mask constants; a probe comparing them found no difference
-//! outside noise. `Wide` is the exception: it needs a 128-bit exchange, which
-//! measured 2-3x slower on the claim, and it is the only thing in this crate
+//! **A deeper position is the same exchange on the same word.** `Balanced`,
+//! `Enduring`, and `Perpetual` all issue the same exchange on the same 64-bit
+//! word and differ only in shift and mask constants, so there is no structural
+//! reason for one to be slower -- but **what that costs in throughput is not
+//! established**: a probe comparing them found them indistinguishable up to
+//! eight producers and near 1.26x at sixteen and thirty-two, on one host,
+//! against a same-code control that itself reached 1.12x. `Wide` is a separate
+//! matter: it needs a 128-bit exchange, which
+//! measured 2-3x slower on the claim in isolation, and it is the only thing in
+//! this crate
 //! that costs a third-party dependency. Prefer `Perpetual` unless you want the
 //! guarantee rather than the twenty years.
 //!

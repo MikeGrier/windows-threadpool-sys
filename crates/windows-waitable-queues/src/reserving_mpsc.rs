@@ -27,8 +27,9 @@
 //!
 //! **[`ClaimLayout`] is how far away that is.** [`Perpetual`] moves it to 2^56
 //! pushes, about twenty years at the same rate, for the cost of a reservation
-//! ceiling of 255 and nothing measurable besides -- it is the same exchange on
-//! the same word, differing only in shift constants. [`Enduring`] sits between
+//! ceiling of 255 -- it is the same exchange on
+//! the same word, differing only in shift constants, though what that costs in
+//! throughput is not established (see [`ClaimLayout`]). [`Enduring`] sits between
 //! them, and the `dwcas` feature adds a 128-bit word that removes the
 //! recurrence outright.
 //!
@@ -183,10 +184,15 @@ use crate::options::Options;
 /// note quotes; a queue that must drain cannot sustain the fastest rate
 /// measured, so treat these as a floor on time rather than a forecast.
 ///
-/// **Choosing a deeper position costs nothing measurable.** All three issue the
-/// same `lock cmpxchg` on the same `u64` and differ only in shift and mask
-/// constants; a probe comparing them found no difference outside noise. The
-/// trade is entirely against the reservation ceiling.
+/// **Choosing a deeper position is the same instruction on the same word.** All
+/// three issue the same `lock cmpxchg` on the same `u64` and differ only in
+/// shift and mask constants, so there is no structural reason for one to be
+/// slower. **What that costs in throughput is not established**: a probe
+/// comparing them found them indistinguishable up to eight producers and near
+/// 1.26x at sixteen and thirty-two, on one host, against a same-code control
+/// that itself reached 1.12x. Measure on your target if throughput at high
+/// producer counts matters. The trade is otherwise entirely against the
+/// reservation ceiling.
 ///
 /// This trait is sealed: the layouts are a fixed set because each one's
 /// constants are checked against each other at compile time, and a caller
