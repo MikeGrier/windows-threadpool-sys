@@ -1905,3 +1905,23 @@ that has not been tied to the code can pass and mean nothing.
 **No decision is recorded here yet.** This section is context for queued work, not an outcome;
 `M30.5` is what produces the decision, and "adopt nothing, and say why" remains a legitimate result
 of it.
+
+### Two corrections the milestone's own drafting needed
+
+Recorded because both were errors in the *argument for* the pilot rather than in the plan, and a
+reader taking them on trust would have aimed the pilot wrongly.
+
+**The untestability was mis-attributed to the count.** The first draft said `SH-14.1` "needs 2^32
+pushes to manifest and is therefore beyond any test". Both halves were wrong. 2^32 pushes is about 37
+seconds of sustained maximum-rate pushing on the host the queue crate publishes -- outside a unit
+suite budgeted in milliseconds, but not beyond a long integration test. And the count was never the
+reason: reaching the wrap is necessary but *not sufficient*, because a producer must also be stalled
+inside a window a few instructions wide. That is what no test can schedule. The corrected reading
+argues the pilot better, because parameter shrinking then earns its place by making the interleaving
+*exhaustive* rather than by making a count small.
+
+**The success criterion was half a criterion.** The first draft asked for a counterexample from a
+deliberately broken variant and explicitly *not* a green run on the correct one -- an overcorrection
+against vacuous green runs. But a counterexample from a broken variant can equally be produced by a
+malformed or over-permissive model that would find one anywhere, so it is an anti-vacuity check, not
+a property check. Both are required, and the item now says so.
