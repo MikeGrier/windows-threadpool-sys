@@ -46,12 +46,20 @@
 //!   *writing* it. Measured in isolation that read hits a clean, shared line and
 //!   looks free -- which would be a confident wrong answer.
 //!
-//!   **It does not isolate that read either**, for the same reason the isolated
-//!   regime does not isolate the claim: the ratio is between two complete push
-//!   paths, and `reserving_mpsc` and `slotwise_mpsc` differ in claim protocol and
-//!   slot metadata as well as in that one load. So the ratio **bounds the read's
-//!   contribution from above** rather than pricing it. Found by a review, which
-//!   is also how the isolated bullet above got its correction.
+//!   **It does not isolate that read, and it does not bound it either** -- an
+//!   earlier correction here claimed a bound, which is no better than the
+//!   over-claim it replaced. The ratio is between two complete push paths, and
+//!   `reserving_mpsc` and `slotwise_mpsc` differ in claim protocol, slot metadata
+//!   and retry behaviour as well as in that one load. Writing `R` and `S` for the
+//!   two totals, `R - S` is the read plus those other differences, and **those
+//!   terms are not ordered**: in the isolated regime `reserving_mpsc` is several
+//!   times *faster* despite doing the extra read, so the other terms can be large
+//!   and negative. A difference that can go either way bounds the read in neither
+//!   direction -- and which shape is ahead in the drained regime varies between
+//!   runs on one host, so even the sign is not a finding. Read these rows as an
+//!   end-to-end comparison of two shapes in the regime where the read is most
+//!   expensive, and nothing finer. Found by a review -- the second one to correct
+//!   this sentence.
 //!
 //! # What is deliberately not claimed
 //!
@@ -510,7 +518,7 @@ fn time_isolated_permit(producers: usize) -> Repetition {
 
 /// A capacity a real system would choose, so the drained regime exercises
 /// backpressure the way a real one would.
-const DRAINED_CAPACITY: usize = 1024;
+pub const DRAINED_CAPACITY: usize = 1024;
 
 fn time_drained_mpsc(producers: usize) -> Repetition {
     let (tx, rx) = slotwise_mpsc::bounded::<u64>(DRAINED_CAPACITY).expect("a valid capacity");

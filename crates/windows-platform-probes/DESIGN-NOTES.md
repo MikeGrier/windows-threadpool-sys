@@ -623,13 +623,19 @@ comparison exists to classify correctly: a red build that is **not** a finding.
 ## The queue-contention probe, and why it must not run in the CI probe job
 
 `probe-queue-contention` measures two things a design decision is waiting on: whether the bounded
-array queue's tail claim contends badly enough to justify the linked and sharded MPSC shapes, and an
-upper bound on what [`reserving_mpsc`](../windows-waitable-queues/src/reserving_mpsc.rs)'s extra read
-of the consumer's position costs. **A bound rather than a price**, because the only ratio available
-is between two complete push paths: `reserving_mpsc` and `slotwise_mpsc` differ in claim protocol and
-slot metadata as well as in that one load, so all of it sits inside the same number. The drained
-regime is where the read is most expensive, which is what makes the bound tight enough to be worth
-having.
+array queue's tail claim contends badly enough to justify the linked and sharded MPSC shapes, and how
+[`reserving_mpsc`](../windows-waitable-queues/src/reserving_mpsc.rs) and `slotwise_mpsc` compare end
+to end in the regime where `reserving_mpsc`'s extra read of the consumer's position is most expensive.
+
+**An end-to-end comparison, and deliberately nothing finer.** Two earlier wordings of this sentence
+were both wrong: the first said the probe *prices* that read, the second said it *bounds* it from
+above. Neither holds. Writing `R` and `S` for the two shapes' total push costs, `R - S` contains the
+read plus the differences in claim protocol, slot metadata and retry behaviour, and those terms are
+not ordered -- in the **isolated** regime `reserving_mpsc` is several times faster despite doing the
+extra read (55.5 against 207.2 ns/push at sixteen producers in one run), so the other terms can be
+large and negative. A difference that can go either way bounds the read in neither direction, and in
+the drained regime which shape leads varies between runs on this host, so even its sign is not a
+finding. Isolating the read would need a matched control this probe does not have.
 
 **The checklists carrying those decisions are not in this repository yet** -- they arrive with the
 rest of the queue work -- so this note deliberately names the QUESTIONS rather than linking to items
@@ -685,7 +691,8 @@ evidence about the claim on its own. **Drained** runs a consumer popping
 continuously, which is the regime in which `reserving_mpsc`'s read of `head` is most expensive -- that
 read is
 cheap until a consumer is *writing* the line, and measuring it in isolation would report it as free.
-It bounds that read rather than pricing it, because the ratio is between two complete push paths.
+It neither isolates that read nor bounds it: the ratio is between two complete push paths whose other
+differences are not ordered.
 
 The drained regime has a **single** consumer, because that is what MPSC means, so at high producer counts
 it becomes consumer-bound and a plateau there says nothing about the claim. Each row carries the refusal
@@ -851,8 +858,11 @@ Seven runs, median of the per-run ratios with the observed range beside it,
 release build. **The sampling parameters are capture parameters too**: each run
 is a whole probe invocation, within which every configuration is measured five
 times and the median reported, each measurement being 50,000 pushes per producer
-thread, preceded by one untimed pass that exists to fault in the fresh
-allocation's pages. So a figure below rests on 35 timed passes per
+thread, preceded by one untimed pass. That pass does **not** pre-touch any
+allocation a timed pass will use -- every repetition builds and drops its own
+queue -- so what it warms is process state: the allocator's size class, the OS
+page cache, the instruction cache and the branch predictors. So a figure below
+rests on 35 timed passes per
 configuration, and "seven runs" alone would not let anyone reproduce it. These
 are fixed at
 [src/queue_contention.rs](src/queue_contention.rs)`::PUSHES_PER_PRODUCER` and

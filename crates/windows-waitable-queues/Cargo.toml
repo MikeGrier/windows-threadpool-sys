@@ -59,8 +59,9 @@ experimental-permit-claim = []
 #
 # Most callers should not need this. `Perpetual` reaches roughly twenty years
 # before its claim position recurs, on a plain `AtomicU64`; what that costs in
-# throughput is not established, and the 128-bit exchange measured roughly 1.1x
-# to 3.8x slower on the claim itself depending on producer count. See
+# throughput is not established, and the 128-bit exchange measured
+# 1.1x to 1.4x up to four producers, 1.8x at eight, and 3.5x to 3.8x at sixteen
+# and thirty-two. See
 # `ClaimLayout` for the comparison.
 dwcas = ["dep:portable-atomic"]
 

@@ -529,10 +529,11 @@ impl ClaimLayout for Perpetual {
 /// but not at all.
 ///
 /// **Read the cost before choosing it.** The 128-bit exchange measured slower
-/// than a `u64` one on the claim itself -- about 1.1x at one or two producers
-/// rising to roughly 3.8x at thirty-two on one x86-64 host, so the penalty grows
-/// with producer count; against a draining consumer the difference fell inside
-/// that host's same-code control and could not be called at all.
+/// than a `u64` one on the claim itself -- 1.1x to 1.4x up to four producers,
+/// 1.8x at eight, and 3.5x to 3.8x at sixteen and thirty-two on one x86-64
+/// host, so the penalty grows with producer count; against a draining consumer
+/// the difference fell inside that host's same-code control and could not be
+/// called at all.
 /// [`Perpetual`] reaches about twenty years on a plain `AtomicU64`, and **what
 /// that costs in throughput is not established** -- see [`ClaimLayout`]. So this
 /// is worth taking when a guarantee is wanted in place of an argument about

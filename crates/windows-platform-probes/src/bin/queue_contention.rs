@@ -11,7 +11,7 @@
 //! and `reserving_mpsc` should merge. See `queue_contention`'s module docs.
 
 use windows_platform_probes::queue_contention::{
-    PRODUCER_COUNTS, PUSHES_PER_PRODUCER, REPETITIONS, Run, measure, shapes,
+    DRAINED_CAPACITY, PRODUCER_COUNTS, PUSHES_PER_PRODUCER, REPETITIONS, Run, measure, shapes,
 };
 use windows_platform_probes::report::emit_report;
 
@@ -86,7 +86,7 @@ fn render(out: &mut dyn std::fmt::Write) {
 
     let _ = writeln!(
         out,
-        "\n-- drained: a consumer popping continuously, capacity 1024 --"
+        "\n-- drained: a consumer popping continuously, capacity {DRAINED_CAPACITY} --"
     );
     render_table(out, &observation.drained);
 
@@ -155,11 +155,11 @@ fn render(out: &mut dyn std::fmt::Write) {
     );
     let _ = writeln!(
         out,
-        "     regime is where that load is at its most expensive, so the ratio"
+        "     regime is where that load is at its most expensive -- but the"
     );
     let _ = writeln!(
         out,
-        "     bounds its contribution from above rather than isolating it.\n"
+        "     ratio still does not isolate it, or bound it either way.\n"
     );
     let _ = writeln!(
         out,
@@ -199,15 +199,31 @@ fn render(out: &mut dyn std::fmt::Write) {
     );
     let _ = writeln!(
         out,
-        "     -- which is why the ratio bounds its cost from above. It does not"
+        "     -- but the ratio does not decompose. It is an END-TO-END"
     );
     let _ = writeln!(
         out,
-        "     price it: the two shapes also differ in claim protocol and slot"
+        "     comparison of two shapes: they also differ in claim protocol,"
     );
     let _ = writeln!(
         out,
-        "     metadata, and all of that is inside the same number."
+        "     slot metadata and retry behaviour, and those differences are not"
+    );
+    let _ = writeln!(
+        out,
+        "     ordered. The isolated table above shows how far: reserving_mpsc"
+    );
+    let _ = writeln!(
+        out,
+        "     is several times FASTER there despite doing the extra read, so"
+    );
+    let _ = writeln!(
+        out,
+        "     the other terms can be large and negative. A difference that can"
+    );
+    let _ = writeln!(
+        out,
+        "     go either way bounds the read in neither direction."
     );
     let _ = writeln!(
         out,

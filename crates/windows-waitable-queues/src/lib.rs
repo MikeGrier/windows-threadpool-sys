@@ -115,8 +115,8 @@
 //! eight producers and near 1.26x at sixteen and thirty-two, on one host,
 //! against a same-code control that itself reached 1.12x. `Wide` is a separate
 //! matter: it needs a 128-bit exchange, which
-//! measured roughly 1.1x at one or two producers rising to about 3.8x at
-//! thirty-two in isolation, and it is the only thing in
+//! measured 1.1x to 1.4x up to four producers, 1.8x at eight, and 3.5x to 3.8x
+//! at sixteen and thirty-two in isolation, and it is the only thing in
 //! this crate
 //! that costs a third-party dependency. Prefer `Perpetual` unless you want the
 //! guarantee rather than the twenty years.
