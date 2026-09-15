@@ -1271,9 +1271,75 @@ Two corollaries that have each already cost a review round:
   written while the old reading was current — generators, test doubles, examples — because those
   encode the reading rather than citing it.
 
-## CHECKLIST file hygiene
+## REVIEW FEEDBACK — answer it where it was raised, not only in the commit
 
-CHECKLIST files are **action-only**: they contain pending, in-progress, and recently
+**A review round is not finished when the code changes. It is finished when the reviewer has
+been told what happened.** Fixing the code and pushing is half the transaction; the other half
+is a reply on GitHub, and omitting it is the default failure mode because the fix *feels* like
+completion. It is not, for three reasons:
+
+- **A commit is not an answer.** The reviewer sees a new SHA, not your reasoning. Nothing
+  connects "I changed `format_ratio`" to the finding that asked for it, so the next round
+  re-raises what was already addressed — which has repeatedly cost rounds on this repository.
+- **Some findings are correctly declined, and silence cannot say so.** A declined finding that
+  is never answered is indistinguishable from one that was missed. Declining is legitimate;
+  declining *silently* is not.
+- **Suppressed comments have no thread at all.** They arrive in the review summary rather than
+  attached to a line, so there is no place a reply can land by default and no automatic record
+  that they were read. They are the easiest feedback to drop and the most likely to be re-raised
+  verbatim in the next round.
+
+### What to do, by where the feedback lives
+
+- **Inline review comments (a thread on a line).** Reply *on that thread*, naming what changed
+  and the commit SHA that changed it. Then resolve the thread — but only if the finding is
+  genuinely discharged; never resolve to clear the queue. Use the `resolveReviewThread` tool, or
+  `gh api repos/{owner}/{repo}/pulls/{number}/comments/{comment_id}/replies -f body=...`.
+- **Suppressed comments, review-summary findings, and anything pasted to you out of band** — no
+  thread exists, so post **one new PR comment** covering that round:
+  `gh pr comment <number> --body-file .scratch/<file>.md`. One comment per round, not one per
+  finding; a reviewer reads the round as a unit.
+- **No PR** (work committed straight to a branch, or feedback on a commit):
+  `gh api repos/{owner}/{repo}/commits/{sha}/comments -f body=...` against the commit that
+  carries the response.
+
+### What the response must contain
+
+Every finding in the round gets a line, and each line is one of exactly two things:
+
+1. **Changed** — what was changed and the SHA. Where the fix was a *sweep* rather than a
+   single-line edit (per CONTRACT INTEGRITY rule 3 above), say so and give the count: "swept
+   `QueueFull`: 13 files, 4 updated". A reviewer who sees only the cited line fixed has no way
+   to know the population was covered.
+2. **Declined** — the argument for why, in enough detail to be argued back against. "Not
+   applicable" is not an argument; "this is gated behind `test-util`, so the mutant sits in code
+   the shipping build never compiles" is.
+
+Two further rules, each of which has already cost a round here:
+
+- **Do not claim a fix you have not verified.** The same standard applies as anywhere else in
+  this file: verify by execution. Where the fix was a test, say what sabotage showed it is
+  load-bearing — an unverified "added a test" is exactly the cosmetic binding CONTRACT INTEGRITY
+  rule 1 warns about.
+- **Report what the round taught, not just what it touched.** When a review round reveals that
+  several findings were one underlying error, say that — it is more useful to the reviewer than
+  five separate acknowledgements, and it is how a recurring defect gets named instead of
+  repeatedly re-fixed.
+
+### The PR description drifts too, and nothing greps it
+
+A PR body is prose that restates measured claims, gate results, and design rationale — so it
+rots exactly like the documents CONTRACT INTEGRITY governs, with one difference: **it is not a
+file in the tree, so no sweep, grep, or CI check will ever catch it.** When a round corrects a
+claim, check whether the PR description states the same claim, and correct it in the same round.
+
+Keep out of the PR body anything that drifts without carrying information. **Test counts are the
+standing example**: "308 lib tests" changes on almost every commit, tells a reader nothing that
+"tests pass" does not, and creates a restatement-drift instance out of nothing. State that the
+gate is green and which parts of it ran; do not enumerate. The same goes for file counts, line
+counts, and any other incidental tally that is not itself the finding.
+
+
 completed (`[x]`) items awaiting migration to `COMPLETED-CHECKLIST.md`. Completed items
 must be moved to `COMPLETED-CHECKLIST.md` when a group is fully done (see below), with one
 exception: a **large** completed item is moved *immediately* and replaced in place by a
