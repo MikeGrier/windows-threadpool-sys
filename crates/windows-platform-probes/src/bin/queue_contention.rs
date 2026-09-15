@@ -211,19 +211,7 @@ fn render(out: &mut dyn std::fmt::Write) {
     );
     let _ = writeln!(
         out,
-        "     ordered. The isolated table above shows how far: reserving_mpsc"
-    );
-    let _ = writeln!(
-        out,
-        "     is several times FASTER there despite doing the extra read, so"
-    );
-    let _ = writeln!(
-        out,
-        "     the other terms can be large and negative. A difference that can"
-    );
-    let _ = writeln!(
-        out,
-        "     go either way bounds the read in neither direction."
+        "     ordered. So this ratio neither isolates the read nor bounds it."
     );
     let _ = writeln!(
         out,

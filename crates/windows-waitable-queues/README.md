@@ -143,11 +143,11 @@ let (tx, rx) = reserving_mpsc::bounded_as::<u32, Perpetual>(64)?;
 `Enduring`, and `Perpetual` all issue the same exchange on the same 64-bit word
 and differ only in shift and mask constants, so there is no structural reason for
 one to be slower -- but **what that costs in throughput is not established**: a
-probe comparing them found them indistinguishable up to eight producers and near
-1.26x at sixteen and thirty-two, on one host, against a same-code control that
-itself reached 1.12x. `Wide` is a separate matter: it needs a 128-bit exchange,
-which measured 1.1x to 1.4x up to four producers, 1.8x at eight, and 3.5x to
-3.8x at sixteen and thirty-two in isolation, and it is the only thing in
+probe comparing them found them indistinguishable at low producer counts, and at
+high counts a difference that did not clearly exceed the run-to-run variation of
+the same code measured twice. `Wide` is a separate matter: it needs a 128-bit exchange,
+whose cost grows with producer count -- near parity at one or two, several times
+by thirty-two, in isolation -- and it is the only thing in
 this crate that costs a third-party dependency.
 
 The default remains `Balanced` so that no existing caller's behaviour changed
@@ -184,9 +184,9 @@ proportionally longer to reach its wrap.
   which takes it past any real deployment. This is the answer for almost every
   caller who is exposed at all. **What it costs in throughput is not
   established** -- it issues the same `lock cmpxchg` on the same `u64` as the
-  default, and measured indistinguishable from it up to eight producers, but a
-  seven-run measurement on a single host put it near 1.26x at sixteen and
-  thirty-two producers against a same-code control that itself reached 1.12x.
+  default, and measured indistinguishable from it at low producer counts; at
+  high counts the difference did not clearly exceed the run-to-run variation of
+  the same code measured twice.
   Measure on your own target if throughput at high producer counts matters.
 - **`slotwise_mpsc` does not have this hazard** under any layout. Its positions
   are 64 bits on every target, so the equivalent wrap needs 2^64 claims. Prefer
@@ -214,8 +214,8 @@ stops at 64 bits -- so the double-width compare-and-swap comes from
 `portable-atomic`. Most callers do not need it; `Perpetual` reaches roughly
 twenty years before its claim position recurs with no dependency, though what
 that costs in throughput is not established, while the 128-bit exchange measured
-1.1x to 1.4x up to four producers, 1.8x at eight, and 3.5x to 3.8x at sixteen
-and thirty-two. Take
+a cost that grows with producer count -- near parity at one or two,
+several times by thirty-two. Take
 it when you want the recurrence gone as a guarantee rather than deferred by an
 argument about deployment lifetimes.
 

@@ -52,14 +52,10 @@
 //!   `reserving_mpsc` and `slotwise_mpsc` differ in claim protocol, slot metadata
 //!   and retry behaviour as well as in that one load. Writing `R` and `S` for the
 //!   two totals, `R - S` is the read plus those other differences, and **those
-//!   terms are not ordered**: in the isolated regime `reserving_mpsc` is several
-//!   times *faster* despite doing the extra read, so the other terms can be large
-//!   and negative. A difference that can go either way bounds the read in neither
-//!   direction -- and which shape is ahead in the drained regime varies between
-//!   runs on one host, so even the sign is not a finding. Read these rows as an
-//!   end-to-end comparison of two shapes in the regime where the read is most
-//!   expensive, and nothing finer. Found by a review -- the second one to correct
-//!   this sentence.
+//!   terms are not ordered** -- so the difference constrains the read in neither
+//!   direction. Read these rows as an end-to-end comparison of two shapes in the
+//!   regime where the read is most expensive, and nothing finer. Found by a
+//!   review -- the second one to correct this sentence.
 //!
 //! # What is deliberately not claimed
 //!

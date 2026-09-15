@@ -188,11 +188,11 @@ use crate::options::Options;
 /// three issue the same `lock cmpxchg` on the same `u64` and differ only in
 /// shift and mask constants, so there is no structural reason for one to be
 /// slower. **What that costs in throughput is not established**: a probe
-/// comparing them found them indistinguishable up to eight producers and near
-/// 1.26x at sixteen and thirty-two, on one host, against a same-code control
-/// that itself reached 1.12x. Measure on your target if throughput at high
-/// producer counts matters. The trade is otherwise entirely against the
-/// reservation ceiling.
+/// comparing them found them indistinguishable at low producer counts, and at
+/// high counts a difference that did not clearly exceed the run-to-run
+/// variation of the same code measured twice. Measure on your target if
+/// throughput at high producer counts matters. The trade is otherwise entirely
+/// against the reservation ceiling.
 ///
 /// This trait is sealed: the layouts are a fixed set because each one's
 /// constants are checked against each other at compile time, and a caller
@@ -529,11 +529,13 @@ impl ClaimLayout for Perpetual {
 /// but not at all.
 ///
 /// **Read the cost before choosing it.** The 128-bit exchange measured slower
-/// than a `u64` one on the claim itself -- 1.1x to 1.4x up to four producers,
-/// 1.8x at eight, and 3.5x to 3.8x at sixteen and thirty-two on one x86-64
-/// host, so the penalty grows with producer count; against a draining consumer
-/// the difference fell inside that host's same-code control and could not be
-/// called at all.
+/// than a `u64` one on the claim itself, and the penalty **grows with producer
+/// count** -- near parity at one or two, several times by thirty-two, on one
+/// x86-64 host; against a draining consumer the difference fell inside that
+/// host's same-code control and could not be called at all. The per-count table
+/// is in the queue-contention section of
+/// [DESIGN-NOTES.md](../../windows-platform-probes/DESIGN-NOTES.md), which is
+/// the one place it is recorded.
 /// [`Perpetual`] reaches about twenty years on a plain `AtomicU64`, and **what
 /// that costs in throughput is not established** -- see [`ClaimLayout`]. So this
 /// is worth taking when a guarantee is wanted in place of an argument about

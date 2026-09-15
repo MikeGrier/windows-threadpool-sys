@@ -631,11 +631,8 @@ to end in the regime where `reserving_mpsc`'s extra read of the consumer's posit
 were both wrong: the first said the probe *prices* that read, the second said it *bounds* it from
 above. Neither holds. Writing `R` and `S` for the two shapes' total push costs, `R - S` contains the
 read plus the differences in claim protocol, slot metadata and retry behaviour, and those terms are
-not ordered -- in the **isolated** regime `reserving_mpsc` is several times faster despite doing the
-extra read (55.5 against 207.2 ns/push at sixteen producers in one run), so the other terms can be
-large and negative. A difference that can go either way bounds the read in neither direction, and in
-the drained regime which shape leads varies between runs on this host, so even its sign is not a
-finding. Isolating the read would need a matched control this probe does not have.
+not ordered -- so the difference constrains the read in neither direction. Isolating it would need a
+matched control this probe does not have.
 
 **The checklists carrying those decisions are not in this repository yet** -- they arrive with the
 rest of the queue work -- so this note deliberately names the QUESTIONS rather than linking to items
