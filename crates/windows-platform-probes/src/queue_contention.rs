@@ -264,8 +264,14 @@ fn median_run(
     producers: usize,
     mut timer: impl FnMut(usize) -> Repetition,
 ) -> Run {
-    // One untimed pass first: the first touch of a fresh allocation faults
-    // pages in, and that cost belongs to the allocator rather than the queue.
+    // One untimed pass first. Be exact about what this does and does not warm:
+    // every call to `timer` builds and drops its OWN queue, so this does not
+    // pre-touch the allocation any timed repetition will use. What it does warm
+    // is the process -- the allocator's size class, the OS page cache, the
+    // instruction cache, and the branch predictors -- which is why the first
+    // timed repetition is no longer an outlier. An earlier comment here claimed
+    // it faulted in "the" allocation, which is not true of an allocation made
+    // fresh each pass. Found by a review.
     let _ = timer(producers);
 
     let mut results: Vec<Repetition> = (0..REPETITIONS).map(|_| timer(producers)).collect();

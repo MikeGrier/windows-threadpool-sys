@@ -49,6 +49,28 @@ fn render(out: &mut dyn std::fmt::Write) {
          warmup pass\n",
         PUSHES_PER_PRODUCER, REPETITIONS
     );
+    // A debug build does not merely lose precision here: the un-inlined overhead
+    // swamps the cache-coherence effects that ARE the finding, and the two MPSC
+    // shapes come out indistinguishable -- a confident wrong answer. The banner
+    // goes in the report rather than in a refusal to run, because it has to
+    // travel with a captured report: whoever pastes these numbers somewhere is
+    // the person who needs to see it, and a binary that refused would tell only
+    // the person who already had the terminal open.
+    if cfg!(debug_assertions) {
+        let _ = writeln!(
+            out,
+            "!! DEBUG BUILD -- THESE NUMBERS ARE NOT A MEASUREMENT !!"
+        );
+        let _ = writeln!(
+            out,
+            "!! Un-inlined overhead swamps the effect being measured, and the"
+        );
+        let _ = writeln!(
+            out,
+            "!! MPSC shapes report as equivalent when they are not. Rebuild"
+        );
+        let _ = writeln!(out, "!! with --release before reading anything below.\n");
+    }
 
     let _ = writeln!(
         out,
