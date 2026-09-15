@@ -91,12 +91,17 @@
 //! many producers are mid-send -- hundreds at most -- so giving up a ceiling
 //! nobody reaches buys positions:
 //!
-//! | Layout | Outstanding reservations | Pushes to recurrence | At sustained maximum rate |
+//! | Layout | Reservation-count field ceiling | Pushes to recurrence | At sustained maximum rate |
 //! |---|---|---|---|
 //! | `Balanced` (default) | 4,294,967,295 | 2^32 | about 37 seconds |
 //! | `Enduring` | 65,535 | 2^48 | about 28 days |
 //! | `Perpetual` | 255 | 2^56 | about 20 years |
 //! | `Wide` (needs `dwcas`) | 4,294,967,295 | 2^64 | unreachable |
+//!
+//! The first column is the field's ceiling, not a reachable number of
+//! reservations: admission is also bounded by capacity, so the achievable count
+//! is the lesser of the two. For `Balanced` the capacity bound binds first --
+//! that layout accepts at most 2^31 slots. For the others the field binds.
 //!
 //! ```
 //! use windows_waitable_queues::reserving_mpsc::{self, Perpetual};

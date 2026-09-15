@@ -857,7 +857,7 @@ rate model reproduces the crate's own published figure -- 32/32 at 116M/s gives
 37 seconds, which is what `reserving_mpsc`'s module documentation discloses -- so
 these are an extension of that disclosure rather than a competing estimate.
 
-| split (reserved/position) | max outstanding reservations | @257M/s | @116M/s | @33M/s |
+| split (reserved/position) | reservation field width | @257M/s | @116M/s | @33M/s |
 |---|---|---|---|---|
 | 32/32 (ships) | 2^32 | 17 s | 37 s | 2.2 min |
 | 24/40 | 2^24 | 71 min | 2.6 hr | 9.2 hr |
@@ -867,6 +867,15 @@ these are an extension of that disclosure rather than a competing estimate.
 | 12/52 | 2^12 | 202 days | 449 days | 4 yr |
 | 8/56 | 2^8 | 9 yr | 20 yr | 69 yr |
 | 64/64 (`u128`) | 2^64 | 2,270 yr | 5,039 yr | 17,607 yr |
+
+**The second column is a field width, not a reachable reservation count**, and
+the distinction matters twice. A field of 2^n encodings holds a maximum count of
+2^n - 1; and the shipping type caps the count at `u32::MAX` however wide the
+field is, because it is handed back to callers as a `u32` -- so the 64/64 row's
+2^64 encodings buy no more reservations than 32/32's. Admission is bounded by
+capacity as well, which for the shipping 32/32 layout binds first at 2^31 slots.
+The time columns are unaffected: they depend on the *position* half, which is
+what this table exists to compare.
 
 Rates: 257M/s is the measured isolated peak at one producer, which has no
 consumer and so is not a rate any draining queue can sustain -- it is a

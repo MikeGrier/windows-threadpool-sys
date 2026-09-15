@@ -174,11 +174,20 @@ use crate::options::Options;
 /// hazard: a producer descheduled across a full wrap can claim against a
 /// numerically identical but generations-later value.
 ///
-/// | Layout | reserved / position | Outstanding reservations | Pushes to recurrence |
+/// | Layout | reserved / position | Reservation-count field ceiling | Pushes to recurrence |
 /// |---|---|---|---|
 /// | [`Balanced`] | 32 / 32 | 4,294,967,295 | 2^32 |
 /// | [`Enduring`] | 16 / 48 | 65,535 | 2^48 |
 /// | [`Perpetual`] | 8 / 56 | 255 | 2^56 |
+///
+/// **The middle column is the field's ceiling, not a reachable number of
+/// reservations.** Admission is also bounded by capacity -- `reserve` refuses
+/// once the ring has no room beyond the reservations already outstanding -- so
+/// the achievable count is the lesser of the two. For [`Balanced`] the capacity
+/// bound is the binding one: this layout accepts at most 2^31 slots, so no more
+/// than 2^31 reservations can be outstanding whatever the field could hold. For
+/// [`Enduring`] and [`Perpetual`] the field binds first, and the column is the
+/// real limit.
 ///
 /// At this crate's disclosed sustained rate of about 116 million pushes per
 /// second, those recurrences are roughly **37 seconds**, **28 days**, and

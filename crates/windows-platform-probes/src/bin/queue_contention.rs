@@ -117,7 +117,7 @@ fn render(out: &mut dyn std::fmt::Write) {
     let _ = writeln!(
         out,
         "     {:<18} {:>12} {:>12} {:>12} {:>14}",
-        "producers", "slotwise x1thr", "reserving", "permit", "atomic floor"
+        "producers", "slotwise", "reserving", "permit", "atomic floor"
     );
     for &producers in PRODUCER_COUNTS {
         let mpsc = observation.scaling(&observation.isolated, shapes::SLOTWISE_MPSC, producers);
