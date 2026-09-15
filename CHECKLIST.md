@@ -224,29 +224,22 @@ action-only rule for checklist files.
   wraps at 8 makes the whole interleaving reachable in seconds and *exhaustive* rather than sampled,
   and yields a counterexample trace rather than a suspicion.
 
-  An earlier version of this item said the defect "needs 2^32 pushes to manifest and is therefore
-  beyond any test", which overstated the limitation and named the wrong reason for it. It also
-  offered `capacity == 1` as a second candidate; that is
-  [D-12](crates/windows-waitable-queues/DESIGN-NOTES.md#d-12), an edge case of `slotwise_mpsc`'s slot
-  *sequence* protocol and unrelated to `reserving_mpsc`'s claim position -- and one already resolved
-  by that shape refusing a capacity below two, with a sabotage entry holding it. Pointing the pilot
-  at it would have sent it after a different shape's settled property.
-
   **Write down what makes the wrap-at-8 model evidence about `Balanced`, or record that it is not.**
   Shrinking the position to 3 bits is a claim that the protocol's correctness does not depend on the
   field's width -- that the shipping code refines the model. State that correspondence explicitly:
   which constants were shrunk, why the protocol is uniform in each, and what a counterexample at 8
   therefore implies at 2^32. If it cannot be argued, the pilot's result is a counterexample *in a toy
-  model* and must be reported as exactly that. A reduced model that nobody has tied to the code can
-  pass and mean nothing, which is the "measures the model, not the thing" trap in a second costume.
+  model* and must be reported as exactly that.
 
   **Success needs both halves.** The unmodified model must satisfy its invariant, *and* a
   deliberately broken variant must produce a counterexample. Neither alone is enough: a green run on
   the correct model says nothing if the model is too permissive or the invariant vacuous, and a
   counterexample from the broken variant can also be produced by a malformed model that would find
-  one anywhere. The first is the property check; the second is the anti-vacuity check, and it is the
-  same sabotage discipline the test suites here already follow. An earlier version of this item asked
-  only for the second, which overcorrected.
+  one anywhere. The first is the property check; the second is the anti-vacuity check.
+
+  Not a candidate: `capacity == 1`. It belongs to `slotwise_mpsc`'s slot sequence protocol
+  ([D-12](crates/windows-waitable-queues/DESIGN-NOTES.md#d-12)), not to `reserving_mpsc`'s claim
+  position, and is already resolved by that shape refusing a capacity below two.
 
 - [ ] **M30.3** -- Write down what the pilot could NOT reach, by name.
 
@@ -257,8 +250,8 @@ action-only rule for checklist files.
 
   Put it where a reader deciding how much to trust the crate will meet it -- beside the existing
   "How far the memory orderings are verified, and how far they are not" section. **That section has
-  two copies**, [README.md](crates/windows-waitable-queues/README.md) and
-  [src/lib.rs](crates/windows-waitable-queues/src/lib.rs), and updating one would leave the other
+  two copies**, [that crate's README.md](crates/windows-waitable-queues/README.md) and
+  [its src/lib.rs](crates/windows-waitable-queues/src/lib.rs), and updating one would leave the other
   telling an adopter something the crate no longer believes. Update both, or make one derive from the
   other -- the README is already a build input via `#[doc = include_str!]`, so the second option is
   available and is the one that cannot drift.
@@ -275,16 +268,17 @@ action-only rule for checklist files.
 
   Give it a real item in a real checklist, with its scope as D-31 describes it (both MPSC shapes or
   neither), and repoint every reference at it. **There are five, not three**: three in
-  [DESIGN-NOTES.md](crates/windows-waitable-queues/DESIGN-NOTES.md), one in
+  [that crate's DESIGN-NOTES.md](crates/windows-waitable-queues/DESIGN-NOTES.md), one in
   [src/doorbell.rs](crates/windows-waitable-queues/src/doorbell.rs), and one in
   [sabotage.json](crates/windows-waitable-queues/sabotage.json). Sweeping only the design notes would
   leave a stale identifier in a source file and in the sabotage manifest -- the same
   fix-the-reported-site-not-the-class failure this repository keeps paying for.
 
-  Opening queue work also obliges the component tracker:
-  [crates/windows-waitable-queues/PLANS.md](crates/windows-waitable-queues/PLANS.md) currently says
-  "No checklist is open against this crate", which this item falsifies. Add the row, as other crates
-  do for root-owned checklists.
+  Opening queue work also obliges the component tracker. That row is added in this change rather than
+  deferred to this item, because
+  [crates/windows-waitable-queues/PLANS.md](crates/windows-waitable-queues/PLANS.md)'s "No checklist
+  is open against this crate" stops being true the moment M30.4 is queued, not when it is completed.
+  What remains for this item is to keep that row accurate as the work proceeds.
 
 - [ ] **M30.5** -- Decide what, if anything, the workspace adopts, and record the decision with its
   cost.
@@ -301,10 +295,10 @@ action-only rule for checklist files.
   once already on narrower grounds.
 
   **Either outcome obliges a contract sweep, and a no-adoption outcome obliges it most.** Three
-  public places promise machine-checked verification before 1.0:
-  [README.md](crates/windows-waitable-queues/README.md),
-  [src/lib.rs](crates/windows-waitable-queues/src/lib.rs), and D-31 in
-  [DESIGN-NOTES.md](crates/windows-waitable-queues/DESIGN-NOTES.md#d-31). Deciding to adopt nothing
+  public places in `windows-waitable-queues` promise machine-checked verification before 1.0:
+  [that crate's README.md](crates/windows-waitable-queues/README.md),
+  [its src/lib.rs](crates/windows-waitable-queues/src/lib.rs), and D-31 in
+  [its DESIGN-NOTES.md](crates/windows-waitable-queues/DESIGN-NOTES.md#d-31). Deciding to adopt nothing
   without reconciling those leaves the crate promising adopters something no item will deliver --
   which is the failure M30.4 exists to fix, recreated by the milestone that fixed it. Sweep all three
   as part of this item, whichever way it goes.
