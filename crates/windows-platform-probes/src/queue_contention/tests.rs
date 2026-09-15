@@ -26,7 +26,7 @@ fn observation(isolated: Vec<Run>, drained: Vec<Run>) -> Observation {
     Observation {
         isolated,
         drained,
-        logical_processors: 8,
+        available_parallelism: Some(8),
     }
 }
 
@@ -206,9 +206,11 @@ fn scaling_is_none_for_a_shape_absent_from_the_regime() {
     );
 }
 
-/// A zero denominator yields a non-finite value rather than a panic, so the
-/// renderer's own guard is what decides the cell. This pins the contract that
-/// `scaling` does not itself panic on degenerate input.
+/// A zero denominator yields a non-finite value rather than a panic. That is
+/// deliberate -- `scaling` is arithmetic, not a renderer -- and it is why
+/// `format_scaling` in the binary must filter non-finite values before
+/// formatting, or a degenerate observation prints `infx` in a column of
+/// measurements. This test pins the half of that contract the library owns.
 #[test]
 fn scaling_against_a_zero_rate_is_non_finite_rather_than_a_panic() {
     let observed = observation(

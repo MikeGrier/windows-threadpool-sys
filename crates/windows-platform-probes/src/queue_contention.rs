@@ -41,10 +41,17 @@
 //!   reading more out of the number than is in it. Found by a review.
 //!
 //! - **Drained** -- a consumer popping continuously while the producers push.
-//!   This is the one that can price `reserving_mpsc`, because its producer reads
-//!   `head`, and `head` is only expensive to read when a consumer is *writing*
-//!   it. Measured in isolation that read hits a clean, shared line and looks
-//!   free -- which would be a confident wrong answer.
+//!   This is the regime in which `reserving_mpsc`'s read of `head` is at its
+//!   most expensive, because `head` is only costly to read when a consumer is
+//!   *writing* it. Measured in isolation that read hits a clean, shared line and
+//!   looks free -- which would be a confident wrong answer.
+//!
+//!   **It does not isolate that read either**, for the same reason the isolated
+//!   regime does not isolate the claim: the ratio is between two complete push
+//!   paths, and `reserving_mpsc` and `slotwise_mpsc` differ in claim protocol and
+//!   slot metadata as well as in that one load. So the ratio **bounds the read's
+//!   contribution from above** rather than pricing it. Found by a review, which
+//!   is also how the isolated bullet above got its correction.
 //!
 //! # What is deliberately not claimed
 //!
@@ -155,8 +162,19 @@ pub struct Observation {
     pub isolated: Vec<Run>,
     /// Producers timed against a continuously draining consumer.
     pub drained: Vec<Run>,
-    /// Logical processors the host reports.
-    pub logical_processors: usize,
+    /// Processors available to **this process**, when it could be determined.
+    ///
+    /// This is `available_parallelism`, which is the process-available estimate
+    /// and not the host's logical-processor count: an affinity mask or a job
+    /// object narrows it, so under either it is legitimately smaller than the
+    /// banner's `16p`. It is reported because it is what decides whether a
+    /// producer count oversubscribes *this run*, which is the question a reader
+    /// of these rows actually has; the host's own shape is already on the banner.
+    ///
+    /// `None` when the query failed. An earlier version mapped failure to `0`,
+    /// which the report then printed as a zero-processor host -- a value no host
+    /// has, presented with the same confidence as a measured one.
+    pub available_parallelism: Option<usize>,
 }
 
 impl Observation {
@@ -247,7 +265,9 @@ pub fn measure() -> Observation {
     Observation {
         isolated,
         drained,
-        logical_processors: thread::available_parallelism().map_or(0, std::num::NonZeroUsize::get),
+        available_parallelism: thread::available_parallelism()
+            .ok()
+            .map(std::num::NonZeroUsize::get),
     }
 }
 
@@ -447,7 +467,11 @@ fn time_isolated_reserving(producers: usize) -> Repetition {
     (elapsed, refusals)
 }
 
-/// The experimental permit claim, in the regime that isolates the claim itself.
+/// The experimental permit claim, with no consumer and no possibility of refusal.
+///
+/// Not "the regime that isolates the claim", which an earlier wording said: this
+/// times the whole push path, including slot metadata, the item write,
+/// publication and the doorbell's fence. See the module header.
 ///
 /// A line-for-line twin of [`time_isolated_reserving`] with one shape
 /// substituted. Deliberately not factored into a generic over the two, which
@@ -701,7 +725,12 @@ fn time_drained_permit(producers: usize) -> Repetition {
     (elapsed, refusals)
 }
 
-/// One claim-word layout, in the regime that isolates the claim.
+/// One claim-word layout, with no consumer and no possibility of refusal.
+///
+/// As with the other isolated timers, this is the whole push path and not the
+/// claim word alone; only the layout differs between these rows, so a difference
+/// is still attributable to the layout, but its magnitude is a share of total
+/// push cost rather than of the exchange.
 ///
 /// **Generic over the layout, where [`time_isolated_permit`] is deliberately
 /// duplicated, and the difference is the point.** That twin compares two

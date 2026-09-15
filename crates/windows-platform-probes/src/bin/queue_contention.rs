@@ -35,11 +35,17 @@ fn render(out: &mut dyn std::fmt::Write) {
     let _ = writeln!(out, "== does the array queue's tail claim contend? ==\n");
 
     let observation = measure();
-    let _ = writeln!(
-        out,
-        "host reports {} logical processors\n",
-        observation.logical_processors
-    );
+    // `available_parallelism`, not the host count -- an affinity mask or job
+    // object narrows it, and saying "host reports" under either would contradict
+    // the banner three lines up. The host's shape is already there; this is what
+    // decides whether a producer count oversubscribes THIS run.
+    let _ = match observation.available_parallelism {
+        Some(count) => writeln!(out, "processors available to this process: {count}\n"),
+        None => writeln!(
+            out,
+            "processors available to this process: unknown (the query failed)\n"
+        ),
+    };
     // The sampling parameters are capture parameters, and a figure is only
     // interpretable with them -- see D-observations-not-verdicts. The dispersion
     // belongs here too and is not yet carried; M4.2 covers both.
@@ -185,15 +191,23 @@ fn render(out: &mut dyn std::fmt::Write) {
     );
     let _ = writeln!(
         out,
-        "     `slotwise_mpsc` does not, which is the entire reason they ship as"
+        "     `slotwise_mpsc` does not. This regime is where that read is at its"
     );
     let _ = writeln!(
         out,
-        "     two shapes. This regime is the one that can price that read,"
+        "     most expensive, because a consumer is writing the line being read"
     );
     let _ = writeln!(
         out,
-        "     because a consumer is writing the line being read."
+        "     -- which is why the ratio bounds its cost from above. It does not"
+    );
+    let _ = writeln!(
+        out,
+        "     price it: the two shapes also differ in claim protocol and slot"
+    );
+    let _ = writeln!(
+        out,
+        "     metadata, and all of that is inside the same number."
     );
     let _ = writeln!(
         out,
@@ -374,8 +388,19 @@ fn render_table(out: &mut dyn std::fmt::Write, runs: &[Run]) {
     }
 }
 
+/// A scaling factor, or `--` when it is missing or not a number.
+///
+/// Guards non-finite values for the same reason [`format_ratio`] guards its
+/// denominator, and the guard belongs here rather than in `scaling`: a shape
+/// whose one-producer row reports zero makes the quotient infinite, and
+/// `infx` in a column of measurements reads as a measurement. `scaling` is
+/// deliberately allowed to return the non-finite value -- it is arithmetic, not
+/// a renderer -- so the display layer is where it has to be caught.
 fn format_scaling(scaling: Option<f64>) -> String {
-    scaling.map_or_else(|| "--".to_owned(), |value| format!("{value:.2}x"))
+    match scaling {
+        Some(value) if value.is_finite() => format!("{value:.2}x"),
+        _ => "--".to_owned(),
+    }
 }
 
 /// `numerator / denominator` as a cost ratio, or `--` when either is missing.

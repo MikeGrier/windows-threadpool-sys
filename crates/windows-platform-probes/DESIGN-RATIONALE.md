@@ -644,8 +644,9 @@ it continues for the whole run and no amount of warming touches it. Removing the
 transients therefore does not hide the inherent floor, it uncovers it, which is
 why the expected signature is a spread that narrows as warming and length
 increase and then stops narrowing. The plateau is the inherent part. This probe
-already discards one untimed pass, though only for the allocation's pages, so
-part of this is done and the rest is unmeasured.
+already discards one untimed pass -- which warms process and allocator state
+rather than the timed allocation, since each repetition builds its own queue --
+so part of this is done and the rest is unmeasured.
 
 **The calibration is the part worth writing down, because it is not obvious and
 it cuts both ways.** A spread like this in a benchmark or a marketing document

@@ -119,8 +119,12 @@ machine, and before suspecting the probe -- each of those changes what is being
 measured, and a change made before the cheap check cannot be evaluated.
 
 **A warmup pass separates transient cost from ongoing noise, and the two are
-different things.** This probe already discards one untimed pass, but only to
-fault in a fresh allocation's pages. Cold caches, branch predictors, and CPU
+different things.** This probe already discards one untimed pass -- though not for
+the reason an earlier version of this paragraph gave. Every timed repetition
+builds and drops its own queue, so the discarded pass cannot fault in any
+allocation a timed pass will use; what it warms is process state, the allocator's
+size class, the OS page cache, the instruction cache and the branch predictors.
+Cold caches, predictors, and CPU
 frequency ramp are the same *kind* of cost -- one-time, front-loaded, not a
 property of the steady state -- and lengthening the timed span dilutes them
 whether or not a warmup removes them.
@@ -619,9 +623,13 @@ comparison exists to classify correctly: a red build that is **not** a finding.
 ## The queue-contention probe, and why it must not run in the CI probe job
 
 `probe-queue-contention` measures two things a design decision is waiting on: whether the bounded
-array queue's tail claim contends badly enough to justify the linked and sharded MPSC shapes, and
-what [`reserving_mpsc`](../windows-waitable-queues/src/reserving_mpsc.rs)'s extra read of the
-consumer's position actually costs.
+array queue's tail claim contends badly enough to justify the linked and sharded MPSC shapes, and an
+upper bound on what [`reserving_mpsc`](../windows-waitable-queues/src/reserving_mpsc.rs)'s extra read
+of the consumer's position costs. **A bound rather than a price**, because the only ratio available
+is between two complete push paths: `reserving_mpsc` and `slotwise_mpsc` differ in claim protocol and
+slot metadata as well as in that one load, so all of it sits inside the same number. The drained
+regime is where the read is most expensive, which is what makes the bound tight enough to be worth
+having.
 
 **The checklists carrying those decisions are not in this repository yet** -- they arrive with the
 rest of the queue work -- so this note deliberately names the QUESTIONS rather than linking to items
@@ -674,8 +682,10 @@ whatever curve appears against N is the producer side alone, with no consumer tr
 the claim alone -- what is timed is each shape's whole push path, tail claim and slot write and
 publication and doorbell together, so a difference here is a difference in PUSH COST rather than
 evidence about the claim on its own. **Drained** runs a consumer popping
-continuously, which is the only regime that can price `reserving_mpsc`'s read of `head` -- that read is
+continuously, which is the regime in which `reserving_mpsc`'s read of `head` is most expensive -- that
+read is
 cheap until a consumer is *writing* the line, and measuring it in isolation would report it as free.
+It bounds that read rather than pricing it, because the ratio is between two complete push paths.
 
 The drained regime has a **single** consumer, because that is what MPSC means, so at high producer counts
 it becomes consumer-bound and a plateau there says nothing about the claim. Each row carries the refusal
@@ -683,7 +693,7 @@ count from the queue's own `Observable` counters precisely so that is visible as
 mistaken for contention: the sixteen- and thirty-two-producer drained rows show millions of refusals and
 should be read as measurements of the consumer.
 
-## The claim word's width costs 2-3x in isolation, and the drained figure is withdrawn
+## The claim word's width costs 1.1x to 3.8x in isolation, and the drained figure is withdrawn
 
 Measured by `probe-queue-contention` on one host, `x86_64-pc-windows-msvc`.
 Four apportionments of `reserving_mpsc`'s claim word: 32/32, 16/48 and 8/56 over
@@ -728,11 +738,13 @@ buys is not in dispute: the recurrence moves from 2^32 to 2^48, from about 37
 seconds of sustained maximum-rate pushing to about 28 days.
 
 **Widening the word is not free in the isolated regime, and the drained figure
-below does not survive the re-measurement.** Isolated, where the claim is the
-only thing happening, `cmpxchg16b` costs 2-3x and the penalty *grows* with
+below does not survive the re-measurement.** Isolated, where no consumer touches
+the queue, `cmpxchg16b` cost 2-3x on the stand-in and the penalty *grows* with
 contention; that is the one conclusion in this section the seven-run
 re-measurement strengthened, to 3.45x and 3.81x at sixteen and thirty-two
-producers. The drained figure of 5-12% is **withdrawn** -- not because the
+producers. (These are shares of total push cost, not of the exchange: the
+isolated regime times the whole push path, and only the layout differs between
+these rows.) The drained figure of 5-12% is **withdrawn** -- not because the
 number moved, but because nothing was measuring whether it meant anything. The
 re-measured drained 128-bit rows run 2-13%, which resembles the old figure
 closely enough to look like confirmation, while every one of them sits inside a
