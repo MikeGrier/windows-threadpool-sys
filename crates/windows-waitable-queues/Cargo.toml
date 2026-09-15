@@ -57,8 +57,8 @@ experimental-permit-claim = []
 # while still compiling. With them off, `AtomicU128` does not exist on such a
 # target and the build fails naming it.
 #
-# This feature adds only the `Wide` layout. `Wide` measured slower on the whole
-# push path as producer count rises -- near parity at one or two, several times by
+# This feature adds only the `Wide` layout. The whole push path was measured as
+# slower under it as producer count rises -- near parity at one or two, several times by
 # thirty-two, in the isolated regime. The probe times the complete push, so that
 # is the layout's effect on that path, not the exchange in isolation.
 #

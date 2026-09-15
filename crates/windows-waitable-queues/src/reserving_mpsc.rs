@@ -535,8 +535,8 @@ impl ClaimLayout for Perpetual {
 /// pushes to recur, which no deployment reaches -- not "not for twenty years",
 /// but not at all.
 ///
-/// The 128-bit exchange measured slower on the whole push path than a `u64`
-/// layout does, and the difference **grows with producer count** -- near parity
+/// The whole push path was measured as slower under this layout than under a
+/// `u64` one, and the difference **grows with producer count** -- near parity
 /// at one or two, several times by thirty-two, in the isolated regime on one
 /// x86-64 host; against a draining consumer the difference fell inside that
 /// host's same-code control and could not be called at all. The probe times the

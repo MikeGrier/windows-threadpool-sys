@@ -146,7 +146,7 @@ one to be slower -- but **what that costs in throughput is not established**: a
 probe comparing them found them indistinguishable at low producer counts, and at
 high counts a difference that did not clearly exceed the run-to-run variation of
 the same code measured twice. `Wide` is a separate matter: it needs a 128-bit exchange,
-and choosing it measured slower on the whole push path as producer count rises
+and the whole push path was measured as slower under it as producer count rises
 -- near parity at one or two, several times by thirty-two, in the isolated
 regime -- and it is the only thing in
 this crate that costs a third-party dependency.
@@ -186,8 +186,8 @@ proportionally longer to reach its wrap.
 
 - **Naming a layout moves it.** `Perpetual` puts the recurrence about twenty
   years out. **What it costs in throughput is not established** -- it issues the
-  same atomic compare-exchange on the same `u64` as the
-  default, and measured indistinguishable from it at low producer counts; at
+  same atomic compare-exchange on the same `u64` as the default, and was measured
+  as indistinguishable from it at low producer counts; at
   high counts the difference did not clearly exceed the run-to-run variation of
   the same code measured twice.
 - **`slotwise_mpsc` does not have this hazard** under any layout. Its positions
@@ -215,8 +215,8 @@ dependency: Rust's standard library has no 128-bit atomic -- `core::sync::atomic
 stops at 64 bits -- so the double-width compare-and-swap comes from
 `portable-atomic`. `Perpetual` reaches roughly
 twenty years before its claim position recurs with no dependency, though what
-that costs in throughput is not established, while choosing `Wide` measured
-slower on the whole push path as producer count rises -- near parity at one or
+that costs in throughput is not established, while under `Wide` the whole push
+path was measured as slower as producer count rises -- near parity at one or
 two, several times by thirty-two, in the isolated regime. What `Wide` provides
 that the `u64` layouts do not is the recurrence removed outright rather than
 deferred.
@@ -362,8 +362,11 @@ both rather than picking one for you.
   above.
 - **Of the two MPSC shapes, only `reserving_mpsc` offers `reserve`**;
   `slotwise_mpsc` structurally cannot. (`spsc` has it too, and the experimental
-  `permit_mpsc` exposes its own.) That no longer forces a trade against the
-  recurrence, since naming a layout addresses it.
+  `permit_mpsc` exposes its own.) Wanting `reserve` no longer means accepting the
+  default layout's recurrence, but the trade is not gone -- it changes axis: a
+  deeper position is paid for with a lower ceiling on outstanding reservations,
+  65,535 under `Enduring` and 255 under `Perpetual` against 2^32 under the
+  default.
 - **`spsc` requires exactly one producer and one consumer**, and does less work
   than either MPSC shape because of it.
 
