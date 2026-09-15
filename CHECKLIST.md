@@ -185,6 +185,98 @@ written before it was stated.
   function pointer, which is exactly where such a path would be. Depends on M22.1's
   classification.
 
+## M23 -- Find out how much of this workspace's algorithm correctness can be machine-checked
+
+**Why now, and what this is not.** The workspace's concurrency is checked today by reasoning recorded
+beside the code, an extensive unit suite, a sabotage suite that injects defects and requires each to
+be caught, and a cargo-mutants sweep. That combination has found real bugs -- `D-15`'s lost wakeup
+among them. It also has a measured blind spot:
+[crates/windows-waitable-queues/README.md](crates/windows-waitable-queues/README.md) records that
+weakening a producer's `Acquire` load of the consumer's position to `Relaxed` left the entire suite
+green, while every logic defect injected beside it was caught. A test observes what a run happened to
+do; it cannot observe an ordering that a run happened not to need.
+
+**The goal is to narrow where hand-inspection has to look, not to replace it.** A method that proves
+a protocol correct for three producers and a capacity of two does not prove the shipping code
+correct -- but it moves a class of question out of "argued carefully" and into "checked", and what
+remains uncheckable is then a short, named list rather than the whole surface. That list is the
+deliverable. Formal methods here are a scoping instrument.
+
+**This milestone does not commit the workspace to any tool**, and it must not pre-empt
+[D-31](crates/windows-waitable-queues/DESIGN-NOTES.md#d-31), which decided on considered grounds that
+0.1.0 ships without machine-checked orderings. D-31's
+reasoning is the starting point rather than something to overturn: a model checker covers atomics and
+cannot cover `SetEvent`/`ResetEvent`, so stubbing them verifies a model of `SetEvent` rather than
+`SetEvent` -- the "measures the model, not the thing" trap this workspace has already been caught by
+once. Any tool this milestone recommends has to be read against that.
+
+- [ ] **M23.1** -- Survey the workspace for algorithms whose correctness is currently argued rather
+  than checked, and match each to the class of tool that could check it.
+
+  Candidates, not exhaustive: `reserving_mpsc`'s packed claim word and its reservation admission rule;
+  `slotwise_mpsc`'s per-slot sequence protocol; the experimental permit claim; the doorbell's mirror
+  flag against `SetEvent`/`ResetEvent`; `windows-file-watcher`'s contract state machine;
+  `windows-ioring-sys`' submission/completion ring.
+
+  For each, record which of these fits and why: **TLA+/PlusCal** (protocol-level, exhaustive over a
+  small configuration, no memory model -- its actions are atomic and interleaved, which is sequential
+  consistency); **loom** (actual Rust under the C11 memory model, which is where the measured
+  weakened-`Acquire` blind spot lives); **kani or similar bounded proof** (Rust, memory-safety and
+  assertion checking); **`const` assertions** (arithmetic relationships between constants, already
+  used here and the cheapest of the four, because they fail the build rather than a run somebody
+  chose to make).
+
+  The output is a table, and the "no tool fits this" rows are as valuable as the rest.
+
+- [ ] **M23.2** -- Pilot exactly one, chosen because parameter shrinking turns an untestable property
+  into an exhaustive one.
+
+  `reserving_mpsc`'s claim-position recurrence (`SH-14.1`) is the strongest candidate: the defect
+  needs 2^32 pushes to manifest and is therefore beyond any test, but a model whose position wraps at
+  8 makes the same interleaving reachable in seconds and yields a counterexample trace rather than a
+  suspicion. `capacity == 1` is a second such case -- the design notes record that two of the three
+  sequence states collapse to the same number there.
+
+  Success is a counterexample for a deliberately broken variant, not a green run on the correct one.
+  A model that cannot produce the known bug when the bug is reintroduced has not been shown to be
+  checking anything -- the same sabotage discipline the test suites here already follow.
+
+- [ ] **M23.3** -- Write down what the pilot could NOT reach, by name.
+
+  This is the item the milestone exists for. Expect the list to include: the memory orderings, if the
+  tool has no memory model; every syscall boundary, including the doorbell's; anything whose
+  correctness depends on the allocator, the scheduler, or real time; and the gap between the model
+  and the code, which no tool closes.
+
+  Put it where a reader deciding how much to trust the crate will meet it -- beside the existing
+  "How far the memory orderings are verified, and how far they are not" section, which is already
+  written in the right register.
+
+- [ ] **M23.4** -- Re-home `M31.6`, which is currently orphaned.
+
+  `windows-waitable-queues`' design notes reference `M31.6` in three places as the planned `loom`
+  verification, and [crates/windows-waitable-queues/README.md](crates/windows-waitable-queues/README.md)
+  tells adopters it is planned before 1.0. There is no live checklist item for it anywhere in the
+  repository -- the crate has only a `COMPLETED-CHECKLIST.md`. That is the "design notes are not a
+  work queue" failure the repository instructions name: a public commitment that nothing will cause
+  anyone to pick up.
+
+  Give it a real item in a real checklist, with its scope as D-31 describes it (both MPSC shapes or
+  neither), and make the design-note references point at it.
+
+- [ ] **M23.5** -- Decide what, if anything, the workspace adopts, and record the decision with its
+  cost.
+
+  The cost to name explicitly, because it is the one this workspace keeps paying: **a specification is
+  another statement of the contract, and it can drift from the code with nothing to detect it.** That
+  is the restatement-drift problem in
+  [.github/copilot-instructions.md](.github/copilot-instructions.md)'s CONTRACT INTEGRITY section,
+  applied to an artefact that is harder to keep honest than prose because it looks authoritative. A
+  stale model that still passes is worse than no model.
+
+  So the decision has to answer: what keeps the model and the code in step, who re-runs it, and what
+  happens when they disagree. "Adopt nothing, and say why" is a legitimate outcome -- D-31 reached it
+  once already on narrower grounds.
 ## M-inf -- Parked
 
 Ungated work with no identified predecessor deliverable.
