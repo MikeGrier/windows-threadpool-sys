@@ -1339,7 +1339,9 @@ standing example**: "308 lib tests" changes on almost every commit, tells a read
 gate is green and which parts of it ran; do not enumerate. The same goes for file counts, line
 counts, and any other incidental tally that is not itself the finding.
 
+## CHECKLIST file hygiene
 
+CHECKLIST files are **action-only**: they contain pending, in-progress, and recently
 completed (`[x]`) items awaiting migration to `COMPLETED-CHECKLIST.md`. Completed items
 must be moved to `COMPLETED-CHECKLIST.md` when a group is fully done (see below), with one
 exception: a **large** completed item is moved *immediately* and replaced in place by a

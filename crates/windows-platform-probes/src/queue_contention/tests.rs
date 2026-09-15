@@ -428,3 +428,137 @@ fn render_table_of_nothing_still_writes_its_header() {
     render_table(&mut out, &[]);
     assert_eq!(out.lines().count(), 1, "header only, got {out:?}");
 }
+
+/// A timer that replays a scripted sequence instead of measuring anything, so
+/// `median_run`'s selection can be checked exactly. The first value is consumed
+/// by the untimed warmup pass.
+fn scripted(values: Vec<Repetition>) -> impl FnMut(usize) -> Repetition {
+    let mut next = 0usize;
+    move |_producers| {
+        let value = values[next];
+        next += 1;
+        value
+    }
+}
+
+/// The scripted repetitions used by the tests below, in the order `median_run`
+/// calls for them. Three properties are deliberate and each catches a different
+/// regression:
+///
+/// - the durations are **not** in ascending order, so failing to sort at all
+///   selects 5e6 rather than the median 3e6;
+/// - the refusal counts are **not** monotonic in duration, so sorting by the
+///   wrong tuple element also selects 5e6;
+/// - no two durations are equal, so the median is unambiguous.
+///
+/// Sort *direction* is deliberately not covered, because it cannot be: with
+/// `REPETITIONS == 5`, `results[REPETITIONS / 2]` is index 2 of five, which is
+/// the median whether the sort ascends or descends. A test claiming to pin
+/// direction here would pass under both and be theatre.
+fn scripted_repetitions() -> Vec<Repetition> {
+    vec![
+        (999e6, 9_999), // warmup, discarded
+        (4e6, 40),
+        (1e6, 10),
+        (5e6, 30),
+        (2e6, 50),
+        (3e6, 20),
+    ]
+}
+
+#[test]
+fn median_run_reports_the_median_repetition_rather_than_the_first_or_last() {
+    let measured = median_run(shapes::RESERVING_MPSC, 1, scripted(scripted_repetitions()));
+    // 3e6 ns over 1 * 50,000 pushes is 60 ns per push.
+    assert!(
+        (measured.nanos_per_push - 60.0).abs() < 1e-9,
+        "expected the 3e6 ns median, got {} ns/push",
+        measured.nanos_per_push
+    );
+    assert_eq!(measured.shape, shapes::RESERVING_MPSC);
+    assert_eq!(measured.producers, 1);
+}
+
+/// The refusal count travels with the repetition whose duration was chosen. It
+/// is the probe's only signal that a drained row was limited by the consumer
+/// rather than by claim contention, so pairing it with a different repetition
+/// would misattribute the cause while leaving the timing plausible.
+#[test]
+fn median_run_pairs_the_refusal_count_with_the_median_repetition() {
+    let measured = median_run(shapes::RESERVING_MPSC, 1, scripted(scripted_repetitions()));
+    assert_eq!(
+        measured.refusals, 20,
+        "3e6 ns is the median and its repetition refused 20; got {}",
+        measured.refusals
+    );
+}
+
+/// The warmup pass exists to take the first-call costs out of the sample, so its
+/// value must not reach the report. Its scripted duration is the largest in the
+/// sequence and its refusal count is unique, so either leaking into the result
+/// is visible.
+#[test]
+fn median_run_discards_the_warmup_pass() {
+    let measured = median_run(shapes::RESERVING_MPSC, 1, scripted(scripted_repetitions()));
+    assert_ne!(
+        measured.refusals, 9_999,
+        "the warmup's refusals were reported"
+    );
+    assert!(
+        measured.nanos_per_push < 100.0,
+        "the warmup's 999e6 ns reached the report as {} ns/push",
+        measured.nanos_per_push
+    );
+}
+
+/// Both published rates come from the same chosen repetition, so they must agree
+/// with each other. A regression that derived one from the median and the other
+/// from some different element would leave a report whose two columns describe
+/// different runs.
+#[test]
+fn median_run_derives_both_rates_from_the_one_chosen_repetition() {
+    let measured = median_run(shapes::RESERVING_MPSC, 1, scripted(scripted_repetitions()));
+    let round_trip = 1_000_000_000.0 / measured.nanos_per_push;
+    assert!(
+        (measured.pushes_per_second - round_trip).abs() < 1e-3,
+        "{} pushes/sec does not agree with {} ns/push",
+        measured.pushes_per_second,
+        measured.nanos_per_push
+    );
+}
+
+/// `median_run` scales by the producer count, so the same per-repetition
+/// durations must report a lower per-push cost when more producers shared them.
+#[test]
+fn median_run_divides_the_median_by_every_producers_pushes() {
+    let one = median_run(shapes::RESERVING_MPSC, 1, scripted(scripted_repetitions()));
+    let four = median_run(shapes::RESERVING_MPSC, 4, scripted(scripted_repetitions()));
+    assert!(
+        (one.nanos_per_push / four.nanos_per_push - 4.0).abs() < 1e-9,
+        "four producers push four times as many items in the same span: {} vs {}",
+        one.nanos_per_push,
+        four.nanos_per_push
+    );
+}
+
+/// The refusal column is the probe's diagnosis of *why* a drained row is slow --
+/// consumer backpressure rather than claim contention -- so a row that dropped
+/// or misformatted it would leave the report looking complete while the central
+/// signal was silently absent. Every other renderer test builds rows refusing
+/// nothing, which cannot catch that.
+#[test]
+fn render_table_shows_a_nonzero_refusal_count() {
+    let mut refused = run(shapes::SLOTWISE_MPSC, 8, 100_000_000.0);
+    refused.refusals = 123_456;
+    let mut out = String::new();
+    render_table(&mut out, &[refused]);
+    let row = out.lines().nth(1).expect("one row was rendered");
+    assert!(
+        row.contains("123456"),
+        "the refusal count is missing from {row:?}"
+    );
+    assert!(
+        out.lines().next().expect("a header").contains("refusals"),
+        "the refusal column is unlabelled"
+    );
+}
