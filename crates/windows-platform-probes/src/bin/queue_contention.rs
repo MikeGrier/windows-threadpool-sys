@@ -10,7 +10,9 @@
 //! linked and sharded MPSC shapes are ever needed, and whether `slotwise_mpsc`
 //! and `reserving_mpsc` should merge. See `queue_contention`'s module docs.
 
-use windows_platform_probes::queue_contention::{PRODUCER_COUNTS, Run, measure, shapes};
+use windows_platform_probes::queue_contention::{
+    PRODUCER_COUNTS, PUSHES_PER_PRODUCER, REPETITIONS, Run, measure, shapes,
+};
 use windows_platform_probes::report::emit_report;
 
 fn main() {
@@ -37,6 +39,15 @@ fn render(out: &mut dyn std::fmt::Write) {
         out,
         "host reports {} logical processors\n",
         observation.logical_processors
+    );
+    // The sampling parameters are capture parameters, and a figure is only
+    // interpretable with them -- see D-observations-not-verdicts. The dispersion
+    // belongs here too and is not yet carried; M4.2 covers both.
+    let _ = writeln!(
+        out,
+        "sampling: {} pushes per producer, median of {} repetitions, one untimed \
+         warmup pass\n",
+        PUSHES_PER_PRODUCER, REPETITIONS
     );
 
     let _ = writeln!(
@@ -100,7 +111,27 @@ fn render(out: &mut dyn std::fmt::Write) {
     // Question 2: what does reserving_mpsc's read of `head` actually cost?
     let _ = writeln!(
         out,
-        "\n  2. the price of reservation (drained regime, where `head` is written)\n"
+        "\n  2. reserving vs slotwise, drained (where `head` is written)\n"
+    );
+    let _ = writeln!(
+        out,
+        "     The ratio is the WHOLE push path of two different shapes, not the"
+    );
+    let _ = writeln!(
+        out,
+        "     price of reserving's extra `head` load on its own: they use"
+    );
+    let _ = writeln!(
+        out,
+        "     different claim protocols, slot metadata and retry behaviour. This"
+    );
+    let _ = writeln!(
+        out,
+        "     regime is where that load is at its most expensive, so the ratio"
+    );
+    let _ = writeln!(
+        out,
+        "     bounds its contribution from above rather than isolating it.\n"
     );
     let _ = writeln!(
         out,
@@ -183,16 +214,37 @@ fn render(out: &mut dyn std::fmt::Write) {
     );
     let _ = writeln!(
         out,
-        "     apportioned differently; 64/64 is a u128 exchange (cmpxchg16b)."
+        "     apportioned differently; 64/64 is a u128 exchange (cmpxchg16b on"
     );
     let _ = writeln!(
         out,
-        "     The three u64 rows issue the SAME instruction, so a difference"
+        "     x86-64, ldxp/stxp on aarch64), measured only where that is native."
     );
     let _ = writeln!(
         out,
-        "     between them is noise or slot-metadata density, not the claim."
+        "     The three u64 rows issue the same instruction and differ only in"
     );
+    let _ = writeln!(
+        out,
+        "     shift and mask constants, so there is no structural reason for one"
+    );
+    let _ = writeln!(
+        out,
+        "     to be slower -- but these rows time the WHOLE push path, so a"
+    );
+    let _ = writeln!(
+        out,
+        "     difference between them is not thereby noise. Read it against a"
+    );
+    let _ = writeln!(
+        out,
+        "     control before calling it either way: the reserving_mpsc row and"
+    );
+    let _ = writeln!(
+        out,
+        "     the 32/32 row above are the same code, so their gap is this"
+    );
+    let _ = writeln!(out, "     host's zero.");
     let _ = writeln!(
         out,
         "     64/64 vs 32/32 prices the double-width exchange -- what removing"

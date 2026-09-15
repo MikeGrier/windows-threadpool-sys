@@ -686,8 +686,10 @@ should be read as measurements of the consumer.
 ## The claim word's width costs 2-3x in isolation, and the drained figure is withdrawn
 
 Measured by `probe-queue-contention` on one host, `x86_64-pc-windows-msvc`.
-Three apportionments of `reserving_mpsc`'s claim word: 32/32 and 16/48 over
-`AtomicU64`, and 64/64 over `AtomicU128`.
+Four apportionments of `reserving_mpsc`'s claim word: 32/32, 16/48 and 8/56 over
+`AtomicU64`, and 64/64 over `AtomicU128`. The last is measured only where a
+128-bit exchange is native -- x86-64 and aarch64 -- so on a target without one
+the report carries the other three and leaves its column empty.
 
 **These were duplicated scaffolding when the measurement was taken, and they
 ship now.** The layouts were built as copies so the shipping crate was not

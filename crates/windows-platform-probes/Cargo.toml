@@ -153,9 +153,6 @@ windows-namespace-request-sys = { path = "../windows-namespace-request-sys" }
 # the same host, in the same run, by the same harness.
 windows-waitable-queues = { path = "../windows-waitable-queues", features = [
 	"experimental-permit-claim",
-	# So the probe can instantiate the 128-bit layout. The 64-bit ones need no
-	# feature; this is the only one that costs the queue crate a dependency.
-	"dwcas",
 ] }
 # The long-path probe measures a length against `MAX_PATH`, and `MAX_PATH` counts
 # UTF-16 code units. `OsStr::len` counts Rust's platform encoding -- WTF-8 here --
@@ -177,6 +174,33 @@ wtf-string = { path = "../wtf-string" }
 # `MapAccess` visitor sees the names as the parser reads them, so the scan is
 # still the real parser's and this crate hand-writes no string walking at all.
 serde = { version = "1.0", optional = true }
+
+# The 128-bit claim layout is measured only where a 128-bit exchange is a native
+# instruction, and the feature that supplies it is added per-target rather than
+# unconditionally.
+#
+# This is not a tuning choice, it is the queue crate's `D-18`/`D-37` contract:
+# `dwcas` is non-default precisely so `reserving_mpsc`'s narrow word ships on
+# every target while the wide one ships only where it is genuinely lock-free.
+# `i686-pc-windows-msvc` has no 128-bit atomic at all, and `D-40` records that
+# the workspace deliberately keeps that target supported -- so enabling `dwcas`
+# from here without a target gate would propagate through feature unification and
+# fail the i686 build in the queue crate (`cannot find AtomicU128 in
+# portable_atomic`). Measured, not assumed: that is the exact error this gate was
+# added to remove.
+#
+# `target_has_atomic = "128"` would be the WRONG condition -- `D-37` records that
+# rustc emits it even with `cmpxchg16b` disabled. The architectures are named
+# instead, matching the two the queue crate documents as natively lock-free:
+# x86-64 via `cmpxchg16b`, aarch64 via `ldxp`/`stxp`.
+#
+# `src/queue_contention.rs` gates the `Wide` rows on the SAME condition. The two
+# must agree; the source side names this comment so a reader changing one finds
+# the other.
+[target.'cfg(any(target_arch = "x86_64", target_arch = "aarch64"))'.dependencies]
+windows-waitable-queues = { path = "../windows-waitable-queues", features = [
+	"dwcas",
+] }
 
 [dev-dependencies]
 # Here because [tests/a_real_report_agrees_with_itself.rs] uses `serde_json`

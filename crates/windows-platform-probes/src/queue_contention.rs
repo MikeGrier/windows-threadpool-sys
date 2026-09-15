@@ -64,17 +64,31 @@ use std::time::Instant;
 
 use windows_waitable_queues::{permit_mpsc, reserving_mpsc, slotwise_mpsc};
 
-use windows_waitable_queues::reserving_mpsc::{Balanced, ClaimLayout, Enduring, Perpetual, Wide};
+use windows_waitable_queues::reserving_mpsc::{Balanced, ClaimLayout, Enduring, Perpetual};
+
+/// The 128-bit layout exists only where a 128-bit exchange is native.
+///
+/// The condition is duplicated in this crate's `Cargo.toml`, which adds the
+/// `dwcas` feature under the same `cfg`; see the comment there for why the
+/// architectures are named rather than testing `target_has_atomic = "128"`, and
+/// why enabling the feature unconditionally breaks the workspace's deliberately
+/// supported `i686-pc-windows-msvc` build. Changing one without the other yields
+/// either a missing type or an unused feature.
+#[cfg(any(target_arch = "x86_64", target_arch = "aarch64"))]
+use windows_waitable_queues::reserving_mpsc::Wide;
+
+#[cfg(test)]
+mod tests;
 
 /// How many pushes each producer thread performs in one timed run.
-const PUSHES_PER_PRODUCER: usize = 50_000;
+pub const PUSHES_PER_PRODUCER: usize = 50_000;
 
 /// How many times each configuration is repeated; the median is reported.
 ///
 /// Odd, so the median is an observed value rather than an average of two. Five
 /// because these probes run on a virtual machine, where a single run can be
 /// perturbed by something entirely outside the process.
-const REPETITIONS: usize = 5;
+pub const REPETITIONS: usize = 5;
 
 /// The producer counts measured, in order.
 ///
@@ -207,6 +221,10 @@ pub fn measure() -> Observation {
         isolated.push(median_run(shapes::CLAIM_PERPETUAL, producers, |count| {
             time_isolated_layout::<Perpetual>(count)
         }));
+        // Gated on the architectures where a 128-bit exchange is native; see the
+        // `Wide` import above. `#[cfg]` governs only the statement that follows
+        // it, so each of the two pushes carries its own.
+        #[cfg(any(target_arch = "x86_64", target_arch = "aarch64"))]
         isolated.push(median_run(shapes::CLAIM_WIDE, producers, |count| {
             time_isolated_layout::<Wide>(count)
         }));
@@ -220,6 +238,7 @@ pub fn measure() -> Observation {
         drained.push(median_run(shapes::CLAIM_PERPETUAL, producers, |count| {
             time_drained_layout::<Perpetual>(count)
         }));
+        #[cfg(any(target_arch = "x86_64", target_arch = "aarch64"))]
         drained.push(median_run(shapes::CLAIM_WIDE, producers, |count| {
             time_drained_layout::<Wide>(count)
         }));
@@ -467,10 +486,19 @@ fn time_drained_mpsc(producers: usize) -> Repetition {
     let (tx, rx) = slotwise_mpsc::bounded::<u64>(DRAINED_CAPACITY).expect("a valid capacity");
     let done = Arc::new(AtomicBool::new(false));
     let consumer_done = Arc::clone(&done);
-    // The consumer is a participant too: it is spawned first, but spawning is
-    // not readiness, and a consumer still starting up while producers push turns
-    // the opening of the run into an undrained regime -- the one thing this
-    // measurement is defined against.
+    // The consumer is a barrier participant, not merely spawned: spawning is not
+    // readiness, and a consumer still in thread start-up while producers push
+    // turns the opening of the run into an undrained regime.
+    //
+    // Be precise about what this buys, because it is less than it looks. The
+    // barrier guarantees the consumer has ARRIVED -- it exists, is scheduled, and
+    // is past start-up -- not that it reaches its first `pop` before a producer
+    // reaches its first `push`. A release wakes every party at once, so a short
+    // undrained window remains. It is bounded by a scheduling quantum rather than
+    // by thread creation, which is the improvement; it is not zero. Closing it
+    // needs a readiness flag the producers spin on, which would change the
+    // measurement and so obsolete every figure already published against it --
+    // queued as M4.3 rather than taken mid-branch.
     let gate = start_barrier(producers + 1);
     let consumer_gate = Arc::clone(&gate);
 

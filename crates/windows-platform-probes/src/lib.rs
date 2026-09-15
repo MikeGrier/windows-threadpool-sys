@@ -134,6 +134,7 @@
 //! | [`doorbell_cost::measure`] | binary only | the absolute cost of `SetEvent`, a set/reset cycle and a satisfied wait against an uncontended atomic, and how much batching drives the doorbell below the push it accompanies |
 //! | [`doorbell_cost::measure_park_and_wake`] | asserted | that the park-and-wake handshake completes rather than deadlocking, which its first implementation did |
 //! | [`request_cost::measure`] | binary only | the absolute cost of preparing a path, building an owned `OpenFile`, and duplicating a handle |
+//! | [`queue_contention::measure`] | binary only | what the bounded array queue's contended tail claim costs against a plain `fetch_add`, what `reserving_mpsc`'s read of the consumer's position adds, and how the claim word's bit apportionments compare -- binary only because it wants more cores than a hosted runner has, takes about a minute, and reports the two shapes as equivalent unless built with `--release` |
 #![cfg(windows)]
 #![forbid(unsafe_op_in_unsafe_fn)]
 #![warn(missing_docs)]

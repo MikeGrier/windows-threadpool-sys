@@ -77,11 +77,12 @@ correctness in the archive.
   executable. The judgement stays with the person; the probe stops being the obstacle.
 
   **Gap:** [src/queue_contention.rs](src/queue_contention.rs) fixes every sampling parameter as a
-  private constant -- `PUSHES_PER_PRODUCER` (50,000) and `REPETITIONS` (5) -- and `measure()` takes
-  no arguments. The first move the design note prescribes on seeing a wide control is to lengthen
-  the span and raise the repetition count on the unchanged configuration, which is currently a
-  source edit and a rebuild. A control that cannot be turned is not a control, and the cheapest
-  diagnostic step is the one being blocked.
+  compile-time constant -- `PUSHES_PER_PRODUCER` (50,000) and `REPETITIONS` (5) -- and `measure()`
+  takes no arguments. They were made `pub` and are now printed in the report, so a captured run at
+  least says what produced it; but reading a constant is not setting one. The first move the design
+  note prescribes on seeing a wide control is to lengthen the span and raise the repetition count on
+  the unchanged configuration, which is still a source edit and a rebuild. A control that cannot be
+  turned is not a control, and the cheapest diagnostic step is the one being blocked.
 
   **Target:** `measure()` takes a settings value carrying at least the pushes-per-producer count,
   the repetition count, and the producer counts to sweep (`PRODUCER_COUNTS` is already public and
@@ -101,9 +102,45 @@ correctness in the archive.
   is only interpretable with its capture parameters, and these are now among them. Making the
   sampling adjustable without recording it would turn one reproducibility problem into a worse one.
 
+  **Emit the dispersion, not just the median.** `median_run` currently sorts the five repetitions,
+  keeps the middle one, and **discards the other four** -- so `Run` carries a median with no spread,
+  and the ranges published in [DESIGN-NOTES.md](DESIGN-NOTES.md) exist only because they were
+  computed by hand outside the probe. That is the same contract failure from the other side: the
+  decision above requires a figure to carry "the number of runs with their dispersion", and the
+  instrument does not supply it. Keep at least the min and max alongside the median, and render
+  them. Reported by review, and correctly -- the same-code control is the evidence a reader needs
+  to judge any ratio here, and it is exactly what is being thrown away.
+
   **Not in scope:** deciding why the control is wide. That is the judgement this tooling supports,
   and per the design note a negative result -- "lengthening and repeating do not narrow it, so the
   floor is here" -- is a real answer that gets recorded beside the figures.
+
+- [ ] **M4.3** -- Close the undrained window at the start of the drained regime with a readiness
+  handshake, and re-measure everything that changes.
+
+  **Gap:** the drained timings put the consumer in the same `Barrier` as the producers, which
+  guarantees it has *arrived* -- spawned, scheduled, past thread start-up -- but not that it reaches
+  its first `pop` before a producer reaches its first `push`. The barrier releases every party at
+  once, so a short undrained window remains at the opening of each run. It is bounded by a
+  scheduling quantum rather than by thread creation, which is why the barrier is still worth having,
+  but it is not zero, and the drained regime is defined against exactly this.
+
+  **Target:** the consumer sets an `AtomicBool` after entering its drain loop; producers spin on it
+  after `gate.wait()` and before `Instant::now()`. Apply it to all four drained functions
+  (`time_drained_mpsc`, `time_drained_reserving`, `time_drained_permit`, `time_drained_layout`) --
+  they share the defect and the three siblings currently point at the slotwise twin's comment for
+  the reasoning, so that comment is the one to update.
+
+  **BLOCKER, and the reason this is queued rather than taken:** adding the handshake changes the
+  measurement, so every drained figure already published in
+  [DESIGN-NOTES.md](DESIGN-NOTES.md) -- and the withdrawal argument built on the drained control --
+  becomes a measurement of different code. The item is therefore "change it *and* re-run the
+  seven-run sweep *and* rewrite the drained sections", not a one-line fix, and doing it mid-branch
+  would invalidate figures that five review rounds have already been read against. Raised rather
+  than silently deferred, per the PRIME DIRECTIVE.
+
+  Reported by review against this branch; the comment at the slotwise twin now states what the
+  barrier actually guarantees rather than implying the window is closed.
 
 - [ ] **M2.5** -- Make the banner describe the read the body describes.
 
