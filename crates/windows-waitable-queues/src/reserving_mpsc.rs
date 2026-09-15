@@ -28,7 +28,7 @@
 //! **[`ClaimLayout`] is how far away that is.** [`Perpetual`] moves it to 2^56
 //! pushes, about twenty years at the same rate, for the cost of a reservation
 //! ceiling of 255 -- it is the same exchange on
-//! the same word, differing only in shift constants, though what that costs in
+//! the same word, differing only in shift and mask constants, though what that costs in
 //! throughput is not established (see [`ClaimLayout`]). [`Enduring`] sits between
 //! them, and the `dwcas` feature adds a 128-bit word whose 64-bit position moves
 //! the recurrence to 2^64 pushes, which no deployment reaches.
@@ -121,20 +121,21 @@
 //! `2^(b-1)`, and the count needs `b` bits because it can reach the capacity, so
 //! `b + b = 64` gives `b = 32`. There is no cleverer division of the word.
 //!
-//! **A 128-bit compare-and-swap is deliberately not used *here***
-//! ([D-37](../DESIGN-NOTES.md#d-37)). It would not remove the cost that
-//! matters -- the consumer's position still has to be read -- and 2^31 slots is
-//! a ring this shape allocates in full at construction.
+//! **The 128-bit word ships as a layout, not as a separate shape**
+//! ([D-37](../DESIGN-NOTES.md#d-37), amended by
+//! [D-41](../DESIGN-NOTES.md#d-41)). An earlier plan put it in a shape of its own
+//! called `reserving_mpsc_wide`; that shape was never built, and this paragraph
+//! described it as forthcoming for longer than the plan survived.
 //!
-//! The operative reason is that widening *this* shape's word would change what
-//! it offers depending on the target: `i686-pc-windows-msvc` has no lock-free
-//! 128-bit exchange, so the same module would be lock-free on one target and
-//! silently mutex-backed on another. A wider claim ships instead as its own
-//! shape (`reserving_mpsc_wide`, not yet built -- see D-37), to exist only
-//! where the exchange is genuinely lock-free. That keeps *this* module's
-//! contract the same on every target, which is the property being protected
-//! here: a caller who wants 2^62 slots and no wrap hazard will ask for it by
-//! name rather than get it by accident of where they compiled.
+//! The reason for keeping it out of the default is unchanged: widening this
+//! shape's word unconditionally would change what the module offers depending on
+//! the target, because `i686-pc-windows-msvc` has no lock-free 128-bit exchange
+//! and neither does an x86-64 build without `cmpxchg16b`. The same module would
+//! be lock-free on one target and silently mutex-backed on another. So `Wide`
+//! (which exists only under `dwcas`, so this names it without linking) is
+//! reached by naming it, and the
+//! narrow word's contract is identical on every target -- a caller gets the wide
+//! one by asking, never by accident of where they compiled.
 
 use core::cell::{Cell, UnsafeCell};
 use core::fmt;

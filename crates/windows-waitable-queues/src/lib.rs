@@ -292,36 +292,54 @@
 //! - **[`spsc`] requires exactly one producer and one consumer**, and does less
 //!   work than either MPSC shape because of it.
 //!
-//! The measurements below are what this workspace observed on the hosts named;
-//! they are not a ranking.
+//! The measurements below are one host's observation, recorded with the
+//! parameters that produced them. They are not a ranking.
 //!
-//! **They predate a correction to the probe's timing window and have not been
-//! retaken.** The probe timed from the coordinator's clock rather than from the
-//! producers' own, which overstated throughput, and the error grew with producer
-//! count. The direction of the comparison survived re-measurement on the x64
-//! host; the absolute numbers here are optimistic, the high-producer rows most
-//! so. Retaking them needs the two hosts named below, neither of which is the
-//! machine the correction was measured on.
+//! Isolated regime (producers only, capacity large enough that nothing is
+//! refused), ns per push, median of three runs:
 //!
-//! Measured ns per push, isolated regime, median of three. An AMD EPYC 7763
-//! slice (8 cores, 16 threads) and a Snapdragon X2 Elite (12 cores, no SMT):
-//!
-//! | producers | `slotwise_mpsc` x64 | `reserving` x64 | `slotwise_mpsc` ARM64 | `reserving` ARM64 |
+//! | producers | `slotwise_mpsc` | `reserving_mpsc` | `permit_mpsc` | `baseline_fetch_add` |
 //! |---|---|---|---|---|
-//! | 1 | 9.0 | 8.6 | 6.5 | 6.1 |
-//! | 2 | 49.0 | 28.0 | 29.8 | 9.4 |
-//! | 4 | 84.4 | 33.3 | 60.6 | 12.9 |
-//! | 8 | 140.8 | 38.5 | 167.4 | 29.8 |
-//! | 16 | 193.5 | 52.2 | 194.9 | 30.6 |
-//! | 32 | 239.7 | 56.9 | 195.0 | 30.6 |
+//! | 1 | 6.3 | 5.4 | 8.0 | 2.3 |
+//! | 2 | 54.0 | 34.9 | 41.5 | 11.7 |
+//! | 4 | 89.3 | 37.1 | 32.1 | 15.1 |
+//! | 8 | 143.8 | 38.1 | 26.4 | 15.2 |
+//! | 16 | 246.9 | 51.1 | 21.4 | 15.3 |
+//! | 32 | 235.7 | 53.0 | 21.2 | 15.1 |
 //!
-//! **Read these as two data points, not as a law**, and measure your own
-//! workload before treating them as settled. This comparison has already
-//! inverted once: the split was designed on the assumption that `slotwise_mpsc` would be
-//! the cheaper shape, and measurement disagreed on both machines. Producer
-//! count, how hard the consumer drains, and where the threads are scheduled all
-//! move the answer -- placement alone moved an SPSC handoff by 5.6x on one of
-//! these hosts.
+//! Attribution, because a figure without it is not reusable data:
+//!
+//! | | |
+//! |---|---|
+//! | Host | `x86_64 16p/8c smt+ L2[2,2,2,2,2,2,2,2] ec[0:16] numa[16]` |
+//! | Profile | release |
+//! | Sampling | 50,000 pushes per producer, median of 5 repetitions, one untimed warmup pass |
+//! | Runs | 3 whole-probe invocations, median of the three |
+//! | Instrument | `probe-queue-contention`, at commit `a99108f` |
+//! | Taken | 2026-09-15 |
+//!
+//! The banner's `numa[16]` is a single NUMA node holding all sixteen processors,
+//! so nothing here says anything about cross-domain behaviour. `permit_mpsc` is
+//! behind `experimental-permit-claim` and is not covered by the semver promise.
+//! `baseline_fetch_add` is N threads incrementing one `AtomicU64`, included so
+//! the queue figures can be read against what this processor does to a contended
+//! line at all.
+//!
+//! **Read these as one machine's numbers.** Producer counts above 8 oversubscribe
+//! this host's 8 physical cores, and the spread across the three runs is not
+//! small: `slotwise_mpsc` at sixteen producers gave 257.3, 215.1 and 246.9.
+//!
+//! A previous version of this table compared an AMD EPYC 7763 slice against a
+//! Snapdragon X2 Elite. It was removed rather than carried forward: its figures
+//! predate a correction to the probe's timing window, and neither machine is
+//! available here to retake them. One finding from it was structural rather than
+//! numeric and is worth keeping -- the split was designed on the assumption that
+//! `slotwise_mpsc` would be the cheaper shape, and measurement disagreed on both
+//! machines.
+//!
+//! **What moves these numbers.** Producer count, how hard the consumer drains,
+//! and where the threads are scheduled -- placement alone moved an SPSC handoff
+//! by 5.6x on an earlier host this workspace measured.
 //!
 //! Two things that look like reasons to choose and are not. **Capacity**: on a
 //! 64-bit target `slotwise_mpsc` reaches 2^62 slots and `reserving_mpsc` 2^31.

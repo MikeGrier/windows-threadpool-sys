@@ -371,42 +371,65 @@ both rather than picking one for you.
 - **`spsc` requires exactly one producer and one consumer**, and does less work
   than either MPSC shape because of it.
 
-The measurements below are what this workspace observed on the hosts named; they
-are not a ranking, and which shape suits a given deployment is the deployment's
-question.
+The measurements below are one host's observation, recorded with the parameters
+that produced them. They are not a ranking, and which shape suits a given
+deployment is the deployment's question.
 
-**These figures predate a correction to the probe's timing window and have not
-been retaken.** The probe timed from the coordinator's clock rather than from the
-producers' own, which overstated throughput, and the error grew with producer
-count. The direction of the comparison survived re-measurement on the x64 host;
-the absolute numbers here are optimistic and the high-producer rows most so.
-Retaking them needs the two hosts named below, neither of which is the machine the
-correction was measured on. See the queue-contention section of
-[DESIGN-NOTES.md](../windows-platform-probes/DESIGN-NOTES.md).
+**What was measured**, in ns per push, isolated regime (producers only, capacity
+large enough that nothing is refused), median of three runs:
 
-**What we measured**, in ns per push, isolated regime, median of three runs.
-Higher producer counts oversubscribe both hosts:
-
-| producers | `slotwise_mpsc` (x64) | `reserving` (x64) | `slotwise_mpsc` (ARM64) | `reserving` (ARM64) |
+| producers | `slotwise_mpsc` | `reserving_mpsc` | `permit_mpsc` | `baseline_fetch_add` |
 |---|---|---|---|---|
-| 1 | 9.0 | 8.6 | 6.5 | 6.1 |
-| 2 | 49.0 | 28.0 | 29.8 | 9.4 |
-| 4 | 84.4 | 33.3 | 60.6 | 12.9 |
-| 8 | 140.8 | 38.5 | 167.4 | 29.8 |
-| 16 | 193.5 | 52.2 | 194.9 | 30.6 |
-| 32 | 239.7 | 56.9 | 195.0 | 30.6 |
+| 1 | 6.3 | 5.4 | 8.0 | 2.3 |
+| 2 | 54.0 | 34.9 | 41.5 | 11.7 |
+| 4 | 89.3 | 37.1 | 32.1 | 15.1 |
+| 8 | 143.8 | 38.1 | 26.4 | 15.2 |
+| 16 | 246.9 | 51.1 | 21.4 | 15.3 |
+| 32 | 235.7 | 53.0 | 21.2 | 15.1 |
 
-x64 is an AMD EPYC 7763 slice (8 cores, 16 threads); ARM64 is a Snapdragon X2
-Elite (12 cores, no SMT). **Read these as two data points, not as a law.** This
-comparison has already inverted once: it was designed on the assumption that
-`slotwise_mpsc` would be the cheaper shape, and measurement said otherwise on both
-machines.
+**Attribution, because a figure without it is not reusable data:**
 
-**Measure your own workload before treating any of this as settled.** Producer
-count, how hard the consumer drains, and where the threads are scheduled all
-move the answer -- thread placement alone moved an SPSC handoff by 5.6x on one
-of these hosts. The `probe-core-affinity` tool in this repository exists so you
-can run that measurement on your hardware instead of inheriting ours.
+| | |
+|---|---|
+| Host | `x86_64 16p/8c smt+ L2[2,2,2,2,2,2,2,2] ec[0:16] numa[16]` |
+| Profile | release |
+| Sampling | 50,000 pushes per producer, median of 5 repetitions, one untimed warmup pass |
+| Runs | 3 whole-probe invocations, median of the three |
+| Instrument | `probe-queue-contention`, at commit `a99108f` |
+| Taken | 2026-09-15 |
+
+The banner's `numa[16]` is a single NUMA node holding all sixteen processors, so
+nothing here says anything about cross-domain behaviour. `permit_mpsc` is behind
+`experimental-permit-claim` and is not covered by the semver promise.
+`baseline_fetch_add` is N threads incrementing one `AtomicU64` -- the cheapest
+thing N threads can do to a contended line, included so the queue figures can be
+read against what this processor does to such a line at all.
+
+**Read these as one machine's numbers.** Producer counts above 8 oversubscribe
+this host's 8 physical cores, and the spread across the three runs is not small:
+`slotwise_mpsc` at sixteen producers gave 257.3, 215.1 and 246.9 across them. The
+probe's own same-code control has been measured at 0.68-1.27x over seven runs,
+which is wide enough to swallow small differences; see
+[DESIGN-NOTES.md](../windows-platform-probes/DESIGN-NOTES.md#d-variance-is-a-finding).
+
+**A previous version of this table compared two hosts** -- an AMD EPYC 7763 slice
+and a Snapdragon X2 Elite -- and has been removed rather than carried forward. Its
+figures predate a correction to the probe's timing window, which timed from the
+coordinator's clock rather than the producers' own and overstated throughput by a
+margin that grew with producer count; and neither of those machines is available
+here to retake them. The ARM64 data point is therefore gone rather than stale,
+which is the lesser of the two problems. Restoring one is what M2.15 in the
+probe crate's [CHECKLIST.md](../windows-platform-probes/CHECKLIST.md) is for.
+
+That comparison did carry one finding worth keeping, because it was structural
+rather than numeric: it was designed on the assumption that `slotwise_mpsc` would
+be the cheaper shape, and measurement said otherwise on both machines.
+
+**What moves these numbers.** Producer count, how hard the consumer drains, and
+where the threads are scheduled all change the answer -- thread placement alone
+moved an SPSC handoff by 5.6x on an earlier host this workspace measured. The
+`probe-core-affinity` tool in this repository runs that measurement, and
+`probe-queue-contention` runs the one above.
 
 Two things that look like reasons to choose and are not:
 
