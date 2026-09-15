@@ -541,6 +541,13 @@ M31.5 rather than as an intention here.
 
 ## D-17: the reservation count and the claim position share one word
 
+**Partly superseded by [D-41](#d-41): the 32/32 split is no longer forced.** The packing argument below
+is unchanged and still describes `Balanced`, but its premise -- that the count must be able to reach the
+whole capacity -- was the thing D-41 dropped. Capping outstanding reservations instead frees the position
+to take 48 or 56 bits, so the split became a caller-selected layout rather than the only division of the
+word. Read "forced" below as "forced *given that premise*", and the 2^31 ceiling as `Balanced`'s rather
+than the shape's.
+
 **The obvious implementation is broken, and it is worth writing down why, because the brokenness is not
 visible from reading either side on its own.** With the count in its own atomic:
 
@@ -571,10 +578,13 @@ Three consequences fall out, and all three are improvements:
   consumer's position anyway. So `reserving_mpsc`'s `pop` is one store shorter than `slotwise_mpsc`'s: nothing
   writes a "free again" sequence.
 
-**The 32/32 split is forced, not chosen.** A position of `b` bits keeps a wrapping difference unambiguous
-only up to `2^(b-1)`; the count can reach the capacity, so it needs `b` bits too; `b + b = 64` gives
-`b = 32`. There is no cleverer division of the word, and the resulting ceiling is 2^31 items -- a ring
-this shape allocates in full at construction, so at eight bytes an item it is already 17 GB.
+**The 32/32 split is forced by the premise above, which [D-41](#d-41) later dropped.** A position of `b` bits
+keeps a wrapping difference unambiguous
+only up to `2^(b-1)`; if the count must be able to reach the capacity it needs `b` bits too; `b + b = 64` gives
+`b = 32`. Given that requirement there is no cleverer division of the word, and the resulting ceiling is 2^31 items -- a ring
+this shape allocates in full at construction, so at eight bytes an item it is already 17 GB. D-41 removed the
+requirement rather than the arithmetic: capping outstanding reservations well below capacity lets the position
+take 48 or 56 bits, which is what `Enduring` and `Perpetual` do. The 2^31 ceiling is therefore `Balanced`'s.
 
 That ceiling is reported through `CapacityError`'s `max_valid`, which [D-12](#d-12) had already made a
 property of the shape rather than of the crate. D-12 introduced that for the *minimum* and argued the

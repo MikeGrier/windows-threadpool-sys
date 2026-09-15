@@ -115,11 +115,19 @@
 //!
 //! # What the packing costs, and what it does not
 //!
-//! Splitting a 64-bit word 32/32 caps this shape at
-//! a maximum of 2^31 items, and that split is forced rather than chosen:
+//! Splitting a 64-bit word 32/32 caps `Balanced` at
+//! a maximum of 2^31 items, and that split is forced *given one premise*:
 //! a position of `b` bits keeps a wrapping difference unambiguous only up to
-//! `2^(b-1)`, and the count needs `b` bits because it can reach the capacity, so
-//! `b + b = 64` gives `b = 32`. There is no cleverer division of the word.
+//! `2^(b-1)`, and if the count must be able to reach the capacity it needs `b`
+//! bits too, so `b + b = 64` gives `b = 32`. Given that requirement there is no
+//! cleverer division of the word.
+//!
+//! **[`ClaimLayout`] drops the requirement rather than the arithmetic.** Capping
+//! outstanding reservations well below capacity -- 65,535 under [`Enduring`], 255
+//! under [`Perpetual`] -- frees the position to take 48 or 56 bits, which is
+//! where the deeper layouts come from. So the derivation above describes
+//! [`Balanced`] and the capacity-filling case, not every layout this module
+//! offers.
 //!
 //! **The 128-bit word ships as a layout, not as a separate shape**
 //! ([D-37](../DESIGN-NOTES.md#d-37), amended by
@@ -485,17 +493,22 @@ impl ClaimWord for u128 {
 
 /// The shipping division: 32 bits each.
 ///
-/// Holds [`u32::MAX`] outstanding reservations and recurs after 2^32 pushes --
+/// Its reservation-count field tops out at [`u32::MAX`], though capacity binds
+/// first: this layout accepts at most 2^31 slots, so no instance can hold more
+/// than that many outstanding reservations whatever the field could encode. It
+/// recurs after 2^32 pushes --
 /// about
 /// **37 seconds** of sustained maximum-rate pushing. Past that point, with two
 /// or more producers, the queue can **silently lose an item**: that is the whole
 /// of the `SH-14.1` exposure, and this layout carries it.
 ///
 /// It is the default because it is what the shape shipped with, not because the
-/// division is a good one: the [`u32::MAX`] reservation ceiling it buys is far
-/// beyond any use this crate has seen, and the exposure is what pays for it.
-/// [`Enduring`] and [`Perpetual`] spend that ceiling the other way --
-/// [`Enduring`] holds 65,535 outstanding reservations, [`Perpetual`] 255 --
+/// division is a good one: the reservation field it buys is far
+/// beyond any use this crate has seen -- and beyond what its own capacity
+/// permits -- while the exposure is what pays for it.
+/// [`Enduring`] and [`Perpetual`] spend that field the other way --
+/// [`Enduring`] holds 65,535 outstanding reservations, [`Perpetual`] 255, both
+/// reachable because capacity does not bind there --
 /// and `Wide` moves it to 2^64 pushes rather than to a horizon in years. (`Wide` exists
 /// only under the `dwcas` feature, so this names it without linking: an
 /// intra-doc link here would not resolve in a default-feature rustdoc build.)

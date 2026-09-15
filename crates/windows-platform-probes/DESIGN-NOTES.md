@@ -927,9 +927,11 @@ and a rate, not from a measurement of either layout; what does not follow is any
 statement about what the re-apportionment costs to run. See
 [Re-measured on the shipping type](#d-queue-layout-observations).
 
-So the candidates worth considering are **12/52 and 8/56**, not the 16/48 first
-sketched here: 16/48's 12.7 days at the conservative floor is still reachable by
-a busy long-lived process, and 12/52 is the first row that is not.
+So the arithmetic separates the rows this way: 16/48's 12.7 days at the
+conservative floor is still reachable by a busy long-lived process, and 12/52 is
+the first row that is not. Which of them a caller wants is the caller's question,
+and the shipping type takes the layout as a parameter so it stays theirs -- see
+[D-no-client-prescriptions](#d-no-client-prescriptions).
 
 ### Re-measured on the shipping type, with the probe's own control to read it against
 

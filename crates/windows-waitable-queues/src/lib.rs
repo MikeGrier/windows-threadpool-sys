@@ -98,7 +98,7 @@
 //! | `Perpetual` | 255 | 2^56 | about 20 years |
 //! | `Wide` (needs `dwcas`) | 4,294,967,295 | 2^64 | unreachable |
 //!
-//! The first column is the field's ceiling, not a reachable number of
+//! The reservation-count column is the field's ceiling, not a reachable number of
 //! reservations: admission is also bounded by capacity, so the achievable count
 //! is the lesser of the two. For `Balanced` the capacity bound binds first --
 //! that layout accepts at most 2^31 slots. For the others the field binds.
@@ -132,7 +132,7 @@
 //! changed when the choice was introduced. Under it, a queue driven past 2^32
 //! pushes by two or more producers can **silently lose an item** -- the defect
 //! described above. `Enduring` and `Perpetual` move that point out, and `Wide`
-//! removes it.
+//! moves it to 2^64 pushes.
 //!
 //! **What happens.** A producer checks that there is room, is descheduled, and
 //! resumes after other producers have driven the position field through a

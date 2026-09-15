@@ -130,7 +130,7 @@ positions:
 | `Perpetual` | 255 | 2^56 | about 20 years |
 | `Wide` (needs `dwcas`) | 4,294,967,295 | 2^64 | unreachable |
 
-The first column is the field's ceiling, not a reachable number of reservations:
+The middle column is the field's ceiling, not a reachable number of reservations:
 admission is also bounded by capacity -- `reserve` refuses once the ring has no
 room beyond the reservations already outstanding -- so the achievable count is
 the lesser of the two. For `Balanced` the capacity bound binds first, since that
@@ -161,7 +161,7 @@ The default remains `Balanced` so that no existing caller's behaviour changed
 when the choice was introduced. Under it, a queue driven past 2^32 pushes by two
 or more producers can **silently lose an item** -- the defect described above.
 `Enduring` and `Perpetual` move that point out by 2^16 and 2^24 respectively, and
-`Wide` removes it.
+`Wide` moves it to 2^64 pushes.
 
 **What happens.** A producer checks that there is room, is descheduled, and
 resumes after other producers have driven the position field through a complete
