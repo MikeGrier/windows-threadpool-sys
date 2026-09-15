@@ -485,7 +485,9 @@ impl ClaimWord for u128 {
 /// any use this crate has seen, and the exposure is what pays for it.
 /// [`Enduring`] and [`Perpetual`] spend that ceiling the other way --
 /// [`Enduring`] holds 65,535 outstanding reservations, [`Perpetual`] 255 --
-/// and [`Wide`] removes the recurrence rather than deferring it.
+/// and `Wide` removes the recurrence rather than deferring it. (`Wide` exists
+/// only under the `dwcas` feature, so this names it without linking: an
+/// intra-doc link here would not resolve in a default-feature rustdoc build.)
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Balanced;
 impl sealed::Sealed for Balanced {}

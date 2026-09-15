@@ -34,7 +34,10 @@ fn render(out: &mut dyn std::fmt::Write) {
         "{}",
         windows_placement_probe::fingerprint::banner_line()
     );
-    let _ = writeln!(out, "== does the array queue's tail claim contend? ==\n");
+    let _ = writeln!(
+        out,
+        "== how does the array queue's push path scale with producer count? ==\n"
+    );
 
     let observation = measure();
     // `available_parallelism`, not the host count -- an affinity mask or job
@@ -49,8 +52,20 @@ fn render(out: &mut dyn std::fmt::Write) {
         ),
     };
     // The sampling parameters are capture parameters, and a figure is only
-    // interpretable with them -- see D-observations-not-verdicts. The dispersion
-    // belongs here too and is not yet carried; M4.2 covers both.
+    // interpretable with them -- see D-observations-not-verdicts. The build
+    // profile is one of them too: a captured report has to be able to show it
+    // was produced by a build that can measure, not merely stay silent when it
+    // was. The dispersion belongs here as well and is not yet carried; M4.2
+    // covers it.
+    let _ = writeln!(
+        out,
+        "profile: {}",
+        if cfg!(debug_assertions) {
+            "debug -- NOT A MEASUREMENT, see below"
+        } else {
+            "release"
+        }
+    );
     let _ = writeln!(
         out,
         "sampling: {} pushes per producer, median of {} repetitions, one untimed \
@@ -352,8 +367,21 @@ fn render(out: &mut dyn std::fmt::Write) {
     );
     let _ = writeln!(
         out,
-        "     configuration run twice, so they should agree within noise. They"
+        "     configuration run twice, so the gap between them is this host's"
     );
+    let _ = writeln!(
+        out,
+        "     same-code control: whatever it shows is dispersion, not a"
+    );
+    let _ = writeln!(
+        out,
+        "     difference between shapes. Do not read it as noise that can be"
+    );
+    let _ = writeln!(
+        out,
+        "     discounted -- its width is an open question about this"
+    );
+    let _ = writeln!(out, "     instrument. They");
     let _ = writeln!(
         out,
         "     are no longer a control against a duplicated implementation: the"

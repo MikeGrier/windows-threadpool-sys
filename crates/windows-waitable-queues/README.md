@@ -217,9 +217,9 @@ stops at 64 bits -- so the double-width compare-and-swap comes from
 twenty years before its claim position recurs with no dependency, though what
 that costs in throughput is not established, while choosing `Wide` measured
 slower on the whole push path as producer count rises -- near parity at one or
-two, several times by thirty-two, in the isolated regime. Take
-it when you want the recurrence gone as a guarantee rather than deferred by an
-argument about deployment lifetimes.
+two, several times by thirty-two, in the isolated regime. What `Wide` provides
+that the `u64` layouts do not is the recurrence removed outright rather than
+deferred.
 
 **`experimental-permit-claim`** adds `permit_mpsc`, a different claim protocol in
 which the decision and the operation are one atomic rather than two. It is
