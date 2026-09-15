@@ -187,29 +187,10 @@ written before it was stated.
 
 ## M30 -- Find out how much of this workspace's algorithm correctness can be machine-checked
 
-**Why now, and what this is not.** The workspace's concurrency is checked today by reasoning recorded
-beside the code, an extensive unit suite, a sabotage suite that injects defects and requires each to
-be caught, and a cargo-mutants sweep. That combination has found real bugs --
-[D-15](crates/windows-waitable-queues/DESIGN-NOTES.md#d-15)'s lost wakeup
-among them. It also has a measured blind spot:
-[crates/windows-waitable-queues/README.md](crates/windows-waitable-queues/README.md) records that
-weakening a producer's `Acquire` load of the consumer's position to `Relaxed` left the entire suite
-green, while every logic defect injected beside it was caught. A test observes what a run happened to
-do; it cannot observe an ordering that a run happened not to need.
-
-**The goal is to narrow where hand-inspection has to look, not to replace it.** A method that proves
-a protocol correct for three producers and a capacity of two does not prove the shipping code
-correct -- but it moves a class of question out of "argued carefully" and into "checked", and what
-remains uncheckable is then a short, named list rather than the whole surface. That list is the
-deliverable. Formal methods here are a scoping instrument.
-
-**This milestone does not commit the workspace to any tool**, and it must not pre-empt
-[D-31](crates/windows-waitable-queues/DESIGN-NOTES.md#d-31), which decided on considered grounds that
-0.1.0 ships without machine-checked orderings. D-31's
-reasoning is the starting point rather than something to overturn: a model checker covers atomics and
-cannot cover `SetEvent`/`ResetEvent`, so stubbing them verifies a model of `SetEvent` rather than
-`SetEvent` -- the "measures the model, not the thing" trap this workspace has already been caught by
-once. Any tool this milestone recommends has to be read against that.
+Why this milestone exists, what it is not, and how it relates to
+[D-31](crates/windows-waitable-queues/DESIGN-NOTES.md#d-31) are recorded in
+[DESIGN-NOTES.md](DESIGN-NOTES.md#machine-checking-what-is-argued) rather than here, per the
+action-only rule for checklist files.
 
 - [ ] **M30.1** -- Survey the workspace for algorithms whose correctness is currently argued rather
   than checked, and match each to the class of tool that could check it.
@@ -251,9 +232,21 @@ once. Any tool this milestone recommends has to be read against that.
   by that shape refusing a capacity below two, with a sabotage entry holding it. Pointing the pilot
   at it would have sent it after a different shape's settled property.
 
-  Success is a counterexample for a deliberately broken variant, not a green run on the correct one.
-  A model that cannot produce the known bug when the bug is reintroduced has not been shown to be
-  checking anything -- the same sabotage discipline the test suites here already follow.
+  **Write down what makes the wrap-at-8 model evidence about `Balanced`, or record that it is not.**
+  Shrinking the position to 3 bits is a claim that the protocol's correctness does not depend on the
+  field's width -- that the shipping code refines the model. State that correspondence explicitly:
+  which constants were shrunk, why the protocol is uniform in each, and what a counterexample at 8
+  therefore implies at 2^32. If it cannot be argued, the pilot's result is a counterexample *in a toy
+  model* and must be reported as exactly that. A reduced model that nobody has tied to the code can
+  pass and mean nothing, which is the "measures the model, not the thing" trap in a second costume.
+
+  **Success needs both halves.** The unmodified model must satisfy its invariant, *and* a
+  deliberately broken variant must produce a counterexample. Neither alone is enough: a green run on
+  the correct model says nothing if the model is too permissive or the invariant vacuous, and a
+  counterexample from the broken variant can also be produced by a malformed model that would find
+  one anywhere. The first is the property check; the second is the anti-vacuity check, and it is the
+  same sabotage discipline the test suites here already follow. An earlier version of this item asked
+  only for the second, which overcorrected.
 
 - [ ] **M30.3** -- Write down what the pilot could NOT reach, by name.
 
@@ -263,8 +256,12 @@ once. Any tool this milestone recommends has to be read against that.
   and the code, which no tool closes.
 
   Put it where a reader deciding how much to trust the crate will meet it -- beside the existing
-  "How far the memory orderings are verified, and how far they are not" section, which is already
-  written in the right register.
+  "How far the memory orderings are verified, and how far they are not" section. **That section has
+  two copies**, [README.md](crates/windows-waitable-queues/README.md) and
+  [src/lib.rs](crates/windows-waitable-queues/src/lib.rs), and updating one would leave the other
+  telling an adopter something the crate no longer believes. Update both, or make one derive from the
+  other -- the README is already a build input via `#[doc = include_str!]`, so the second option is
+  available and is the one that cannot drift.
 
 - [ ] **M30.4** -- Re-home `M31.6`, which is currently orphaned.
 
@@ -277,7 +274,17 @@ once. Any tool this milestone recommends has to be read against that.
   that nothing will cause anyone to pick up.
 
   Give it a real item in a real checklist, with its scope as D-31 describes it (both MPSC shapes or
-  neither), and make the design-note references point at it.
+  neither), and repoint every reference at it. **There are five, not three**: three in
+  [DESIGN-NOTES.md](crates/windows-waitable-queues/DESIGN-NOTES.md), one in
+  [src/doorbell.rs](crates/windows-waitable-queues/src/doorbell.rs), and one in
+  [sabotage.json](crates/windows-waitable-queues/sabotage.json). Sweeping only the design notes would
+  leave a stale identifier in a source file and in the sabotage manifest -- the same
+  fix-the-reported-site-not-the-class failure this repository keeps paying for.
+
+  Opening queue work also obliges the component tracker:
+  [crates/windows-waitable-queues/PLANS.md](crates/windows-waitable-queues/PLANS.md) currently says
+  "No checklist is open against this crate", which this item falsifies. Add the row, as other crates
+  do for root-owned checklists.
 
 - [ ] **M30.5** -- Decide what, if anything, the workspace adopts, and record the decision with its
   cost.
@@ -292,6 +299,15 @@ once. Any tool this milestone recommends has to be read against that.
   So the decision has to answer: what keeps the model and the code in step, who re-runs it, and what
   happens when they disagree. "Adopt nothing, and say why" is a legitimate outcome -- D-31 reached it
   once already on narrower grounds.
+
+  **Either outcome obliges a contract sweep, and a no-adoption outcome obliges it most.** Three
+  public places promise machine-checked verification before 1.0:
+  [README.md](crates/windows-waitable-queues/README.md),
+  [src/lib.rs](crates/windows-waitable-queues/src/lib.rs), and D-31 in
+  [DESIGN-NOTES.md](crates/windows-waitable-queues/DESIGN-NOTES.md#d-31). Deciding to adopt nothing
+  without reconciling those leaves the crate promising adopters something no item will deliver --
+  which is the failure M30.4 exists to fix, recreated by the milestone that fixed it. Sweep all three
+  as part of this item, whichever way it goes.
 
 ## M-inf -- Parked
 
