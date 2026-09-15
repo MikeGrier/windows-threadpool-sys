@@ -599,9 +599,12 @@ constraint that binds: the count's half must be wide enough to hold the whole ca
 
 ## D-18: a 128-bit compare-and-swap is refused
 
-**Superseded by [D-37](#d-37).** A 128-bit exchange is now adopted, but for a **separate wide
-shape** rather than for this one: `reserving_mpsc` keeps its packed 64-bit word on every target, and
-`reserving_mpsc_wide` is a peer beside it. Read this decision for the cost analysis, which D-37
+**Superseded by [D-37](#d-37).** A 128-bit exchange is now adopted, though not in the form D-37 first
+proposed: it planned a **separate wide shape**, `reserving_mpsc_wide`, as a peer beside this one, and
+[D-41](#d-41) replaced that with a `ClaimLayout` inside `reserving_mpsc`. The peer shape was never
+built, so the name appears in this file only as history. What survives unchanged is that
+`reserving_mpsc` keeps its packed 64-bit word on every target and the wide word is reached by asking
+for it. Read this decision for the cost analysis, which D-37
 depends on and does not repeat -- and note one correction it needs, below, that D-37's gate is built
 around.
 

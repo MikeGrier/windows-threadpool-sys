@@ -116,7 +116,9 @@
 //! # What the packing costs, and what it does not
 //!
 //! Splitting a 64-bit word 32/32 caps `Balanced` at
-//! a maximum of 2^31 items, and that split is forced *given one premise*:
+//! a maximum of 2^31 items on a 64-bit target -- 2^30 on a 32-bit one, where
+//! the crate-wide ceiling binds first -- and that split is forced *given one
+//! premise*:
 //! a position of `b` bits keeps a wrapping difference unambiguous only up to
 //! `2^(b-1)`, and if the count must be able to reach the capacity it needs `b`
 //! bits too, so `b + b = 64` gives `b = 32`. Given that requirement there is no
@@ -188,12 +190,17 @@ use crate::options::Options;
 /// | [`Enduring`] | 16 / 48 | 65,535 | 2^48 |
 /// | [`Perpetual`] | 8 / 56 | 255 | 2^56 |
 ///
+/// A fourth layout, `Wide` (64 / 64 over a `u128`), exists when the `dwcas`
+/// feature is enabled; it is omitted from this table because it does not exist
+/// in a default build, and named without a link here for the same reason.
+///
 /// **The middle column is the field's ceiling, not a reachable number of
 /// reservations.** Admission is also bounded by capacity -- `reserve` refuses
 /// once the ring has no room beyond the reservations already outstanding -- so
 /// the achievable count is the lesser of the two. For [`Balanced`] the capacity
-/// bound is the binding one: this layout accepts at most 2^31 slots, so no more
-/// than 2^31 reservations can be outstanding whatever the field could hold. For
+/// bound is the binding one: this layout accepts at most 2^31 slots on a 64-bit
+/// target and 2^30 on a 32-bit one, so no more than that many reservations can
+/// be outstanding whatever the field could hold. For
 /// [`Enduring`] and [`Perpetual`] the field binds first, and the column is the
 /// real limit.
 ///
@@ -494,8 +501,9 @@ impl ClaimWord for u128 {
 /// The shipping division: 32 bits each.
 ///
 /// Its reservation-count field tops out at [`u32::MAX`], though capacity binds
-/// first: this layout accepts at most 2^31 slots, so no instance can hold more
-/// than that many outstanding reservations whatever the field could encode. It
+/// first: this layout accepts at most 2^31 slots on a 64-bit target and 2^30 on
+/// a 32-bit one, so no instance can hold more than that many outstanding
+/// reservations whatever the field could encode. It
 /// recurs after 2^32 pushes --
 /// about
 /// **37 seconds** of sustained maximum-rate pushing. Past that point, with two

@@ -134,7 +134,8 @@ The middle column is the field's ceiling, not a reachable number of reservations
 admission is also bounded by capacity -- `reserve` refuses once the ring has no
 room beyond the reservations already outstanding -- so the achievable count is
 the lesser of the two. For `Balanced` the capacity bound binds first, since that
-layout accepts at most 2^31 slots. For the others the field binds.
+layout accepts at most 2^31 slots on a 64-bit target, and 2^30 on a 32-bit
+one. For the others the field binds on either.
 
 ```rust
 use windows_waitable_queues::reserving_mpsc::{self, Perpetual};

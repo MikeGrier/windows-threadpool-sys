@@ -1010,7 +1010,11 @@ What follows is therefore reported as *data with a known-unexplained spread*,
 which is a reasonable input for planning a deployment on comparable hardware and
 an unreasonable basis for a comparative claim about the layouts.
 
-| producers | 16/48 vs 32/32 | 8/56 vs 32/32 | 64/64 vs 32/32 |
+**Isolated regime**, median of the per-run ratios with the observed range beside
+it. The drained regime is reported in the paragraph below the table, and mixing
+the two is the reading this label exists to prevent:
+
+| producers | 16/48 vs 32/32 (isolated) | 8/56 vs 32/32 (isolated) | 64/64 vs 32/32 (isolated) |
 |---|---|---|---|
 | 1 | 1.00x [0.74-1.00] | 1.00x [0.67-1.04] | 1.37x [1.16-1.57] |
 | 2 | 0.94x [0.89-1.05] | 0.96x [0.80-0.98] | 1.13x [1.02-1.15] |
