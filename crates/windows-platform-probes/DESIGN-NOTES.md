@@ -761,8 +761,10 @@ should be read as measurements of the consumer.
 Measured by `probe-queue-contention` on one host, `x86_64-pc-windows-msvc`.
 Four apportionments of `reserving_mpsc`'s claim word: 32/32, 16/48 and 8/56 over
 `AtomicU64`, and 64/64 over `AtomicU128`. The last is measured only where a
-128-bit exchange is native -- x86-64 and aarch64 -- so on a target without one
-the report carries the other three and leaves its column empty.
+128-bit exchange is native: aarch64, and x86-64 **built with `cmpxchg16b`** --
+the gate is the target feature rather than the architecture, because an x86-64
+build with the instruction switched off has no `AtomicU128` either. On a target
+without one the report carries the other three and leaves its column empty.
 
 **These were duplicated scaffolding when the measurement was taken, and they
 ship now.** The layouts were built as copies so the shipping crate was not
@@ -791,7 +793,7 @@ branch was measured as though it were the algorithm.
 The reasoning was that both layouts issue the same `lock cmpxchg` on the same
 `u64`, so only the shift and mask constants differ, and the table above was read
 as confirming it. The table cannot carry that weight: these are single-run
-figures, and the same-code control measured later ranges 0.69-1.27x, which is
+figures, and the same-code control measured later ranges 0.68-1.27x, which is
 wider than most of the differences being called "noise" -- note that this very
 table has 16/48 at 1.14x and 1.21x while the prose beneath it says "within
 noise". See

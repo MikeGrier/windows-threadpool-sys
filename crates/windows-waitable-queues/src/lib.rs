@@ -287,7 +287,7 @@
 //!   `reserve`.) Wanting it no longer means accepting the default layout's
 //!   recurrence, but the trade is not gone -- it changes axis: a deeper position
 //!   is paid for with a lower ceiling on outstanding reservations, 65,535 under
-//!   `Enduring` and 255 under `Perpetual` against 2^32 under the default.
+//!   `Enduring` and 255 under `Perpetual` against `u32::MAX` under the default.
 //! - **[`spsc`] requires exactly one producer and one consumer**, and does less
 //!   work than either MPSC shape because of it.
 //!

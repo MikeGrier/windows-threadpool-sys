@@ -260,9 +260,25 @@ fn render(out: &mut dyn std::fmt::Write) {
 
     // Question 3: what does the claim word's apportionment and width cost?
     let _ = writeln!(out, "\n  3. claim-word layout\n");
+    // Counted from what was actually measured rather than written as a literal:
+    // the 64/64 rows are cfg-elided on a target with no native 128-bit exchange,
+    // and a hardcoded "four" would be false there.
+    let layouts_measured = [
+        shapes::CLAIM_NARROW,
+        shapes::CLAIM_DEEP,
+        shapes::CLAIM_PERPETUAL,
+        shapes::CLAIM_WIDE,
+    ]
+    .iter()
+    .filter(|shape| {
+        observation
+            .find(&observation.isolated, shape, PRODUCER_COUNTS[0])
+            .is_some()
+    })
+    .count();
     let _ = writeln!(
         out,
-        "     Four apportionments of reserving_mpsc's claim word, measured on"
+        "     {layouts_measured} apportionments of reserving_mpsc's claim word, measured on"
     );
     let _ = writeln!(
         out,

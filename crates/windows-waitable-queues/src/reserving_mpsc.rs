@@ -475,14 +475,15 @@ impl ClaimWord for u128 {
 
 /// The shipping division: 32 bits each.
 ///
-/// Holds 2^32 outstanding reservations and recurs after 2^32 pushes -- about
+/// Holds [`u32::MAX`] outstanding reservations and recurs after 2^32 pushes --
+/// about
 /// **37 seconds** of sustained maximum-rate pushing. Past that point, with two
 /// or more producers, the queue can **silently lose an item**: that is the whole
 /// of the `SH-14.1` exposure, and this layout carries it.
 ///
 /// It is the default because it is what the shape shipped with, not because the
-/// division is a good one: the 2^32 reservation ceiling it buys is far beyond
-/// any use this crate has seen, and the exposure is what pays for it.
+/// division is a good one: the [`u32::MAX`] reservation ceiling it buys is far
+/// beyond any use this crate has seen, and the exposure is what pays for it.
 /// [`Enduring`] and [`Perpetual`] spend that ceiling the other way --
 /// [`Enduring`] holds 65,535 outstanding reservations, [`Perpetual`] 255 --
 /// and `Wide` removes the recurrence rather than deferring it. (`Wide` exists
