@@ -185,7 +185,7 @@ written before it was stated.
   function pointer, which is exactly where such a path would be. Depends on M22.1's
   classification.
 
-## M23 -- Find out how much of this workspace's algorithm correctness can be machine-checked
+## M30 -- Find out how much of this workspace's algorithm correctness can be machine-checked
 
 **Why now, and what this is not.** The workspace's concurrency is checked today by reasoning recorded
 beside the code, an extensive unit suite, a sabotage suite that injects defects and requires each to
@@ -210,7 +210,7 @@ cannot cover `SetEvent`/`ResetEvent`, so stubbing them verifies a model of `SetE
 `SetEvent` -- the "measures the model, not the thing" trap this workspace has already been caught by
 once. Any tool this milestone recommends has to be read against that.
 
-- [ ] **M23.1** -- Survey the workspace for algorithms whose correctness is currently argued rather
+- [ ] **M30.1** -- Survey the workspace for algorithms whose correctness is currently argued rather
   than checked, and match each to the class of tool that could check it.
 
   Candidates, not exhaustive: `reserving_mpsc`'s packed claim word and its reservation admission rule;
@@ -228,7 +228,7 @@ once. Any tool this milestone recommends has to be read against that.
 
   The output is a table, and the "no tool fits this" rows are as valuable as the rest.
 
-- [ ] **M23.2** -- Pilot exactly one, chosen because parameter shrinking turns an untestable property
+- [ ] **M30.2** -- Pilot exactly one, chosen because parameter shrinking turns an untestable property
   into an exhaustive one.
 
   `reserving_mpsc`'s claim-position recurrence (`SH-14.1`) is the strongest candidate: the defect
@@ -241,7 +241,7 @@ once. Any tool this milestone recommends has to be read against that.
   A model that cannot produce the known bug when the bug is reintroduced has not been shown to be
   checking anything -- the same sabotage discipline the test suites here already follow.
 
-- [ ] **M23.3** -- Write down what the pilot could NOT reach, by name.
+- [ ] **M30.3** -- Write down what the pilot could NOT reach, by name.
 
   This is the item the milestone exists for. Expect the list to include: the memory orderings, if the
   tool has no memory model; every syscall boundary, including the doorbell's; anything whose
@@ -252,7 +252,7 @@ once. Any tool this milestone recommends has to be read against that.
   "How far the memory orderings are verified, and how far they are not" section, which is already
   written in the right register.
 
-- [ ] **M23.4** -- Re-home `M31.6`, which is currently orphaned.
+- [ ] **M30.4** -- Re-home `M31.6`, which is currently orphaned.
 
   `windows-waitable-queues`' design notes reference `M31.6` in three places as the planned `loom`
   verification, and [crates/windows-waitable-queues/README.md](crates/windows-waitable-queues/README.md)
@@ -264,7 +264,7 @@ once. Any tool this milestone recommends has to be read against that.
   Give it a real item in a real checklist, with its scope as D-31 describes it (both MPSC shapes or
   neither), and make the design-note references point at it.
 
-- [ ] **M23.5** -- Decide what, if anything, the workspace adopts, and record the decision with its
+- [ ] **M30.5** -- Decide what, if anything, the workspace adopts, and record the decision with its
   cost.
 
   The cost to name explicitly, because it is the one this workspace keeps paying: **a specification is
