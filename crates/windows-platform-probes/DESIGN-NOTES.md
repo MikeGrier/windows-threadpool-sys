@@ -683,7 +683,7 @@ count from the queue's own `Observable` counters precisely so that is visible as
 mistaken for contention: the sixteen- and thirty-two-producer drained rows show millions of refusals and
 should be read as measurements of the consumer.
 
-## The claim word's width costs 2-3x in isolation and much less in use
+## The claim word's width costs 2-3x in isolation, and the drained figure is withdrawn
 
 Measured by `probe-queue-contention` on one host, `x86_64-pc-windows-msvc`.
 Three apportionments of `reserving_mpsc`'s claim word: 32/32 and 16/48 over
@@ -725,11 +725,18 @@ below for the seven-run figures and the withdrawal. What the re-apportionment
 buys is not in dispute: the recurrence moves from 2^32 to 2^48, from about 37
 seconds of sustained maximum-rate pushing to about 28 days.
 
-**Widening the word is not free, and how much it costs depends entirely on the
-regime.** Isolated, where the claim is the only thing happening, `cmpxchg16b`
-costs 2-3x and the penalty *grows* with contention. Drained, with a consumer
-running, it is 5-12%. This is the one conclusion in this section that the
-seven-run re-measurement strengthened rather than withdrew.
+**Widening the word is not free in the isolated regime, and the drained figure
+below does not survive the re-measurement.** Isolated, where the claim is the
+only thing happening, `cmpxchg16b` costs 2-3x and the penalty *grows* with
+contention; that is the one conclusion in this section the seven-run
+re-measurement strengthened, to 3.45x and 3.81x at sixteen and thirty-two
+producers. The drained figure of 5-12% is **withdrawn** -- not because the
+number moved, but because nothing was measuring whether it meant anything. The
+re-measured drained 128-bit rows run 2-13%, which resembles the old figure
+closely enough to look like confirmation, while every one of them sits inside a
+same-code control spanning -32% to +27%. A number that agrees with its
+predecessor is not thereby established; that is precisely the trap the control
+exists to catch, and this is the case where it catches it.
 
 ### The drained regime flatters the slower layout, and the refusal counts say so
 
