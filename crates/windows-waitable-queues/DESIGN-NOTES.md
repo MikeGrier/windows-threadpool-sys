@@ -1283,7 +1283,8 @@ most so.
 
 ### Isolated regime -- producers only, nothing ever refused
 
-The cleanest measurement of the claim, because nothing else touches the queue. Nanoseconds per push:
+The cleanest comparison between the shapes, because nothing else touches the queue -- but still a
+measurement of each shape's whole push path, not of the claim alone. Nanoseconds per push:
 
 | producers | `slotwise_mpsc` | `reserving_mpsc` | `permit_mpsc` | contended `fetch_add` |
 |---|---|---|---|---|

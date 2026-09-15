@@ -817,20 +817,47 @@ same-code control spanning -32% to +27%. A number that agrees with its
 predecessor is not thereby established; that is precisely the trap the control
 exists to catch, and this is the case where it catches it.
 
-### The drained regime flatters the slower layout, and the refusal counts say so
+### The drained regime is hard to read, and the refusal counts do not settle it
 
 The two regimes must not be averaged, and the drained one must not be read as
-the answer on its own. **A slower producer is less backpressured**, so it earns
-fewer refusals, and refusal retries are inside the timed region. At eight
-producers the 64/64 layout took 12,149 refusals against 32/32's 74,181 -- so
-part of what makes its per-push number look close is that it spent less time
-being turned away. The drained figures are therefore an *understatement* of the
-128-bit word's cost, not a measurement of it under load.
+the answer on its own. The mechanism is structural: **a slower producer is less
+backpressured**, so it earns fewer refusals, and refusal retries are inside the
+timed region -- which means part of what makes a slower shape's per-push number
+look close may be that it spent less time being turned away.
 
-The isolated regime is the clean measurement of the claim itself; the drained
-one shows that in a queue doing real work the claim is not the dominant cost. A
-real application sits between them, nearer the drained end the more
-consumer-bound it is.
+**The refusal counts were offered here as evidence of that, and they do not
+support it.** An earlier version of this section reported the 64/64 layout taking
+12,149 refusals at eight producers against 32/32's 74,181, and read the
+asymmetry as the mechanism showing through. Re-measured three times on the same
+host, the counts are neither stable nor consistently ordered:
+
+| run | 32/32 refusals | 64/64 refusals |
+|---|---|---|
+| 1 | 925 | 14,461 |
+| 2 | 12,613 | 2,152 |
+| 3 | 1,814 | 10,337 |
+
+The ordering reverses between runs and the magnitudes span more than an order of
+magnitude either way, so no single run's counts establish anything about which
+shape was more backpressured. The original figures were one run, and they are not
+reproducible in direction or in size.
+
+What survives is the confound, not a measurement of it: the drained numbers
+contain retry time whose amount is unknown and varies between runs, so a drained
+difference cannot be read as a difference in push cost. That is a reason to
+distrust the drained ratios, which is weaker than the claim this section
+previously made and is what the data supports.
+
+**The isolated regime removes consumer traffic; it does not isolate the claim.**
+Both regimes time the whole push path -- the tail claim, the slot-sequence load,
+the item write, the publication store and the doorbell's fence. An earlier
+version of this paragraph called the isolated regime "the clean measurement of
+the claim itself", said the drained one shows the claim "is not the dominant
+cost", and placed a real application between the two. None of the three follows:
+the first attributes a whole-path number to one operation, the second rests on
+drained figures the paragraph above has just shown to be confounded, and the
+third is an interpolation between two regimes that measure different things,
+offered about deployments this crate has not seen.
 
 ### What the control caught
 
