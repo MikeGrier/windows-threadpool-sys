@@ -69,6 +69,29 @@ The failure this prevents is a reader inheriting a number as though it were a
 property of the code. It is a property of the code **on that machine**, and the
 distinction is the whole value of shipping the probe rather than only its output.
 
+**A figure here is the output of a procedure, and that is what review checks.**
+An observation is not an opinion, a position, or a point of view, so it is not
+something to be argued for or against. The reviewable questions are procedural:
+was the right instrument used, were the capture parameters recorded, was the
+dispersion reported, does the stated conclusion stay inside what the procedure can
+support. If the answer to those is yes, the figure stands as an observation --
+including when a reader would have characterised it differently.
+
+**So do not re-litigate a number or its wording.** A challenge of the form "this
+should be called 1.4x rather than 1.1x", or "this ought to be phrased as a bound
+rather than a comparison", is answered by pointing at the procedure and the table,
+not by renegotiating the prose. The exception is a statement that the procedure
+cannot support at all -- an attribution to a cause the measurement does not
+isolate, a claim of significance a control contradicts, a figure restated
+somewhere it can drift from its source. Those are procedural defects and are
+fixed. The distinction is worth holding because the two look alike in a review
+comment and only one is worth the time.
+
+This is a consequence of the decision above rather than a separate rule: once
+figures are published as parameterised observations rather than as verdicts, there
+is no verdict left to disagree with, and treating each characterisation as a
+position to defend re-introduces exactly the authority the decision removes.
+
 ### High variance in our own control is a finding about the instrument, not just a wider yardstick
 
 <a id="d-variance-is-a-finding"></a>
