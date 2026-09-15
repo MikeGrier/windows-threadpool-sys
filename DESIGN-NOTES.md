@@ -1859,3 +1859,98 @@ written. The rule is about **discarded failure information**, not about discarde
 
 The audit this decision implies is queued as
 [CHECKLIST.md](CHECKLIST.md) -> `M22.1`; it is not scheduled by this note alone.
+
+## <a id="prose-volume-and-error-surface"></a>Prose volume is not the error surface; restatement count is
+
+[Restatement drift](#restatement-drift) explains the mechanism and gives the remedy. This note
+records something that section does not: a measurement of **where** the drift actually lives, taken
+after PR #90's eighteenth review round, and what follows from it about formal specification.
+
+The question that prompted it was whether this repository simply says too much -- whether English,
+which must be inexact to serve human readers, is being asked to carry a specification load it cannot
+bear, and whether some formal specification plus substantially less prose would shrink the error
+surface.
+
+### The measurement
+
+Across the workspace, prose runs at **0.84 lines per line of code** -- about 86,000 lines of prose
+(50,700 Rust comment lines, 35,200 markdown) against 101,700 lines of code.
+
+That number turns out to be the wrong one to watch. In `windows-waitable-queues`, the crate that
+produced most of the review findings, single facts are restated like this:
+
+| fact | restatements | files |
+|---|---|---|
+| `255` (the `Perpetual` reservation-count ceiling) | 19 | 5 |
+| `37 seconds` (the `Balanced` recurrence horizon) | 8 | 4 |
+| `2^56` (the `Perpetual` position span) | 6 | 3 |
+| `4,294,967,295` (the `Balanced` field ceiling) | 5 | 3 |
+| `about 20 years` | 3 | 3 |
+
+**Every one of these is derivable from `ClaimLayout`'s associated constants, and every one is
+hand-maintained with nothing checking it.** The error surface is proportional to that column, not to
+total prose volume. Halving the prose uniformly would leave roughly half of each row and fix
+nothing structural.
+
+### Which errors this predicts, and which it does not
+
+Sorting PR #90's findings across all rounds by class:
+
+- **Restated derivable facts** -- the `2^31`/`2^30` target-dependent capacity, `MAX_RESERVED`
+  conflated with capacity, "`Wide` removes it" for a bound that is finite, stale recurrence tables,
+  a test count that matched no crate. **The large majority.**
+- **Structural** -- an unmarked supersedence row in a decision index, an orphaned milestone
+  reference. A linter's job, not a specification's.
+- **Evidence overclaiming** -- a noise floor computed from two runs, a refusal-count argument that
+  did not reproduce in direction or magnitude across three re-measurements. These were the most
+  valuable findings of the whole PR, and *more* measurement is what fixes them, not less prose.
+- **Policy** -- client prescriptions surviving [D-no-client-prescriptions](crates/windows-platform-probes/DESIGN-NOTES.md#d-no-client-prescriptions).
+  Only a reviewer catches these.
+- **Algorithm properties** -- **zero findings, in any round.**
+
+That last line is the one to be careful with, because it has two readings and only the second is
+honest. There are no findings in that class because **there is no instrument for it**, not because
+the algorithms are known good. `SH-14.1` is a live, known defect in the claim protocol; it was found
+by a person reasoning carefully, and nothing in the toolchain would have caught it. Absence of
+findings where nothing looks is not evidence of correctness -- the same error this repository has
+corrected in its own measurements more than once.
+
+### What follows
+
+Three conclusions, of which the middle one is the one that changes practice.
+
+**Formal specification and prose reduction address different classes.** TLA+ and `loom`
+([D-31](crates/windows-waitable-queues/DESIGN-NOTES.md#d-31)) target algorithm properties, which
+have produced no findings and carry one known unfound defect. Restatement targets documented facts,
+which have produced most findings. Both are worth doing; conflating them would aim the expensive
+instrument at the cheap problem.
+
+**The cut must be to restated assertions, not to rationale.** No finding in any round of PR #90 was
+against a passage explaining *why* a decision was made. The findings were against duplicated
+*assertions* of fact, against overclaims from evidence, and against prescriptions. Rationale is what
+makes a decision re-checkable years later and is the reason this file exists at all; cutting it
+uniformly to hit a volume target would remove the only prose that has never been wrong, while
+leaving the prose that keeps being wrong in proportion.
+
+**A formal spec's most useful property here is not proof -- it is that prose can point at it instead
+of paraphrasing it.** That is [restatement drift](#restatement-drift)'s first remedy applied one
+level up: define the protocol once in a form that can be checked, and let every document cite it.
+This is the real connection between the two ideas, and it is why they belong in the same
+conversation despite fixing different things.
+
+### The cheapest available move, recorded but not scheduled
+
+`README.md` is already a build input for `windows-waitable-queues` (`#[doc = include_str!]` in
+[lib.rs](crates/windows-waitable-queues/src/lib.rs)), so a test can parse the published layout
+tables and assert every row against `ClaimLayout`'s constants -- converting 19 hand-written `255`s
+into one definition and N checked derivations, with no generator and no new tooling. Mechanically,
+that would have caught the `2^31`/`2^30` error, the `MAX_RESERVED`-as-capacity conflation, and both
+stale recurrence tables.
+
+**No work is scheduled by this note.** It was written to inform a decision that has not been taken,
+and the deliberate absence of a checklist item is per the "design notes are not a work queue" rule
+rather than an oversight. The formal-methods survey it bears on is `M30` in the root
+[CHECKLIST.md](CHECKLIST.md), which is not yet on `main` -- it is pending in PR #92, where the
+milestone was originally numbered `M23` until that ID was found to collide with an archived one. If
+the table-versus-constants test or a prose-reduction pass is adopted, each needs its own item at
+that time.
