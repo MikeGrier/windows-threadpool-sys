@@ -598,8 +598,10 @@ impl ClaimLayout for Enduring {
 /// Its field holds at most 255 outstanding reservations -- reachable only when
 /// capacity is at least that large, since the achievable count is the lesser of
 /// the two -- and its position recurs after 2^56 pushes, about
-/// **20 years** at the pre-correction planning rate ([`ClaimLayout`]), which puts the recurrence
-/// beyond any real deployment rather than merely far away.
+/// **20 years** at the pre-correction planning rate ([`ClaimLayout`]). That is a
+/// longer horizon, not the absence of one, and like every figure in that column
+/// it scales with the caller's rate: a deployment pushing an order of magnitude
+/// faster reaches it in about two.
 ///
 /// 255 reservations is the whole of the trade, and it is a real limit rather
 /// than a nominal one: [`Producer::reserve`] returns `None` once that many are

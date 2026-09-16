@@ -26,10 +26,10 @@
 //!
 //! How wide that field is, and so how many pushes recurrence takes, is a layout
 //! choice there -- 32 bits under the default and up to 64 under
-//! [`reserving_mpsc::Wide`](crate::reserving_mpsc). **That moves the recurrence
-//! out of reach without removing the separation that causes it**, which is why
-//! this shape remains interesting: it addresses the structure rather than the
-//! interval.
+//! [`reserving_mpsc::Wide`](crate::reserving_mpsc). **That widens the interval
+//! before recurrence without removing the separation that causes it**, which is
+//! why this shape remains interesting: it addresses the structure rather than
+//! the interval.
 //!
 //! Here the decision *is* the operation. A producer takes a permit from a count
 //! of unspoken-for slots with one atomic, and that single modification both
