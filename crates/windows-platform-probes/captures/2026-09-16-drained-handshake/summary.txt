@@ -14,5 +14,5 @@ same-code control (reserving_mpsc vs reserving 32/32), drained
   span:         0.92x to 1.25x
   median:       1.01x
 
-widest layout median: 1.12x
-inside the control band: true
+layout medians: 18, spanning 0.96x to 1.12x
+every layout median inside the control band: true

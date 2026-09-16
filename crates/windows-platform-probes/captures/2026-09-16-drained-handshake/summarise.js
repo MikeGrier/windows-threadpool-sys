@@ -87,8 +87,20 @@ console.log(
 );
 console.log(`  median:       ${median(every).toFixed(2)}x`);
 console.log("");
-const widest = Math.max(...medians);
-console.log(`widest layout median: ${widest.toFixed(2)}x`);
+const low = Math.min(...every);
+const high = Math.max(...every);
+// **Every** layout median, not just the largest. The claim this capture is
+// cited for is that all of them sit inside the control band, and an earlier
+// version of this check tested `Math.max(...medians)` alone -- which passes
+// unchanged while a median below the band's floor goes unreported. The
+// committed data happens to clear the floor, so that check was right by luck
+// rather than by construction.
+const outside = medians.filter((m) => m < low || m > high);
 console.log(
-  `inside the control band: ${Math.min(...every) <= widest && widest <= Math.max(...every)}`,
+  `layout medians: ${medians.length}, spanning ` +
+    `${Math.min(...medians).toFixed(2)}x to ${Math.max(...medians).toFixed(2)}x`,
 );
+console.log(`every layout median inside the control band: ${outside.length === 0}`);
+if (outside.length > 0) {
+  console.log(`  outside: ${outside.map((m) => `${m.toFixed(2)}x`).join(", ")}`);
+}
