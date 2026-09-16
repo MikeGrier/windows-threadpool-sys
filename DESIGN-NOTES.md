@@ -1871,32 +1871,47 @@ which must be inexact to serve human readers, is being asked to carry a specific
 bear, and whether some formal specification plus substantially less prose would shrink the error
 surface.
 
-### The measurement
+### The measurement, and why it is not written down here
 
-Across the workspace, prose runs at **0.84 lines per line of code** -- about 86,000 lines of prose
-(50,700 Rust comment lines, 35,200 markdown) against 101,700 lines of code.
+Prose in this workspace runs at somewhat less than a line per line of code, counting Rust comment
+lines and markdown together. That ratio turns out to be the wrong thing to watch.
 
-That number turns out to be the wrong one to watch. In `windows-waitable-queues`, single facts are restated like this:
+The thing to watch is that in `windows-waitable-queues`, a handful of single facts -- `Perpetual`'s
+reservation-count ceiling, `Balanced`'s recurrence horizon, `Perpetual`'s position span, `Balanced`'s
+field ceiling -- are each restated many times across several files, by hand, with nothing checking
+any of them. The ceiling is the worst: it appears in five separate files.
 
-| fact | restatements | files |
-|---|---|---|
-| `255` (the `Perpetual` reservation-count ceiling) | 19 | 5 |
-| `37 seconds` (the `Balanced` recurrence horizon) | 8 | 4 |
-| `2^56` (the `Perpetual` position span) | 7 | 4 |
-| `4,294,967,295` (the `Balanced` field ceiling) | 5 | 3 |
-| `about 20 years` | 3 | 3 |
+**The exact counts are deliberately not recorded here.** An earlier version of this section carried
+them as a table, and the table drifted within days: one row gained an occurrence when a qualifier was
+added to a rustdoc elsewhere in this same branch, so the census of restatements became a restatement
+that needed maintaining. That is the section's own subject, demonstrated on the section.
 
-*(Counts are as of the measurement, and they move: `2^56` gained an occurrence when the horizon
-qualifier was added to `Perpetual`'s rustdoc, which is the table demonstrating its own subject.)*
+Anyone who wants current numbers can compute them, which is the point of the principle below -- the
+counts are a finding, and a finding should be computed rather than quoted:
 
-**All of these are restated by hand with nothing checking them.** Three of the rows -- the ceiling,
-the span and the field ceiling -- follow from `ClaimLayout`'s associated constants. The two time rows
-follow from a field width *and* an assumed sustained push rate, so a constants-versus-table check
-would validate those three outright and the time rows only once the rate is pinned somewhere
-single. That distinction bounds what the cheapest remedy below can do -- an earlier version of this
-paragraph said every row was derivable from the constants, which overstated it, in a note about
-overstatement. The error surface is proportional to that column, not to
-total prose volume: a uniform cut to the prose leaves every row still restated, just in fewer words.
+```powershell
+# Occurrences of a figure across the crate, and how many files carry it.
+$files = git ls-files 'crates/windows-waitable-queues/*' |
+    Where-Object { $_ -match '\.(rs|md|toml)$' }
+foreach ($pattern in '\b255\b', '37 seconds', '2\^56', '4,294,967,295', 'about 20 years') {
+    $hits = 0; $carrying = 0
+    foreach ($file in $files) {
+        $n = ([regex]::Matches([System.IO.File]::ReadAllText($file), $pattern)).Count
+        if ($n) { $hits += $n; $carrying++ }
+    }
+    "{0,-16} {1,3} occurrences across {2} files" -f $pattern, $hits, $carrying
+}
+```
+
+**All of these are restated by hand with nothing checking them.** Three of those facts -- the
+ceiling, the span and the field ceiling -- follow from `ClaimLayout`'s associated constants. The two
+time figures follow from a field width *and* an assumed sustained push rate, so a
+constants-versus-table check would validate those three outright and the time figures only once the
+rate is pinned somewhere single. That distinction bounds what the cheapest remedy below can do -- an
+earlier version of this paragraph said every one was derivable from the constants, which overstated
+it, in a note about overstatement. The error surface is proportional to how often a fact is restated,
+not to total prose volume: a uniform cut to the prose leaves every restatement in place, just in
+fewer words.
 
 ### Which errors this predicts, and which it does not
 
