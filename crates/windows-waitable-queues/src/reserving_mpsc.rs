@@ -34,7 +34,8 @@
 //! the same word, differing only in shift and mask constants, though what that costs in
 //! throughput is not established (see [`ClaimLayout`]). [`Enduring`] sits between
 //! them, and the `dwcas` feature adds a 128-bit word whose 64-bit position moves
-//! the recurrence to 2^64 pushes, which no deployment reaches.
+//! the recurrence to 2^64 pushes -- about 5,000 years at the rate
+//! [`ClaimLayout`] documents, which is a longer horizon rather than no horizon.
 //!
 //! ```
 //! use windows_waitable_queues::reserving_mpsc::{self, Perpetual};
@@ -95,8 +96,12 @@
 //! line every thread in the system touches.
 //!
 //! So the two ship as peers ([D-16](../DESIGN-NOTES.md#d-16)): `slotwise_mpsc` for a
-//! caller who wants the cheapest possible push and can treat a refusal as
-//! backpressure, this shape for a caller with a message it must not lose. That
+//! caller who can treat a refusal as backpressure, this shape for a caller with
+//! a message it must not lose. The distinction is what each offers, not which
+//! one is quicker -- an earlier version of this sentence said `slotwise_mpsc`
+//! was for "a caller who wants the cheapest possible push", which asserts a cost
+//! ordering this crate does not establish and which its own end-to-end
+//! measurement did not find. That
 //! is the narrow-trait argument from [D-2](../DESIGN-NOTES.md#d-2) reaching
 //! its sharpest case -- `slotwise_mpsc` does not implement
 //! [`Reserving`](crate::Reserving) because it genuinely cannot, not because
@@ -612,8 +617,8 @@ impl ClaimLayout for Perpetual {
 ///
 /// Requires the `dwcas` feature, which is what brings in the `portable-atomic`
 /// dependency this crate otherwise does not have. The position is 64 bits, so it
-/// recurs after 2^64 pushes -- a bound that exists but that no deployment
-/// reaches, rather than the twenty years [`Perpetual`] buys.
+/// recurs after 2^64 pushes -- about 5,000 years at the rate [`ClaimLayout`]
+/// documents, against the twenty [`Perpetual`] buys. Longer, not unbounded.
 ///
 /// The whole push path was measured as slower under this layout than under a
 /// `u64` one, and the difference **grows with producer count** -- near parity
@@ -629,8 +634,10 @@ impl ClaimLayout for Perpetual {
 /// [`Perpetual`] reaches about twenty years on a plain `AtomicU64`, and what
 /// that costs in throughput is not established -- see [`ClaimLayout`]. What this
 /// layout provides that the others do not is a 64-bit position: the recurrence
-/// moves to 2^64 pushes, which no deployment reaches, rather than to a horizon
-/// measured in years.
+/// moves to 2^64 pushes -- about 5,000 years at the rate [`ClaimLayout`]
+/// documents, rather than the twenty [`Perpetual`] buys. A longer horizon, not
+/// the absence of one, and it scales with the caller's rate like the rest of
+/// that column.
 ///
 /// The reservation ceiling is [`u32::MAX`] rather than the 64 bits the field
 /// could hold, because the count is reported to callers as a `u32`.

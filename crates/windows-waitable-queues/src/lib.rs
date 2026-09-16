@@ -99,7 +99,7 @@
 //! | `Balanced` (default) | 4,294,967,295 | 2^32 | about 37 seconds |
 //! | `Enduring` | 65,535 | 2^48 | about 28 days |
 //! | `Perpetual` | 255 | 2^56 | about 20 years |
-//! | `Wide` (needs `dwcas`) | 4,294,967,295 | 2^64 | unreachable |
+//! | `Wide` (needs `dwcas`) | 4,294,967,295 | 2^64 | about 5,000 years |
 //!
 //! The last column is arithmetic, not a measurement: pushes-to-recurrence
 //! divided by a sustained rate of about 116 million pushes per second. **That
@@ -139,8 +139,10 @@
 //! thing in
 //! this crate
 //! that costs a third-party dependency. What it provides that `Perpetual` does
-//! not is a 64-bit position: the recurrence moves to 2^64 pushes, which no
-//! deployment reaches, rather than to a horizon measured in years.
+//! not is a 64-bit position: the recurrence moves to 2^64 pushes -- about 5,000
+//! years at the rate the table above uses, against the twenty `Perpetual` buys.
+//! A longer horizon rather than the absence of one, and it moves with the
+//! caller's rate like every other figure in that column.
 //!
 //! The default remains `Balanced` so that no existing caller's behaviour
 //! changed when the choice was introduced. Under it, a queue driven past 2^32

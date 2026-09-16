@@ -130,7 +130,7 @@ against the narrower layouts rather than against a producer count.
 | `Balanced` (default) | 4,294,967,295 | 2^32 | about 37 seconds |
 | `Enduring` | 65,535 | 2^48 | about 28 days |
 | `Perpetual` | 255 | 2^56 | about 20 years |
-| `Wide` (needs `dwcas`) | 4,294,967,295 | 2^64 | unreachable |
+| `Wide` (needs `dwcas`) | 4,294,967,295 | 2^64 | about 5,000 years |
 
 The last column is arithmetic, not a measurement: pushes-to-recurrence divided by
 a sustained rate of about 116 million pushes per second. **That rate predates a
@@ -240,8 +240,9 @@ that costs in throughput is not established, while under `Wide` the whole push
 path was measured as slower as producer count rises -- near parity at one or
 two, several times by thirty-two, in the isolated regime. What `Wide` provides
 that the `u64` layouts do not is a 64-bit position: the recurrence moves to
-2^64 pushes, which no deployment reaches, rather than to a horizon measured in
-years.
+2^64 pushes -- about 5,000 years at the same rate the table above uses, rather
+than the twenty `Perpetual` buys. That is a longer horizon, not the absence of
+one, and it moves with the caller's rate like every other figure in that column.
 
 **`experimental-permit-claim`** adds `permit_mpsc`, a different claim protocol in
 which the decision and the operation are one atomic rather than two. It is
