@@ -1969,7 +1969,9 @@ comes to be trusted as a complete one.
 **No work is scheduled by this note.** It was written to inform a decision that has not been taken,
 and the deliberate absence of a checklist item is per the "design notes are not a work queue" rule
 rather than an oversight. The formal-methods survey it bears on is `M30` in the root
-[CHECKLIST.md](CHECKLIST.md), which is not yet on `main` -- it is pending in PR #92, where the
-milestone was originally numbered `M23` until that ID was found to collide with an archived one. If
-the table-versus-constants test or a prose-reduction pass is adopted, each needs its own item at
-that time.
+[CHECKLIST.md](CHECKLIST.md). If the table-versus-constants test or a prose-reduction pass is
+adopted, each needs its own item at that time.
+
+*(`M30` was authored as `M23` and renumbered when that ID was found to collide with an archived
+milestone. Recorded because the old number appears in the commit history and in PR #92's earlier
+discussion, not because either number is in doubt now.)*
