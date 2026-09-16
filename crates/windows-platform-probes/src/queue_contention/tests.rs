@@ -1340,3 +1340,114 @@ fn stop_on_drop_sets_the_flag_when_the_producer_phase_unwinds() {
         "the consumer would spin forever on a flag nobody sets"
     );
 }
+
+/// Arrives at a gate on its own thread and hands back somewhere to read the
+/// answer.
+///
+/// **Every gate test goes through this rather than calling `arrive_and_wait`
+/// directly.** A gate regression parks its caller forever, so an assertion made
+/// on the test thread would hang the whole suite -- which runs its tests as
+/// threads in one process -- instead of failing it. The spawned thread is
+/// deliberately never joined, for the same reason.
+///
+/// Two of these tests were first written the direct way, and sabotage caught
+/// both: neutering `release` wedged the run rather than reddening it.
+fn spawn_arrival(gate: &Arc<StartGate>) -> Arc<Mutex<Option<bool>>> {
+    let gate = Arc::clone(gate);
+    let outcome = Arc::new(Mutex::new(None));
+    let observed = Arc::clone(&outcome);
+    thread::spawn(move || {
+        let complete = gate.arrive_and_wait();
+        *observed.lock().expect("not poisoned") = Some(complete);
+    });
+    outcome
+}
+
+/// The answer from [`spawn_arrival`], or `None` if the party never came back.
+fn await_arrival(outcome: &Arc<Mutex<Option<bool>>>) -> Option<bool> {
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        if let Some(complete) = *outcome.lock().expect("not poisoned") {
+            return Some(complete);
+        }
+        if Instant::now() >= deadline {
+            return None;
+        }
+        thread::sleep(Duration::from_millis(10));
+    }
+}
+
+/// A complete party opens the gate and every member learns that it was complete.
+#[test]
+fn a_complete_party_opens_the_gate_for_everyone() {
+    let gate = StartGate::new(3);
+    let arrivals: Vec<_> = (0..4).map(|_| spawn_arrival(&gate)).collect();
+    for outcome in &arrivals {
+        assert_eq!(
+            await_arrival(outcome),
+            Some(true),
+            "every member of a complete party must be freed, and told so"
+        );
+    }
+}
+
+/// A released gate frees parties waiting for arrivals that will never come.
+///
+/// This is the deadlock `M4.6` was queued for, reproduced without needing the
+/// OS to refuse a thread: the gate is sized for a party that never completes,
+/// which is what a panicking `Scope::spawn` leaves behind.
+#[test]
+fn a_released_gate_frees_parties_that_will_never_be_completed() {
+    let gate = StartGate::new(2);
+    let parked = spawn_arrival(&gate);
+
+    // Let it reach the gate, then give up on the members that never arrive.
+    thread::sleep(Duration::from_millis(50));
+    gate.release();
+
+    assert_eq!(
+        await_arrival(&parked),
+        Some(false),
+        "the parked party must be freed and told the party was incomplete, so \
+         a worker knows its run was abandoned"
+    );
+}
+
+/// Arriving at an already-released gate reports the party incomplete.
+///
+/// The ordering matters: a worker spawned before the failure may arrive after
+/// the coordinator has given up, and must reach the same conclusion as one that
+/// was already parked.
+#[test]
+fn arriving_after_a_release_still_reports_an_incomplete_party() {
+    let gate = StartGate::new(4);
+    gate.release();
+    for _ in 0..2 {
+        assert_eq!(
+            await_arrival(&spawn_arrival(&gate)),
+            Some(false),
+            "a late arrival must not be told the party completed, and the \
+             answer must not change on a second look"
+        );
+    }
+}
+
+/// The guard releases the gate while its scope unwinds.
+#[test]
+fn release_on_drop_frees_the_gate_when_spawning_panics() {
+    let gate = StartGate::new(8);
+    let parked = spawn_arrival(&gate);
+    thread::sleep(Duration::from_millis(50));
+
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let _release = ReleaseOnDrop(Arc::clone(&gate));
+        panic!("the OS refused a thread, as `Scope::spawn` does by panicking");
+    }));
+    assert!(result.is_err(), "the fixture must actually unwind");
+
+    assert_eq!(
+        await_arrival(&parked),
+        Some(false),
+        "the guard did not release the gate as its scope unwound"
+    );
+}

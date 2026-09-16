@@ -79,8 +79,8 @@
 
 use std::fmt;
 use std::sync::Arc;
-use std::sync::Barrier;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::{Condvar, Mutex, MutexGuard, PoisonError};
 use std::thread;
 use std::time::Instant;
 
@@ -745,14 +745,18 @@ fn time_contended_atomic(producers: usize) -> Repetition {
     // here; the clock starts as the barrier releases, so neither thread creation
     // nor a solo head start by an early worker is inside the measurement. See
     // `start_barrier`'s note for why that matters at these producer counts.
-    let gate = Arc::new(Barrier::new(producers + 1));
+    let gate = start_gate(producers);
     let spans = thread::scope(|scope| {
+        let _release = ReleaseOnDrop(Arc::clone(&gate));
         let mut workers = Vec::with_capacity(producers);
         for _ in 0..producers {
             let counter = Arc::clone(&counter);
             let gate = Arc::clone(&gate);
             workers.push(scope.spawn(move || {
-                gate.wait();
+                if !gate.arrive_and_wait() {
+                    // Abandoned before the party completed; see `StartGate`.
+                    return (Instant::now(), Instant::now());
+                }
                 let began = Instant::now();
                 for _ in 0..PUSHES_PER_PRODUCER {
                     counter.fetch_add(1, Ordering::Relaxed);
@@ -760,7 +764,7 @@ fn time_contended_atomic(producers: usize) -> Repetition {
                 (began, Instant::now())
             }));
         }
-        gate.wait();
+        let _ = gate.arrive_and_wait();
         workers
             .into_iter()
             .map(|worker| worker.join().expect("a producer must not panic"))
@@ -774,7 +778,8 @@ fn capacity_for(producers: usize) -> usize {
     (producers * PUSHES_PER_PRODUCER).next_power_of_two()
 }
 
-/// A gate holding every participant until all of them exist.
+/// A gate holding every participant until all of them exist, or until the
+/// coordinator gives up on the ones that do not.
 ///
 /// **Without this the row labelled N producers need not have measured N of
 /// them.** Spawning is not instant, and each worker used to start pushing the
@@ -785,11 +790,122 @@ fn capacity_for(producers: usize) -> usize {
 /// output of this probe, and both effects bend it downward exactly where it is
 /// steepest.
 ///
-/// The count includes this thread, so no worker can start before the last one
-/// exists. It does NOT start the clock -- see [`measured_span`] for why that is
-/// a separate job.
-fn start_barrier(participants: usize) -> Arc<Barrier> {
-    Arc::new(Barrier::new(participants + 1))
+/// The count includes the coordinating thread, so no worker can start before the
+/// last one exists. It does NOT start the clock -- see [`measured_span`] for why
+/// that is a separate job.
+///
+/// **Why this is not `std::sync::Barrier`.** A `Barrier`'s party count, once
+/// set, must be met: there is no way to say "nobody else is coming". The timers
+/// size the gate for every planned worker and then spawn them with
+/// `Scope::spawn`, which *panics* if the OS refuses a thread. If that happened
+/// after an earlier worker had already parked, the coordinator never reached its
+/// own arrival, the count was never met, and `thread::scope` joined a
+/// permanently parked worker while unwinding -- so the probe **hung rather than
+/// failed**, which is the worse of the two. [`StartGate::release`] is the
+/// missing operation, and [`ReleaseOnDrop`] performs it on the unwind path.
+///
+/// **The property the measurement depends on is preserved.** Every parked party
+/// is woken by one `notify_all` and returns as a group, exactly as
+/// `Barrier::wait` does -- which is what [`measured_span`] relies on when it
+/// argues that this thread cannot time the workers and each must time itself.
+struct StartGate {
+    state: Mutex<GateState>,
+    opened: Condvar,
+}
+
+struct GateState {
+    /// Participants still to arrive. Reaching zero opens the gate.
+    remaining: usize,
+    /// Whether waiters may proceed, for either reason.
+    open: bool,
+    /// Whether the gate opened because everyone arrived, rather than because
+    /// the coordinator released it. A participant that reads `false` learns its
+    /// run was abandoned and should not do the work.
+    complete: bool,
+}
+
+impl StartGate {
+    /// `participants` workers plus the coordinating thread.
+    fn new(participants: usize) -> Arc<Self> {
+        Arc::new(Self {
+            state: Mutex::new(GateState {
+                remaining: participants + 1,
+                open: false,
+                complete: false,
+            }),
+            opened: Condvar::new(),
+        })
+    }
+
+    /// Poisoning is stepped over rather than propagated.
+    ///
+    /// Nothing but the gate's own bookkeeping runs under this lock, so a
+    /// poisoned mutex means some *other* thread panicked while parked here. The
+    /// whole point of this type is to unblock that situation; panicking on the
+    /// way -- from inside a `Drop` that is already unwinding -- would abort the
+    /// process instead.
+    fn locked(&self) -> MutexGuard<'_, GateState> {
+        self.state.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    /// Arrive, then block until every participant has, or until the gate is
+    /// released.
+    ///
+    /// `true` when the gate opened because the party was complete, which is the
+    /// only case in which a run's timings mean anything. `false` says the
+    /// coordinator gave up; the caller should return without doing the work.
+    #[must_use]
+    fn arrive_and_wait(&self) -> bool {
+        let mut state = self.locked();
+        state.remaining = state.remaining.saturating_sub(1);
+        if state.remaining == 0 && !state.open {
+            state.open = true;
+            state.complete = true;
+        }
+        if state.open {
+            let complete = state.complete;
+            drop(state);
+            self.opened.notify_all();
+            return complete;
+        }
+        while !state.open {
+            state = self
+                .opened
+                .wait(state)
+                .unwrap_or_else(PoisonError::into_inner);
+        }
+        state.complete
+    }
+
+    /// Open the gate now, however many participants are missing.
+    ///
+    /// A no-op once the gate is open, so the guard that calls this on the
+    /// ordinary path costs nothing.
+    fn release(&self) {
+        let mut state = self.locked();
+        state.open = true;
+        drop(state);
+        self.opened.notify_all();
+    }
+}
+
+/// Releases the start gate however the spawning phase ends.
+///
+/// The failure this exists for is a `Scope::spawn` panic partway through
+/// creating the workers: without it, the parties already parked wait for a count
+/// that will never be met, and the join that `thread::scope` performs while
+/// unwinding never returns. Held inside the scope's closure, so it drops while
+/// that closure unwinds -- before the join loop it needs to unblock.
+struct ReleaseOnDrop(Arc<StartGate>);
+
+impl Drop for ReleaseOnDrop {
+    fn drop(&mut self) {
+        self.0.release();
+    }
+}
+
+fn start_gate(participants: usize) -> Arc<StartGate> {
+    StartGate::new(participants)
 }
 
 /// The wall-clock window the producers were actually inside: from the first to
@@ -831,14 +947,18 @@ fn measured_span(spans: &[(Instant, Instant)]) -> f64 {
 fn time_isolated_mpsc(producers: usize) -> Repetition {
     let (tx, rx) =
         slotwise_mpsc::bounded::<u64>(capacity_for(producers)).expect("a valid capacity");
-    let gate = start_barrier(producers);
+    let gate = start_gate(producers);
     let spans = thread::scope(|scope| {
+        let _release = ReleaseOnDrop(Arc::clone(&gate));
         let mut workers = Vec::with_capacity(producers);
         for producer in 0..producers {
             let tx = tx.clone();
             let gate = Arc::clone(&gate);
             workers.push(scope.spawn(move || {
-                gate.wait();
+                if !gate.arrive_and_wait() {
+                    // Abandoned before the party completed; see `StartGate`.
+                    return (Instant::now(), Instant::now());
+                }
                 let began = Instant::now();
                 for index in 0..PUSHES_PER_PRODUCER {
                     tx.push((producer * PUSHES_PER_PRODUCER + index) as u64)
@@ -847,7 +967,7 @@ fn time_isolated_mpsc(producers: usize) -> Repetition {
                 (began, Instant::now())
             }));
         }
-        gate.wait();
+        let _ = gate.arrive_and_wait();
         workers
             .into_iter()
             .map(|worker| worker.join().expect("a producer must not panic"))
@@ -864,14 +984,18 @@ fn time_isolated_mpsc(producers: usize) -> Repetition {
 fn time_isolated_reserving(producers: usize) -> Repetition {
     let (tx, rx) =
         reserving_mpsc::bounded::<u64>(capacity_for(producers)).expect("a valid capacity");
-    let gate = start_barrier(producers);
+    let gate = start_gate(producers);
     let spans = thread::scope(|scope| {
+        let _release = ReleaseOnDrop(Arc::clone(&gate));
         let mut workers = Vec::with_capacity(producers);
         for producer in 0..producers {
             let tx = tx.clone();
             let gate = Arc::clone(&gate);
             workers.push(scope.spawn(move || {
-                gate.wait();
+                if !gate.arrive_and_wait() {
+                    // Abandoned before the party completed; see `StartGate`.
+                    return (Instant::now(), Instant::now());
+                }
                 let began = Instant::now();
                 for index in 0..PUSHES_PER_PRODUCER {
                     tx.push((producer * PUSHES_PER_PRODUCER + index) as u64)
@@ -880,7 +1004,7 @@ fn time_isolated_reserving(producers: usize) -> Repetition {
                 (began, Instant::now())
             }));
         }
-        gate.wait();
+        let _ = gate.arrive_and_wait();
         workers
             .into_iter()
             .map(|worker| worker.join().expect("a producer must not panic"))
@@ -905,14 +1029,18 @@ fn time_isolated_reserving(producers: usize) -> Repetition {
 /// a difference of a few nanoseconds per push.
 fn time_isolated_permit(producers: usize) -> Repetition {
     let (tx, rx) = permit_mpsc::bounded::<u64>(capacity_for(producers)).expect("a valid capacity");
-    let gate = start_barrier(producers);
+    let gate = start_gate(producers);
     let spans = thread::scope(|scope| {
+        let _release = ReleaseOnDrop(Arc::clone(&gate));
         let mut workers = Vec::with_capacity(producers);
         for producer in 0..producers {
             let tx = tx.clone();
             let gate = Arc::clone(&gate);
             workers.push(scope.spawn(move || {
-                gate.wait();
+                if !gate.arrive_and_wait() {
+                    // Abandoned before the party completed; see `StartGate`.
+                    return (Instant::now(), Instant::now());
+                }
                 let began = Instant::now();
                 for index in 0..PUSHES_PER_PRODUCER {
                     tx.push((producer * PUSHES_PER_PRODUCER + index) as u64)
@@ -921,7 +1049,7 @@ fn time_isolated_permit(producers: usize) -> Repetition {
                 (began, Instant::now())
             }));
         }
-        gate.wait();
+        let _ = gate.arrive_and_wait();
         workers
             .into_iter()
             .map(|worker| worker.join().expect("a producer must not panic"))
@@ -979,11 +1107,13 @@ fn time_drained_mpsc(producers: usize) -> Repetition {
     // needs a readiness flag the producers spin on, which would change the
     // measurement and so obsolete every figure already published against it --
     // queued as M4.3 rather than taken mid-branch.
-    let gate = start_barrier(producers + 1);
+    let gate = start_gate(producers + 1);
     let consumer_gate = Arc::clone(&gate);
 
     let consumer = thread::spawn(move || {
-        consumer_gate.wait();
+        if !consumer_gate.arrive_and_wait() {
+            return rx.refused();
+        }
         // Spin rather than park: the doorbell's cost is `doorbell_cost`'s
         // question, and parking here would measure that instead of the claim.
         while !consumer_done.load(Ordering::Relaxed) {
@@ -995,12 +1125,16 @@ fn time_drained_mpsc(producers: usize) -> Repetition {
     });
 
     let spans = thread::scope(|scope| {
+        let _release = ReleaseOnDrop(Arc::clone(&gate));
         let mut workers = Vec::with_capacity(producers);
         for producer in 0..producers {
             let tx = tx.clone();
             let gate = Arc::clone(&gate);
             workers.push(scope.spawn(move || {
-                gate.wait();
+                if !gate.arrive_and_wait() {
+                    // Abandoned before the party completed; see `StartGate`.
+                    return (Instant::now(), Instant::now());
+                }
                 let began = Instant::now();
                 for index in 0..PUSHES_PER_PRODUCER {
                     let mut item = (producer * PUSHES_PER_PRODUCER + index) as u64;
@@ -1025,7 +1159,7 @@ fn time_drained_mpsc(producers: usize) -> Repetition {
                 (began, Instant::now())
             }));
         }
-        gate.wait();
+        let _ = gate.arrive_and_wait();
         workers
             .into_iter()
             .map(|worker| worker.join().expect("a producer must not panic"))
@@ -1067,11 +1201,13 @@ fn time_drained_reserving(producers: usize) -> Repetition {
     let stop = StopOnDrop(done);
     // The consumer joins the gate here for the reason it does in the slotwise
     // twin: a run whose opening is undrained is not the regime being measured.
-    let gate = start_barrier(producers + 1);
+    let gate = start_gate(producers + 1);
     let consumer_gate = Arc::clone(&gate);
 
     let consumer = thread::spawn(move || {
-        consumer_gate.wait();
+        if !consumer_gate.arrive_and_wait() {
+            return rx.refused();
+        }
         while !consumer_done.load(Ordering::Relaxed) {
             while rx.pop().is_ok() {}
             std::hint::spin_loop();
@@ -1081,12 +1217,16 @@ fn time_drained_reserving(producers: usize) -> Repetition {
     });
 
     let spans = thread::scope(|scope| {
+        let _release = ReleaseOnDrop(Arc::clone(&gate));
         let mut workers = Vec::with_capacity(producers);
         for producer in 0..producers {
             let tx = tx.clone();
             let gate = Arc::clone(&gate);
             workers.push(scope.spawn(move || {
-                gate.wait();
+                if !gate.arrive_and_wait() {
+                    // Abandoned before the party completed; see `StartGate`.
+                    return (Instant::now(), Instant::now());
+                }
                 let began = Instant::now();
                 for index in 0..PUSHES_PER_PRODUCER {
                     let mut item = (producer * PUSHES_PER_PRODUCER + index) as u64;
@@ -1105,7 +1245,7 @@ fn time_drained_reserving(producers: usize) -> Repetition {
                 (began, Instant::now())
             }));
         }
-        gate.wait();
+        let _ = gate.arrive_and_wait();
         workers
             .into_iter()
             .map(|worker| worker.join().expect("a producer must not panic"))
@@ -1134,11 +1274,13 @@ fn time_drained_permit(producers: usize) -> Repetition {
     let consumer_done = Arc::clone(&done);
     // Set on every exit path, not just the one that returns. See StopOnDrop.
     let stop = StopOnDrop(done);
-    let gate = start_barrier(producers + 1);
+    let gate = start_gate(producers + 1);
     let consumer_gate = Arc::clone(&gate);
 
     let consumer = thread::spawn(move || {
-        consumer_gate.wait();
+        if !consumer_gate.arrive_and_wait() {
+            return rx.refused();
+        }
         while !consumer_done.load(Ordering::Relaxed) {
             while rx.pop().is_ok() {}
             std::hint::spin_loop();
@@ -1148,12 +1290,16 @@ fn time_drained_permit(producers: usize) -> Repetition {
     });
 
     let spans = thread::scope(|scope| {
+        let _release = ReleaseOnDrop(Arc::clone(&gate));
         let mut workers = Vec::with_capacity(producers);
         for producer in 0..producers {
             let tx = tx.clone();
             let gate = Arc::clone(&gate);
             workers.push(scope.spawn(move || {
-                gate.wait();
+                if !gate.arrive_and_wait() {
+                    // Abandoned before the party completed; see `StartGate`.
+                    return (Instant::now(), Instant::now());
+                }
                 let began = Instant::now();
                 for index in 0..PUSHES_PER_PRODUCER {
                     let mut item = (producer * PUSHES_PER_PRODUCER + index) as u64;
@@ -1172,7 +1318,7 @@ fn time_drained_permit(producers: usize) -> Repetition {
                 (began, Instant::now())
             }));
         }
-        gate.wait();
+        let _ = gate.arrive_and_wait();
         workers
             .into_iter()
             .map(|worker| worker.join().expect("a producer must not panic"))
@@ -1209,14 +1355,18 @@ fn time_drained_permit(producers: usize) -> Repetition {
 fn time_isolated_layout<L: ClaimLayout>(producers: usize) -> Repetition {
     let (tx, rx) =
         reserving_mpsc::bounded_as::<u64, L>(capacity_for(producers)).expect("a valid capacity");
-    let gate = start_barrier(producers);
+    let gate = start_gate(producers);
     let spans = thread::scope(|scope| {
+        let _release = ReleaseOnDrop(Arc::clone(&gate));
         let mut workers = Vec::with_capacity(producers);
         for producer in 0..producers {
             let tx = tx.clone();
             let gate = Arc::clone(&gate);
             workers.push(scope.spawn(move || {
-                gate.wait();
+                if !gate.arrive_and_wait() {
+                    // Abandoned before the party completed; see `StartGate`.
+                    return (Instant::now(), Instant::now());
+                }
                 let began = Instant::now();
                 for index in 0..PUSHES_PER_PRODUCER {
                     tx.push((producer * PUSHES_PER_PRODUCER + index) as u64)
@@ -1225,7 +1375,7 @@ fn time_isolated_layout<L: ClaimLayout>(producers: usize) -> Repetition {
                 (began, Instant::now())
             }));
         }
-        gate.wait();
+        let _ = gate.arrive_and_wait();
         workers
             .into_iter()
             .map(|worker| worker.join().expect("a producer must not panic"))
@@ -1249,11 +1399,13 @@ fn time_drained_layout<L: ClaimLayout + 'static>(producers: usize) -> Repetition
     let stop = StopOnDrop(done);
     // The consumer joins the gate for the reason its twins do: a run whose
     // opening is undrained is not the regime being measured.
-    let gate = start_barrier(producers + 1);
+    let gate = start_gate(producers + 1);
     let consumer_gate = Arc::clone(&gate);
 
     let consumer = thread::spawn(move || {
-        consumer_gate.wait();
+        if !consumer_gate.arrive_and_wait() {
+            return rx.refused();
+        }
         while !consumer_done.load(Ordering::Relaxed) {
             while rx.pop().is_ok() {}
             std::hint::spin_loop();
@@ -1263,12 +1415,16 @@ fn time_drained_layout<L: ClaimLayout + 'static>(producers: usize) -> Repetition
     });
 
     let spans = thread::scope(|scope| {
+        let _release = ReleaseOnDrop(Arc::clone(&gate));
         let mut workers = Vec::with_capacity(producers);
         for producer in 0..producers {
             let tx = tx.clone();
             let gate = Arc::clone(&gate);
             workers.push(scope.spawn(move || {
-                gate.wait();
+                if !gate.arrive_and_wait() {
+                    // Abandoned before the party completed; see `StartGate`.
+                    return (Instant::now(), Instant::now());
+                }
                 let began = Instant::now();
                 for index in 0..PUSHES_PER_PRODUCER {
                     let mut item = (producer * PUSHES_PER_PRODUCER + index) as u64;
@@ -1287,7 +1443,7 @@ fn time_drained_layout<L: ClaimLayout + 'static>(producers: usize) -> Repetition
                 (began, Instant::now())
             }));
         }
-        gate.wait();
+        let _ = gate.arrive_and_wait();
         workers
             .into_iter()
             .map(|worker| worker.join().expect("a producer must not panic"))

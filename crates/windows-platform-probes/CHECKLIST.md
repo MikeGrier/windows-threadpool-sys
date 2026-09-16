@@ -172,7 +172,11 @@ correctness in the archive.
   Reported by review against this branch; the comment at the slotwise twin now states what the
   barrier actually guarantees rather than implying the window is closed.
 
-- [ ] **M4.6** -- Make the start gate releasable, so a failed thread spawn cannot deadlock the probe.
+- [x] **M4.6** -- Make the start gate releasable, so a failed thread spawn cannot deadlock the probe.
+  `StartGate` replaces `std::sync::Barrier`: a complete party opens it as before, and the
+  coordinator can open it early when a spawn fails, so parked workers are freed instead of held
+  for arrivals that will never come. `ReleaseOnDrop` performs that release on the unwind path.
+  The property `measured_span` depends on -- every party released together -- is preserved.
 
   **Gap:** every timer sizes a `Barrier` for all planned workers plus the coordinator, then spawns
   the workers with `Scope::spawn`, which **panics** if the OS cannot create a thread. If that
