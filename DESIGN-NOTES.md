@@ -1879,7 +1879,7 @@ lines and markdown together. That ratio turns out to be the wrong thing to watch
 The thing to watch is that in `windows-waitable-queues`, a handful of single facts -- `Perpetual`'s
 reservation-count ceiling, `Balanced`'s recurrence horizon, `Perpetual`'s position span, `Balanced`'s
 field ceiling -- are each restated many times across several files, by hand, with nothing checking
-any of them. The ceiling is the worst: it appears in five separate files.
+any of them. The ceiling is the worst, restated in more places than any of the others.
 
 **The exact counts are deliberately not recorded here.** An earlier version of this section carried
 them as a table, and the table drifted within days: one row gained an occurrence when a qualifier was
@@ -1981,7 +1981,7 @@ them wrong -- it said "in both cases roughly 60%" where one of the two cases was
 was adjacent and the summary of it was false, because prose is not checkable and nobody checks it.
 
 **This repository already contains the better pattern and did not apply it here.**
-`mutation-sweeps/2026-09-02/` is a dated, committed capture directory: data as an artifact, cited
+[`mutation-sweeps/2026-09-02/`](mutation-sweeps/2026-09-02) is a dated, committed capture directory: data as an artifact, cited
 rather than retyped. `windows-platform-probes`, which produces the most-cited numbers in the
 workspace, commits no capture at all -- every figure it has ever published reached its document by
 hand.
@@ -2040,6 +2040,5 @@ they know.)*
 
 **No work is scheduled by this note.** It was written to inform a decision that has not been taken,
 and the deliberate absence of a checklist item is per the "design notes are not a work queue" rule
-rather than an oversight. A formal-methods survey is queued separately in the root
-[CHECKLIST.md](CHECKLIST.md) and bears on the same question. If the table-versus-constants test or a
+rather than an oversight. If the table-versus-constants test or a
 prose-reduction pass is adopted, each needs its own item at that time.

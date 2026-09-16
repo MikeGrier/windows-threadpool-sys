@@ -20,10 +20,10 @@
 //! silent**: the consumer receives a different item than was sent, and no error,
 //! panic, or counter reports it.
 //!
-//! Under `Balanced`, 2^32 pushes is 37 seconds to about four minutes of
-//! *sustained* pushing at this crate's disclosed rates, roughly two minutes at
-//! two producers. Those rates predate a correction to the probe's timing window,
-//! so they are a floor rather than a forecast -- the correction lowers the rate
+//! Under `Balanced`, 2^32 pushes is about 37 seconds of
+//! *sustained* pushing at the rate [`ClaimLayout`] discloses; two producers is
+//! the smallest count that can trigger it. That rate predates a correction to the probe's timing window,
+//! so it is a floor rather than a forecast -- the correction lowers the rate
 //! and lengthens the horizon, which is the conservative direction for a hazard;
 //! see [`ClaimLayout`]. The wrap alone is not enough -- a producer must also stall
 //! inside a window a few instructions wide -- but a preemption suffices.

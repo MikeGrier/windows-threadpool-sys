@@ -163,10 +163,10 @@
 //! to a caller to discover, and why it cannot be mitigated after the fact.
 //!
 //! **The exposure, as arithmetic over a disclosed rate.** Under `Balanced`, 2^32
-//! pushes is 37 seconds to roughly four minutes of *sustained* pushing at this
-//! crate's disclosed rates -- about two minutes at two producers, which is
-//! the smallest count that can trigger it at all. **Those rates predate a
-//! correction to the probe's timing window** and are kept as a floor for the
+//! pushes is about 37 seconds of *sustained* pushing at the rate the layout
+//! table above discloses. Two producers is the smallest count that can trigger
+//! the defect at all. **That rate predates a
+//! correction to the probe's timing window** and is kept as a floor for the
 //! reason the layout table above gives: the correction lowers the rate and
 //! lengthens the horizon, so these figures say the wrap arrives sooner than it
 //! does, which is the conservative direction for a hazard. That is sustained
