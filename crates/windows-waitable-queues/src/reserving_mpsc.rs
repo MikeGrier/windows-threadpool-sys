@@ -191,15 +191,17 @@ use crate::options::Options;
 /// them is therefore a trade, and this trait is where a caller chooses which
 /// side to spend them on.
 ///
-/// **The two things being traded are not equally valuable, and the shipping
-/// default spends the bits on the less valuable one.** The reservation count
+/// **What the two halves buy is different in kind, and which matters depends on
+/// the deployment.** The reservation count
 /// bounds how many messages may be held in flight at once. That bound is the
 /// lesser of the ring's capacity and the layout's count field, and it is
 /// reachable by a *single* producer: [`Producer::reserve`] takes `&self` and
 /// returns an owned [`Reservation`], so one thread can hold as many as the
 /// field allows. (An earlier version of this paragraph said the practical bound
-/// was "the number of producers mid-send, so hundreds or thousands". That was
-/// wrong, and it mattered -- it made the narrower fields look unreachable. One
+/// was "the number of producers mid-send, so hundreds or thousands", and called
+/// the reservation half "the less valuable one" on that basis. The bound was
+/// wrong, and it mattered -- it made the narrower fields look unreachable, which
+/// is what made the trade look one-sided. One
 /// producer alone fills `Perpetual`'s 255 and is then refused, which
 /// `one_producer_alone_can_exhaust_the_reservation_field` pins.) The position
 /// decides
@@ -233,13 +235,19 @@ use crate::options::Options;
 /// note quotes; a queue that must drain cannot sustain the fastest rate
 /// measured, so treat these as a floor on time rather than a forecast.
 ///
+/// **That rate premise predates a correction to the probe's timing window**,
+/// which had overstated throughput. The correction therefore moves the true
+/// sustained rate *down* and these horizons *up*, so the figures above remain a
+/// floor -- they say the wrap arrives sooner than it does, which is the
+/// conservative direction for a hazard. They have not been recomputed, because
+/// the horizon a caller needs is the one on their own hardware and at their own
+/// rate; the arithmetic is field width divided by rate.
+///
 /// **Choosing a deeper position is the same instruction on the same word.** All
 /// three issue the same atomic compare-exchange on the same `u64` and differ
 /// shift and mask constants, so there is no structural reason for one to be
 /// slower. **What that costs in throughput is not established**: a probe
-/// comparing them found them indistinguishable at low producer counts, and at
-/// high counts a difference that did not clearly exceed the run-to-run
-/// variation of the same code measured twice. The settled trade is the
+/// comparing them found them indistinguishable at low producer counts, and at high counts ran 1.23-1.30x the default against a same-code control that itself reaches 1.12x -- outside the control, but too close to it to establish an ordering or a cost on this host. The settled trade is the
 /// reservation ceiling; throughput is target-dependent and this crate does not
 /// characterise it beyond the one host in the note above.
 ///

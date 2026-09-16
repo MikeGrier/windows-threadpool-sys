@@ -94,12 +94,20 @@
 //! holds many at once is choosing against the narrower layouts rather than
 //! against a producer count.
 //!
-//! | Layout | Reservation-count field ceiling | Pushes to recurrence | At sustained maximum rate |
+//! | Layout | Reservation-count field ceiling | Pushes to recurrence | At the pre-correction planning rate |
 //! |---|---|---|---|
 //! | `Balanced` (default) | 4,294,967,295 | 2^32 | about 37 seconds |
 //! | `Enduring` | 65,535 | 2^48 | about 28 days |
 //! | `Perpetual` | 255 | 2^56 | about 20 years |
 //! | `Wide` (needs `dwcas`) | 4,294,967,295 | 2^64 | unreachable |
+//!
+//! The last column is arithmetic, not a measurement: pushes-to-recurrence
+//! divided by a sustained rate of about 116 million pushes per second. **That
+//! rate predates a correction to the probe's timing window**, which had
+//! overstated throughput -- so the true sustained rate is lower and these
+//! horizons longer. They are kept as a floor, saying the wrap arrives sooner
+//! than it does, which is the conservative direction for a hazard. The horizon
+//! that matters is the one on your hardware at your rate.
 //!
 //! The reservation-count column is the field's ceiling, not a reachable number of
 //! reservations: admission is also bounded by capacity, so the achievable count
@@ -121,8 +129,7 @@
 //! word and differ only in shift and mask constants, so there is no structural
 //! reason for one to be slower -- but **what that costs in throughput is not
 //! established**: a probe comparing them found them indistinguishable at low
-//! producer counts, and at high counts a difference that did not clearly exceed
-//! the run-to-run variation of the same code measured twice. `Wide` is a separate
+//! producer counts, and at high counts ran 1.23-1.30x the default against a same-code control that itself reaches 1.12x -- outside the control, but too close to it to establish an ordering or a cost on this host. `Wide` is a separate
 //! matter: it needs a 128-bit exchange, and the whole push path was measured as
 //! slower under it as producer count rises -- near parity at one or two,
 //! several times by thirty-two, in the isolated regime -- and it is the only
@@ -169,9 +176,7 @@
 //! - **Naming a layout moves it.** `Perpetual` puts the recurrence about twenty
 //!   years out. **What it costs in throughput is not established** -- it issues
 //!   the same atomic compare-exchange on the same `u64` as the default, and was
-//!   measured as indistinguishable from it at low producer counts; at high
-//!   counts the difference did not clearly exceed the run-to-run variation of
-//!   the same code measured twice.
+//!   measured as indistinguishable from it at low producer counts; at high counts ran 1.23-1.30x the default against a same-code control that itself reaches 1.12x -- outside the control, but too close to it to establish an ordering or a cost on this host.
 //! - **[`slotwise_mpsc`] does not have this hazard** under any layout. Its
 //!   positions are 64 bits on every target, so the equivalent wrap needs 2^64
 //!   claims. It does not offer [`Reserving`].
