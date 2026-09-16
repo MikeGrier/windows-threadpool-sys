@@ -1295,6 +1295,77 @@ fn scaling_bounds_at_one_producer_is_exactly_one() {
     }
 }
 
+/// Either row being unmeasured is enough; it does not take both.
+///
+/// Found by `cargo mutants`: replacing the `||` in that guard with `&&` survived
+/// the suite, because every case written supplied the same row twice. A bound
+/// over one real row and one that never ran is exactly the case the guard is
+/// for, and nothing reached it.
+#[test]
+fn scaling_bounds_needs_both_rows_measured_not_merely_one() {
+    let measured = run_spanning(shapes::RESERVING_MPSC, 1, 4.0, 5.0, 6.0);
+    let mut absent = run_spanning(shapes::RESERVING_MPSC, 8, 40.0, 50.0, 60.0);
+    absent.nanos_per_op = 0.0;
+
+    let one_ran = Observation {
+        isolated: vec![measured, absent],
+        drained: Vec::new(),
+        available_parallelism: Some(8),
+    };
+    assert_eq!(
+        one_ran.scaling_bounds(&one_ran.isolated, shapes::RESERVING_MPSC, 8),
+        None,
+        "the many-producer row measured nothing, so there is no bound"
+    );
+
+    let mut absent_one = measured;
+    absent_one.nanos_per_op = 0.0;
+    let other_ran = Observation {
+        isolated: vec![
+            absent_one,
+            run_spanning(shapes::RESERVING_MPSC, 8, 40.0, 50.0, 60.0),
+        ],
+        drained: Vec::new(),
+        available_parallelism: Some(8),
+    };
+    assert_eq!(
+        other_ran.scaling_bounds(&other_ran.isolated, shapes::RESERVING_MPSC, 8),
+        None,
+        "and the one-producer row measuring nothing is equally disqualifying"
+    );
+}
+
+/// A non-finite bound is not printed, even beside a perfectly good point.
+///
+/// Found by `cargo mutants`: the `low.is_finite() && high.is_finite()` guard
+/// could be replaced with `true`, or its `&&` with `||`, and the suite stayed
+/// green -- every case gave the bound a finite pair or no pair at all, so the
+/// guard was never asked to reject one. The point estimate is still
+/// publishable in that case; only the interval is not.
+#[test]
+fn format_scaling_bounded_drops_a_non_finite_interval_and_keeps_the_point() {
+    for (low, high) in [
+        (f64::NAN, 2.0),
+        (1.5, f64::NAN),
+        (f64::NEG_INFINITY, 2.0),
+        (1.5, f64::INFINITY),
+    ] {
+        let rendered = format_scaling_bounded(Some(2.0), Some((low, high)));
+        assert_eq!(
+            rendered, "2.00x",
+            "[{low}, {high}] is not an interval, so only the point may be \
+             published -- got {rendered:?}"
+        );
+    }
+
+    // And a finite pair must still be printed, or the guard has simply been
+    // turned into "never show an interval".
+    assert_eq!(
+        format_scaling_bounded(Some(2.0), Some((1.5, 2.5))),
+        "2.00x [1.50-2.50]"
+    );
+}
+
 /// The stop flag must be set on the path where nobody sets it explicitly.
 ///
 /// The drained timers cleared the flag on the line after their producer scope,
