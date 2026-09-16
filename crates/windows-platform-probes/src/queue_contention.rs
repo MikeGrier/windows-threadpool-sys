@@ -182,6 +182,40 @@ pub struct Run {
     /// rather than by the claim, which is a fact about the measurement and not
     /// about the queue.
     pub refusals: u64,
+    /// Fastest of the [`REPETITIONS`] timed repetitions, in nanoseconds per
+    /// operation.
+    ///
+    /// Carried because [`d-observations-not-verdicts`] obliges every published
+    /// figure to arrive with its run count *and its dispersion*: a median alone
+    /// is an anecdote a reader cannot compare against their own hardware. The
+    /// four repetitions the median discards are the only evidence this probe has
+    /// about its own stability within a run, and discarding them silently was
+    /// the crate publishing a figure its own contract forbids.
+    ///
+    /// [`d-observations-not-verdicts`]: https://github.com/MikeGrier/windows-threadpool-sys/blob/main/crates/windows-platform-probes/DESIGN-NOTES.md#d-observations-not-verdicts
+    pub fastest_nanos_per_op: f64,
+    /// Slowest of the [`REPETITIONS`] timed repetitions, in nanoseconds per
+    /// operation. See [`Run::fastest_nanos_per_op`].
+    pub slowest_nanos_per_op: f64,
+}
+
+impl Run {
+    /// The spread across this configuration's repetitions, as a multiple.
+    ///
+    /// `1.00` would mean every repetition took the same time. A wide spread
+    /// says the figure beside it is one draw from a distribution this host does
+    /// not hold still, which is the reading the median alone hides.
+    ///
+    /// Zero when the fastest repetition took no measurable time, which cannot
+    /// happen for a real run and is reported rather than divided by.
+    #[must_use]
+    pub fn spread(&self) -> f64 {
+        if self.fastest_nanos_per_op > 0.0 {
+            self.slowest_nanos_per_op / self.fastest_nanos_per_op
+        } else {
+            0.0
+        }
+    }
 }
 
 /// Everything one invocation measured.
@@ -239,14 +273,23 @@ impl Observation {
 pub fn render_table(out: &mut dyn fmt::Write, runs: &[Run]) {
     let _ = writeln!(
         out,
-        "{:<18} {:>10} {:>14} {:>16} {:>14}",
-        "shape", "producers", "ns/op", "ops/sec", "refusals"
+        "{:<18} {:>10} {:>14} {:>16} {:>14} {:>18} {:>9}",
+        "shape", "producers", "ns/op", "ops/sec", "refusals", "ns/op range", "spread"
     );
     for run in runs {
         let _ = writeln!(
             out,
-            "{:<18} {:>10} {:>14.1} {:>16.0} {:>14}",
-            run.shape, run.producers, run.nanos_per_op, run.ops_per_second, run.refusals
+            "{:<18} {:>10} {:>14.1} {:>16.0} {:>14} {:>18} {:>9}",
+            run.shape,
+            run.producers,
+            run.nanos_per_op,
+            run.ops_per_second,
+            run.refusals,
+            format!(
+                "{:.1}-{:.1}",
+                run.fastest_nanos_per_op, run.slowest_nanos_per_op
+            ),
+            format_scaling(Some(run.spread())),
         );
     }
 }
@@ -391,6 +434,11 @@ fn median_run(
     let mut results: Vec<Repetition> = (0..REPETITIONS).map(|_| timer(producers)).collect();
     results.sort_by(|left, right| left.0.total_cmp(&right.0));
     let (elapsed_nanos, refusals) = results[REPETITIONS / 2];
+    // The sort is ascending by elapsed time, so the extremes are the ends. They
+    // are carried rather than discarded because a median without its dispersion
+    // is what `d-observations-not-verdicts` forbids publishing.
+    let (fastest_nanos, _) = results[0];
+    let (slowest_nanos, _) = results[REPETITIONS - 1];
 
     let pushes = (producers * PUSHES_PER_PRODUCER) as f64;
     Run {
@@ -399,6 +447,8 @@ fn median_run(
         nanos_per_op: elapsed_nanos / pushes,
         ops_per_second: pushes / (elapsed_nanos / 1e9),
         refusals,
+        fastest_nanos_per_op: fastest_nanos / pushes,
+        slowest_nanos_per_op: slowest_nanos / pushes,
     }
 }
 

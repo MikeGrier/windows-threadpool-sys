@@ -20,6 +20,16 @@ fn run(shape: &'static str, producers: usize, ops_per_second: f64) -> Run {
         },
         ops_per_second,
         refusals: 0,
+        fastest_nanos_per_op: if ops_per_second > 0.0 {
+            1_000_000_000.0 / ops_per_second
+        } else {
+            0.0
+        },
+        slowest_nanos_per_op: if ops_per_second > 0.0 {
+            1_000_000_000.0 / ops_per_second
+        } else {
+            0.0
+        },
     }
 }
 
@@ -557,5 +567,114 @@ fn render_table_shows_a_nonzero_refusal_count() {
     assert!(
         out.lines().next().expect("a header").contains("refusals"),
         "the refusal column is unlabelled"
+    );
+}
+
+/// The dispersion `d-observations-not-verdicts` obliges the crate to publish.
+/// `median_run` sorts ascending, so the extremes are the ends of that sort --
+/// these pin that the reported range is the whole sample rather than, say, the
+/// median repeated or two adjacent repetitions.
+#[test]
+fn median_run_carries_the_fastest_and_slowest_repetitions() {
+    let measured = median_run(shapes::RESERVING_MPSC, 1, scripted(scripted_repetitions()));
+    // Scripted timed repetitions are 1e6..5e6 ns over 50,000 pushes: 20..100 ns/op.
+    assert!(
+        (measured.fastest_nanos_per_op - 20.0).abs() < 1e-9,
+        "expected the 1e6 ns repetition as fastest, got {} ns/op",
+        measured.fastest_nanos_per_op
+    );
+    assert!(
+        (measured.slowest_nanos_per_op - 100.0).abs() < 1e-9,
+        "expected the 5e6 ns repetition as slowest, got {} ns/op",
+        measured.slowest_nanos_per_op
+    );
+}
+
+/// The median must lie inside the range, or the two are describing different
+/// samples. This is the cheap invariant that catches a range computed from the
+/// wrong vector or from an unsorted one.
+#[test]
+fn median_run_brackets_its_median_with_the_range() {
+    let measured = median_run(shapes::RESERVING_MPSC, 1, scripted(scripted_repetitions()));
+    assert!(
+        measured.fastest_nanos_per_op <= measured.nanos_per_op,
+        "fastest {} must not exceed the median {}",
+        measured.fastest_nanos_per_op,
+        measured.nanos_per_op
+    );
+    assert!(
+        measured.nanos_per_op <= measured.slowest_nanos_per_op,
+        "median {} must not exceed the slowest {}",
+        measured.nanos_per_op,
+        measured.slowest_nanos_per_op
+    );
+}
+
+/// The warmup is excluded from the dispersion as well as from the median. Its
+/// scripted 999e6 ns would otherwise dominate the range and make every row look
+/// wildly unstable.
+#[test]
+fn median_run_excludes_the_warmup_from_the_range() {
+    let measured = median_run(shapes::RESERVING_MPSC, 1, scripted(scripted_repetitions()));
+    assert!(
+        measured.slowest_nanos_per_op < 1_000.0,
+        "the warmup's 999e6 ns reached the range as {} ns/op",
+        measured.slowest_nanos_per_op
+    );
+}
+
+#[test]
+fn spread_is_the_slowest_over_the_fastest() {
+    let mut run = run(shapes::RESERVING_MPSC, 4, 100_000_000.0);
+    run.fastest_nanos_per_op = 10.0;
+    run.slowest_nanos_per_op = 13.0;
+    assert!((run.spread() - 1.3).abs() < 1e-9, "got {}", run.spread());
+}
+
+/// A configuration whose repetitions all took the same time has a spread of
+/// exactly one, which is what "this host held still" looks like.
+#[test]
+fn spread_of_an_identical_sample_is_one() {
+    let mut run = run(shapes::RESERVING_MPSC, 4, 100_000_000.0);
+    run.fastest_nanos_per_op = 42.0;
+    run.slowest_nanos_per_op = 42.0;
+    assert!((run.spread() - 1.0).abs() < 1e-9, "got {}", run.spread());
+}
+
+/// A shape that failed to run reports zero, and dividing by it would put `inf`
+/// in a column a reader takes for a measurement -- the same guard
+/// `format_ratio` carries.
+#[test]
+fn spread_of_a_zero_sample_is_zero_rather_than_infinite() {
+    let mut run = run(shapes::SLOTWISE_MPSC, 4, 0.0);
+    run.fastest_nanos_per_op = 0.0;
+    run.slowest_nanos_per_op = 0.0;
+    assert_eq!(run.spread(), 0.0);
+    assert!(
+        run.spread().is_finite(),
+        "the spread must never be infinite"
+    );
+}
+
+#[test]
+fn render_table_publishes_the_range_and_the_spread() {
+    let mut row = run(shapes::RESERVING_MPSC, 8, 100_000_000.0);
+    row.fastest_nanos_per_op = 9.5;
+    row.slowest_nanos_per_op = 12.5;
+    let mut out = String::new();
+    render_table(&mut out, &[row]);
+    let header = out.lines().next().expect("a header");
+    let line = out.lines().nth(1).expect("one row");
+    assert!(
+        header.contains("range") && header.contains("spread"),
+        "the dispersion columns are unlabelled: {header:?}"
+    );
+    assert!(
+        line.contains("9.5-12.5"),
+        "the range is missing from {line:?}"
+    );
+    assert!(
+        line.contains("1.32x"),
+        "the spread is missing from {line:?}"
     );
 }
