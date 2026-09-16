@@ -1342,12 +1342,6 @@ crate that happens to publish measurements. Every instance found so far has been
 existing decision rather than a gap in it. Apply it while writing: no checker can find these,
 because nothing is inconsistent.
 
-This is **not a new rule** — it is [D-no-client-prescriptions](../crates/windows-platform-probes/DESIGN-NOTES.md#d-no-client-prescriptions)
-("state what was observed … stop there"), stated once for the repository rather than once for the
-crate that happens to publish measurements. Every instance found so far has been a violation of that
-existing decision rather than a gap in it. Apply it while writing: no checker can find these,
-because nothing is inconsistent.
-
 ## REVIEW FEEDBACK — answer it where it was raised, not only in the commit
 
 **A review round is not finished when the code changes. It is finished when the reviewer has
