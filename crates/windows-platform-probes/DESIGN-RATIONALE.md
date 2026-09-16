@@ -528,3 +528,139 @@ about THEM. The instruments remain exactly as good as the hand-sabotage that
 built them -- which is where several of this branch's defects were found, and
 where the next one will be. A clean sweep is evidence about the oracle, not about
 the things measuring it.
+
+## Why the crate reports observations instead of verdicts
+
+Recorded for [D-observations-not-verdicts](DESIGN-NOTES.md#d-observations-not-verdicts).
+
+The rule was earned, not designed. The queue-contention note had carried the
+claim that re-apportioning a queue's position/reservation bits was **free** --
+that 16/48 and 8/56 "track the default within noise" -- and therefore that buying
+twenty years of counter headroom cost nothing. Two independent defects sat under
+that sentence.
+
+The first was arithmetic-shaped: the table directly beneath it showed 1.21x and
+1.13x, against a noise floor the same document put at 2-6%. The prose
+contradicted its own evidence, in adjacent lines, and survived several review
+passes anyway -- because "within noise" reads as a conclusion rather than as a
+claim about a measured quantity, so nobody checked it against the number.
+
+The second was deeper. The 2-6% floor had itself been obtained by comparing **two
+runs**, which cannot measure a spread at all. Re-running the probe seven times
+put the same-configuration spread at 7-61% depending on producer count. So the
+floor every "within noise" judgement in the section had been made against was off
+by roughly an order of magnitude, and the judgements were not recoverable by
+adjusting it.
+
+What made the repair possible was already in the probe's output. `reserving_mpsc`
+and `reserving(32/32)` are the same code at the same layout, measured twice per
+run, so their ratio is an *empirical* answer to "what does no difference look
+like here" -- 0.68-1.27x across seven runs. That is a control the instrument
+derives rather than a floor the prose asserts, which is
+[D-derived-not-restated](DESIGN-NOTES.md#d-derived-not-restated) applied to a
+measurement instead of to a fact.
+
+**The tempting repair was to invert the claim**, since the seven-run medians put
+the re-apportionments at 1.23-1.30x at high producer counts. That would have been
+the same error with the opposite sign: one host, one microarchitecture, a single
+NUMA domain, against a control whose own excursions reach 1.12x. The claim was
+withdrawn in both directions instead, and the section now says which
+configuration is worth measuring locally rather than what the answer is.
+
+This generalises to where the crate draws its line. Coarse claims that follow
+from how the hardware works *and* are backed by observation -- "the buffers
+should be in the same memory domain as the executor" -- are worth making, and
+portable enough to be useful. Fine-grained topological and layout choices are
+not: they depend on parameters the capture does not record and the reader's
+machine does not share. The shipping queue takes its layout as a type parameter
+precisely so that choice belongs to the client; a design note that quietly picks
+one on their behalf takes it back.
+
+**On the capture parameters themselves.** Windows exposes no NUMA distance table,
+so "how far apart are these nodes" is unanswerable on this platform. The analog
+the crate uses is the processor-to-node assignment carried in the banner's
+`numa[...]` field, with device-to-node mapping available on the same footing. It
+answers the same-domain question, which is what most placement decisions turn on,
+and it is why `numa[16]` on the measurement host is worth stating plainly: a
+single domain means the queue figures say nothing about cross-domain behaviour at
+all.
+
+### Why a wide control is logged as a defect rather than absorbed
+
+Recorded for [D-variance-is-a-finding](DESIGN-NOTES.md#d-variance-is-a-finding).
+
+The queue-contention repair produced a genuinely useful artifact -- a noise
+control the probe derives rather than asserts, built from two rows that are the
+same code at the same layout. It immediately did its job, withdrawing a claim
+that had survived several reviews.
+
+It also very nearly produced a second error. Having found that the control spans
+0.68-1.27x, the natural next move is to use it: judge every ratio against that
+band, mark what falls outside, and report the result. That is what the first
+draft of the section did. But two measurements of identical code in the same run
+differing by 27% is not a fact about the queue at all -- it is the instrument
+telling you something, and using it as a ruler while declining to ask why it is
+elastic is how a methodological problem becomes permanent. The control had been
+promoted from *symptom* to *tool* without anyone deciding to do that.
+
+The causes are not separable from the dispersion itself, which is precisely why
+the decision refuses to guess among them. The list is short and every entry is
+plausible here: the probe may be moving more than the variable under test; it may
+carry a residual defect, as it demonstrably did until the timing window was
+corrected; seven runs of a ~65-second probe may simply be too few; or a
+nanosecond-scale measurement on a shared desktop running everything else may be
+dominated by the machine.
+
+**The ordering of the diagnosis is the practical content, and it follows from
+cost rather than from likelihood.** Lengthening the span and raising the
+repetition count is the only step that changes nothing about what is being
+measured -- so it is the only step whose result is interpretable before the
+others have been tried. Pinning threads, quiescing the machine, or altering the
+probe all move the measurement as well as the noise, and a change made ahead of
+the cheap check cannot be evaluated against anything. That this also happens to
+be the least effortful step is a convenience, not the reason.
+
+The other half is knowing when to stop. Every setup has a floor, and past it more
+runs buy nothing; the failure mode is a week spent establishing that two numbers
+are the same. What makes the floor easy to misjudge is the assumption that it
+scales with the measured value -- that small numbers are inherently noisy. It can
+just as well be set by the sampling regime: clock granularity, how many
+independent samples the run takes, how the span is constructed. This probe takes
+two timestamps per worker per repetition and divides by the pass, so what limits
+resolution at small values is the number of passes, not a fraction of the
+nanoseconds printed. The distinction matters because the two readings prescribe
+opposite actions -- one says the measurement is hopeless, the other says take
+more samples.
+
+**A warmup pass looks like it contradicts the "some noise is inherent" position,
+and the objection is worth answering rather than smoothing over.** If dispersion
+were genuinely inherent to a shared machine, warming could not remove it -- so
+proposing a warmup appears to concede that it is really an artifact after all.
+The resolution is that the two are different quantities that happen to widen the
+same spread. A warmup addresses *transients*: page faults on a fresh allocation,
+cold caches and predictors, frequency ramp -- all front-loaded, all one-time, none
+a property of the steady state. Contention with other tenants is not front-loaded;
+it continues for the whole run and no amount of warming touches it. Removing the
+transients therefore does not hide the inherent floor, it uncovers it, which is
+why the expected signature is a spread that narrows as warming and length
+increase and then stops narrowing. The plateau is the inherent part. This probe
+already discards one untimed pass -- which warms process and allocator state
+rather than the timed allocation, since each repetition builds its own queue --
+so part of this is done and the rest is unmeasured.
+
+**The calibration is the part worth writing down, because it is not obvious and
+it cuts both ways.** A spread like this in a benchmark or a marketing document
+would be fatal -- such documents exist to carry a comparative claim, and a
+comparative claim resting on a control this wide is simply unsupported. But this
+crate's figures exist to support *planning for deployment environments like the
+measured one*, and the measured one is an ordinary machine under ordinary load.
+Data gathered there is not obviously the wrong input for planning there. So the
+answer is neither suppression nor promotion: publish it, publish the dispersion,
+and publish the fact that the dispersion is unexplained. A reader can then weigh
+it for their own purpose, which is the same principle as
+[D-observations-not-verdicts](DESIGN-NOTES.md#d-observations-not-verdicts) applied
+to the quality of the measurement instead of to its portability.
+
+The rule exists to forbid the quiet version: reporting a wide control as though a
+wide control were ordinary. It is not ordinary, and the moment it stops being
+remarked upon is the moment nobody investigates it.

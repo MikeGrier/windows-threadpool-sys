@@ -27,10 +27,11 @@
 //!
 //! **[`ClaimLayout`] is how far away that is.** [`Perpetual`] moves it to 2^56
 //! pushes, about twenty years at the same rate, for the cost of a reservation
-//! ceiling of 255 and nothing measurable besides -- it is the same exchange on
-//! the same word, differing only in shift constants. [`Enduring`] sits between
-//! them, and the `dwcas` feature adds a 128-bit word that removes the
-//! recurrence outright.
+//! ceiling of 255 -- it is the same exchange on
+//! the same word, differing only in shift and mask constants, though what that costs in
+//! throughput is not established (see [`ClaimLayout`]). [`Enduring`] sits between
+//! them, and the `dwcas` feature adds a 128-bit word whose 64-bit position moves
+//! the recurrence to 2^64 pushes, which no deployment reaches.
 //!
 //! ```
 //! use windows_waitable_queues::reserving_mpsc::{self, Perpetual};
@@ -41,7 +42,8 @@
 //! ```
 //!
 //! The default stays `Balanced` so that introducing the choice changed no
-//! existing caller's behaviour; it is not the recommended layout.
+//! existing caller's behaviour; under it the queue can silently lose an item past
+//! 2^32 pushes from two or more producers.
 //! [`slotwise_mpsc`](crate::slotwise_mpsc) does not have this hazard under any
 //! layout, its positions being 64 bits on every target; [`spsc`](crate::spsc)
 //! never had it. The full statement is in the [crate documentation](crate).
@@ -57,10 +59,19 @@
 //! is what `slotwise_mpsc` avoids and why it cannot offer reservation at all.
 //!
 //! **That cost is not what makes either shape slower.** This one measured
-//! *faster* than `slotwise_mpsc` under contention on both architectures tried, by up to
-//! 6.4x, because the slot sequence `slotwise_mpsc` reads instead marches through memory
-//! while other producers write it. See the crate documentation for the numbers
-//! and for how to choose.
+//! *faster* than `slotwise_mpsc` under contention on the hosts tried. The
+//! magnitude belongs with the capture that produced it rather than here, so see
+//! the crate documentation's attributed table for the figures and the conditions
+//! they were taken under.
+//!
+//! An earlier version of this paragraph gave a figure ("by up to 6.4x") taken
+//! from a two-host comparison that has since been withdrawn for predating a
+//! correction to the probe's timing window, and attributed the difference to
+//! `slotwise_mpsc`'s slot sequence marching through memory while other producers
+//! write it. That mechanism is plausible and is **not** established: the probe
+//! times the complete push and cannot isolate or bound that read, so the causal
+//! claim went further than the measurement supports. The direction survives; the
+//! magnitude and the cause do not.
 //!
 //! `slotwise_mpsc`'s producer never reads the consumer's position. It asks a different
 //! question -- "is the slot I am about to claim free?" -- and reads that from
@@ -113,26 +124,43 @@
 //!
 //! # What the packing costs, and what it does not
 //!
-//! Splitting a 64-bit word 32/32 caps this shape at
-//! a maximum of 2^31 items, and that split is forced rather than chosen:
+//! Splitting a 64-bit word 32/32 caps `Balanced` at
+//! a maximum of 2^31 items on a 64-bit target -- 2^30 on a 32-bit one, where
+//! the crate-wide ceiling binds first -- and that split is forced *given one
+//! premise*:
 //! a position of `b` bits keeps a wrapping difference unambiguous only up to
-//! `2^(b-1)`, and the count needs `b` bits because it can reach the capacity, so
-//! `b + b = 64` gives `b = 32`. There is no cleverer division of the word.
+//! `2^(b-1)`, and if the count must be able to reach the capacity it needs `b`
+//! bits too, so `b + b = 64` gives `b = 32`. Given that requirement there is no
+//! cleverer division of the word.
 //!
-//! **A 128-bit compare-and-swap is deliberately not used *here***
-//! ([D-37](../DESIGN-NOTES.md#d-37)). It would not remove the cost that
-//! matters -- the consumer's position still has to be read -- and 2^31 slots is
-//! a ring this shape allocates in full at construction.
+//! **[`ClaimLayout`] drops the requirement rather than the arithmetic.** Capping
+//! outstanding reservations well below capacity -- 65,535 under [`Enduring`], 255
+//! under [`Perpetual`] -- frees the position to take 48 or 56 bits, which is
+//! where the deeper layouts come from. So the derivation above describes
+//! [`Balanced`] and the capacity-filling case, not every layout this module
+//! offers.
 //!
-//! The operative reason is that widening *this* shape's word would change what
-//! it offers depending on the target: `i686-pc-windows-msvc` has no lock-free
-//! 128-bit exchange, so the same module would be lock-free on one target and
-//! silently mutex-backed on another. A wider claim ships instead as its own
-//! shape (`reserving_mpsc_wide`, not yet built -- see D-37), to exist only
-//! where the exchange is genuinely lock-free. That keeps *this* module's
-//! contract the same on every target, which is the property being protected
-//! here: a caller who wants 2^62 slots and no wrap hazard will ask for it by
-//! name rather than get it by accident of where they compiled.
+//! **The 128-bit word ships as a layout, not as a separate shape**
+//! ([D-37](../DESIGN-NOTES.md#d-37), amended by
+//! [D-41](../DESIGN-NOTES.md#d-41)). An earlier plan put it in a shape of its own
+//! called `reserving_mpsc_wide`; that shape was never built, and this paragraph
+//! described it as forthcoming for longer than the plan survived.
+//!
+//! The reason for keeping it out of the default is unchanged: widening this
+//! shape's word unconditionally would change what the module offers depending on
+//! the target, because `i686-pc-windows-msvc` has no lock-free 128-bit exchange
+//! and neither does an x86-64 build without `cmpxchg16b`. On such a target this
+//! crate does not silently substitute a lock: the `portable-atomic` dependency
+//! is taken with `default-features = false`, which is load-bearing precisely
+//! because its defaults *would* supply a global lock and still compile. With
+//! them off, `AtomicU128` does not exist there and enabling `dwcas` fails the
+//! build naming it. So the hazard an unconditional wide word would carry is a
+//! module that is lock-free on one target and mutex-backed on another; the
+//! hazard the feature gate actually trades it for is a build that stops. So
+//! `Wide` (which exists only under `dwcas`, so this names it without linking) is
+//! reached by naming it, and the
+//! narrow word's contract is identical on every target -- a caller gets the wide
+//! one by asking, never by accident of where they compiled.
 
 use core::cell::{Cell, UnsafeCell};
 use core::fmt;
@@ -163,19 +191,43 @@ use crate::options::Options;
 /// them is therefore a trade, and this trait is where a caller chooses which
 /// side to spend them on.
 ///
-/// **The two things being traded are not equally valuable, and the shipping
-/// default spends the bits on the less valuable one.** The reservation count
-/// bounds how many messages may be held in flight at once -- in practice the
-/// number of producers mid-send, so hundreds or thousands. The position decides
+/// **What the two halves buy is different in kind, and which matters depends on
+/// the deployment.** The reservation count
+/// bounds how many messages may be held in flight at once. That bound is the
+/// lesser of the ring's capacity and the layout's count field, and it is
+/// reachable by a *single* producer: [`Producer::reserve`] takes `&self` and
+/// returns an owned [`Reservation`], so one thread can hold as many as the
+/// field allows. (An earlier version of this paragraph said the practical bound
+/// was "the number of producers mid-send, so hundreds or thousands", and called
+/// the reservation half "the less valuable one" on that basis. The bound was
+/// wrong, and it mattered -- it made the narrower fields look unreachable, which
+/// is what made the trade look one-sided. One
+/// producer alone fills `Perpetual`'s 255 and is then refused, which
+/// `one_producer_alone_can_exhaust_the_reservation_field` pins.) The position
+/// decides
 /// how many pushes occur before it recurs, and a recurrence is the `SH-14.1`
 /// hazard: a producer descheduled across a full wrap can claim against a
 /// numerically identical but generations-later value.
 ///
-/// | Layout | reserved / position | Outstanding reservations | Pushes to recurrence |
+/// | Layout | reserved / position | Reservation-count field ceiling | Pushes to recurrence |
 /// |---|---|---|---|
-/// | [`Balanced`] | 32 / 32 | 2^32 | 2^32 |
+/// | [`Balanced`] | 32 / 32 | 4,294,967,295 | 2^32 |
 /// | [`Enduring`] | 16 / 48 | 65,535 | 2^48 |
 /// | [`Perpetual`] | 8 / 56 | 255 | 2^56 |
+///
+/// A fourth layout, `Wide` (64 / 64 over a `u128`), exists when the `dwcas`
+/// feature is enabled; it is omitted from this table because it does not exist
+/// in a default build, and named without a link here for the same reason.
+///
+/// **The middle column is the field's ceiling, not a reachable number of
+/// reservations.** Admission is also bounded by capacity -- `reserve` refuses
+/// once the ring has no room beyond the reservations already outstanding -- so
+/// the achievable count is the lesser of the two. For [`Balanced`] the capacity
+/// bound is the binding one: this layout accepts at most 2^31 slots on a 64-bit
+/// target and 2^30 on a 32-bit one, so no more than that many reservations can
+/// be outstanding whatever the field could hold. For
+/// [`Enduring`] and [`Perpetual`] the field binds first, and the column is the
+/// real limit.
 ///
 /// At this crate's disclosed sustained rate of about 116 million pushes per
 /// second, those recurrences are roughly **37 seconds**, **28 days**, and
@@ -183,10 +235,21 @@ use crate::options::Options;
 /// note quotes; a queue that must drain cannot sustain the fastest rate
 /// measured, so treat these as a floor on time rather than a forecast.
 ///
-/// **Choosing a deeper position costs nothing measurable.** All three issue the
-/// same `lock cmpxchg` on the same `u64` and differ only in shift and mask
-/// constants; a probe comparing them found no difference outside noise. The
-/// trade is entirely against the reservation ceiling.
+/// **That rate premise predates a correction to the probe's timing window**,
+/// which had overstated throughput. The correction therefore moves the true
+/// sustained rate *down* and these horizons *up*, so the figures above remain a
+/// floor -- they say the wrap arrives sooner than it does, which is the
+/// conservative direction for a hazard. They have not been recomputed, because
+/// the horizon a caller needs is the one on their own hardware and at their own
+/// rate; the arithmetic is field width divided by rate.
+///
+/// **Choosing a deeper position is the same instruction on the same word.** All
+/// three issue the same atomic compare-exchange on the same `u64` and differ
+/// shift and mask constants, so there is no structural reason for one to be
+/// slower. **What that costs in throughput is not established**: a probe
+/// comparing them found them indistinguishable at low producer counts, and at high counts ran 1.23-1.30x the default against a same-code control that itself reaches 1.12x -- outside the control, but too close to it to establish an ordering or a cost on this host. The settled trade is the
+/// reservation ceiling; throughput is target-dependent and this crate does not
+/// characterise it beyond the one host in the note above.
 ///
 /// This trait is sealed: the layouts are a fixed set because each one's
 /// constants are checked against each other at compile time, and a caller
@@ -468,13 +531,26 @@ impl ClaimWord for u128 {
 
 /// The shipping division: 32 bits each.
 ///
-/// Holds 2^32 outstanding reservations and recurs after 2^32 pushes -- about
-/// **37 seconds** of sustained maximum-rate pushing. This is the default
-/// because it is what the shape shipped with, not because it is the best
-/// choice: the reservation ceiling it buys is far beyond any real use, and it
-/// is paid for with the whole of the `SH-14.1` exposure. Prefer [`Enduring`] or
-/// [`Perpetual`] unless you genuinely hold more than 65,535 reservations at
-/// once.
+/// Its reservation-count field tops out at [`u32::MAX`], though capacity binds
+/// first: this layout accepts at most 2^31 slots on a 64-bit target and 2^30 on
+/// a 32-bit one, so no instance can hold more than that many outstanding
+/// reservations whatever the field could encode. It
+/// recurs after 2^32 pushes --
+/// about
+/// **37 seconds** of sustained maximum-rate pushing. Past that point, with two
+/// or more producers, the queue can **silently lose an item**: that is the whole
+/// of the `SH-14.1` exposure, and this layout carries it.
+///
+/// It is the default because it is what the shape shipped with, not because the
+/// division is a good one: the reservation field it buys is far
+/// beyond any use this crate has seen -- and beyond what its own capacity
+/// permits -- while the exposure is what pays for it.
+/// [`Enduring`] and [`Perpetual`] spend that field the other way --
+/// [`Enduring`] holds 65,535 outstanding reservations, [`Perpetual`] 255, both
+/// reachable because capacity does not bind there --
+/// and `Wide` moves it to 2^64 pushes rather than to a horizon in years. (`Wide` exists
+/// only under the `dwcas` feature, so this names it without linking: an
+/// intra-doc link here would not resolve in a default-feature rustdoc build.)
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Balanced;
 impl sealed::Sealed for Balanced {}
@@ -518,16 +594,26 @@ impl ClaimLayout for Perpetual {
 /// A 128-bit claim word: 64 bits of position, and the count in the other half.
 ///
 /// Requires the `dwcas` feature, which is what brings in the `portable-atomic`
-/// dependency this crate otherwise does not have. The position needs 2^64
-/// pushes to recur, which no deployment reaches -- not "not for twenty years",
-/// but not at all.
+/// dependency this crate otherwise does not have. The position is 64 bits, so it
+/// recurs after 2^64 pushes -- a bound that exists but that no deployment
+/// reaches, rather than the twenty years [`Perpetual`] buys.
 ///
-/// **Read the cost before choosing it.** The 128-bit exchange measured 2-3x
-/// slower than a `u64` one on the claim itself, and the penalty grows with
-/// producer count; against a draining consumer the difference is much smaller.
-/// [`Perpetual`] reaches about twenty years on a plain `AtomicU64` at no
-/// measured cost, so this is worth taking only when a guarantee is wanted in
-/// place of an argument about deployment lifetimes.
+/// The whole push path was measured as slower under this layout than under a
+/// `u64` one, and the difference **grows with producer count** -- near parity
+/// at one or two, several times by thirty-two, in the isolated regime on one
+/// x86-64 host; against a draining consumer the difference fell inside that
+/// host's same-code control and could not be called at all. The probe times the
+/// complete push, so this is the layout's effect on that path and not a
+/// measurement of the 128-bit exchange on its own. The per-count table is in the
+/// queue-contention section of
+/// [DESIGN-NOTES.md](../../windows-platform-probes/DESIGN-NOTES.md), which is
+/// the one place it is recorded.
+///
+/// [`Perpetual`] reaches about twenty years on a plain `AtomicU64`, and what
+/// that costs in throughput is not established -- see [`ClaimLayout`]. What this
+/// layout provides that the others do not is a 64-bit position: the recurrence
+/// moves to 2^64 pushes, which no deployment reaches, rather than to a horizon
+/// measured in years.
 ///
 /// The reservation ceiling is [`u32::MAX`] rather than the 64 bits the field
 /// could hold, because the count is reported to callers as a `u32`.

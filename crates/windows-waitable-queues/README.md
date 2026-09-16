@@ -64,12 +64,12 @@ how many threads push, whether a slot can be claimed before the message exists
 -- decides its *algorithm*, not merely its configuration, so these are separate
 shapes rather than one type with switches. A caller names the shape it wants.
 
-| Shape | Producers | What it adds | Choose it when |
+| Shape | Producers | What it adds | Applies when |
 |---|---|---|---|
 | `spsc` | one | nothing -- no compare-and-swap on either side | exactly one thread pushes |
-| `slotwise_mpsc` | many | Vyukov's per-slot sequence protocol, so producers push without a lock | **the default** for many producers |
+| `slotwise_mpsc` | many | Vyukov's per-slot sequence protocol, so producers push without a lock | many threads push and a full queue may refuse |
 | `reserving_mpsc` | many | claiming a slot *before* the message exists | a message must not be lost to a full queue |
-| `permit_mpsc` | many | an experimental claim protocol | never in production -- see below |
+| `permit_mpsc` | many | an experimental claim protocol | behind `experimental-permit-claim`, outside the semver promise -- see below |
 
 Every shape has one consumer. `permit_mpsc` is behind the non-default
 `experimental-permit-claim` feature and is outside the semver promise; it will
@@ -119,16 +119,33 @@ to correct that misreading once.
 **This is a property of the default layout, not of the shape**, and that is a
 change: it was previously a defect a caller had to live with. The claim word
 packs an outstanding-reservation count beside the position, and how its bits are
-divided is now a caller's choice. Reservations are bounded by how many producers
-are mid-send -- hundreds at most -- so giving up a ceiling nobody reaches buys
-positions:
+divided is now a caller's choice. A narrower count field buys position bits, and
+what it costs is reservations held simultaneously: `Producer::reserve` takes
+`&self` and returns an owned `Reservation`, so a single producer can hold as
+many as the field allows, and a caller that holds many at once is choosing
+against the narrower layouts rather than against a producer count.
 
-| Layout | Outstanding reservations | Pushes to recurrence | At sustained maximum rate |
+| Layout | Reservation-count field ceiling | Pushes to recurrence | At the pre-correction planning rate |
 |---|---|---|---|
-| `Balanced` (default) | 2^32 | 2^32 | about 37 seconds |
+| `Balanced` (default) | 4,294,967,295 | 2^32 | about 37 seconds |
 | `Enduring` | 65,535 | 2^48 | about 28 days |
 | `Perpetual` | 255 | 2^56 | about 20 years |
-| `Wide` (needs `dwcas`) | 2^32 | 2^64 | unreachable |
+| `Wide` (needs `dwcas`) | 4,294,967,295 | 2^64 | unreachable |
+
+The last column is arithmetic, not a measurement: pushes-to-recurrence divided by
+a sustained rate of about 116 million pushes per second. **That rate predates a
+correction to the probe's timing window**, which had overstated throughput -- so
+the true sustained rate is lower and these horizons longer. They are kept as a
+floor, saying the wrap arrives sooner than it does, which is the conservative
+direction for a hazard. The horizon that matters is the one on your hardware at
+your rate.
+
+The middle column is the field's ceiling, not a reachable number of reservations:
+admission is also bounded by capacity -- `reserve` refuses once the ring has no
+room beyond the reservations already outstanding -- so the achievable count is
+the lesser of the two. For `Balanced` the capacity bound binds first, since that
+layout accepts at most 2^31 slots on a 64-bit target, and 2^30 on a 32-bit
+one. For the others the field binds on either.
 
 ```rust
 use windows_waitable_queues::reserving_mpsc::{self, Perpetual};
@@ -139,15 +156,21 @@ let (tx, rx) = reserving_mpsc::bounded_as::<u32, Perpetual>(64)?;
 # Ok::<(), windows_waitable_queues::CapacityError>(())
 ```
 
-**A deeper position costs nothing measurable.** `Balanced`, `Enduring`, and
-`Perpetual` all issue the same exchange on the same 64-bit word and differ only
-in shift and mask constants; a probe comparing them found no difference outside
-noise. `Wide` is the exception: it needs a 128-bit exchange, which measured 2-3x
-slower on the claim, and it is the only thing in this crate that costs a
-third-party dependency.
+**A deeper position is the same exchange on the same word.** `Balanced`,
+`Enduring`, and `Perpetual` all issue the same exchange on the same 64-bit word
+and differ only in shift and mask constants, so there is no structural reason for
+one to be slower -- but **what that costs in throughput is not established**: a
+probe comparing them found them indistinguishable at low producer counts, and at high counts ran 1.23-1.30x the default against a same-code control that itself reaches 1.12x -- outside the control, but too close to it to establish an ordering or a cost on this host. `Wide` is a separate matter: it needs a 128-bit exchange,
+and the whole push path was measured as slower under it as producer count rises
+-- near parity at one or two, several times by thirty-two, in the isolated
+regime -- and it is the only thing in
+this crate that costs a third-party dependency.
 
 The default remains `Balanced` so that no existing caller's behaviour changed
-when the choice was introduced. It is not the recommended layout.
+when the choice was introduced. Under it, a queue driven past 2^32 pushes by two
+or more producers can **silently lose an item** -- the defect described above.
+`Enduring` and `Perpetual` move that point out by 2^16 and 2^24 respectively, and
+`Wide` moves it to 2^64 pushes.
 
 **What happens.** A producer checks that there is room, is descheduled, and
 resumes after other producers have driven the position field through a complete
@@ -174,18 +197,23 @@ width, so they are a floor on time rather than a forecast: a queue that must
 drain cannot sustain the fastest rate measured, and a slower producer takes
 proportionally longer to reach its wrap.
 
-**What to do about it.**
+**What bears on it.**
 
-- **Name a layout.** `Perpetual` puts the recurrence about twenty years out at
-  no measured cost, which takes it past any real deployment. This is the answer
-  for almost every caller who is exposed at all.
+- **Naming a layout moves it.** `Perpetual` puts the recurrence about twenty
+  years out. **What it costs in throughput is not established** -- it issues the
+  same atomic compare-exchange on the same `u64` as the default, and was measured
+  as indistinguishable from it at low producer counts; at high counts ran 1.23-1.30x the default against a same-code control that itself reaches 1.12x -- outside the control, but too close to it to establish an ordering or a cost on this host.
 - **`slotwise_mpsc` does not have this hazard** under any layout. Its positions
-  are 64 bits on every target, so the equivalent wrap needs 2^64 claims. Prefer
-  it unless you need `Reserving`.
+  are 64 bits on every target, so the equivalent wrap needs 2^64 claims. It does
+  not offer `Reserving`.
 - **`spsc` never had it**, having no contended claim to race.
-- **The default layout is sound below its wrap.** A queue that will not push 4.3
-  billion items in one run, or that is not driven at sustained maximum rate by
-  two or more producers, is not exposed even on `Balanced`.
+- **The default layout's exposure is a count, not a rate.** Two conditions must
+  both hold: two or more producers (one producer has no race to lose), and 4.3
+  billion pushes accumulated over the life of one queue. A lower sustained rate
+  does not remove the exposure -- the position advances once per push regardless
+  of how fast they arrive, so a slow queue with two or more producers reaches the
+  same wrap, just later. An earlier version of this bullet listed a low rate as
+  its own exemption, which was wrong.
 
 This is disclosed on the same principle as the ordering gap below: an adopter
 gets the information we have rather than an assurance we cannot support. The
@@ -202,11 +230,14 @@ Both are off by default, and the default build depends on `windows-sys` alone.
 `reserving_mpsc`. This is the only thing in the crate that costs a third-party
 dependency: Rust's standard library has no 128-bit atomic -- `core::sync::atomic`
 stops at 64 bits -- so the double-width compare-and-swap comes from
-`portable-atomic`. Most callers do not need it; `Perpetual` reaches roughly
-twenty years before its claim position recurs with no dependency and no measured
-cost, while the 128-bit exchange measured 2-4x slower on the claim itself. Take
-it when you want the recurrence gone as a guarantee rather than deferred by an
-argument about deployment lifetimes.
+`portable-atomic`. `Perpetual` reaches roughly
+twenty years before its claim position recurs with no dependency, though what
+that costs in throughput is not established, while under `Wide` the whole push
+path was measured as slower as producer count rises -- near parity at one or
+two, several times by thirty-two, in the isolated regime. What `Wide` provides
+that the `u64` layouts do not is a 64-bit position: the recurrence moves to
+2^64 pushes, which no deployment reaches, rather than to a horizon measured in
+years.
 
 **`experimental-permit-claim`** adds `permit_mpsc`, a different claim protocol in
 which the decision and the operation are one atomic rather than two. It is
@@ -337,46 +368,93 @@ position, which is the only way a reservation can be answered at all. Both are
 well-studied designs in production use elsewhere, which is why this crate ships
 both rather than picking one for you.
 
-**Start here:**
+**What distinguishes them:**
 
 - **Pushing more than ~4 billion items in one run, from two or more producers?**
-  Either use `slotwise_mpsc`, whose positions are 64 bits under every
-  configuration, or name a deeper layout on `reserving_mpsc` -- `Perpetual`
-  puts the recurrence about twenty years out at no measured cost. Under its
-  default layout `reserving_mpsc` can lose an item past that volume; see
+  Under its default layout `reserving_mpsc` can lose an item past that volume.
+  `slotwise_mpsc`'s positions are 64 bits under every configuration, and naming a
+  deeper layout on `reserving_mpsc` moves the recurrence out -- `Perpetual` to
+  about twenty years -- though what that costs in throughput is not established.
+  The mechanism is in
   [the section on recurrence](#how-long-reserving_mpsc-runs-before-its-claim-position-recurs)
-  above, which you should read before choosing.
-- Need `reserve`? Only `reserving_mpsc` has it, and `slotwise_mpsc` structurally
-  cannot. That no longer forces a trade against the recurrence: choosing a
-  layout addresses it, so the capability can settle the choice on its own
-  merits.
-- Otherwise, **start with `reserving_mpsc`.** It was the faster of the two at
-  every producer count we measured above one.
-- Only one producer *and* one consumer? Use `spsc`, which beats both.
+  above.
+- **Of the two MPSC shapes, only `reserving_mpsc` offers `reserve`**;
+  `slotwise_mpsc` structurally cannot. (`spsc` has it too, and the experimental
+  `permit_mpsc` exposes its own.) Wanting `reserve` no longer means accepting the
+  default layout's recurrence, but the trade is not gone -- it changes axis: a
+  deeper position is paid for with a lower ceiling on outstanding reservations,
+  65,535 under `Enduring` and 255 under `Perpetual` against `u32::MAX` under the
+  default.
+- **`spsc` requires exactly one producer and one consumer**, and does less work
+  than either MPSC shape because of it.
 
-**What we measured**, in ns per push, isolated regime, median of three runs.
-Higher producer counts oversubscribe both hosts:
+The measurements below are one host's observation, recorded with the parameters
+that produced them. They are not a ranking, and which shape suits a given
+deployment is the deployment's question.
 
-| producers | `slotwise_mpsc` (x64) | `reserving` (x64) | `slotwise_mpsc` (ARM64) | `reserving` (ARM64) |
+**What was measured**, in ns per operation, isolated regime (producers only,
+capacity large enough that nothing is refused), median of three runs. An
+operation is one successful push for the three queue shapes; for
+`baseline_fetch_add` it is one `fetch_add`, which is why the column is labelled
+per operation rather than per push:
+
+| producers | `slotwise_mpsc` | `reserving_mpsc` | `permit_mpsc` | `baseline_fetch_add` |
 |---|---|---|---|---|
-| 1 | 9.0 | 8.6 | 6.5 | 6.1 |
-| 2 | 49.0 | 28.0 | 29.8 | 9.4 |
-| 4 | 84.4 | 33.3 | 60.6 | 12.9 |
-| 8 | 140.8 | 38.5 | 167.4 | 29.8 |
-| 16 | 193.5 | 52.2 | 194.9 | 30.6 |
-| 32 | 239.7 | 56.9 | 195.0 | 30.6 |
+| 1 | 6.3 | 5.4 | 8.0 | 2.3 |
+| 2 | 54.0 | 34.9 | 41.5 | 11.7 |
+| 4 | 89.3 | 37.1 | 32.1 | 15.1 |
+| 8 | 143.8 | 38.1 | 26.4 | 15.2 |
+| 16 | 246.9 | 51.1 | 21.4 | 15.3 |
+| 32 | 235.7 | 53.0 | 21.2 | 15.1 |
 
-x64 is an AMD EPYC 7763 slice (8 cores, 16 threads); ARM64 is a Snapdragon X2
-Elite (12 cores, no SMT). **Read these as two data points, not as a law.** This
-comparison has already inverted once: it was designed on the assumption that
-`slotwise_mpsc` would be the cheaper shape, and measurement said otherwise on both
-machines.
+**Attribution, because a figure without it is not reusable data:**
 
-**Measure your own workload before treating any of this as settled.** Producer
-count, how hard the consumer drains, and where the threads are scheduled all
-move the answer -- thread placement alone moved an SPSC handoff by 5.6x on one
-of these hosts. The `probe-core-affinity` tool in this repository exists so you
-can run that measurement on your hardware instead of inheriting ours.
+| | |
+|---|---|
+| Host | `x86_64 16p/8c smt+ L2[2,2,2,2,2,2,2,2] ec[0:16] numa[16]` |
+| Profile | release |
+| Sampling | 50,000 pushes per producer, median of 5 repetitions, one untimed warmup pass |
+| Runs | 3 whole-probe invocations, median of the three |
+| Instrument | `probe-queue-contention`, at commit `a99108f` |
+| Taken | 2026-09-15 |
+
+The banner's `numa[16]` is a single NUMA node holding all sixteen processors, so
+nothing here says anything about cross-domain behaviour. `permit_mpsc` is behind
+`experimental-permit-claim` and is not covered by the semver promise.
+`baseline_fetch_add` is N threads incrementing one `AtomicU64` -- the cheapest
+thing N threads can do to a contended line, included so the queue figures can be
+read against what this processor does to such a line at all.
+
+**Read these as one machine's numbers.** Producer counts above 8 oversubscribe
+this host's 8 physical cores, and the spread across the three runs is not small:
+`slotwise_mpsc` at sixteen producers gave 257.3, 215.1 and 246.9 across them. The
+probe's own same-code control has been measured at 0.68-1.27x over seven runs,
+which is wide enough to swallow small differences; see
+[DESIGN-NOTES.md](../windows-platform-probes/DESIGN-NOTES.md#d-variance-is-a-finding).
+That seven-run sweep is a **separate capture** taken to size the noise floor, not
+a longer version of this table -- its medians differ from the ones above, which is
+the point it was making. Where the two disagree, this table is the attributed
+figure for this crate and the sweep is the evidence about how much such a figure
+moves.
+
+**A previous version of this table compared two hosts** -- an AMD EPYC 7763 slice
+and a Snapdragon X2 Elite -- and has been removed rather than carried forward. Its
+figures predate a correction to the probe's timing window, which timed from the
+coordinator's clock rather than the producers' own and overstated throughput by a
+margin that grew with producer count; and neither of those machines is available
+here to retake them. The ARM64 data point is therefore gone rather than stale,
+which is the lesser of the two problems. Restoring one is what M2.15 in the
+probe crate's [CHECKLIST.md](../windows-platform-probes/CHECKLIST.md) is for.
+
+That comparison did carry one finding worth keeping, because it was structural
+rather than numeric: it was designed on the assumption that `slotwise_mpsc` would
+be the cheaper shape, and measurement said otherwise on both machines.
+
+**What moves these numbers.** Producer count, how hard the consumer drains, and
+where the threads are scheduled all change the answer -- thread placement alone
+moved an SPSC handoff by 5.6x on an earlier host this workspace measured. The
+`probe-core-affinity` tool in this repository runs that measurement, and
+`probe-queue-contention` runs the one above.
 
 Two things that look like reasons to choose and are not:
 
