@@ -96,6 +96,11 @@
 //! cargo test -p windows-platform-probes -- --include-ignored     # both tiers
 //! cargo test -p windows-platform-probes -- --ignored             # ignored tier only
 //! cargo run  -p windows-platform-probes --bin probe-cancel-io    # binary only
+//!
+//! # binary only, and --release is not optional: a debug build reports
+//! # slotwise_mpsc and reserving_mpsc as equivalent, which is a confident
+//! # wrong answer rather than a merely imprecise one. Takes about a minute.
+//! cargo run --release -p windows-platform-probes --bin probe-queue-contention
 //! ```
 //!
 //! `--include-ignored` is what CI runs, and is almost always what a human

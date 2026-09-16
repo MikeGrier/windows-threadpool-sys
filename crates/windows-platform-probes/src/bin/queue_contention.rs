@@ -56,8 +56,9 @@ fn render(out: &mut dyn std::fmt::Write) {
     // interpretable with them -- see D-observations-not-verdicts. The build
     // profile is one of them too: a captured report has to be able to show it
     // was produced by a build that can measure, not merely stay silent when it
-    // was. The dispersion belongs here as well and is not yet carried; M4.2
-    // covers it.
+    // was. The dispersion belongs here as well, and now is: each row carries the
+    // range across its repetitions and the resulting spread. What M4.2 still
+    // covers is making the sampling parameters settable rather than fixed.
     let _ = writeln!(
         out,
         "profile: {}",

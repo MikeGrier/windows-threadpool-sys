@@ -137,14 +137,18 @@ correctness in the archive.
   is only interpretable with its capture parameters, and these are now among them. Making the
   sampling adjustable without recording it would turn one reproducibility problem into a worse one.
 
-  **Emit the dispersion, not just the median.** `median_run` currently sorts the five repetitions,
-  keeps the middle one, and **discards the other four** -- so `Run` carries a median with no spread,
-  and the ranges published in [DESIGN-NOTES.md](DESIGN-NOTES.md) exist only because they were
-  computed by hand outside the probe. That is the same contract failure from the other side: the
-  decision above requires a figure to carry "the number of runs with their dispersion", and the
-  instrument does not supply it. Keep at least the min and max alongside the median, and render
-  them. Reported by review, and correctly -- the same-code control is the evidence a reader needs
-  to judge any ratio here, and it is exactly what is being thrown away.
+  **Emit the dispersion, not just the median. -- DONE, landed in this branch.** `median_run` used to
+  sort the five repetitions, keep the middle one and **discard the other four**, so `Run` carried a
+  median with no spread and any range published elsewhere had been computed by hand outside the
+  probe. `Run` now carries `fastest_nanos_per_op` and `slowest_nanos_per_op` alongside the median,
+  with a `spread()` accessor, and `render_table` publishes both an `ns/op range` and a `spread`
+  column. Reported by review, and correctly -- it was the same contract failure from the other side,
+  since the decision above requires a figure to carry "the number of runs with their dispersion" and
+  the instrument did not supply it.
+
+  **What remains in this item is the sampling controls only** -- making `PUSHES_PER_PRODUCER`,
+  `REPETITIONS` and the producer counts settable, and recording whatever was used beside the
+  figures.
 
   **Not in scope:** deciding why the control is wide. That is the judgement this tooling supports,
   and per the design note a negative result -- "lengthening and repeating do not narrow it, so the
