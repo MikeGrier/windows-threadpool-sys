@@ -678,3 +678,159 @@ fn render_table_publishes_the_range_and_the_spread() {
         "the spread is missing from {line:?}"
     );
 }
+
+/// Helper: a row with an explicit cost span, for the bound arithmetic.
+fn run_spanning(
+    shape: &'static str,
+    producers: usize,
+    fastest: f64,
+    median: f64,
+    slowest: f64,
+) -> Run {
+    Run {
+        shape,
+        producers,
+        nanos_per_op: median,
+        ops_per_second: if median > 0.0 {
+            1_000_000_000.0 / median
+        } else {
+            0.0
+        },
+        refusals: 0,
+        fastest_nanos_per_op: fastest,
+        slowest_nanos_per_op: slowest,
+    }
+}
+
+/// The bound pairs each side's extreme against the other's opposite extreme,
+/// because that is the widest the ratio could be. Rate ratio inverts cost, so
+/// the smallest rate ratio is the numerator at its slowest against the
+/// denominator at its fastest.
+#[test]
+fn ratio_bounds_pairs_opposing_extremes() {
+    let numerator = run_spanning(shapes::RESERVING_MPSC, 4, 8.0, 10.0, 12.0);
+    let denominator = run_spanning(shapes::SLOTWISE_MPSC, 4, 40.0, 50.0, 60.0);
+    let (low, high) = ratio_bounds(numerator, denominator).expect("both spans are positive");
+    // rate ratio low  = den.fastest / num.slowest = 40 / 12
+    // rate ratio high = den.slowest / num.fastest = 60 / 8
+    assert!((low - (40.0 / 12.0)).abs() < 1e-9, "low was {low}");
+    assert!((high - (60.0 / 8.0)).abs() < 1e-9, "high was {high}");
+}
+
+/// The invariant that makes the bound meaningful: whatever point estimate the
+/// medians produce must lie inside it. A bound that excluded its own point
+/// estimate would be arithmetic nobody should trust.
+#[test]
+fn ratio_bounds_contain_the_point_estimate() {
+    let numerator = run_spanning(shapes::RESERVING_MPSC, 4, 8.0, 10.0, 12.0);
+    let denominator = run_spanning(shapes::SLOTWISE_MPSC, 4, 40.0, 50.0, 60.0);
+    let point = denominator.nanos_per_op / numerator.nanos_per_op;
+    let (low, high) = ratio_bounds(numerator, denominator).expect("both spans are positive");
+    assert!(
+        low <= point && point <= high,
+        "the point estimate {point} falls outside its own bound [{low}, {high}]"
+    );
+}
+
+/// A row whose span touches zero cannot be divided by, the same case
+/// `format_ratio` and `spread` already guard.
+#[test]
+fn ratio_bounds_of_a_zero_span_is_none() {
+    let real = run_spanning(shapes::RESERVING_MPSC, 4, 8.0, 10.0, 12.0);
+    let absent = run_spanning(shapes::SLOTWISE_MPSC, 4, 0.0, 0.0, 0.0);
+    assert!(ratio_bounds(real, absent).is_none());
+    assert!(ratio_bounds(absent, real).is_none());
+}
+
+/// A configuration whose repetitions all agreed gives a bound of zero width,
+/// which is what "this host held still" looks like for a derived figure.
+#[test]
+fn ratio_bounds_of_two_exact_samples_is_a_point() {
+    let numerator = run_spanning(shapes::RESERVING_MPSC, 4, 10.0, 10.0, 10.0);
+    let denominator = run_spanning(shapes::SLOTWISE_MPSC, 4, 50.0, 50.0, 50.0);
+    let (low, high) = ratio_bounds(numerator, denominator).expect("positive spans");
+    assert!(
+        (low - 5.0).abs() < 1e-9 && (high - 5.0).abs() < 1e-9,
+        "[{low},{high}]"
+    );
+}
+
+#[test]
+fn format_ratio_bounded_renders_the_point_and_its_interval() {
+    let numerator = run_spanning(shapes::RESERVING_MPSC, 4, 8.0, 10.0, 12.0);
+    let denominator = run_spanning(shapes::SLOTWISE_MPSC, 4, 40.0, 50.0, 60.0);
+    let rendered = format_ratio_bounded(Some(numerator), Some(denominator));
+    assert!(
+        rendered.starts_with("0.20x ["),
+        "expected the point estimate first, got {rendered:?}"
+    );
+    assert!(
+        rendered.contains('[') && rendered.contains(']'),
+        "the bound must be bracketed to mark it as not a sampled range: {rendered:?}"
+    );
+}
+
+#[test]
+fn format_ratio_bounded_marks_a_missing_or_zero_row() {
+    let real = run_spanning(shapes::RESERVING_MPSC, 4, 8.0, 10.0, 12.0);
+    let zero = run_spanning(shapes::SLOTWISE_MPSC, 4, 0.0, 0.0, 0.0);
+    assert_eq!(format_ratio_bounded(None, Some(real)), "--");
+    assert_eq!(format_ratio_bounded(Some(real), None), "--");
+    assert_eq!(format_ratio_bounded(Some(real), Some(zero)), "--");
+}
+
+#[test]
+fn format_scaling_bounded_renders_point_and_interval_or_the_marker() {
+    assert_eq!(
+        format_scaling_bounded(Some(2.0), Some((1.5, 2.5))),
+        "2.00x [1.50-2.50]"
+    );
+    assert_eq!(format_scaling_bounded(None, Some((1.5, 2.5))), "--");
+    assert_eq!(
+        format_scaling_bounded(Some(f64::NAN), Some((1.0, 2.0))),
+        "--"
+    );
+    assert_eq!(
+        format_scaling_bounded(Some(f64::INFINITY), Some((1.0, 2.0))),
+        "--"
+    );
+    // A point estimate with no computable bound still renders, unbracketed.
+    assert_eq!(format_scaling_bounded(Some(2.0), None), "2.00x");
+}
+
+#[test]
+fn scaling_bounds_reads_the_one_and_many_producer_rows() {
+    let observation = Observation {
+        isolated: vec![
+            run_spanning(shapes::RESERVING_MPSC, 1, 4.0, 5.0, 6.0),
+            run_spanning(shapes::RESERVING_MPSC, 8, 40.0, 50.0, 60.0),
+        ],
+        drained: Vec::new(),
+        available_parallelism: Some(8),
+    };
+    let (low, high) = observation
+        .scaling_bounds(&observation.isolated, shapes::RESERVING_MPSC, 8)
+        .expect("both rows present with positive spans");
+    let point = observation
+        .scaling(&observation.isolated, shapes::RESERVING_MPSC, 8)
+        .expect("both rows present");
+    assert!(
+        low <= point && point <= high,
+        "scaling {point} outside its bound [{low}, {high}]"
+    );
+}
+
+#[test]
+fn scaling_bounds_is_none_when_a_row_is_missing() {
+    let observation = Observation {
+        isolated: vec![run_spanning(shapes::RESERVING_MPSC, 8, 40.0, 50.0, 60.0)],
+        drained: Vec::new(),
+        available_parallelism: Some(8),
+    };
+    assert!(
+        observation
+            .scaling_bounds(&observation.isolated, shapes::RESERVING_MPSC, 8)
+            .is_none(),
+        "the one-producer row is absent, so no bound exists"
+    );
+}

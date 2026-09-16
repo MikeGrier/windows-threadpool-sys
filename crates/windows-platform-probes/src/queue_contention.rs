@@ -261,6 +261,102 @@ impl Observation {
         let many = self.find(regime, shape, producers)?;
         Some(many.ops_per_second / one.ops_per_second)
     }
+
+    /// The interval [`Observation::scaling`] could occupy, given the two rows'
+    /// observed spans.
+    ///
+    /// **This is a bound, not a sampled distribution, and the difference
+    /// matters.** The probe measures each configuration in its own pass, so the
+    /// repetitions behind the numerator and the denominator are not paired:
+    /// there is no set of per-repetition ratios to take a median or a range
+    /// over. What can be said is that if one producer's cost lies in `[a, b]`
+    /// and N producers' in `[c, d]`, their ratio cannot fall outside
+    /// `[a / d, b / c]` -- so this is the widest the scaling could be, which is
+    /// conservative in the direction that matters.
+    ///
+    /// Carried because [`d-observations-not-verdicts`] obliges every published
+    /// figure to arrive with its dispersion, and a *derived* figure is exactly
+    /// where a bare point estimate is most likely to be over-read. Reporting
+    /// the ratio alone, while the rows beneath it carry ranges, would put the
+    /// least certain number on the page in the most confident dress.
+    ///
+    /// Pairing the repetitions would give a real distribution rather than a
+    /// bound, and that is a change to how the probe measures rather than to how
+    /// it reports -- see `M4.4`, which asks for candidates to be interleaved
+    /// with their controls.
+    ///
+    /// [`d-observations-not-verdicts`]: https://github.com/MikeGrier/windows-threadpool-sys/blob/main/crates/windows-platform-probes/DESIGN-NOTES.md#d-observations-not-verdicts
+    #[must_use]
+    pub fn scaling_bounds(
+        &self,
+        regime: &[Run],
+        shape: &str,
+        producers: usize,
+    ) -> Option<(f64, f64)> {
+        let one = self.find(regime, shape, 1)?;
+        let many = self.find(regime, shape, producers)?;
+        ratio_bounds(many, one)
+    }
+}
+
+/// The interval a `numerator / denominator` cost ratio could occupy, given each
+/// row's observed span. See [`Observation::scaling_bounds`] for why this is a
+/// bound rather than a sample.
+///
+/// The ratio is of *rates*, so it inverts the cost interval: a numerator that
+/// was slow and a denominator that was fast give the smallest ratio.
+///
+/// `None` when either span touches zero, which cannot happen for a real run and
+/// is reported rather than divided by.
+#[must_use]
+pub fn ratio_bounds(numerator: Run, denominator: Run) -> Option<(f64, f64)> {
+    if numerator.fastest_nanos_per_op <= 0.0
+        || numerator.slowest_nanos_per_op <= 0.0
+        || denominator.fastest_nanos_per_op <= 0.0
+        || denominator.slowest_nanos_per_op <= 0.0
+    {
+        return None;
+    }
+    // Rate is inversely proportional to cost, so the widest rate ratio pairs
+    // the numerator's best cost against the denominator's worst, and vice versa.
+    let low = denominator.fastest_nanos_per_op / numerator.slowest_nanos_per_op;
+    let high = denominator.slowest_nanos_per_op / numerator.fastest_nanos_per_op;
+    Some((low, high))
+}
+
+/// Renders a ratio together with the interval it could occupy, or `--`.
+///
+/// The bound is printed in square brackets to mark it as *not* a sampled range:
+/// the row ranges above it are observed spans, this is arithmetic over two of
+/// them.
+#[must_use]
+pub fn format_ratio_bounded(numerator: Option<Run>, denominator: Option<Run>) -> String {
+    match (numerator, denominator) {
+        (Some(numerator), Some(denominator)) if denominator.nanos_per_op > 0.0 => {
+            let point = numerator.nanos_per_op / denominator.nanos_per_op;
+            match ratio_bounds(denominator, numerator) {
+                Some((low, high)) => format!("{point:.2}x [{low:.2}-{high:.2}]"),
+                None => format!("{point:.2}x"),
+            }
+        }
+        _ => "--".to_owned(),
+    }
+}
+
+/// Renders a scaling factor together with the interval it could occupy.
+///
+/// See [`Observation::scaling_bounds`]: the bracketed interval is a bound over
+/// two unpaired spans, not a distribution.
+#[must_use]
+pub fn format_scaling_bounded(point: Option<f64>, bounds: Option<(f64, f64)>) -> String {
+    match (point, bounds) {
+        (Some(point), _) if !point.is_finite() => "--".to_owned(),
+        (Some(point), Some((low, high))) if low.is_finite() && high.is_finite() => {
+            format!("{point:.2}x [{low:.2}-{high:.2}]")
+        }
+        (Some(point), _) => format!("{point:.2}x"),
+        (None, _) => "--".to_owned(),
+    }
 }
 
 /// Renders one regime's rows as the report's table body.
@@ -422,13 +518,17 @@ fn median_run(
     mut timer: impl FnMut(usize) -> Repetition,
 ) -> Run {
     // One untimed pass first. Be exact about what this does and does not warm:
-    // every call to `timer` builds and drops its OWN queue, so this does not
-    // pre-touch the allocation any timed repetition will use. What it does warm
-    // is the process -- the allocator's size class, the OS page cache, the
-    // instruction cache, and the branch predictors -- which is why the first
-    // timed repetition is no longer an outlier. An earlier comment here claimed
-    // it faulted in "the" allocation, which is not true of an allocation made
-    // fresh each pass. Found by a review.
+    // for the queue timers, every call to `timer` builds and drops its OWN
+    // queue, so this does not pre-touch the allocation any timed repetition will
+    // use. The baseline timer allocates no queue at all -- one `AtomicU64` and a
+    // barrier -- so for that row there is no allocation to pre-touch either way.
+    // What the pass warms in both cases is the process: the allocator's size
+    // class, the OS page cache, the instruction cache, and the branch
+    // predictors, which is why the first timed repetition is no longer an
+    // outlier. An earlier comment here claimed it faulted in "the" allocation,
+    // which is not true of an allocation made fresh each pass, and a later one
+    // said every timer builds a queue, which is not true of the baseline.
+    // Both found by review.
     let _ = timer(producers);
 
     let mut results: Vec<Repetition> = (0..REPETITIONS).map(|_| timer(producers)).collect();

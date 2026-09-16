@@ -14,7 +14,7 @@
 
 use windows_platform_probes::queue_contention::{
     DRAINED_CAPACITY, PRODUCER_COUNTS, PUSHES_PER_PRODUCER, REPETITIONS, format_nanos,
-    format_ratio, format_scaling, measure, render_table, shapes,
+    format_ratio_bounded, format_scaling_bounded, measure, render_table, shapes,
 };
 use windows_platform_probes::report::emit_report;
 
@@ -118,23 +118,23 @@ fn render(out: &mut dyn std::fmt::Write) {
     );
     let _ = writeln!(
         out,
-        "     {:<18} {:>12} {:>12} {:>12} {:>14}",
+        "     {:<12} {:>22} {:>22} {:>22} {:>22}",
         "producers", "slotwise", "reserving", "permit", "atomic floor"
     );
     for &producers in PRODUCER_COUNTS {
-        let mpsc = observation.scaling(&observation.isolated, shapes::SLOTWISE_MPSC, producers);
-        let reserving =
-            observation.scaling(&observation.isolated, shapes::RESERVING_MPSC, producers);
-        let permit = observation.scaling(&observation.isolated, shapes::PERMIT_MPSC, producers);
-        let floor =
-            observation.scaling(&observation.isolated, shapes::BASELINE_FETCH_ADD, producers);
+        let cell = |shape: &str| {
+            format_scaling_bounded(
+                observation.scaling(&observation.isolated, shape, producers),
+                observation.scaling_bounds(&observation.isolated, shape, producers),
+            )
+        };
         let _ = writeln!(
             out,
-            "     {producers:<18} {:>12} {:>12} {:>12} {:>14}",
-            format_scaling(mpsc),
-            format_scaling(reserving),
-            format_scaling(permit),
-            format_scaling(floor)
+            "     {producers:<12} {:>22} {:>22} {:>22} {:>22}",
+            cell(shapes::SLOTWISE_MPSC),
+            cell(shapes::RESERVING_MPSC),
+            cell(shapes::PERMIT_MPSC),
+            cell(shapes::BASELINE_FETCH_ADD)
         );
     }
     let _ = writeln!(
@@ -192,11 +192,11 @@ fn render(out: &mut dyn std::fmt::Write) {
         let plain = observation.find(&observation.drained, shapes::SLOTWISE_MPSC, producers);
         let reserving = observation.find(&observation.drained, shapes::RESERVING_MPSC, producers);
         let permit = observation.find(&observation.drained, shapes::PERMIT_MPSC, producers);
-        let ratio = format_ratio(reserving, plain);
+        let ratio = format_ratio_bounded(reserving, plain);
         // The column SH-15.5 exists to fill: the experimental claim against the
         // shipping shape it would replace. Below 1.00 means the permit claim is
         // cheaper; above means removing the room-decision race costs throughput.
-        let permit_ratio = format_ratio(permit, reserving);
+        let permit_ratio = format_ratio_bounded(permit, reserving);
         let _ = writeln!(
             out,
             "     {producers:<18} {:>14} {:>14} {:>10} {:>14} {:>16}",
@@ -372,9 +372,9 @@ fn render(out: &mut dyn std::fmt::Write) {
                 format_nanos(deep),
                 format_nanos(perpetual),
                 format_nanos(wide),
-                format_ratio(deep, narrow),
-                format_ratio(perpetual, narrow),
-                format_ratio(wide, narrow)
+                format_ratio_bounded(deep, narrow),
+                format_ratio_bounded(perpetual, narrow),
+                format_ratio_bounded(wide, narrow)
             );
         }
         let _ = writeln!(out);
