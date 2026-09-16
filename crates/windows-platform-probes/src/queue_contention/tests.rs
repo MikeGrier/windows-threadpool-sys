@@ -9,16 +9,16 @@ use super::*;
 use std::time::Duration;
 
 /// A `Run` with everything but the fields under test held constant.
-fn run(shape: &'static str, producers: usize, pushes_per_second: f64) -> Run {
+fn run(shape: &'static str, producers: usize, ops_per_second: f64) -> Run {
     Run {
         shape,
         producers,
-        nanos_per_push: if pushes_per_second > 0.0 {
-            1_000_000_000.0 / pushes_per_second
+        nanos_per_op: if ops_per_second > 0.0 {
+            1_000_000_000.0 / ops_per_second
         } else {
             0.0
         },
-        pushes_per_second,
+        ops_per_second,
         refusals: 0,
     }
 }
@@ -66,7 +66,7 @@ fn find_distinguishes_rows_that_share_a_shape() {
     let four = observed
         .find(&observed.isolated, shapes::RESERVING_MPSC, 4)
         .expect("present");
-    assert_ne!(one.pushes_per_second, four.pushes_per_second);
+    assert_ne!(one.ops_per_second, four.ops_per_second);
 }
 
 #[test]
@@ -78,7 +78,7 @@ fn find_distinguishes_rows_that_share_a_producer_count() {
     let slotwise = observed
         .find(&observed.isolated, shapes::SLOTWISE_MPSC, 1)
         .expect("present");
-    assert_ne!(reserving.pushes_per_second, slotwise.pushes_per_second);
+    assert_ne!(reserving.ops_per_second, slotwise.ops_per_second);
 }
 
 #[test]
@@ -111,7 +111,7 @@ fn find_reads_only_the_regime_it_is_given() {
     let drained = observed
         .find(&observed.drained, shapes::RESERVING_MPSC, 1)
         .expect("present in drained");
-    assert_ne!(isolated.pushes_per_second, drained.pushes_per_second);
+    assert_ne!(isolated.ops_per_second, drained.ops_per_second);
     assert!(
         observed
             .find(&observed.drained, shapes::SLOTWISE_MPSC, 1)
@@ -372,7 +372,7 @@ fn format_scaling_renders_a_finite_value_and_marks_everything_else() {
 fn format_ratio_divides_and_guards_its_denominator() {
     let fast = run(shapes::RESERVING_MPSC, 4, 200_000_000.0);
     let slow = run(shapes::SLOTWISE_MPSC, 4, 100_000_000.0);
-    // slow is 10.0 ns/push, fast is 5.0, so fast/slow is 0.50x.
+    // slow is 10.0 ns/op, fast is 5.0, so fast/slow is 0.50x.
     assert_eq!(format_ratio(Some(fast), Some(slow)), "0.50x");
     assert_eq!(format_ratio(Some(slow), Some(fast)), "2.00x");
     assert_eq!(format_ratio(None, Some(slow)), "--");
@@ -386,10 +386,7 @@ fn format_ratio_divides_and_guards_its_denominator() {
 fn format_ratio_refuses_a_zero_denominator() {
     let measured = run(shapes::RESERVING_MPSC, 4, 100_000_000.0);
     let absent = run(shapes::SLOTWISE_MPSC, 4, 0.0);
-    assert_eq!(
-        absent.nanos_per_push, 0.0,
-        "the fixture must have zero cost"
-    );
+    assert_eq!(absent.nanos_per_op, 0.0, "the fixture must have zero cost");
     assert_eq!(format_ratio(Some(measured), Some(absent)), "--");
 }
 
@@ -412,12 +409,12 @@ fn render_table_writes_a_header_and_one_line_per_run() {
     render_table(&mut out, &rows);
     let lines: Vec<&str> = out.lines().collect();
     assert_eq!(lines.len(), 3, "a header and two rows, got {out:?}");
-    assert!(lines[0].contains("shape") && lines[0].contains("ns/push"));
+    assert!(lines[0].contains("shape") && lines[0].contains("ns/op"));
     assert!(lines[1].contains(shapes::BASELINE_FETCH_ADD));
     assert!(lines[2].contains(shapes::RESERVING_MPSC));
     assert!(
         lines[2].contains("10.0"),
-        "100M pushes/sec is 10.0 ns/push, got {:?}",
+        "100M ops/sec is 10.0 ns/op, got {:?}",
         lines[2]
     );
 }
@@ -469,11 +466,11 @@ fn scripted_repetitions() -> Vec<Repetition> {
 #[test]
 fn median_run_reports_the_median_repetition_rather_than_the_first_or_last() {
     let measured = median_run(shapes::RESERVING_MPSC, 1, scripted(scripted_repetitions()));
-    // 3e6 ns over 1 * 50,000 pushes is 60 ns per push.
+    // 3e6 ns over 1 * 50,000 pushes is 60 ns per op.
     assert!(
-        (measured.nanos_per_push - 60.0).abs() < 1e-9,
-        "expected the 3e6 ns median, got {} ns/push",
-        measured.nanos_per_push
+        (measured.nanos_per_op - 60.0).abs() < 1e-9,
+        "expected the 3e6 ns median, got {} ns/op",
+        measured.nanos_per_op
     );
     assert_eq!(measured.shape, shapes::RESERVING_MPSC);
     assert_eq!(measured.producers, 1);
@@ -505,9 +502,9 @@ fn median_run_discards_the_warmup_pass() {
         "the warmup's refusals were reported"
     );
     assert!(
-        measured.nanos_per_push < 100.0,
-        "the warmup's 999e6 ns reached the report as {} ns/push",
-        measured.nanos_per_push
+        measured.nanos_per_op < 100.0,
+        "the warmup's 999e6 ns reached the report as {} ns/op",
+        measured.nanos_per_op
     );
 }
 
@@ -518,12 +515,12 @@ fn median_run_discards_the_warmup_pass() {
 #[test]
 fn median_run_derives_both_rates_from_the_one_chosen_repetition() {
     let measured = median_run(shapes::RESERVING_MPSC, 1, scripted(scripted_repetitions()));
-    let round_trip = 1_000_000_000.0 / measured.nanos_per_push;
+    let round_trip = 1_000_000_000.0 / measured.nanos_per_op;
     assert!(
-        (measured.pushes_per_second - round_trip).abs() < 1e-3,
-        "{} pushes/sec does not agree with {} ns/push",
-        measured.pushes_per_second,
-        measured.nanos_per_push
+        (measured.ops_per_second - round_trip).abs() < 1e-3,
+        "{} ops/sec does not agree with {} ns/op",
+        measured.ops_per_second,
+        measured.nanos_per_op
     );
 }
 
@@ -534,10 +531,10 @@ fn median_run_divides_the_median_by_every_producers_pushes() {
     let one = median_run(shapes::RESERVING_MPSC, 1, scripted(scripted_repetitions()));
     let four = median_run(shapes::RESERVING_MPSC, 4, scripted(scripted_repetitions()));
     assert!(
-        (one.nanos_per_push / four.nanos_per_push - 4.0).abs() < 1e-9,
+        (one.nanos_per_op / four.nanos_per_op - 4.0).abs() < 1e-9,
         "four producers push four times as many items in the same span: {} vs {}",
-        one.nanos_per_push,
-        four.nanos_per_push
+        one.nanos_per_op,
+        four.nanos_per_op
     );
 }
 

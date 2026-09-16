@@ -165,10 +165,17 @@ pub struct Run {
     pub shape: &'static str,
     /// How many producer threads pushed concurrently.
     pub producers: usize,
-    /// Median nanoseconds per successful push, across all producers.
-    pub nanos_per_push: f64,
-    /// Successful pushes per second, summed across producers.
-    pub pushes_per_second: f64,
+    /// Median nanoseconds per successful operation, across all producers.
+    ///
+    /// An *operation* is one successful push for every queue shape. For
+    /// [`shapes::BASELINE_FETCH_ADD`] it is one `fetch_add` on a shared
+    /// `AtomicU64` -- that row is a floor rather than a queue, so it has no
+    /// pushes to report, and labelling this field per-push would publish it with
+    /// units it does not have.
+    pub nanos_per_op: f64,
+    /// Successful operations per second, summed across producers. See
+    /// [`Run::nanos_per_op`] for what counts as an operation in each row.
+    pub ops_per_second: f64,
     /// Pushes refused for want of room during the median run.
     ///
     /// Non-zero means the run was at least partly bounded by the consumer
@@ -218,7 +225,7 @@ impl Observation {
     pub fn scaling(&self, regime: &[Run], shape: &str, producers: usize) -> Option<f64> {
         let one = self.find(regime, shape, 1)?;
         let many = self.find(regime, shape, producers)?;
-        Some(many.pushes_per_second / one.pushes_per_second)
+        Some(many.ops_per_second / one.ops_per_second)
     }
 }
 
@@ -233,13 +240,13 @@ pub fn render_table(out: &mut dyn fmt::Write, runs: &[Run]) {
     let _ = writeln!(
         out,
         "{:<18} {:>10} {:>14} {:>16} {:>14}",
-        "shape", "producers", "ns/push", "pushes/sec", "refusals"
+        "shape", "producers", "ns/op", "ops/sec", "refusals"
     );
     for run in runs {
         let _ = writeln!(
             out,
             "{:<18} {:>10} {:>14.1} {:>16.0} {:>14}",
-            run.shape, run.producers, run.nanos_per_push, run.pushes_per_second, run.refusals
+            run.shape, run.producers, run.nanos_per_op, run.ops_per_second, run.refusals
         );
     }
 }
@@ -268,23 +275,17 @@ pub fn format_scaling(scaling: Option<f64>) -> String {
 #[must_use]
 pub fn format_ratio(numerator: Option<Run>, denominator: Option<Run>) -> String {
     match (numerator, denominator) {
-        (Some(numerator), Some(denominator)) if denominator.nanos_per_push > 0.0 => {
-            format!(
-                "{:.2}x",
-                numerator.nanos_per_push / denominator.nanos_per_push
-            )
+        (Some(numerator), Some(denominator)) if denominator.nanos_per_op > 0.0 => {
+            format!("{:.2}x", numerator.nanos_per_op / denominator.nanos_per_op)
         }
         _ => "--".to_owned(),
     }
 }
 
-/// One row's nanoseconds per push, or `--` when the row is missing.
+/// One row's nanoseconds per operation, or `--` when the row is missing.
 #[must_use]
 pub fn format_nanos(run: Option<Run>) -> String {
-    run.map_or_else(
-        || "--".to_owned(),
-        |run| format!("{:.1}", run.nanos_per_push),
-    )
+    run.map_or_else(|| "--".to_owned(), |run| format!("{:.1}", run.nanos_per_op))
 }
 
 /// Time every configuration.
@@ -395,8 +396,8 @@ fn median_run(
     Run {
         shape,
         producers,
-        nanos_per_push: elapsed_nanos / pushes,
-        pushes_per_second: pushes / (elapsed_nanos / 1e9),
+        nanos_per_op: elapsed_nanos / pushes,
+        ops_per_second: pushes / (elapsed_nanos / 1e9),
         refusals,
     }
 }

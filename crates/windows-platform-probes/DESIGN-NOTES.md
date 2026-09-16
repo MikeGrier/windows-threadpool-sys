@@ -911,8 +911,12 @@ producer. 116M/s is the crate's own disclosed figure and is the honest planning
 number.
 
 **The reservation half is where the bits are being spent, and the trade it makes
-is a real one.** The field currently holds four billion outstanding reservations.
-Narrowing it is what buys the position bits: 2^21 reservations leaves about a
+is a real one.** The field currently *encodes* up to four billion outstanding
+reservations, which is a field ceiling rather than a reachable count: on
+`Balanced` the ring's capacity binds first (at most 2^31 slots on a 64-bit
+target, 2^30 on a 32-bit one), and a smaller queue binds it sooner still.
+Narrowing the field is what buys the position bits: 2^21 reservations leaves
+about a
 day, 2^12 leaves over a year, and 2^8 leaves twenty years. The last reaches the
 same practical headroom a 128-bit word gives, on a plain `AtomicU64`, without a
 third-party dependency and without reopening `D-18`'s i686 question.
