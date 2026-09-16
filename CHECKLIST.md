@@ -221,71 +221,55 @@ yet; `M30.5` produces it.
   Not a candidate: `capacity == 1`, which belongs to `slotwise_mpsc`
   ([D-12](crates/windows-waitable-queues/DESIGN-NOTES.md#d-12)) and is already resolved.
 
-- [ ] **M30.3** -- Write down what the pilot could NOT reach, by name.
+- [ ] **M30.3** -- Write down what the pilot could NOT reach, by name. This is the item the milestone
+  exists for.
 
-  This is the item the milestone exists for. Expect the list to include: the memory orderings, if the
-  tool has no memory model; every syscall boundary, including the doorbell's; anything whose
-  correctness depends on the allocator, the scheduler, or real time; and the gap between the model
-  and the code, which no tool closes.
+  Done when both hold:
 
-  Put it where a reader deciding how much to trust the crate will meet it -- beside the existing
-  "How far the memory orderings are verified, and how far they are not" section. **That section has
-  two copies**, [that crate's README.md](crates/windows-waitable-queues/README.md) and
-  [its src/lib.rs](crates/windows-waitable-queues/src/lib.rs), and updating one would leave the other
-  telling an adopter something the crate no longer believes. Update both.
-
-  Deriving one from the other is **not** available with the mechanism that exists today: the
-  `#[doc = include_str!("../README.md")]` in that crate is `#[cfg(all(doctest, windows))]` on a
-  private `ReadmeDoctests` item, so it compiles the README's *code* as doctests and does not render
-  its prose into the crate documentation. Making one derive would mean introducing a shared fragment
-  both include, which is a separate piece of work and not a shortcut available to this item.
+  1. **The list names only what the *selected* tool cannot model**, not what tools in general cannot.
+     Expect the syscall boundary including the doorbell's, real-time behaviour, and the model-to-code
+     gap that no tool closes. Do **not** preclassify scheduler-dependence: loom explores scheduler
+     interleavings deliberately, so recording it as unreachable would be a false gap. Whether the
+     memory orderings are reachable likewise depends on which tool M30.1 selected.
+  2. **Both copies of the disclosure are updated** -- the "How far the memory orderings are verified,
+     and how far they are not" section exists in
+     [that crate's README.md](crates/windows-waitable-queues/README.md) and
+     [its src/lib.rs](crates/windows-waitable-queues/src/lib.rs). Deriving one from the other is not
+     available today: the `include_str!` there is `#[cfg(all(doctest, windows))]` on a private item,
+     so it compiles the README's code as doctests and does not render its prose. Making one derive
+     would mean a shared fragment both include, which is separate work.
 
 - [ ] **M30.4** -- Re-home `M31.6`, which is currently orphaned.
 
-  `windows-waitable-queues`' design notes reference `M31.6` in three places as the planned `loom`
-  verification, and [crates/windows-waitable-queues/README.md](crates/windows-waitable-queues/README.md)
-  tells adopters it is planned before 1.0. Until this item, there was no live checklist item for it
-  anywhere in the repository -- the crate has only a
-  [COMPLETED-CHECKLIST.md](crates/windows-waitable-queues/COMPLETED-CHECKLIST.md). That was the
-  "design notes are not a work queue" failure the repository instructions name: a public commitment
-  that nothing will cause anyone to pick up.
+  Done when all three hold:
 
-  Give it a real item in a real checklist, with its scope as D-31 describes it (both MPSC shapes or
-  neither), and repoint every reference at it. **There are five, not three**: three in
-  [that crate's DESIGN-NOTES.md](crates/windows-waitable-queues/DESIGN-NOTES.md), one in
-  [src/doorbell.rs](crates/windows-waitable-queues/src/doorbell.rs), and one in
-  [sabotage.json](crates/windows-waitable-queues/sabotage.json). Sweeping only the design notes would
-  leave a stale identifier in a source file and in the sabotage manifest -- the same
-  fix-the-reported-site-not-the-class failure this repository keeps paying for.
-
-  Opening queue work also obliges the component tracker. That row is added in this change rather than
-  deferred to this item, because
-  [crates/windows-waitable-queues/PLANS.md](crates/windows-waitable-queues/PLANS.md)'s "No checklist
-  is open against this crate" stops being true the moment M30.4 is queued, not when it is completed.
-  What remains for this item is to keep that row accurate as the work proceeds.
+  1. **It has a live item in a live checklist**, scoped as
+     [D-29](crates/windows-waitable-queues/DESIGN-NOTES.md#d-29) requires -- the loom verification
+     covers both MPSC shapes or neither is verified. (D-29 owns that obligation;
+     [D-31](crates/windows-waitable-queues/DESIGN-NOTES.md#d-31) owns only the release timing, that
+     verification gates 1.0 rather than 0.1.0.)
+  2. **All five references point at it.** Three in
+     [that crate's DESIGN-NOTES.md](crates/windows-waitable-queues/DESIGN-NOTES.md), one in
+     [src/doorbell.rs](crates/windows-waitable-queues/src/doorbell.rs), one in
+     [sabotage.json](crates/windows-waitable-queues/sabotage.json).
+  3. **The component tracker row stays accurate** as the work proceeds. The row itself was added
+     when the work was queued, not deferred to this item.
 
 - [ ] **M30.5** -- Decide what, if anything, the workspace adopts, and record the decision with its
   cost.
 
-  The cost to name explicitly, because it is the one this workspace keeps paying: **a specification is
-  another statement of the contract, and it can drift from the code with nothing to detect it.** That
-  is the restatement-drift problem in
-  [.github/copilot-instructions.md](.github/copilot-instructions.md)'s CONTRACT INTEGRITY section,
-  applied to an artefact that is harder to keep honest than prose because it looks authoritative. A
-  stale model that still passes is worse than no model.
+  Done when both hold:
 
-  So the decision has to answer: what keeps the model and the code in step, who re-runs it, and what
-  happens when they disagree. "Adopt nothing, and say why" is a legitimate outcome -- D-31 reached it
-  once already on narrower grounds.
-
-  **Either outcome obliges a contract sweep, and a no-adoption outcome obliges it most.** Three
-  public places in `windows-waitable-queues` promise machine-checked verification before 1.0:
-  [that crate's README.md](crates/windows-waitable-queues/README.md),
-  [its src/lib.rs](crates/windows-waitable-queues/src/lib.rs), and D-31 in
-  [its DESIGN-NOTES.md](crates/windows-waitable-queues/DESIGN-NOTES.md#d-31). Deciding to adopt nothing
-  without reconciling those leaves the crate promising adopters something no item will deliver --
-  which is the failure M30.4 exists to fix, recreated by the milestone that fixed it. Sweep all three
-  as part of this item, whichever way it goes.
+  1. **The decision answers three questions**: what keeps the model and the code in step, who
+     re-runs it, and what happens when they disagree. "Adopt nothing, and say why" is a legitimate
+     outcome.
+  2. **The contract sweep is done, whichever way it went.** Three public places in
+     `windows-waitable-queues` promise machine-checked verification before 1.0:
+     [that crate's README.md](crates/windows-waitable-queues/README.md),
+     [its src/lib.rs](crates/windows-waitable-queues/src/lib.rs), and
+     [D-31](crates/windows-waitable-queues/DESIGN-NOTES.md#d-31). A no-adoption outcome obliges this
+     most: left unswept it would recreate, in the same crate, the orphaned commitment M30.4 exists
+     to fix.
 
 ## M-inf -- Parked
 

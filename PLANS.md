@@ -3,6 +3,7 @@
 Master tracker for every active checklist in the repository. Each source-component also keeps its own
 plans tracker: [crates/windows-file-enumeration-sys/PLANS.md](crates/windows-file-enumeration-sys/PLANS.md),
 [crates/windows-file-watcher/PLANS.md](crates/windows-file-watcher/PLANS.md),
+[crates/windows-file-watcher-example-test-harness/PLANS.md](crates/windows-file-watcher-example-test-harness/PLANS.md),
 [crates/windows-impersonation-token-sys/PLANS.md](crates/windows-impersonation-token-sys/PLANS.md),
 [crates/windows-ioring-sys/PLANS.md](crates/windows-ioring-sys/PLANS.md),
 [crates/windows-overlapped-io-sys/PLANS.md](crates/windows-overlapped-io-sys/PLANS.md),
@@ -10,7 +11,8 @@ plans tracker: [crates/windows-file-enumeration-sys/PLANS.md](crates/windows-fil
 [crates/windows-platform-probes/PLANS.md](crates/windows-platform-probes/PLANS.md),
 [crates/windows-thread-ambient-sys/PLANS.md](crates/windows-thread-ambient-sys/PLANS.md),
 [crates/windows-threadpool-sys/PLANS.md](crates/windows-threadpool-sys/PLANS.md),
-[crates/windows-topology-sys/PLANS.md](crates/windows-topology-sys/PLANS.md), and
+[crates/windows-topology-sys/PLANS.md](crates/windows-topology-sys/PLANS.md),
+[crates/windows-waitable-queues/PLANS.md](crates/windows-waitable-queues/PLANS.md), and
 [crates/wtf-string/PLANS.md](crates/wtf-string/PLANS.md). Checklists whose work is finished move to
 [COMPLETED-PLANS.md](COMPLETED-PLANS.md).
 

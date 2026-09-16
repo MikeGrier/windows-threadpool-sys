@@ -483,11 +483,22 @@ than a tidying step after the pilot. Formal methods here are a scoping instrumen
 
 ### The tool classes, and what each can and cannot see
 
-- **TLA+/PlusCal** -- protocol-level, exhaustive over a small configuration. Its actions are atomic
-  and interleaved, which is sequential consistency: it has **no memory model at all**, so it cannot
-  see a weakened ordering. It checks the protocol, not the code that implements it.
-- **loom** -- actual Rust under the C11 memory model, which is exactly where the measured
-  weakened-`Acquire` blind spot lives.
+- **TLA+/PlusCal** -- protocol-level, exhaustive over a small configuration. It has **no built-in
+  hardware memory model**, and its ordinary interleaved-action semantics is sequential consistency,
+  so by default it cannot see a weakened ordering. That is a property of the default model rather
+  than an absolute limit: a specification *can* model weak-memory reordering explicitly, with store
+  buffers or a reordering relation written into the spec. What it still checks in that case is the
+  protocol as written, not the orderings the Rust implementation actually emits -- so the
+  model-to-code gap remains, and `M30.1` should record which of the two is meant rather than
+  treating "no memory model" as settled.
+- **loom** -- an instrumented code-level model. It runs the crate's own logic, but the
+  synchronization primitives must be substituted for `loom`'s instrumented types, and loom then
+  explores the executions the C11 model permits. That is much closer to the code than a protocol
+  spec, and it is where the measured weakened-`Acquire` blind spot lives -- but it is still a model:
+  what runs under loom is not the shipping binary, and the Windows calls are not executed as
+  written. An earlier version of this line called it "actual Rust under the C11 memory model", which
+  overstated the guarantee and blurred exactly the model-to-code gap `M30.2` and `M30.3` exist to
+  record.
 - **kani or similar bounded proof** -- Rust, memory-safety and assertion checking.
 - **`const` assertions** -- arithmetic relationships between constants. Already used here, and the
   cheapest of the four, because they fail the build rather than a run somebody chose to make.
@@ -521,9 +532,11 @@ overturn, and its central objection survives any tool choice: **no candidate mod
 been caught by once, and the doorbell is precisely where its one real ordering bug lived.
 
 An earlier version of this section said the objection was that "a model checker covers atomics and
-cannot cover `SetEvent`" -- which is wrong for TLA+, whose actions are atomic by construction and
-which has no memory model to cover atomics *with*. The tool-independent part of D-31's objection is
-only the syscall boundary; how much of the atomics a tool sees is exactly what `M30.1` is for.
+cannot cover `SetEvent`" -- which is wrong for TLA+, whose ordinary interleaved-action semantics is
+sequentially consistent and which has no *built-in* memory model to cover atomics with (a spec can
+model reordering explicitly, but then it checks the modelled protocol rather than the emitted code).
+The tool-independent part of D-31's objection is only the syscall boundary; how much of the atomics
+a tool sees is exactly what `M30.1` is for.
 
 ### The same trap has a second costume
 
