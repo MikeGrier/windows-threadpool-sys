@@ -1883,9 +1883,12 @@ produced most of the review findings, single facts are restated like this:
 |---|---|---|
 | `255` (the `Perpetual` reservation-count ceiling) | 19 | 5 |
 | `37 seconds` (the `Balanced` recurrence horizon) | 8 | 4 |
-| `2^56` (the `Perpetual` position span) | 6 | 3 |
+| `2^56` (the `Perpetual` position span) | 7 | 4 |
 | `4,294,967,295` (the `Balanced` field ceiling) | 5 | 3 |
 | `about 20 years` | 3 | 3 |
+
+*(Counts are as of the measurement, and they move: `2^56` gained an occurrence when the horizon
+qualifier was added to `Perpetual`'s rustdoc, which is the table demonstrating its own subject.)*
 
 **All of these are restated by hand with nothing checking them, and most are derivable from
 `ClaimLayout`'s associated constants.** The two time rows are not: `37 seconds` and `about 20 years`
@@ -1960,11 +1963,13 @@ the two errors this note originally named -- the `2^31`/`2^30` target-dependent 
 `MAX_RESERVED`-as-capacity conflation -- it would **not** have caught at all: both are prose
 assertions in the surrounding text, not cells in any table.
 
-That bound is the useful part rather than a caveat on it. Roughly half the restatements measured
-above are tabular and mechanically checkable; the other half are prose claims *about* those
-constants, and catching those needs something that reads assertions rather than rows. A remedy that
-covers the first half is still worth having, and claiming it covers both is how a partial instrument
-comes to be trusted as a complete one.
+That bound is the useful part rather than a caveat on it. Counted rather than estimated, and stating
+the denominator because an earlier version of this sentence did not: of the **42** occurrences of
+those five figures across the crate's `.rs`, `.md` and `.toml` files, **19 sit in table rows** and
+**23 in prose**. So a constants-versus-table check reaches a little under half of them, and the rest
+are prose claims *about* those constants, which need something that reads assertions rather than
+rows. A remedy that covers the tabular half is still worth having, and claiming it covers both is how
+a partial instrument comes to be trusted as a complete one.
 
 **No work is scheduled by this note.** It was written to inform a decision that has not been taken,
 and the deliberate absence of a checklist item is per the "design notes are not a work queue" rule
