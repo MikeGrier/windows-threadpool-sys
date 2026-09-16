@@ -187,11 +187,7 @@ written before it was stated.
 
 ## M30 -- Find out how much of this workspace's algorithm correctness can be machine-checked
 
-Rationale -- why this milestone exists, which tool classes are in scope and what each can see, why
-`SH-14.1` is the pilot, and how this relates to
-[D-31](crates/windows-waitable-queues/DESIGN-NOTES.md#d-31) -- is in
-[DESIGN-RATIONALE.md](DESIGN-RATIONALE.md#machine-checking-what-is-argued). No decision is recorded
-yet; `M30.5` produces it.
+Rationale: [DESIGN-RATIONALE.md](DESIGN-RATIONALE.md#machine-checking-what-is-argued).
 
 - [ ] **M30.1** -- Survey the workspace for algorithms whose correctness is currently argued rather
   than checked, and match each to the class of tool that could check it.
@@ -227,10 +223,6 @@ yet; `M30.5` produces it.
      Configured so the wrap is unreachable -- total pushes bounded below it, or a single producer,
      which has no race to lose -- it must come back green. A model that reports a violation there is
      over-permissive, and its counterexample in (2) proved nothing.
-
-  An earlier version of this item asked for (2) and (3) the other way round: the unmodified model to
-  satisfy its invariant, and only a deliberately broken variant to fail. That could only be satisfied
-  by a model that does *not* reproduce a defect this crate ships and documents.
 
   Not a candidate: `capacity == 1`, which belongs to `slotwise_mpsc`
   ([D-12](crates/windows-waitable-queues/DESIGN-NOTES.md#d-12)) and is already resolved.
@@ -273,12 +265,18 @@ yet; `M30.5` produces it.
 - [ ] **M30.5** -- Decide what, if anything, the workspace adopts, and record the decision with its
   cost.
 
-  Done when both hold:
+  Done when all three hold:
 
-  1. **The decision answers three questions**: what keeps the model and the code in step, who
+  1. **The cost is stated, not implied.** What running it costs in wall-clock and in whose time,
+     what tooling it adds and who maintains that, and the standing cost the workspace already knows
+     it pays here -- a specification is a second statement of the contract and can drift from the
+     code with nothing to detect it, so a stale model that still passes is worse than no model. An
+     adoption recorded without its cost is the half of this item that is easiest to skip and the
+     half the milestone exists to surface.
+  2. **The decision answers three questions**: what keeps the model and the code in step, who
      re-runs it, and what happens when they disagree. "Adopt nothing, and say why" is a legitimate
      outcome.
-  2. **The contract sweep is done, whichever way it went.** Three public places in
+  3. **The contract sweep is done, whichever way it went.** Three public places in
      `windows-waitable-queues` promise machine-checked verification before 1.0:
      [that crate's README.md](crates/windows-waitable-queues/README.md),
      [its src/lib.rs](crates/windows-waitable-queues/src/lib.rs), and

@@ -1859,7 +1859,6 @@ written. The rule is about **discarded failure information**, not about discarde
 
 The audit this decision implies is queued as
 [CHECKLIST.md](CHECKLIST.md) -> `M22.1`; it is not scheduled by this note alone.
-
 ## <a id="prose-volume-and-error-surface"></a>Prose volume is not the error surface; restatement count is
 
 **Decided: the error surface is proportional to how often a fact is restated, not to how much prose
