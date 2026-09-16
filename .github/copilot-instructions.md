@@ -1299,6 +1299,36 @@ sites in three wordings.
 ask. This says the same of measurements: hold the number once, and have prose point rather than
 paraphrase.
 
+### 5. In prose we own, present the data and stop; do not draw the conclusion
+
+Rule 4 governs where a number lives. This governs whether you state what it *means*. In any `.md`
+prose this repository owns, give the reader the figures and the mechanism, and leave the verdict to
+them — because the verdict is almost always a claim about *their* deployment, which we have not
+measured and do not know.
+
+The failure does not look like an error, which is why it survives review. It reads as helpfulness:
+
+- A table gives 8/56 twenty years and 64/64 5,039 years at the same rate; the paragraph above it
+  says 8/56 "reaches the same practical headroom a 128-bit word gives." Nothing is inconsistent —
+  the prose has simply decided, on the reader's behalf, that a factor of 250 does not matter to
+  them.
+- A table gives 12/52 202 days; the prose calls it "the first row that is not reachable."
+- **Flipping the verdict is not the fix.** Replacing "not reachable" with "reachable by a busy
+  long-lived process" is the same move with the opposite conclusion. The repair is to delete the
+  conclusion, not to correct it: *"every row recurs; what changes down the column is how long that
+  takes at a given rate — 16/48 at 12.7 days against 12/52 at 202 days."*
+
+**A code comment is different, and the difference is deliberate.** `// effectively unreachable` or
+`// unreachable in all practicality` beside the line it describes is ordinary English idiom, read by
+someone already working on that code, and it carries its own hedge. The rule bites on `.md` prose,
+which is read by people deciding whether to adopt something, out of context, long after.
+
+This is **not a new rule** — it is [D-no-client-prescriptions](../crates/windows-platform-probes/DESIGN-NOTES.md#d-no-client-prescriptions)
+("state what was observed … stop there"), stated once for the repository rather than once for the
+crate that happens to publish measurements. Every instance found so far has been a violation of that
+existing decision rather than a gap in it, so reach for the decision before proposing a mechanism:
+no checker can find these, because nothing is inconsistent.
+
 ## REVIEW FEEDBACK — answer it where it was raised, not only in the commit
 
 **A review round is not finished when the code changes. It is finished when the reviewer has

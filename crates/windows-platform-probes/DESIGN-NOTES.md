@@ -944,10 +944,9 @@ and a rate, not from a measurement of either layout; what does not follow is any
 statement about what the re-apportionment costs to run. See
 [Re-measured on the shipping type](#d-queue-layout-observations).
 
-So the arithmetic separates the rows this way: 16/48's 12.7 days at the
-conservative floor is reachable by a busy long-lived process within a single
-uptime, and 12/52's 202 days is reachable within a long one. Every row recurs;
-what changes down the column is how long it takes, and at what rate. Which of
+So the arithmetic separates the rows this way: every row recurs, and what changes
+down the column is how long that takes at a given rate -- 16/48 at 12.7 days
+against 12/52 at 202 days, at the conservative floor. Which of
 them a caller wants is the caller's question,
 and the shipping type takes the layout as a parameter so it stays theirs -- see
 [D-no-client-prescriptions](#d-no-client-prescriptions).
