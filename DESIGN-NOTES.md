@@ -1876,8 +1876,7 @@ surface.
 Across the workspace, prose runs at **0.84 lines per line of code** -- about 86,000 lines of prose
 (50,700 Rust comment lines, 35,200 markdown) against 101,700 lines of code.
 
-That number turns out to be the wrong one to watch. In `windows-waitable-queues`, the crate that
-produced most of the review findings, single facts are restated like this:
+That number turns out to be the wrong one to watch. In `windows-waitable-queues`, single facts are restated like this:
 
 | fact | restatements | files |
 |---|---|---|
@@ -1890,16 +1889,14 @@ produced most of the review findings, single facts are restated like this:
 *(Counts are as of the measurement, and they move: `2^56` gained an occurrence when the horizon
 qualifier was added to `Perpetual`'s rustdoc, which is the table demonstrating its own subject.)*
 
-**All of these are restated by hand with nothing checking them, and most are derivable from
-`ClaimLayout`'s associated constants.** The two time rows are not: `37 seconds` and `about 20 years`
+**All of these are restated by hand with nothing checking them.** Three of the rows -- the ceiling,
+the span and the field ceiling -- follow from `ClaimLayout`'s associated constants. The two time rows
 follow from a field width *and* an assumed sustained push rate, so a constants-versus-table check
-would validate the first three rows outright and the time rows only once the rate is also pinned
-somewhere single. That distinction matters because it bounds what the cheapest remedy below can
-actually do -- an earlier version of this paragraph said every row was derivable from the constants,
-which overstated it, in a note about overstatement. The error surface is proportional to that column,
-not to
-total prose volume. Halving the prose uniformly would leave roughly half of each row and fix
-nothing structural.
+would validate the first three outright and the time rows only once the rate is pinned somewhere
+single. That distinction bounds what the cheapest remedy below can do -- an earlier version of this
+paragraph said every row was derivable from the constants, which overstated it, in a note about
+overstatement. The error surface is proportional to that column, not to
+total prose volume: a uniform cut to the prose leaves every row still restated, just in fewer words.
 
 ### Which errors this predicts, and which it does not
 
@@ -1907,7 +1904,8 @@ Sorting PR #90's findings across all rounds by class:
 
 - **Restated derivable facts** -- the `2^31`/`2^30` target-dependent capacity, `MAX_RESERVED`
   conflated with capacity, "`Wide` removes it" for a bound that is finite, stale recurrence tables,
-  a test count that matched no crate. **The large majority.**
+  a test count that matched no crate, the same horizon left unqualified across seven sites, a
+  withdrawn magnitude surviving in two public rustdocs.
 - **Structural** -- an unmarked supersedence row in a decision index, an orphaned milestone
   reference. A linter's job, not a specification's.
 - **Evidence overclaiming** -- a noise floor computed from two runs, a refusal-count argument that
@@ -1947,6 +1945,53 @@ level up: define the protocol once in a form that can be checked, and let every 
 This is the real connection between the two ideas, and it is why they belong in the same
 conversation despite fixing different things.
 
+### Prose carries the claim; an artifact carries the number
+
+The sharper question, asked after several rounds of the above: **why is measured data living in
+prose at all?**
+
+There is no principled reason. It is an accident of what is easy. Markdown has no include and
+rustdoc has no data include, so the only way to put a figure in front of a reader is to paste it --
+and a pasted figure is a copy somebody must keep true by hand, in every place they pasted it,
+forever.
+
+The cost is measurable in this PR's own review history. Almost none of its measurement-related
+findings were *wrong measurements*. They were **transcription failures**: the same table in the
+README and the crate rustdoc disagreeing because one was retaken; an attribution naming a capture
+the figures no longer came from; one recurrence horizon left unqualified across seven sites in three
+wordings; a withdrawn magnitude surviving in two public rustdocs. The most instructive was a
+proportion that restated two counts **given four words earlier in the same sentence** and got one of
+them wrong -- "in both cases roughly 60%", against 57 of 61, which is 93%. The data was adjacent and
+the summary of it was false, because prose is not checkable and nobody checks it.
+
+**This repository already contains the better pattern and did not apply it here.**
+`mutation-sweeps/2026-09-02/` is a dated, committed capture directory: data as an artifact, cited
+rather than retyped. `windows-platform-probes`, which produces the most-cited numbers in the
+workspace, commits no capture at all -- every figure it has ever published reached its document by
+hand.
+
+So the principle, which holds regardless of which mechanism is eventually chosen:
+
+- **A claim belongs in prose.** "`reserving_mpsc` measured faster than `slotwise_mpsc` under
+  contention, and the spread is wide enough that the ordering is a flag rather than a finding" is a
+  claim. It contains no digits, so it cannot drift from the data -- it can only be wrong about it,
+  which a reader can see.
+- **A number belongs in an artifact.** `15.3`, `246.9`, `fecd352`, a count of occurrences: one copy,
+  with its provenance travelling *with* it rather than in a hand-maintained attribution table
+  beside it.
+- **A proportion over data we hold is not a finding, it is a restatement of one.** Computed by hand,
+  checked by nobody, and stale the moment any input moves. The counts are the finding. A reader who
+  wants a ratio can take one, against a denominator they chose and at a moment they know.
+
+If this were adopted, the "which restatements are mechanically checkable" question earlier in this
+note **dissolves** rather than being answered: all of them, because none would be restated.
+
+**The mechanism is undecided and no work is scheduled here.** The reader-experience trade is real --
+a figure behind a link is a figure most readers will not look at -- and it has not been settled.
+Recorded as a principle so the next person choosing where to paste a number has the argument in front
+of them, not as a queued change. Per "design notes are not a work queue", the absence of a checklist
+item is deliberate.
+
 ### The cheapest available move, recorded but not scheduled
 
 [README.md](crates/windows-waitable-queues/README.md) is already a build input for
@@ -1963,13 +2008,18 @@ the two errors this note originally named -- the `2^31`/`2^30` target-dependent 
 `MAX_RESERVED`-as-capacity conflation -- it would **not** have caught at all: both are prose
 assertions in the surrounding text, not cells in any table.
 
-That bound is the useful part rather than a caveat on it. Counted rather than estimated, and stating
-the denominator because an earlier version of this sentence did not: of the **42** occurrences of
-those five figures across the crate's `.rs`, `.md` and `.toml` files, **19 sit in table rows** and
-**23 in prose**. So a constants-versus-table check reaches a little under half of them, and the rest
-are prose claims *about* those constants, which need something that reads assertions rather than
-rows. A remedy that covers the tabular half is still worth having, and claiming it covers both is how
-a partial instrument comes to be trusted as a complete one.
+That bound is the useful part rather than a caveat on it. A constants-versus-table check reaches the
+occurrences that sit in table rows and none of the ones in prose, and both populations are
+substantial -- which is the shape of the result, and a reason to build the check rather than not to.
+The prose occurrences need something that reads assertions rather than rows. A remedy that covers the
+tabular ones is worth having; claiming it covers both is how a partial instrument comes to be trusted
+as a complete one.
+
+*(An earlier version of this paragraph put a proportion here. It is gone deliberately: a ratio over
+the counts above is a restatement of them, computed by hand and checked by nobody, and it drifts the
+moment any file is edited -- which is the defect this whole note is about. The counts are the
+finding. Anyone who needs a proportion can take one, against a denominator they chose and at a moment
+they know.)*
 
 **No work is scheduled by this note.** It was written to inform a decision that has not been taken,
 and the deliberate absence of a checklist item is per the "design notes are not a work queue" rule

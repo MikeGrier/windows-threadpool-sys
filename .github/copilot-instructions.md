@@ -492,8 +492,7 @@ the same time, so both halves of the evidence disappear together.
 This is not a small correction. Measured on two runs here: a `windows-topology-sys` sweep
 reported 61 survivors of which **57 were in `#[cfg(feature = "serde")]` code**, and a
 `windows-file-watcher` sweep reported 247 of which **147 were in `scenario-tool` and
-`test-util` modules**. In both cases roughly 60% of the "gaps" were artifacts of the
-invocation. So:
+`test-util` modules**. In both cases the gated code dominated the survivor list. So:
 
 ```
 cargo mutants -p <crate> --all-features
@@ -1270,6 +1269,35 @@ Two corollaries that have each already cost a review round:
   Nothing re-checks it automatically. When you correct a rule, ask specifically which code was
   written while the old reading was current — generators, test doubles, examples — because those
   encode the reading rather than citing it.
+
+### 4. Prose carries the claim; a number belongs in an artifact
+
+Measured data pasted into prose becomes a copy somebody must keep true by hand, in every place it
+was pasted, forever. Markdown has no include and rustdoc has no data include, so pasting is the path
+of least resistance — and it is where this repository's documentation defects overwhelmingly come
+from. Measured on one pull request's review history: almost none of its measurement findings were
+*wrong measurements*; they were transcriptions that drifted — a table disagreeing with its own copy
+one file away, an attribution naming a superseded capture, one horizon left unqualified across seven
+sites in three wordings.
+
+- **Write the claim, not the digits, wherever the digits are not the point.** "Measured faster under
+  contention, and the spread is wide enough that the ordering is a flag rather than a finding" cannot
+  drift from the data, because it restates none of it.
+- **When a figure must appear, it has exactly one home.** Prefer a committed capture the prose links
+  to (`mutation-sweeps/<date>/` is this repository's existing example) over the same figure typed
+  into two documents. Provenance — host, commit, date — travels with the data rather than in a
+  hand-maintained table beside it.
+- **Never restate a proportion over data you already showed.** A ratio over counts in the same
+  document is not a finding; it is a hand-computed copy of one, checked by nobody and stale the
+  moment any input moves. The counts are the finding. This rule was earned: an instructions file in
+  this repository claimed "in both cases roughly 60%" about two figures given four words earlier,
+  one of which was 57 of 61 — 93%.
+- **The same applies to incidental tallies** — test counts, file counts, line counts. If the number
+  is not itself the finding, leave it out; "the gate is green" says what "308 lib tests" pretends to.
+
+**This is the data-side twin of rule 1.** Rule 1 says define a fact once in code and have everything
+ask. This says the same of measurements: hold the number once, and have prose point rather than
+paraphrase.
 
 ## REVIEW FEEDBACK — answer it where it was raised, not only in the commit
 
