@@ -1977,8 +1977,8 @@ README and the crate rustdoc disagreeing because one was retaken; an attribution
 the figures no longer came from; one recurrence horizon left unqualified across seven sites in three
 wordings; a withdrawn magnitude surviving in two public rustdocs. The most instructive was a
 proportion that restated two counts **given four words earlier in the same sentence** and got one of
-them wrong -- "in both cases roughly 60%", against 57 of 61, which is 93%. The data was adjacent and
-the summary of it was false, because prose is not checkable and nobody checks it.
+them wrong -- it said "in both cases roughly 60%" where one of the two cases was 57 of 61. The data
+was adjacent and the summary of it was false, because prose is not checkable and nobody checks it.
 
 **This repository already contains the better pattern and did not apply it here.**
 `mutation-sweeps/2026-09-02/` is a dated, committed capture directory: data as an artifact, cited
@@ -1992,9 +1992,9 @@ So the principle, which holds regardless of which mechanism is eventually chosen
   contention, and the spread is wide enough that the ordering is a flag rather than a finding" is a
   claim. It contains no digits, so it cannot drift from the data -- it can only be wrong about it,
   which a reader can see.
-- **A number belongs in an artifact.** `15.3`, `246.9`, `fecd352`, a count of occurrences: one copy,
-  with its provenance travelling *with* it rather than in a hand-maintained attribution table
-  beside it.
+- **A number belongs in an artifact.** A measured cost, a capture's commit, a count of occurrences:
+  one copy, with its provenance travelling *with* it rather than in a hand-maintained attribution
+  table beside it.
 - **A proportion over data we hold is not a finding, it is a restatement of one.** Computed by hand,
   checked by nobody, and stale the moment any input moves. The counts are the finding. A reader who
   wants a ratio can take one, against a denominator they chose and at a moment they know.

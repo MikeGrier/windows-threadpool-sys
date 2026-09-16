@@ -160,7 +160,7 @@ let (tx, rx) = reserving_mpsc::bounded_as::<u32, Perpetual>(64)?;
 `Enduring`, and `Perpetual` all issue the same exchange on the same 64-bit word
 and differ only in shift and mask constants, so there is no structural reason for
 one to be slower -- but **what that costs in throughput is not established**: a
-probe comparing them found them indistinguishable at low producer counts, and at high counts ran 1.23-1.30x the default against a same-code control that itself reaches 1.12x -- outside the control, but too close to it to establish an ordering or a cost on this host. `Wide` is a separate matter: it needs a 128-bit exchange,
+probe comparing them found them indistinguishable at low producer counts, and at high counts sat outside the probe's same-code control but too close to it to establish an ordering or a cost on this host. `Wide` is a separate matter: it needs a 128-bit exchange,
 and the whole push path was measured as slower under it as producer count rises
 -- near parity at one or two, several times by thirty-two, in the isolated
 regime -- and it is the only thing in
@@ -206,7 +206,7 @@ proportionally longer to reach its wrap.
 - **Naming a layout moves it.** `Perpetual` puts the recurrence about twenty
   years out. **What it costs in throughput is not established** -- it issues the
   same atomic compare-exchange on the same `u64` as the default, and was measured
-  as indistinguishable from it at low producer counts; at high counts ran 1.23-1.30x the default against a same-code control that itself reaches 1.12x -- outside the control, but too close to it to establish an ordering or a cost on this host.
+  as indistinguishable from it at low producer counts; at high counts sat outside the probe's same-code control but too close to it to establish an ordering or a cost on this host.
 - **`slotwise_mpsc` does not have this hazard** under any layout. Its positions
   are 64 bits on every target, so the equivalent wrap needs 2^64 claims. It does
   not offer `Reserving`.
@@ -397,7 +397,9 @@ The measurements below are one host's observation, recorded with the parameters
 that produced them. They are not a ranking, and which shape suits a given
 deployment is the deployment's question.
 
-**What was measured**, in ns per operation, isolated regime (producers only,
+### <a id="what-was-measured"></a>What was measured
+
+In ns per operation, isolated regime (producers only,
 capacity large enough that nothing is refused). Each cell is the median of three
 whole-probe runs, followed by the full range across all fifteen repetitions those
 runs contain. An operation is one successful push for the three queue shapes;
@@ -414,7 +416,7 @@ labelled per operation rather than per push:
 | 32 | 224.7 (131.4-268.3) | 51.3 (40.7-55.4) | 21.9 (20.7-39.0) | 15.0 (14.7-15.7) |
 
 **The ranges are the point, not a footnote.** `slotwise_mpsc` at two producers
-spans 19.3 to 59.5 -- a factor of three within one configuration on one host --
+spans 19.3 to 59.5 within one configuration on one host,
 and at thirty-two, 131.4 to 268.3. A median quoted without that is an anecdote,
 which is why
 [D-observations-not-verdicts](../windows-platform-probes/DESIGN-NOTES.md#d-observations-not-verdicts)
@@ -446,7 +448,7 @@ this host's 8 physical cores, and the spread is not small at either scale.
 *Between* runs: `slotwise_mpsc` at sixteen producers gave whole-run medians of
 225.7, 218.0 and 192.9. *Within* a run the probe reports its own per-row spread
 -- a fourth, separate invocation of the same build gave that row a median of
-226.5 over a 181.5-242.3 range, a spread of 1.33x across its five repetitions.
+226.5 over a 181.5-242.3 range across its five repetitions.
 The parenthesised ranges in the table above are the wider quantity: the extremes
 over all fifteen repetitions of the three captured runs. The probe's same-code
 control has been measured at 0.68-1.27x over seven runs, which is wide enough to

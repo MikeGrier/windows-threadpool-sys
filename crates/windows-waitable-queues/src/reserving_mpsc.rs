@@ -263,7 +263,7 @@ use crate::options::Options;
 /// three issue the same atomic compare-exchange on the same `u64` and differ
 /// shift and mask constants, so there is no structural reason for one to be
 /// slower. **What that costs in throughput is not established**: a probe
-/// comparing them found them indistinguishable at low producer counts, and at high counts ran 1.23-1.30x the default against a same-code control that itself reaches 1.12x -- outside the control, but too close to it to establish an ordering or a cost on this host. The settled trade is the
+/// comparing them found them indistinguishable at low producer counts, and at high counts sat outside the probe's same-code control but too close to it to establish an ordering or a cost on this host. The settled trade is the
 /// reservation ceiling; throughput is target-dependent and this crate does not
 /// characterise it beyond the one host in the note above.
 ///

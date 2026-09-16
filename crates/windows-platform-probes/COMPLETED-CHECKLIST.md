@@ -1142,5 +1142,5 @@ Nine tests cover it, verified load-bearing by sabotage: taking the fastest from 
 instead of the minimum fails `median_run_carries_the_fastest_and_slowest_repetitions`.
 
 The dispersion justified itself on first capture. `slotwise_mpsc` at two producers spans 19.3 to
-59.5 ns/op -- a factor of three within one configuration on one host -- which the median alone had
+59.5 ns/op within one configuration on one host, which the median alone had
 concealed entirely, in a table that had already been published twice.

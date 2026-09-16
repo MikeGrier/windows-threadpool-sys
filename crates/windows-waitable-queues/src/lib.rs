@@ -132,7 +132,7 @@
 //! word and differ only in shift and mask constants, so there is no structural
 //! reason for one to be slower -- but **what that costs in throughput is not
 //! established**: a probe comparing them found them indistinguishable at low
-//! producer counts, and at high counts ran 1.23-1.30x the default against a same-code control that itself reaches 1.12x -- outside the control, but too close to it to establish an ordering or a cost on this host. `Wide` is a separate
+//! producer counts, and at high counts sat outside the probe's same-code control but too close to it to establish an ordering or a cost on this host. `Wide` is a separate
 //! matter: it needs a 128-bit exchange, and the whole push path was measured as
 //! slower under it as producer count rises -- near parity at one or two,
 //! several times by thirty-two, in the isolated regime -- and it is the only
@@ -186,7 +186,7 @@
 //! - **Naming a layout moves it.** `Perpetual` puts the recurrence about twenty
 //!   years out. **What it costs in throughput is not established** -- it issues
 //!   the same atomic compare-exchange on the same `u64` as the default, and was
-//!   measured as indistinguishable from it at low producer counts; at high counts ran 1.23-1.30x the default against a same-code control that itself reaches 1.12x -- outside the control, but too close to it to establish an ordering or a cost on this host.
+//!   measured as indistinguishable from it at low producer counts; at high counts sat outside the probe's same-code control but too close to it to establish an ordering or a cost on this host.
 //! - **[`slotwise_mpsc`] does not have this hazard** under any layout. Its
 //!   positions are 64 bits on every target, so the equivalent wrap needs 2^64
 //!   claims. It does not offer [`Reserving`].
@@ -320,67 +320,43 @@
 //! - **[`spsc`] requires exactly one producer and one consumer**, and does less
 //!   work than either MPSC shape because of it.
 //!
-//! The measurements below are one host's observation, recorded with the
-//! parameters that produced them. They are not a ranking.
+//! **The measurements live in one place, not two.** This crate's
+//! [README][readme-measurements] carries the capture: the isolated-regime table,
+//! every cell's observed range, and the attribution -- host banner, profile,
+//! sampling parameters, run count, the instrument's commit, and when it was
+//! taken. That is deliberately not duplicated here, because a figure with two
+//! hand-maintained homes is a figure that will disagree with itself the first
+//! time one of them is retaken. This branch did exactly that once already.
 //!
-//! Isolated regime (producers only, capacity large enough that nothing is
-//! refused), ns per operation. Each cell is the median of three whole-probe
-//! runs, followed by the full range across all fifteen repetitions those runs
-//! contain -- [`D-observations-not-verdicts`] obliges a published figure to
-//! carry its run count *and* its dispersion, and the ranges are the more useful
-//! half: `slotwise_mpsc` at two producers spans a factor of three within one
-//! configuration on one host.
+//! What is worth saying without the digits:
 //!
-//! An operation is one successful push for the three queue shapes; for
-//! `baseline_fetch_add` it is one `fetch_add`, which is why the column is
-//! labelled per operation rather than per push.
+//! - The figures are **one host's observation**, not a ranking, and which shape
+//!   suits a deployment is the deployment's question.
+//! - **The ranges matter more than the medians.** Every cell carries the span
+//!   its repetitions covered, because
+//!   [`D-observations-not-verdicts`] obliges a published figure to arrive with
+//!   its run count *and* its dispersion. At some producer counts that span is
+//!   wide enough to swallow the difference between shapes.
+//! - An *operation* is one successful push for the three queue shapes; for
+//!   `baseline_fetch_add` it is one `fetch_add` on a shared `AtomicU64`, which is
+//!   why the column is labelled per operation rather than per push. It is
+//!   included so the queue figures can be read against what this processor does
+//!   to a contended line at all.
+//! - The host is a single NUMA node holding all its processors, so **nothing
+//!   there says anything about cross-domain behaviour**, and producer counts
+//!   above its physical core count oversubscribe it.
+//! - `permit_mpsc` is behind `experimental-permit-claim` and is outside the
+//!   semver promise.
 //!
-//! | producers | `slotwise_mpsc` | `reserving_mpsc` | `permit_mpsc` | `baseline_fetch_add` |
-//! |---|---|---|---|---|
-//! | 1 | 6.3 (6.3-7.5) | 5.4 (5.4-6.4) | 7.9 (7.9-8.3) | 2.3 (2.3-2.7) |
-//! | 2 | 50.6 (19.3-59.5) | 31.9 (22.5-35.2) | 44.2 (37.4-45.9) | 12.1 (5.8-14.3) |
-//! | 4 | 91.6 (89.7-99.9) | 37.2 (31.6-41.5) | 31.8 (30.4-32.9) | 13.8 (12.6-17.6) |
-//! | 8 | 138.6 (126.9-157.6) | 37.8 (34.3-41.7) | 25.9 (25.0-27.4) | 14.7 (13.9-15.9) |
-//! | 16 | 218.0 (188.9-272.7) | 47.9 (44.9-56.0) | 21.8 (20.9-25.6) | 14.8 (14.4-15.9) |
-//! | 32 | 224.7 (131.4-268.3) | 51.3 (40.7-55.4) | 21.9 (20.7-39.0) | 15.0 (14.7-15.7) |
+//! An earlier capture compared two machines and was removed rather than carried
+//! forward: its figures predate a correction to the probe's timing window, and
+//! neither machine is available here to retake them. One finding from it was
+//! structural rather than numeric and is worth keeping -- the split was designed
+//! on the assumption that `slotwise_mpsc` would be the cheaper shape, and
+//! measurement disagreed on both machines.
 //!
-//! Attribution, because a figure without it is not reusable data:
-//!
-//! | | |
-//! |---|---|
-//! | Host | `x86_64 16p/8c smt+ L2[2,2,2,2,2,2,2,2] ec[0:16] numa[16]` |
-//! | Profile | release |
-//! | Sampling | 50,000 pushes per producer, median of 5 repetitions, one untimed warmup pass |
-//! | Runs | 3 whole-probe invocations; cells are the median of the three, ranges span all 15 repetitions |
-//! | Instrument | `probe-queue-contention`, built from `fecd352` |
-//! | Taken | 2026-09-15 UTC-07:00 |
-//!
+//! [readme-measurements]: https://github.com/MikeGrier/windows-threadpool-sys/blob/main/crates/windows-waitable-queues/README.md#what-was-measured
 //! [`D-observations-not-verdicts`]: https://github.com/MikeGrier/windows-threadpool-sys/blob/main/crates/windows-platform-probes/DESIGN-NOTES.md#d-observations-not-verdicts
-//!
-//! The banner's `numa[16]` is a single NUMA node holding all sixteen processors,
-//! so nothing here says anything about cross-domain behaviour. `permit_mpsc` is
-//! behind `experimental-permit-claim` and is not covered by the semver promise.
-//! `baseline_fetch_add` is N threads incrementing one `AtomicU64`, included so
-//! the queue figures can be read against what this processor does to a contended
-//! line at all.
-//!
-//! **Read these as one machine's numbers.** Producer counts above 8 oversubscribe
-//! this host's 8 physical cores, and the spread is not small at either scale.
-//! *Between* runs: `slotwise_mpsc` at sixteen producers gave whole-run medians
-//! of 225.7, 218.0 and 192.9. *Within* a run the probe reports its own per-row
-//! spread -- a fourth, separate invocation of the same build gave that row a
-//! median of 226.5 over a 181.5-242.3 range, a spread of 1.33x across its five
-//! repetitions. The parenthesised ranges in the table above are the wider
-//! quantity: the extremes over all fifteen repetitions of the three captured
-//! runs.
-//!
-//! A previous version of this table compared an AMD EPYC 7763 slice against a
-//! Snapdragon X2 Elite. It was removed rather than carried forward: its figures
-//! predate a correction to the probe's timing window, and neither machine is
-//! available here to retake them. One finding from it was structural rather than
-//! numeric and is worth keeping -- the split was designed on the assumption that
-//! `slotwise_mpsc` would be the cheaper shape, and measurement disagreed on both
-//! machines.
 //!
 //! **What moves these numbers.** Producer count, how hard the consumer drains,
 //! and where the threads are scheduled -- placement alone moved an SPSC handoff
