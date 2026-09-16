@@ -187,10 +187,11 @@ written before it was stated.
 
 ## M30 -- Find out how much of this workspace's algorithm correctness can be machine-checked
 
-Why this milestone exists, what it is not, and how it relates to
-[D-31](crates/windows-waitable-queues/DESIGN-NOTES.md#d-31) are recorded in
-[DESIGN-NOTES.md](DESIGN-NOTES.md#machine-checking-what-is-argued) rather than here, per the
-action-only rule for checklist files.
+Rationale -- why this milestone exists, which tool classes are in scope and what each can see, why
+`SH-14.1` is the pilot, and how this relates to
+[D-31](crates/windows-waitable-queues/DESIGN-NOTES.md#d-31) -- is in
+[DESIGN-RATIONALE.md](DESIGN-RATIONALE.md#machine-checking-what-is-argued). No decision is recorded
+yet; `M30.5` produces it.
 
 - [ ] **M30.1** -- Survey the workspace for algorithms whose correctness is currently argued rather
   than checked, and match each to the class of tool that could check it.
@@ -200,46 +201,25 @@ action-only rule for checklist files.
   flag against `SetEvent`/`ResetEvent`; `windows-file-watcher`'s contract state machine;
   `windows-ioring-sys`' submission/completion ring.
 
-  For each, record which of these fits and why: **TLA+/PlusCal** (protocol-level, exhaustive over a
-  small configuration, no memory model -- its actions are atomic and interleaved, which is sequential
-  consistency); **loom** (actual Rust under the C11 memory model, which is where the measured
-  weakened-`Acquire` blind spot lives); **kani or similar bounded proof** (Rust, memory-safety and
-  assertion checking); **`const` assertions** (arithmetic relationships between constants, already
-  used here and the cheapest of the four, because they fail the build rather than a run somebody
-  chose to make).
+  Tool classes to match against: TLA+/PlusCal, loom, a bounded proof such as kani, and `const`
+  assertions. What each can and cannot see is in the rationale.
 
-  The output is a table, and the "no tool fits this" rows are as valuable as the rest.
+  Done when: a table exists with one row per algorithm, each naming a tool class or "none fits" and
+  why. The "none fits" rows count as output, not as gaps in the survey.
 
-- [ ] **M30.2** -- Pilot exactly one, chosen because parameter shrinking turns an untestable property
-  into an exhaustive one.
+- [ ] **M30.2** -- Pilot exactly one: `reserving_mpsc`'s claim-position recurrence (`SH-14.1`).
 
-  `reserving_mpsc`'s claim-position recurrence (`SH-14.1`) is the strongest candidate, and the reason
-  is the interleaving rather than the count. Reaching the wrap takes 2^32 pushes -- about 37 seconds
-  of sustained maximum-rate pushing on the host the crate publishes, which is far outside a unit
-  suite budgeted in milliseconds but is not in itself beyond a long integration test. What is beyond
-  any test is the rest of the condition:
-  [crates/windows-waitable-queues/README.md](crates/windows-waitable-queues/README.md) records that
-  reaching the wrap is necessary but *not sufficient* -- a producer must also be stalled inside a
-  window a few instructions wide, and no test can schedule that deliberately. A model whose position
-  wraps at 8 makes the whole interleaving reachable in seconds and *exhaustive* rather than sampled,
-  and yields a counterexample trace rather than a suspicion.
+  Done when all three hold:
 
-  **Write down what makes the wrap-at-8 model evidence about `Balanced`, or record that it is not.**
-  Shrinking the position to 3 bits is a claim that the protocol's correctness does not depend on the
-  field's width -- that the shipping code refines the model. State that correspondence explicitly:
-  which constants were shrunk, why the protocol is uniform in each, and what a counterexample at 8
-  therefore implies at 2^32. If it cannot be argued, the pilot's result is a counterexample *in a toy
-  model* and must be reported as exactly that.
+  1. **The refinement is stated.** Which constants were shrunk, why the protocol is uniform in each,
+     and what a counterexample at the reduced width implies at the shipping width. If it cannot be
+     argued, the result is reported as a counterexample *in a toy model* and nothing more.
+  2. **The unmodified model satisfies its invariant** -- the property check.
+  3. **A deliberately broken variant produces a counterexample** -- the anti-vacuity check. Neither
+     2 nor 3 alone is sufficient.
 
-  **Success needs both halves.** The unmodified model must satisfy its invariant, *and* a
-  deliberately broken variant must produce a counterexample. Neither alone is enough: a green run on
-  the correct model says nothing if the model is too permissive or the invariant vacuous, and a
-  counterexample from the broken variant can also be produced by a malformed model that would find
-  one anywhere. The first is the property check; the second is the anti-vacuity check.
-
-  Not a candidate: `capacity == 1`. It belongs to `slotwise_mpsc`'s slot sequence protocol
-  ([D-12](crates/windows-waitable-queues/DESIGN-NOTES.md#d-12)), not to `reserving_mpsc`'s claim
-  position, and is already resolved by that shape refusing a capacity below two.
+  Not a candidate: `capacity == 1`, which belongs to `slotwise_mpsc`
+  ([D-12](crates/windows-waitable-queues/DESIGN-NOTES.md#d-12)) and is already resolved.
 
 - [ ] **M30.3** -- Write down what the pilot could NOT reach, by name.
 
@@ -252,9 +232,13 @@ action-only rule for checklist files.
   "How far the memory orderings are verified, and how far they are not" section. **That section has
   two copies**, [that crate's README.md](crates/windows-waitable-queues/README.md) and
   [its src/lib.rs](crates/windows-waitable-queues/src/lib.rs), and updating one would leave the other
-  telling an adopter something the crate no longer believes. Update both, or make one derive from the
-  other -- the README is already a build input via `#[doc = include_str!]`, so the second option is
-  available and is the one that cannot drift.
+  telling an adopter something the crate no longer believes. Update both.
+
+  Deriving one from the other is **not** available with the mechanism that exists today: the
+  `#[doc = include_str!("../README.md")]` in that crate is `#[cfg(all(doctest, windows))]` on a
+  private `ReadmeDoctests` item, so it compiles the README's *code* as doctests and does not render
+  its prose into the crate documentation. Making one derive would mean introducing a shared fragment
+  both include, which is a separate piece of work and not a shortcut available to this item.
 
 - [ ] **M30.4** -- Re-home `M31.6`, which is currently orphaned.
 
