@@ -192,9 +192,9 @@ accumulated over an uptime. Reaching the wrap is necessary but not sufficient: a
 producer must also be stalled inside a window a few instructions wide. Rare, but
 a preemption is enough, and "rare" over billions of pushes is not "never".
 
-The figures in the table above scale that same measurement by the position
+The figures in the table above scale that same rate model by the position
 width, so they are a floor on time rather than a forecast: a queue that must
-drain cannot sustain the fastest rate measured, and a slower producer takes
+drain cannot sustain the fastest rate shown, and a slower producer takes
 proportionally longer to reach its wrap.
 
 **What bears on it.**
@@ -426,7 +426,7 @@ cannot be omitted again.
 | Profile | release |
 | Sampling | 50,000 pushes per producer, median of 5 repetitions, one untimed warmup pass |
 | Runs | 3 whole-probe invocations; cells are the median of the three, ranges span all 15 repetitions |
-| Instrument | `probe-queue-contention`, rebuilt for this capture |
+| Instrument | `probe-queue-contention`, built from `fecd352` (the commit that added the range columns) |
 | Taken | 2026-09-15 |
 
 The banner's `numa[16]` is a single NUMA node holding all sixteen processors, so
@@ -438,10 +438,14 @@ read against what this processor does to such a line at all.
 
 **Read these as one machine's numbers.** Producer counts above 8 oversubscribe
 this host's 8 physical cores, and the spread is not small at either scale.
-Between runs: `slotwise_mpsc` at sixteen producers gave whole-run medians of
-225.7, 218.0 and 192.9. Within a single run its five repetitions spanned 188.9 to
-272.7. The probe's own same-code control has been measured at 0.68-1.27x over
-seven runs, which is wide enough to swallow small differences; see
+*Between* runs: `slotwise_mpsc` at sixteen producers gave whole-run medians of
+225.7, 218.0 and 192.9. *Within* a run the probe reports its own per-row spread
+-- a fourth, separate invocation of the same build gave that row a median of
+226.5 over a 181.5-242.3 range, a spread of 1.33x across its five repetitions.
+The parenthesised ranges in the table above are the wider quantity: the extremes
+over all fifteen repetitions of the three captured runs. The probe's same-code
+control has been measured at 0.68-1.27x over seven runs, which is wide enough to
+swallow small differences; see
 [DESIGN-NOTES.md](../windows-platform-probes/DESIGN-NOTES.md#d-variance-is-a-finding).
 That seven-run sweep is a **separate capture** taken to size the noise floor, not
 a longer version of this table -- its medians differ from the ones above, which is

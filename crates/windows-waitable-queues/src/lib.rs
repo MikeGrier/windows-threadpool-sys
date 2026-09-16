@@ -314,16 +314,25 @@
 //! parameters that produced them. They are not a ranking.
 //!
 //! Isolated regime (producers only, capacity large enough that nothing is
-//! refused), ns per push, median of three runs:
+//! refused), ns per operation. Each cell is the median of three whole-probe
+//! runs, followed by the full range across all fifteen repetitions those runs
+//! contain -- [`D-observations-not-verdicts`] obliges a published figure to
+//! carry its run count *and* its dispersion, and the ranges are the more useful
+//! half: `slotwise_mpsc` at two producers spans a factor of three within one
+//! configuration on one host.
+//!
+//! An operation is one successful push for the three queue shapes; for
+//! `baseline_fetch_add` it is one `fetch_add`, which is why the column is
+//! labelled per operation rather than per push.
 //!
 //! | producers | `slotwise_mpsc` | `reserving_mpsc` | `permit_mpsc` | `baseline_fetch_add` |
 //! |---|---|---|---|---|
-//! | 1 | 6.3 | 5.4 | 8.0 | 2.3 |
-//! | 2 | 54.0 | 34.9 | 41.5 | 11.7 |
-//! | 4 | 89.3 | 37.1 | 32.1 | 15.1 |
-//! | 8 | 143.8 | 38.1 | 26.4 | 15.2 |
-//! | 16 | 246.9 | 51.1 | 21.4 | 15.3 |
-//! | 32 | 235.7 | 53.0 | 21.2 | 15.1 |
+//! | 1 | 6.3 (6.3-7.5) | 5.4 (5.4-6.4) | 7.9 (7.9-8.3) | 2.3 (2.3-2.7) |
+//! | 2 | 50.6 (19.3-59.5) | 31.9 (22.5-35.2) | 44.2 (37.4-45.9) | 12.1 (5.8-14.3) |
+//! | 4 | 91.6 (89.7-99.9) | 37.2 (31.6-41.5) | 31.8 (30.4-32.9) | 13.8 (12.6-17.6) |
+//! | 8 | 138.6 (126.9-157.6) | 37.8 (34.3-41.7) | 25.9 (25.0-27.4) | 14.7 (13.9-15.9) |
+//! | 16 | 218.0 (188.9-272.7) | 47.9 (44.9-56.0) | 21.8 (20.9-25.6) | 14.8 (14.4-15.9) |
+//! | 32 | 224.7 (131.4-268.3) | 51.3 (40.7-55.4) | 21.9 (20.7-39.0) | 15.0 (14.7-15.7) |
 //!
 //! Attribution, because a figure without it is not reusable data:
 //!
@@ -332,9 +341,11 @@
 //! | Host | `x86_64 16p/8c smt+ L2[2,2,2,2,2,2,2,2] ec[0:16] numa[16]` |
 //! | Profile | release |
 //! | Sampling | 50,000 pushes per producer, median of 5 repetitions, one untimed warmup pass |
-//! | Runs | 3 whole-probe invocations, median of the three |
-//! | Instrument | `probe-queue-contention`, at commit `a99108f` |
+//! | Runs | 3 whole-probe invocations; cells are the median of the three, ranges span all 15 repetitions |
+//! | Instrument | `probe-queue-contention`, built from `fecd352` |
 //! | Taken | 2026-09-15 |
+//!
+//! [`D-observations-not-verdicts`]: https://github.com/MikeGrier/windows-threadpool-sys/blob/main/crates/windows-platform-probes/DESIGN-NOTES.md#d-observations-not-verdicts
 //!
 //! The banner's `numa[16]` is a single NUMA node holding all sixteen processors,
 //! so nothing here says anything about cross-domain behaviour. `permit_mpsc` is
@@ -344,8 +355,14 @@
 //! line at all.
 //!
 //! **Read these as one machine's numbers.** Producer counts above 8 oversubscribe
-//! this host's 8 physical cores, and the spread across the three runs is not
-//! small: `slotwise_mpsc` at sixteen producers gave 257.3, 215.1 and 246.9.
+//! this host's 8 physical cores, and the spread is not small at either scale.
+//! *Between* runs: `slotwise_mpsc` at sixteen producers gave whole-run medians
+//! of 225.7, 218.0 and 192.9. *Within* a run the probe reports its own per-row
+//! spread -- a fourth, separate invocation of the same build gave that row a
+//! median of 226.5 over a 181.5-242.3 range, a spread of 1.33x across its five
+//! repetitions. The parenthesised ranges in the table above are the wider
+//! quantity: the extremes over all fifteen repetitions of the three captured
+//! runs.
 //!
 //! A previous version of this table compared an AMD EPYC 7763 slice against a
 //! Snapdragon X2 Elite. It was removed rather than carried forward: its figures
