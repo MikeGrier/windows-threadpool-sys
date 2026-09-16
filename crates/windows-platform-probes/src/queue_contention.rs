@@ -9,7 +9,8 @@
 //!
 //! **An experiment, not a component.** These probes measure platform behaviour
 //! and are not for production use. Do not call them from production code, and
-//! do not lift a technique out of here. See this crate's DESIGN-NOTES.md.
+//! do not lift a technique out of here. See this crate's
+//! [DESIGN-NOTES.md](../DESIGN-NOTES.md).
 //!
 //! # The two decisions this exists to force
 //!
@@ -354,6 +355,19 @@ impl Observation {
     ) -> Option<(f64, f64)> {
         let one = self.find(regime, shape, 1)?;
         let many = self.find(regime, shape, producers)?;
+        if producers == 1 {
+            // **The one-producer row is a row divided by itself.** Its scaling is
+            // exactly 1.0 by construction, not approximately 1.0 by measurement,
+            // so there is no interval to report. Handing both spans to
+            // `ratio_bounds` would treat one measurement as two independent ones
+            // and manufacture a bound like `[0.84-1.20]` around a quantity that
+            // cannot be anything but 1 -- uncertainty invented by the arithmetic
+            // rather than observed, printed in the report's first row.
+            //
+            // The bound stays sound either way, since it contains 1.0. It is
+            // tightness that is at stake, and at the identity it is exact.
+            return Some((1.0, 1.0));
+        }
         // Scaling is a RATE ratio -- many over one -- which is the COST ratio
         // one over many, so the rows go in that order.
         ratio_bounds(one, many)

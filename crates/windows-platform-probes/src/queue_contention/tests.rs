@@ -1199,6 +1199,52 @@ fn spread_rejects_non_finite_span_endpoints() {
     }
 }
 
+/// At one producer the bound is exact, because the row is divided by itself.
+///
+/// The report's first row is this case. Passing both spans to `ratio_bounds`
+/// treats one measurement as two independent ones and manufactures an interval
+/// around a quantity that is 1 by construction -- uncertainty invented by the
+/// arithmetic rather than observed, in the most prominent row on the page.
+#[test]
+fn scaling_bounds_at_one_producer_is_exactly_one() {
+    // A deliberately wide span: if the identity case were not special-cased,
+    // this row would publish a correspondingly wide bound.
+    let observation = Observation {
+        isolated: vec![run_spanning(shapes::RESERVING_MPSC, 1, 4.0, 5.0, 6.0)],
+        drained: Vec::new(),
+        available_parallelism: Some(8),
+    };
+    assert_eq!(
+        observation.scaling(&observation.isolated, shapes::RESERVING_MPSC, 1),
+        Some(1.0),
+        "the point estimate is one by construction"
+    );
+    assert_eq!(
+        observation.scaling_bounds(&observation.isolated, shapes::RESERVING_MPSC, 1),
+        Some((1.0, 1.0)),
+        "and so is the bound; a wider one would be invented, not measured"
+    );
+
+    // The general case must keep its real bound, or this special case has
+    // simply broken the function.
+    let observation = Observation {
+        isolated: vec![
+            run_spanning(shapes::RESERVING_MPSC, 1, 4.0, 5.0, 6.0),
+            run_spanning(shapes::RESERVING_MPSC, 8, 40.0, 50.0, 60.0),
+        ],
+        drained: Vec::new(),
+        available_parallelism: Some(8),
+    };
+    let (low, high) = observation
+        .scaling_bounds(&observation.isolated, shapes::RESERVING_MPSC, 8)
+        .expect("both rows present");
+    assert!(
+        low < high,
+        "a genuine comparison of two rows still spans an interval, got \
+         [{low}, {high}]"
+    );
+}
+
 /// The stop flag must be set on the path where nobody sets it explicitly.
 ///
 /// The drained timers cleared the flag on the line after their producer scope,

@@ -4,7 +4,8 @@
 //!
 //! **An experiment, not a component.** These probes measure platform behaviour
 //! and are not for production use. Do not call them from production code, and
-//! do not lift a technique out of here. See this crate's DESIGN-NOTES.md.
+//! do not lift a technique out of here. See this crate's
+//! [DESIGN-NOTES.md](../../DESIGN-NOTES.md).
 //!
 //! This reports observations that bear on two questions otherwise settled by
 //! taste: whether the linked and sharded MPSC shapes are ever needed, and
