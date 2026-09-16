@@ -1542,6 +1542,7 @@ fn time_drained_layout<L: ClaimLayout + 'static>(producers: usize) -> Repetition
     });
     let elapsed = measured_span(&spans);
     drop(stop);
+    drop(tx);
     let refusals = consumer.join().expect("the consumer must not panic");
     (elapsed, refusals)
 }
