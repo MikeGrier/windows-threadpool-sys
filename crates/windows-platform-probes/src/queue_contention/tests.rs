@@ -628,7 +628,11 @@ fn spread_is_the_slowest_over_the_fastest() {
     let mut run = run(shapes::RESERVING_MPSC, 4, 100_000_000.0);
     run.fastest_nanos_per_op = 10.0;
     run.slowest_nanos_per_op = 13.0;
-    assert!((run.spread().expect("a measured row") - 1.3).abs() < 1e-9, "got {:?}", run.spread());
+    assert!(
+        (run.spread().expect("a measured row") - 1.3).abs() < 1e-9,
+        "got {:?}",
+        run.spread()
+    );
 }
 
 /// A configuration whose repetitions all took the same time has a spread of
@@ -638,7 +642,11 @@ fn spread_of_an_identical_sample_is_one() {
     let mut run = run(shapes::RESERVING_MPSC, 4, 100_000_000.0);
     run.fastest_nanos_per_op = 42.0;
     run.slowest_nanos_per_op = 42.0;
-    assert!((run.spread().expect("a measured row") - 1.0).abs() < 1e-9, "got {:?}", run.spread());
+    assert!(
+        (run.spread().expect("a measured row") - 1.0).abs() < 1e-9,
+        "got {:?}",
+        run.spread()
+    );
 }
 
 /// A shape that failed to run reports zero, and dividing by it would put `inf`
