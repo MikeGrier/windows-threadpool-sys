@@ -1304,13 +1304,20 @@ paraphrase.
 Rule 4 governs where a number lives. This governs whether you state what it *means*. Give the
 figures and the mechanism. Stop. Do not tell the reader what follows for them.
 
-**This holds everywhere, and has no exception for context.** An earlier draft exempted code
-comments, reasoning that `// effectively unreachable` is ordinary idiom read by someone already in
-that code. That exemption is withdrawn, because its boundary cannot be drawn: rustdoc is a code
-comment *and* published prose that people read while deciding whether to adopt something, which is
-the case the rule most needs to cover. A rule with an undecidable boundary gets re-argued at every
-review, and the argument costs more than the rule saves. There is no setting in which writing the
-reader's conclusion for them is wanted, so there is nothing to except.
+**Where it applies is syntactic, so there is nothing to adjudicate.** It governs `.md` files and
+rustdoc — `///` and `//!`. It does not govern an ordinary `//` comment.
+
+That split is about purpose, not about how public the text happens to be. **Rustdoc is not a code
+comment; it is the `.md` colocated with the code** — the same published prose, read by the same
+people, deciding whether to adopt the thing. A `//` comment exists to carry the *developer's
+mind-state* to whoever edits that line next: why this was done this way, what was uncertain, what
+was traded. `// effectively unreachable` there is not a lapse to be tolerated — **conveying a
+judgment, hedges and all, is that comment's whole job**, and flattening it into a bare figure would
+destroy the thing it was written to preserve.
+
+An earlier draft of this rule got the boundary wrong twice: first exempting "code comments" as a
+single category, then withdrawing the exemption on the grounds that rustdoc made the boundary
+undecidable. It is decidable, and it is the slash count.
 
 The failure does not look like an error, which is why it survives review. It reads as helpfulness:
 
@@ -1326,7 +1333,14 @@ The failure does not look like an error, which is why it survives review. It rea
 
 Three words are the usual tell, and each is a conclusion wearing a measurement's clothes:
 **practical**, **effectively**, **reachable**. So are "enough", "negligible", "safe to", and any
-sentence whose subject is the reader.
+sentence whose subject is the reader. In `.md` and rustdoc they mark a violation; in a `//` comment
+they mark a developer saying what they thought, which is wanted.
+
+This is **not a new rule** — it is [D-no-client-prescriptions](../crates/windows-platform-probes/DESIGN-NOTES.md#d-no-client-prescriptions)
+("state what was observed … stop there"), stated once for the repository rather than once for the
+crate that happens to publish measurements. Every instance found so far has been a violation of that
+existing decision rather than a gap in it. Apply it while writing: no checker can find these,
+because nothing is inconsistent.
 
 This is **not a new rule** — it is [D-no-client-prescriptions](../crates/windows-platform-probes/DESIGN-NOTES.md#d-no-client-prescriptions)
 ("state what was observed … stop there"), stated once for the repository rather than once for the
