@@ -1451,3 +1451,46 @@ fn release_on_drop_frees_the_gate_when_spawning_panics() {
         "the guard did not release the gate as its scope unwound"
     );
 }
+
+/// A producer does not start timing until the consumer says it is draining.
+///
+/// This is the window `M4.3` closed: the gate proves the consumer exists and is
+/// scheduled, not that it has reached its first `pop`, so a producer released by
+/// the gate could push into a queue nobody was draining yet -- an undrained
+/// opening to a run whose whole subject is that it is drained.
+///
+/// Asserted by holding the flag clear and showing the producer stays put, then
+/// setting it and showing the producer moves. A test that only set the flag
+/// first would pass against a missing handshake, which is the shape that has
+/// slipped through on this branch before.
+#[test]
+fn a_producer_waits_for_the_consumer_to_announce_that_it_is_draining() {
+    let ready = Arc::new(AtomicBool::new(false));
+    let waited = Arc::new(AtomicBool::new(false));
+
+    let consumer_ready = Arc::clone(&ready);
+    let observed = Arc::clone(&waited);
+    // Detached rather than joined: a regression leaves this parked forever, and
+    // joining would hang the suite instead of failing it.
+    thread::spawn(move || {
+        await_consumer(&consumer_ready);
+        observed.store(true, Ordering::Release);
+    });
+
+    // While the consumer has not announced itself, the producer must not pass.
+    thread::sleep(Duration::from_millis(100));
+    assert!(
+        !waited.load(Ordering::Acquire),
+        "a producer started before the consumer was draining"
+    );
+
+    ready.store(true, Ordering::Release);
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while !waited.load(Ordering::Acquire) {
+        assert!(
+            Instant::now() < deadline,
+            "the producer never observed the consumer's announcement"
+        );
+        thread::sleep(Duration::from_millis(10));
+    }
+}

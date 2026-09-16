@@ -1088,25 +1088,55 @@ impl Drop for StopOnDrop {
     }
 }
 
+/// Holds a producer until the consumer is actually draining.
+///
+/// **The gate is not enough, and the difference is the regime being measured.**
+/// Arriving at the gate proves the consumer exists, is scheduled and is past
+/// thread start-up; it does not prove the consumer has reached its first `pop`.
+/// The gate releases every party together, so a producer could push into a queue
+/// nobody was taking from yet -- an undrained opening to a run whose whole point
+/// is that it is drained. The window was bounded by a scheduling quantum rather
+/// than by thread creation, which is why the gate was still worth having, but it
+/// was not zero.
+///
+/// `Acquire`/`Release` rather than `Relaxed`, though the flag carries no data:
+/// this is the standing "promote the load" answer recorded in the queue crate's
+/// [D-40](../../windows-waitable-queues/DESIGN-NOTES.md#d-40) -- an acquire that
+/// proves unnecessary costs little, while a relaxed load that turns out to have
+/// been load-bearing fails only on hardware nobody here owns.
+///
+/// **This changes what the drained rows measure**, which is why it is `M4.3` and
+/// why the figures taken before it are kept beside the ones taken after rather
+/// than replaced: they are measurements of two different pieces of code, and
+/// both are real.
+fn await_consumer(ready: &AtomicBool) {
+    while !ready.load(Ordering::Acquire) {
+        std::hint::spin_loop();
+    }
+}
+
 fn time_drained_mpsc(producers: usize) -> Repetition {
     let (tx, rx) = slotwise_mpsc::bounded::<u64>(DRAINED_CAPACITY).expect("a valid capacity");
     let done = Arc::new(AtomicBool::new(false));
     let consumer_done = Arc::clone(&done);
     // Set on every exit path, not just the one that returns. See StopOnDrop.
     let stop = StopOnDrop(done);
-    // The consumer is a barrier participant, not merely spawned: spawning is not
+    // Closes the undrained opening the gate alone leaves. See await_consumer.
+    let ready = Arc::new(AtomicBool::new(false));
+    let consumer_ready = Arc::clone(&ready);
+    // The consumer is a gate participant, not merely spawned: spawning is not
     // readiness, and a consumer still in thread start-up while producers push
     // turns the opening of the run into an undrained regime.
     //
-    // Be precise about what this buys, because it is less than it looks. The
-    // barrier guarantees the consumer has ARRIVED -- it exists, is scheduled, and
-    // is past start-up -- not that it reaches its first `pop` before a producer
-    // reaches its first `push`. A release wakes every party at once, so a short
-    // undrained window remains. It is bounded by a scheduling quantum rather than
-    // by thread creation, which is the improvement; it is not zero. Closing it
-    // needs a readiness flag the producers spin on, which would change the
-    // measurement and so obsolete every figure already published against it --
-    // queued as M4.3 rather than taken mid-branch.
+    // The gate alone does not finish the job, which is why `await_consumer`
+    // exists. Arriving proves the consumer exists, is scheduled and is past
+    // start-up; it does not prove the consumer has reached its first `pop`, and
+    // the gate releases every party together. The handshake closes that
+    // remainder: the consumer announces that it is draining, and producers hold
+    // until they see it. This is the M4.3 change, and it MOVED the drained
+    // numbers -- the figures taken before it are kept beside the ones taken
+    // after rather than replaced, because they measure two different pieces of
+    // code.
     let gate = start_gate(producers + 1);
     let consumer_gate = Arc::clone(&gate);
 
@@ -1114,6 +1144,9 @@ fn time_drained_mpsc(producers: usize) -> Repetition {
         if !consumer_gate.arrive_and_wait() {
             return rx.refused();
         }
+        // Announced before the drain loop, so producers start against a
+        // consumer that is running rather than one merely spawned.
+        consumer_ready.store(true, Ordering::Release);
         // Spin rather than park: the doorbell's cost is `doorbell_cost`'s
         // question, and parking here would measure that instead of the claim.
         while !consumer_done.load(Ordering::Relaxed) {
@@ -1130,11 +1163,13 @@ fn time_drained_mpsc(producers: usize) -> Repetition {
         for producer in 0..producers {
             let tx = tx.clone();
             let gate = Arc::clone(&gate);
+            let ready = Arc::clone(&ready);
             workers.push(scope.spawn(move || {
                 if !gate.arrive_and_wait() {
                     // Abandoned before the party completed; see `StartGate`.
                     return (Instant::now(), Instant::now());
                 }
+                await_consumer(&ready);
                 let began = Instant::now();
                 for index in 0..PUSHES_PER_PRODUCER {
                     let mut item = (producer * PUSHES_PER_PRODUCER + index) as u64;
@@ -1199,6 +1234,9 @@ fn time_drained_reserving(producers: usize) -> Repetition {
     let consumer_done = Arc::clone(&done);
     // Set on every exit path, not just the one that returns. See StopOnDrop.
     let stop = StopOnDrop(done);
+    // Closes the undrained opening the gate alone leaves. See await_consumer.
+    let ready = Arc::new(AtomicBool::new(false));
+    let consumer_ready = Arc::clone(&ready);
     // The consumer joins the gate here for the reason it does in the slotwise
     // twin: a run whose opening is undrained is not the regime being measured.
     let gate = start_gate(producers + 1);
@@ -1208,6 +1246,9 @@ fn time_drained_reserving(producers: usize) -> Repetition {
         if !consumer_gate.arrive_and_wait() {
             return rx.refused();
         }
+        // Announced before the drain loop, so producers start against a
+        // consumer that is running rather than one merely spawned.
+        consumer_ready.store(true, Ordering::Release);
         while !consumer_done.load(Ordering::Relaxed) {
             while rx.pop().is_ok() {}
             std::hint::spin_loop();
@@ -1222,11 +1263,13 @@ fn time_drained_reserving(producers: usize) -> Repetition {
         for producer in 0..producers {
             let tx = tx.clone();
             let gate = Arc::clone(&gate);
+            let ready = Arc::clone(&ready);
             workers.push(scope.spawn(move || {
                 if !gate.arrive_and_wait() {
                     // Abandoned before the party completed; see `StartGate`.
                     return (Instant::now(), Instant::now());
                 }
+                await_consumer(&ready);
                 let began = Instant::now();
                 for index in 0..PUSHES_PER_PRODUCER {
                     let mut item = (producer * PUSHES_PER_PRODUCER + index) as u64;
@@ -1274,6 +1317,9 @@ fn time_drained_permit(producers: usize) -> Repetition {
     let consumer_done = Arc::clone(&done);
     // Set on every exit path, not just the one that returns. See StopOnDrop.
     let stop = StopOnDrop(done);
+    // Closes the undrained opening the gate alone leaves. See await_consumer.
+    let ready = Arc::new(AtomicBool::new(false));
+    let consumer_ready = Arc::clone(&ready);
     let gate = start_gate(producers + 1);
     let consumer_gate = Arc::clone(&gate);
 
@@ -1281,6 +1327,9 @@ fn time_drained_permit(producers: usize) -> Repetition {
         if !consumer_gate.arrive_and_wait() {
             return rx.refused();
         }
+        // Announced before the drain loop, so producers start against a
+        // consumer that is running rather than one merely spawned.
+        consumer_ready.store(true, Ordering::Release);
         while !consumer_done.load(Ordering::Relaxed) {
             while rx.pop().is_ok() {}
             std::hint::spin_loop();
@@ -1295,11 +1344,13 @@ fn time_drained_permit(producers: usize) -> Repetition {
         for producer in 0..producers {
             let tx = tx.clone();
             let gate = Arc::clone(&gate);
+            let ready = Arc::clone(&ready);
             workers.push(scope.spawn(move || {
                 if !gate.arrive_and_wait() {
                     // Abandoned before the party completed; see `StartGate`.
                     return (Instant::now(), Instant::now());
                 }
+                await_consumer(&ready);
                 let began = Instant::now();
                 for index in 0..PUSHES_PER_PRODUCER {
                     let mut item = (producer * PUSHES_PER_PRODUCER + index) as u64;
@@ -1397,6 +1448,9 @@ fn time_drained_layout<L: ClaimLayout + 'static>(producers: usize) -> Repetition
     let consumer_done = Arc::clone(&done);
     // Set on every exit path, not just the one that returns. See StopOnDrop.
     let stop = StopOnDrop(done);
+    // Closes the undrained opening the gate alone leaves. See await_consumer.
+    let ready = Arc::new(AtomicBool::new(false));
+    let consumer_ready = Arc::clone(&ready);
     // The consumer joins the gate for the reason its twins do: a run whose
     // opening is undrained is not the regime being measured.
     let gate = start_gate(producers + 1);
@@ -1406,6 +1460,9 @@ fn time_drained_layout<L: ClaimLayout + 'static>(producers: usize) -> Repetition
         if !consumer_gate.arrive_and_wait() {
             return rx.refused();
         }
+        // Announced before the drain loop, so producers start against a
+        // consumer that is running rather than one merely spawned.
+        consumer_ready.store(true, Ordering::Release);
         while !consumer_done.load(Ordering::Relaxed) {
             while rx.pop().is_ok() {}
             std::hint::spin_loop();
@@ -1420,11 +1477,13 @@ fn time_drained_layout<L: ClaimLayout + 'static>(producers: usize) -> Repetition
         for producer in 0..producers {
             let tx = tx.clone();
             let gate = Arc::clone(&gate);
+            let ready = Arc::clone(&ready);
             workers.push(scope.spawn(move || {
                 if !gate.arrive_and_wait() {
                     // Abandoned before the party completed; see `StartGate`.
                     return (Instant::now(), Instant::now());
                 }
+                await_consumer(&ready);
                 let began = Instant::now();
                 for index in 0..PUSHES_PER_PRODUCER {
                     let mut item = (producer * PUSHES_PER_PRODUCER + index) as u64;
