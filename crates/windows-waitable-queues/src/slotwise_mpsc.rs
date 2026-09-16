@@ -84,8 +84,9 @@ use core::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 /// counter cannot lap.
 ///
 /// With `usize` it can. On a 32-bit target the counter laps after 2^32 claims,
-/// which at this crate's disclosed rates is a matter of minutes -- a floor,
-/// since those rates predate a timing correction that lowers them: the stalled
+/// which at the pre-correction planning rate [`reserving_mpsc::ClaimLayout`]
+/// documents is a matter of minutes -- a floor, since that rate overstates
+/// throughput: the stalled
 /// producer then sees the same tail bits, succeeds, and writes a slot that has
 /// since been refilled from the previous lap of the ring. Every other guard in
 /// this shape holds -- the position really is claimed by exactly one producer;
@@ -194,7 +195,8 @@ pub fn bounded<T>(capacity: usize) -> Result<(Producer<T>, Consumer<T>), Capacit
 ///
 /// That avoidance is what distinguishes the two multi-producer shapes, but
 /// **it is not what makes either one faster**: measurement found this shape the
-/// slower of the two under contention on the hosts tried. See the crate
+/// slower of the two under contention on the host the crate's table was taken
+/// on. See the crate
 /// documentation's attributed table for the figures and the conditions they were
 /// taken under. (An earlier version of this sentence gave "by up to 6.4x", a
 /// figure from a two-host capture withdrawn for predating a correction to the

@@ -78,8 +78,9 @@ use crate::metrics::Metrics;
 ///
 /// **64 bits on every target, deliberately, rather than `usize`**, for the same
 /// reason [`slotwise_mpsc`](crate::slotwise_mpsc) made the same choice: a
-/// 32-bit counter laps in minutes at this crate's disclosed rates (a floor,
-/// since they predate a timing correction that lowers them), and a shape
+/// 32-bit counter laps in minutes at the pre-correction planning rate
+/// [`reserving_mpsc::ClaimLayout`] documents (a floor, since that rate
+/// overstates throughput), and a shape
 /// whose soundness depends on the target's pointer width is not one this crate
 /// ships twice over.
 ///

@@ -1024,9 +1024,7 @@ instrument](#d-variance-is-a-finding) for what to try first and how to recognise
 the floor, and M4.2 in [CHECKLIST.md](CHECKLIST.md) for the probe controls that
 make those steps executable without a source edit.
 
-What follows is therefore reported as *data with a known-unexplained spread*,
-which is a reasonable input for planning a deployment on comparable hardware and
-an unreasonable basis for a comparative claim about the layouts.
+What follows is therefore reported as *data with a known-unexplained spread*.
 
 **Isolated regime**, median of the per-run ratios with the observed range beside
 it. The drained regime is reported in the paragraph below the table, and mixing
@@ -1046,8 +1044,8 @@ In the drained regime nothing separates at all -- every u64 layout *and* the
 median is 1.13x at one producer, against a control that reaches 1.27x).
 
 **Widening the word is the one effect this probe establishes.** At sixteen and
-thirty-two producers the isolated 128-bit rows sit three to four times the
-64-bit rows, an order of magnitude outside anything the same-code control does.
+thirty-two producers the isolated 128-bit rows fall outside the same-code
+control band; the `u64` re-apportionments do not, at any producer count.
 That is a real effect on this machine, and its direction is mechanically
 unsurprising -- `cmpxchg16b` against `lock cmpxchg`. Whether it reproduces on
 another microarchitecture is a question for the probe, not for this note.

@@ -555,10 +555,12 @@ adjusting it.
 What made the repair possible was already in the probe's output. `reserving_mpsc`
 and `reserving(32/32)` are the same code at the same layout, measured twice per
 run, so their ratio is an *empirical* answer to "what does no difference look
-like here" -- 0.68-1.27x across seven runs. That is a control the instrument
+like here". That is a control the instrument
 derives rather than a floor the prose asserts, which is
 [D-derived-not-restated](DESIGN-NOTES.md#d-derived-not-restated) applied to a
-measurement instead of to a fact.
+measurement instead of to a fact. Its measured span is in the control table in
+[DESIGN-NOTES.md](DESIGN-NOTES.md#d-variance-is-a-finding), which is where it is
+recorded rather than here.
 
 **The tempting repair was to invert the claim**, since the seven-run medians put
 the re-apportionments at 1.23-1.30x at high producer counts. That would have been

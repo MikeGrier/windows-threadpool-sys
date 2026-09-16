@@ -602,7 +602,7 @@ impl ClaimLayout for Enduring {
 /// **20 years** at the pre-correction planning rate ([`ClaimLayout`]). That is a
 /// longer horizon, not the absence of one, and like every figure in that column
 /// it scales with the caller's rate: a deployment pushing an order of magnitude
-/// faster reaches it in about two.
+/// faster reaches it in about two years.
 ///
 /// 255 reservations is the whole of the trade, and it is a real limit rather
 /// than a nominal one: [`Producer::reserve`] returns `None` once that many are

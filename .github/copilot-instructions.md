@@ -1291,7 +1291,7 @@ sites in three wordings.
   document is not a finding; it is a hand-computed copy of one, checked by nobody and stale the
   moment any input moves. The counts are the finding. This rule was earned: an instructions file in
   this repository claimed "in both cases roughly 60%" about two figures given four words earlier,
-  one of which was 57 of 61 — 93%.
+  one of which was 57 of 61.
 - **The same applies to incidental tallies** — test counts, file counts, line counts. If the number
   is not itself the finding, leave it out; "the gate is green" says what "308 lib tests" pretends to.
 
