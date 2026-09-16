@@ -172,6 +172,32 @@ correctness in the archive.
   Reported by review against this branch; the comment at the slotwise twin now states what the
   barrier actually guarantees rather than implying the window is closed.
 
+- [ ] **M4.6** -- Make the start gate releasable, so a failed thread spawn cannot deadlock the probe.
+
+  **Gap:** every timer sizes a `Barrier` for all planned workers plus the coordinator, then spawns
+  the workers with `Scope::spawn`, which **panics** if the OS cannot create a thread. If that
+  happens after an earlier worker has already parked in `gate.wait()`, the coordinator never reaches
+  its own `wait()`, so the party count is never met. `thread::scope` then joins the parked worker
+  while unwinding, and the join never returns: the probe hangs rather than fails. In the drained
+  timers the consumer is parked on the same barrier, and `StopOnDrop` cannot help, because the scope
+  cannot finish unwinding to drop it.
+
+  **Target:** a gate that can be released short of its party count -- the coordinator must be able to
+  say "nobody else is coming" and have every parked participant return. `std::sync::Barrier` cannot
+  express that (a party count, once set, must be met), so this is a change of primitive rather than a
+  change of call, and it touches every timer plus `start_barrier`'s documented reasoning about what
+  the barrier guarantees. Prefer a specified primitive over a hand-rolled spin, per
+  [DESIGN-NOTES.md](../windows-waitable-queues/DESIGN-NOTES.md#d-40).
+
+  **Why this is queued rather than taken:** it requires replacing a synchronisation primitive whose
+  current semantics are load-bearing for the measurement (see `measured_span`'s note on why each
+  worker times itself, which turns on `Barrier::wait` releasing every party together). Changing it
+  mid-review-round risks the timing argument that several rounds have already been read against, and
+  the failure path it fixes needs the OS to refuse a thread. Raised rather than silently deferred,
+  per the PRIME DIRECTIVE.
+
+  Reported by review against this branch.
+
 - [ ] **M2.5** -- Make the banner describe the read the body describes.
 
   Gated by M3.1 and M3.3, both landed: establishing that the middle of three discoveries agreed
