@@ -1148,22 +1148,54 @@ fn ratio_bounds_rejects_non_finite_endpoints() {
         "the fixture must otherwise produce a bound, or this proves nothing"
     );
 
+    // **All four endpoints, each on its own.** An earlier version of this test
+    // poisoned `numerator.fastest` and `denominator.slowest` only -- the two
+    // that feed the LOWER bound -- so dropping either of the upper bound's
+    // endpoints from the guard would have left it green while `ratio_bounds`
+    // returned a `NaN` high.
+    /// A named span endpoint, so each can be poisoned independently.
+    type Endpoint = (&'static str, fn(&mut Run, f64));
+    let fields: [Endpoint; 2] = [
+        ("fastest", |run, value| run.fastest_nanos_per_op = value),
+        ("slowest", |run, value| run.slowest_nanos_per_op = value),
+    ];
     for poison in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
-        let mut numerator = sound;
-        numerator.fastest_nanos_per_op = poison;
-        assert_eq!(
-            ratio_bounds(numerator, sound),
-            None,
-            "a {poison} numerator span must not reach the division"
-        );
+        for (field, set) in fields {
+            let mut numerator = sound;
+            set(&mut numerator, poison);
+            assert_eq!(
+                ratio_bounds(numerator, sound),
+                None,
+                "numerator.{field} = {poison} must not reach the division"
+            );
 
-        let mut denominator = sound;
-        denominator.slowest_nanos_per_op = poison;
-        assert_eq!(
-            ratio_bounds(sound, denominator),
-            None,
-            "a {poison} denominator span must not reach the division"
-        );
+            let mut denominator = sound;
+            set(&mut denominator, poison);
+            assert_eq!(
+                ratio_bounds(sound, denominator),
+                None,
+                "denominator.{field} = {poison} must not reach the division"
+            );
+
+            // The medians are still sound, so the point estimate is publishable
+            // and the *bound* is not. What must never appear is a bracket built
+            // from a poisoned endpoint.
+            for (label, rendered) in [
+                (
+                    "numerator",
+                    format_ratio_bounded(Some(numerator), Some(sound)),
+                ),
+                (
+                    "denominator",
+                    format_ratio_bounded(Some(sound), Some(denominator)),
+                ),
+            ] {
+                assert!(
+                    !rendered.contains('['),
+                    "{label}.{field} = {poison} rendered an interval: {rendered:?}"
+                );
+            }
+        }
     }
 }
 
@@ -1243,6 +1275,24 @@ fn scaling_bounds_at_one_producer_is_exactly_one() {
         "a genuine comparison of two rows still spans an interval, got \
          [{low}, {high}]"
     );
+
+    // A present-but-unmeasured one-producer row must not get the exact bound.
+    // `find` returns it, so the identity case would otherwise report perfect
+    // certainty about a shape that measured nothing.
+    for absent in [0.0, f64::NAN, f64::INFINITY] {
+        let mut row = run_spanning(shapes::RESERVING_MPSC, 1, 4.0, 5.0, 6.0);
+        row.nanos_per_op = absent;
+        let observation = Observation {
+            isolated: vec![row],
+            drained: Vec::new(),
+            available_parallelism: Some(8),
+        };
+        assert_eq!(
+            observation.scaling_bounds(&observation.isolated, shapes::RESERVING_MPSC, 1),
+            None,
+            "a row reporting {absent} has no scaling to bound"
+        );
+    }
 }
 
 /// The stop flag must be set on the path where nobody sets it explicitly.

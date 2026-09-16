@@ -355,6 +355,15 @@ impl Observation {
     ) -> Option<(f64, f64)> {
         let one = self.find(regime, shape, 1)?;
         let many = self.find(regime, shape, producers)?;
+        // Asked before the identity case below, not after: a row that did not
+        // run is still a row, so `find` returns it and `producers == 1` would
+        // otherwise hand back an exact `(1.0, 1.0)` for a shape that measured
+        // nothing. The point estimate goes `NaN` in that case and the current
+        // renderer suppresses it, but this is a public method and a caller
+        // reading the bound on its own would see a certainty that is not there.
+        if !one.is_measured() || !many.is_measured() {
+            return None;
+        }
         if producers == 1 {
             // **The one-producer row is a row divided by itself.** Its scaling is
             // exactly 1.0 by construction, not approximately 1.0 by measurement,
