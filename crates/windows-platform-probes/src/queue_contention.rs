@@ -206,14 +206,22 @@ impl Run {
     /// says the figure beside it is one draw from a distribution this host does
     /// not hold still, which is the reading the median alone hides.
     ///
-    /// Zero when the fastest repetition took no measurable time, which cannot
-    /// happen for a real run and is reported rather than divided by.
+    /// `None` when the fastest repetition took no measurable time, which cannot
+    /// happen for a real run and marks a shape that did not run at all.
+    ///
+    /// **This returns an `Option` rather than a sentinel, and that is the whole
+    /// point.** An earlier version returned `0.0` for the unmeasurable case,
+    /// reasoning that zero is not a plausible spread. It renders as `0.00x`,
+    /// which reads as *perfect stability* -- the most reassuring cell the column
+    /// can contain, produced by a row that measured nothing. Every neighbouring
+    /// accessor already returns `Option` for the same situation; this one was
+    /// the exception, and the exception is what a renderer got wrong.
     #[must_use]
-    pub fn spread(&self) -> f64 {
+    pub fn spread(&self) -> Option<f64> {
         if self.fastest_nanos_per_op > 0.0 {
-            self.slowest_nanos_per_op / self.fastest_nanos_per_op
+            Some(self.slowest_nanos_per_op / self.fastest_nanos_per_op)
         } else {
-            0.0
+            None
         }
     }
 }
@@ -408,7 +416,7 @@ pub fn render_table(out: &mut dyn fmt::Write, runs: &[Run]) {
                 "{:.1}-{:.1}",
                 run.fastest_nanos_per_op, run.slowest_nanos_per_op
             ),
-            format_scaling(Some(run.spread())),
+            format_scaling(run.spread()),
         );
     }
 }

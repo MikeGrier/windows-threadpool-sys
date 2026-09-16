@@ -628,7 +628,7 @@ fn spread_is_the_slowest_over_the_fastest() {
     let mut run = run(shapes::RESERVING_MPSC, 4, 100_000_000.0);
     run.fastest_nanos_per_op = 10.0;
     run.slowest_nanos_per_op = 13.0;
-    assert!((run.spread() - 1.3).abs() < 1e-9, "got {}", run.spread());
+    assert!((run.spread().expect("a measured row") - 1.3).abs() < 1e-9, "got {:?}", run.spread());
 }
 
 /// A configuration whose repetitions all took the same time has a spread of
@@ -638,21 +638,26 @@ fn spread_of_an_identical_sample_is_one() {
     let mut run = run(shapes::RESERVING_MPSC, 4, 100_000_000.0);
     run.fastest_nanos_per_op = 42.0;
     run.slowest_nanos_per_op = 42.0;
-    assert!((run.spread() - 1.0).abs() < 1e-9, "got {}", run.spread());
+    assert!((run.spread().expect("a measured row") - 1.0).abs() < 1e-9, "got {:?}", run.spread());
 }
 
 /// A shape that failed to run reports zero, and dividing by it would put `inf`
 /// in a column a reader takes for a measurement -- the same guard
 /// `format_ratio` carries.
+/// A row that never ran has no spread to report. It used to answer `0.0` here,
+/// which the report rendered as `0.00x` -- the most reassuring value the column
+/// can hold, meaning "perfectly stable", produced by a shape that measured
+/// nothing. `None` is the honest answer and the renderer turns it into `--`.
 #[test]
-fn spread_of_a_zero_sample_is_zero_rather_than_infinite() {
+fn spread_of_a_zero_sample_is_none_rather_than_a_reassuring_number() {
     let mut run = run(shapes::SLOTWISE_MPSC, 4, 0.0);
     run.fastest_nanos_per_op = 0.0;
     run.slowest_nanos_per_op = 0.0;
-    assert_eq!(run.spread(), 0.0);
-    assert!(
-        run.spread().is_finite(),
-        "the spread must never be infinite"
+    assert_eq!(run.spread(), None, "an unmeasured row has no spread");
+    assert_eq!(
+        format_scaling(run.spread()),
+        "--",
+        "and it must not render as a number"
     );
 }
 
@@ -888,4 +893,26 @@ fn both_ratio_formatters_reject_the_same_unmeasurable_rows() {
             "format_ratio_bounded accepted an unmeasurable pair"
         );
     }
+}
+
+/// The renderer is where the sentinel did its damage, so the guard is asserted
+/// there and not only on the accessor. A row that measured nothing must show
+/// `--` in the spread column rather than a number a reader would take for
+/// stability.
+#[test]
+fn render_table_marks_an_unmeasured_spread_rather_than_printing_zero() {
+    let mut absent = run(shapes::SLOTWISE_MPSC, 8, 0.0);
+    absent.fastest_nanos_per_op = 0.0;
+    absent.slowest_nanos_per_op = 0.0;
+    let mut out = String::new();
+    render_table(&mut out, &[absent]);
+    let row = out.lines().nth(1).expect("one row was rendered");
+    assert!(
+        !row.contains("0.00x"),
+        "an unmeasured row rendered a spread that reads as perfect stability: {row:?}"
+    );
+    assert!(
+        row.contains("--"),
+        "an unmeasured spread must be marked: {row:?}"
+    );
 }
