@@ -323,21 +323,4 @@ IDs keep their M2 numbers, for the reason given under M4.
 
 - [x] **M2.14.2** -- Add to CONTRACT INTEGRITY rule 1 the one thing this branch learned that it does NOT already say. -> [completed 2026-09-13](COMPLETED-CHECKLIST.md#m2142)
 
-- [ ] **M2.16** -- Repair the garbled `Report` doc comment, and drop the two counts that have already
-  rotted beside it.
-
-  [src/report.rs](src/report.rs) opens its `Report` sink doc with a dangling fragment -- "A [`Report`]
-  a renderer can `writeln!` into directly." followed by a blank line and then "is arithmetic. Every
-  renderer writes through ..." -- so a sentence was lost in an edit, and "moves only 18 renderer
-  signatures." is followed by a bare repeat of the word "signatures." Introduced 2026-09-09 by
-  `b5594860` and `3827dc32`, both already on main; found while sweeping a count defect on the report
-  -oracle branch, where the file was out of scope to touch.
-
-  Both surviving numbers in that passage are censuses that have since drifted. It claims **332
-  `writeln!` sites**; measured now, 354. [DESIGN-NOTES.md](DESIGN-NOTES.md) restates the same 332,
-  so the two must be fixed together or they drift apart again. Replace them with the invariant the
-  passage is actually arguing -- that `String` already implements `fmt::Write`, so every existing
-  write site stands untouched and only the renderer signatures move -- which is what makes the point
-  and cannot rot. This is the same defect class as CONTRACT INTEGRITY rule 1 in
-  [.github/copilot-instructions.md](../../.github/copilot-instructions.md), which M2.14 exists to
-  make bite.
+- [x] **M2.16** -- Repair the garbled `Report` doc comment, and drop the two counts that had rotted beside it. -> [completed 2026-09-16 UTC-04:00](COMPLETED-CHECKLIST.md#m216)

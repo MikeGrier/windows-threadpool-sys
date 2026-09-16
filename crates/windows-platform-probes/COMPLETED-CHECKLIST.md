@@ -1202,3 +1202,38 @@ earlier capture remains what the earlier instrument measured, and both are label
 that produced them. The finding survived the re-measurement -- every layout median still sits inside
 the same-code control band in the drained regime -- which is worth stating precisely because it was
 not guaranteed: the drained conclusion did not depend on the window it had been measured through.
+
+## Moved 2026-09-16 17:31:31 UTC-04:00 -- M2.16: the census that broke the prose around it
+
+### <a id="m216"></a>M2.16 -- Repair the garbled `Report` doc comment, and drop the two counts that had rotted beside it. *(completed 2026-09-16 17:31:31 UTC-04:00)*
+
+`src/report.rs` opened its `Report` sink doc with a dangling fragment -- a title line, a blank line,
+then "is arithmetic. Every renderer writes through ..." -- and further down repeated the bare word
+"signatures." after the sentence that already ended in it. Both were introduced on 2026-09-09.
+
+**The history is the point, and it was recovered rather than guessed.** `b5594860` wrote the passage
+with a full sentence -- "This is the answer to 'how does a formatted line reach the sink', and the
+reason it is a `std::fmt::Write` adapter rather than a method on `Report` is arithmetic" -- and a
+count of **504** write sites. `3827dc32`, titled "Update comments in report.rs for better clarity",
+revised that count to **332** and, in the same edit, deleted the two lines that carried the sentence.
+So the edit that maintained the census is the edit that broke the prose, which is as direct an
+argument for CONTRACT INTEGRITY rule 4 as this repository has produced.
+
+The two homes were fixed together, because fixing one alone would have created a fresh disagreement:
+
+- **`src/report.rs`** states the property instead of the count. `String` already implements
+  `fmt::Write`, so a sink that does too leaves every write site untouched and moves only the renderer
+  signatures. That is what makes the point, and it cannot rot. The lost sentence is restored, the
+  duplicated word removed, and the census delegated to the design note by link.
+- **`DESIGN-NOTES.md`** keeps the numbers, because there they *are* the finding: the decision was
+  taken by counting, and the entry contrasts M1's estimate of "upwards of 160" with what re-measuring
+  found. They are now pinned as the census *as it stood on 2026-09-09 when the decision was taken*
+  rather than stated in the present tense as a description of the crate now, and the passage no longer
+  repeats the figure four times to make its argument.
+
+**A third home was found by sweeping and deliberately left alone.** `COMPLETED-CHECKLIST.md`'s
+archived `M1.1` entry restates 332 and 18. It is pre-existing on main rather than authored by this
+branch, it sits in an append-only archive dated by its own heading, and there the count is the whole
+of the record -- the entry exists to say that the estimate was wrong and that re-measuring decided
+the question. Rewriting it would have been an archive rewrite in service of tidiness. The design
+note's new wording agrees with it rather than contradicting it.

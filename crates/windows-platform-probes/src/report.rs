@@ -92,13 +92,21 @@ impl Captured {
 
 /// A [`Report`] a renderer can `writeln!` into directly.
 ///
-/// is arithmetic. Every renderer writes through `writeln!(out, ...)` against a
-/// `String`, at **332 sites** across this crate; a sink method taking
+/// This is the answer to "how does a formatted line reach the sink", and the
+/// reason it is a [`std::fmt::Write`] adapter rather than a method on [`Report`]
+/// is a property rather than a count. Every renderer writes through
+/// `writeln!(out, ...)` against a `String`; a sink method taking
 /// `fmt::Arguments` would have been explicit but would have rewritten every one
-/// of them, while `String` already implements `fmt::Write`, so a sink that does
-/// too lets those sites stand untouched and moves only 18 renderer signatures.
-/// signatures. The recorded reasoning is in
-/// [DESIGN-NOTES.md](../DESIGN-NOTES.md#d-streaming-report).
+/// of those sites, while `String` already implements `fmt::Write` -- so a sink
+/// that does too lets every write site stand untouched and moves only the
+/// renderer signatures.
+///
+/// The census that decided it is recorded in
+/// [DESIGN-NOTES.md](../DESIGN-NOTES.md#d-streaming-report) rather than repeated
+/// here, because a count in prose is a copy somebody has to keep true. This
+/// passage carried one, and the edit that revised it is the same edit that
+/// dropped the sentence above and left this comment reading "is arithmetic"
+/// with nothing before it.
 ///
 /// # Lines are reassembled here, because `fmt::Write` does not speak in them
 ///

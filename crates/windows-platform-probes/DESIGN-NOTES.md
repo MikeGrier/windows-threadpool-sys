@@ -1162,18 +1162,28 @@ The choice was between giving `Report` a method taking `fmt::Arguments` (with a
 `report_line!` macro), implementing `fmt::Write` on a sink so existing
 `writeln!` calls keep working, and keeping the `String` while flushing it at
 line boundaries. **It was decided by counting rather than by taste.** Every
-renderer already writes through `writeln!(out, ...)` against a `String`'s
-`fmt::Write`, at **332 sites** in this crate; only 18 functions take the `&mut
-String` those sites write into. A sink method would have been the most explicit
-option and would have rewritten all 332; `fmt::Write` moves the 18 and leaves
-the 332 untouched, because `String` implements `fmt::Write` too and the call
-sites cannot tell the difference.
+renderer already wrote through `writeln!(out, ...)` against a `String`'s
+`fmt::Write`, at far more sites than there were functions taking the `&mut
+String` they wrote into. A sink method would have been the most explicit option
+and would have rewritten every one of those write sites; `fmt::Write` moves the
+signatures and leaves the write sites untouched, because `String` implements
+`fmt::Write` too and the call sites cannot tell the difference.
 
-Worth recording that M1 estimated "upwards of 160" of those sites. The real
-figure is twice that, and it is the whole of the argument -- an option whose
-cost is "rewrite every call site" is affordable at 160 and is not at 332. A
-plan's estimate is worth re-measuring at the moment it becomes a decision.
+**The census as it stood when the decision was taken, on 2026-09-09: 332 write
+sites against 18 signatures.** It is recorded as what was measured that day, not
+as a description of the crate now, and the distinction earns its place here. The
+same passage in the sink's own doc comment first carried 504 sites and "about
+twenty" functions; the edit that revised those figures is the same edit that
+dropped a sentence out of that comment and left it reading "is arithmetic" with
+nothing before it. Keeping the census true by hand is what broke the prose
+around it. The relation above is what the decision actually turned on, and it
+cannot rot.
 
+Worth recording that M1 estimated "upwards of 160" of those sites, and the
+measured figure was roughly twice that. The gap is the whole of the argument --
+an option whose cost is "rewrite every call site" is affordable at 160 and is
+not at twice that. A plan's estimate is worth re-measuring at the moment it
+becomes a decision.
 ### What the adapter has to reassemble, and why that is not a detail
 
 `fmt::Write` is **line-agnostic**: `write_str` receives whatever slices the
