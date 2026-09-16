@@ -371,11 +371,11 @@ fn render(out: &mut dyn std::fmt::Write) {
     );
     let _ = writeln!(
         out,
-        "     what 'no difference' looks like on this host -- which across seven"
+        "     what 'no difference' looks like on this host -- read it against"
     );
     let _ = writeln!(
         out,
-        "     runs was not zero, and was wide enough to swallow the layout rows."
+        "     the layout rows before calling any of them apart."
     );
     let _ = writeln!(
         out,

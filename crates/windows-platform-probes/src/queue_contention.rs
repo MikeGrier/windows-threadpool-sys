@@ -1088,7 +1088,7 @@ impl Drop for StopOnDrop {
     }
 }
 
-/// Holds a producer until the consumer is actually draining.
+/// Holds a producer until the consumer has drained at least once.
 ///
 /// **The gate is not enough, and the difference is the regime being measured.**
 /// Arriving at the gate proves the consumer exists, is scheduled and is past
@@ -1098,6 +1098,13 @@ impl Drop for StopOnDrop {
 /// is that it is drained. The window was bounded by a scheduling quantum rather
 /// than by thread creation, which is why the gate was still worth having, but it
 /// was not zero.
+///
+/// **What this guarantees, stated exactly.** No producer begins timing until the
+/// consumer has executed its pop path at least once. It does *not* guarantee the
+/// consumer is draining continuously from then on -- nothing a flag can express
+/// would, since the consumer can be descheduled at any point afterwards, as it
+/// can at any point during the run. What it removes is the case where producers
+/// push into a queue whose consumer has not yet run at all.
 ///
 /// `Acquire`/`Release` rather than `Relaxed`, though the flag carries no data:
 /// this is the standing "promote the load" answer recorded in the queue crate's
@@ -1131,12 +1138,13 @@ fn time_drained_mpsc(producers: usize) -> Repetition {
     // The gate alone does not finish the job, which is why `await_consumer`
     // exists. Arriving proves the consumer exists, is scheduled and is past
     // start-up; it does not prove the consumer has reached its first `pop`, and
-    // the gate releases every party together. The handshake closes that
-    // remainder: the consumer announces that it is draining, and producers hold
-    // until they see it. This is the M4.3 change, and it MOVED the drained
-    // numbers -- the figures taken before it are kept beside the ones taken
-    // after rather than replaced, because they measure two different pieces of
-    // code.
+    // the gate releases every party together. The handshake narrows that
+    // remainder to a stated guarantee: no producer begins timing until the
+    // consumer has executed its pop path at least once. Continuous draining is
+    // not guaranteed and cannot be by a flag. This is the M4.3 change, and it
+    // MOVED the drained numbers -- the figures taken before it are kept beside
+    // the ones taken after rather than replaced, because they measure two
+    // different pieces of code.
     let gate = start_gate(producers + 1);
     let consumer_gate = Arc::clone(&gate);
 
@@ -1144,8 +1152,14 @@ fn time_drained_mpsc(producers: usize) -> Repetition {
         if !consumer_gate.arrive_and_wait() {
             return rx.refused();
         }
-        // Announced before the drain loop, so producers start against a
-        // consumer that is running rather than one merely spawned.
+        // **One drain attempt BEFORE announcing, not merely reaching the loop.**
+        // Publishing first proves only that the consumer is about to drain: it
+        // can be descheduled between the store and its first `pop`, which is the
+        // same undrained opening in a narrower form. Popping first makes the
+        // announcement mean `this consumer has executed the pop path`, which is a
+        // fact rather than an intention. The queue is empty here, so it costs one
+        // failed pop, and it happens before any producer has started timing.
+        let _ = rx.pop();
         consumer_ready.store(true, Ordering::Release);
         // Spin rather than park: the doorbell's cost is `doorbell_cost`'s
         // question, and parking here would measure that instead of the claim.
@@ -1246,8 +1260,14 @@ fn time_drained_reserving(producers: usize) -> Repetition {
         if !consumer_gate.arrive_and_wait() {
             return rx.refused();
         }
-        // Announced before the drain loop, so producers start against a
-        // consumer that is running rather than one merely spawned.
+        // **One drain attempt BEFORE announcing, not merely reaching the loop.**
+        // Publishing first proves only that the consumer is about to drain: it
+        // can be descheduled between the store and its first `pop`, which is the
+        // same undrained opening in a narrower form. Popping first makes the
+        // announcement mean `this consumer has executed the pop path`, which is a
+        // fact rather than an intention. The queue is empty here, so it costs one
+        // failed pop, and it happens before any producer has started timing.
+        let _ = rx.pop();
         consumer_ready.store(true, Ordering::Release);
         while !consumer_done.load(Ordering::Relaxed) {
             while rx.pop().is_ok() {}
@@ -1327,8 +1347,14 @@ fn time_drained_permit(producers: usize) -> Repetition {
         if !consumer_gate.arrive_and_wait() {
             return rx.refused();
         }
-        // Announced before the drain loop, so producers start against a
-        // consumer that is running rather than one merely spawned.
+        // **One drain attempt BEFORE announcing, not merely reaching the loop.**
+        // Publishing first proves only that the consumer is about to drain: it
+        // can be descheduled between the store and its first `pop`, which is the
+        // same undrained opening in a narrower form. Popping first makes the
+        // announcement mean `this consumer has executed the pop path`, which is a
+        // fact rather than an intention. The queue is empty here, so it costs one
+        // failed pop, and it happens before any producer has started timing.
+        let _ = rx.pop();
         consumer_ready.store(true, Ordering::Release);
         while !consumer_done.load(Ordering::Relaxed) {
             while rx.pop().is_ok() {}
@@ -1460,8 +1486,14 @@ fn time_drained_layout<L: ClaimLayout + 'static>(producers: usize) -> Repetition
         if !consumer_gate.arrive_and_wait() {
             return rx.refused();
         }
-        // Announced before the drain loop, so producers start against a
-        // consumer that is running rather than one merely spawned.
+        // **One drain attempt BEFORE announcing, not merely reaching the loop.**
+        // Publishing first proves only that the consumer is about to drain: it
+        // can be descheduled between the store and its first `pop`, which is the
+        // same undrained opening in a narrower form. Popping first makes the
+        // announcement mean `this consumer has executed the pop path`, which is a
+        // fact rather than an intention. The queue is empty here, so it costs one
+        // failed pop, and it happens before any producer has started timing.
+        let _ = rx.pop();
         consumer_ready.store(true, Ordering::Release);
         while !consumer_done.load(Ordering::Relaxed) {
             while rx.pop().is_ok() {}
