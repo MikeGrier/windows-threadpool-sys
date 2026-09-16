@@ -191,6 +191,33 @@ correctness in the archive.
   explicitly after being pointed at the question. Nothing in the suite decides it either way, which is
   itself the argument for making it an invariant rather than a test.
 
+- [ ] **M4.7** -- Make the queue-contention report renderer testable, by taking the observation as an
+  argument instead of measuring inside it.
+
+  **Gap:** `render` in [src/bin/queue_contention.rs](src/bin/queue_contention.rs) calls `measure()`
+  itself, so the only way to exercise it is to run the whole ~65-second host-dependent measurement.
+  Everything it does beyond the library's `render_table` is therefore unreached by the suite: the
+  three tables' assembly, the derived column widths, the `cfg`-dependent `Wide` rows, and the
+  interpretation text between them.
+
+  **This is not hypothetical, and that is the argument for the item.** Two defects shipped through
+  exactly this gap on the branch that wrote it. The scaling and drained-comparison tables hard-coded
+  a column width of 22 for formatters whose output has no fixed maximum, so a wide cell silently
+  pushed later columns out of line with their headers; and the drained footer printed a seven-run
+  control result beneath a table produced by a single invocation. Both were found by reading. A
+  fixture over the renderer would have caught the first mechanically and made the second visible.
+
+  **Target:** a sibling that takes `&Observation` -- `render` keeps its signature and calls it with
+  `measure()`, so the binary's behaviour is unchanged -- and fixture-based tests over synthetic
+  observations. [src/topology_report.rs](src/topology_report.rs) is the precedent in this crate:
+  rendering moved into the library precisely so fixture observations could drive it. Note the test
+  file cannot be an inline `mod tests` per the repository's Rust rules, and a binary needs the
+  `src/bin/<name>/main.rs` layout to carry a sibling `tests.rs`;
+  `windows-placement-probe`'s `src/bin/placement_probe/` is the worked example.
+
+  Reported by review against this branch, and queued rather than taken because it is a refactor of
+  the report's structure at a point where the branch is converging, not a defect.
+
 - [ ] **M2.15** -- Run the probe suite on a second architecture in CI.
 
   **Keeps its conclusion but loses its evidence.** The five failures cited below were all

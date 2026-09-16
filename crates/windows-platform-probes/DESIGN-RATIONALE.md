@@ -596,11 +596,12 @@ control the probe derives rather than asserts, built from two rows that are the
 same code at the same layout. It immediately did its job, withdrawing a claim
 that had survived several reviews.
 
-It also very nearly produced a second error. Having found that the control spans
-0.68-1.27x, the natural next move is to use it: judge every ratio against that
+It also very nearly produced a second error. Having measured the control's span,
+the natural next move is to use it: judge every ratio against that
 band, mark what falls outside, and report the result. That is what the first
 draft of the section did. But two measurements of identical code in the same run
-differing by 27% is not a fact about the queue at all -- it is the instrument
+differing by as much as they did is not a fact about the queue at all -- it is
+the instrument
 telling you something, and using it as a ruler while declining to ask why it is
 elastic is how a methodological problem becomes permanent. The control had been
 promoted from *symptom* to *tool* without anyone deciding to do that.

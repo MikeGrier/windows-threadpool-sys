@@ -6,8 +6,11 @@ say?
 
 **This is a second capture, not a replacement for the first.** The figures in
 [DESIGN-NOTES.md](../../DESIGN-NOTES.md) that predate `M4.3` measured a probe
-whose producers could begin pushing before the consumer reached its first `pop`.
-These measured a probe where they cannot. Both are real measurements; they are
+whose producers could begin pushing before the consumer had run at all. These
+measured a probe where no producer begins timing until the consumer has executed
+its pop path at least once. That is the guarantee, stated exactly: continuous
+draining is not guaranteed and no flag could express it, since the consumer can
+be descheduled afterwards as it can at any point in the run. Both are real
 measurements of two different pieces of code, so they are kept side by side and
 each is labelled with the instrument that produced it.
 

@@ -1145,8 +1145,8 @@ reassuring cell the column can hold, produced by a row that measured nothing. `s
 original wording is noted rather than quietly replaced because it did not merely go stale: it
 presented returning zero as the fix, when returning zero was the defect.)*
 
-Nine tests cover it, verified load-bearing by sabotage: taking the fastest from the median index
-instead of the minimum fails `median_run_carries_the_fastest_and_slowest_repetitions`.
+Verified load-bearing by sabotage: taking the fastest from the median index instead of the minimum
+fails `median_run_carries_the_fastest_and_slowest_repetitions`.
 
 The dispersion justified itself on first capture. `slotwise_mpsc` at two producers spans 19.3 to
 59.5 ns/op within one configuration on one host, which the median alone had
@@ -1177,8 +1177,8 @@ instead of unblocking it.
 Applied to all nine timers at once, since they share the defect and this branch had three times
 shipped a correct fix applied to a subset of its call sites.
 
-**Two of the four new tests were first written to assert on the test thread, and sabotage caught
-both**: with `release` neutered they parked the test rather than failing it, which would wedge a
+**Some of the new gate tests were first written to assert on the test thread, and sabotage caught
+them**: with `release` neutered they parked the test rather than failing it, which would wedge a
 suite that runs its tests as threads in one process. Every gate test now arrives off-thread and
 polls, so a regression reddens in five seconds.
 
@@ -1194,7 +1194,7 @@ hold until they see that before starting their clocks. Applied to all four drain
 **The blocker recorded when this was queued was real, and it is what made the item large.** The
 change moves the drained numbers, so every drained figure already published measured a different
 piece of code. Re-measured on the same host, three whole-probe invocations, committed as a capture
-at `captures/2026-09-16-drained-handshake/` with the summarising script beside the raw runs so the
+at [captures/2026-09-16-drained-handshake/](captures/2026-09-16-drained-handshake/README.md) with the summarising script beside the raw runs so the
 derivation can be checked rather than trusted.
 
 **The figures are amended rather than replaced**, because this is new data and not a correction: the
@@ -1207,7 +1207,7 @@ not guaranteed: the drained conclusion did not depend on the window it had been 
 
 ### <a id="m216"></a>M2.16 -- Repair the garbled `Report` doc comment, and drop the two counts that had rotted beside it. *(completed 2026-09-16 17:31:31 UTC-04:00)*
 
-`src/report.rs` opened its `Report` sink doc with a dangling fragment -- a title line, a blank line,
+[src/report.rs](src/report.rs) opened its `Report` sink doc with a dangling fragment -- a title line, a blank line,
 then "is arithmetic. Every renderer writes through ..." -- and further down repeated the bare word
 "signatures." after the sentence that already ended in it. Both were introduced on 2026-09-09.
 
@@ -1221,11 +1221,11 @@ argument for CONTRACT INTEGRITY rule 4 as this repository has produced.
 
 The two homes were fixed together, because fixing one alone would have created a fresh disagreement:
 
-- **`src/report.rs`** states the property instead of the count. `String` already implements
+- **[src/report.rs](src/report.rs)** states the property instead of the count. `String` already implements
   `fmt::Write`, so a sink that does too leaves every write site untouched and moves only the renderer
   signatures. That is what makes the point, and it cannot rot. The lost sentence is restored, the
   duplicated word removed, and the census delegated to the design note by link.
-- **`DESIGN-NOTES.md`** keeps the numbers, because there they *are* the finding: the decision was
+- **[DESIGN-NOTES.md](DESIGN-NOTES.md)** keeps the numbers, because there they *are* the finding: the decision was
   taken by counting, and the entry contrasts M1's estimate of "upwards of 160" with what re-measuring
   found. They are now pinned as the census *as it stood on 2026-09-09 when the decision was taken*
   rather than stated in the present tense as a description of the crate now, and the passage no longer

@@ -84,9 +84,12 @@ use core::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 /// counter cannot lap.
 ///
 /// With `usize` it can. On a 32-bit target the counter laps after 2^32 claims,
-/// which at the pre-correction planning rate [`reserving_mpsc::ClaimLayout`]
-/// documents is a matter of minutes -- a floor, since that rate overstates
-/// throughput: the stalled
+/// which is a matter of minutes at the reference rate
+/// [`reserving_mpsc::ClaimLayout`] documents. **That rate is `reserving_mpsc`'s,
+/// and is used here only as an arithmetic input rather than as a bound on this
+/// shape**: this shape's own measured throughput differs, and at low producer
+/// counts exceeds it, so the interval is neither a floor nor a forecast for it.
+/// The stalled
 /// producer then sees the same tail bits, succeeds, and writes a slot that has
 /// since been refilled from the previous lap of the ring. Every other guard in
 /// this shape holds -- the position really is claimed by exactly one producer;
@@ -554,8 +557,9 @@ impl<T> Producer<T> {
         // asked for the answer.
         //
         // Note what this property does *not* buy: measurement found this shape
-        // slower than `reserving_mpsc` under contention despite it. Why is not
-        // established -- the probe times the complete push, so the sequence read
+        // slower than `reserving_mpsc` under contention despite it. Why that is
+        // so is not established -- the probe times the complete push, so the
+        // sequence read
         // is one term among several and is never isolated. An earlier version of
         // this comment attributed it to the slot sequence marching through
         // memory while other producers write it; that mechanism is plausible and

@@ -558,10 +558,10 @@ impl ClaimWord for u128 {
 /// or more producers, the queue can **silently lose an item**: that is the whole
 /// of the `SH-14.1` exposure, and this layout carries it.
 ///
-/// It is the default because it is what the shape shipped with, not because the
-/// division is a good one: the reservation field it buys is far
-/// beyond any use this crate has seen -- and beyond what its own capacity
-/// permits -- while the exposure is what pays for it.
+/// It is the default because it is what the shape shipped with. The reservation
+/// field it buys is far beyond any use this crate has seen -- and beyond what
+/// its own capacity permits -- while the position half is what sets the
+/// exposure.
 /// [`Enduring`] and [`Perpetual`] spend that field the other way --
 /// [`Enduring`] holds up to 65,535 outstanding reservations, [`Perpetual`] up to
 /// 255 -- each reachable only when the queue's capacity is at least that
