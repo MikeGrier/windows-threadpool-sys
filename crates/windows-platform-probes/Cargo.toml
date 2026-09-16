@@ -84,7 +84,7 @@ path = "src/bin/request_cost.rs"
 
 [[bin]]
 name = "probe-queue-contention"
-path = "src/bin/queue_contention.rs"
+path = "src/bin/queue_contention/main.rs"
 
 # These two are the same code, and that is the measurement: they differ only in
 # whether `build.rs` embeds the `longPathAware` manifest, which is not a runtime

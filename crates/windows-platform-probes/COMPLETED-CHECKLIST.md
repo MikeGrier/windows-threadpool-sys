@@ -1237,3 +1237,42 @@ branch, it sits in an append-only archive dated by its own heading, and there th
 of the record -- the entry exists to say that the estimate was wrong and that re-measuring decided
 the question. Rewriting it would have been an archive rewrite in service of tidiness. The design
 note's new wording agrees with it rather than contradicting it.
+
+## Moved 2026-09-16 18:40:00 UTC-04:00 -- M4.7: the report renderer, driven by a corpus
+
+### <a id="m47"></a>M4.7 -- Make the queue-contention report renderer testable, by taking the observation as an argument instead of measuring inside it. *(completed 2026-09-16 18:40:00 UTC-04:00)*
+
+`render` called `measure()` itself, so the only way to exercise it was a ~65-second host-dependent
+pass. Everything beyond the library's `render_table` was therefore reached by nothing in the suite:
+the three tables' assembly, the derived column widths, the `cfg`-gated `Wide` rows, and the prose
+between them. Two defects shipped through that gap on this branch -- two tables hard-coding a column
+width for formatters whose output has no fixed maximum, and a drained footer printing a seven-run
+result beneath a table produced by one invocation.
+
+`render` now writes the banner and calls `render_observation(out, &measure())`. The banner stays
+outside because it is a fresh topology read rather than a function of the observation, which is what
+keeps the rendering half pure and therefore drivable by a fixture. The binary moved to
+`src/bin/queue_contention/main.rs` so it can carry a sibling `tests.rs`, following
+`windows-placement-probe`'s layout; git recorded it as a rename, so history follows.
+
+**The cases are data, not code.** `corpus.json` holds an observation and what the rendered report
+must be true of, so adding a case needs no Rust. The central check is *derived rather than
+restated*: `aligned_tables` asserts every line of a named table is the same length, which is exactly
+the property a cell wider than its column breaks. It therefore catches width bugs the corpus never
+anticipated, where a golden would only catch what somebody thought to record and would need
+regenerating whenever the prose moved.
+
+Two things the corpus established on first run, both of which a hand-written fixture would have
+missed:
+
+- With an empty observation the `ns/op range` table emits a header and no rows, while the layout and
+  scaling tables still emit six `--` rows, because those iterate `PRODUCER_COUNTS` and that one
+  iterates the runs. The first expectation written was wrong about this, not the renderer.
+- **A width of 22 was not overrun by an ordinary outlier.** The 300ms-against-4ns repetition that
+  motivated the original finding renders 21 characters; reaching 23 needs a hundredfold ratio as
+  well. The argument for deriving the width is that no constant can be *established* as sufficient,
+  since the cell's width is a function of measured data -- not that 22 was visibly too small. The
+  corpus case says so in its own `why`, having been corrected once for claiming otherwise.
+
+Sabotage-verified: replacing the derived widths with the constant they had before fails the corpus
+case, naming the table and the overrun line.

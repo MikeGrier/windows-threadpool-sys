@@ -14,7 +14,7 @@
 //! cannot separate.
 
 use windows_platform_probes::queue_contention::{
-    DRAINED_CAPACITY, PRODUCER_COUNTS, PUSHES_PER_PRODUCER, REPETITIONS, format_nanos,
+    DRAINED_CAPACITY, Observation, PRODUCER_COUNTS, PUSHES_PER_PRODUCER, REPETITIONS, format_nanos,
     format_ratio_bounded, format_scaling_bounded, measure, ratio_column_width, render_table,
     shapes,
 };
@@ -27,8 +27,26 @@ fn main() {
     emit_report(render);
 }
 
-/// The probe's whole report, as text.
+#[cfg(test)]
+mod tests;
+
+/// Measure, then render what was measured.
+///
+/// **The two halves are separate so the second one can be tested.** Rendering
+/// used to measure inside itself, which made the only way to exercise it a
+/// ~65-second host-dependent run -- so the table assembly, the derived column
+/// widths, the `cfg`-gated rows and the prose between them were reached by
+/// nothing in the suite. Two defects shipped through that gap on this branch:
+/// two tables hard-coded a column width for formatters whose output has no
+/// fixed maximum, and the drained footer printed a seven-run result beneath a
+/// table produced by one invocation. See `M4.7`.
 fn render(out: &mut dyn std::fmt::Write) {
+    // The banner is the one line that is not a function of the observation --
+    // it is a fresh topology read -- so it is written here and
+    // `render_observation` stays a pure function of what was measured. That
+    // purity is the whole point of the split: it is what lets a fixture drive
+    // the entire report.
+    //
     // First line of the report, and part of the returned text rather than
     // written out here: a captured report must carry the line naming the
     // machine that produced it, and the taint marker with it.
@@ -37,12 +55,16 @@ fn render(out: &mut dyn std::fmt::Write) {
         "{}",
         windows_placement_probe::fingerprint::banner_line()
     );
+    render_observation(out, &measure());
+}
+
+/// Everything the report says about an observation.
+fn render_observation(out: &mut dyn std::fmt::Write, observation: &Observation) {
     let _ = writeln!(
         out,
         "== how does the array queue's push path scale with producer count? ==\n"
     );
 
-    let observation = measure();
     // `available_parallelism`, not the host count -- an affinity mask or job
     // object narrows it, and saying "host reports" under either would contradict
     // the banner three lines up. The host's shape is already there; this is what

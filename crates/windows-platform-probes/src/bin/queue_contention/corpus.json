@@ -1,0 +1,147 @@
+{
+  "_comment": [
+    "Cases that drive the queue-contention report renderer. Each supplies an",
+    "observation and what the rendered report must be true of. Adding a case is",
+    "adding data -- no Rust changes -- which is the point: the report's tables",
+    "were unreachable by the suite until M4.7, and two defects shipped through",
+    "that gap.",
+    "",
+    "`aligned_tables` names a header substring. Every non-blank line of that",
+    "table, header included, must be the same length. That is exactly the",
+    "property a cell wider than its column breaks, and it is derived from the",
+    "output rather than restated as a golden -- so it catches a width bug the",
+    "corpus never anticipated, which a golden cannot."
+  ],
+  "cases": [
+    {
+      "name": "ordinary",
+      "why": "A plausible run. Establishes that the tables render and line up at all, so the stressed cases below are testing something.",
+      "observation": {
+        "available_parallelism": 8,
+        "isolated": [
+          ["baseline_fetch_add", 1, 2.3, 434782608.0, 0, 2.1, 2.5],
+          ["baseline_fetch_add", 2, 12.1, 165289256.0, 0, 11.0, 13.0],
+          ["slotwise_mpsc", 1, 6.3, 158730158.0, 0, 6.0, 6.8],
+          ["slotwise_mpsc", 2, 50.6, 39525691.0, 0, 19.3, 59.5],
+          ["reserving_mpsc", 1, 5.4, 185185185.0, 0, 5.2, 5.9],
+          ["reserving_mpsc", 2, 31.9, 31347962.0, 0, 22.5, 35.2],
+          ["permit_mpsc", 1, 7.9, 126582278.0, 0, 7.5, 8.3],
+          ["permit_mpsc", 2, 44.2, 22624434.0, 0, 37.4, 45.9],
+          ["reserving(32/32)", 1, 5.5, 181818181.0, 0, 5.3, 6.0],
+          ["reserving(32/32)", 2, 32.4, 30864197.0, 0, 23.0, 35.9],
+          ["reserving(16/48)", 1, 5.6, 178571428.0, 0, 5.4, 6.1],
+          ["reserving(16/48)", 2, 33.1, 30211480.0, 0, 23.4, 36.2],
+          ["reserving(8/56)", 1, 5.7, 175438596.0, 0, 5.5, 6.2],
+          ["reserving(8/56)", 2, 33.4, 29940119.0, 0, 23.8, 36.5]
+        ],
+        "drained": [
+          ["slotwise_mpsc", 1, 11.4, 87719298.0, 0, 10.9, 12.1],
+          ["slotwise_mpsc", 2, 66.8, 29940119.0, 1200, 60.1, 70.2],
+          ["reserving_mpsc", 1, 26.2, 38167938.0, 0, 24.9, 27.8],
+          ["reserving_mpsc", 2, 64.2, 31152647.0, 1100, 58.3, 68.0],
+          ["permit_mpsc", 1, 64.3, 15552099.0, 0, 61.0, 67.1],
+          ["permit_mpsc", 2, 56.2, 35587188.0, 900, 51.4, 59.9],
+          ["reserving(32/32)", 1, 24.8, 40322580.0, 0, 23.6, 26.3],
+          ["reserving(32/32)", 2, 65.1, 30721966.0, 1150, 59.0, 69.1],
+          ["reserving(16/48)", 1, 26.8, 37313432.0, 0, 25.4, 28.2],
+          ["reserving(16/48)", 2, 67.9, 29455081.0, 1180, 61.2, 71.4],
+          ["reserving(8/56)", 1, 27.6, 36231884.0, 0, 26.1, 29.0],
+          ["reserving(8/56)", 2, 67.0, 29850746.0, 1160, 60.5, 70.8]
+        ]
+      },
+      "expect": {
+        "aligned_tables": ["16/48 vs", "reserving/slotwise", "atomic floor", "ns/op range"],
+        "contains": ["processors available to this process: 8"],
+        "absent": []
+      }
+    },
+    {
+      "name": "spans_wide_enough_to_overrun_a_fixed_column",
+      "why": "A cell's width is a function of measured data: `format_ratio_bounded` sizes its interval from the observed span, so no constant is provably sufficient. These values are chosen to exceed a fixed width rather than to depict a likely run -- and the margin matters, because the width of 22 that two tables carried was NOT overrun by an ordinary outlier. A 300ms repetition against a 4ns one renders 21 characters. Reaching 23 needs a hundredfold ratio as well. The argument for deriving the width is that the bound cannot be established, not that 22 was obviously too small.",
+      "observation": {
+        "available_parallelism": 8,
+        "isolated": [
+          ["baseline_fetch_add", 1, 2.3, 434782608.0, 0, 2.1, 2.5],
+          ["baseline_fetch_add", 2, 12.1, 165289256.0, 0, 11.0, 13.0],
+          ["slotwise_mpsc", 1, 6.0, 166666666.0, 0, 4.0, 6.0],
+          ["slotwise_mpsc", 2, 30.0, 66666666.0, 0, 4.0, 60.0],
+          ["reserving_mpsc", 1, 5.0, 200000000.0, 0, 4.0, 6.0],
+          ["reserving_mpsc", 2, 3000.0, 666666.0, 0, 40.0, 90000.0],
+          ["permit_mpsc", 1, 8.0, 125000000.0, 0, 4.0, 6.0],
+          ["permit_mpsc", 2, 3000.0, 666666.0, 0, 40.0, 90000.0],
+          ["reserving(32/32)", 1, 5.0, 200000000.0, 0, 4.0, 6.0],
+          ["reserving(32/32)", 2, 30.0, 66666666.0, 0, 4.0, 6.0],
+          ["reserving(16/48)", 1, 50.0, 20000000.0, 0, 40.0, 6000.0],
+          ["reserving(16/48)", 2, 3000.0, 666666.0, 0, 40.0, 90000.0],
+          ["reserving(8/56)", 1, 60.0, 16666666.0, 0, 40.0, 7000.0],
+          ["reserving(8/56)", 2, 3200.0, 625000.0, 0, 40.0, 95000.0]
+        ],
+        "drained": [
+          ["slotwise_mpsc", 1, 11.0, 90909090.0, 0, 4.0, 6.0],
+          ["slotwise_mpsc", 2, 30.0, 66666666.0, 1200, 4.0, 60.0],
+          ["reserving_mpsc", 1, 26.0, 38461538.0, 0, 4.0, 60.0],
+          ["reserving_mpsc", 2, 3000.0, 666666.0, 1100, 40.0, 90000.0],
+          ["permit_mpsc", 1, 64.0, 15625000.0, 0, 4.0, 60.0],
+          ["permit_mpsc", 2, 3000.0, 666666.0, 900, 40.0, 90000.0],
+          ["reserving(32/32)", 1, 25.0, 40000000.0, 0, 4.0, 6.0],
+          ["reserving(32/32)", 2, 30.0, 66666666.0, 1150, 4.0, 6.0],
+          ["reserving(16/48)", 1, 250.0, 4000000.0, 0, 40.0, 9000.0],
+          ["reserving(16/48)", 2, 3000.0, 666666.0, 1180, 40.0, 90000.0],
+          ["reserving(8/56)", 1, 270.0, 3703703.0, 0, 40.0, 9000.0],
+          ["reserving(8/56)", 2, 3200.0, 625000.0, 1160, 40.0, 95000.0]
+        ]
+      },
+      "expect": {
+        "aligned_tables": ["16/48 vs", "reserving/slotwise", "atomic floor", "ns/op range"],
+        "contains": ["100.00x [6.67-22500.00]"],
+        "absent": []
+      }
+    },
+    {
+      "name": "a_shape_that_did_not_run",
+      "why": "A row present but carrying the did-not-run sentinel. Zero is not an obviously broken value in any of this report's columns, so the rendered cells must be marked rather than published: `0.0` ns/op reads as immeasurably fast and `0.00x` as a ratio of one.",
+      "observation": {
+        "available_parallelism": 4,
+        "isolated": [
+          ["baseline_fetch_add", 1, 2.3, 434782608.0, 0, 2.1, 2.5],
+          ["slotwise_mpsc", 1, 6.3, 158730158.0, 0, 6.0, 6.8],
+          ["reserving_mpsc", 1, 5.4, 185185185.0, 0, 5.2, 5.9],
+          ["permit_mpsc", 1, 0.0, 0.0, 0, 0.0, 0.0],
+          ["reserving(32/32)", 1, 5.5, 181818181.0, 0, 5.3, 6.0],
+          ["reserving(16/48)", 1, 0.0, 0.0, 0, 0.0, 0.0],
+          ["reserving(8/56)", 1, 5.7, 175438596.0, 0, 5.5, 6.2]
+        ],
+        "drained": [
+          ["slotwise_mpsc", 1, 11.4, 87719298.0, 0, 10.9, 12.1],
+          ["reserving_mpsc", 1, 26.2, 38167938.0, 0, 24.9, 27.8],
+          ["permit_mpsc", 1, 0.0, 0.0, 0, 0.0, 0.0],
+          ["reserving(32/32)", 1, 24.8, 40322580.0, 0, 23.6, 26.3],
+          ["reserving(16/48)", 1, 0.0, 0.0, 0, 0.0, 0.0],
+          ["reserving(8/56)", 1, 27.6, 36231884.0, 0, 26.1, 29.0]
+        ]
+      },
+      "expect": {
+        "aligned_tables": ["16/48 vs", "reserving/slotwise", "atomic floor", "ns/op range"],
+        "contains": ["--"],
+        "absent": ["0.00x", " 0.0 ", "infx", "NaN"]
+      }
+    },
+    {
+      "name": "nothing_measured_at_all",
+      "why": "Every shape absent, which is what a `cfg`-elided target or a failed run looks like from the renderer's side. It must still produce a report with its headers rather than panicking or printing figures it does not have.",
+      "observation": {
+        "available_parallelism": null,
+        "isolated": [],
+        "drained": []
+      },
+      "expect": {
+        "aligned_tables": ["16/48 vs", "reserving/slotwise", "atomic floor"],
+        "contains": [
+          "processors available to this process: unknown (the query failed)",
+          "ns/op range"
+        ],
+        "absent": ["0.00x", "infx", "NaN"]
+      }
+    }
+  ]
+}
