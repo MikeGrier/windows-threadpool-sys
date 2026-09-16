@@ -295,16 +295,29 @@ impl Observation {
     ) -> Option<(f64, f64)> {
         let one = self.find(regime, shape, 1)?;
         let many = self.find(regime, shape, producers)?;
-        ratio_bounds(many, one)
+        // Scaling is a RATE ratio -- many over one -- which is the COST ratio
+        // one over many, so the rows go in that order.
+        ratio_bounds(one, many)
     }
 }
 
-/// The interval a `numerator / denominator` cost ratio could occupy, given each
-/// row's observed span. See [`Observation::scaling_bounds`] for why this is a
-/// bound rather than a sample.
+/// The interval the cost ratio `numerator / denominator` could occupy, given
+/// each row's observed span.
 ///
-/// The ratio is of *rates*, so it inverts the cost interval: a numerator that
-/// was slow and a denominator that was fast give the smallest ratio.
+/// Both arguments are rows whose costs are nanoseconds per operation, and the
+/// result is in those same terms: `0.20x` means the numerator cost a fifth of
+/// what the denominator cost. A caller wanting a *rate* ratio -- "how much
+/// faster" -- passes the two rows the other way round, which is what
+/// [`Observation::scaling_bounds`] does.
+///
+/// See [`Observation::scaling_bounds`] for why this is a bound rather than a
+/// sample.
+///
+/// **An earlier version of this function documented a cost ratio and returned
+/// the inverse**, leaving both internal callers to compensate by swapping their
+/// arguments. That works until somebody calls it directly, which is the defect a
+/// review caught: a public contract that is only correct if you read the
+/// implementation is not a contract.
 ///
 /// `None` when either span touches zero, which cannot happen for a real run and
 /// is reported rather than divided by.
@@ -317,10 +330,10 @@ pub fn ratio_bounds(numerator: Run, denominator: Run) -> Option<(f64, f64)> {
     {
         return None;
     }
-    // Rate is inversely proportional to cost, so the widest rate ratio pairs
-    // the numerator's best cost against the denominator's worst, and vice versa.
-    let low = denominator.fastest_nanos_per_op / numerator.slowest_nanos_per_op;
-    let high = denominator.slowest_nanos_per_op / numerator.fastest_nanos_per_op;
+    // Widest is the numerator at its worst over the denominator at its best;
+    // narrowest is the reverse.
+    let low = numerator.fastest_nanos_per_op / denominator.slowest_nanos_per_op;
+    let high = numerator.slowest_nanos_per_op / denominator.fastest_nanos_per_op;
     Some((low, high))
 }
 
@@ -334,7 +347,7 @@ pub fn format_ratio_bounded(numerator: Option<Run>, denominator: Option<Run>) ->
     match (numerator, denominator) {
         (Some(numerator), Some(denominator)) if denominator.nanos_per_op > 0.0 => {
             let point = numerator.nanos_per_op / denominator.nanos_per_op;
-            match ratio_bounds(denominator, numerator) {
+            match ratio_bounds(numerator, denominator) {
                 Some((low, high)) => format!("{point:.2}x [{low:.2}-{high:.2}]"),
                 None => format!("{point:.2}x"),
             }

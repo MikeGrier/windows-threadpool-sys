@@ -711,10 +711,10 @@ fn ratio_bounds_pairs_opposing_extremes() {
     let numerator = run_spanning(shapes::RESERVING_MPSC, 4, 8.0, 10.0, 12.0);
     let denominator = run_spanning(shapes::SLOTWISE_MPSC, 4, 40.0, 50.0, 60.0);
     let (low, high) = ratio_bounds(numerator, denominator).expect("both spans are positive");
-    // rate ratio low  = den.fastest / num.slowest = 40 / 12
-    // rate ratio high = den.slowest / num.fastest = 60 / 8
-    assert!((low - (40.0 / 12.0)).abs() < 1e-9, "low was {low}");
-    assert!((high - (60.0 / 8.0)).abs() < 1e-9, "high was {high}");
+    // cost ratio low  = num.fastest / den.slowest =  8 / 60
+    // cost ratio high = num.slowest / den.fastest = 12 / 40
+    assert!((low - (8.0 / 60.0)).abs() < 1e-9, "low was {low}");
+    assert!((high - (12.0 / 40.0)).abs() < 1e-9, "high was {high}");
 }
 
 /// The invariant that makes the bound meaningful: whatever point estimate the
@@ -724,7 +724,7 @@ fn ratio_bounds_pairs_opposing_extremes() {
 fn ratio_bounds_contain_the_point_estimate() {
     let numerator = run_spanning(shapes::RESERVING_MPSC, 4, 8.0, 10.0, 12.0);
     let denominator = run_spanning(shapes::SLOTWISE_MPSC, 4, 40.0, 50.0, 60.0);
-    let point = denominator.nanos_per_op / numerator.nanos_per_op;
+    let point = numerator.nanos_per_op / denominator.nanos_per_op;
     let (low, high) = ratio_bounds(numerator, denominator).expect("both spans are positive");
     assert!(
         low <= point && point <= high,
@@ -749,8 +749,9 @@ fn ratio_bounds_of_two_exact_samples_is_a_point() {
     let numerator = run_spanning(shapes::RESERVING_MPSC, 4, 10.0, 10.0, 10.0);
     let denominator = run_spanning(shapes::SLOTWISE_MPSC, 4, 50.0, 50.0, 50.0);
     let (low, high) = ratio_bounds(numerator, denominator).expect("positive spans");
+    // Cost ratio: 10 over 50.
     assert!(
-        (low - 5.0).abs() < 1e-9 && (high - 5.0).abs() < 1e-9,
+        (low - 0.2).abs() < 1e-9 && (high - 0.2).abs() < 1e-9,
         "[{low},{high}]"
     );
 }

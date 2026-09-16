@@ -185,8 +185,13 @@ fn render(out: &mut dyn std::fmt::Write) {
     );
     let _ = writeln!(
         out,
-        "     {:<18} {:>14} {:>14} {:>10} {:>14} {:>16}",
-        "producers", "slotwise ns/pu", "reserving", "ratio", "permit", "permit/reserving"
+        "     {:<10} {:>12} {:>12} {:>22} {:>12} {:>22}",
+        "producers", "slotwise", "reserving", "reserving/slotwise", "permit", "permit/reserving"
+    );
+    let _ = writeln!(
+        out,
+        "     {:<10} {:>12} {:>12} {:>22} {:>12} {:>22}",
+        "", "ns/op", "ns/op", "ratio [bound]", "ns/op", "ratio [bound]"
     );
     for &producers in PRODUCER_COUNTS {
         let plain = observation.find(&observation.drained, shapes::SLOTWISE_MPSC, producers);
@@ -199,7 +204,7 @@ fn render(out: &mut dyn std::fmt::Write) {
         let permit_ratio = format_ratio_bounded(permit, reserving);
         let _ = writeln!(
             out,
-            "     {producers:<18} {:>14} {:>14} {:>10} {:>14} {:>16}",
+            "     {producers:<10} {:>12} {:>12} {:>22} {:>12} {:>22}",
             format_nanos(plain),
             format_nanos(reserving),
             ratio,
