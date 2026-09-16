@@ -353,7 +353,7 @@
 //! | Sampling | 50,000 pushes per producer, median of 5 repetitions, one untimed warmup pass |
 //! | Runs | 3 whole-probe invocations; cells are the median of the three, ranges span all 15 repetitions |
 //! | Instrument | `probe-queue-contention`, built from `fecd352` |
-//! | Taken | 2026-09-15 |
+//! | Taken | 2026-09-15 UTC-07:00 |
 //!
 //! [`D-observations-not-verdicts`]: https://github.com/MikeGrier/windows-threadpool-sys/blob/main/crates/windows-platform-probes/DESIGN-NOTES.md#d-observations-not-verdicts
 //!

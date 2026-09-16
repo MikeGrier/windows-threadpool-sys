@@ -1904,9 +1904,10 @@ foreach ($pattern in '\b255\b', '37 seconds', '2\^56', '4,294,967,295', 'about 2
 ```
 
 **All of these are restated by hand with nothing checking them.** Three of those facts -- the
-ceiling, the span and the field ceiling -- follow from `ClaimLayout`'s associated constants. The two
+ceiling, the span and the field ceiling -- follow from `ClaimLayout`'s associated constants. The
 time figures follow from a field width *and* an assumed sustained push rate, so a
-constants-versus-table check would validate those three outright and the time figures only once the
+constants-versus-table check would validate the constant-derived facts outright and the time figures
+only once the
 rate is pinned somewhere single. That distinction bounds what the cheapest remedy below can do -- an
 earlier version of this paragraph said every one was derivable from the constants, which overstated
 it, in a note about overstatement. The error surface is proportional to how often a fact is restated,
