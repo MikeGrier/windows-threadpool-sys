@@ -914,10 +914,35 @@ fn time_isolated_permit(producers: usize) -> Repetition {
 /// backpressure the way a real one would.
 pub const DRAINED_CAPACITY: usize = 1024;
 
+/// Stops a drained timer's consumer however the producer phase ends.
+///
+/// Each drained timer parks a consumer in `while !done { ... }` and clears the
+/// flag once the producer scope returns. On the **failure** path that line is
+/// never reached: a producer's assertion unwinds straight past it, so the
+/// consumer keeps spinning on a flag nobody will ever set, and its `JoinHandle`
+/// is dropped without a join. The probe then leaves a thread burning a core for
+/// the life of the process -- in exactly the run someone is trying to read a
+/// failure out of.
+///
+/// Clearing the flag from `Drop` runs on both paths, so the consumer observes
+/// the stop and finishes whether the producers succeeded or panicked. The join
+/// is still done explicitly on the success path, where its return value is the
+/// refusal count; on the unwind path the thread is detached, but it terminates
+/// promptly rather than spinning, which is the part that mattered.
+struct StopOnDrop(Arc<AtomicBool>);
+
+impl Drop for StopOnDrop {
+    fn drop(&mut self) {
+        self.0.store(true, Ordering::Relaxed);
+    }
+}
+
 fn time_drained_mpsc(producers: usize) -> Repetition {
     let (tx, rx) = slotwise_mpsc::bounded::<u64>(DRAINED_CAPACITY).expect("a valid capacity");
     let done = Arc::new(AtomicBool::new(false));
     let consumer_done = Arc::clone(&done);
+    // Set on every exit path, not just the one that returns. See StopOnDrop.
+    let stop = StopOnDrop(done);
     // The consumer is a barrier participant, not merely spawned: spawning is not
     // readiness, and a consumer still in thread start-up while producers push
     // turns the opening of the run into an undrained regime.
@@ -985,7 +1010,7 @@ fn time_drained_mpsc(producers: usize) -> Repetition {
     });
     let elapsed = measured_span(&spans);
 
-    done.store(true, Ordering::Relaxed);
+    drop(stop);
     drop(tx);
     let refusals = consumer.join().expect("the consumer must not panic");
     (elapsed, refusals)
@@ -1015,6 +1040,8 @@ fn time_drained_reserving(producers: usize) -> Repetition {
     let (tx, rx) = reserving_mpsc::bounded::<u64>(DRAINED_CAPACITY).expect("a valid capacity");
     let done = Arc::new(AtomicBool::new(false));
     let consumer_done = Arc::clone(&done);
+    // Set on every exit path, not just the one that returns. See StopOnDrop.
+    let stop = StopOnDrop(done);
     // The consumer joins the gate here for the reason it does in the slotwise
     // twin: a run whose opening is undrained is not the regime being measured.
     let gate = start_barrier(producers + 1);
@@ -1063,7 +1090,7 @@ fn time_drained_reserving(producers: usize) -> Repetition {
     });
     let elapsed = measured_span(&spans);
 
-    done.store(true, Ordering::Relaxed);
+    drop(stop);
     drop(tx);
     let refusals = consumer.join().expect("the consumer must not panic");
     (elapsed, refusals)
@@ -1082,6 +1109,8 @@ fn time_drained_permit(producers: usize) -> Repetition {
     let (tx, rx) = permit_mpsc::bounded::<u64>(DRAINED_CAPACITY).expect("a valid capacity");
     let done = Arc::new(AtomicBool::new(false));
     let consumer_done = Arc::clone(&done);
+    // Set on every exit path, not just the one that returns. See StopOnDrop.
+    let stop = StopOnDrop(done);
     let gate = start_barrier(producers + 1);
     let consumer_gate = Arc::clone(&gate);
 
@@ -1128,7 +1157,7 @@ fn time_drained_permit(producers: usize) -> Repetition {
     });
     let elapsed = measured_span(&spans);
 
-    done.store(true, Ordering::Relaxed);
+    drop(stop);
     drop(tx);
     let refusals = consumer.join().expect("the consumer must not panic");
     (elapsed, refusals)
@@ -1193,6 +1222,8 @@ fn time_drained_layout<L: ClaimLayout + 'static>(producers: usize) -> Repetition
         reserving_mpsc::bounded_as::<u64, L>(DRAINED_CAPACITY).expect("a valid capacity");
     let done = Arc::new(AtomicBool::new(false));
     let consumer_done = Arc::clone(&done);
+    // Set on every exit path, not just the one that returns. See StopOnDrop.
+    let stop = StopOnDrop(done);
     // The consumer joins the gate for the reason its twins do: a run whose
     // opening is undrained is not the regime being measured.
     let gate = start_barrier(producers + 1);
@@ -1240,7 +1271,7 @@ fn time_drained_layout<L: ClaimLayout + 'static>(producers: usize) -> Repetition
             .collect::<Vec<_>>()
     });
     let elapsed = measured_span(&spans);
-    done.store(true, Ordering::Relaxed);
+    drop(stop);
     let refusals = consumer.join().expect("the consumer must not panic");
     (elapsed, refusals)
 }

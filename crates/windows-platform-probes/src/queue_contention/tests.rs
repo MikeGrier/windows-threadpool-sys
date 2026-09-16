@@ -1198,3 +1198,49 @@ fn spread_rejects_non_finite_span_endpoints() {
         assert_eq!(broken.spread(), None, "a {poison} fastest has no spread");
     }
 }
+
+/// The stop flag must be set on the path where nobody sets it explicitly.
+///
+/// The drained timers cleared the flag on the line after their producer scope,
+/// which a producer's assertion unwinds straight past -- leaving the consumer
+/// spinning on a flag nobody would ever set, its handle dropped unjoined, and a
+/// core burning for the life of the process. The success path was never in
+/// doubt; this pins the failure path, which is the one that was broken.
+///
+/// Note this asserts the *observable* effect through an `Arc` the guard does not
+/// own, rather than reading the guard back: a consumer sees the flag through
+/// exactly such a clone.
+#[test]
+fn stop_on_drop_sets_the_flag_when_the_producer_phase_unwinds() {
+    let flag = Arc::new(AtomicBool::new(false));
+
+    // The success path, for contrast.
+    let observed = Arc::clone(&flag);
+    {
+        let _stop = StopOnDrop(Arc::clone(&flag));
+        assert!(
+            !observed.load(Ordering::Relaxed),
+            "the flag must stay clear while the guard is alive, or a consumer \
+             would stop before the producers had finished"
+        );
+    }
+    assert!(
+        observed.load(Ordering::Relaxed),
+        "a normal drop must stop it"
+    );
+
+    // The path that was broken. `catch_unwind` prints the panic to stderr; no
+    // panic hook is installed to silence it, because a hook is process-global
+    // and this suite runs its tests as threads in one process.
+    let unwound = Arc::new(AtomicBool::new(false));
+    let observed = Arc::clone(&unwound);
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let _stop = StopOnDrop(Arc::clone(&unwound));
+        panic!("a producer failed, as one does when the consumer is gone");
+    }));
+    assert!(result.is_err(), "the fixture must actually unwind");
+    assert!(
+        observed.load(Ordering::Relaxed),
+        "the consumer would spin forever on a flag nobody sets"
+    );
+}
