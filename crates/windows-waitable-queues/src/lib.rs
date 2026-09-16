@@ -113,7 +113,10 @@
 //! reservations: admission is also bounded by capacity, so the achievable count
 //! is the lesser of the two. For `Balanced` the capacity bound binds first --
 //! that layout accepts at most 2^31 slots on a 64-bit target, and 2^30 on a
-//! 32-bit one. For the others the field binds on either.
+//! 32-bit one. For the others the field is the smaller number only once
+//! the queue is at least that large: a `Perpetual` queue of capacity 64 can
+//! hold 64 reservations, not 255. The achievable count is always the lesser
+//! of the two.
 //!
 //! ```
 //! use windows_waitable_queues::reserving_mpsc::{self, Perpetual};

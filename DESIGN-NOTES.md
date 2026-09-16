@@ -1892,7 +1892,7 @@ qualifier was added to `Perpetual`'s rustdoc, which is the table demonstrating i
 **All of these are restated by hand with nothing checking them.** Three of the rows -- the ceiling,
 the span and the field ceiling -- follow from `ClaimLayout`'s associated constants. The two time rows
 follow from a field width *and* an assumed sustained push rate, so a constants-versus-table check
-would validate the first three outright and the time rows only once the rate is pinned somewhere
+would validate those three outright and the time rows only once the rate is pinned somewhere
 single. That distinction bounds what the cheapest remedy below can do -- an earlier version of this
 paragraph said every row was derivable from the constants, which overstated it, in a note about
 overstatement. The error surface is proportional to that column, not to
@@ -1997,8 +1997,9 @@ item is deliberate.
 [README.md](crates/windows-waitable-queues/README.md) is already a build input for
 `windows-waitable-queues` (`#[doc = include_str!]` in
 [lib.rs](crates/windows-waitable-queues/src/lib.rs)), so a test can parse the published layout
-tables and assert every row against `ClaimLayout`'s constants -- converting 19 hand-written `255`s
-into one definition and N checked derivations, with no generator and no new tooling.
+tables and assert every row against `ClaimLayout`'s constants -- turning the occurrences that sit in
+table rows into checked derivations of one definition, with no generator and no new tooling. It
+reaches only those; the occurrences in prose are untouched by it.
 
 **Be precise about what that would and would not catch, because this paragraph has now overstated it
 twice.** The layout table's columns are the layout name, the reservation-count field ceiling, the
@@ -2023,10 +2024,6 @@ they know.)*
 
 **No work is scheduled by this note.** It was written to inform a decision that has not been taken,
 and the deliberate absence of a checklist item is per the "design notes are not a work queue" rule
-rather than an oversight. The formal-methods survey it bears on is `M30` in the root
-[CHECKLIST.md](CHECKLIST.md). If the table-versus-constants test or a prose-reduction pass is
-adopted, each needs its own item at that time.
-
-*(`M30` was authored as `M23` and renumbered when that ID was found to collide with an archived
-milestone. Recorded because the old number appears in the commit history and in PR #92's earlier
-discussion, not because either number is in doubt now.)*
+rather than an oversight. A formal-methods survey is queued separately in the root
+[CHECKLIST.md](CHECKLIST.md) and bears on the same question. If the table-versus-constants test or a
+prose-reduction pass is adopted, each needs its own item at that time.

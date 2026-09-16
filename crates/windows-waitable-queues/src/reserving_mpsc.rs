@@ -235,8 +235,10 @@ use crate::options::Options;
 /// bound is the binding one: this layout accepts at most 2^31 slots on a 64-bit
 /// target and 2^30 on a 32-bit one, so no more than that many reservations can
 /// be outstanding whatever the field could hold. For
-/// [`Enduring`] and [`Perpetual`] the field binds first, and the column is the
-/// real limit.
+/// [`Enduring`] and [`Perpetual`] the field is the smaller of the two only once
+/// the queue is at least that large -- a `Perpetual` queue of capacity 64 admits
+/// 64 reservations, not 255. The achievable count is always the lesser of
+/// capacity and field ceiling; this column is the field half of that pair.
 ///
 /// At this crate's disclosed sustained rate of about 116 million pushes per
 /// second, those recurrences are roughly **37 seconds**, **28 days**, and
@@ -556,8 +558,9 @@ impl ClaimWord for u128 {
 /// beyond any use this crate has seen -- and beyond what its own capacity
 /// permits -- while the exposure is what pays for it.
 /// [`Enduring`] and [`Perpetual`] spend that field the other way --
-/// [`Enduring`] holds 65,535 outstanding reservations, [`Perpetual`] 255, both
-/// reachable because capacity does not bind there --
+/// [`Enduring`] holds up to 65,535 outstanding reservations, [`Perpetual`] up to
+/// 255 -- each reachable only when the queue's capacity is at least that
+/// large --
 /// and `Wide` moves it to 2^64 pushes rather than to a horizon in years. (`Wide` exists
 /// only under the `dwcas` feature, so this names it without linking: an
 /// intra-doc link here would not resolve in a default-feature rustdoc build.)
@@ -572,7 +575,9 @@ impl ClaimLayout for Balanced {
 
 /// A deeper position: 16 bits of reservations, 48 of position.
 ///
-/// Holds 65,535 outstanding reservations and recurs after 2^48 pushes -- about
+/// Its field holds at most 65,535 outstanding reservations -- reachable only
+/// when capacity is at least that large, since the achievable count is the
+/// lesser of the two -- and its position recurs after 2^48 pushes, about
 /// **28 days** at the pre-correction planning rate; see [`ClaimLayout`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Enduring;
@@ -585,7 +590,9 @@ impl ClaimLayout for Enduring {
 
 /// The deepest position: 8 bits of reservations, 56 of position.
 ///
-/// Holds 255 outstanding reservations and recurs after 2^56 pushes -- about
+/// Its field holds at most 255 outstanding reservations -- reachable only when
+/// capacity is at least that large, since the achievable count is the lesser of
+/// the two -- and its position recurs after 2^56 pushes, about
 /// **20 years** at the pre-correction planning rate ([`ClaimLayout`]), which puts the recurrence
 /// beyond any real deployment rather than merely far away.
 ///
