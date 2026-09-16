@@ -58,11 +58,17 @@
 //! on **every** push, including the pushes that never reserve anything -- which
 //! is what `slotwise_mpsc` avoids and why it cannot offer reservation at all.
 //!
-//! **That cost is not what makes either shape slower.** This one measured
-//! *faster* than `slotwise_mpsc` under contention on the hosts tried. The
-//! magnitude belongs with the capture that produced it rather than here, so see
-//! the crate documentation's attributed table for the figures and the conditions
-//! they were taken under.
+//! **What that read costs is not established, and this comparison cannot
+//! establish it.** This shape measured *faster* than `slotwise_mpsc` under
+//! contention on the hosts tried -- an end-to-end result over the complete push
+//! path, in which the consumer-position read is one term among the protocol,
+//! metadata and retry costs and is not separated from them. So the honest
+//! statement is that the extra read did not stop this shape being the faster of
+//! the two here; it is **not** that the read is cheap, nor that it is "not what
+//! makes either shape slower", which is a causal negative the measurement cannot
+//! support either. The magnitude belongs with the capture that produced it
+//! rather than here, so see the crate documentation's attributed table for the
+//! figures and the conditions they were taken under.
 //!
 //! An earlier version of this paragraph gave a figure ("by up to 6.4x") taken
 //! from a two-host comparison that has since been withdrawn for predating a

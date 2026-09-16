@@ -393,19 +393,30 @@ that produced them. They are not a ranking, and which shape suits a given
 deployment is the deployment's question.
 
 **What was measured**, in ns per operation, isolated regime (producers only,
-capacity large enough that nothing is refused), median of three runs. An
-operation is one successful push for the three queue shapes; for
-`baseline_fetch_add` it is one `fetch_add`, which is why the column is labelled
-per operation rather than per push:
+capacity large enough that nothing is refused). Each cell is the median of three
+whole-probe runs, followed by the full range across all fifteen repetitions those
+runs contain. An operation is one successful push for the three queue shapes;
+for `baseline_fetch_add` it is one `fetch_add`, which is why the column is
+labelled per operation rather than per push:
 
 | producers | `slotwise_mpsc` | `reserving_mpsc` | `permit_mpsc` | `baseline_fetch_add` |
 |---|---|---|---|---|
-| 1 | 6.3 | 5.4 | 8.0 | 2.3 |
-| 2 | 54.0 | 34.9 | 41.5 | 11.7 |
-| 4 | 89.3 | 37.1 | 32.1 | 15.1 |
-| 8 | 143.8 | 38.1 | 26.4 | 15.2 |
-| 16 | 246.9 | 51.1 | 21.4 | 15.3 |
-| 32 | 235.7 | 53.0 | 21.2 | 15.1 |
+| 1 | 6.3 (6.3-7.5) | 5.4 (5.4-6.4) | 7.9 (7.9-8.3) | 2.3 (2.3-2.7) |
+| 2 | 50.6 (19.3-59.5) | 31.9 (22.5-35.2) | 44.2 (37.4-45.9) | 12.1 (5.8-14.3) |
+| 4 | 91.6 (89.7-99.9) | 37.2 (31.6-41.5) | 31.8 (30.4-32.9) | 13.8 (12.6-17.6) |
+| 8 | 138.6 (126.9-157.6) | 37.8 (34.3-41.7) | 25.9 (25.0-27.4) | 14.7 (13.9-15.9) |
+| 16 | 218.0 (188.9-272.7) | 47.9 (44.9-56.0) | 21.8 (20.9-25.6) | 14.8 (14.4-15.9) |
+| 32 | 224.7 (131.4-268.3) | 51.3 (40.7-55.4) | 21.9 (20.7-39.0) | 15.0 (14.7-15.7) |
+
+**The ranges are the point, not a footnote.** `slotwise_mpsc` at two producers
+spans 19.3 to 59.5 -- a factor of three within one configuration on one host --
+and at thirty-two, 131.4 to 268.3. A median quoted without that is an anecdote,
+which is why
+[D-observations-not-verdicts](../windows-platform-probes/DESIGN-NOTES.md#d-observations-not-verdicts)
+obliges every published figure here to carry its run count *and* its dispersion.
+An earlier version of this table published the medians alone and did not meet
+that obligation; the probe now carries the range through to the report so it
+cannot be omitted again.
 
 **Attribution, because a figure without it is not reusable data:**
 
@@ -414,8 +425,8 @@ per operation rather than per push:
 | Host | `x86_64 16p/8c smt+ L2[2,2,2,2,2,2,2,2] ec[0:16] numa[16]` |
 | Profile | release |
 | Sampling | 50,000 pushes per producer, median of 5 repetitions, one untimed warmup pass |
-| Runs | 3 whole-probe invocations, median of the three |
-| Instrument | `probe-queue-contention`, at commit `a99108f` |
+| Runs | 3 whole-probe invocations; cells are the median of the three, ranges span all 15 repetitions |
+| Instrument | `probe-queue-contention`, rebuilt for this capture |
 | Taken | 2026-09-15 |
 
 The banner's `numa[16]` is a single NUMA node holding all sixteen processors, so
@@ -426,10 +437,11 @@ thing N threads can do to a contended line, included so the queue figures can be
 read against what this processor does to such a line at all.
 
 **Read these as one machine's numbers.** Producer counts above 8 oversubscribe
-this host's 8 physical cores, and the spread across the three runs is not small:
-`slotwise_mpsc` at sixteen producers gave 257.3, 215.1 and 246.9 across them. The
-probe's own same-code control has been measured at 0.68-1.27x over seven runs,
-which is wide enough to swallow small differences; see
+this host's 8 physical cores, and the spread is not small at either scale.
+Between runs: `slotwise_mpsc` at sixteen producers gave whole-run medians of
+225.7, 218.0 and 192.9. Within a single run its five repetitions spanned 188.9 to
+272.7. The probe's own same-code control has been measured at 0.68-1.27x over
+seven runs, which is wide enough to swallow small differences; see
 [DESIGN-NOTES.md](../windows-platform-probes/DESIGN-NOTES.md#d-variance-is-a-finding).
 That seven-run sweep is a **separate capture** taken to size the noise floor, not
 a longer version of this table -- its medians differ from the ones above, which is
@@ -453,7 +465,7 @@ be the cheaper shape, and measurement said otherwise on both machines.
 **What moves these numbers.** Producer count, how hard the consumer drains, and
 where the threads are scheduled all change the answer -- thread placement alone
 moved an SPSC handoff by 5.6x on an earlier host this workspace measured. The
-`probe-core-affinity` tool in this repository runs that measurement, and
+`placement-probe` tool in this repository runs that measurement, and
 `probe-queue-contention` runs the one above.
 
 Two things that look like reasons to choose and are not:

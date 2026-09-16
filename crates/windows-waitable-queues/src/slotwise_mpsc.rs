@@ -551,10 +551,13 @@ impl<T> Producer<T> {
         // asked for the answer.
         //
         // Note what this property does *not* buy: measurement found this shape
-        // slower than `reserving_mpsc` under contention despite it, because the
-        // slot sequence a producer must read instead marches through memory
-        // while other producers write it. Staying off the shared line is why
-        // the two shapes are different, not why either is quick.
+        // slower than `reserving_mpsc` under contention despite it. Why is not
+        // established -- the probe times the complete push, so the sequence read
+        // is one term among several and is never isolated. An earlier version of
+        // this comment attributed it to the slot sequence marching through
+        // memory while other producers write it; that mechanism is plausible and
+        // unmeasured. Staying off the shared line is why the two shapes are
+        // different, not a claim about which is quick.
         //
         // Off, the cost is one predictable branch on a field written once at
         // construction, so the line is shared but read-only -- the cheap kind.
