@@ -13,8 +13,9 @@
 //! cannot separate.
 
 use windows_platform_probes::queue_contention::{
-    DRAINED_CAPACITY, PRODUCER_COUNTS, PUSHES_PER_PRODUCER, RATIO_COLUMN_WIDTH, REPETITIONS,
-    format_nanos, format_ratio_bounded, format_scaling_bounded, measure, render_table, shapes,
+    DRAINED_CAPACITY, PRODUCER_COUNTS, PUSHES_PER_PRODUCER, REPETITIONS, format_nanos,
+    format_ratio_bounded, format_scaling_bounded, measure, ratio_column_width, render_table,
+    shapes,
 };
 use windows_platform_probes::report::emit_report;
 
@@ -267,22 +268,22 @@ fn render(out: &mut dyn std::fmt::Write) {
 
     // Question 3: what does the claim word's apportionment and width cost?
     let _ = writeln!(out, "\n  3. claim-word layout\n");
-    // Counted from what was actually measured rather than written as a literal:
+    // Counted from what was actually MEASURED rather than from what is present:
     // the 64/64 rows are cfg-elided on a target with no native 128-bit exchange,
-    // and a hardcoded "four" would be false there.
-    let layouts_measured = [
-        shapes::CLAIM_NARROW,
-        shapes::CLAIM_DEEP,
-        shapes::CLAIM_PERPETUAL,
-        shapes::CLAIM_WIDE,
-    ]
-    .iter()
-    .filter(|shape| {
-        observation
-            .find(&observation.isolated, shape, PRODUCER_COUNTS[0])
-            .is_some()
-    })
-    .count();
+    // and a hardcoded "four" would be false there -- but a row can also be
+    // present while carrying the did-not-run sentinel, which `render_table`
+    // marks `--` and this sentence would otherwise still count. See
+    // `Observation::count_measured`.
+    let layouts_measured = observation.count_measured(
+        &observation.isolated,
+        &[
+            shapes::CLAIM_NARROW,
+            shapes::CLAIM_DEEP,
+            shapes::CLAIM_PERPETUAL,
+            shapes::CLAIM_WIDE,
+        ],
+        PRODUCER_COUNTS[0],
+    );
     let _ = writeln!(
         out,
         "     {layouts_measured} apportionments of reserving_mpsc's claim word, measured on"
@@ -353,6 +354,39 @@ fn render(out: &mut dyn std::fmt::Write) {
         ("drained", &observation.drained),
     ] {
         let _ = writeln!(out, "     -- {label} --");
+        // Every cell is rendered before the header is emitted, because the ratio
+        // column's width is derived from the widest value it must hold. A Rust
+        // width is a minimum, so sizing the header first and discovering a wider
+        // cell later does not truncate that cell -- it silently pushes the two
+        // columns after it out of line. See `ratio_column_width`.
+        let rows: Vec<(usize, [String; 4], [String; 3])> = PRODUCER_COUNTS
+            .iter()
+            .map(|&producers| {
+                let narrow = observation.find(regime, shapes::CLAIM_NARROW, producers);
+                let deep = observation.find(regime, shapes::CLAIM_DEEP, producers);
+                let perpetual = observation.find(regime, shapes::CLAIM_PERPETUAL, producers);
+                let wide = observation.find(regime, shapes::CLAIM_WIDE, producers);
+                (
+                    producers,
+                    [
+                        format_nanos(narrow),
+                        format_nanos(deep),
+                        format_nanos(perpetual),
+                        format_nanos(wide),
+                    ],
+                    [
+                        format_ratio_bounded(deep, narrow),
+                        format_ratio_bounded(perpetual, narrow),
+                        format_ratio_bounded(wide, narrow),
+                    ],
+                )
+            })
+            .collect();
+        let w = ratio_column_width(
+            rows.iter()
+                .flat_map(|(_, _, ratios)| ratios)
+                .map(String::as_str),
+        );
         let _ = writeln!(
             out,
             "     {:<10} {:>11} {:>11} {:>11} {:>11} {:>w$} {:>w$} {:>w$}",
@@ -364,25 +398,12 @@ fn render(out: &mut dyn std::fmt::Write) {
             "16/48 vs",
             "8/56 vs",
             "64/64 vs",
-            w = RATIO_COLUMN_WIDTH
         );
-        for &producers in PRODUCER_COUNTS {
-            let narrow = observation.find(regime, shapes::CLAIM_NARROW, producers);
-            let deep = observation.find(regime, shapes::CLAIM_DEEP, producers);
-            let perpetual = observation.find(regime, shapes::CLAIM_PERPETUAL, producers);
-            let wide = observation.find(regime, shapes::CLAIM_WIDE, producers);
+        for (producers, nanos, ratios) in &rows {
             let _ = writeln!(
                 out,
                 "     {:<10} {:>11} {:>11} {:>11} {:>11} {:>w$} {:>w$} {:>w$}",
-                producers,
-                format_nanos(narrow),
-                format_nanos(deep),
-                format_nanos(perpetual),
-                format_nanos(wide),
-                format_ratio_bounded(deep, narrow),
-                format_ratio_bounded(perpetual, narrow),
-                format_ratio_bounded(wide, narrow),
-                w = RATIO_COLUMN_WIDTH
+                producers, nanos[0], nanos[1], nanos[2], nanos[3], ratios[0], ratios[1], ratios[2],
             );
         }
         let _ = writeln!(out);

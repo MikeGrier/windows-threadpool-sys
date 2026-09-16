@@ -1040,7 +1040,7 @@ fn a_many_producer_row_that_did_not_run_scales_to_the_marker() {
     );
 }
 
-/// The layout table's ratio column must fit what its formatter emits.
+/// The ratio column must fit every cell it is asked to hold.
 ///
 /// A Rust width is a *minimum*, so a value wider than its field is not
 /// truncated -- it pushes every column after it out of alignment with its
@@ -1048,36 +1048,88 @@ fn a_many_producer_row_that_did_not_run_scales_to_the_marker() {
 /// whose ordinary output is 17, so the second and third ratio columns had been
 /// rendering seven and fourteen characters adrift.
 ///
-/// This binds the width to the formatter rather than restating it: widening
-/// `format_ratio_bounded`'s output without widening `RATIO_COLUMN_WIDTH` fails
-/// here instead of skewing a published table.
+/// **An earlier version of this test asserted `cell.len() <= RATIO_COLUMN_WIDTH`,
+/// and that invariant is not available.** The interval's endpoints are measured
+/// spans, so the cell's width is a function of data and has no compile-time
+/// bound; the test passed only because its fixtures happened to be narrow. The
+/// width is now derived from the cells, and what is pinned is that derivation.
 #[test]
-fn ratio_column_is_wide_enough_for_its_formatter() {
-    // Both halves of the point-and-interval shape, plus the marker.
-    let rendered = [
-        format_ratio_bounded(
-            Some(run_spanning(shapes::CLAIM_WIDE, 32, 40.0, 50.0, 60.0)),
-            Some(run_spanning(shapes::CLAIM_NARROW, 32, 4.0, 5.0, 6.0)),
-        ),
-        format_ratio_bounded(
-            Some(run_spanning(shapes::CLAIM_DEEP, 1, 9.9, 10.0, 10.1)),
-            Some(run_spanning(shapes::CLAIM_NARROW, 1, 9.9, 10.0, 10.1)),
-        ),
-        format_ratio_bounded(None, None),
-    ];
-    for cell in &rendered {
+fn ratio_column_fits_every_cell_it_must_hold() {
+    let ordinary = format_ratio_bounded(
+        Some(run_spanning(shapes::CLAIM_WIDE, 32, 40.0, 50.0, 60.0)),
+        Some(run_spanning(shapes::CLAIM_NARROW, 32, 4.0, 5.0, 6.0)),
+    );
+    // The guard is only meaningful if the formatter really does emit the wide
+    // point-and-interval form -- otherwise it would pass against a bare `1.00x`.
+    assert!(
+        ordinary.contains('['),
+        "expected a bounded ratio, got {ordinary:?}"
+    );
+
+    // A slow outlier -- a 300 ms repetition against a 4 ns one, which is exactly
+    // what `median_run` takes a median to survive -- overruns the floor.
+    let outlier = format_ratio_bounded(
+        Some(run_spanning(shapes::CLAIM_WIDE, 32, 40.0, 50.0, 6000.0)),
+        Some(run_spanning(shapes::CLAIM_NARROW, 32, 4.0, 5.0, 6.0)),
+    );
+    assert!(
+        outlier.len() > RATIO_COLUMN_WIDTH,
+        "this fixture exists to exceed the floor; if it no longer does, the \
+         case it guards has stopped being exercised: {outlier:?}"
+    );
+
+    let cells = [ordinary.as_str(), outlier.as_str(), "--"];
+    let width = ratio_column_width(cells);
+    for cell in cells {
         assert!(
-            cell.len() <= RATIO_COLUMN_WIDTH,
+            cell.len() <= width,
             "{cell:?} is {} characters and would push the next column out of \
-             line with its header, which allows {RATIO_COLUMN_WIDTH}",
+             line with its header, which allows {width}",
             cell.len()
         );
     }
-    // And the guard is only meaningful if the formatter really does emit the
-    // wide form here -- otherwise this would pass against a bare point estimate.
-    assert!(
-        rendered[0].contains('['),
-        "expected a bounded ratio, got {:?}",
-        rendered[0]
+}
+
+/// The floor applies when every cell is narrower than it.
+#[test]
+fn ratio_column_never_narrows_below_its_floor() {
+    assert_eq!(ratio_column_width(["1.00x", "--"]), RATIO_COLUMN_WIDTH);
+    assert_eq!(
+        ratio_column_width(std::iter::empty()),
+        RATIO_COLUMN_WIDTH,
+        "a regime with no rows still needs a header that lines up"
+    );
+}
+
+/// A row that is present but never ran must not be counted as measured.
+///
+/// The report says "N apportionments ... measured" above a table in which
+/// `render_table` marks every cell of an unmeasured row `--`. Counting presence
+/// rather than measurement let those two halves disagree: the sentence claimed
+/// four layouts while the table showed one of them as having produced nothing.
+#[test]
+fn count_measured_counts_rows_that_ran_rather_than_rows_that_exist() {
+    let layouts = [
+        shapes::CLAIM_NARROW,
+        shapes::CLAIM_DEEP,
+        shapes::CLAIM_PERPETUAL,
+        shapes::CLAIM_WIDE,
+    ];
+    let observation = Observation {
+        isolated: vec![
+            run(shapes::CLAIM_NARROW, 1, 1e8),
+            run(shapes::CLAIM_DEEP, 1, 1e8),
+            // Present, but carrying the did-not-run sentinel.
+            run(shapes::CLAIM_PERPETUAL, 1, 0.0),
+            // CLAIM_WIDE absent entirely, as it is when cfg-elided.
+        ],
+        drained: Vec::new(),
+        available_parallelism: Some(8),
+    };
+    assert_eq!(
+        observation.count_measured(&observation.isolated, &layouts, 1),
+        2,
+        "a present-but-unmeasured row must not be counted, and an absent one \
+         must not be either"
     );
 }

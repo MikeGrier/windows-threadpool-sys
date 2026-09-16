@@ -279,6 +279,29 @@ impl Observation {
             .copied()
     }
 
+    /// How many of `shapes` actually produced a measurement at `producers`.
+    ///
+    /// Counted rather than written as a literal because the 64/64 rows are
+    /// `cfg`-elided on a target with no native 128-bit exchange, so a hardcoded
+    /// count would be false there.
+    ///
+    /// **Presence is not measurement.** A row can be present and still carry the
+    /// did-not-run sentinel, and the report's prose is where that distinction
+    /// escapes: `render_table` marks such a row `--` in every measured cell while
+    /// a sentence above it counts the shape as measured. Asking
+    /// [`Run::is_measured`] here is what keeps the two halves of the report
+    /// telling the same story.
+    #[must_use]
+    pub fn count_measured(&self, regime: &[Run], shapes: &[&str], producers: usize) -> usize {
+        shapes
+            .iter()
+            .filter(|shape| {
+                self.find(regime, shape, producers)
+                    .is_some_and(|run| run.is_measured())
+            })
+            .count()
+    }
+
     /// How far throughput scaled from one producer to `producers`.
     ///
     /// 1.0 means N producers together push no faster than one did, which is
@@ -395,7 +418,7 @@ pub fn format_ratio_bounded(numerator: Option<Run>, denominator: Option<Run>) ->
     }
 }
 
-/// The column width the report allocates to a bounded ratio.
+/// The **minimum** width the report gives a bounded ratio column.
 ///
 /// Named here, beside the formatter, rather than written as a literal in the
 /// report's format string. [`format_ratio_bounded`] emits a point estimate *and*
@@ -404,10 +427,31 @@ pub fn format_ratio_bounded(numerator: Option<Run>, denominator: Option<Run>) ->
 /// a field narrower than the value does not truncate it, it pushes every later
 /// column out of line with its header. The report had been allocating 10.
 ///
-/// `ratio_column_is_wide_enough_for_its_formatter` holds the two together, so
-/// widening the formatter's output without widening this fails a test rather
-/// than silently skewing a table.
+/// **This is a floor, not a bound, because the formatter has no bound.** The
+/// interval's endpoints come from measured spans, so a slow outlier -- an
+/// ordinary event on a loaded or virtualized host, and the reason `median_run`
+/// takes a median at all -- widens the cell without limit: a 300 ms repetition
+/// against a 4 ns one renders `10.00x [6.67-1500.00]`, which is 21. Use
+/// [`ratio_column_width`] to size the column against the values it must actually
+/// hold; this constant only stops a table of narrow values from looking cramped.
 pub const RATIO_COLUMN_WIDTH: usize = 20;
+
+/// The width a ratio column must take to keep its rows aligned with its header.
+///
+/// The widest cell the column has to hold, or [`RATIO_COLUMN_WIDTH`] when that
+/// is wider. Derived from the rendered cells rather than assumed, because
+/// [`format_ratio_bounded`]'s output length is a function of measured data and
+/// therefore has no compile-time bound -- see [`RATIO_COLUMN_WIDTH`] for the
+/// case that overruns it. A caller must render every cell of the column before
+/// emitting the header, which is the only ordering that can get this right.
+#[must_use]
+pub fn ratio_column_width<'a>(cells: impl IntoIterator<Item = &'a str>) -> usize {
+    cells
+        .into_iter()
+        .map(str::len)
+        .max()
+        .map_or(RATIO_COLUMN_WIDTH, |widest| widest.max(RATIO_COLUMN_WIDTH))
+}
 
 /// Renders a scaling factor together with the interval it could occupy.
 ///
