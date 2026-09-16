@@ -94,12 +94,13 @@ impl Captured {
 ///
 /// This is the answer to "how does a formatted line reach the sink", and the
 /// reason it is a [`std::fmt::Write`] adapter rather than a method on [`Report`]
-/// is a property rather than a count. Every renderer writes through
+/// is a property rather than a count. Every renderer already wrote through
 /// `writeln!(out, ...)` against a `String`; a sink method taking
 /// `fmt::Arguments` would have been explicit but would have rewritten every one
 /// of those sites, while `String` already implements `fmt::Write` -- so a sink
-/// that does too lets every write site stand untouched and moves only the
-/// renderer signatures.
+/// that does too let every write site stand untouched and moved only the
+/// renderer signatures, which now take `&mut dyn fmt::Write` and are handed a
+/// [`LineSink`] by `emit_report_to`.
 ///
 /// The census that decided it is recorded in
 /// [DESIGN-NOTES.md](../DESIGN-NOTES.md#d-streaming-report) rather than repeated

@@ -19,8 +19,8 @@ each is labelled with the instrument that produced it.
 | Profile | release |
 | Sampling | 50,000 pushes per producer, median of 5 repetitions, one untimed warmup pass |
 | Runs | 3 whole-probe invocations, in [run1.txt](run1.txt), [run2.txt](run2.txt), [run3.txt](run3.txt) |
-| Instrument | `probe-queue-contention`, built from `04e6d825` (the commit that added the handshake) |
-| Taken | 2026-09-16 UTC-04:00 |
+| Instrument | `probe-queue-contention`, built from `68198359` (the commit that made the consumer drain once before announcing readiness) |
+| Taken | 2026-09-16 18:12 UTC-04:00 |
 
 The host is the same machine as the capture the crate README carries, so the two
 are comparable; nothing here says anything about any other hardware, and the

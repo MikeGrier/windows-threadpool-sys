@@ -1,3 +1,4 @@
+// Copyright (c) Mike Grier.
 // Summarise the drained tables of a queue-contention capture.
 //
 // Reads the probe's own report text rather than re-deriving anything: the

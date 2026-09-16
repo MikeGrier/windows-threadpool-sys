@@ -1980,11 +1980,16 @@ proportion that restated two counts **given four words earlier in the same sente
 them wrong -- it said "in both cases roughly 60%" where one of the two cases was 57 of 61. The data
 was adjacent and the summary of it was false, because prose is not checkable and nobody checks it.
 
-**This repository already contains the better pattern and did not apply it here.**
+**This repository already contains the better pattern, and this branch was the first to apply it
+in the probe crate.**
 [`mutation-sweeps/2026-09-02/`](mutation-sweeps/2026-09-02) is a dated, committed capture directory: data as an artifact, cited
-rather than retyped. `windows-platform-probes`, which produces the most-cited numbers in the
-workspace, commits no capture at all -- every figure it has ever published reached its document by
-hand.
+rather than retyped. `windows-platform-probes` produces the most-cited numbers in the workspace and
+committed no capture at all when this section was written -- every figure it had published reached
+its document by hand. The re-measurement that `M4.3` forced is the first exception:
+[`crates/windows-platform-probes/captures/2026-09-16-drained-handshake/`](crates/windows-platform-probes/captures/2026-09-16-drained-handshake/README.md)
+commits the raw runs, the script that derives the summary, and its output. The seven-run sweep that
+the variance argument rests on still has no committed capture, so the gap this section describes is
+narrowed rather than closed.
 
 So the principle, which holds regardless of which mechanism is eventually chosen:
 

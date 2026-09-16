@@ -2,17 +2,17 @@ runs: 3
 
 drained layout ratios vs 32/32, median across runs
 producers  16/48   8/56   64/64
-        1  1.07x  1.06x  1.12x
-        2  0.99x  0.99x  1.07x
-        4  1.02x  1.06x  1.11x
-        8  1.02x  0.98x  1.06x
-       16  1.01x  1.05x  1.02x
-       32  0.96x  0.96x  1.02x
+        1  1.01x  1.03x  1.17x
+        2  0.98x  1.03x  1.06x
+        4  1.00x  1.00x  1.09x
+        8  0.98x  1.01x  1.06x
+       16  0.91x  0.93x  0.80x
+       32  1.23x  1.20x  0.94x
 
 same-code control (reserving_mpsc vs reserving 32/32), drained
   observations: 18
-  span:         0.92x to 1.25x
-  median:       1.01x
+  span:         0.75x to 1.23x
+  median:       0.98x
 
-layout medians: 18, spanning 0.96x to 1.12x
+layout medians: 18, spanning 0.80x to 1.23x
 every layout median inside the control band: true
