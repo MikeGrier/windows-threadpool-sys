@@ -143,7 +143,7 @@ correctness in the archive.
 
   **Also not in scope, because it is done:** emitting the dispersion. See M4.5 below.
 
-- [x] **M4.5** -- Emit the dispersion, not just the median. -> [completed 2026-09-15](COMPLETED-CHECKLIST.md#m45)
+- [x] **M4.5** -- Emit the dispersion, not just the median. -> [completed 2026-09-15 UTC-07:00](COMPLETED-CHECKLIST.md#m45)
 
 - [ ] **M4.3** -- Close the undrained window at the start of the drained regime with a readiness
   handshake, and re-measure everything that changes.

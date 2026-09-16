@@ -342,10 +342,20 @@ pub fn ratio_bounds(numerator: Run, denominator: Run) -> Option<(f64, f64)> {
 /// The bound is printed in square brackets to mark it as *not* a sampled range:
 /// the row ranges above it are observed spans, this is arithmetic over two of
 /// them.
+///
+/// **Both rows must have measured something.** A shape that failed to run
+/// reports zero nanoseconds, and zero is the sentinel for "no measurement here"
+/// on either side of the division -- a zero numerator would render `0.00x`,
+/// which is a number a reader takes for a result rather than for the absence of
+/// one. An earlier version guarded only the denominator, on the reasoning that
+/// division is what breaks; publishing a plausible figure from a row that never
+/// ran is the worse failure of the two.
 #[must_use]
 pub fn format_ratio_bounded(numerator: Option<Run>, denominator: Option<Run>) -> String {
     match (numerator, denominator) {
-        (Some(numerator), Some(denominator)) if denominator.nanos_per_op > 0.0 => {
+        (Some(numerator), Some(denominator))
+            if numerator.nanos_per_op > 0.0 && denominator.nanos_per_op > 0.0 =>
+        {
             let point = numerator.nanos_per_op / denominator.nanos_per_op;
             match ratio_bounds(numerator, denominator) {
                 Some((low, high)) => format!("{point:.2}x [{low:.2}-{high:.2}]"),
@@ -421,13 +431,16 @@ pub fn format_scaling(scaling: Option<f64>) -> String {
 
 /// `numerator / denominator` as a cost ratio, or `--` when either is missing.
 ///
-/// Guards the denominator rather than trusting it: a shape that failed to run
-/// reports zero, and a division by it would print `inf` or `NaN` in a column a
-/// reader would otherwise take for a measurement.
+/// Guards both rows rather than trusting them: a shape that failed to run
+/// reports zero, so a zero denominator would print `inf` or `NaN` and a zero
+/// numerator would print `0.00x` -- and of those two the second is the more
+/// dangerous, because it looks like a measurement rather than like a failure.
 #[must_use]
 pub fn format_ratio(numerator: Option<Run>, denominator: Option<Run>) -> String {
     match (numerator, denominator) {
-        (Some(numerator), Some(denominator)) if denominator.nanos_per_op > 0.0 => {
+        (Some(numerator), Some(denominator))
+            if numerator.nanos_per_op > 0.0 && denominator.nanos_per_op > 0.0 =>
+        {
             format!("{:.2}x", numerator.nanos_per_op / denominator.nanos_per_op)
         }
         _ => "--".to_owned(),

@@ -835,3 +835,57 @@ fn scaling_bounds_is_none_when_a_row_is_missing() {
         "the one-producer row is absent, so no bound exists"
     );
 }
+
+/// Zero is the sentinel for "this shape did not run", and it is as meaningful on
+/// the numerator side as on the denominator. A zero denominator would render
+/// `inf`; a zero numerator renders `0.00x`, which is worse -- `inf` announces
+/// itself as broken, and `0.00x` reads as a shape that was immeasurably fast.
+#[test]
+fn format_ratio_refuses_a_zero_numerator() {
+    let measured = run(shapes::RESERVING_MPSC, 4, 100_000_000.0);
+    let absent = run(shapes::SLOTWISE_MPSC, 4, 0.0);
+    assert_eq!(absent.nanos_per_op, 0.0, "the fixture must have zero cost");
+    assert_eq!(
+        format_ratio(Some(absent), Some(measured)),
+        "--",
+        "a row that never ran must not render as a ratio"
+    );
+}
+
+#[test]
+fn format_ratio_bounded_refuses_a_zero_numerator() {
+    let measured = run_spanning(shapes::RESERVING_MPSC, 4, 8.0, 10.0, 12.0);
+    let absent = run_spanning(shapes::SLOTWISE_MPSC, 4, 0.0, 0.0, 0.0);
+    assert_eq!(
+        format_ratio_bounded(Some(absent), Some(measured)),
+        "--",
+        "a row that never ran must not render as a ratio"
+    );
+}
+
+/// Both formatters agree about what is unmeasurable, in both positions. They are
+/// separate functions with separate guards, which is exactly how one of them
+/// came to guard only half the cases.
+#[test]
+fn both_ratio_formatters_reject_the_same_unmeasurable_rows() {
+    let measured = run_spanning(shapes::RESERVING_MPSC, 4, 8.0, 10.0, 12.0);
+    let absent = run_spanning(shapes::SLOTWISE_MPSC, 4, 0.0, 0.0, 0.0);
+    for (numerator, denominator) in [
+        (Some(absent), Some(measured)),
+        (Some(measured), Some(absent)),
+        (Some(absent), Some(absent)),
+        (None, Some(measured)),
+        (Some(measured), None),
+    ] {
+        assert_eq!(
+            format_ratio(numerator, denominator),
+            "--",
+            "format_ratio accepted an unmeasurable pair"
+        );
+        assert_eq!(
+            format_ratio_bounded(numerator, denominator),
+            "--",
+            "format_ratio_bounded accepted an unmeasurable pair"
+        );
+    }
+}

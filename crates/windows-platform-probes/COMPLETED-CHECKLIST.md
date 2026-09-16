@@ -1115,7 +1115,7 @@ M4 below, six in M5. M2.18 is the exception, dissolved rather than moved.
 
   > **-> DEPENDS ON M2.14.1:** the pointer has nothing to point at until the manifest exists.
 
-## Moved 2026-09-15 -- M4.5: the probe carries its own dispersion
+## Moved 2026-09-15 20:04:09 UTC-07:00 -- M4.5: the probe carries its own dispersion
 
 ### <a id="m45"></a>M4.5 -- Emit the dispersion, not just the median. *(completed 2026-09-15 20:04:09 UTC-07:00)*
 
