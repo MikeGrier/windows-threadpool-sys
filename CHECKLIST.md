@@ -209,14 +209,28 @@ yet; `M30.5` produces it.
 
 - [ ] **M30.2** -- Pilot exactly one: `reserving_mpsc`'s claim-position recurrence (`SH-14.1`).
 
+  **`SH-14.1` is a live defect in the shipping protocol, not a hypothetical**, and that inverts the
+  usual shape of a success criterion. A faithful model of the shipping claim protocol, at a position
+  width small enough to wrap, *must* find it. A green run on that model is therefore evidence the
+  model is **unfaithful**, not evidence the protocol is sound.
+
   Done when all three hold:
 
   1. **The refinement is stated.** Which constants were shrunk, why the protocol is uniform in each,
      and what a counterexample at the reduced width implies at the shipping width. If it cannot be
      argued, the result is reported as a counterexample *in a toy model* and nothing more.
-  2. **The unmodified model satisfies its invariant** -- the property check.
-  3. **A deliberately broken variant produces a counterexample** -- the anti-vacuity check. Neither
-     2 nor 3 alone is sufficient.
+  2. **Faithfulness: the model of the shipping protocol reproduces `SH-14.1`.** Configured so the
+     wrap is reachable and a producer can stall across it, it must yield the known counterexample --
+     a claim succeeding against a numerically identical but generations-later position. A model that
+     cannot produce a defect the crate already documents is not modelling this protocol.
+  3. **Anti-vacuity: the same model satisfies its invariant where no violation is possible.**
+     Configured so the wrap is unreachable -- total pushes bounded below it, or a single producer,
+     which has no race to lose -- it must come back green. A model that reports a violation there is
+     over-permissive, and its counterexample in (2) proved nothing.
+
+  An earlier version of this item asked for (2) and (3) the other way round: the unmodified model to
+  satisfy its invariant, and only a deliberately broken variant to fail. That could only be satisfied
+  by a model that does *not* reproduce a defect this crate ships and documents.
 
   Not a candidate: `capacity == 1`, which belongs to `slotwise_mpsc`
   ([D-12](crates/windows-waitable-queues/DESIGN-NOTES.md#d-12)) and is already resolved.
@@ -227,7 +241,8 @@ yet; `M30.5` produces it.
   Done when both hold:
 
   1. **The list names only what the *selected* tool cannot model**, not what tools in general cannot.
-     Expect the syscall boundary including the doorbell's, real-time behaviour, and the model-to-code
+     Expect the syscall boundary -- including the doorbell's `SetEvent`/`ResetEvent` -- real-time
+     behaviour, and the model-to-code
      gap that no tool closes. Do **not** preclassify scheduler-dependence: loom explores scheduler
      interleavings deliberately, so recording it as unreachable would be a false gap. Whether the
      memory orderings are reachable likewise depends on which tool M30.1 selected.

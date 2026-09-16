@@ -555,8 +555,22 @@ trust would have aimed the pilot wrongly.
 pushes to manifest and is therefore beyond any test". Corrected above: the count is reachable, and
 the stall window is what is not.
 
-**The success criterion was half a criterion.** The first draft asked for a counterexample from a
-deliberately broken variant and explicitly *not* a green run on the correct one -- an overcorrection
-against vacuous green runs. A counterexample from a broken variant can equally be produced by a
-malformed or over-permissive model that would find one anywhere, so it is an anti-vacuity check, not
-a property check. Both are required.
+**The success criterion went wrong twice, and the second error was the instructive one.** The first
+draft asked for a counterexample from a deliberately broken variant and explicitly *not* a green run
+on the correct one -- an overcorrection against vacuous green runs, since a counterexample from a
+broken variant can equally be produced by a malformed or over-permissive model that would find one
+anywhere. The fix was to require both: property check and anti-vacuity check.
+
+That fix was wrong for this particular pilot, and the reason is worth keeping. **`SH-14.1` is a live
+defect in the shipping protocol**, documented in the crate and disclosed to adopters. So a faithful
+model of the shipping claim protocol, at a position width small enough to wrap, *must* find it --
+and "the unmodified model satisfies its invariant" could only be satisfied by a model that does not
+reproduce a defect the crate ships. The criterion was inverted: it would have been failed by a
+correct model and passed by a broken one.
+
+The general form: **when the system being modelled has a known defect, a green run on the unmodified
+model is a failure signal, not a success.** The two checks still exist, but they attach to different
+configurations rather than to modified and unmodified code -- the model must reproduce the defect
+where the wrap is reachable, and must come back green where it is not (total pushes bounded below
+the wrap, or a single producer, which has no race to lose). `M30.2` carries that as its criteria 2
+and 3.
