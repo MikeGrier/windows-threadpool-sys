@@ -1114,3 +1114,33 @@ M4 below, six in M5. M2.18 is the exception, dissolved rather than moved.
   currently has no sentence about claims.
 
   > **-> DEPENDS ON M2.14.1:** the pointer has nothing to point at until the manifest exists.
+
+## Moved 2026-09-15 -- M4.5: the probe carries its own dispersion
+
+### <a id="m45"></a>M4.5 -- Emit the dispersion, not just the median. *(completed 2026-09-15 20:04:09 UTC-07:00)*
+
+Split out of M4.2 when it landed, because M4.2's remaining work -- the sampling controls -- is
+independent of it and an unchecked item must not embed a completed deliverable.
+
+`median_run` took the five timed repetitions, sorted them, kept the middle one and **discarded the
+other four**. `Run` then carried a median with no spread, so every figure derived from the probe was
+published without dispersion and any range quoted elsewhere had been computed by hand outside the
+instrument.
+
+That was a contract failure rather than a gap in polish.
+[D-observations-not-verdicts](DESIGN-NOTES.md#d-observations-not-verdicts) requires every published
+figure to carry "the number of runs with their dispersion", and says a ratio quoted without those
+"is an anecdote, not data a reader can compare against their own hardware". The probe was the source
+of the figures that decision governs and did not satisfy it. Reported by review, and correctly.
+
+`Run` gained `fastest_nanos_per_op` and `slowest_nanos_per_op`, taken from the ends of the sort that
+already existed, plus a `spread()` accessor that returns zero rather than infinity when a shape
+failed to run -- the same guard `format_ratio` carries for the same reason. `render_table` publishes
+an `ns/op range` column and a `spread` column.
+
+Nine tests cover it, verified load-bearing by sabotage: taking the fastest from the median index
+instead of the minimum fails `median_run_carries_the_fastest_and_slowest_repetitions`.
+
+The dispersion justified itself on first capture. `slotwise_mpsc` at two producers spans 19.3 to
+59.5 ns/op -- a factor of three within one configuration on one host -- which the median alone had
+concealed entirely, in a table that had already been published twice.

@@ -137,22 +137,13 @@ correctness in the archive.
   is only interpretable with its capture parameters, and these are now among them. Making the
   sampling adjustable without recording it would turn one reproducibility problem into a worse one.
 
-  **Emit the dispersion, not just the median. -- DONE, landed in this branch.** `median_run` used to
-  sort the five repetitions, keep the middle one and **discard the other four**, so `Run` carried a
-  median with no spread and any range published elsewhere had been computed by hand outside the
-  probe. `Run` now carries `fastest_nanos_per_op` and `slowest_nanos_per_op` alongside the median,
-  with a `spread()` accessor, and `render_table` publishes both an `ns/op range` and a `spread`
-  column. Reported by review, and correctly -- it was the same contract failure from the other side,
-  since the decision above requires a figure to carry "the number of runs with their dispersion" and
-  the instrument did not supply it.
-
-  **What remains in this item is the sampling controls only** -- making `PUSHES_PER_PRODUCER`,
-  `REPETITIONS` and the producer counts settable, and recording whatever was used beside the
-  figures.
-
   **Not in scope:** deciding why the control is wide. That is the judgement this tooling supports,
   and per the design note a negative result -- "lengthening and repeating do not narrow it, so the
   floor is here" -- is a real answer that gets recorded beside the figures.
+
+  **Also not in scope, because it is done:** emitting the dispersion. See M4.5 below.
+
+- [x] **M4.5** -- Emit the dispersion, not just the median. -> [completed 2026-09-15](COMPLETED-CHECKLIST.md#m45)
 
 - [ ] **M4.3** -- Close the undrained window at the start of the drained regime with a readiness
   handshake, and re-measure everything that changes.
