@@ -13,8 +13,8 @@
 //! cannot separate.
 
 use windows_platform_probes::queue_contention::{
-    DRAINED_CAPACITY, PRODUCER_COUNTS, PUSHES_PER_PRODUCER, REPETITIONS, format_nanos,
-    format_ratio_bounded, format_scaling_bounded, measure, render_table, shapes,
+    DRAINED_CAPACITY, PRODUCER_COUNTS, PUSHES_PER_PRODUCER, RATIO_COLUMN_WIDTH, REPETITIONS,
+    format_nanos, format_ratio_bounded, format_scaling_bounded, measure, render_table, shapes,
 };
 use windows_platform_probes::report::emit_report;
 
@@ -345,8 +345,9 @@ fn render(out: &mut dyn std::fmt::Write) {
     );
     let _ = writeln!(
         out,
-        "     8/56 merely deferring it. Not the exchange in isolation.\n"
+        "     8/56 moving it to 2^56. Both defer the recurrence rather than"
     );
+    let _ = writeln!(out, "     removing it. Not the exchange in isolation.\n");
     for (label, regime) in [
         ("isolated", &observation.isolated),
         ("drained", &observation.drained),
@@ -354,15 +355,16 @@ fn render(out: &mut dyn std::fmt::Write) {
         let _ = writeln!(out, "     -- {label} --");
         let _ = writeln!(
             out,
-            "     {:<10} {:>11} {:>11} {:>11} {:>11} {:>10} {:>10} {:>10}",
+            "     {:<10} {:>11} {:>11} {:>11} {:>11} {:>w$} {:>w$} {:>w$}",
             "producers",
-            "32/32 ns",
-            "16/48 ns",
-            "8/56 ns",
-            "64/64 ns",
+            "32/32 ns/op",
+            "16/48 ns/op",
+            "8/56 ns/op",
+            "64/64 ns/op",
             "16/48 vs",
             "8/56 vs",
-            "64/64 vs"
+            "64/64 vs",
+            w = RATIO_COLUMN_WIDTH
         );
         for &producers in PRODUCER_COUNTS {
             let narrow = observation.find(regime, shapes::CLAIM_NARROW, producers);
@@ -371,7 +373,7 @@ fn render(out: &mut dyn std::fmt::Write) {
             let wide = observation.find(regime, shapes::CLAIM_WIDE, producers);
             let _ = writeln!(
                 out,
-                "     {:<10} {:>11} {:>11} {:>11} {:>11} {:>10} {:>10} {:>10}",
+                "     {:<10} {:>11} {:>11} {:>11} {:>11} {:>w$} {:>w$} {:>w$}",
                 producers,
                 format_nanos(narrow),
                 format_nanos(deep),
@@ -379,7 +381,8 @@ fn render(out: &mut dyn std::fmt::Write) {
                 format_nanos(wide),
                 format_ratio_bounded(deep, narrow),
                 format_ratio_bounded(perpetual, narrow),
-                format_ratio_bounded(wide, narrow)
+                format_ratio_bounded(wide, narrow),
+                w = RATIO_COLUMN_WIDTH
             );
         }
         let _ = writeln!(out);

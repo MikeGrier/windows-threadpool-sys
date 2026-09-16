@@ -924,3 +924,160 @@ fn render_table_marks_an_unmeasured_spread_rather_than_printing_zero() {
         "an unmeasured spread must be marked: {row:?}"
     );
 }
+
+/// The sentinel is one predicate now, so it is pinned directly.
+///
+/// [`Run::is_measured`] exists so a renderer cannot forget the test by writing
+/// it slightly differently. That only helps if the predicate is itself right,
+/// which a test routed through a formatter would not establish.
+#[test]
+fn is_measured_rejects_every_shape_of_unmeasured_row() {
+    assert!(run(shapes::RESERVING_MPSC, 1, 1e9).is_measured());
+
+    let mut row = run(shapes::RESERVING_MPSC, 1, 0.0);
+    assert!(
+        !row.is_measured(),
+        "a zero cost is the did-not-run sentinel"
+    );
+
+    row.nanos_per_op = f64::NAN;
+    assert!(!row.is_measured(), "NaN is not a measurement");
+
+    row.nanos_per_op = f64::INFINITY;
+    assert!(!row.is_measured(), "infinity is not a measurement");
+
+    row.nanos_per_op = -1.0;
+    assert!(!row.is_measured(), "a negative cost is not a measurement");
+}
+
+/// A row that did not run must not put a number in *any* measured column.
+///
+/// The test above this one checked the spread cell alone, and passed while the
+/// very same row published `0.0` ns/op, `0` ops/sec and a `0.0-0.0` range --
+/// three cells that read as a shape too fast to time. Checking one cell of a
+/// row is what let the other four drift, so this asserts over the whole row.
+#[test]
+fn render_table_marks_every_measured_cell_of_a_row_that_did_not_run() {
+    let mut absent = run(shapes::SLOTWISE_MPSC, 8, 0.0);
+    absent.fastest_nanos_per_op = 0.0;
+    absent.slowest_nanos_per_op = 0.0;
+    let mut out = String::new();
+    render_table(&mut out, &[absent]);
+    let row = out.lines().nth(1).expect("one row was rendered");
+
+    // Shape and producer count are configuration, not measurement: they are
+    // known whether or not the row ran, and must survive.
+    assert!(
+        row.contains(shapes::SLOTWISE_MPSC),
+        "the shape is configuration and must still be named: {row:?}"
+    );
+    assert!(
+        row.contains('8'),
+        "the producer count is configuration and must survive: {row:?}"
+    );
+
+    assert_eq!(
+        row.matches("--").count(),
+        5,
+        "ns/op, ops/sec, refusals, range and spread must all be marked: {row:?}"
+    );
+    assert!(
+        !row.contains("0.0"),
+        "an unmeasured row published a number: {row:?}"
+    );
+}
+
+/// A shape that did not run must not publish a cost.
+#[test]
+fn format_nanos_marks_a_row_that_did_not_run() {
+    assert_eq!(format_nanos(Some(run(shapes::SLOTWISE_MPSC, 8, 0.0))), "--");
+
+    let mut broken = run(shapes::SLOTWISE_MPSC, 8, 1e9);
+    broken.nanos_per_op = f64::NAN;
+    assert_eq!(format_nanos(Some(broken)), "--");
+}
+
+/// Zero scaling is the sentinel, and it is the half that renders plausibly.
+///
+/// [`Observation::scaling`] divides the many-producer rate by the one-producer
+/// rate, so a many-producer row that did not run yields exactly `Some(0.0)`.
+/// Rendered, that is `0.00x` in a column where values near `1` are the normal
+/// reading -- it looks like a queue that failed to *scale* rather than one that
+/// failed to *run*. The other sentinel, `infx`, at least announces itself.
+#[test]
+fn format_scaling_marks_a_zero_rather_than_publishing_it() {
+    assert_eq!(format_scaling(Some(0.0)), "--");
+    assert_eq!(format_scaling_bounded(Some(0.0), None), "--");
+    assert_eq!(format_scaling_bounded(Some(0.0), Some((0.0, 0.0))), "--");
+}
+
+/// The whole path, so the guard is pinned where a reader would meet it.
+///
+/// The formatter tests above supply the sentinel by hand. This one makes the
+/// probe's own arithmetic produce it, which is the only way to show the two
+/// halves agree about what a did-not-run row looks like.
+#[test]
+fn a_many_producer_row_that_did_not_run_scales_to_the_marker() {
+    let observation = Observation {
+        isolated: vec![
+            run(shapes::RESERVING_MPSC, 1, 1e8),
+            run(shapes::RESERVING_MPSC, 8, 0.0),
+        ],
+        drained: Vec::new(),
+        available_parallelism: Some(8),
+    };
+    let point = observation.scaling(&observation.isolated, shapes::RESERVING_MPSC, 8);
+    assert_eq!(
+        point,
+        Some(0.0),
+        "the sentinel reaches the renderer as a plain zero"
+    );
+    let bounds = observation.scaling_bounds(&observation.isolated, shapes::RESERVING_MPSC, 8);
+    assert_eq!(
+        format_scaling_bounded(point, bounds),
+        "--",
+        "a shape that never ran must not publish a scaling factor"
+    );
+}
+
+/// The layout table's ratio column must fit what its formatter emits.
+///
+/// A Rust width is a *minimum*, so a value wider than its field is not
+/// truncated -- it pushes every column after it out of alignment with its
+/// header, silently. The layout table allocated 10 characters to a formatter
+/// whose ordinary output is 17, so the second and third ratio columns had been
+/// rendering seven and fourteen characters adrift.
+///
+/// This binds the width to the formatter rather than restating it: widening
+/// `format_ratio_bounded`'s output without widening `RATIO_COLUMN_WIDTH` fails
+/// here instead of skewing a published table.
+#[test]
+fn ratio_column_is_wide_enough_for_its_formatter() {
+    // Both halves of the point-and-interval shape, plus the marker.
+    let rendered = [
+        format_ratio_bounded(
+            Some(run_spanning(shapes::CLAIM_WIDE, 32, 40.0, 50.0, 60.0)),
+            Some(run_spanning(shapes::CLAIM_NARROW, 32, 4.0, 5.0, 6.0)),
+        ),
+        format_ratio_bounded(
+            Some(run_spanning(shapes::CLAIM_DEEP, 1, 9.9, 10.0, 10.1)),
+            Some(run_spanning(shapes::CLAIM_NARROW, 1, 9.9, 10.0, 10.1)),
+        ),
+        format_ratio_bounded(None, None),
+    ];
+    for cell in &rendered {
+        assert!(
+            cell.len() <= RATIO_COLUMN_WIDTH,
+            "{cell:?} is {} characters and would push the next column out of \
+             line with its header, which allows {RATIO_COLUMN_WIDTH}",
+            cell.len()
+        );
+    }
+    // And the guard is only meaningful if the formatter really does emit the
+    // wide form here -- otherwise this would pass against a bare point estimate.
+    assert!(
+        rendered[0].contains('['),
+        "expected a bounded ratio, got {:?}",
+        rendered[0]
+    );
+}

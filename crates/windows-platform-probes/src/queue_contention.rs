@@ -200,6 +200,27 @@ pub struct Run {
 }
 
 impl Run {
+    /// Whether this row carries a measurement at all.
+    ///
+    /// **This is the single definition of the "did not run" sentinel, and every
+    /// renderer asks it rather than restating the test.** A shape that did not
+    /// run reports zero, and zero is not an obviously broken value in any of
+    /// this report's columns: `0.0` ns/op reads as immeasurably fast, `0.00x`
+    /// as a ratio of one, `0.0-0.0` as perfect stability. Each is the most
+    /// flattering cell its column can hold, produced by a row that measured
+    /// nothing.
+    ///
+    /// It lives here because the test was previously written inline in the
+    /// renderers that remembered it and simply absent from those that did not
+    /// -- which is how [`Run::spread`] came to render `0.00x` for a shape that
+    /// never ran. Fixing that one accessor left the same hole in four other
+    /// paths, because the sentinel was a convention rather than a definition.
+    /// A renderer can now only get this wrong by not asking.
+    #[must_use]
+    pub fn is_measured(&self) -> bool {
+        self.nanos_per_op.is_finite() && self.nanos_per_op > 0.0
+    }
+
     /// The spread across this configuration's repetitions, as a multiple.
     ///
     /// `1.00` would mean every repetition took the same time. A wide spread
@@ -362,7 +383,7 @@ pub fn ratio_bounds(numerator: Run, denominator: Run) -> Option<(f64, f64)> {
 pub fn format_ratio_bounded(numerator: Option<Run>, denominator: Option<Run>) -> String {
     match (numerator, denominator) {
         (Some(numerator), Some(denominator))
-            if numerator.nanos_per_op > 0.0 && denominator.nanos_per_op > 0.0 =>
+            if numerator.is_measured() && denominator.is_measured() =>
         {
             let point = numerator.nanos_per_op / denominator.nanos_per_op;
             match ratio_bounds(numerator, denominator) {
@@ -374,6 +395,20 @@ pub fn format_ratio_bounded(numerator: Option<Run>, denominator: Option<Run>) ->
     }
 }
 
+/// The column width the report allocates to a bounded ratio.
+///
+/// Named here, beside the formatter, rather than written as a literal in the
+/// report's format string. [`format_ratio_bounded`] emits a point estimate *and*
+/// its interval -- `1.00x [1.00-1.00]` is 17 characters, not the 5 a bare
+/// `1.00x` would take -- and a Rust width is a minimum rather than a maximum, so
+/// a field narrower than the value does not truncate it, it pushes every later
+/// column out of line with its header. The report had been allocating 10.
+///
+/// `ratio_column_is_wide_enough_for_its_formatter` holds the two together, so
+/// widening the formatter's output without widening this fails a test rather
+/// than silently skewing a table.
+pub const RATIO_COLUMN_WIDTH: usize = 20;
+
 /// Renders a scaling factor together with the interval it could occupy.
 ///
 /// See [`Observation::scaling_bounds`]: the bracketed interval is a bound over
@@ -381,7 +416,11 @@ pub fn format_ratio_bounded(numerator: Option<Run>, denominator: Option<Run>) ->
 #[must_use]
 pub fn format_scaling_bounded(point: Option<f64>, bounds: Option<(f64, f64)>) -> String {
     match (point, bounds) {
-        (Some(point), _) if !point.is_finite() => "--".to_owned(),
+        // A scaling of zero is the sentinel, not a measurement: it means the
+        // many-producer row reported no throughput at all. Guarded here as well
+        // as against non-finite values, because zero is the half that renders
+        // plausibly -- `0.00x` looks like a contended queue, `infx` does not.
+        (Some(point), _) if !point.is_finite() || point <= 0.0 => "--".to_owned(),
         (Some(point), Some((low, high))) if low.is_finite() && high.is_finite() => {
             format!("{point:.2}x [{low:.2}-{high:.2}]")
         }
@@ -404,19 +443,35 @@ pub fn render_table(out: &mut dyn fmt::Write, runs: &[Run]) {
         "shape", "producers", "ns/op", "ops/sec", "refusals", "ns/op range", "spread"
     );
     for run in runs {
+        // `shape` and `producers` are configuration and always mean something.
+        // Every other column is a measurement, so a row that did not run has
+        // nothing to put in any of them -- including `refusals`, whose zero
+        // would otherwise read as "nothing was refused" rather than "nothing
+        // was attempted". See `Run::is_measured`.
+        let (nanos, ops, refusals, range, spread) = if run.is_measured() {
+            (
+                format!("{:.1}", run.nanos_per_op),
+                format!("{:.0}", run.ops_per_second),
+                run.refusals.to_string(),
+                format!(
+                    "{:.1}-{:.1}",
+                    run.fastest_nanos_per_op, run.slowest_nanos_per_op
+                ),
+                format_scaling(run.spread()),
+            )
+        } else {
+            (
+                "--".to_owned(),
+                "--".to_owned(),
+                "--".to_owned(),
+                "--".to_owned(),
+                "--".to_owned(),
+            )
+        };
         let _ = writeln!(
             out,
-            "{:<18} {:>10} {:>14.1} {:>16.0} {:>14} {:>18} {:>9}",
-            run.shape,
-            run.producers,
-            run.nanos_per_op,
-            run.ops_per_second,
-            run.refusals,
-            format!(
-                "{:.1}-{:.1}",
-                run.fastest_nanos_per_op, run.slowest_nanos_per_op
-            ),
-            format_scaling(run.spread()),
+            "{:<18} {:>10} {:>14} {:>16} {:>14} {:>18} {:>9}",
+            run.shape, run.producers, nanos, ops, refusals, range, spread,
         );
     }
 }
@@ -432,7 +487,7 @@ pub fn render_table(out: &mut dyn fmt::Write, runs: &[Run]) {
 #[must_use]
 pub fn format_scaling(scaling: Option<f64>) -> String {
     match scaling {
-        Some(value) if value.is_finite() => format!("{value:.2}x"),
+        Some(value) if value.is_finite() && value > 0.0 => format!("{value:.2}x"),
         _ => "--".to_owned(),
     }
 }
@@ -447,7 +502,7 @@ pub fn format_scaling(scaling: Option<f64>) -> String {
 pub fn format_ratio(numerator: Option<Run>, denominator: Option<Run>) -> String {
     match (numerator, denominator) {
         (Some(numerator), Some(denominator))
-            if numerator.nanos_per_op > 0.0 && denominator.nanos_per_op > 0.0 =>
+            if numerator.is_measured() && denominator.is_measured() =>
         {
             format!("{:.2}x", numerator.nanos_per_op / denominator.nanos_per_op)
         }
@@ -455,10 +510,18 @@ pub fn format_ratio(numerator: Option<Run>, denominator: Option<Run>) -> String 
     }
 }
 
-/// One row's nanoseconds per operation, or `--` when the row is missing.
+/// One row's nanoseconds per operation, or `--` when the row is missing or did
+/// not run.
+///
+/// Guards the sentinel for the reason [`Run::is_measured`] records: this column
+/// is the report's most-read number, and `0.0` in it reads as a shape too fast
+/// to time rather than as one that never ran.
 #[must_use]
 pub fn format_nanos(run: Option<Run>) -> String {
-    run.map_or_else(|| "--".to_owned(), |run| format!("{:.1}", run.nanos_per_op))
+    match run {
+        Some(run) if run.is_measured() => format!("{:.1}", run.nanos_per_op),
+        _ => "--".to_owned(),
+    }
 }
 
 /// Time every configuration.
