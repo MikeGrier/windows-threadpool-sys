@@ -1151,3 +1151,54 @@ instead of the minimum fails `median_run_carries_the_fastest_and_slowest_repetit
 The dispersion justified itself on first capture. `slotwise_mpsc` at two producers spans 19.3 to
 59.5 ns/op within one configuration on one host, which the median alone had
 concealed entirely, in a table that had already been published twice.
+
+## Moved 2026-09-16 16:46:50 UTC-04:00 -- M4.6 and M4.3: the start gate, and the window it left open
+
+### <a id="m46"></a>M4.6 -- Make the start gate releasable, so a failed thread spawn cannot deadlock the probe. *(completed 2026-09-16 16:46:50 UTC-04:00)*
+
+Every timer sized a `std::sync::Barrier` for all planned workers plus the coordinator, then spawned
+the workers with `Scope::spawn`, which **panics** if the OS cannot create a thread. If that happened
+after an earlier worker had already parked, the coordinator never reached its own arrival, the party
+count was never met, and `thread::scope` joined a permanently parked worker while unwinding. The
+probe hung rather than failed, which is the worse of the two. In the drained timers the consumer was
+parked on the same barrier, and `StopOnDrop` could not help, because the scope could not finish
+unwinding to drop it.
+
+A `Barrier`'s party count, once set, must be met, so the fix was a change of primitive rather than a
+change of call. `StartGate` keeps the property the measurement depends on -- a complete party
+releases every member together, which is what `measured_span` relies on when it argues that each
+worker must time itself -- and adds the operation `Barrier` lacks. `arrive_and_wait` now reports
+whether the party completed, so a worker freed by a release returns instead of timing an abandoned
+run; `ReleaseOnDrop`, held inside each scope's closure, performs the release while that closure
+unwinds, which is before the join loop it has to unblock. Poisoning is stepped over rather than
+propagated, because panicking out of a `Drop` that is already unwinding would abort the process
+instead of unblocking it.
+
+Applied to all nine timers at once, since they share the defect and this branch had three times
+shipped a correct fix applied to a subset of its call sites.
+
+**Two of the four new tests were first written to assert on the test thread, and sabotage caught
+both**: with `release` neutered they parked the test rather than failing it, which would wedge a
+suite that runs its tests as threads in one process. Every gate test now arrives off-thread and
+polls, so a regression reddens in five seconds.
+
+### <a id="m43"></a>M4.3 -- Close the undrained window at the start of the drained regime with a readiness handshake, and re-measure everything that changes. *(completed 2026-09-16 16:46:50 UTC-04:00)*
+
+The gate proves the consumer exists, is scheduled and is past thread start-up; it does not prove the
+consumer has reached its first `pop`, and it releases every party together. So a producer could push
+into a queue nobody was draining yet -- an undrained opening to a run whose whole subject is that it
+is drained. `await_consumer` closes it: the consumer announces that it is draining, and producers
+hold until they see that before starting their clocks. Applied to all four drained timers, with
+`Acquire`/`Release` per the queue crate's `D-40` standing answer on promoting the load.
+
+**The blocker recorded when this was queued was real, and it is what made the item large.** The
+change moves the drained numbers, so every drained figure already published measured a different
+piece of code. Re-measured on the same host, three whole-probe invocations, committed as a capture
+at `captures/2026-09-16-drained-handshake/` with the summarising script beside the raw runs so the
+derivation can be checked rather than trusted.
+
+**The figures are amended rather than replaced**, because this is new data and not a correction: the
+earlier capture remains what the earlier instrument measured, and both are labelled with the code
+that produced them. The finding survived the re-measurement -- every layout median still sits inside
+the same-code control band in the drained regime -- which is worth stating precisely because it was
+not guaranteed: the drained conclusion did not depend on the window it had been measured through.

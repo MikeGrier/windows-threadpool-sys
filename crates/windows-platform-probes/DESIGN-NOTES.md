@@ -1006,6 +1006,18 @@ what "no difference" looks like on this host:
 | isolated | median 0.94-1.05x, observed 0.69-1.12x |
 | drained | median 0.98-1.07x, observed 0.68-1.27x |
 
+**Amended 2026-09-16: the drained row measures a probe that no longer exists.**
+`M4.3` added a readiness handshake, so producers now hold until the consumer
+announces that it is draining rather than starting the moment the gate releases.
+The row above was taken before that and is kept as what the earlier instrument
+measured. A capture taken after it, on the same host, is in
+[captures/2026-09-16-drained-handshake/](captures/2026-09-16-drained-handshake/README.md);
+its control span is in that capture's `summary.txt` rather than restated here.
+The two are not a like-for-like comparison of dispersion -- the row above spans
+seven runs and the new capture three -- so the amendment records that the
+measurement changed, not that the spread narrowed. The isolated row is
+unaffected: those timers have no consumer, and so no handshake.
+
 So a ratio inside roughly 0.9-1.1x is indistinguishable from zero effect here,
 and at sixteen and thirty-two producers the control alone wanders past 1.12x.
 
@@ -1042,6 +1054,17 @@ the two is the reading this label exists to prevent:
 In the drained regime nothing separates at all -- every u64 layout *and* the
 128-bit word sit inside the control band at every producer count (the widest
 median is 1.13x at one producer, against a control that reaches 1.27x).
+
+**Amended 2026-09-16: re-measured after the `M4.3` handshake, and the finding
+stands.** That paragraph was taken before producers held for the consumer, so it
+describes a drained regime whose opening was briefly undrained. Re-measured on
+the same host without that window, every layout median still sits inside the
+same-code control band -- the figures, and the check itself, are in
+[captures/2026-09-16-drained-handshake/](captures/2026-09-16-drained-handshake/README.md)
+rather than retyped here. What the re-measurement establishes is narrow and
+worth stating plainly: the drained conclusion did not depend on the window it
+was measured through. It says nothing about the isolated regime, which the
+handshake does not touch.
 
 **Widening the word is the one effect this probe establishes.** At sixteen and
 thirty-two producers the isolated 128-bit rows fall outside the same-code

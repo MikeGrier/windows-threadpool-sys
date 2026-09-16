@@ -145,62 +145,9 @@ correctness in the archive.
 
 - [x] **M4.5** -- Emit the dispersion, not just the median. -> [completed 2026-09-15 UTC-07:00](COMPLETED-CHECKLIST.md#m45)
 
-- [ ] **M4.3** -- Close the undrained window at the start of the drained regime with a readiness
-  handshake, and re-measure everything that changes.
+- [x] **M4.3** -- Close the undrained window at the start of the drained regime with a readiness handshake, and re-measure everything that changes. -> [completed 2026-09-16 UTC-04:00](COMPLETED-CHECKLIST.md#m43)
 
-  **Gap:** the drained timings put the consumer in the same `Barrier` as the producers, which
-  guarantees it has *arrived* -- spawned, scheduled, past thread start-up -- but not that it reaches
-  its first `pop` before a producer reaches its first `push`. The barrier releases every party at
-  once, so a short undrained window remains at the opening of each run. It is bounded by a
-  scheduling quantum rather than by thread creation, which is why the barrier is still worth having,
-  but it is not zero, and the drained regime is defined against exactly this.
-
-  **Target:** the consumer sets an `AtomicBool` after entering its drain loop; producers spin on it
-  after `gate.wait()` and before `Instant::now()`. Apply it to all four drained functions
-  (`time_drained_mpsc`, `time_drained_reserving`, `time_drained_permit`, `time_drained_layout`) --
-  they share the defect and the three siblings currently point at the slotwise twin's comment for
-  the reasoning, so that comment is the one to update.
-
-  **BLOCKER, and the reason this is queued rather than taken:** adding the handshake changes the
-  measurement, so every drained figure already published in
-  [DESIGN-NOTES.md](DESIGN-NOTES.md) -- and the withdrawal argument built on the drained control --
-  becomes a measurement of different code. The item is therefore "change it *and* re-run the
-  seven-run sweep *and* rewrite the drained sections", not a one-line fix, and doing it mid-branch
-  would invalidate figures that five review rounds have already been read against. Raised rather
-  than silently deferred, per the PRIME DIRECTIVE.
-
-  Reported by review against this branch; the comment at the slotwise twin now states what the
-  barrier actually guarantees rather than implying the window is closed.
-
-- [x] **M4.6** -- Make the start gate releasable, so a failed thread spawn cannot deadlock the probe.
-  `StartGate` replaces `std::sync::Barrier`: a complete party opens it as before, and the
-  coordinator can open it early when a spawn fails, so parked workers are freed instead of held
-  for arrivals that will never come. `ReleaseOnDrop` performs that release on the unwind path.
-  The property `measured_span` depends on -- every party released together -- is preserved.
-
-  **Gap:** every timer sizes a `Barrier` for all planned workers plus the coordinator, then spawns
-  the workers with `Scope::spawn`, which **panics** if the OS cannot create a thread. If that
-  happens after an earlier worker has already parked in `gate.wait()`, the coordinator never reaches
-  its own `wait()`, so the party count is never met. `thread::scope` then joins the parked worker
-  while unwinding, and the join never returns: the probe hangs rather than fails. In the drained
-  timers the consumer is parked on the same barrier, and `StopOnDrop` cannot help, because the scope
-  cannot finish unwinding to drop it.
-
-  **Target:** a gate that can be released short of its party count -- the coordinator must be able to
-  say "nobody else is coming" and have every parked participant return. `std::sync::Barrier` cannot
-  express that (a party count, once set, must be met), so this is a change of primitive rather than a
-  change of call, and it touches every timer plus `start_barrier`'s documented reasoning about what
-  the barrier guarantees. Prefer a specified primitive over a hand-rolled spin, per
-  [DESIGN-NOTES.md](../windows-waitable-queues/DESIGN-NOTES.md#d-40).
-
-  **Why this is queued rather than taken:** it requires replacing a synchronisation primitive whose
-  current semantics are load-bearing for the measurement (see `measured_span`'s note on why each
-  worker times itself, which turns on `Barrier::wait` releasing every party together). Changing it
-  mid-review-round risks the timing argument that several rounds have already been read against, and
-  the failure path it fixes needs the OS to refuse a thread. Raised rather than silently deferred,
-  per the PRIME DIRECTIVE.
-
-  Reported by review against this branch.
+- [x] **M4.6** -- Make the start gate releasable, so a failed thread spawn cannot deadlock the probe. -> [completed 2026-09-16 UTC-04:00](COMPLETED-CHECKLIST.md#m46)
 
 - [ ] **M2.5** -- Make the banner describe the read the body describes.
 
