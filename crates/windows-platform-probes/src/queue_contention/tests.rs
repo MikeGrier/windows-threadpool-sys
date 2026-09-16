@@ -1133,3 +1133,68 @@ fn count_measured_counts_rows_that_ran_rather_than_rows_that_exist() {
          must not be either"
     );
 }
+
+/// A `<= 0.0` test does not reject `NaN`, and this pins that it is rejected.
+///
+/// Every comparison against `NaN` is false, so the four-way `<= 0.0` guard this
+/// function used to carry fell straight through to the division for a `NaN`
+/// endpoint and produced `[NaN-NaN]`. The endpoints are public fields, so this
+/// is reachable without going through `median_run`.
+#[test]
+fn ratio_bounds_rejects_non_finite_endpoints() {
+    let sound = run_spanning(shapes::RESERVING_MPSC, 8, 4.0, 5.0, 6.0);
+    assert!(
+        ratio_bounds(sound, sound).is_some(),
+        "the fixture must otherwise produce a bound, or this proves nothing"
+    );
+
+    for poison in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
+        let mut numerator = sound;
+        numerator.fastest_nanos_per_op = poison;
+        assert_eq!(
+            ratio_bounds(numerator, sound),
+            None,
+            "a {poison} numerator span must not reach the division"
+        );
+
+        let mut denominator = sound;
+        denominator.slowest_nanos_per_op = poison;
+        assert_eq!(
+            ratio_bounds(sound, denominator),
+            None,
+            "a {poison} denominator span must not reach the division"
+        );
+    }
+}
+
+/// `> 0.0` admits infinity, and a finite slowest over it is a spread of zero.
+///
+/// Zero is the reassuring end of the spread column, so this is the same class
+/// of defect as the sentinel that reached the renderer earlier: a row that
+/// measured nothing coherent reporting perfect stability.
+#[test]
+fn spread_rejects_non_finite_span_endpoints() {
+    let mut row = run(shapes::RESERVING_MPSC, 8, 1e8);
+    row.fastest_nanos_per_op = 10.0;
+    row.slowest_nanos_per_op = 13.0;
+    assert!(row.spread().is_some(), "the fixture must otherwise measure");
+
+    let mut infinite_fastest = row;
+    infinite_fastest.fastest_nanos_per_op = f64::INFINITY;
+    assert_eq!(
+        infinite_fastest.spread(),
+        None,
+        "an infinite fastest divides to a spread of zero, which reads as \
+         perfect stability"
+    );
+
+    for poison in [f64::NAN, f64::INFINITY] {
+        let mut broken = row;
+        broken.slowest_nanos_per_op = poison;
+        assert_eq!(broken.spread(), None, "a {poison} slowest has no spread");
+
+        let mut broken = row;
+        broken.fastest_nanos_per_op = poison;
+        assert_eq!(broken.spread(), None, "a {poison} fastest has no spread");
+    }
+}

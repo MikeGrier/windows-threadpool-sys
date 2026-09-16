@@ -192,7 +192,7 @@ pub struct Run {
     /// about its own stability within a run, and discarding them silently was
     /// the crate publishing a figure its own contract forbids.
     ///
-    /// [`d-observations-not-verdicts`]: https://github.com/MikeGrier/windows-threadpool-sys/blob/main/crates/windows-platform-probes/DESIGN-NOTES.md#d-observations-not-verdicts
+    /// [`d-observations-not-verdicts`]: ../DESIGN-NOTES.md#d-observations-not-verdicts
     pub fastest_nanos_per_op: f64,
     /// Slowest of the [`REPETITIONS`] timed repetitions, in nanoseconds per
     /// operation. See [`Run::fastest_nanos_per_op`].
@@ -239,7 +239,14 @@ impl Run {
     /// the exception, and the exception is what a renderer got wrong.
     #[must_use]
     pub fn spread(&self) -> Option<f64> {
-        if self.fastest_nanos_per_op > 0.0 {
+        // `> 0.0` alone is not the test: `f64::INFINITY > 0.0` is true, and a
+        // finite slowest over an infinite fastest is `0.0` -- a spread of zero,
+        // which is the reassuring end of this column. Both endpoints must be
+        // real numbers before dividing them.
+        if self.fastest_nanos_per_op.is_finite()
+            && self.fastest_nanos_per_op > 0.0
+            && self.slowest_nanos_per_op.is_finite()
+        {
             Some(self.slowest_nanos_per_op / self.fastest_nanos_per_op)
         } else {
             None
@@ -337,7 +344,7 @@ impl Observation {
     /// it reports -- see `M4.4`, which asks for candidates to be interleaved
     /// with their controls.
     ///
-    /// [`d-observations-not-verdicts`]: https://github.com/MikeGrier/windows-threadpool-sys/blob/main/crates/windows-platform-probes/DESIGN-NOTES.md#d-observations-not-verdicts
+    /// [`d-observations-not-verdicts`]: ../DESIGN-NOTES.md#d-observations-not-verdicts
     #[must_use]
     pub fn scaling_bounds(
         &self,
@@ -375,10 +382,20 @@ impl Observation {
 /// is reported rather than divided by.
 #[must_use]
 pub fn ratio_bounds(numerator: Run, denominator: Run) -> Option<(f64, f64)> {
-    if numerator.fastest_nanos_per_op <= 0.0
-        || numerator.slowest_nanos_per_op <= 0.0
-        || denominator.fastest_nanos_per_op <= 0.0
-        || denominator.slowest_nanos_per_op <= 0.0
+    // **A `<= 0.0` test does not reject `NaN`.** IEEE comparison against NaN is
+    // false whichever way it is written, so every one of these four disjuncts is
+    // false for a NaN endpoint and the guard falls through to the division,
+    // which then renders `[NaN-NaN]`. Testing `is_finite()` first is what
+    // actually excludes it, and it excludes infinities in the same move.
+    let endpoints = [
+        numerator.fastest_nanos_per_op,
+        numerator.slowest_nanos_per_op,
+        denominator.fastest_nanos_per_op,
+        denominator.slowest_nanos_per_op,
+    ];
+    if endpoints
+        .iter()
+        .any(|endpoint| !endpoint.is_finite() || *endpoint <= 0.0)
     {
         return None;
     }

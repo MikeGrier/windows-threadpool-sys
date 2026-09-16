@@ -117,25 +117,46 @@ fn render(out: &mut dyn std::fmt::Write) {
         out,
         "  1. push-path scaling with producer count (isolated regime)\n"
     );
+    // Same two-pass shape as the claim-layout table below, and for the same
+    // reason: `format_scaling_bounded` renders a point plus a measured interval,
+    // whose width follows the data and has no fixed maximum. See
+    // `ratio_column_width`.
+    let scaling_rows: Vec<(usize, [String; 4])> = PRODUCER_COUNTS
+        .iter()
+        .map(|&producers| {
+            let cell = |shape: &str| {
+                format_scaling_bounded(
+                    observation.scaling(&observation.isolated, shape, producers),
+                    observation.scaling_bounds(&observation.isolated, shape, producers),
+                )
+            };
+            (
+                producers,
+                [
+                    cell(shapes::SLOTWISE_MPSC),
+                    cell(shapes::RESERVING_MPSC),
+                    cell(shapes::PERMIT_MPSC),
+                    cell(shapes::BASELINE_FETCH_ADD),
+                ],
+            )
+        })
+        .collect();
+    let w = ratio_column_width(
+        scaling_rows
+            .iter()
+            .flat_map(|(_, cells)| cells)
+            .map(String::as_str),
+    );
     let _ = writeln!(
         out,
-        "     {:<12} {:>22} {:>22} {:>22} {:>22}",
+        "     {:<12} {:>w$} {:>w$} {:>w$} {:>w$}",
         "producers", "slotwise", "reserving", "permit", "atomic floor"
     );
-    for &producers in PRODUCER_COUNTS {
-        let cell = |shape: &str| {
-            format_scaling_bounded(
-                observation.scaling(&observation.isolated, shape, producers),
-                observation.scaling_bounds(&observation.isolated, shape, producers),
-            )
-        };
+    for (producers, cells) in &scaling_rows {
         let _ = writeln!(
             out,
-            "     {producers:<12} {:>22} {:>22} {:>22} {:>22}",
-            cell(shapes::SLOTWISE_MPSC),
-            cell(shapes::RESERVING_MPSC),
-            cell(shapes::PERMIT_MPSC),
-            cell(shapes::BASELINE_FETCH_ADD)
+            "     {producers:<12} {:>w$} {:>w$} {:>w$} {:>w$}",
+            cells[0], cells[1], cells[2], cells[3],
         );
     }
     let _ = writeln!(
@@ -184,33 +205,52 @@ fn render(out: &mut dyn std::fmt::Write) {
         out,
         "     ratio still does not isolate it, or bound it either way.\n"
     );
+    // Two-pass again: both ratio columns hold `format_ratio_bounded` output,
+    // whose width follows the measured span. The header labels join the
+    // derivation rather than being assumed to fit, so the column is correct by
+    // construction instead of by the floor happening to exceed them.
+    let drained_rows: Vec<(usize, String, String, String, String, String)> = PRODUCER_COUNTS
+        .iter()
+        .map(|&producers| {
+            let plain = observation.find(&observation.drained, shapes::SLOTWISE_MPSC, producers);
+            let reserving =
+                observation.find(&observation.drained, shapes::RESERVING_MPSC, producers);
+            let permit = observation.find(&observation.drained, shapes::PERMIT_MPSC, producers);
+            (
+                producers,
+                format_nanos(plain),
+                format_nanos(reserving),
+                format_ratio_bounded(reserving, plain),
+                format_nanos(permit),
+                // The column SH-15.5 exists to fill: the experimental claim
+                // against the shipping shape it would replace. Below 1.00 means
+                // the permit claim is cheaper; above means removing the
+                // room-decision race costs throughput.
+                format_ratio_bounded(permit, reserving),
+            )
+        })
+        .collect();
+    let r = ratio_column_width(
+        drained_rows
+            .iter()
+            .flat_map(|(_, _, _, ratio, _, permit_ratio)| [ratio.as_str(), permit_ratio.as_str()])
+            .chain(["reserving/slotwise", "permit/reserving", "ratio [bound]"]),
+    );
     let _ = writeln!(
         out,
-        "     {:<10} {:>12} {:>12} {:>22} {:>12} {:>22}",
+        "     {:<10} {:>12} {:>12} {:>r$} {:>12} {:>r$}",
         "producers", "slotwise", "reserving", "reserving/slotwise", "permit", "permit/reserving"
     );
     let _ = writeln!(
         out,
-        "     {:<10} {:>12} {:>12} {:>22} {:>12} {:>22}",
+        "     {:<10} {:>12} {:>12} {:>r$} {:>12} {:>r$}",
         "", "ns/op", "ns/op", "ratio [bound]", "ns/op", "ratio [bound]"
     );
-    for &producers in PRODUCER_COUNTS {
-        let plain = observation.find(&observation.drained, shapes::SLOTWISE_MPSC, producers);
-        let reserving = observation.find(&observation.drained, shapes::RESERVING_MPSC, producers);
-        let permit = observation.find(&observation.drained, shapes::PERMIT_MPSC, producers);
-        let ratio = format_ratio_bounded(reserving, plain);
-        // The column SH-15.5 exists to fill: the experimental claim against the
-        // shipping shape it would replace. Below 1.00 means the permit claim is
-        // cheaper; above means removing the room-decision race costs throughput.
-        let permit_ratio = format_ratio_bounded(permit, reserving);
+    for (producers, plain, reserving, ratio, permit, permit_ratio) in &drained_rows {
         let _ = writeln!(
             out,
-            "     {producers:<10} {:>12} {:>12} {:>22} {:>12} {:>22}",
-            format_nanos(plain),
-            format_nanos(reserving),
-            ratio,
-            format_nanos(permit),
-            permit_ratio
+            "     {producers:<10} {:>12} {:>12} {:>r$} {:>12} {:>r$}",
+            plain, reserving, ratio, permit, permit_ratio,
         );
     }
     let _ = writeln!(
@@ -385,7 +425,8 @@ fn render(out: &mut dyn std::fmt::Write) {
         let w = ratio_column_width(
             rows.iter()
                 .flat_map(|(_, _, ratios)| ratios)
-                .map(String::as_str),
+                .map(String::as_str)
+                .chain(["16/48 vs", "8/56 vs", "64/64 vs"]),
         );
         let _ = writeln!(
             out,
