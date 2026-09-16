@@ -84,7 +84,8 @@ use core::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 /// counter cannot lap.
 ///
 /// With `usize` it can. On a 32-bit target the counter laps after 2^32 claims,
-/// which at this crate's measured rates is a matter of minutes: the stalled
+/// which at this crate's disclosed rates is a matter of minutes -- a floor,
+/// since those rates predate a timing correction that lowers them: the stalled
 /// producer then sees the same tail bits, succeeds, and writes a slot that has
 /// since been refilled from the previous lap of the ring. Every other guard in
 /// this shape holds -- the position really is claimed by exactly one producer;

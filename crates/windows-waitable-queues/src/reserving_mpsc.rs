@@ -21,8 +21,11 @@
 //! panic, or counter reports it.
 //!
 //! Under `Balanced`, 2^32 pushes is 37 seconds to about four minutes of
-//! *sustained* pushing at this crate's measured rates, roughly two minutes at
-//! two producers. The wrap alone is not enough -- a producer must also stall
+//! *sustained* pushing at this crate's disclosed rates, roughly two minutes at
+//! two producers. Those rates predate a correction to the probe's timing window,
+//! so they are a floor rather than a forecast -- the correction lowers the rate
+//! and lengthens the horizon, which is the conservative direction for a hazard;
+//! see [`ClaimLayout`]. The wrap alone is not enough -- a producer must also stall
 //! inside a window a few instructions wide -- but a preemption suffices.
 //!
 //! **[`ClaimLayout`] is how far away that is.** [`Perpetual`] moves it to 2^56
@@ -543,7 +546,7 @@ impl ClaimWord for u128 {
 /// reservations whatever the field could encode. It
 /// recurs after 2^32 pushes --
 /// about
-/// **37 seconds** of sustained maximum-rate pushing. Past that point, with two
+/// **37 seconds** at the pre-correction planning rate ([ClaimLayout] says why\n/// that is a floor). Past that point, with two
 /// or more producers, the queue can **silently lose an item**: that is the whole
 /// of the `SH-14.1` exposure, and this layout carries it.
 ///
@@ -569,7 +572,7 @@ impl ClaimLayout for Balanced {
 /// A deeper position: 16 bits of reservations, 48 of position.
 ///
 /// Holds 65,535 outstanding reservations and recurs after 2^48 pushes -- about
-/// **28 days** of sustained maximum-rate pushing.
+/// **28 days** at the pre-correction planning rate; see [ClaimLayout].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Enduring;
 impl sealed::Sealed for Enduring {}
@@ -582,7 +585,7 @@ impl ClaimLayout for Enduring {
 /// The deepest position: 8 bits of reservations, 56 of position.
 ///
 /// Holds 255 outstanding reservations and recurs after 2^56 pushes -- about
-/// **20 years** of sustained maximum-rate pushing, which puts the recurrence
+/// **20 years** at the pre-correction planning rate ([ClaimLayout]), which puts the recurrence
 /// beyond any real deployment rather than merely far away.
 ///
 /// 255 reservations is the whole of the trade, and it is a real limit rather
