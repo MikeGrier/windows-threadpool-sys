@@ -1134,9 +1134,16 @@ figure to carry "the number of runs with their dispersion", and says a ratio quo
 of the figures that decision governs and did not satisfy it. Reported by review, and correctly.
 
 `Run` gained `fastest_nanos_per_op` and `slowest_nanos_per_op`, taken from the ends of the sort that
-already existed, plus a `spread()` accessor that returns zero rather than infinity when a shape
-failed to run -- the same guard `format_ratio` carries for the same reason. `render_table` publishes
-an `ns/op range` column and a `spread` column.
+already existed, plus a `spread()` accessor returning `Option<f64>` -- `None` for a shape that did
+not run. `render_table` publishes an `ns/op range` column and a `spread` column.
+
+*(Corrected before merge. This item first shipped `spread()` returning `0.0` for the unmeasurable
+case, recorded here as "the same guard `format_ratio` carries for the same reason". A later review
+on the same branch found that `0.0` renders as `0.00x`, which reads as perfect stability -- the most
+reassuring cell the column can hold, produced by a row that measured nothing. `spread()` now returns
+`Option`, and every renderer routes through `Run::is_measured` rather than restating the test. The
+original wording is noted rather than quietly replaced because it did not merely go stale: it
+presented returning zero as the fix, when returning zero was the defect.)*
 
 Nine tests cover it, verified load-bearing by sabotage: taking the fastest from the median index
 instead of the minimum fails `median_run_carries_the_fastest_and_slowest_repetitions`.
