@@ -1950,11 +1950,21 @@ conversation despite fixing different things.
 `windows-waitable-queues` (`#[doc = include_str!]` in
 [lib.rs](crates/windows-waitable-queues/src/lib.rs)), so a test can parse the published layout
 tables and assert every row against `ClaimLayout`'s constants -- converting 19 hand-written `255`s
-into one definition and N checked derivations, with no generator and no new tooling. Mechanically,
-that would have caught the `2^31`/`2^30` error, the `MAX_RESERVED`-as-capacity conflation, and the
-ceiling and push-count columns of both stale recurrence tables. The time columns need the assumed
-rate pinned somewhere single before they can be checked the same way, which is a second and smaller
-piece of work rather than a reason not to do the first.
+into one definition and N checked derivations, with no generator and no new tooling.
+
+**Be precise about what that would and would not catch, because this paragraph has now overstated it
+twice.** The layout table's columns are the layout name, the reservation-count field ceiling, the
+pushes-to-recurrence count, and a time. A constants check covers the **ceiling and push-count
+columns** outright. The time column additionally needs the assumed rate pinned somewhere single. And
+the two errors this note originally named -- the `2^31`/`2^30` target-dependent capacity and the
+`MAX_RESERVED`-as-capacity conflation -- it would **not** have caught at all: both are prose
+assertions in the surrounding text, not cells in any table.
+
+That bound is the useful part rather than a caveat on it. Roughly half the restatements measured
+above are tabular and mechanically checkable; the other half are prose claims *about* those
+constants, and catching those needs something that reads assertions rather than rows. A remedy that
+covers the first half is still worth having, and claiming it covers both is how a partial instrument
+comes to be trusted as a complete one.
 
 **No work is scheduled by this note.** It was written to inform a decision that has not been taken,
 and the deliberate absence of a checklist item is per the "design notes are not a work queue" rule

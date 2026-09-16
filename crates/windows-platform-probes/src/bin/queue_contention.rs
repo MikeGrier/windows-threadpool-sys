@@ -430,6 +430,14 @@ fn render(out: &mut dyn std::fmt::Write) {
     );
     let _ = writeln!(
         out,
-        "  many refusals was waiting for the consumer, not for the tail."
+        "  many refusals met a full queue often, so the consumer is one term"
+    );
+    let _ = writeln!(
+        out,
+        "  in what it measured. That does not rule the tail out -- both can"
+    );
+    let _ = writeln!(
+        out,
+        "  bind at once, and these counts do not separate them."
     );
 }
