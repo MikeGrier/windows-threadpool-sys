@@ -917,9 +917,11 @@ reservations, which is a field ceiling rather than a reachable count: on
 target, 2^30 on a 32-bit one), and a smaller queue binds it sooner still.
 Narrowing the field is what buys the position bits: 2^21 reservations leaves
 about a
-day, 2^12 leaves over a year, and 2^8 leaves twenty years. The last reaches the
-same practical headroom a 128-bit word gives, on a plain `AtomicU64`, without a
-third-party dependency and without reopening `D-18`'s i686 question.
+day, 2^12 leaves over a year, and 2^8 leaves twenty years. That last is a plain
+`AtomicU64`, so it reaches twenty years without a third-party dependency and
+without reopening `D-18`'s i686 question -- against the 128-bit word's 5,039 at
+the same rate. Both are finite and both scale with the caller's rate; which of
+them is enough is a question about a deployment, not one this table answers.
 
 **An earlier version of this paragraph called the reservation half "the half
 worth least", on the premise that outstanding reservations are bounded by how
@@ -943,8 +945,10 @@ statement about what the re-apportionment costs to run. See
 [Re-measured on the shipping type](#d-queue-layout-observations).
 
 So the arithmetic separates the rows this way: 16/48's 12.7 days at the
-conservative floor is still reachable by a busy long-lived process, and 12/52 is
-the first row that is not. Which of them a caller wants is the caller's question,
+conservative floor is reachable by a busy long-lived process within a single
+uptime, and 12/52's 202 days is reachable within a long one. Every row recurs;
+what changes down the column is how long it takes, and at what rate. Which of
+them a caller wants is the caller's question,
 and the shipping type takes the layout as a parameter so it stays theirs -- see
 [D-no-client-prescriptions](#d-no-client-prescriptions).
 

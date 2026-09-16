@@ -566,7 +566,8 @@ impl ClaimWord for u128 {
 /// [`Enduring`] holds up to 65,535 outstanding reservations, [`Perpetual`] up to
 /// 255 -- each reachable only when the queue's capacity is at least that
 /// large --
-/// and `Wide` moves it to 2^64 pushes rather than to a horizon in years. (`Wide` exists
+/// and `Wide` moves it to 2^64 pushes -- a longer horizon in years, not the absence of
+/// one. (`Wide` exists
 /// only under the `dwcas` feature, so this names it without linking: an
 /// intra-doc link here would not resolve in a default-feature rustdoc build.)
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
