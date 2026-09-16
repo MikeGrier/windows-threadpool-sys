@@ -211,3 +211,103 @@ each produce a distinct, located failure.
 - [`SubmitThreadpoolWork`](https://learn.microsoft.com/windows/win32/api/threadpoolapiset/nf-threadpoolapiset-submitthreadpoolwork)
 - [WIL token helpers](https://github.com/microsoft/wil/blob/master/include/wil/token_helpers.h)
 - [`GetFileInformationByHandleEx`](https://learn.microsoft.com/windows/win32/api/fileapi/nf-fileapi-getfileinformationbyhandleex)
+
+## <a id="machine-checking-what-is-argued"></a>Why M30 exists, what it is not, and how the pilot was chosen
+
+Rationale for [CHECKLIST.md](CHECKLIST.md) -> `M30`. It is here, in Tier 2, rather than in
+[DESIGN-NOTES.md](DESIGN-NOTES.md), because **no decision has been taken**: `M30.5` is what produces
+one, and "adopt nothing, and say why" remains a legitimate result. Tier 1 records current decisions,
+and recording pre-decision context there would let a reader mistake it for an adopted contract.
+
+### What checks this workspace's concurrency today
+
+Reasoning recorded beside the code, an extensive unit suite, a sabotage suite that injects defects
+and requires each to be caught, and a cargo-mutants sweep. That combination is not weak, and it has
+found real bugs -- [D-15](crates/windows-waitable-queues/DESIGN-NOTES.md#d-15)'s lost wakeup among
+them.
+
+### The measured blind spot, which is the reason for the milestone
+
+[crates/windows-waitable-queues/README.md](crates/windows-waitable-queues/README.md) records that
+weakening a producer's `Acquire` load of the consumer's position to `Relaxed` left the entire suite
+green, while every *logic* defect injected beside it was caught. That asymmetry is not a gap in the
+suite's thoroughness; it is what a test is. A test observes what a run happened to do, and cannot
+observe an ordering that a run happened not to need.
+
+The general form is worth keeping in view when reading the survey's results: classes with an oracle
+converge, classes without one do not. Memory ordering has no oracle here.
+
+### The goal is to narrow where hand-inspection has to look, not to replace it
+
+A method that proves a protocol correct for three producers and a capacity of two does not prove the
+shipping code correct. What it does is move a class of question out of "argued carefully" and into
+"checked", so that what remains uncheckable is a short, named list rather than the whole surface.
+**That list is the deliverable**, which is why `M30.3` is the item the milestone exists for rather
+than a tidying step after the pilot. Formal methods here are a scoping instrument.
+
+### The tool classes, and what each can and cannot see
+
+- **TLA+/PlusCal** -- protocol-level, exhaustive over a small configuration. Its actions are atomic
+  and interleaved, which is sequential consistency: it has **no memory model at all**, so it cannot
+  see a weakened ordering. It checks the protocol, not the code that implements it.
+- **loom** -- actual Rust under the C11 memory model, which is exactly where the measured
+  weakened-`Acquire` blind spot lives.
+- **kani or similar bounded proof** -- Rust, memory-safety and assertion checking.
+- **`const` assertions** -- arithmetic relationships between constants. Already used here, and the
+  cheapest of the four, because they fail the build rather than a run somebody chose to make.
+
+### Why `SH-14.1` is the pilot, and why the reason is not the count
+
+Reaching the claim position's wrap takes 2^32 pushes -- about 37 seconds of sustained maximum-rate
+pushing on the host the queue crate publishes. That is far outside a unit suite budgeted in
+milliseconds, but it is not in itself beyond a long integration test, so "beyond any test" would
+overstate it.
+
+What is beyond any test is the rest of the condition. The crate's README records that reaching the
+wrap is necessary but *not sufficient*: a producer must also be stalled inside a window a few
+instructions wide, and no test can schedule that deliberately. A model whose position wraps at 8
+makes the whole interleaving reachable in seconds and **exhaustive** rather than sampled, and yields
+a counterexample trace rather than a suspicion. Parameter shrinking earns its place by making the
+interleaving exhaustive, not by making a count small.
+
+`capacity == 1` was offered as a second candidate in an early draft and is not one. It belongs to
+`slotwise_mpsc`'s slot *sequence* protocol
+([D-12](crates/windows-waitable-queues/DESIGN-NOTES.md#d-12)), not to `reserving_mpsc`'s claim
+position, and is already resolved by that shape refusing a capacity below two.
+
+### This must not pre-empt D-31
+
+[D-31](crates/windows-waitable-queues/DESIGN-NOTES.md#d-31) decided on considered grounds that 0.1.0
+ships without machine-checked orderings. Its reasoning is the starting point rather than something to
+overturn, and its central objection survives any tool choice: **no candidate models the real
+`SetEvent`/`ResetEvent` calls**, so stubbing them verifies a model of `SetEvent` rather than
+`SetEvent` itself. That is the "measures the model, not the thing" trap this workspace has already
+been caught by once, and the doorbell is precisely where its one real ordering bug lived.
+
+An earlier version of this section said the objection was that "a model checker covers atomics and
+cannot cover `SetEvent`" -- which is wrong for TLA+, whose actions are atomic by construction and
+which has no memory model to cover atomics *with*. The tool-independent part of D-31's objection is
+only the syscall boundary; how much of the atomics a tool sees is exactly what `M30.1` is for.
+
+### The same trap has a second costume
+
+Shrinking a model's parameters -- a position that wraps at 8 rather than 2^32 -- is itself a claim:
+that the protocol's correctness does not depend on the width of that field. If nobody states why the
+shipping code refines the reduced model, a green run proves something about the model alone. A
+reduced model that has not been tied to the code can pass and mean nothing. `M30.2` carries that as
+an acceptance criterion.
+
+### Two corrections the milestone's own drafting needed
+
+Both were errors in the argument *for* the pilot rather than in the plan, so a reader taking them on
+trust would have aimed the pilot wrongly.
+
+**The untestability was mis-attributed to the count.** The first draft said `SH-14.1` "needs 2^32
+pushes to manifest and is therefore beyond any test". Corrected above: the count is reachable, and
+the stall window is what is not.
+
+**The success criterion was half a criterion.** The first draft asked for a counterexample from a
+deliberately broken variant and explicitly *not* a green run on the correct one -- an overcorrection
+against vacuous green runs. A counterexample from a broken variant can equally be produced by a
+malformed or over-permissive model that would find one anywhere, so it is an anti-vacuity check, not
+a property check. Both are required.
