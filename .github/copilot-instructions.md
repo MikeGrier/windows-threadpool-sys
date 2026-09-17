@@ -1273,7 +1273,11 @@ Two corollaries that have each already cost a review round:
 ### 4. Prose carries the claim; a number belongs in an artifact
 
 Measured data pasted into prose becomes a copy somebody must keep true by hand, in every place it
-was pasted, forever. Markdown has no include and rustdoc has no data include, so pasting is the path
+was pasted, forever. Markdown has no include at all; rustdoc has one, and this repository uses it --
+`windows-waitable-queues`' [lib.rs](../crates/windows-waitable-queues/src/lib.rs) splices its whole
+README in with `#[doc = include_str!("../README.md")]`. What neither has is a way to pull a *single
+measured value* out of a data file and into a sentence: the include is whole-file or nothing, so a
+figure quoted mid-paragraph must be typed there. That is why pasting is the path
 of least resistance — and it is where this repository's documentation defects overwhelmingly come
 from. Measured on one pull request's review history: almost none of its measurement findings were
 *wrong measurements*; they were transcriptions that drifted — a table disagreeing with its own copy
