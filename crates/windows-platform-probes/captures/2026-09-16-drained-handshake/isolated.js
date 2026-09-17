@@ -54,7 +54,16 @@ function isolatedRows(file) {
   const rows = new Map();
   for (const line of lines.slice(start, end)) {
     const m = line.match(/^(\S+)\s+(\d+)\s+([\d.]+)\s/);
-    if (m) rows.set(`${m[1]}@${m[2]}`, Number(m[3]));
+    if (m) {
+      const key = `${m[1]}@${m[2]}`;
+      // A `Map` keeps the last write. A run carrying the whole expected producer
+      // set plus one duplicated row would pass every completeness check while
+      // one measurement was silently discarded in favour of another.
+      if (rows.has(key)) {
+        throw new Error(`${file}: a second isolated row for ${key}`);
+      }
+      rows.set(key, Number(m[3]));
+    }
   }
   return rows;
 }

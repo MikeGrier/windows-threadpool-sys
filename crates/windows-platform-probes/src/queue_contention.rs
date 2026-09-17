@@ -1209,8 +1209,8 @@ fn await_consumer(ready: &AtomicBool) {
 /// hand-written `pop` followed by a `store` in each of them is four chances for
 /// the two lines to end up the other way round, which no test could see: the
 /// timers cannot run without running the whole probe. Defining it here gives the
-/// ordering a single home that [`the_handshake_drains_before_it_announces`] can
-/// drive with a recording fake.
+/// ordering a single home that the `the_handshake_drains_before_it_announces`
+/// test can drive with a recording fake.
 ///
 /// Swapping these two statements reintroduces the undrained opening in its
 /// narrower form -- the announcement would mean "this consumer is about to
@@ -1219,8 +1219,6 @@ fn await_consumer(ready: &AtomicBool) {
 ///
 /// `Release` pairs with the `Acquire` in [`await_consumer`], so a producer that
 /// observes the flag has the pop ordered before it.
-///
-/// [`the_handshake_drains_before_it_announces`]: crate::queue_contention::tests
 fn drain_then_announce(pop_once: impl FnOnce(), ready: &AtomicBool) {
     pop_once();
     ready.store(true, Ordering::Release);

@@ -64,6 +64,22 @@ function positive(text, what) {
   return value;
 }
 
+// A ratio triple must be ordered and must contain its own point estimate.
+// `positive` accepts each number on its own, so `2.00x [3.00-1.00]` passes
+// three separate checks and is still not a interval any instrument produced.
+function orderedTriple(point, low, high, where) {
+  if (point === null || low === null || high === null) return false;
+  if (low > high) {
+    problems.push(`${where}: bound ${low} to ${high} is inverted`);
+    return false;
+  }
+  if (point < low || point > high) {
+    problems.push(`${where}: median ${point} is outside its own bound ${low}-${high}`);
+    return false;
+  }
+  return true;
+}
+
 // producers -> { narrowNanos, ratios: [16/48, 8/56, 64/64] }
 function drainedLayout(lines, path) {
   let start = -1;
@@ -104,6 +120,18 @@ function drainedLayout(lines, path) {
     }
     if (ratios.some((r) => r === null)) continue;
     if (narrowNanos === null) continue;
+    // Each triple must be an interval containing its own median.
+    const ordered = [0, 3, 6].every((i) =>
+      orderedTriple(ratios[i], ratios[i + 1], ratios[i + 2], `${where}: layout ratio ${i / 3 + 1}`),
+    );
+    if (!ordered) continue;
+    // A `Map` keeps the last write, so a duplicated producer row would silently
+    // discard the earlier measurement while the completeness check -- which sees
+    // only distinct keys -- still reported a whole capture.
+    if (rows.has(producers)) {
+      problems.push(`${where}: a second layout row for this producer count`);
+      continue;
+    }
     rows.set(producers, { narrowNanos, ratios: [ratios[0], ratios[3], ratios[6]] });
   }
   return rows;
@@ -122,6 +150,15 @@ function drainedComparison(lines, path) {
       `${path}, drained comparison, ${producers} producers: the reserving_mpsc cost`,
     );
     if (reserving === null) continue;
+    // Same overwrite hazard as the layout table, and it matters more here: this
+    // value is the same-code control, so silently keeping the last of two
+    // duplicates would move the published control range.
+    if (rows.has(producers)) {
+      problems.push(
+        `${path}, drained comparison, ${producers} producers: a second row for this producer count`,
+      );
+      continue;
+    }
     rows.set(producers, reserving);
   }
   return rows;
