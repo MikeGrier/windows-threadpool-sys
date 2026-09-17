@@ -25,7 +25,7 @@
   "cases": [
     {
       "name": "ordinary",
-      "why": "A plausible run. Establishes that the tables render and line up at all, so the stressed cases below are testing something.",
+      "why": "A plausible run. Establishes that the tables render and line up at all, so the stressed cases below are testing something. It also carries measured `reserving(64/64)` rows in both regimes: that layout is cfg-gated behind a native 128-bit exchange, so without them the renderer's 64/64 columns were only ever exercised by the did-not-run path, and a width or alignment fault in a real Wide measurement would have rendered unseen.",
       "observation": {
         "available_parallelism": 8,
         "isolated": [
@@ -154,6 +154,24 @@
             0,
             23.8,
             36.5
+          ],
+          [
+            "reserving(64/64)",
+            1,
+            7.5,
+            133333333,
+            0,
+            7.1,
+            7.9
+          ],
+          [
+            "reserving(64/64)",
+            8,
+            61.7,
+            16207455,
+            0,
+            54.1,
+            88.1
           ]
         ],
         "drained": [
@@ -264,6 +282,24 @@
             1160,
             60.5,
             70.8
+          ],
+          [
+            "reserving(64/64)",
+            1,
+            29.3,
+            34129692,
+            12,
+            27.4,
+            31
+          ],
+          [
+            "reserving(64/64)",
+            8,
+            103.3,
+            9680542,
+            480,
+            92.1,
+            118.4
           ]
         ]
       },
@@ -275,7 +311,8 @@
           "ns/op range": 2
         },
         "contains": [
-          "processors available to this process: 8"
+          "processors available to this process: 8",
+          "reserving(64/64)"
         ],
         "absent": []
       }

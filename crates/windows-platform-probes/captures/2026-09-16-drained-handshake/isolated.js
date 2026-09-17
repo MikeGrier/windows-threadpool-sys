@@ -57,6 +57,38 @@ if (files.length === 0) {
   }
 }
 
+
+// The attribution a run prints about itself. A capture is runs of one build on
+// one host under one sampling regime, so these must agree across the inputs --
+// mixing a debug run, or another machine's, yields a median and a control span
+// that describe no configuration that was ever measured, and nothing else here
+// would notice.
+function attribution(text, where) {
+  const line = (prefix) => {
+    const found = text.split(/\r?\n/).find((l) => l.startsWith(prefix));
+    if (found === undefined) {
+      fail(`${where}: no "${prefix}" line; this does not look like a probe report`);
+      process.exit(2);
+    }
+    return found.trim();
+  };
+  return [line("host:"), line("profile:"), line("sampling:")].join(" | ");
+}
+
+function requireOneConfiguration(entries) {
+  const first = entries[0];
+  for (const entry of entries.slice(1)) {
+    if (entry.attribution !== first.attribution) {
+      fail(
+        `${entry.name} was taken under different conditions from ${first.name}:\n` +
+          `  ${first.name}: ${first.attribution}\n` +
+          `  ${entry.name}: ${entry.attribution}`,
+      );
+      process.exit(2);
+    }
+  }
+}
+
 const COUNTS = [1, 2, 4, 8, 16, 32];
 const DEFAULT_LAYOUT = "reserving(32/32)";
 // Same code as DEFAULT_LAYOUT, under the shipping type's own name.
@@ -89,6 +121,9 @@ function isolatedRows(file) {
   return rows;
 }
 
+requireOneConfiguration(
+  files.map((f) => ({ name: f, attribution: attribution(fs.readFileSync(f, "utf8"), f) })),
+);
 const tables = files.map(isolatedRows);
 
 function ratios(numerator, denominator) {

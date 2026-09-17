@@ -82,7 +82,7 @@ function wholeCount(text, what) {
 
 // A ratio triple must be ordered and must contain its own point estimate.
 // `positive` accepts each number on its own, so `2.00x [3.00-1.00]` passes
-// three separate checks and is still not a interval any instrument produced.
+// three separate checks and is still not an interval any instrument produced.
 function orderedTriple(point, low, high, where) {
   if (point === null || low === null || high === null) return false;
   if (low > high) {
@@ -208,8 +208,43 @@ if (paths.length === 0) {
     seen.set(digest, path);
   }
 }
+
+// The attribution a run prints about itself. A capture is runs of one build on
+// one host under one sampling regime, so these must agree across the inputs --
+// mixing a debug run, or another machine's, yields a median and a control span
+// that describe no configuration that was ever measured, and nothing else here
+// would notice.
+function attribution(text, where) {
+  const line = (prefix) => {
+    const found = text.split(/\r?\n/).find((l) => l.startsWith(prefix));
+    if (found === undefined) {
+      fail(`${where}: no "${prefix}" line; this does not look like a probe report`);
+      process.exit(2);
+    }
+    return found.trim();
+  };
+  return [line("host:"), line("profile:"), line("sampling:")].join(" | ");
+}
+
+function requireOneConfiguration(entries) {
+  const first = entries[0];
+  for (const entry of entries.slice(1)) {
+    if (entry.attribution !== first.attribution) {
+      fail(
+        `${entry.name} was taken under different conditions from ${first.name}:\n` +
+          `  ${first.name}: ${first.attribution}\n` +
+          `  ${entry.name}: ${entry.attribution}`,
+      );
+      process.exit(2);
+    }
+  }
+}
+
 const layouts = [];
 const controls = [];
+requireOneConfiguration(
+  paths.map((p) => ({ name: p, attribution: attribution(fs.readFileSync(p, "utf8"), p) })),
+);
 for (const path of paths) {
   const lines = fs.readFileSync(path, "utf8").split(/\r?\n/);
   const layout = drainedLayout(lines, path);
