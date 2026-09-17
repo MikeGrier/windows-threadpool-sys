@@ -212,7 +212,8 @@ reached, and what was rejected on the way.
 
 The evidence was a review history, not an argument. Across the rounds on PR #90, most findings were
 not wrong measurements -- they were transcriptions that had drifted from the thing they restated: a
-table disagreeing with its own copy, a control quoted for the wrong regime, a horizon stated in
+table disagreeing with its own copy, a control quoted for the wrong regime, 
+
 minutes that the crate's own rate put at thirty-seven seconds. The measurements were fine. The
 copies were not.
 

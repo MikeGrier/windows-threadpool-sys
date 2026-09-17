@@ -153,7 +153,7 @@
 //! sweep whose raw runs were never committed, and a three-run capture that was,
 //! at
 //! [captures/2026-09-16-drained-handshake/](https://github.com/MikeGrier/windows-threadpool-sys/blob/main/crates/windows-platform-probes/captures/2026-09-16-drained-handshake/README.md),
-//! whose `isolated.js` derives the
+//! whose [isolated.js](https://github.com/MikeGrier/windows-threadpool-sys/blob/main/crates/windows-platform-probes/captures/2026-09-16-drained-handshake/isolated.js) derives the
 //! per-count layout ratios against a same-code control. The two agree on the
 //! direction. Until the sweep is re-run with its data kept, the capture is the
 //! part of this claim a reader can check.
