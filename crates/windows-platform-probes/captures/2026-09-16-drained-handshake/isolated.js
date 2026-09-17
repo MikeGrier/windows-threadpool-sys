@@ -21,6 +21,7 @@
 "use strict";
 
 const fs = require("fs");
+const crypto = require("crypto");
 
 // One writer for the generated artifact, per this repository's output rule: no
 // formatting site picks a destination, so retargeting the report to a file is a
@@ -40,17 +41,19 @@ if (files.length === 0) {
 // control range -- derived from one set of bytes. A typo must not make the
 // capture look more reproducible than it is.
 {
-  // Compared by resolved path, not by spelling: `run1.txt` and `./run1.txt`
-  // are the same bytes, and so is a symlink to either, while the run count
-  // would still report two independent captures.
-  const seen = new Set();
+  // Compared by CONTENT, not by name. A resolved path catches `./run1.txt` and
+  // a symlink, but not `copy-of-run1.txt`, which has a different real path and
+  // identical bytes -- and the run count would still present it as a second
+  // observation, narrowing the reported range without adding data. What is being
+  // claimed here is independent runs, so identical bytes cannot be two of them.
+  const seen = new Map();
   for (const file of files) {
-    const real = fs.realpathSync(file);
-    if (seen.has(real)) {
-      fail(`the same capture was given more than once: ${file}`);
+    const digest = crypto.createHash("sha256").update(fs.readFileSync(file)).digest("hex");
+    if (seen.has(digest)) {
+      fail(`the same capture was given twice: ${file} is byte-identical to ${seen.get(digest)}`);
       process.exit(2);
     }
-    seen.add(real);
+    seen.set(digest, file);
   }
 }
 
