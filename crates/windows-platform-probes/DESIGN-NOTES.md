@@ -743,8 +743,8 @@ Two regimes, and the pair is the point.
 whatever curve appears against N is the producer side alone, with no consumer traffic in it. It is not
 the claim alone -- what is timed is each shape's whole push path, tail claim and slot write and
 publication and doorbell together, so a difference here is a difference in PUSH COST rather than
-evidence about the claim on its own. **Drained** runs a consumer popping
-continuously, which is the regime in which `reserving_mpsc`'s read of `head` is most expensive -- that
+evidence about the claim on its own. **Drained** runs a consumer looping on `pop`,
+which is the regime in which `reserving_mpsc`'s read of `head` is most expensive -- that
 read is
 cheap until a consumer is *writing* the line, and measuring it in isolation would report it as free.
 It neither isolates that read nor bounds it: the ratio is between two complete push paths whose other

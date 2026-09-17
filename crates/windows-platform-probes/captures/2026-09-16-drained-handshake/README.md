@@ -29,6 +29,12 @@ The host is the same machine as the capture the crate README carries, so the two
 are comparable; nothing here says anything about any other hardware, and the
 banner's `numa[16]` is a single node holding all sixteen processors.
 
+The runs' regime banner reads `a consumer popping continuously`, which is what
+`68198359` printed. A later commit changed that label to `a consumer looping on
+pop`, because the handshake guarantees the consumer's pop path has run once, not
+that it is scheduled without gaps. The label is the only difference: the runs
+below are not retaken for it, since nothing about what was measured moved.
+
 ## Reading it
 
 [summary.txt](summary.txt) is the output of [summarise.js](summarise.js) over the

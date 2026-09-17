@@ -129,7 +129,7 @@ fn render_observation(out: &mut dyn std::fmt::Write, observation: &Observation) 
 
     let _ = writeln!(
         out,
-        "\n-- drained: a consumer popping continuously, capacity {DRAINED_CAPACITY} --"
+        "\n-- drained: a consumer looping on pop, capacity {DRAINED_CAPACITY} --"
     );
     render_table(out, &observation.drained);
 

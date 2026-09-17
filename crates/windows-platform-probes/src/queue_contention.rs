@@ -49,7 +49,7 @@
 //!   difference in PUSH COST, and attributing it to the claim alone would be
 //!   reading more out of the number than is in it. Found by a review.
 //!
-//! - **Drained** -- a consumer popping continuously while the producers push.
+//! - **Drained** -- a consumer looping on `pop` while the producers push.
 //!   This is the regime in which `reserving_mpsc`'s read of `head` is at its
 //!   most expensive, because `head` is only costly to read when a consumer is
 //!   *writing* it. Measured in isolation that read hits a clean, shared line and
@@ -260,7 +260,12 @@ impl Run {
 pub struct Observation {
     /// Producers timed with no consumer and no possibility of refusal.
     pub isolated: Vec<Run>,
-    /// Producers timed against a continuously draining consumer.
+    /// Producers timed against a consumer looping on `pop`.
+    ///
+    /// The handshake in [`await_consumer`] guarantees that loop has executed at
+    /// least once before any producer starts timing. It does not guarantee the
+    /// consumer is never descheduled afterwards, so "looping" describes what the
+    /// consumer thread runs, not how continuously it is scheduled to run it.
     pub drained: Vec<Run>,
     /// Processors available to **this process**, when it could be determined.
     ///
@@ -1322,7 +1327,7 @@ fn time_drained_reserving(producers: usize) -> Repetition {
     (elapsed, refusals)
 }
 
-/// The experimental permit claim, against a continuously draining consumer.
+/// The experimental permit claim, against a consumer looping on `pop`.
 ///
 /// The regime that can price the claim honestly, for the same reason the
 /// reserving twin needs it: the shared line a producer touches is only
@@ -1464,7 +1469,7 @@ fn time_isolated_layout<L: ClaimLayout>(producers: usize) -> Repetition {
     (elapsed, refusals)
 }
 
-/// One claim-word layout, against a continuously draining consumer.
+/// One claim-word layout, against a consumer looping on `pop`.
 ///
 /// Generic for [`time_isolated_layout`]'s reason.
 fn time_drained_layout<L: ClaimLayout + 'static>(producers: usize) -> Repetition {
