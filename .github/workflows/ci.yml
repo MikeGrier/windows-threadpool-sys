@@ -538,6 +538,15 @@ jobs:
           RUST_BACKTRACE: 1
           RUST_LIB_BACKTRACE: 1
         run: cargo test -p windows-waitable-queues --locked --no-fail-fast
+      # The `docs` job documents `--all-features` only, so a link into a
+      # `dwcas`-gated item resolves there and dangles in this configuration.
+      # `private_intra_doc_links` is denied here for the same reason it is in the
+      # placement-probe job: locally it is only a warning, so nothing but a deny
+      # catches a public item documented against a private one.
+      - name: cargo doc (deny broken intra-doc links)
+        env:
+          RUSTDOCFLAGS: "-D rustdoc::broken_intra_doc_links -D rustdoc::private_intra_doc_links"
+        run: cargo doc -p windows-waitable-queues --no-deps --locked
 
   fmt:
     name: rustfmt
