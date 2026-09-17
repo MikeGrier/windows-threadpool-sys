@@ -19,10 +19,16 @@ fn render(out: &mut dyn std::fmt::Write) {
     // First line of the report, and part of the returned text rather than
     // written out here: a captured report must carry the line naming the
     // machine that produced it, and the taint marker with it.
+    //
+    // **Kept, rather than taken from the measurement, so a run that dies still
+    // names its machine** -- and then reconciled below, because the banner and
+    // the rows would otherwise come from two separate discoveries with nothing
+    // saying so.
+    let announced = windows_placement_probe::fingerprint::Fingerprint::discover();
     let _ = writeln!(
         out,
         "{}",
-        windows_placement_probe::fingerprint::banner_line()
+        windows_placement_probe::fingerprint::banner_line_for(&announced)
     );
     let _ = writeln!(
         out,
@@ -60,7 +66,36 @@ fn render(out: &mut dyn std::fmt::Write) {
         }
     };
 
-    let _ = writeln!(out, "processors, as discovered:");
+    // **The banner and the rows must describe the same machine, or the report is
+    // a splice of two.** The banner came from the discovery above; every row
+    // came from the one `measure` took. A processor going offline, or moving
+    // group or node, between them is enough to produce a report whose header
+    // names one machine and whose body describes another, with nothing saying
+    // so -- and `Observation::host` exists precisely so a caller can notice,
+    // its own rustdoc saying it "lets the caller compare the two and refuse".
+    //
+    // `windows-placement-probe`'s own binary does refuse here, because it is
+    // writing a corpus record a runner consented to. This one is a fleet-survey
+    // report, so it discloses instead: the rows below were still measured, and
+    // a reader told which machine they belong to can use them. What must not
+    // happen is the reader being told nothing.
+    if let Ok(announced) = &announced
+        && *announced != observation.host
+    {
+        let _ = writeln!(
+            out,
+            "\nHOST CHANGED DURING THE RUN: the banner above and the rows below\n\
+             describe different machines, so which one the measurements belong to\n\
+             was not established.\n  \
+             banner:   {announced}\n  \
+             measured: {}\n\
+             The rows below were measured on the second. Read them through it, or\n\
+             run again on a machine that is not changing shape.",
+            observation.host
+        );
+    }
+
+    let _ = writeln!(out, "\nprocessors, as discovered:");
     let _ = writeln!(
         out,
         "  {:>8}  {:>16}  {:>13}",
