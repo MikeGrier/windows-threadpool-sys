@@ -304,9 +304,11 @@
 //! answered at all. Both are well-studied designs in production use elsewhere,
 //! which is why this crate ships both instead of picking one for you.
 //!
-//! - **Pushing more than ~4 billion items in one run, from two or more
+//! - **Pushing more than ~4 billion items through one queue, from two or more
 //!   producers?** [`reserving_mpsc`] under its default layout has a known
-//!   item-loss defect past that volume, on every target; [`slotwise_mpsc`]'s
+//!   item-loss defect past that volume, on every target. The count is cumulative
+//!   over that queue's whole life, not per run: many short bursts reach the wrap
+//!   as surely as one long one. [`slotwise_mpsc`]'s
 //!   positions are 64 bits under every configuration, and naming a deeper layout
 //!   on [`reserving_mpsc`] moves the recurrence out. The mechanism is in the
 //!   section above.
