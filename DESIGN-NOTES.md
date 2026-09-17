@@ -1881,7 +1881,9 @@ figures.
 The thing to watch is that in `windows-waitable-queues`, a handful of single facts -- `Perpetual`'s
 reservation-count ceiling, `Balanced`'s recurrence horizon, `Perpetual`'s position span, `Balanced`'s
 field ceiling -- are each restated many times across several files, by hand, with nothing checking
-any of them. The ceiling is the worst, restated in more places than any of the others.
+any of them. Which of them has the most copies was counted once, during the review rounds that
+produced this section, and has not been counted since; no census is committed, so that ordering is
+recorded here as a historical observation rather than a current fact.
 
 **The exact counts are deliberately not recorded here.** An earlier version of this section carried
 them as a table, and the table drifted within days: one row gained an occurrence when a qualifier was

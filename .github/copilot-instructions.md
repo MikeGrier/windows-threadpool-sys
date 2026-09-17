@@ -1181,7 +1181,7 @@ hypothetical: across three consecutive review rounds on PR #42, *five of six fin
 corrections that had not propagated* rather than original defects. See
 [DESIGN-NOTES.md](../DESIGN-NOTES.md) -> [Restatement drift](../DESIGN-NOTES.md#restatement-drift).
 
-Three rules follow, ordered by how little each depends on anyone remembering.
+Five rules follow, ordered by how little each depends on anyone remembering.
 
 ### 1. Prefer a derived fact to a restated one
 
@@ -1298,7 +1298,7 @@ sites in three wordings.
   document is not a finding; it is a hand-computed copy of one, checked by nobody and stale the
   moment any input moves. The counts are the finding. This rule was earned: an instructions file in
   this repository claimed "in both cases roughly 60%" about two figures given four words earlier,
-  one of which was 57 of 61.
+  neither of which rounded to it.
 - **The same applies to incidental tallies** — test counts, file counts, line counts. If the number
   is not itself the finding, leave it out; "the gate is green" says what "308 lib tests" pretends to.
 
@@ -1338,7 +1338,7 @@ The failure does not look like an error, which is why it survives review. It rea
 - **Flipping the verdict is not the fix.** Replacing "not reachable" with "reachable by a busy
   long-lived process" is the same move with the opposite conclusion. Delete the conclusion, do not
   correct it: *"every row recurs; what changes down the column is how long that takes at a given
-  rate — 16/48 at 12.7 days against 12/52 at 202 days."*
+  rate — the table's own figures say how much."*
 
 Three words are the usual tell, and each is a conclusion wearing a measurement's clothes:
 **practical**, **effectively**, **reachable**. So are "enough", "negligible", "safe to", and any
