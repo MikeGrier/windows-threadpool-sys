@@ -1944,8 +1944,10 @@ Three conclusions, of which the middle one is the one that changes practice.
 
 **Formal specification and prose reduction address different classes.** TLA+ and `loom`
 ([D-31](crates/windows-waitable-queues/DESIGN-NOTES.md#d-31)) target algorithm properties. Neither
-has been run -- D-31 records the `loom` verification as planned, and `M31.6` still owns it -- so
-what can be said about that class is that it produced no findings in any review round of PR #90
+has been run, and neither is scheduled: `D-31` records the `loom` verification as planned, and five
+documents name `M31.6` as its owner, but no CHECKLIST contains that item -- `windows-waitable-queues`
+has no CHECKLIST.md at all, only a COMPLETED-CHECKLIST.md. So what can be said about that class is
+that it produced no findings in any review round of PR #90
 while carrying one known unfound defect, which is a statement about the reviews rather than a
 result from either instrument. Restatement targets documented facts,
 which have produced most findings. Both are worth doing; conflating them would aim the expensive
