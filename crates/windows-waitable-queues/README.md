@@ -240,7 +240,13 @@ stops at 64 bits -- so the double-width compare-and-swap comes from
 twenty years before its claim position recurs with no dependency, though what
 that costs in throughput is not established, while under `Wide` the whole push
 path was measured as slower at every producer count measured -- smallest at one
-or two, several times by thirty-two, in the isolated regime. What `Wide` provides
+or two, several times by thirty-two, in the isolated regime. That claim rests on
+a seven-run sweep whose raw runs were never committed, and on a three-run capture
+that was:
+[captures/2026-09-16-drained-handshake/](../windows-platform-probes/captures/2026-09-16-drained-handshake/README.md),
+whose `isolated.js` derives the per-count layout ratios against a same-code
+control. The two agree on the direction; the capture is the part a reader can
+run. What `Wide` provides
 that the `u64` layouts do not is a 64-bit position: the recurrence moves to
 2^64 pushes -- about 5,000 years at the same rate the table above uses, rather
 than the twenty `Perpetual` buys. That is a longer horizon, not the absence of

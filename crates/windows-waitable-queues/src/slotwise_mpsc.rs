@@ -560,7 +560,10 @@ impl<T> Producer<T> {
         // asked for the answer.
         //
         // Note what this property does *not* buy: measurement found this shape
-        // slower than `reserving_mpsc` under contention despite it. Why that is
+        // slower than `reserving_mpsc` under contention in the ISOLATED regime
+        // despite it -- the drained capture on the same host has rows going both
+        // ways, so the unqualified claim is contradicted by committed data. Why
+        // even the isolated result is
         // so is not established -- the probe times the complete push, so the
         // sequence read
         // is one term among several and is never isolated. An earlier version of
