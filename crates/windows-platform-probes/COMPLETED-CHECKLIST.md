@@ -1189,7 +1189,7 @@ consumer has reached its first `pop`, and it releases every party together. So a
 into a queue nobody was draining yet -- an undrained opening to a run whose whole subject is that it
 is drained. `await_consumer` closes it: the consumer announces that it is draining, and producers
 hold until they see that before starting their clocks. Applied to all four drained timers, with
-`Acquire`/`Release` per the queue crate's `D-40` standing answer on promoting the load.
+`Acquire`/`Release` per the queue crate's `D-38` standing answer on promoting the load.
 
 **The blocker recorded when this was queued was real, and it is what made the item large.** The
 change moves the drained numbers, so every drained figure already published measured a different

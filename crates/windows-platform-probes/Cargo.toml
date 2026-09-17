@@ -182,7 +182,7 @@ serde = { version = "1.0", optional = true }
 # This is not a tuning choice, it is the queue crate's `D-18`/`D-37` contract:
 # `dwcas` is non-default precisely so `reserving_mpsc`'s narrow word ships on
 # every target while the wide one ships only where it is genuinely lock-free.
-# `i686-pc-windows-msvc` has no 128-bit atomic at all, and `D-40` records that
+# `i686-pc-windows-msvc` has no 128-bit atomic at all, and `D-18` records that
 # the workspace deliberately keeps that target supported -- so enabling `dwcas`
 # from here without a target gate would propagate through feature unification and
 # fail the i686 build in the queue crate (`cannot find AtomicU128 in

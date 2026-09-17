@@ -1209,7 +1209,7 @@ impl Drop for StopOnDrop {
 ///
 /// `Acquire`/`Release` rather than `Relaxed`, though the flag carries no data:
 /// this is the standing "promote the load" answer recorded in the queue crate's
-/// [D-40](../../windows-waitable-queues/DESIGN-NOTES.md#d-40) -- an acquire that
+/// [D-38](../../windows-waitable-queues/DESIGN-NOTES.md#d-38) -- an acquire that
 /// proves unnecessary costs little, while a relaxed load that turns out to have
 /// been load-bearing fails only on hardware nobody here owns.
 ///

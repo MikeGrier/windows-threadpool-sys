@@ -237,22 +237,6 @@ correctness in the archive.
   them. Until this lands, a shape that needs two dimensions must be added by hand, which is exactly
   the imagination-driven process M2.12 exists to replace.
 
-- [ ] **M4.9** -- Move the prose-volume section's history out of Tier 1.
-
-  **Gap:** `DESIGN-NOTES.md`'s "Prose volume is not the error surface" section carries its motivating
-  question, the alternatives rejected, the review-history it was measured from, an earlier draft it
-  corrects, and an undecided mechanism. Tier 1 is for the current decision; Tier 2
-  ([DESIGN-RATIONALE.md](../../DESIGN-RATIONALE.md)) already holds the history for the neighbouring
-  one-home rule, so this section splits its own rationale across both tiers and makes the decision
-  harder to find inside it.
-
-  **Target:** a compact decision in `DESIGN-NOTES.md` -- what is watched, and why restatement count
-  rather than volume -- with the narrative moved to `DESIGN-RATIONALE.md` beside the rule it belongs
-  with, per the three-tier convention. No content is dropped; it changes which file owns it.
-
-  **Blocker recorded when queued:** none. Raised by review during PR #90 and accepted; deferred only
-  because a move of this size is safer as its own commit than appended to a review round.
-
 - [ ] **M4.8** -- Have the queue-contention report carry the build identity that produced it, and
   have the capture scripts require it to agree.
 

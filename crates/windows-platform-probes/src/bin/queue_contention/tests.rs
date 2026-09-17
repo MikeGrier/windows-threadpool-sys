@@ -2,7 +2,7 @@
 
 //! The report renderer, driven by a corpus rather than by hand-written cases.
 //!
-//! Adding a case is adding data to `corpus.json` -- an observation, and what the
+//! Adding a case is adding data to [corpus.json](corpus.json) -- an observation, and what the
 //! rendered report must be true of. Nothing here needs to change, which is the
 //! point: the report's tables were reachable by nothing in the suite until
 //! `M4.7`, because rendering measured inside itself and the only way to run it

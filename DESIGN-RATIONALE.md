@@ -207,8 +207,8 @@ each produce a distinct, located failure.
 
 ## Why a measured figure is asked to have one home
 
-[DESIGN-NOTES.md](DESIGN-NOTES.md)'s restatement-drift section records the rule; this is how it was
-reached, and what was rejected on the way.
+[DESIGN-NOTES.md](DESIGN-NOTES.md#prose-volume-and-error-surface) records the rule; this is how it
+was reached, and what was rejected on the way.
 
 The evidence was a review history, not an argument. Across the rounds on PR #90, most findings were
 not wrong measurements -- they were transcriptions that had drifted from the thing they restated: a
@@ -232,6 +232,214 @@ earlier draft of the rule said the digit-free form "cannot drift", which oversta
 The mechanism -- how a figure gets from an artifact into rendered prose -- is deliberately left
 open; markdown has no include, and rustdoc's include is whole-file. That is stated in the decision as an
 unsettled trade rather than resolved here, and no work is scheduled against it.
+
+## <a id="why-restatement-count-is-what-is-watched"></a>Why restatement count is what is watched
+
+[DESIGN-NOTES.md](DESIGN-NOTES.md#prose-volume-and-error-surface) records the decision. This is how
+it was reached, what was rejected on the way, and the remedy that was costed but not adopted. It was
+moved here from that file, where it had been written inline: Tier 1 is the current decision, and a
+section carrying its own motivating question, census procedure and superseded drafts had made the
+decision harder to find inside it.
+
+[Restatement drift](#restatement-drift) explains the mechanism and gives the remedy. This note
+records something that section does not: a measurement of **where** the drift actually lives, taken
+after PR #90's eighteenth review round, and what follows from it about formal specification.
+
+The question that prompted it was whether this repository simply says too much -- whether English,
+which must be inexact to serve human readers, is being asked to carry a specification load it cannot
+bear, and whether some formal specification plus substantially less prose would shrink the error
+surface.
+
+### The measurement, and why it is not written down here
+
+Prose volume was looked at first and set aside: whatever the ratio of prose to code is here, it is
+not what the findings track. That ratio is deliberately not quoted, because quoting a measurement
+this section takes no position on would be an uncited figure inside the argument against uncited
+figures.
+
+The thing to watch is that in `windows-waitable-queues`, a handful of single facts -- `Perpetual`'s
+reservation-count ceiling, `Balanced`'s recurrence horizon, `Perpetual`'s position span, `Balanced`'s
+field ceiling -- are each restated many times across several files, by hand, with nothing checking
+any of them. Which of them has the most copies was counted once, during the review rounds that
+produced this section, and has not been counted since; no census is committed, so that ordering is
+recorded here as a historical observation rather than a current fact.
+
+**The exact counts are deliberately not recorded here.** An earlier version of this section carried
+them as a table, and the table drifted within days: one row gained an occurrence when a qualifier was
+added to a rustdoc elsewhere in this same branch, so the census of restatements became a restatement
+that needed maintaining. That is the section's own subject, demonstrated on the section.
+
+Anyone who wants current numbers can compute them, which is the point of the principle below -- the
+counts are a finding, and a finding should be computed rather than quoted:
+
+```powershell
+# Occurrences of a figure across the crate, and how many files carry it.
+$files = git ls-files 'crates/windows-waitable-queues/*' |
+    Where-Object { $_ -match '\.(rs|md|toml)$' }
+foreach ($pattern in '\b255\b', '37 seconds', '2\^56', '4,294,967,295', 'about 20 years') {
+    $hits = 0; $carrying = 0
+    foreach ($file in $files) {
+        $n = ([regex]::Matches([System.IO.File]::ReadAllText($file), $pattern)).Count
+        if ($n) { $hits += $n; $carrying++ }
+    }
+    "{0,-16} {1,3} occurrences across {2} files" -f $pattern, $hits, $carrying
+}
+```
+
+**All of these are restated by hand with nothing checking them.** Three of those facts -- the
+ceiling, the span and the field ceiling -- follow from `ClaimLayout`'s associated constants. The
+time figures follow from a field width *and* an assumed sustained push rate, so a
+constants-versus-table check would validate the constant-derived facts outright and the time figures
+only once the
+rate is pinned somewhere single. That distinction bounds what the cheapest remedy below can do -- an
+earlier version of this paragraph said every one was derivable from the constants, which overstated
+it, in a note about overstatement. The error surface is proportional to how often a fact is restated,
+not to total prose volume: a uniform cut to the prose leaves every restatement in place, just in
+fewer words.
+
+### Which errors this predicts, and which it does not
+
+Sorting PR #90's findings across all rounds by class:
+
+- **Restated derivable facts** -- the `2^31`/`2^30` target-dependent capacity, `MAX_RESERVED`
+  conflated with capacity, "`Wide` removes it" for a bound that is finite, stale recurrence tables,
+  a test count that matched no crate, the same horizon left unqualified across seven sites, a
+  withdrawn magnitude surviving in two public rustdocs.
+- **Structural** -- an unmarked supersedence row in a decision index, an orphaned milestone
+  reference. A linter's job, not a specification's.
+- **Evidence overclaiming** -- a noise floor computed from two runs, a refusal-count argument that
+  did not reproduce in direction or magnitude across three re-measurements. These were the most
+  valuable findings of the whole PR, and *more* measurement is what fixes them, not less prose.
+- **Policy** -- client prescriptions surviving [D-no-client-prescriptions](crates/windows-platform-probes/DESIGN-NOTES.md#d-no-client-prescriptions).
+  Only a reviewer catches these.
+- **Algorithm properties** -- **zero findings, in any round.**
+
+That last line is the one to be careful with, because it has two readings and only the second is
+honest. There are no findings in that class because **there is no instrument for it**, not because
+the algorithms are known good. `SH-14.1` is a live, known defect in the claim protocol; it was found
+by a person reasoning carefully, and nothing in the toolchain would have caught it. Absence of
+findings where nothing looks is not evidence of correctness -- the same error this repository has
+corrected in its own measurements more than once.
+
+### What follows
+
+Three conclusions, of which the middle one is the one that changes practice.
+
+**Formal specification and prose reduction address different classes.** TLA+ and `loom`
+([D-31](crates/windows-waitable-queues/DESIGN-NOTES.md#d-31)) target algorithm properties. Neither
+has been run, and neither is scheduled: `D-31` records the `loom` verification as planned, and
+several documents name `M31.6` as its owner, but no checklist contains that item --
+`windows-waitable-queues` has an archive,
+[COMPLETED-CHECKLIST.md](crates/windows-waitable-queues/COMPLETED-CHECKLIST.md), and no open
+checklist at all. So what can be said about that class is
+that it produced no findings in any review round of PR #90
+while carrying one known unfound defect, which is a statement about the reviews rather than a
+result from either instrument. Restatement targets documented facts,
+which have produced most findings. Both are worth doing; conflating them would aim the expensive
+instrument at the cheap problem.
+
+**The cut must be to restated assertions, not to rationale.** No finding in any round of PR #90 was
+against a passage explaining *why* a decision was made. The findings were against duplicated
+*assertions* of fact, against overclaims from evidence, and against prescriptions. Rationale is what
+makes a decision re-checkable years later and is the reason this file exists at all; cutting it
+uniformly to hit a volume target would remove the only prose that has never been wrong, while
+leaving the prose that keeps being wrong in proportion.
+
+**A formal spec's most useful property here is not proof -- it is that prose can point at it instead
+of paraphrasing it.** That is [restatement drift](#restatement-drift)'s first remedy applied one
+level up: define the protocol once in a form that can be checked, and let every document cite it.
+This is the real connection between the two ideas, and it is why they belong in the same
+conversation despite fixing different things.
+
+### Prose carries the claim; an artifact carries the number
+
+The sharper question, asked after several rounds of the above: **why is measured data living in
+prose at all?**
+
+There is no principled reason. It is an accident of what is easy. Markdown has no include and
+rustdoc has no data include, so the only way to put a figure in front of a reader is to paste it --
+and a pasted figure is a copy somebody must keep true by hand, in every place they pasted it,
+forever.
+
+The cost is measurable in this PR's own review history. Almost none of its measurement-related
+findings were *wrong measurements*. They were **transcription failures**: the same table in the
+README and the crate rustdoc disagreeing because one was retaken; an attribution naming a capture
+the figures no longer came from; one recurrence horizon left unqualified across seven sites in three
+wordings; a withdrawn magnitude surviving in two public rustdocs. The most instructive was a
+proportion that restated two counts **given four words earlier in the same sentence** and got one of
+them wrong -- it said "in both cases roughly 60%" where one of the two cases was 57 of 61. The data
+was adjacent and the summary of it was false, because prose is not checkable and nobody checks it.
+
+**This repository already contains the better pattern, and this branch was the first to apply it
+in the probe crate.**
+[`mutation-sweeps/2026-09-02/`](mutation-sweeps/2026-09-02) is a dated, committed capture directory: data as an artifact, cited
+rather than retyped. `windows-platform-probes` produces the most-cited numbers in the workspace and
+committed no capture at all when this section was written -- every figure it had published reached
+its document by hand. The re-measurement that `M4.3` forced is the first exception:
+[`crates/windows-platform-probes/captures/2026-09-16-drained-handshake/`](crates/windows-platform-probes/captures/2026-09-16-drained-handshake/README.md)
+commits the raw runs, the script that derives the summary, and its output. The seven-run sweep that
+the variance argument rests on still has no committed capture, so the gap this section describes is
+narrowed rather than closed.
+
+So the principle, which holds regardless of which mechanism is eventually chosen:
+
+- **A claim belongs in prose.** "`reserving_mpsc` measured faster than `slotwise_mpsc` under
+  contention, over a spread that overlaps the same-code control at every producer count" is a
+  claim. It transcribes no figure, so it cannot drift from the artifact the way a pasted number
+  does -- but it is not thereby permanent: a retake can make it false, and a reader cannot tell from
+  the sentence alone. That is why the claim cites the artifact. Dropping the digits removes the
+  transcription failure and leaves the citation obligation exactly where it was.
+- **A number belongs in an artifact.** A measured cost, a capture's commit, a count of occurrences:
+  one copy, with its provenance travelling *with* it rather than in a hand-maintained attribution
+  table beside it.
+- **A proportion over data we hold is not a finding, it is a restatement of one.** Computed by hand,
+  checked by nobody, and stale the moment any input moves. The counts are the finding. A reader who
+  wants a ratio can take one, against a denominator they chose and at a moment they know.
+
+If this were adopted, the "which restatements are mechanically checkable" question earlier in this
+note **dissolves** rather than being answered: all of them, because none would be restated.
+
+**The mechanism is undecided and no work is scheduled here.** The reader-experience trade is real --
+a figure in the prose is read by whoever reads the sentence, and a figure behind a link is read by
+whoever follows it, which is a different and unmeasured set -- and it has not been settled.
+Recorded as a principle so the next person choosing where to paste a number has the argument in front
+of them, not as a queued change. Per "design notes are not a work queue", the absence of a checklist
+item is deliberate.
+
+### The cheapest available move, recorded but not scheduled
+
+[README.md](crates/windows-waitable-queues/README.md) is already a build input for
+`windows-waitable-queues` (`#[doc = include_str!]` in
+[lib.rs](crates/windows-waitable-queues/src/lib.rs)), so a test can parse the published layout
+tables and assert every row against `ClaimLayout`'s constants -- turning the occurrences that sit in
+table rows into checked derivations of one definition, with no generator and no new tooling. It
+reaches only those; the occurrences in prose are untouched by it.
+
+**Be precise about what that would and would not catch, because this paragraph has now overstated it
+twice.** The layout table's columns are the layout name, the reservation-count field ceiling, the
+pushes-to-recurrence count, and a time. A constants check covers the **ceiling and push-count
+columns** outright. The time column additionally needs the assumed rate pinned somewhere single. And
+the two errors this note originally named -- the `2^31`/`2^30` target-dependent capacity and the
+`MAX_RESERVED`-as-capacity conflation -- it would **not** have caught at all: both are prose
+assertions in the surrounding text, not cells in any table.
+
+That bound is the useful part rather than a caveat on it. A constants-versus-table check reaches the
+occurrences that sit in table rows and none of the ones in prose, and both populations are
+substantial -- which is the shape of the result, and a reason to build the check rather than not to.
+The prose occurrences need something that reads assertions rather than rows. A remedy that covers the
+tabular ones is worth having; claiming it covers both is how a partial instrument comes to be trusted
+as a complete one.
+
+*(An earlier version of this paragraph put a proportion here. It is gone deliberately: a ratio over
+the counts above is a restatement of them, computed by hand and checked by nobody, and it drifts the
+moment any file is edited -- which is the defect this whole note is about. The counts are the
+finding. Anyone who needs a proportion can take one, against a denominator they chose and at a moment
+they know.)*
+
+**No work is scheduled by this note.** It was written to inform a decision that has not been taken,
+and the deliberate absence of a checklist item is per the "design notes are not a work queue" rule
+rather than an oversight. If the table-versus-constants test or a
+prose-reduction pass is adopted, each needs its own item at that time.
 
 ## References
 
