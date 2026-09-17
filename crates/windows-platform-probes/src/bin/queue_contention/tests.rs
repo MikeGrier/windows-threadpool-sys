@@ -59,6 +59,17 @@ fn run_from(value: &Value) -> Run {
             .as_f64()
             .unwrap_or_else(|| panic!("field {index} of a run is a number"))
     };
+    // `as` truncates a fraction and saturates a negative, so `1.5` would become
+    // producer count 1 and `-3` would become 0 -- a fixture exercising a case it
+    // does not name, silently. Counts are checked for being counts first.
+    let whole = |index: usize| -> u64 {
+        let value = number(index);
+        assert!(
+            value.is_finite() && value >= 0.0 && value.fract() == 0.0,
+            "field {index} of a run is a non-negative whole number, not {value}"
+        );
+        value as u64
+    };
     Run {
         // Leaked so the fixture can hand back the `&'static str` the field
         // wants. A test process is the one place that is the cheap answer, and
@@ -70,10 +81,10 @@ fn run_from(value: &Value) -> Run {
                 .to_owned()
                 .into_boxed_str(),
         ),
-        producers: number(1) as usize,
+        producers: usize::try_from(whole(1)).expect("a producer count fits a usize"),
         nanos_per_op: number(2),
         ops_per_second: number(3),
-        refusals: number(4) as u64,
+        refusals: whole(4),
         fastest_nanos_per_op: number(5),
         slowest_nanos_per_op: number(6),
     }
@@ -95,10 +106,15 @@ fn observation_from(value: &Value) -> Observation {
         // it cannot also be what a typo produces. `as_u64().map(...)` would
         // return `None` for a missing field, a string, a negative, or a
         // fraction, rendering the unknown-parallelism case and passing, while
-        // the corpus said something else entirely. Every other malformed shape
-        // is rejected here so a broken fixture fails instead of testing a
-        // different case than it names.
-        available_parallelism: match &value["available_parallelism"] {
+        // the corpus said something else entirely.
+        //
+        // Indexing with `[]` yields `Value::Null` for an absent key, which would
+        // have made an *omitted* field indistinguishable from an explicit one --
+        // the same conflation one layer up, and exactly what the sentence above
+        // claims is impossible. `get` separates them.
+        available_parallelism: match value.get("available_parallelism").unwrap_or_else(|| {
+            panic!("a case states `available_parallelism`, using null where the query failed")
+        }) {
             Value::Null => None,
             other => Some(
                 other

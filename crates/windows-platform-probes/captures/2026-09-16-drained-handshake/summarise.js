@@ -64,6 +64,21 @@ function positive(text, what) {
   return value;
 }
 
+// A producer count is a positive whole number, and is used as a `Map` key. Left
+// to `finite`, a label of `1.0` becomes the number 1 and matches the expected
+// count 1, so a malformed capture would be normalised into a well-formed one on
+// the way past the completeness check.
+function wholeCount(text, what) {
+  // The check is on the TEXT, not the parsed value: `Number("2.0")` is 2 and
+  // `Number.isInteger(2)` is true, so a value-level test normalises the very
+  // label it is meant to reject. A producer count is written as digits.
+  if (!/^\d+$/.test(text)) {
+    problems.push(`${what}: ${JSON.stringify(text)} is not a whole number`);
+    return null;
+  }
+  return positive(text, what);
+}
+
 // A ratio triple must be ordered and must contain its own point estimate.
 // `positive` accepts each number on its own, so `2.00x [3.00-1.00]` passes
 // three separate checks and is still not a interval any instrument produced.
@@ -97,7 +112,7 @@ function drainedLayout(lines, path) {
   const rows = new Map();
   for (const line of lines.slice(start + 2, start + 8)) {
     const fields = line.trim().split(/\s+/);
-    const producers = finite(fields[0], `${path}: a drained layout producer count`);
+    const producers = wholeCount(fields[0], `${path}: a drained layout producer count`);
     if (producers === null) continue;
     const where = `${path}, drained layout, ${producers} producers`;
     const narrowNanos = positive(fields[1], `${where}: the 32/32 cost`);
@@ -143,7 +158,7 @@ function drainedComparison(lines, path) {
   const rows = new Map();
   for (const line of lines.slice(start + 2, start + 8)) {
     const fields = line.trim().split(/\s+/);
-    const producers = finite(fields[0], `${path}: a comparison producer count`);
+    const producers = wholeCount(fields[0], `${path}: a comparison producer count`);
     if (producers === null) continue;
     const reserving = positive(
       fields[2],
