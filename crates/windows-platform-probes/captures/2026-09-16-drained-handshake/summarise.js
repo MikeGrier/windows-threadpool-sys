@@ -43,6 +43,14 @@ function drainedLayout(lines, path) {
   lines.forEach((line, i) => {
     if (line.includes("-- drained --")) start = i;
   });
+  // The raw table's marker is `-- drained: ... --`, which this does not match;
+  // the one it finds is the claim-layout interpretation table, which is the one
+  // carrying ratios. A missing marker must stop the run rather than silently
+  // slice from line 1, which would summarise whatever happened to be there.
+  if (start < 0) {
+    problems.push(`${path}: no drained layout table (expected a "-- drained --" marker)`);
+    return new Map();
+  }
   const rows = new Map();
   for (const line of lines.slice(start + 2, start + 8)) {
     const fields = line.trim().split(/\s+/);
@@ -50,7 +58,14 @@ function drainedLayout(lines, path) {
     if (producers === null) continue;
     const where = `${path}, drained layout, ${producers} producers`;
     const narrowNanos = finite(fields[1], `${where}: the 32/32 cost`);
-    const ratios = [...line.matchAll(RATIO)].map((m) => Number(m[1]));
+    // Through `finite` like every other captured value. The ratio pattern
+    // accepts any run of digits and dots, so a malformed cell such as `...x`
+    // matches, and a bare `Number` would turn it into NaN -- which compares
+    // false against everything, so it would pass every guard downstream and
+    // surface as `NaN` in the output rather than as a rejected capture.
+    const ratios = [...line.matchAll(RATIO)].map((m, i) =>
+      finite(m[1], `${where}: layout ratio ${i + 1}`),
+    );
     // A row that did not run renders `--`, which the ratio pattern does not
     // match, so a short list is the signal that this row cannot be summarised.
     if (ratios.length !== 3) {
@@ -59,6 +74,7 @@ function drainedLayout(lines, path) {
       );
       continue;
     }
+    if (ratios.some((r) => r === null)) continue;
     if (narrowNanos === null) continue;
     rows.set(producers, { narrowNanos, ratios });
   }

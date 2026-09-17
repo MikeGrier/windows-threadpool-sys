@@ -1565,3 +1565,42 @@ fn a_producer_waits_for_the_consumer_to_announce_that_it_is_draining() {
         thread::sleep(Duration::from_millis(10));
     }
 }
+
+/// The handshake drains before it announces, not after.
+///
+/// The test above proves a producer waits for the announcement. It says nothing
+/// about what the announcement means, so it would pass just as happily if the
+/// consumer announced first and drained second -- and that ordering is the whole
+/// of `M4.3`. Announcing first makes the flag mean "about to drain", which a
+/// descheduling between the store and the first `pop` falsifies; draining first
+/// makes it mean "has executed the pop path", which nothing can.
+///
+/// Reachable only because [`drain_then_announce`] states the ordering once. The
+/// four drained timers that use it cannot be tested directly -- running one runs
+/// the whole probe -- so a hand-written `pop`-then-`store` in each was four
+/// copies of a guarantee nothing could check.
+///
+/// The fake records what the flag said *at the moment the pop ran*. If the store
+/// had already happened, it sees `true`.
+#[test]
+fn the_handshake_drains_before_it_announces() {
+    let ready = AtomicBool::new(false);
+    let already_announced = AtomicBool::new(false);
+
+    drain_then_announce(
+        || already_announced.store(ready.load(Ordering::Acquire), Ordering::Release),
+        &ready,
+    );
+
+    assert!(
+        !already_announced.load(Ordering::Acquire),
+        "readiness was published before the consumer drained, so a producer \
+         released by it can push into a queue whose consumer has not run -- the \
+         undrained opening M4.3 closed, in its narrower form"
+    );
+    assert!(
+        ready.load(Ordering::Acquire),
+        "the handshake drained but never announced, so every producer would spin \
+         forever in await_consumer"
+    );
+}

@@ -98,7 +98,7 @@ impl Captured {
 /// `writeln!(out, ...)` against a `String`; a sink method taking
 /// `fmt::Arguments` would have been explicit but would have rewritten every one
 /// of those sites, while `String` already implements `fmt::Write` -- so a sink
-/// that does too let every write site stand untouched and moved only the
+/// that does too lets every write site stand untouched and moved only the
 /// renderer signatures, which now take `&mut dyn fmt::Write` and are handed a
 /// [`LineSink`] by `emit_report_to`.
 ///

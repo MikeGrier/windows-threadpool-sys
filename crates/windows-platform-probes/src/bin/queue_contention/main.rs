@@ -14,9 +14,9 @@
 //! cannot separate.
 
 use windows_platform_probes::queue_contention::{
-    DRAINED_CAPACITY, Observation, PRODUCER_COUNTS, PUSHES_PER_PRODUCER, REPETITIONS, format_nanos,
-    format_ratio_bounded, format_scaling_bounded, measure, ratio_column_width, render_table,
-    shapes,
+    DRAINED_CAPACITY, Observation, PRODUCER_COUNTS, PUSHES_PER_PRODUCER, REPETITIONS, column_width,
+    format_nanos, format_ratio_bounded, format_scaling_bounded, measure, ratio_column_width,
+    render_table, shapes,
 };
 use windows_platform_probes::report::emit_report;
 
@@ -451,9 +451,17 @@ fn render_observation(out: &mut dyn std::fmt::Write, observation: &Observation) 
                 .map(String::as_str)
                 .chain(["16/48 vs", "8/56 vs", "64/64 vs"]),
         );
+        // `format_nanos` renders a measurement, so these columns are no more
+        // bounded than the ratio columns beside them.
+        let n = column_width(
+            rows.iter()
+                .flat_map(|(_, nanos, _)| nanos)
+                .map(String::as_str),
+            11,
+        );
         let _ = writeln!(
             out,
-            "     {:<10} {:>11} {:>11} {:>11} {:>11} {:>w$} {:>w$} {:>w$}",
+            "     {:<10} {:>n$} {:>n$} {:>n$} {:>n$} {:>w$} {:>w$} {:>w$}",
             "producers",
             "32/32 ns/op",
             "16/48 ns/op",
@@ -466,7 +474,7 @@ fn render_observation(out: &mut dyn std::fmt::Write, observation: &Observation) 
         for (producers, nanos, ratios) in &rows {
             let _ = writeln!(
                 out,
-                "     {:<10} {:>11} {:>11} {:>11} {:>11} {:>w$} {:>w$} {:>w$}",
+                "     {:<10} {:>n$} {:>n$} {:>n$} {:>n$} {:>w$} {:>w$} {:>w$}",
                 producers, nanos[0], nanos[1], nanos[2], nanos[3], ratios[0], ratios[1], ratios[2],
             );
         }

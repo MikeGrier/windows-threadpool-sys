@@ -97,22 +97,56 @@ fn observation_from(value: &Value) -> Observation {
     }
 }
 
-/// The lines of the table whose header contains `header`, header included.
+/// Every table whose header contains `header`, each with its header included.
 ///
 /// A table runs from its header to the first blank line. The drained tables
 /// carry a second header row, which is part of the table and has to line up
 /// with the rest of it, so it is not skipped.
-fn table_lines<'a>(report: &'a str, header: &str) -> Vec<&'a str> {
+///
+/// **All occurrences, not the first.** The report emits the claim-word layout
+/// table twice under identical headers -- once isolated, once drained -- and
+/// `ns/op range` heads both raw tables. Returning only the first meant the
+/// corpus checked the isolated table and a width regression in the drained one
+/// passed unseen, which is half the report unguarded.
+fn tables<'a>(report: &'a str, header: &str) -> Vec<Vec<&'a str>> {
     let all: Vec<&str> = report.lines().collect();
-    let start = all
-        .iter()
-        .position(|line| line.contains(header))
-        .unwrap_or_else(|| panic!("no table header containing {header:?} in:\n{report}"));
-    all[start..]
-        .iter()
-        .take_while(|line| !line.trim().is_empty())
-        .copied()
-        .collect()
+    let mut found = Vec::new();
+    let mut index = 0;
+    while index < all.len() {
+        if all[index].contains(header) && is_columnar(all[index]) {
+            let table: Vec<&str> = all[index..]
+                .iter()
+                .take_while(|line| !line.trim().is_empty())
+                .copied()
+                .collect();
+            // Step past this table so its own rows cannot match again.
+            index += table.len().max(1);
+            found.push(table);
+        } else {
+            index += 1;
+        }
+    }
+    found
+}
+
+/// Whether a line is a table header rather than prose that mentions one.
+///
+/// Header names are matched as substrings, and the report's prose discusses the
+/// columns it prints -- "The atomic floor is the cheapest possible contended
+/// operation" contains `atomic floor` and is a sentence. Slicing from there
+/// gathers a paragraph and compares the lengths of its lines, which fails for
+/// the ordinary reason that prose is ragged.
+///
+/// A header is columnar: its fields are separated by gaps of multiple spaces, so
+/// it splits into two or more parts. Prose is single-spaced and splits into one.
+/// That one test tells them apart without the fixture having to enumerate
+/// either.
+fn is_columnar(line: &str) -> bool {
+    line.trim()
+        .split("  ")
+        .filter(|part| !part.is_empty())
+        .count()
+        >= 2
 }
 
 #[test]
@@ -138,13 +172,20 @@ fn every_corpus_case_renders_a_report_whose_tables_line_up() {
             .expect("`aligned_tables` is an array")
         {
             let header = header.as_str().expect("a header is a string");
-            let lines = table_lines(&report, header);
+            let found = tables(&report, header);
             assert!(
-                lines.len() > 1,
-                "[{name}] the table at {header:?} has no rows, so its alignment \
-                 is not being checked\n{why}"
+                !found.is_empty(),
+                "[{name}] no table header containing {header:?} in:\n{why}\n{report}"
             );
-            assert_aligned(name, &lines, why);
+            for (occurrence, lines) in found.iter().enumerate() {
+                assert!(
+                    lines.len() > 1,
+                    "[{name}] the table at {header:?} (occurrence {}) has no rows, \
+                     so its alignment is not being checked\n{why}",
+                    occurrence + 1
+                );
+                assert_aligned(name, lines, why);
+            }
         }
 
         for needle in expect["contains"]
@@ -187,10 +228,11 @@ fn every_corpus_case_renders_a_report_whose_tables_line_up() {
 /// test's failure message.
 #[test]
 fn the_alignment_check_can_tell_a_misaligned_table_from_an_aligned_one() {
-    let misaligned = table_lines(
+    let misaligned = tables(
         "producers      ratio\n1          1.00x [1.00-1.00]\n",
         "ratio",
-    );
+    )
+    .remove(0);
     assert_eq!(misaligned.len(), 2, "the fixture has a header and one row");
     let caught = std::panic::catch_unwind(AssertUnwindSafe(|| {
         assert_aligned("fixture", &misaligned, "a deliberately overrun table");
@@ -203,6 +245,34 @@ fn the_alignment_check_can_tell_a_misaligned_table_from_an_aligned_one() {
         misaligned[0].len()
     );
 
-    let aligned = table_lines("producers      ratio\n        1      1.00x\n", "ratio");
+    let aligned = tables("producers      ratio\n        1      1.00x\n", "ratio").remove(0);
     assert_aligned("fixture", &aligned, "an aligned table must not be reported");
+}
+
+/// The layout table is rendered for both regimes, and both are checked.
+///
+/// Returning every occurrence only helps if there are two to find. Were the
+/// drained layout table to stop being rendered, every alignment assertion above
+/// would still pass -- there would simply be one fewer table to check, which is
+/// silence rather than failure. This pins the count so the disappearance is a
+/// test failure instead of a quietly smaller suite.
+#[test]
+fn an_ordinary_observation_renders_the_layout_table_for_both_regimes() {
+    let corpus: Value = serde_json::from_str(CORPUS).expect("the corpus parses");
+    let case = corpus["cases"]
+        .as_array()
+        .expect("`cases` is an array")
+        .iter()
+        .find(|case| case["name"] == "ordinary")
+        .expect("the corpus has an `ordinary` case");
+
+    let mut report = String::new();
+    render_observation(&mut report, &observation_from(&case["observation"]));
+
+    assert_eq!(
+        tables(&report, "16/48 vs").len(),
+        2,
+        "the claim-word layout table is rendered once isolated and once drained, \
+         so a count other than two means a regime stopped being reported\n{report}"
+    );
 }

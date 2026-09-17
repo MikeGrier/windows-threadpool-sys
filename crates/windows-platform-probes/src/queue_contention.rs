@@ -491,11 +491,23 @@ pub const RATIO_COLUMN_WIDTH: usize = 20;
 /// emitting the header, which is the only ordering that can get this right.
 #[must_use]
 pub fn ratio_column_width<'a>(cells: impl IntoIterator<Item = &'a str>) -> usize {
+    column_width(cells, RATIO_COLUMN_WIDTH)
+}
+
+/// The width a column must take to keep its rows aligned with its header.
+///
+/// The widest cell, or `floor` when that is wider. Every column in this report
+/// holds rendered measurements, whose length is a function of the data rather
+/// than a constant, so a fixed field silently shifts everything to its right the
+/// first time a value outgrows it. `floor` only stops a table of narrow values
+/// from looking cramped; it is never an upper bound.
+#[must_use]
+pub fn column_width<'a>(cells: impl IntoIterator<Item = &'a str>, floor: usize) -> usize {
     cells
         .into_iter()
         .map(str::len)
         .max()
-        .map_or(RATIO_COLUMN_WIDTH, |widest| widest.max(RATIO_COLUMN_WIDTH))
+        .map_or(floor, |widest| widest.max(floor))
 }
 
 /// Renders a scaling factor together with the interval it could occupy.
@@ -526,11 +538,25 @@ pub fn format_scaling_bounded(point: Option<f64>, bounds: Option<(f64, f64)>) ->
 /// composes a string emits its lines first, reordering the report without losing
 /// any of it.
 pub fn render_table(out: &mut dyn fmt::Write, runs: &[Run]) {
-    let _ = writeln!(
-        out,
-        "{:<18} {:>10} {:>14} {:>16} {:>14} {:>18} {:>9}",
-        "shape", "producers", "ns/op", "ops/sec", "refusals", "ns/op range", "spread"
-    );
+    const HEADERS: [&str; 7] = [
+        "shape",
+        "producers",
+        "ns/op",
+        "ops/sec",
+        "refusals",
+        "ns/op range",
+        "spread",
+    ];
+    // The widths this table has always used, kept as floors so an ordinary
+    // report is unchanged. Every column is a measurement rendered at its natural
+    // width, and `spread` and `ns/op range` are quotients and pairs of measured
+    // endpoints with no upper bound -- a long pause, the very outlier
+    // `median_run` exists to tolerate, renders wider than any fixed field and
+    // pushes every column after it out of line. See `ratio_column_width`, which
+    // is the same argument for the ratio tables.
+    const FLOOR: [usize; 7] = [18, 10, 14, 16, 14, 18, 9];
+
+    let mut rows: Vec<[String; 7]> = Vec::with_capacity(runs.len());
     for run in runs {
         // `shape` and `producers` are configuration and always mean something.
         // Every other column is a measurement, so a row that did not run has
@@ -557,10 +583,60 @@ pub fn render_table(out: &mut dyn fmt::Write, runs: &[Run]) {
                 "--".to_owned(),
             )
         };
+        rows.push([
+            run.shape.to_owned(),
+            run.producers.to_string(),
+            nanos,
+            ops,
+            refusals,
+            range,
+            spread,
+        ]);
+    }
+
+    let mut width = FLOOR;
+    for row in &rows {
+        for (column, cell) in row.iter().enumerate() {
+            width[column] = width[column].max(cell.len());
+        }
+    }
+
+    let _ = writeln!(
+        out,
+        "{:<a$} {:>b$} {:>c$} {:>d$} {:>e$} {:>f$} {:>g$}",
+        HEADERS[0],
+        HEADERS[1],
+        HEADERS[2],
+        HEADERS[3],
+        HEADERS[4],
+        HEADERS[5],
+        HEADERS[6],
+        a = width[0],
+        b = width[1],
+        c = width[2],
+        d = width[3],
+        e = width[4],
+        f = width[5],
+        g = width[6],
+    );
+    for row in &rows {
         let _ = writeln!(
             out,
-            "{:<18} {:>10} {:>14} {:>16} {:>14} {:>18} {:>9}",
-            run.shape, run.producers, nanos, ops, refusals, range, spread,
+            "{:<a$} {:>b$} {:>c$} {:>d$} {:>e$} {:>f$} {:>g$}",
+            row[0],
+            row[1],
+            row[2],
+            row[3],
+            row[4],
+            row[5],
+            row[6],
+            a = width[0],
+            b = width[1],
+            c = width[2],
+            d = width[3],
+            e = width[4],
+            f = width[5],
+            g = width[6],
         );
     }
 }
@@ -1127,6 +1203,29 @@ fn await_consumer(ready: &AtomicBool) {
     }
 }
 
+/// Drains once, then announces -- the producing half of the `M4.3` handshake.
+///
+/// **The one statement of the ordering.** Four drained timers need it, and a
+/// hand-written `pop` followed by a `store` in each of them is four chances for
+/// the two lines to end up the other way round, which no test could see: the
+/// timers cannot run without running the whole probe. Defining it here gives the
+/// ordering a single home that [`the_handshake_drains_before_it_announces`] can
+/// drive with a recording fake.
+///
+/// Swapping these two statements reintroduces the undrained opening in its
+/// narrower form -- the announcement would mean "this consumer is about to
+/// drain", which a descheduling can falsify, rather than "this consumer has
+/// executed the pop path", which nothing can.
+///
+/// `Release` pairs with the `Acquire` in [`await_consumer`], so a producer that
+/// observes the flag has the pop ordered before it.
+///
+/// [`the_handshake_drains_before_it_announces`]: crate::queue_contention::tests
+fn drain_then_announce(pop_once: impl FnOnce(), ready: &AtomicBool) {
+    pop_once();
+    ready.store(true, Ordering::Release);
+}
+
 fn time_drained_mpsc(producers: usize) -> Repetition {
     let (tx, rx) = slotwise_mpsc::bounded::<u64>(DRAINED_CAPACITY).expect("a valid capacity");
     let done = Arc::new(AtomicBool::new(false));
@@ -1164,8 +1263,12 @@ fn time_drained_mpsc(producers: usize) -> Repetition {
         // announcement mean `this consumer has executed the pop path`, which is a
         // fact rather than an intention. The queue is empty here, so it costs one
         // failed pop, and it happens before any producer has started timing.
-        let _ = rx.pop();
-        consumer_ready.store(true, Ordering::Release);
+        drain_then_announce(
+            || {
+                let _ = rx.pop();
+            },
+            &consumer_ready,
+        );
         // Spin rather than park: the doorbell's cost is `doorbell_cost`'s
         // question, and parking here would measure that instead of the claim.
         while !consumer_done.load(Ordering::Relaxed) {
@@ -1272,8 +1375,12 @@ fn time_drained_reserving(producers: usize) -> Repetition {
         // announcement mean `this consumer has executed the pop path`, which is a
         // fact rather than an intention. The queue is empty here, so it costs one
         // failed pop, and it happens before any producer has started timing.
-        let _ = rx.pop();
-        consumer_ready.store(true, Ordering::Release);
+        drain_then_announce(
+            || {
+                let _ = rx.pop();
+            },
+            &consumer_ready,
+        );
         while !consumer_done.load(Ordering::Relaxed) {
             while rx.pop().is_ok() {}
             std::hint::spin_loop();
@@ -1359,8 +1466,12 @@ fn time_drained_permit(producers: usize) -> Repetition {
         // announcement mean `this consumer has executed the pop path`, which is a
         // fact rather than an intention. The queue is empty here, so it costs one
         // failed pop, and it happens before any producer has started timing.
-        let _ = rx.pop();
-        consumer_ready.store(true, Ordering::Release);
+        drain_then_announce(
+            || {
+                let _ = rx.pop();
+            },
+            &consumer_ready,
+        );
         while !consumer_done.load(Ordering::Relaxed) {
             while rx.pop().is_ok() {}
             std::hint::spin_loop();
@@ -1498,8 +1609,12 @@ fn time_drained_layout<L: ClaimLayout + 'static>(producers: usize) -> Repetition
         // announcement mean `this consumer has executed the pop path`, which is a
         // fact rather than an intention. The queue is empty here, so it costs one
         // failed pop, and it happens before any producer has started timing.
-        let _ = rx.pop();
-        consumer_ready.store(true, Ordering::Release);
+        drain_then_announce(
+            || {
+                let _ = rx.pop();
+            },
+            &consumer_ready,
+        );
         while !consumer_done.load(Ordering::Relaxed) {
             while rx.pop().is_ok() {}
             std::hint::spin_loop();

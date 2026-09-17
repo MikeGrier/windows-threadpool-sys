@@ -71,7 +71,15 @@ function ratios(numerator, denominator) {
   return out;
 }
 
-const median = (xs) => [...xs].sort((a, b) => a - b)[Math.floor(xs.length / 2)];
+// The middle of an odd set, and the mean of the two middle values otherwise --
+// matching `summarise.js`. The CLI takes any number of runs, and picking the
+// upper-middle for an even set would report the slower of two runs as their
+// median, which is a different statistic under the same name.
+const median = (xs) => {
+  const sorted = [...xs].sort((a, b) => a - b);
+  const mid = Math.floor(sorted.length / 2);
+  return sorted.length % 2 === 1 ? sorted[mid] : (sorted[mid - 1] + sorted[mid]) / 2;
+};
 const fmt = (x) => x.toFixed(2);
 const cell = (xs) => `${fmt(median(xs))}x [${fmt(Math.min(...xs))}-${fmt(Math.max(...xs))}]`;
 
