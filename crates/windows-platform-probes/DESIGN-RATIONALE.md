@@ -539,18 +539,25 @@ that 16/48 and 8/56 "track the default within noise" -- and therefore that buyin
 twenty years of counter headroom cost nothing. Two independent defects sat under
 that sentence.
 
-The first was arithmetic-shaped: the table directly beneath it showed 1.21x and
-1.13x, against a noise floor the same document put at 2-6%. The prose
+The first was arithmetic-shaped: the ratios in the table directly beneath it were
+several times the noise floor the same document quoted. The prose
 contradicted its own evidence, in adjacent lines, and survived several review
 passes anyway -- because "within noise" reads as a conclusion rather than as a
 claim about a measured quantity, so nobody checked it against the number.
 
-The second was deeper. The 2-6% floor had itself been obtained by comparing **two
-runs**, which cannot measure a spread at all. Re-running the probe seven times
-put the same-configuration spread at 7-61% depending on producer count. So the
-floor every "within noise" judgement in the section had been made against was off
-by roughly an order of magnitude, and the judgements were not recoverable by
+The second was deeper. That floor had itself been obtained by comparing **two
+runs**, which cannot measure a spread at all. Seven runs of the same probe put
+the same-configuration spread roughly an order of magnitude wider. So the
+floor every "within noise" judgement in the section had been made against was
+wrong by about that much, and the judgements were not recoverable by
 adjusting it.
+
+**The figures are deliberately not repeated here.** Both tables live in
+[DESIGN-NOTES.md](DESIGN-NOTES.md#d-variance-is-a-finding), which is the one home
+for them, and the seven-run sweep's own gap -- its raw runs were never committed
+-- is recorded there rather than in a second copy. A rationale that restated the
+numbers would be a second surface to keep true by hand, which is the defect this
+very section is explaining.
 
 What made the repair possible was already in the probe's output. `reserving_mpsc`
 and `reserving(32/32)` are the same code at the same layout, measured twice per
@@ -562,10 +569,12 @@ measurement instead of to a fact. Its measured span is in the control table in
 [DESIGN-NOTES.md](DESIGN-NOTES.md#d-variance-is-a-finding), which is where it is
 recorded rather than here.
 
-**The tempting repair was to invert the claim**, since the seven-run medians put
-the re-apportionments at 1.23-1.30x at high producer counts. That would have been
+**The tempting repair was to invert the claim**, since at high producer counts
+the seven-run medians put the re-apportionments above the same-code control's
+own excursions. That would have been
 the same error with the opposite sign: one host, one microarchitecture, a single
-NUMA domain, against a control whose own excursions reach 1.12x. The claim was
+NUMA domain, against a control wide enough that the gap is not an ordering. The
+claim was
 withdrawn in both directions instead, and the section now says which
 configuration is worth measuring locally rather than what the answer is.
 
