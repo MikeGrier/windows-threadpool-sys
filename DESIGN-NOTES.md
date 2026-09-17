@@ -1997,7 +1997,7 @@ narrowed rather than closed.
 So the principle, which holds regardless of which mechanism is eventually chosen:
 
 - **A claim belongs in prose.** "`reserving_mpsc` measured faster than `slotwise_mpsc` under
-  contention, and the spread is wide enough that the ordering is a flag rather than a finding" is a
+  contention, over a spread that overlaps the same-code control at every producer count" is a
   claim. It contains no digits, so it cannot drift from the data -- it can only be wrong about it,
   which a reader can see.
 - **A number belongs in an artifact.** A measured cost, a capture's commit, a count of occurrences:
@@ -2011,7 +2011,8 @@ If this were adopted, the "which restatements are mechanically checkable" questi
 note **dissolves** rather than being answered: all of them, because none would be restated.
 
 **The mechanism is undecided and no work is scheduled here.** The reader-experience trade is real --
-a figure behind a link is a figure most readers will not look at -- and it has not been settled.
+a figure in the prose is read by whoever reads the sentence, and a figure behind a link is read by
+whoever follows it, which is a different and unmeasured set -- and it has not been settled.
 Recorded as a principle so the next person choosing where to paste a number has the argument in front
 of them, not as a queued change. Per "design notes are not a work queue", the absence of a checklist
 item is deliberate.

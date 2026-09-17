@@ -1285,7 +1285,7 @@ one file away, an attribution naming a superseded capture, one horizon left unqu
 sites in three wordings.
 
 - **Write the claim, not the digits, wherever the digits are not the point.** "Measured faster under
-  contention, and the spread is wide enough that the ordering is a flag rather than a finding" cannot
+  contention, over a spread that overlaps the same-code control at every producer count" cannot
   drift from the data, because it restates none of it.
 - **When a figure must appear, it has exactly one home.** Prefer a committed capture the prose links
   to (`mutation-sweeps/<date>/` is this repository's existing example) over the same figure typed
