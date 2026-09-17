@@ -40,13 +40,17 @@ if (files.length === 0) {
 // control range -- derived from one set of bytes. A typo must not make the
 // capture look more reproducible than it is.
 {
+  // Compared by resolved path, not by spelling: `run1.txt` and `./run1.txt`
+  // are the same bytes, and so is a symlink to either, while the run count
+  // would still report two independent captures.
   const seen = new Set();
   for (const file of files) {
-    if (seen.has(file)) {
+    const real = fs.realpathSync(file);
+    if (seen.has(real)) {
       fail(`the same capture was given more than once: ${file}`);
       process.exit(2);
     }
-    seen.add(file);
+    seen.add(real);
   }
 }
 
@@ -120,7 +124,12 @@ const median = (xs) => {
 const fmt = (x) => x.toFixed(2);
 const cell = (xs) => `${fmt(median(xs))}x [${fmt(Math.min(...xs))}-${fmt(Math.max(...xs))}]`;
 
-const control = ratios(DEFAULT_LAYOUT, CONTROL_TWIN);
+// Same code under two names. The denominator is `DEFAULT_LAYOUT`, exactly as it
+// is for every layout ratio above -- a control read against ratios computed the
+// other way round is not a control, because these ranges are not symmetric about
+// 1.00 and the reciprocal of [0.95-1.26] is [0.79-1.05]. `summarise.js` computes
+// its control in this same direction.
+const control = ratios(CONTROL_TWIN, DEFAULT_LAYOUT);
 const measured = new Map(LAYOUTS.map((l) => [l, ratios(l, DEFAULT_LAYOUT)]));
 
 // Widths derived from the cells, not fixed. `cell()` renders a median and a
@@ -137,7 +146,7 @@ const width = COLUMNS.map((name, column) =>
 const PRODUCERS_WIDTH = Math.max(9, ...COUNTS.map((n) => String(n).length));
 
 out(`isolated regime, ${files.length} run(s): ${files.join(", ")}`);
-out(`each layout against ${DEFAULT_LAYOUT}; control is ${DEFAULT_LAYOUT} against ${CONTROL_TWIN}`);
+out(`each layout against ${DEFAULT_LAYOUT}; control is ${CONTROL_TWIN} against ${DEFAULT_LAYOUT}`);
 out("median of the per-run ratios, with the observed range beside it\n");
 
 out(

@@ -1066,17 +1066,28 @@ second independent measurement. The two agree on 64/64 at every producer count:
 
 | producers | seven-run (above) | three-run capture | same-code control, capture |
 |---|---|---|---|
-| 1 | 1.37x [1.16-1.57] | 1.39x [1.32-1.74] | 1.04x [0.95-1.26] |
-| 2 | 1.13x [1.02-1.15] | 1.10x [1.10-1.16] | 1.03x [1.00-1.04] |
-| 4 | 1.29x [1.14-1.36] | 1.37x [1.36-1.70] | 0.96x [0.95-1.03] |
-| 8 | 1.82x [1.64-2.20] | 1.67x [1.59-2.05] | 0.99x [0.90-1.01] |
-| 16 | 3.45x [2.91-4.27] | 4.00x [3.94-4.10] | 0.92x [0.88-1.16] |
-| 32 | 3.81x [2.70-4.31] | 4.77x [3.54-4.99] | 0.98x [0.93-1.06] |
+| 1 | 1.37x [1.16-1.57] | 1.39x [1.32-1.74] | 0.96x [0.79-1.06] |
+| 2 | 1.13x [1.02-1.15] | 1.10x [1.10-1.16] | 0.97x [0.96-1.00] |
+| 4 | 1.29x [1.14-1.36] | 1.37x [1.36-1.70] | 1.04x [0.97-1.06] |
+| 8 | 1.82x [1.64-2.20] | 1.67x [1.59-2.05] | 1.01x [0.99-1.12] |
+| 16 | 3.45x [2.91-4.27] | 4.00x [3.94-4.10] | 1.09x [0.87-1.14] |
+| 32 | 3.81x [2.70-4.31] | 4.77x [3.54-4.99] | 1.02x [0.94-1.07] |
 
 In the capture, all three runs put 64/64 above the control's whole observed
-range at **every** producer count; 16/48 does so at 16 and 32, and 8/56 at 32.
+range at **every** producer count; 16/48 and 8/56 each do so at 16 and 32.
 Three control observations per count is not a band, so this reports what these
 runs did rather than what a fresh run would do.
+
+**Corrected 2026-09-17: the control column above was inverted when first
+published.** `isolated.js` divided the control the other way round --
+`reserving(32/32)` over `reserving_mpsc`, while every layout ratio beside it
+divides *by* `reserving(32/32)` -- so a reciprocal was tabulated as though it
+were comparable. These ranges are not symmetric about 1.00, so the difference is
+real: the reciprocal of `[0.95-1.26]` is `[0.79-1.05]`. It moved a reported
+result, not just a column: 8/56 sits above its control at 16 producers as well as
+32, where the inverted control had shown 32 alone. `summarise.js` computed its
+control in the correct direction throughout, which is why the drained figures are
+unaffected. Found by review.
 
 **An earlier reading of the small-count end said "near parity at one or two",
 and that is withdrawn.** It was restated in six places across the queue crate --

@@ -192,13 +192,17 @@ if (paths.length === 0) {
 // capture given twice would be certified as two independent runs -- repeated
 // bytes reported as agreement.
 {
+  // Compared by resolved path, not by spelling: `run1.txt` and `./run1.txt`
+  // are the same bytes, and so is a symlink to either, while the run count
+  // would still report two independent captures.
   const seen = new Set();
   for (const path of paths) {
-    if (seen.has(path)) {
+    const real = fs.realpathSync(path);
+    if (seen.has(real)) {
       fail(`the same capture was given more than once: ${path}`);
       process.exit(2);
     }
-    seen.add(path);
+    seen.add(real);
   }
 }
 const layouts = [];
