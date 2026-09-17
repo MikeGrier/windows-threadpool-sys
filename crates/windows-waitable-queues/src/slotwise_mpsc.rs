@@ -197,9 +197,12 @@ pub fn bounded<T>(capacity: usize) -> Result<(Producer<T>, Consumer<T>), Capacit
 /// branch on a field that is written once at construction.
 ///
 /// That avoidance is what distinguishes the two multi-producer shapes, but
-/// **it is not what makes either one faster**: measurement found this shape the
-/// slower of the two under contention on the host the crate's table was taken
-/// on. See the crate
+/// **it is not what makes either one faster**: in the **isolated** regime,
+/// measurement found this shape the slower of the two under contention on the
+/// host the crate's table was taken on. The qualifier is load-bearing -- the
+/// crate's table is isolated, and the drained captures on the same host have
+/// rows going both ways, so an unqualified reading of this sentence is
+/// contradicted by the committed data. See the crate
 /// documentation's attributed table for the figures and the conditions they were
 /// taken under. (An earlier version of this sentence gave "by up to 6.4x", a
 /// figure from a two-host capture withdrawn for predating a correction to the
