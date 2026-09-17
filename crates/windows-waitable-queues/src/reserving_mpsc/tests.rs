@@ -1780,7 +1780,13 @@ fn one_producer_alone_can_exhaust_the_reservation_field() {
     // Perpetual is 8/56: the count field holds at most 255.
     let (tx, _rx) = bounded_as::<u64, Perpetual>(1024).expect("a valid capacity");
 
+    // Bounded deliberately. Were the guard to regress to never refusing, an
+    // unbounded `repeat_with` would allocate until the process died -- and this
+    // suite runs its tests as threads in one process, so that takes every other
+    // test with it. One attempt past the ceiling is enough: the assertion below
+    // then reports a count one too high instead of the harness disappearing.
     let held: Vec<_> = std::iter::repeat_with(|| tx.reserve())
+        .take(Perpetual::MAX_RESERVED as usize + 1)
         .take_while(Option::is_some)
         .flatten()
         .collect();
