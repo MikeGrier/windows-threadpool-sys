@@ -655,6 +655,51 @@ fn undirected(pair: (u32, u32)) -> (u32, u32) {
     }
 }
 
+/// Where a row's ring sat relative to the two ends of its hop.
+///
+/// The axis that has to be held fixed before two hops can be compared. A hop
+/// measured with the ring on the producer's node and the same hop measured with
+/// it on the consumer's are different costs, so a minimum drawn from one and a
+/// maximum from the other says nothing about the hops.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Locality {
+    /// The ring was asked for the producer's node.
+    Producer,
+    /// The ring was asked for the consumer's node.
+    Consumer,
+    /// Asked for a third node, or not asked for one at all.
+    Elsewhere,
+}
+
+impl Locality {
+    fn of(pair: (u32, u32), requested: Option<u32>) -> Self {
+        match requested {
+            Some(node) if node == pair.0 => Self::Producer,
+            Some(node) if node == pair.1 => Self::Consumer,
+            _ => Self::Elsewhere,
+        }
+    }
+
+    fn label(self) -> &'static str {
+        match self {
+            Self::Producer => "with the ring on the producer's node",
+            Self::Consumer => "with the ring on the consumer's node",
+            Self::Elsewhere => "with the ring elsewhere",
+        }
+    }
+}
+
+/// One measured node-pair row, reduced to what the spread analysis needs.
+struct NodeRow {
+    /// The undirected hop, which is the unit hops are compared as.
+    hop: (u32, u32),
+    /// The directed pair, kept so a row can be named the way the table names it.
+    directed: (u32, u32),
+    locality: Locality,
+    ring: Option<u32>,
+    nanos: f64,
+}
+
 /// Print the per-node-pair handoff cost, when the host has nodes to cross.
 ///
 /// Silent on a single-node machine: there is nothing to say, and a header over
@@ -686,16 +731,16 @@ fn render_node_distances(out: &mut dyn std::fmt::Write, observation: &Observatio
          any run whose memory did not land there)"
     );
 
-    // Keyed on the ring placement as well as the pair, because the table above
-    // measures every hop TWICE -- once with the ring on the producer's node and
-    // once on the consumer's -- and the comment there says so. Recording only
-    // the pair swept the min and the max over both placements while labelling
-    // each with a hop alone, so the cheapest and dearest rows could be the SAME
-    // hop at two ring placements, and the spread between them was then reported
-    // as evidence that hops differ. That is a difference attributed to a factor
-    // that did not vary.
-    let mut slowest: Option<(f64, (u32, u32), Option<u32>)> = None;
-    let mut fastest: Option<(f64, (u32, u32), Option<u32>)> = None;
+    // **Every row, not just the extremes, because the extremes alone cannot say
+    // what varied.** Taking a global minimum and maximum mixes two factors: a
+    // hop can be measured with the ring on the producer's node or the
+    // consumer's, and those are different costs. The cheapest row may be
+    // producer-local on one hop while the dearest is consumer-local on another,
+    // so their ratio spans a change of hop AND a change of locality -- and
+    // attributing it to the hops is the same error as reporting a direction
+    // reversal as a hop difference, one level further out. Holding locality
+    // fixed is what makes a hop comparison a comparison.
+    let mut rows: Vec<NodeRow> = Vec::new();
 
     for pair in &pairs {
         for base in observation.node_pair_rows(*pair, Strategy::Baseline) {
@@ -753,13 +798,13 @@ fn render_node_distances(out: &mut dyn std::fmt::Write, observation: &Observatio
                 cached.nanos_per_item,
                 cached.consumer_batch
             );
-            let seen = (base.nanos_per_item, *pair, base.requested_memory_node);
-            if slowest.is_none_or(|(worst, _, _)| seen.0 > worst) {
-                slowest = Some(seen);
-            }
-            if fastest.is_none_or(|(best, _, _)| seen.0 < best) {
-                fastest = Some(seen);
-            }
+            rows.push(NodeRow {
+                hop: undirected(*pair),
+                directed: *pair,
+                locality: Locality::of(*pair, base.requested_memory_node),
+                ring: base.requested_memory_node,
+                nanos: base.nanos_per_item,
+            });
         }
     }
 
@@ -783,71 +828,110 @@ fn render_node_distances(out: &mut dyn std::fmt::Write, observation: &Observatio
         return;
     }
 
-    let (Some((worst, worst_pair, worst_ring)), Some((best, best_pair, best_ring))) =
-        (slowest, fastest)
-    else {
+    // **The comparison is made WITHIN a ring locality, never across them.** A
+    // global minimum and maximum span whatever varied between those two rows,
+    // and two things vary here: which hop, and where the ring sat. On a machine
+    // where locality dominates -- every hop cheap producer-local and dear
+    // consumer-local -- the cheapest row and the dearest row can be one percent
+    // apart at matching placements while their ratio is tenfold, and reporting
+    // that as "the hops are not interchangeable" attributes to the hops a
+    // difference the hops did not make.
+    //
+    // So each locality is compared against itself, and only a locality that
+    // actually spans two or more hops can say anything about hops at all.
+    let mut verdict: Option<(Locality, &NodeRow, &NodeRow)> = None;
+    for locality in [Locality::Producer, Locality::Consumer, Locality::Elsewhere] {
+        let within: Vec<&NodeRow> = rows.iter().filter(|row| row.locality == locality).collect();
+        let mut spanned: Vec<(u32, u32)> = within.iter().map(|row| row.hop).collect();
+        spanned.sort_unstable();
+        spanned.dedup();
+        if spanned.len() < 2 {
+            continue;
+        }
+        let (Some(best), Some(worst)) = (
+            within
+                .iter()
+                .copied()
+                .min_by(|a, b| a.nanos.total_cmp(&b.nanos)),
+            within
+                .iter()
+                .copied()
+                .max_by(|a, b| a.nanos.total_cmp(&b.nanos)),
+        ) else {
+            continue;
+        };
+        // The widest within-locality spread is the strongest hop evidence the
+        // run holds, so that is the one reported.
+        let wider = verdict.is_none_or(|(_, previous_best, previous_worst)| {
+            worst.nanos / best.nanos > previous_worst.nanos / previous_best.nanos
+        });
+        if wider {
+            verdict = Some((locality, best, worst));
+        }
+    }
+
+    // `hops.len()`, not `pairs.len()`. `pairs` is directed, so a three-node host
+    // has six entries for the three hops the guard above just counted -- and
+    // printing the directed count here made two adjacent paragraphs describe one
+    // machine with two different numbers.
+    let Some((locality, best, worst)) = verdict else {
+        let _ = writeln!(
+            out,
+            "\n  {} node hop(s), but no single ring placement covers two of them,\n  \
+             so this run cannot compare hops: every pair of rows differs in where\n  \
+             the ring sat as well as which hop it crossed.",
+            hops.len()
+        );
+        let _ = writeln!(
+            out,
+            "  This measures the handoff between two nodes; it is not a distance\n  \
+             matrix read from firmware. Windows exposes no NUMA distance table, so\n  \
+             these numbers are the observable rather than a restatement of ACPI."
+        );
         return;
     };
     let ring = |node: Option<u32>| match node {
         Some(node) => format!("ring on node {node}"),
         None => "ring unspecified".to_owned(),
     };
-    // `hops.len()`, not `pairs.len()`. `pairs` is directed, so a three-node host
-    // has six entries for the three hops the guard above just counted -- and
-    // printing the directed count here made two adjacent paragraphs describe one
-    // machine with two different numbers.
+    let spread = worst.nanos / best.nanos;
     let _ = writeln!(
         out,
-        "\n  {} node hop(s). Cheapest {} -> {} ({}) at {:.1} ns/item; dearest\n  \
+        "\n  {} node hop(s). Compared {}, which is the widest spread any single\n  \
+         placement shows: cheapest {} -> {} ({}) at {:.1} ns/item; dearest\n  \
          {} -> {} ({}) at {:.1} ns/item -- a spread of {:.1}x.",
         hops.len(),
-        best_pair.0,
-        best_pair.1,
-        ring(best_ring),
-        best,
-        worst_pair.0,
-        worst_pair.1,
-        ring(worst_ring),
-        worst,
-        worst / best
+        locality.label(),
+        best.directed.0,
+        best.directed.1,
+        ring(best.ring),
+        best.nanos,
+        worst.directed.0,
+        worst.directed.1,
+        ring(worst.ring),
+        worst.nanos,
+        spread
     );
-    // What varied between the two extremes decides what the spread is evidence
-    // ABOUT, and it is not always the hop.
-    //
-    // **Compared as UNDIRECTED hops, through the same `undirected` the guard
-    // above uses.** Directed equality made `0 -> 1` and `1 -> 0` different hops,
-    // so a spread that came entirely from reversing one hop was reported as the
-    // hops not being interchangeable -- the same confusion the guard above
-    // exists to fix, reintroduced a few dozen lines below it as a second copy of
-    // the same expression. There is now one.
-    if best_pair == worst_pair && best_ring == worst_ring {
-        // One row was both extremes, so there is no spread to describe: this is
-        // a single measurement, not a comparison.
-        let _ = writeln!(
-            out,
-            "  Both extremes are the same row, so the table holds one\n  \
-             measurement per hop and this restates it rather than comparing."
-        );
-    } else if undirected(best_pair) == undirected(worst_pair) {
+    if undirected(best.directed) == undirected(worst.directed) {
         let _ = writeln!(
             out,
             "  Both extremes are the same hop, so that spread is within it --\n  \
-             between its two directions, its two ring placements, or both -- and\n  \
-             says nothing about how the hops compare."
+             between its two directions -- and says nothing about how the hops\n  \
+             compare."
         );
-    } else if worst / best < 1.2 {
+    } else if spread < 1.2 {
         let _ = writeln!(
             out,
             "  That spread is small enough that this host's nodes are close to\n  \
-             equidistant, so the single `cross NUMA node` row above is a fair\n  \
-             summary of it."
+             equidistant at this placement, so the single `cross NUMA node` row\n  \
+             above is a fair summary of it."
         );
     } else {
         let _ = writeln!(
             out,
-            "  The hops are NOT interchangeable, so the single `cross NUMA node`\n  \
-             row above reports whichever one was enumerated first and should not\n  \
-             be read as 'the' cost of leaving a node."
+            "  The hops are NOT interchangeable at this placement, so the single\n  \
+             `cross NUMA node` row above reports whichever one was enumerated\n  \
+             first and should not be read as 'the' cost of leaving a node."
         );
     }
     let _ = writeln!(

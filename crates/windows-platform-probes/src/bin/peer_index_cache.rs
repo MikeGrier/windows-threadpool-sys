@@ -356,30 +356,47 @@ fn render(out: &mut dyn std::fmt::Write) {
     };
     let warm_reduction =
         baseline.consumer_refreshes as f64 / warmed.consumer_refreshes.max(1) as f64;
+    let warm_throughput = baseline.nanos_per_item / warmed.nanos_per_item;
     let _ = writeln!(out);
     let _ = writeln!(
         out,
-        "  control (warming load): {:.2}x throughput, {:.2}x fewer consumer reads.",
-        baseline.nanos_per_item / warmed.nanos_per_item,
-        warm_reduction
+        "  control (warming load): {warm_throughput:.2}x throughput, \
+         {warm_reduction:.2}x fewer consumer reads."
     );
     if warm_reduction < 1.5 {
+        // **The read count is what makes this a control; it is not a statement
+        // about speed.** This arm used to close with "a discarded load cannot
+        // help", which is a claim about throughput, decided entirely by the read
+        // count and contradicted by the figure printed one line above it
+        // whenever the run happened to come out faster. Measured on this host:
+        // one run in twelve reported 1.10x throughput under that sentence.
+        //
+        // What the control establishes is exactly the read count, so that is
+        // what is claimed. The throughput is reported beside it and left to the
+        // reader, because a single pair of runs cannot separate a real effect
+        // from this probe's own spread -- and saying which it is would be the
+        // same over-claim in the other direction.
         let _ = writeln!(
             out,
-            "  It removed no shared read, which is what a control should do. A"
+            "  It removed no shared read, which is what a control should do: the"
         );
         let _ = writeln!(
             out,
-            "  discarded load cannot help: the authoritative load still happens,"
+            "  authoritative load still happens, so the technique's saving has to"
         );
         let _ = writeln!(
             out,
-            "  and in a tight handoff loop the prefetch has no time to land."
+            "  come from REMOVING that load rather than from warming it."
         );
         let _ = writeln!(
             out,
-            "  So the technique works by REMOVING the load, not by warming it."
+            "  The throughput figure above is not part of that: this run does not"
         );
+        let _ = writeln!(
+            out,
+            "  separate a warming effect from its own run-to-run spread, and one"
+        );
+        let _ = writeln!(out, "  pair of runs is not enough to try.");
     } else {
         let _ = writeln!(
             out,
