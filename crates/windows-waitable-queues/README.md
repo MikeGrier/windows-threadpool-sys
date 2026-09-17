@@ -193,8 +193,7 @@ above discloses. Two producers is the smallest count that can trigger the defect
 at all. **That rate predates a correction to
 the probe's timing window** and is kept as a floor for the reason the layout
 table above gives: the correction lowers the rate and lengthens the horizon, so
-these figures say the wrap arrives sooner than it does, which is the
-conservative direction for a hazard. That is sustained throughput, not a total
+these figures name a shorter horizon than the corrected rate gives. That is sustained throughput, not a total
 accumulated over an uptime. Reaching the wrap is necessary but not sufficient: a
 producer must also be stalled inside a window a few instructions wide. Rare, but
 a preemption is enough, and "rare" over billions of pushes is not "never".

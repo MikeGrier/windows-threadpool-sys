@@ -24,7 +24,7 @@
 //! *sustained* pushing at the rate [`ClaimLayout`] discloses; two producers is
 //! the smallest count that can trigger it. That rate predates a correction to the probe's timing window,
 //! so it is a floor rather than a forecast -- the correction lowers the rate
-//! and lengthens the horizon, which is the conservative direction for a hazard;
+//! and lengthens the horizon, so the figures below name a shorter one than it gives;
 //! see [`ClaimLayout`]. The wrap alone is not enough -- a producer must also stall
 //! inside a window a few instructions wide -- but a preemption suffices.
 //!
@@ -255,7 +255,7 @@ use crate::options::Options;
 /// which had overstated throughput. The correction therefore moves the true
 /// sustained rate *down* and these horizons *up*, so the figures above remain a
 /// floor -- they say the wrap arrives sooner than it does, which is the
-/// conservative direction for a hazard. They have not been recomputed, because
+/// corrected rate gives. They have not been recomputed, because
 /// the horizon a caller needs is the one on their own hardware and at their own
 /// rate; the arithmetic is field width divided by rate.
 ///

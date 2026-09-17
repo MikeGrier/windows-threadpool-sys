@@ -106,7 +106,7 @@
 //! rate predates a correction to the probe's timing window**, which had
 //! overstated throughput -- so the true sustained rate is lower and these
 //! horizons longer. They are kept as a floor, saying the wrap arrives sooner
-//! than it does, which is the conservative direction for a hazard. The horizon
+//! than it does -- a shorter horizon than the corrected rate gives. The horizon
 //! that matters is the one on your hardware at your rate.
 //!
 //! The reservation-count column is the field's ceiling rather than the count any
@@ -183,7 +183,7 @@
 //! correction to the probe's timing window** and is kept as a floor for the
 //! reason the layout table above gives: the correction lowers the rate and
 //! lengthens the horizon, so these figures say the wrap arrives sooner than it
-//! does, which is the conservative direction for a hazard. That is sustained
+//! does -- a shorter horizon than the corrected rate gives. That is sustained
 //! throughput,
 //! not a total accumulated over an uptime. Reaching the wrap is necessary but
 //! not sufficient: a producer must also be stalled inside a window a few

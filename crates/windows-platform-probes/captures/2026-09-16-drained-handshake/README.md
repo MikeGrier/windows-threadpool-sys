@@ -90,4 +90,7 @@ three samples is not a band to judge anything against.
 
 So three runs do not settle the drained comparison in either direction. This
 capture reports figures; the claim that nothing separates in the drained regime
-rests on the seven-run sweep, which this does not replace.
+is the **pre-handshake** reading, resting on the seven-run sweep, which this does
+not replace and which measured a probe `M4.3` has since changed. Carrying that
+reading forward as a current statement about the drained regime is the thing this
+paragraph exists to prevent.
