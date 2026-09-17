@@ -185,6 +185,105 @@ written before it was stated.
   function pointer, which is exactly where such a path would be. Depends on M22.1's
   classification.
 
+## M30 -- Find out how much of this workspace's algorithm correctness can be machine-checked
+
+Rationale: [DESIGN-RATIONALE.md](DESIGN-RATIONALE.md#machine-checking-what-is-argued).
+
+- [ ] **M30.1** -- Survey the workspace for algorithms whose correctness is currently argued rather
+  than checked, and match each to the class of tool that could check it.
+
+  Candidates, not exhaustive: `reserving_mpsc`'s packed claim word and its reservation admission rule;
+  `slotwise_mpsc`'s per-slot sequence protocol; the experimental permit claim; the doorbell's mirror
+  flag against `SetEvent`/`ResetEvent`; `windows-file-watcher`'s contract state machine;
+  `windows-ioring-sys`' submission/completion ring.
+
+  Tool classes to match against: TLA+/PlusCal, loom, a bounded proof such as kani, and `const`
+  assertions. What each can and cannot see is in the rationale.
+
+  Done when: a table exists with one row per algorithm, each naming a tool class or "none fits" and
+  why. The "none fits" rows count as output, not as gaps in the survey.
+
+- [ ] **M30.2** -- Pilot exactly one: `reserving_mpsc`'s claim-position recurrence (`SH-14.1`).
+
+  **`SH-14.1` is a live defect in the shipping protocol, not a hypothetical**, and that inverts the
+  usual shape of a success criterion. A faithful model of the shipping claim protocol, at a position
+  width small enough to wrap, *must* find it. A green run on that model is therefore evidence the
+  model is **unfaithful**, not evidence the protocol is sound.
+
+  Done when all three hold:
+
+  1. **The refinement is stated.** Which constants were shrunk, why the protocol is uniform in each,
+     and what a counterexample at the reduced width implies at the shipping width. If it cannot be
+     argued, the result is reported as a counterexample *in a toy model* and nothing more.
+  2. **Faithfulness: the model of the shipping protocol reproduces `SH-14.1`.** Configured so the
+     wrap is reachable and a producer can stall across it, it must yield the known counterexample --
+     a claim succeeding against a numerically identical but generations-later position. A model that
+     cannot produce a defect the crate already documents is not modelling this protocol.
+  3. **Anti-vacuity: the same model satisfies its invariant where no violation is possible.**
+     Configured so the wrap is unreachable -- total pushes bounded below it, or a single producer,
+     which has no race to lose -- it must come back green. A model that reports a violation there is
+     over-permissive, and its counterexample in (2) proved nothing.
+
+  Not a candidate: `capacity == 1`, which belongs to `slotwise_mpsc`
+  ([D-12](crates/windows-waitable-queues/DESIGN-NOTES.md#d-12)) and is already resolved.
+
+- [ ] **M30.3** -- Write down what the pilot could NOT reach, by name. This is the item the milestone
+  exists for.
+
+  Done when both hold:
+
+  1. **The list names only what the *selected* tool cannot model**, not what tools in general cannot.
+     Expect the syscall boundary -- including the doorbell's `SetEvent`/`ResetEvent` -- real-time
+     behaviour, and the model-to-code
+     gap that no tool closes. Do **not** preclassify scheduler-dependence: loom explores scheduler
+     interleavings deliberately, so recording it as unreachable would be a false gap. Whether the
+     memory orderings are reachable likewise depends on which tool M30.1 selected.
+  2. **Both copies of the disclosure are updated** -- the "How far the memory orderings are verified,
+     and how far they are not" section exists in
+     [that crate's README.md](crates/windows-waitable-queues/README.md) and
+     [its src/lib.rs](crates/windows-waitable-queues/src/lib.rs). Deriving one from the other is not
+     available today: the `include_str!` there is `#[cfg(all(doctest, windows))]` on a private item,
+     so it compiles the README's code as doctests and does not render its prose. Making one derive
+     would mean a shared fragment both include, which is separate work.
+
+- [ ] **M30.4** -- Re-home `M31.6`, which is currently orphaned.
+
+  Done when all three hold:
+
+  1. **It has a live item in a live checklist**, scoped as
+     [D-29](crates/windows-waitable-queues/DESIGN-NOTES.md#d-29) requires -- the loom verification
+     covers both MPSC shapes or neither is verified. (D-29 owns that obligation;
+     [D-31](crates/windows-waitable-queues/DESIGN-NOTES.md#d-31) owns only the release timing, that
+     verification gates 1.0 rather than 0.1.0.)
+  2. **All five references point at it.** Three in
+     [that crate's DESIGN-NOTES.md](crates/windows-waitable-queues/DESIGN-NOTES.md), one in
+     [src/doorbell.rs](crates/windows-waitable-queues/src/doorbell.rs), one in
+     [sabotage.json](crates/windows-waitable-queues/sabotage.json).
+  3. **The component tracker row stays accurate** as the work proceeds. The row itself was added
+     when the work was queued, not deferred to this item.
+
+- [ ] **M30.5** -- Decide what, if anything, the workspace adopts, and record the decision with its
+  cost.
+
+  Done when all three hold:
+
+  1. **The cost is stated, not implied.** What running it costs in wall-clock and in whose time,
+     what tooling it adds and who maintains that, and the standing cost the workspace already knows
+     it pays here -- a specification is a second statement of the contract and can drift from the
+     code with nothing to detect it, so a stale model that still passes is worse than no model. An
+     adoption recorded without its cost is the half of this item that is easiest to skip and the
+     half the milestone exists to surface.
+  2. **The decision answers three questions**: what keeps the model and the code in step, who
+     re-runs it, and what happens when they disagree. "Adopt nothing, and say why" is a legitimate
+     outcome.
+  3. **The contract sweep is done, whichever way it went.** Three public places in
+     `windows-waitable-queues` promise machine-checked verification before 1.0:
+     [that crate's README.md](crates/windows-waitable-queues/README.md),
+     [its src/lib.rs](crates/windows-waitable-queues/src/lib.rs), and
+     [D-31](crates/windows-waitable-queues/DESIGN-NOTES.md#d-31). A no-adoption outcome obliges this
+     most: left unswept it would recreate, in the same crate, the orphaned commitment M30.4 exists
+     to fix.
+
 ## M-inf -- Parked
 
 Ungated work with no identified predecessor deliverable.
