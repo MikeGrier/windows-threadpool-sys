@@ -127,7 +127,10 @@ fn observation_from(value: &Value) -> Observation {
                         "`available_parallelism` is a positive whole number or null, not {other}"
                     )
                 });
-                assert!(count > 0, "`available_parallelism` is null when the query failed, not 0");
+                assert!(
+                    count > 0,
+                    "`available_parallelism` is null when the query failed, not 0"
+                );
                 Some(usize::try_from(count).expect("a processor count fits a usize"))
             }
         },
