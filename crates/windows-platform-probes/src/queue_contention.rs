@@ -262,7 +262,7 @@ pub struct Observation {
     pub isolated: Vec<Run>,
     /// Producers timed against a consumer looping on `pop`.
     ///
-    /// The handshake in [`await_consumer`] guarantees that loop has executed at
+    /// The handshake in `await_consumer` guarantees that loop has executed at
     /// least once before any producer starts timing. It does not guarantee the
     /// consumer is never descheduled afterwards, so "looping" describes what the
     /// consumer thread runs, not how continuously it is scheduled to run it.
