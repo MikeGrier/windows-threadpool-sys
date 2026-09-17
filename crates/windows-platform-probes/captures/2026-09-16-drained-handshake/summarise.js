@@ -111,65 +111,83 @@ for (const path of paths) {
 
 const producers = [...layouts[0].keys()].sort((a, b) => a - b);
 console.log(`runs: ${paths.length}`);
-console.log("");
-console.log("drained layout ratios vs 32/32, median across runs");
-console.log("producers  16/48   8/56   64/64");
-const medians = [];
+
+// **Reported per producer count, and deliberately without a verdict.**
+//
+// An earlier version pooled every control observation into one band and asked
+// whether each layout median fell inside it. That answered `true`, and the
+// answer was an artifact of the pooling: the control is not independent of
+// producer count -- it spans about 0.82-0.98x at one producer against
+// 0.95-1.23x at thirty-two on this capture -- so pooling builds a band wider
+// than any count's own and containment follows from the method rather than
+// from the data.
+//
+// Comparing per count instead does not rescue a verdict either. Three runs
+// give three control observations per count, and the range of three samples is
+// not a band: a fresh independent draw falls outside the range of three priors
+// about half the time. So neither comparison is strong enough to say a median
+// is inside or outside, and this script says so rather than picking whichever
+// framing yields an answer.
+const rows = [];
 for (const p of producers) {
   const present = layouts.filter((layout) => layout.has(p));
   if (present.length !== layouts.length) {
-    problems.push(`${p} producers is missing from ${layouts.length - present.length} run(s)`);
+    problems.push(
+      `${p} producers is missing from ${layouts.length - present.length} run(s)`,
+    );
     continue;
   }
-  const row = [0, 1, 2].map((column) =>
-    median(present.map((layout) => layout.get(p).ratios[column])),
-  );
-  medians.push(...row);
-  console.log(
-    `${String(p).padStart(9)}  ` + row.map((m) => `${m.toFixed(2)}x`).join("  "),
-  );
+  const control = controls.map((c) => c.get(p)).filter((v) => Number.isFinite(v));
+  if (control.length !== controls.length) {
+    problems.push(`${p} producers has no control ratio in every run`);
+    continue;
+  }
+  rows.push({
+    producers: p,
+    control,
+    medians: [0, 1, 2].map((column) =>
+      median(present.map((layout) => layout.get(p).ratios[column])),
+    ),
+  });
 }
 
-const every = controls.flatMap((control) => [...control.values()]);
-console.log("");
-console.log("same-code control (reserving_mpsc vs reserving 32/32), drained");
-console.log(`  observations: ${every.length}`);
-
-// **Refuse to certify a capture that could not be read.** Everything below
-// compares against the control band, and every comparison against `NaN` is
-// false -- so a single unreadable cell would empty the "outside the band" list
-// and print `true`. An incomplete capture must say so, not pass.
-if (problems.length > 0 || every.length === 0 || medians.length === 0) {
+// **Refuse to summarise a capture that could not be read.** A report renders
+// `--` for a shape that did not run, `Number("--")` is `NaN`, and every
+// comparison against `NaN` is false -- so an unreadable cell used to empty the
+// "outside the band" list and print `true`.
+if (problems.length > 0 || rows.length === 0) {
   console.log("");
   console.log("CAPTURE INCOMPLETE -- not summarised:");
-  if (every.length === 0) console.log("  - no control observations were read");
-  if (medians.length === 0) console.log("  - no layout medians were read");
+  if (rows.length === 0) console.log("  - no complete producer counts were read");
   for (const problem of problems) console.log(`  - ${problem}`);
-  console.log("");
-  console.log("every layout median inside the control band: UNKNOWN");
   process.exitCode = 1;
   return;
 }
 
-console.log(
-  `  span:         ${Math.min(...every).toFixed(2)}x to ${Math.max(...every).toFixed(2)}x`,
-);
-console.log(`  median:       ${median(every).toFixed(2)}x`);
 console.log("");
-const low = Math.min(...every);
-const high = Math.max(...every);
-// **Every** layout median, not just the largest. The claim this capture is
-// cited for is that all of them sit inside the control band, and an earlier
-// version of this check tested `Math.max(...medians)` alone -- which passes
-// unchanged while a median below the band's floor goes unreported. The
-// committed data happens to clear the floor, so that check was right by luck
-// rather than by construction.
-const outside = medians.filter((m) => m < low || m > high);
 console.log(
-  `layout medians: ${medians.length}, spanning ` +
-    `${Math.min(...medians).toFixed(2)}x to ${Math.max(...medians).toFixed(2)}x`,
+  "drained, per producer count: the same-code control's observed range, then",
 );
-console.log(`every layout median inside the control band: ${outside.length === 0}`);
-if (outside.length > 0) {
-  console.log(`  outside: ${outside.map((m) => `${m.toFixed(2)}x`).join(", ")}`);
+console.log("each layout's median ratio against 32/32, across runs.");
+console.log("");
+console.log("producers   control(n)        16/48   8/56   64/64");
+for (const row of rows) {
+  const low = Math.min(...row.control);
+  const high = Math.max(...row.control);
+  const band = `${low.toFixed(2)}-${high.toFixed(2)}(${row.control.length})`;
+  console.log(
+    `${String(row.producers).padStart(9)}   ${band.padEnd(16)}  ` +
+      row.medians.map((m) => `${m.toFixed(2)}x`).join("  "),
+  );
 }
+
+const everyControl = rows.flatMap((row) => row.control);
+console.log("");
+console.log(
+  `control observations: ${everyControl.length} across ${rows.length} producer counts, ` +
+    `${Math.min(...everyControl).toFixed(2)}x to ${Math.max(...everyControl).toFixed(2)}x pooled`,
+);
+console.log(
+  "Pooled only to show the spread; it is not a band to judge a median against,",
+);
+console.log("for the reason recorded in this script beside the table above.");

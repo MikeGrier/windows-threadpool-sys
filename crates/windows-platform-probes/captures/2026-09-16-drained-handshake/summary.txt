@@ -1,18 +1,16 @@
 runs: 3
 
-drained layout ratios vs 32/32, median across runs
-producers  16/48   8/56   64/64
-        1  1.01x  1.03x  1.17x
-        2  0.98x  1.03x  1.06x
-        4  1.00x  1.00x  1.09x
-        8  0.98x  1.01x  1.06x
-       16  0.91x  0.93x  0.80x
-       32  1.23x  1.20x  0.94x
+drained, per producer count: the same-code control's observed range, then
+each layout's median ratio against 32/32, across runs.
 
-same-code control (reserving_mpsc vs reserving 32/32), drained
-  observations: 18
-  span:         0.75x to 1.23x
-  median:       0.98x
+producers   control(n)        16/48   8/56   64/64
+        1   0.82-0.98(3)      1.01x  1.03x  1.17x
+        2   0.92-1.06(3)      0.98x  1.03x  1.06x
+        4   0.95-1.02(3)      1.00x  1.00x  1.09x
+        8   0.92-1.00(3)      0.98x  1.01x  1.06x
+       16   0.75-1.04(3)      0.91x  0.93x  0.80x
+       32   0.95-1.23(3)      1.23x  1.20x  0.94x
 
-layout medians: 18, spanning 0.80x to 1.23x
-every layout median inside the control band: true
+control observations: 18 across 6 producer counts, 0.75x to 1.23x pooled
+Pooled only to show the spread; it is not a band to judge a median against,
+for the reason recorded in this script beside the table above.

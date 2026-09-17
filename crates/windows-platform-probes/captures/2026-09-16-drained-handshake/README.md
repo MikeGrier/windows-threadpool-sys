@@ -39,8 +39,22 @@ node summarise.js run1.txt run2.txt run3.txt
 ```
 
 It is committed so the derivation can be checked rather than taken on trust, and
-so nothing downstream has to retype a figure. The script derives two things the
-runs do not state individually: the across-run median per producer count, and
-the same-code control span -- which is a relation *between* two tables, since
+so nothing downstream has to retype a figure. The script derives what the runs do
+not state individually: the across-run median per producer count, and the
+same-code control -- which is a relation *between* two tables, since
 `reserving_mpsc` in the comparison table and `32/32` in the layout table are the
 same configuration measured twice in the same run.
+
+**It reports per producer count and emits no verdict, deliberately.** An earlier
+version pooled every control observation into one band and asked whether each
+layout median fell inside it. It answered `true`, and the pooling is what
+produced that answer: the control is not independent of producer count -- about
+0.82-0.98x at one producer against 0.95-1.23x at thirty-two here -- so a pooled
+band is wider than any count's own, and containment follows from the method
+rather than from the data. Comparing per count does not rescue a verdict either,
+because three runs give three control observations per count, and the range of
+three samples is not a band to judge anything against.
+
+So three runs do not settle the drained comparison in either direction. This
+capture reports figures; the claim that nothing separates in the drained regime
+rests on the seven-run sweep, which this does not replace.

@@ -1199,9 +1199,17 @@ derivation can be checked rather than trusted.
 
 **The figures are amended rather than replaced**, because this is new data and not a correction: the
 earlier capture remains what the earlier instrument measured, and both are labelled with the code
-that produced them. The finding survived the re-measurement -- every layout median still sits inside
-the same-code control band in the drained regime -- which is worth stating precisely because it was
-not guaranteed: the drained conclusion did not depend on the window it had been measured through.
+that produced them.
+
+**What the re-measurement establishes was overstated when this entry was written, and the correction
+belongs here.** It originally said the finding survived -- every layout median still inside the
+same-code control band. That rested on pooling every control observation into one band, and the
+pooling produced the answer: the control is not independent of producer count, so a pooled band is
+wider than any count's own and containment follows from the method. Compared per count, several
+medians fall outside their own count's range; compared per count the other way, three runs give
+three control observations, which is not a band. Three runs do not settle the drained comparison in
+either direction. The capture now reports per-count figures and emits no verdict, and the
+pre-handshake reading rests on the seven-run sweep, which this does not replace.
 
 ## Moved 2026-09-16 17:31:31 UTC-04:00 -- M2.16: the census that broke the prose around it
 

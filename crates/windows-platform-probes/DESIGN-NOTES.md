@@ -1055,16 +1055,40 @@ In the drained regime nothing separates at all -- every u64 layout *and* the
 128-bit word sit inside the control band at every producer count (the widest
 median is 1.13x at one producer, against a control that reaches 1.27x).
 
-**Amended 2026-09-16: re-measured after the `M4.3` handshake, and the finding
-stands.** That paragraph was taken before producers held for the consumer, so it
-describes a drained regime whose opening was briefly undrained. Re-measured on
-the same host without that window, every layout median still sits inside the
-same-code control band -- the figures, and the check itself, are in
-[captures/2026-09-16-drained-handshake/](captures/2026-09-16-drained-handshake/README.md)
-rather than retyped here. What the re-measurement establishes is narrow and
-worth stating plainly: the drained conclusion did not depend on the window it
-was measured through. It says nothing about the isolated regime, which the
-handshake does not touch.
+**Amended 2026-09-16: re-measured after the `M4.3` handshake, and the
+re-measurement does not settle it.** That paragraph was taken before producers
+held for the consumer, so it describes a drained regime whose opening was
+briefly undrained. Re-measured on the same host without that window, the figures
+are in
+[captures/2026-09-16-drained-handshake/](captures/2026-09-16-drained-handshake/README.md).
+
+**What the re-measurement establishes is less than first claimed here, and the
+correction is worth stating plainly.** This amendment originally said every
+layout median still sat inside the same-code control band. That rested on
+pooling every control observation into one band, and the pooling is what
+produced the answer: the control is not independent of producer count -- it
+spans about 0.82-0.98x at one producer against 0.95-1.23x at thirty-two in that
+capture -- so pooling builds a band wider than any count's own, and containment
+follows from the method. Compared per count, several medians fall outside their
+own count's range. Compared per count the other way, three runs give three
+control observations, and the range of three samples is not a band to judge
+anything against.
+
+So the drained comparison is **not established by three runs**, in either
+direction. The capture reports the per-count figures and declines a verdict;
+the pre-handshake reading above rests on the seven-run sweep, which this does
+not replace. Reported by review, after the pooled framing had already been
+published here.
+
+**The same caveat reaches the paragraph above, and saying so is the honest
+scope of this correction.** That reading compares a per-count median against a
+control quoted as a single pooled figure -- "the widest median is 1.13x at one
+producer, against a control that reaches 1.27x" -- which is the same comparison
+this amendment has just withdrawn for the three-run capture. Its raw runs are
+not committed, so the per-count bands behind it cannot be recomputed here and
+the conclusion is neither confirmed nor refuted. What can be said is that it
+rests on the same framing, and that settling it needs the sweep re-run with its
+data kept.
 
 **Widening the word is the one effect this probe establishes.** At sixteen and
 thirty-two producers the isolated 128-bit rows fall outside the same-code
