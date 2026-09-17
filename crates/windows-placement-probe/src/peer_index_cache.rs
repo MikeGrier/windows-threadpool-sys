@@ -808,21 +808,28 @@ fn pin_current_thread(cpu: Option<(u16, u8)>) -> std::io::Result<AffinityGuard> 
     let Some((group, number)) = cpu else {
         return Ok(AffinityGuard { previous: None });
     };
-    // **An error rather than an assert, and for the same reason the OS failure
-    // below is one.** A group affinity mask is a `usize`, so on a 32-bit target
-    // a processor numbered 32 or above cannot be named at all -- that is a
-    // limit of the mask, not a caller mistake, and it is the condition the
-    // pinning tests use because it is the only one reachable deterministically
-    // on an ordinary host. Leaving it a panic would have left the fallible path
-    // with no test that could reach it.
-    if u32::from(number) >= usize::BITS {
+    // **The predicate lives in `is_nameable_in_a_mask`, not here.** It is also
+    // asked by `core_affinity::check_group_support` over every discovered
+    // processor, and when the two were separate expressions, converting this one
+    // from a panic to a refusal left that one deciding the outcome -- so the fix
+    // changed nothing a binary could reach. One definition cannot be
+    // half-converted.
+    //
+    // An error rather than an assert, and for the same reason the OS failure
+    // below is one: a group affinity mask is a `usize`, so on a 32-bit target a
+    // processor numbered 32 or above cannot be named at all. That is a limit of
+    // the mask, not a caller mistake, and it is the condition the pinning tests
+    // use because it is the only one reachable deterministically on an ordinary
+    // host. Leaving it a panic would have left the fallible path with no test
+    // that could reach it.
+    if !is_nameable_in_a_mask(number) {
         return Err(refusal(
             group,
             number,
             &format!(
                 "a group affinity mask on this target holds {} processors, so \
                  processor {number} cannot be named in one",
-                usize::BITS
+                mask_width()
             ),
             MASK_TOO_NARROW,
         ));
@@ -863,6 +870,33 @@ fn pin_current_thread(cpu: Option<(u16, u8)>) -> std::io::Result<AffinityGuard> 
     Ok(AffinityGuard {
         previous: Some(previous),
     })
+}
+
+/// Whether a processor number can be named in a group affinity mask.
+///
+/// **One definition, because the split between two is exactly how a fix came to
+/// be measured as working while the binary's behaviour was unchanged.** This
+/// predicate lived inline in `pin_current_thread` and again in
+/// `core_affinity::check_group_support`, which runs over every discovered
+/// processor *before* any pin. Converting only the first from a panic to a
+/// refusal changed nothing a binary could reach: the run still died at the
+/// second, with the banner, the heading and nothing else.
+///
+/// Both sites were consistent before that change and neither was wrong. The
+/// hazard is **partial conversion** -- and a shared predicate makes the two
+/// impossible to get out of step, which is stronger than remembering to grep.
+#[must_use]
+pub fn is_nameable_in_a_mask(number: u8) -> bool {
+    u32::from(number) < usize::BITS
+}
+
+/// How many processors a group affinity mask can name on this target.
+///
+/// Reported by both refusals, so the reader is told the actual bound rather
+/// than being left to infer it from a pointer width.
+#[must_use]
+pub fn mask_width() -> u32 {
+    usize::BITS
 }
 
 /// The refusal a failed pin carries, as an error rather than a panic.

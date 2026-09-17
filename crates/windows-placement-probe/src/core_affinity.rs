@@ -82,7 +82,9 @@ use std::io::ErrorKind;
 use windows_topology_sys::MachineMemoryTopology;
 
 use crate::fingerprint::{Fingerprint, ProcessorPlace, Slice, places_from_topology};
-use crate::peer_index_cache::{ITEMS, Strategy, time_model_on, time_model_placed};
+use crate::peer_index_cache::{
+    ITEMS, Strategy, is_nameable_in_a_mask, mask_width, time_model_on, time_model_placed,
+};
 
 /// Repetitions per placement; the median is reported.
 ///
@@ -555,25 +557,24 @@ pub fn representative_pairs(
 ///
 /// If the discovered processors cannot be measured as they are.
 ///
-/// **This is the same predicate `pin_current_thread` checks, and converting only
-/// that one left this one deciding the outcome.** It runs over every discovered
-/// processor *before* any pin is attempted, so a machine with a processor too
-/// wide for an affinity mask died here -- with the banner, the heading and
-/// nothing else on stdout -- and never reached the branch that had just been
-/// made to report it. Fixing one site of a rule and leaving its twin is how the
-/// fix came to be measured as working while the binary's behaviour was
-/// unchanged.
+/// **This asks the same predicate `pin_current_thread` asks, and it now asks it
+/// through the same function.** It runs over every discovered processor *before*
+/// any pin, so when the two were separate expressions, converting only that one
+/// from a panic to a refusal left this one deciding the outcome -- the probe
+/// still died with banner, heading and nothing else, and never reached the
+/// branch that had just been made to report it. Neither site was wrong; the
+/// hazard was changing one of them.
 fn check_group_support(processors: &[ProcessorPlace]) -> std::io::Result<()> {
     if processors.is_empty() {
         return Err(std::io::Error::other(
             "no processors were discovered, so there is nothing to measure",
         ));
     }
-    // Every discovered processor must be pinnable. A number at or above the
-    // width of an affinity mask cannot be expressed in one, and measuring the
-    // rest while dropping it would report a machine smaller than the real one.
+    // Every discovered processor must be pinnable. A number a mask cannot name
+    // cannot be pinned to, and measuring the rest while dropping it would
+    // report a machine smaller than the real one.
     for place in processors {
-        if u32::from(place.number) >= usize::BITS {
+        if !is_nameable_in_a_mask(place.number) {
             return Err(std::io::Error::other(format!(
                 "
 This run is stopping, and no measurement was taken.
@@ -588,7 +589,7 @@ this build cannot name that processor.
 Measuring the rest while dropping it would report a machine smaller than
 the real one, so the run stops instead.
 ",
-                width = usize::BITS
+                width = mask_width()
             )));
         }
     }

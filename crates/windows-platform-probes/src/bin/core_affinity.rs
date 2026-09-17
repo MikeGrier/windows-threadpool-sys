@@ -600,6 +600,26 @@ interpretation:
     }
 }
 
+/// The undirected hop a directed pair belongs to.
+///
+/// **One definition, because two copies is how this went wrong twice.** A hop is
+/// measured in both directions, so `(0, 1)` and `(1, 0)` are one hop. Forgetting
+/// that made a single-pair guard unreachable in one review round; the fix for
+/// that wrote the rule inline, and a later round then attributed a spread to
+/// "the hops" when it came entirely from reversing one hop -- because the fix
+/// for *that* wrote the same expression a second time, fifty lines below the
+/// first, instead of calling it.
+///
+/// Two consistent copies are not themselves a defect. The defect is the next
+/// change reaching one of them, and a function cannot be half-converted.
+fn undirected(pair: (u32, u32)) -> (u32, u32) {
+    if pair.0 <= pair.1 {
+        (pair.0, pair.1)
+    } else {
+        (pair.1, pair.0)
+    }
+}
+
 /// Print the per-node-pair handoff cost, when the host has nodes to cross.
 ///
 /// Silent on a single-node machine: there is nothing to say, and a header over
@@ -627,7 +647,8 @@ fn render_node_distances(out: &mut dyn std::fmt::Write, observation: &Observatio
     // names.
     let _ = writeln!(
         out,
-        "  (`ring on` is the node requested; `!` means it landed elsewhere)"
+        "  (`ring on` is the node requested; `!base`, `!cached` or `!both` names\n  \
+         any run whose memory did not land there)"
     );
 
     // Keyed on the ring placement as well as the pair, because the table above
@@ -666,13 +687,30 @@ fn render_node_distances(out: &mut dyn std::fmt::Write, observation: &Observatio
                 // apart.
                 format!("{} -> {}", pair.0, pair.1),
                 // The requested node, matching the key above and the probe
-                // crate's own report. A trailing `!` marks a row whose memory
-                // did not land where it was asked to go, so a redirected run
-                // is not read as a measurement of the placement it names.
-                match (base.requested_memory_node, base.memory_node) {
-                    (Some(asked), Some(got)) if asked == got => format!("node {asked}"),
-                    (Some(asked), _) => format!("node {asked}!"),
-                    (None, _) => "unspecified".to_owned(),
+                // crate's own report. A trailing marker names any run whose
+                // memory did not land where it was asked to go, so a redirected
+                // run is not read as a measurement of the placement it names.
+                //
+                // **Both runs, not just the baseline.** The row prints a
+                // baseline and a cached timing side by side as a comparison at
+                // one placement, but the marker was computed from `base` alone
+                // -- so a cached allocation that was redirected, or whose
+                // placement could not be determined, printed under an
+                // unqualified `node N` beside a baseline that did land there.
+                // The reader was shown a same-placement comparison that was not
+                // achieved, which is the defect the marker exists to prevent,
+                // applied to one of the two columns only.
+                match base.requested_memory_node {
+                    None => "unspecified".to_owned(),
+                    Some(asked) => {
+                        let landed = |node: Option<u32>| node == Some(asked);
+                        match (landed(base.memory_node), landed(cached.memory_node)) {
+                            (true, true) => format!("node {asked}"),
+                            (false, true) => format!("node {asked}!base"),
+                            (true, false) => format!("node {asked}!cached"),
+                            (false, false) => format!("node {asked}!both"),
+                        }
+                    }
                 },
                 format!("g{}/cpu{}", base.producer.group, base.producer.number),
                 format!("g{}/cpu{}", base.consumer.group, base.consumer.number),
@@ -696,16 +734,7 @@ fn render_node_distances(out: &mut dyn std::fmt::Write, observation: &Observatio
     // host and even and >= 2 otherwise, so `== 1` never held and a two-node
     // machine fell into the spread analysis below, where it compared a hop
     // against its own reverse and reported the two as different hops.
-    let mut hops: Vec<(u32, u32)> = pairs
-        .iter()
-        .map(|pair| {
-            if pair.0 <= pair.1 {
-                (pair.0, pair.1)
-            } else {
-                (pair.1, pair.0)
-            }
-        })
-        .collect();
+    let mut hops: Vec<(u32, u32)> = pairs.iter().copied().map(undirected).collect();
     hops.sort_unstable();
     hops.dedup();
 
@@ -750,19 +779,12 @@ fn render_node_distances(out: &mut dyn std::fmt::Write, observation: &Observatio
     // What varied between the two extremes decides what the spread is evidence
     // ABOUT, and it is not always the hop.
     //
-    // **Compared as UNDIRECTED hops, because that is the unit the guard above
-    // just counted.** Directed equality made `0 -> 1` and `1 -> 0` different
-    // hops, so a spread that came entirely from reversing one hop was reported
-    // as the hops not being interchangeable -- the same directed/undirected
-    // confusion the guard above exists to fix, reintroduced in the code that
-    // fixed it.
-    let canonical = |pair: (u32, u32)| {
-        if pair.0 <= pair.1 {
-            (pair.0, pair.1)
-        } else {
-            (pair.1, pair.0)
-        }
-    };
+    // **Compared as UNDIRECTED hops, through the same `undirected` the guard
+    // above uses.** Directed equality made `0 -> 1` and `1 -> 0` different hops,
+    // so a spread that came entirely from reversing one hop was reported as the
+    // hops not being interchangeable -- the same confusion the guard above
+    // exists to fix, reintroduced a few dozen lines below it as a second copy of
+    // the same expression. There is now one.
     if best_pair == worst_pair && best_ring == worst_ring {
         // One row was both extremes, so there is no spread to describe: this is
         // a single measurement, not a comparison.
@@ -771,7 +793,7 @@ fn render_node_distances(out: &mut dyn std::fmt::Write, observation: &Observatio
             "  Both extremes are the same row, so the table holds one\n  \
              measurement per hop and this restates it rather than comparing."
         );
-    } else if canonical(best_pair) == canonical(worst_pair) {
+    } else if undirected(best_pair) == undirected(worst_pair) {
         let _ = writeln!(
             out,
             "  Both extremes are the same hop, so that spread is within it --\n  \
