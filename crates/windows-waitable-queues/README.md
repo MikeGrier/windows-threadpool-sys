@@ -453,7 +453,9 @@ this host's 8 physical cores, and the spread is not small at either scale.
 226.5 over a 181.5-242.3 range across its five repetitions.
 The parenthesised ranges in the table above are the wider quantity: the extremes
 over all fifteen repetitions of the three captured runs. The probe's same-code
-control has been measured at 0.68-1.27x over seven runs; see
+control for this regime has been measured at 0.69-1.12x over seven runs -- the
+drained regime's is wider, at 0.68-1.27x, and does not apply to the isolated
+figures above; see
 [DESIGN-NOTES.md](../windows-platform-probes/DESIGN-NOTES.md#d-variance-is-a-finding).
 That seven-run sweep is a **separate capture** taken to size the noise floor, not
 a longer version of this table -- its medians differ from the ones above, which is

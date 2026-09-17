@@ -863,7 +863,8 @@ warm-up; three independent invocations agreed to within noise.
 **That "within noise" rests on a floor this workspace has since measured to be far
 wider.** The figure was read against a 2-6% run-to-run spread; seven runs of the
 same probe later put the same-configuration spread at 7-61% depending on producer
-count, and the probe's own same-code control spans 0.68-1.27x. The figures below
+count, and the probe's own same-code control spans 0.69-1.12x isolated and
+0.68-1.27x drained. The figures below
 are not retracted -- the direction of `D-26` survived a re-measurement on the
 shipping type -- but "agreed within noise" is a weaker statement than it reads as,
 and any difference here smaller than that control should not be treated as
@@ -1307,7 +1308,8 @@ three times; the isolated numbers reproduced within noise except one outlier not
 
 **Read "within noise" here against the wider floor measured later**: seven runs
 of this probe put the same-configuration spread at 7-61%, and its same-code
-control at 0.68-1.27x, so three agreeing runs establish less than the phrase
+control at 0.69-1.12x isolated -- the regime these numbers are in -- against
+0.68-1.27x drained, so three agreeing runs establish less than the phrase
 suggests. See
 [DESIGN-NOTES.md](../windows-platform-probes/DESIGN-NOTES.md#d-variance-is-a-finding).
 
