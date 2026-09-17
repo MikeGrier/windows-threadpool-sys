@@ -225,7 +225,12 @@ jobs:
         env:
           RUST_BACKTRACE: 1
           RUST_LIB_BACKTRACE: 1
-        run: cargo test -p windows-platform-probes --features oracle-in-renderer --locked --no-fail-fast -- --include-ignored
+        run: cargo test -p windows-platform-probes --locked --no-fail-fast -- --include-ignored
+      - name: cargo test (windows-platform-probes oracle-in-renderer integration target)
+        env:
+          RUST_BACKTRACE: 1
+          RUST_LIB_BACKTRACE: 1
+        run: cargo test -p windows-platform-probes --features oracle-in-renderer --locked --test a_real_report_agrees_with_itself -- --include-ignored
       # The binaries print the numbers the tests deliberately do not assert:
       # host-specific magnitudes, which are exactly what an architecture
       # comparison needs and what a pass/fail cannot carry.
