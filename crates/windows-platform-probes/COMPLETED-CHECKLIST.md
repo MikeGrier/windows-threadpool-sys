@@ -1565,3 +1565,190 @@ M4 below, six in M5. M2.18 is the exception, dissolved rather than moved.
   currently has no sentence about claims.
 
   > **-> DEPENDS ON M2.14.1:** the pointer has nothing to point at until the manifest exists.
+
+## Moved 2026-09-15 20:04:09 UTC-07:00 -- M4.5: the probe carries its own dispersion
+
+### <a id="m45"></a>M4.5 -- Emit the dispersion, not just the median. *(completed 2026-09-15 20:04:09 UTC-07:00)*
+
+Split out of M4.2 when it landed, because M4.2's remaining work -- the sampling controls -- is
+independent of it and an unchecked item must not embed a completed deliverable.
+
+`median_run` took the five timed repetitions, sorted them, kept the middle one and **discarded the
+other four**. `Run` then carried a median with no spread, so every figure derived from the probe was
+published without dispersion and any range quoted elsewhere had been computed by hand outside the
+instrument.
+
+That was a contract failure rather than a gap in polish.
+[D-observations-not-verdicts](DESIGN-NOTES.md#d-observations-not-verdicts) requires every published
+figure to carry "the number of runs with their dispersion", and says a ratio quoted without those
+"is an anecdote, not data a reader can compare against their own hardware". The probe was the source
+of the figures that decision governs and did not satisfy it. Reported by review, and correctly.
+
+`Run` gained `fastest_nanos_per_op` and `slowest_nanos_per_op`, taken from the ends of the sort that
+already existed, plus a `spread()` accessor returning `Option<f64>` -- `None` for a shape that did
+not run. `render_table` publishes an `ns/op range` column and a `spread` column.
+
+*(Corrected before merge. This item first shipped `spread()` returning `0.0` for the unmeasurable
+case, recorded here as "the same guard `format_ratio` carries for the same reason". A later review
+on the same branch found that `0.0` renders as `0.00x`, which reads as perfect stability -- the most
+reassuring cell the column can hold, produced by a row that measured nothing. `spread()` now returns
+`Option`, and every renderer routes through `Run::is_measured` rather than restating the test. The
+original wording is noted rather than quietly replaced because it did not merely go stale: it
+presented returning zero as the fix, when returning zero was the defect.)*
+
+Verified load-bearing by sabotage: taking the fastest from the median index instead of the minimum
+fails `median_run_carries_the_fastest_and_slowest_repetitions`.
+
+The dispersion justified itself on first capture. `slotwise_mpsc` at two producers spans 19.3 to
+59.5 ns/op within one configuration on one host, which the median alone had
+concealed entirely, in a table that had already been published twice.
+
+## Moved 2026-09-16 16:46:50 UTC-04:00 -- M4.6 and M4.3: the start gate, and the window it left open
+
+### <a id="m46"></a>M4.6 -- Make the start gate releasable, so a failed thread spawn cannot deadlock the probe. *(completed 2026-09-16 16:46:50 UTC-04:00)*
+
+Every timer sized a `std::sync::Barrier` for all planned workers plus the coordinator, then spawned
+the workers with `Scope::spawn`, which **panics** if the OS cannot create a thread. If that happened
+after an earlier worker had already parked, the coordinator never reached its own arrival, the party
+count was never met, and `thread::scope` joined a permanently parked worker while unwinding. The
+probe hung rather than failed, which is the worse of the two. In the drained timers the consumer was
+parked on the same barrier, and `StopOnDrop` could not help, because the scope could not finish
+unwinding to drop it.
+
+A `Barrier`'s party count, once set, must be met, so the fix was a change of primitive rather than a
+change of call. `StartGate` keeps the property the measurement depends on -- a complete party
+releases every member together, which is what `measured_span` relies on when it argues that each
+worker must time itself -- and adds the operation `Barrier` lacks. `arrive_and_wait` now reports
+whether the party completed, so a worker freed by a release returns instead of timing an abandoned
+run; `ReleaseOnDrop`, held inside each scope's closure, performs the release while that closure
+unwinds, which is before the join loop it has to unblock. Poisoning is stepped over rather than
+propagated, because panicking out of a `Drop` that is already unwinding would abort the process
+instead of unblocking it.
+
+Applied to all nine timers at once, since they share the defect and this branch had three times
+shipped a correct fix applied to a subset of its call sites.
+
+**Some of the new gate tests were first written to assert on the test thread, and sabotage caught
+them**: with `release` neutered they parked the test rather than failing it, which would wedge a
+suite that runs its tests as threads in one process. Every gate test now arrives off-thread and
+polls, so a regression reddens in five seconds.
+
+### <a id="m43"></a>M4.3 -- Close the undrained window at the start of the drained regime with a readiness handshake, and re-measure everything that changes. *(completed 2026-09-16 16:46:50 UTC-04:00)*
+
+The gate proves the consumer exists, is scheduled and is past thread start-up; it does not prove the
+consumer has reached its first `pop`, and it releases every party together. So a producer could push
+into a queue nobody was draining yet -- an undrained opening to a run whose whole subject is that it
+is drained. `await_consumer` closes it: the consumer announces that it is draining, and producers
+hold until they see that before starting their clocks. Applied to all four drained timers, with
+`Acquire`/`Release` per the queue crate's `D-38` standing answer on promoting the load.
+
+**The blocker recorded when this was queued was real, and it is what made the item large.** The
+change moves the drained numbers, so every drained figure already published measured a different
+piece of code. Re-measured on the same host, three whole-probe invocations, committed as a capture
+at [captures/2026-09-16-drained-handshake/](captures/2026-09-16-drained-handshake/README.md) with the summarising script beside the raw runs so the
+derivation can be checked rather than trusted.
+
+**The figures are amended rather than replaced**, because this is new data and not a correction: the
+earlier capture remains what the earlier instrument measured, and both are labelled with the code
+that produced them.
+
+**What the re-measurement establishes was overstated when this entry was written, and the correction
+belongs here.** It originally said the finding survived -- every layout median still inside the
+same-code control band. That rested on pooling every control observation into one band, and the
+pooling produced the answer: the control is not independent of producer count, so a pooled band is
+wider than any count's own and containment follows from the method. Compared per count, several
+medians fall outside their own count's range; compared per count the other way, three runs give
+three control observations, which is not a band. Three runs do not settle the drained comparison in
+either direction. The capture now reports per-count figures and emits no verdict, and the
+pre-handshake reading rests on the seven-run sweep, which this does not replace.
+
+**Two further corrections, appended because this archive is append-only.** The
+paragraph above names `await_consumer` as what closes the window; that helper is
+only the *waiting* half -- a producer spinning until the flag is set. The
+ordering the item is actually about lives in `drain_then_announce`, which pops
+once and only then publishes readiness, and which was extracted into a single
+definition later (see the M4.3 review round) precisely because four timers had
+been writing it by hand with nothing able to test it.
+
+And "closes it" overstates what any flag can do. The window is *narrowed to a
+stated guarantee*: no producer begins timing until the consumer has executed its
+pop path at least once. Continuous draining is not guaranteed and cannot be --
+the consumer can be descheduled immediately afterwards, as it can at any point
+during the run. `await_consumer`'s own doc said so from the start, which is what
+makes this entry's wording a restatement that drifted from the thing it restated.
+
+## Moved 2026-09-16 17:31:31 UTC-04:00 -- M2.16: the census that broke the prose around it
+
+### <a id="m216"></a>M2.16 -- Repair the garbled `Report` doc comment, and drop the two counts that had rotted beside it. *(completed 2026-09-16 17:31:31 UTC-04:00)*
+
+[src/report.rs](src/report.rs) opened its `Report` sink doc with a dangling fragment -- a title line, a blank line,
+then "is arithmetic. Every renderer writes through ..." -- and further down repeated the bare word
+"signatures." after the sentence that already ended in it. Both were introduced on 2026-09-09.
+
+**The history is the point, and it was recovered rather than guessed.** `b5594860` wrote the passage
+with a full sentence -- "This is the answer to 'how does a formatted line reach the sink', and the
+reason it is a `std::fmt::Write` adapter rather than a method on `Report` is arithmetic" -- and a
+count of **504** write sites. `3827dc32`, titled "Update comments in report.rs for better clarity",
+revised that count to **332** and, in the same edit, deleted the two lines that carried the sentence.
+So the edit that maintained the census is the edit that broke the prose, which is as direct an
+argument for CONTRACT INTEGRITY rule 4 as this repository has produced.
+
+The two homes were fixed together, because fixing one alone would have created a fresh disagreement:
+
+- **[src/report.rs](src/report.rs)** states the property instead of the count. `String` already implements
+  `fmt::Write`, so a sink that does too leaves every write site untouched and moves only the renderer
+  signatures. That is what makes the point, and it cannot rot. The lost sentence is restored, the
+  duplicated word removed, and the census delegated to the design note by link.
+- **[DESIGN-NOTES.md](DESIGN-NOTES.md)** keeps the numbers, because there they *are* the finding: the decision was
+  taken by counting, and the entry contrasts M1's estimate of "upwards of 160" with what re-measuring
+  found. They are now pinned as the census *as it stood on 2026-09-09 when the decision was taken*
+  rather than stated in the present tense as a description of the crate now, and the passage no longer
+  repeats the figure four times to make its argument.
+
+**A third home was found by sweeping and deliberately left alone.** `COMPLETED-CHECKLIST.md`'s
+archived `M1.1` entry restates 332 and 18. It is pre-existing on main rather than authored by this
+branch, it sits in an append-only archive dated by its own heading, and there the count is the whole
+of the record -- the entry exists to say that the estimate was wrong and that re-measuring decided
+the question. Rewriting it would have been an archive rewrite in service of tidiness. The design
+note's new wording agrees with it rather than contradicting it.
+
+## Moved 2026-09-16 18:40:00 UTC-04:00 -- M4.7: the report renderer, driven by a corpus
+
+### <a id="m47"></a>M4.7 -- Make the queue-contention report renderer testable, by taking the observation as an argument instead of measuring inside it. *(completed 2026-09-16 18:40:00 UTC-04:00)*
+
+`render` called `measure()` itself, so the only way to exercise it was a ~65-second host-dependent
+pass. Everything beyond the library's `render_table` was therefore reached by nothing in the suite:
+the three tables' assembly, the derived column widths, the `cfg`-gated `Wide` rows, and the prose
+between them. Two defects shipped through that gap on this branch -- two tables hard-coding a column
+width for formatters whose output has no fixed maximum, and a drained footer printing a seven-run
+result beneath a table produced by one invocation.
+
+`render` now writes the banner and calls `render_observation(out, &measure())`. The banner stays
+outside because it is a fresh topology read rather than a function of the observation, which is what
+keeps the rendering half pure and therefore drivable by a fixture. The binary moved to
+[src/bin/queue_contention/main.rs](src/bin/queue_contention/main.rs) so it can carry a sibling
+[tests.rs](src/bin/queue_contention/tests.rs), following
+`windows-placement-probe`'s layout; git recorded it as a rename, so history follows.
+
+**The cases are data, not code.** [corpus.json](src/bin/queue_contention/corpus.json) holds an
+observation and what the rendered report
+must be true of, so adding a case needs no Rust. The central check is *derived rather than
+restated*: `aligned_tables` asserts every line of a named table is the same length, which is exactly
+the property a cell wider than its column breaks. It therefore catches width bugs the corpus never
+anticipated, where a golden would only catch what somebody thought to record and would need
+regenerating whenever the prose moved.
+
+Two things the corpus established on first run, both of which a hand-written fixture would have
+missed:
+
+- With an empty observation the `ns/op range` table emits a header and no rows, while the layout and
+  scaling tables still emit six `--` rows, because those iterate `PRODUCER_COUNTS` and that one
+  iterates the runs. The first expectation written was wrong about this, not the renderer.
+- **A width of 22 was not overrun by an ordinary outlier.** The 300ms-against-4ns repetition that
+  motivated the original finding renders 21 characters; reaching 23 needs a hundredfold ratio as
+  well. The argument for deriving the width is that no constant can be *established* as sufficient,
+  since the cell's width is a function of measured data -- not that 22 was visibly too small. The
+  corpus case says so in its own `why`, having been corrected once for claiming otherwise.
+
+Sabotage-verified: replacing the derived widths with the constant they had before fails the corpus
+case, naming the table and the overrun line.

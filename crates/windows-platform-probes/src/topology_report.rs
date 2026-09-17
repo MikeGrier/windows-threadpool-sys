@@ -992,8 +992,8 @@ pub fn report(banner: &str, observation: &Observation) -> String {
     // library as an ordinary dependency, WITHOUT `cfg(test)`, for anything under
     // `tests/`. Found by a review and measured -- an integration test rendered a
     // report whose banner architecture contradicted its NDJSON `arch` and did
-    // not panic. The `oracle-in-renderer` feature, switched on by this crate's
-    // dev-dependency on itself, closes that.
+    // not panic. The `oracle-in-renderer` feature, enabled explicitly for the
+    // required-feature integration target, closes that.
     //
     // **A DEFAULT-FEATURE build still prints rather than panics**, which is the
     // contract this gate exists to preserve: a self-contradicting report is a
@@ -1014,12 +1014,13 @@ pub fn report(banner: &str, observation: &Observation) -> String {
     // than to claim one the mechanism cannot hold. Found by a review.
     //
     // Two consequences, both deliberate and both named here rather than left to
-    // be discovered: binaries built by `cargo test` assert, so a probe spawned
-    // by an integration test aborts on a contradiction instead of printing it;
-    // and so does an `--all-features` build. The evidence survives in every
-    // case, because the assertion's message carries the whole report -- what is
-    // lost is the NDJSON row a survey would have mined, which is why the default
-    // build is the one that matters and is the one pinned above.
+    // be discovered: binaries built by the feature-on test command assert, so a
+    // probe spawned by the required-feature integration target aborts on a
+    // contradiction instead of printing it; and so does an `--all-features`
+    // build. The evidence survives in every case, because the assertion's
+    // message carries the whole report -- what is lost is the NDJSON row a
+    // survey would have mined, which is why the default build is the one that
+    // matters and is the one pinned above.
     //
     // **The schema's SHAPES are bound here for the same reason.** Well-formed
     // says the row parses; the schema says `processors` is a number and each
@@ -1031,10 +1032,9 @@ pub fn report(banner: &str, observation: &Observation) -> String {
     // `#[cfg]` attribute governs the single statement that follows it, so
     // adding a second call beneath the gated one left that call ungated -- and
     // `report_oracle` does not exist in a default build. Nothing local caught
-    // it: this crate's dev-dependency on itself turns `oracle-in-renderer` on
-    // for every `cargo test` and `cargo check --all-targets`, so the
-    // feature-off arm is never compiled here. CI's `cargo run --bin` is, and
-    // that is where it broke.
+    // it: the feature-on test wiring compiles only the enabled arm in those
+    // runs, so the feature-off arm was never checked there. CI's `cargo run
+    // --bin` is, and that is where it broke.
     #[cfg(any(test, feature = "oracle-in-renderer"))]
     {
         crate::report_oracle::assert_row_is_well_formed(&out);

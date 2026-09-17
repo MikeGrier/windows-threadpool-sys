@@ -26,10 +26,10 @@
 //!
 //! How wide that field is, and so how many pushes recurrence takes, is a layout
 //! choice there -- 32 bits under the default and up to 64 under
-//! [`reserving_mpsc::Wide`](crate::reserving_mpsc). **That moves the recurrence
-//! out of reach without removing the separation that causes it**, which is why
-//! this shape remains interesting: it addresses the structure rather than the
-//! interval.
+//! [`reserving_mpsc::Wide`](crate::reserving_mpsc). **That widens the interval
+//! before recurrence without removing the separation that causes it**, which is
+//! why this shape remains interesting: it addresses the structure rather than
+//! the interval.
 //!
 //! Here the decision *is* the operation. A producer takes a permit from a count
 //! of unspoken-for slots with one atomic, and that single modification both
@@ -78,7 +78,9 @@ use crate::metrics::Metrics;
 ///
 /// **64 bits on every target, deliberately, rather than `usize`**, for the same
 /// reason [`slotwise_mpsc`](crate::slotwise_mpsc) made the same choice: a
-/// 32-bit counter laps in minutes at this crate's measured rates, and a shape
+/// 32-bit counter laps in about thirty-seven seconds at the reference rate
+/// [`reserving_mpsc::ClaimLayout`] documents -- an arithmetic input taken from
+/// another shape rather than a bound on this one -- and a shape
 /// whose soundness depends on the target's pointer width is not one this crate
 /// ships twice over.
 ///

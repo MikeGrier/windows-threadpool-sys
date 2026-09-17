@@ -2029,3 +2029,53 @@ written. The rule is about **discarded failure information**, not about discarde
 
 The audit this decision implies is queued as
 [CHECKLIST.md](CHECKLIST.md) -> `M37.1`; it is not scheduled by this note alone.
+
+## <a id="prose-volume-and-error-surface"></a>Prose volume is not the error surface; restatement count is
+
+**Decided: the error surface is proportional to how often a fact is restated, not to how much prose
+carries it.** A uniform cut to the prose leaves every restatement in place, just in fewer words.
+What is watched is therefore the number of hand-maintained copies of a single fact, not a word or
+line count -- and no prose-to-code ratio is quoted here, because this note takes no position on one.
+
+**Decided: prose carries the claim; an artifact carries the number.**
+
+- **A claim belongs in prose.** "`reserving_mpsc` measured faster than `slotwise_mpsc` under
+  contention, over a spread that overlaps the same-code control at every producer count" is a
+  claim. It transcribes no figure, so it cannot drift from the artifact the way a pasted number
+  does -- but it is not thereby permanent: a retake can make it false, and a reader cannot tell from
+  the sentence alone. That is why the claim cites the artifact. Dropping the digits removes the
+  transcription failure and leaves the citation obligation exactly where it was.
+- **A number belongs in an artifact.** A measured cost, a capture's commit, a count of occurrences:
+  one copy, with its provenance travelling *with* it rather than in a hand-maintained attribution
+  table beside it.
+- **A proportion over data we hold is not a finding, it is a restatement of one.** Computed by hand,
+  checked by nobody, and stale the moment any input moves. The counts are the finding. A reader who
+  wants a ratio can take one, against a denominator they chose and at a moment they know.
+
+[`mutation-sweeps/2026-09-02/`](mutation-sweeps/2026-09-02) and
+[`crates/windows-platform-probes/captures/2026-09-16-drained-handshake/`](crates/windows-platform-probes/captures/2026-09-16-drained-handshake/README.md)
+are the worked examples: dated, committed capture directories carrying raw runs, the script that
+derives the summary, and its output. The seven-run sweep the variance argument rests on still has no
+committed capture, so the gap is narrowed rather than closed.
+
+**Decided: formal specification and restatement control address different classes, and neither
+substitutes for the other.** TLA+ and `loom`
+([D-31](crates/windows-waitable-queues/DESIGN-NOTES.md#d-31)) target algorithm properties;
+restatement control targets documented facts. A formal spec's most useful property here is not proof
+-- it is that prose can point at it instead of paraphrasing it, which is
+[restatement drift](#restatement-drift)'s first remedy applied one level up.
+
+Neither of those instruments has been run, and neither is scheduled: `D-31` records the `loom`
+verification as planned and several documents name `M31.6` as its owner, but no checklist contains
+that item -- `windows-waitable-queues` has an archive,
+[COMPLETED-CHECKLIST.md](crates/windows-waitable-queues/COMPLETED-CHECKLIST.md), and no open
+checklist at all.
+
+**Decided: the cut is to restated assertions, never to rationale.** Rationale is what makes a
+decision re-checkable years later; cutting it to hit a volume target would remove the only prose
+that has never been wrong while leaving the prose that keeps being wrong in proportion.
+
+**No work is scheduled by this note**, per "design notes are not a work queue". How the measurement
+was taken, which findings it is drawn from, what was rejected on the way, and the one cheap remedy
+that was costed but not adopted are in
+[DESIGN-RATIONALE.md](DESIGN-RATIONALE.md#why-restatement-count-is-what-is-watched).

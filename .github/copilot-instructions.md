@@ -492,8 +492,7 @@ the same time, so both halves of the evidence disappear together.
 This is not a small correction. Measured on two runs here: a `windows-topology-sys` sweep
 reported 61 survivors of which **57 were in `#[cfg(feature = "serde")]` code**, and a
 `windows-file-watcher` sweep reported 247 of which **147 were in `scenario-tool` and
-`test-util` modules**. In both cases roughly 60% of the "gaps" were artifacts of the
-invocation. So:
+`test-util` modules**. In both cases the gated code dominated the survivor list. So:
 
 ```
 cargo mutants -p <crate> --all-features
@@ -1182,7 +1181,7 @@ hypothetical: across three consecutive review rounds on PR #42, *five of six fin
 corrections that had not propagated* rather than original defects. See
 [DESIGN-NOTES.md](../DESIGN-NOTES.md) -> [Restatement drift](../DESIGN-NOTES.md#restatement-drift).
 
-Three rules follow, ordered by how little each depends on anyone remembering.
+Five rules follow, ordered by how little each depends on anyone remembering.
 
 ### 1. Prefer a derived fact to a restated one
 
@@ -1254,6 +1253,10 @@ files, 4 updated, 9 incidental mentions"). Do **not** fix only the site a review
 the reported site is a sample, not the population. This is cheap and it works: run once
 voluntarily on this repository, a sweep immediately found a stale site no reviewer had reported.
 
+**And sweep the change set, not only the file you noticed it in:** when you fix a defect of any
+kind in one file of a commit, grep the commit's other files for the same defect before committing
+-- the file you happened to be reading is a sample of your own change too.
+
 Two corollaries that have each already cost a review round:
 
 - **An analysis document never restates normative content.** An audit, review response, or design
@@ -1266,6 +1269,155 @@ Two corollaries that have each already cost a review round:
   Nothing re-checks it automatically. When you correct a rule, ask specifically which code was
   written while the old reading was current — generators, test doubles, examples — because those
   encode the reading rather than citing it.
+
+### 4. Prose carries the claim; a number belongs in an artifact
+
+Measured data pasted into prose becomes a copy somebody must keep true by hand, in every place it
+was pasted, forever. Markdown has no include at all; rustdoc has one, and this repository uses it --
+`windows-waitable-queues`' [lib.rs](../crates/windows-waitable-queues/src/lib.rs) splices its whole
+README in with `#[doc = include_str!("../README.md")]`. What neither has is a way to pull a *single
+measured value* out of a data file and into a sentence: the include is whole-file or nothing, so a
+figure quoted mid-paragraph must be typed there. That is why pasting is the path
+of least resistance — and it is where this repository's documentation defects overwhelmingly come
+from. Measured on one pull request's review history: almost none of its measurement findings were
+*wrong measurements*; they were transcriptions that drifted — a table disagreeing with its own copy
+one file away, an attribution naming a superseded capture, one horizon left unqualified across seven
+sites in three wordings.
+
+- **Write the claim, not the digits, wherever the digits are not the point.** "Measured faster under
+  contention, over a spread that overlaps the same-code control at every producer count" carries no
+  transcribed figure, so it cannot drift *from* the artifact the way a pasted number does. It can
+  still be made false by a retake -- so **it links the artifact**, and a reader who follows the link
+  can settle it. Omitting digits removes the transcription failure, not the obligation to cite.
+- **When a figure must appear, it has exactly one home.** Prefer a committed capture the prose links
+  to ([mutation-sweeps/2026-09-02/](../mutation-sweeps/2026-09-02) is this repository's existing
+  example) over the same figure typed
+  into two documents. Provenance — host, commit, date — travels with the data rather than in a
+  hand-maintained table beside it.
+- **Never restate a proportion over data you already showed.** A ratio over counts in the same
+  document is not a finding; it is a hand-computed copy of one, checked by nobody and stale the
+  moment any input moves. The counts are the finding. This rule was earned: an instructions file in
+  this repository claimed "in both cases roughly 60%" about two figures given four words earlier,
+  neither of which rounded to it.
+- **The same applies to incidental tallies** — test counts, file counts, line counts. If the number
+  is not itself the finding, leave it out; "the gate is green" says what "308 lib tests" pretends to.
+
+**This is the data-side twin of rule 1.** Rule 1 says define a fact once in code and have everything
+ask. This says the same of measurements: hold the number once, and have prose point rather than
+paraphrase.
+
+### 5. Present what was observed; never write the conclusion
+
+Rule 4 governs where a number lives. This governs whether you state what it *means*. Give the
+figures and the mechanism. Stop. Do not tell the reader what follows for them.
+
+**Where it applies is syntactic, so there is nothing to adjudicate.** It governs `.md` files and
+rustdoc — `///` and `//!`. It does not govern an ordinary `//` comment.
+
+That split is about purpose, not about how public the text happens to be. **Rustdoc is not a code
+comment; it is the `.md` colocated with the code** — the same published prose, read by the same
+people, deciding whether to adopt the thing. A `//` comment exists to carry the *developer's
+mind-state* to whoever edits that line next: why this was done this way, what was uncertain, what
+was traded. `// effectively unreachable` there is not a lapse to be tolerated — **conveying a
+judgment, hedges and all, is that comment's whole job**, and flattening it into a bare figure would
+destroy the thing it was written to preserve.
+
+An earlier draft of this rule got the boundary wrong twice: first exempting "code comments" as a
+single category, then withdrawing the exemption on the grounds that rustdoc made the boundary
+undecidable. It is decidable, and it is the slash count.
+
+The failure does not look like an error, which is why it survives review. It reads as helpfulness:
+
+- A table gives one layout a horizon of years and another a horizon hundreds of times longer at the
+  same rate; the paragraph above it says the shorter one "reaches the same practical headroom a
+  128-bit word gives." Nothing is inconsistent —
+  the prose has simply decided, on the reader's behalf, that a factor of that size does not matter to
+  them.
+- A table gives a layout a horizon of months; the prose calls it "the first row that is not
+  reachable."
+- **Flipping the verdict is not the fix.** Replacing "not reachable" with "reachable by a busy
+  long-lived process" is the same move with the opposite conclusion. Delete the conclusion, do not
+  correct it: *"every row recurs; what changes down the column is how long that takes at a given
+  rate — the table's own figures say how much."*
+
+Three words are the usual tell, and each is a conclusion wearing a measurement's clothes:
+**practical**, **effectively**, **reachable**. So are "enough", "negligible", "safe to", and any
+sentence whose subject is the reader. In `.md` and rustdoc they mark a violation; in a `//` comment
+they mark a developer saying what they thought, which is wanted.
+
+This is **not a new rule** — it is [D-no-client-prescriptions](../crates/windows-platform-probes/DESIGN-NOTES.md#d-no-client-prescriptions)
+("state what was observed … stop there"), stated once for the repository rather than once for the
+crate that happens to publish measurements. Every instance found so far has been a violation of that
+existing decision rather than a gap in it. Apply it while writing: no checker can find these,
+because nothing is inconsistent.
+
+## REVIEW FEEDBACK — answer it where it was raised, not only in the commit
+
+**A review round is not finished when the code changes. It is finished when the reviewer has
+been told what happened.** Fixing the code and pushing is half the transaction; the other half
+is a reply on GitHub, and omitting it is the default failure mode because the fix *feels* like
+completion. It is not, for three reasons:
+
+- **A commit is not an answer.** The reviewer sees a new SHA, not your reasoning. Nothing
+  connects "I changed `format_ratio`" to the finding that asked for it, so the next round
+  re-raises what was already addressed — which has repeatedly cost rounds on this repository.
+- **Some findings are correctly declined, and silence cannot say so.** A declined finding that
+  is never answered is indistinguishable from one that was missed. Declining is legitimate;
+  declining *silently* is not.
+- **Suppressed comments have no thread at all.** They arrive in the review summary rather than
+  attached to a line, so there is no place a reply can land by default and no automatic record
+  that they were read. They are the easiest feedback to drop and the most likely to be re-raised
+  verbatim in the next round.
+
+### What to do, by where the feedback lives
+
+- **Inline review comments (a thread on a line).** Reply *on that thread*, naming what changed
+  and the commit SHA that changed it. Then resolve the thread — but only if the finding is
+  genuinely discharged; never resolve to clear the queue. Use the `resolveReviewThread` tool, or
+  `gh api repos/{owner}/{repo}/pulls/{number}/comments/{comment_id}/replies -f body=...`.
+- **Suppressed comments, review-summary findings, and anything pasted to you out of band** — no
+  thread exists, so post **one new PR comment** covering that round:
+  `gh pr comment <number> --body-file .scratch/<file>.md`. One comment per round, not one per
+  finding; a reviewer reads the round as a unit.
+- **No PR** (work committed straight to a branch, or feedback on a commit):
+  `gh api repos/{owner}/{repo}/commits/{sha}/comments -f body=...` against the commit that
+  carries the response.
+
+### What the response must contain
+
+Every finding in the round gets a line, and each line is one of exactly two things:
+
+1. **Changed** — what was changed and the SHA. Where the fix was a *sweep* rather than a
+   single-line edit (per CONTRACT INTEGRITY rule 3 above), say so and give the count: "swept
+   `QueueFull`: 13 files, 4 updated". A reviewer who sees only the cited line fixed has no way
+   to know the population was covered.
+2. **Declined** — the argument for why, in enough detail to be argued back against. "Not
+   applicable" is not an argument; "this is gated behind `test-util`, so the mutant sits in code
+   the shipping build never compiles" is.
+
+Two further rules, each of which has already cost a round here:
+
+- **Do not claim a fix you have not verified.** The same standard applies as anywhere else in
+  this file: verify by execution. Where the fix was a test, say what sabotage showed it is
+  load-bearing — an unverified "added a test" is exactly the cosmetic binding CONTRACT INTEGRITY
+  rule 1 warns about.
+- **Report what the round taught, not just what it touched.** When a review round reveals that
+  several findings were one underlying error, say that — it is more useful to the reviewer than
+  five separate acknowledgements, and it is how a recurring defect gets named instead of
+  repeatedly re-fixed.
+
+### The PR description drifts too, and nothing greps it
+
+A PR body is prose that restates measured claims, gate results, and design rationale — so it
+rots exactly like the documents CONTRACT INTEGRITY governs, with one difference: **it is not a
+file in the tree, so no sweep, grep, or CI check will ever catch it.** When a round corrects a
+claim, check whether the PR description states the same claim, and correct it in the same round.
+
+Keep out of the PR body anything that drifts without carrying information. **Test counts are the
+standing example**: "308 lib tests" changes on almost every commit, tells a reader nothing that
+"tests pass" does not, and creates a restatement-drift instance out of nothing. State that the
+gate is green and which parts of it ran; do not enumerate. The same goes for file counts, line
+counts, and any other incidental tally that is not itself the finding.
 
 ## CHECKLIST file hygiene
 

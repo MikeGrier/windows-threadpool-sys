@@ -67,6 +67,88 @@ correctness in the archive.
   own arithmetic does NOT belong, and the honest outcome for such a one is a line in the module
   header saying so by name rather than a silent absence.
 
+- [ ] **M4.4** -- Interleave each candidate with a nearby control instead of measuring the control
+  four runs away from it, and re-measure everything that changes.
+
+  **Gap:** `measure()` runs, per producer count, `baseline_fetch_add`, `slotwise_mpsc`,
+  `reserving_mpsc`, `permit_mpsc`, then the three drained shapes, then the layout rows starting with
+  `reserving(32/32)`. The same-code control is the `reserving_mpsc` row against the
+  `reserving(32/32)` row -- **four measurements apart**, each five repetitions of 50,000 pushes per
+  producer. Frequency, thermal and scheduler drift across that interval is folded into the control,
+  and into every candidate the control is used to judge. At sixteen and thirty-two producers, where
+  the machine is oversubscribed and the layout differences are smallest, that is exactly where it
+  matters most.
+
+  This is the first *specific* mechanism proposed for the 7-61% same-configuration spread recorded in
+  [DESIGN-NOTES.md](DESIGN-NOTES.md#d-variance-is-a-finding); the other candidates there are general.
+  Reported by review.
+
+  **Target:** measure each candidate adjacent to a control run of the same code, or randomise and
+  balance the order across repetitions so drift cannot align with position in the sequence. Whichever
+  is chosen, the control must end up measuring the same interval the candidate did.
+
+  **BLOCKER, same as M4.3:** interleaving changes the measurement, so every figure published in
+  [DESIGN-NOTES.md](DESIGN-NOTES.md) becomes a measurement of a different procedure. The item is
+  "change it *and* re-run the sweep *and* rewrite the sections", not a reordering. Doing it
+  mid-branch would invalidate figures that ten review rounds have been read against. Raised rather
+  than silently deferred, per the PRIME DIRECTIVE.
+
+  **It is placed ahead of M4.2 deliberately**, since a control that is not paired cannot answer
+  whether lengthening the run narrows the spread -- that answer would be confounded by the same
+  drift this item removes. Taking M4.2 first would produce a diagnosis nobody could trust.
+
+- [ ] **M4.2** -- Give the measurement probes the controls needed to act on a dispersion finding,
+  so "gather more data along this axis" does not require editing a `const` and rebuilding.
+
+  **Ordered after M4.4, which is why it appears second despite the lower number.** The first
+  diagnostic step this item unblocks is "lengthen the run and see whether the control narrows", and
+  that cannot be read while the control is measured four runs away from its candidate -- drift would
+  confound it either way.
+
+  **This item is deliberately small in software and large in guidance.** The diagnostic method
+  belongs in [DESIGN-NOTES.md](DESIGN-NOTES.md) -- see
+  [What to try first, and how to tell when you have reached the
+  floor](DESIGN-NOTES.md#d-variance-is-a-finding) -- and this item exists only to make that method
+  executable. The judgement stays with the person; the probe stops being the obstacle.
+
+  **Gap:** [src/queue_contention.rs](src/queue_contention.rs) fixes every sampling parameter as a
+  compile-time constant -- `PUSHES_PER_PRODUCER` (50,000) and `REPETITIONS` (5) -- and `measure()`
+  takes no arguments. They were made `pub` and are now printed in the report, so a captured run at
+  least says what produced it; but reading a constant is not setting one. The first move the design
+  note prescribes on seeing a wide control is to lengthen the span and raise the repetition count on
+  the unchanged configuration, which is still a source edit and a rebuild. A control that cannot be
+  turned is not a control, and the cheapest diagnostic step is the one being blocked.
+
+  **Target:** `measure()` takes a settings value carrying at least the pushes-per-producer count,
+  the repetition count, and the producer counts to sweep (`PRODUCER_COUNTS` is already public and
+  is the model for the others). Existing defaults stay exactly as they are, so a default run remains
+  the run the notes describe and every published figure stays reproducible. The binary exposes the
+  same knobs so a human or an agent can act without a rebuild.
+
+  Apply the same treatment to the sibling cost probes where the sampling parameters are equally
+  fixed; the axes we anticipate varying are **duration, repetitions, and concurrency**, so those are
+  the ones that need to be reachable. Do not add knobs beyond what a stated diagnostic step needs --
+  an unused parameter is a configuration surface to maintain and a way for two runs to differ
+  without anyone noticing.
+
+  **Report what was used.** Whatever settings a run was given must appear in its output beside the
+  host banner, for the reason
+  [D-observations-not-verdicts](DESIGN-NOTES.md#d-observations-not-verdicts) already gives: a figure
+  is only interpretable with its capture parameters, and these are now among them. Making the
+  sampling adjustable without recording it would turn one reproducibility problem into a worse one.
+
+  **Not in scope:** deciding why the control is wide. That is the judgement this tooling supports,
+  and per the design note a negative result -- "lengthening and repeating do not narrow it, so the
+  floor is here" -- is a real answer that gets recorded beside the figures.
+
+  **Also not in scope, because it is done:** emitting the dispersion. See M4.5 below.
+
+- [x] **M4.5** -- Emit the dispersion, not just the median. -> [completed 2026-09-15 UTC-07:00](COMPLETED-CHECKLIST.md#m45)
+
+- [x] **M4.3** -- Close the undrained window at the start of the drained regime with a readiness handshake, and re-measure everything that changes. -> [completed 2026-09-16 UTC-04:00](COMPLETED-CHECKLIST.md#m43)
+
+- [x] **M4.6** -- Make the start gate releasable, so a failed thread spawn cannot deadlock the probe. -> [completed 2026-09-16 UTC-04:00](COMPLETED-CHECKLIST.md#m46)
+
 - [ ] **M2.5** -- Make the banner describe the read the body describes.
 
   Gated by M3.1 and M3.3, both landed: establishing that the middle of three discoveries agreed
@@ -108,6 +190,8 @@ correctness in the archive.
   than noise: across two rounds one reader raised this twice while two others cleared it, one of them
   explicitly after being pointed at the question. Nothing in the suite decides it either way, which is
   itself the argument for making it an invariant rather than a test.
+
+- [x] **M4.7** -- Make the queue-contention report renderer testable, by taking the observation as an argument instead of measuring inside it. -> [completed 2026-09-16 UTC-04:00](COMPLETED-CHECKLIST.md#m47)
 
 - [ ] **M2.15** -- Run the probe suite on a second architecture in CI.
 
@@ -152,6 +236,27 @@ correctness in the archive.
   the fact accounting per shape, so nothing new has to be written to check them -- only to produce
   them. Until this lands, a shape that needs two dimensions must be added by hand, which is exactly
   the imagination-driven process M2.12 exists to replace.
+
+- [ ] **M4.8** -- Have the queue-contention report carry the build identity that produced it, and
+  have the capture scripts require it to agree.
+
+  **Gap:** a run's report states its `host:`, `profile:` and `sampling:`, and the capture scripts
+  now refuse a set whose runs disagree on any of those. None of it identifies the *instrument*. Two
+  runs from different probe commits, on one machine, under one profile, pass that check -- and this
+  is the capture where that matters most, because `M4.3` changed the drained procedure, so a
+  pre-handshake and a post-handshake run would have their medians combined as though one procedure
+  produced both. The instrument commit is recorded in the capture README, which is an assertion by
+  whoever took the capture rather than something anything verifies.
+
+  **Target:** `windows-placement-probe`'s `build_identity` module is the worked example -- a build
+  script stamps the commit, the dirty flag and the build source into env vars that the binary reads
+  at run time, and `BuildIdentity::current()` renders them. `windows-platform-probes` has no build
+  script today, so this adds one. The report prints the identity beside the existing attribution
+  lines, `requireOneConfiguration` in both capture scripts includes it, and the sabotage is two runs
+  of different commits being refused.
+
+  **Blocker recorded when queued:** none. The dependency exists next door and is already proven by
+  that crate's own tests.
 
 
 ## M5 -- Carried over from M2: unblocked hygiene
@@ -241,21 +346,4 @@ IDs keep their M2 numbers, for the reason given under M4.
 
 - [x] **M2.14.2** -- Add to CONTRACT INTEGRITY rule 1 the one thing this branch learned that it does NOT already say. -> [completed 2026-09-13](COMPLETED-CHECKLIST.md#m2142)
 
-- [ ] **M2.16** -- Repair the garbled `Report` doc comment, and drop the two counts that have already
-  rotted beside it.
-
-  [src/report.rs](src/report.rs) opens its `Report` sink doc with a dangling fragment -- "A [`Report`]
-  a renderer can `writeln!` into directly." followed by a blank line and then "is arithmetic. Every
-  renderer writes through ..." -- so a sentence was lost in an edit, and "moves only 18 renderer
-  signatures." is followed by a bare repeat of the word "signatures." Introduced 2026-09-09 by
-  `b5594860` and `3827dc32`, both already on main; found while sweeping a count defect on the report
-  -oracle branch, where the file was out of scope to touch.
-
-  Both surviving numbers in that passage are censuses that have since drifted. It claims **332
-  `writeln!` sites**; measured now, 354. [DESIGN-NOTES.md](DESIGN-NOTES.md) restates the same 332,
-  so the two must be fixed together or they drift apart again. Replace them with the invariant the
-  passage is actually arguing -- that `String` already implements `fmt::Write`, so every existing
-  write site stands untouched and only the renderer signatures move -- which is what makes the point
-  and cannot rot. This is the same defect class as CONTRACT INTEGRITY rule 1 in
-  [.github/copilot-instructions.md](../../.github/copilot-instructions.md), which M2.14 exists to
-  make bite.
+- [x] **M2.16** -- Repair the garbled `Report` doc comment, and drop the two counts that had rotted beside it. -> [completed 2026-09-16 UTC-04:00](COMPLETED-CHECKLIST.md#m216)

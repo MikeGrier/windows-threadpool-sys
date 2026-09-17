@@ -1,0 +1,894 @@
+{
+  "_comment": [
+    "Cases that drive the queue-contention report renderer. Each supplies an",
+    "observation and what the rendered report must be true of. Adding a case is",
+    "adding data -- no Rust changes -- which is the point: the report's tables",
+    "were unreachable by the suite until M4.7, and two defects shipped through",
+    "that gap.",
+    "",
+    "`aligned_tables` maps a header substring to how many tables the report must",
+    "head with it. Every non-blank line of each of those tables, header included,",
+    "must be the same length. That is exactly the",
+    "property a cell wider than its column breaks, and it is derived from the",
+    "output rather than restated as a golden -- so it catches a width bug the",
+    "corpus never anticipated, which a golden cannot.",
+    "The count is part of the expectation rather than a minimum: the raw table",
+    "and the claim-layout table are each rendered twice, once per regime, under",
+    "identical headers. Checking only that at least one matched would let a",
+    "regime stop being reported without any assertion failing -- there would",
+    "simply be one fewer table to check, which is silence rather than failure.",
+    "A table that is legitimately empty is named in `contains` instead of here:",
+    "when nothing was measured the raw table is still headed but has no data",
+    "rows, and a header on its own always aligns with itself, so listing it",
+    "would buy a vacuous assertion rather than a check."
+  ],
+  "cases": [
+    {
+      "name": "ordinary",
+      "why": "A plausible run. Establishes that the tables render and line up at all, so the stressed cases below are testing something. It also carries measured `reserving(64/64)` rows in both regimes: that layout is cfg-gated behind a native 128-bit exchange, so without them the renderer's 64/64 columns were only ever exercised by the did-not-run path, and a width or alignment fault in a real Wide measurement would have rendered unseen.",
+      "observation": {
+        "available_parallelism": 8,
+        "isolated": [
+          [
+            "baseline_fetch_add",
+            1,
+            2.3,
+            434782608,
+            0,
+            2.1,
+            2.5
+          ],
+          [
+            "baseline_fetch_add",
+            2,
+            12.1,
+            165289256,
+            0,
+            11,
+            13
+          ],
+          [
+            "slotwise_mpsc",
+            1,
+            6.3,
+            158730158,
+            0,
+            6,
+            6.8
+          ],
+          [
+            "slotwise_mpsc",
+            2,
+            50.6,
+            39525691,
+            0,
+            19.3,
+            59.5
+          ],
+          [
+            "reserving_mpsc",
+            1,
+            5.4,
+            185185185,
+            0,
+            5.2,
+            5.9
+          ],
+          [
+            "reserving_mpsc",
+            2,
+            31.9,
+            31347962,
+            0,
+            22.5,
+            35.2
+          ],
+          [
+            "permit_mpsc",
+            1,
+            7.9,
+            126582278,
+            0,
+            7.5,
+            8.3
+          ],
+          [
+            "permit_mpsc",
+            2,
+            44.2,
+            22624434,
+            0,
+            37.4,
+            45.9
+          ],
+          [
+            "reserving(32/32)",
+            1,
+            5.5,
+            181818181,
+            0,
+            5.3,
+            6
+          ],
+          [
+            "reserving(32/32)",
+            2,
+            32.4,
+            30864197,
+            0,
+            23,
+            35.9
+          ],
+          [
+            "reserving(16/48)",
+            1,
+            5.6,
+            178571428,
+            0,
+            5.4,
+            6.1
+          ],
+          [
+            "reserving(16/48)",
+            2,
+            33.1,
+            30211480,
+            0,
+            23.4,
+            36.2
+          ],
+          [
+            "reserving(8/56)",
+            1,
+            5.7,
+            175438596,
+            0,
+            5.5,
+            6.2
+          ],
+          [
+            "reserving(8/56)",
+            2,
+            33.4,
+            29940119,
+            0,
+            23.8,
+            36.5
+          ],
+          [
+            "reserving(64/64)",
+            1,
+            7.5,
+            133333333,
+            0,
+            7.1,
+            7.9
+          ],
+          [
+            "reserving(64/64)",
+            8,
+            61.7,
+            16207455,
+            0,
+            54.1,
+            88.1
+          ]
+        ],
+        "drained": [
+          [
+            "slotwise_mpsc",
+            1,
+            11.4,
+            87719298,
+            0,
+            10.9,
+            12.1
+          ],
+          [
+            "slotwise_mpsc",
+            2,
+            66.8,
+            29940119,
+            1200,
+            60.1,
+            70.2
+          ],
+          [
+            "reserving_mpsc",
+            1,
+            26.2,
+            38167938,
+            0,
+            24.9,
+            27.8
+          ],
+          [
+            "reserving_mpsc",
+            2,
+            64.2,
+            31152647,
+            1100,
+            58.3,
+            68
+          ],
+          [
+            "permit_mpsc",
+            1,
+            64.3,
+            15552099,
+            0,
+            61,
+            67.1
+          ],
+          [
+            "permit_mpsc",
+            2,
+            56.2,
+            35587188,
+            900,
+            51.4,
+            59.9
+          ],
+          [
+            "reserving(32/32)",
+            1,
+            24.8,
+            40322580,
+            0,
+            23.6,
+            26.3
+          ],
+          [
+            "reserving(32/32)",
+            2,
+            65.1,
+            30721966,
+            1150,
+            59,
+            69.1
+          ],
+          [
+            "reserving(16/48)",
+            1,
+            26.8,
+            37313432,
+            0,
+            25.4,
+            28.2
+          ],
+          [
+            "reserving(16/48)",
+            2,
+            67.9,
+            29455081,
+            1180,
+            61.2,
+            71.4
+          ],
+          [
+            "reserving(8/56)",
+            1,
+            27.6,
+            36231884,
+            0,
+            26.1,
+            29
+          ],
+          [
+            "reserving(8/56)",
+            2,
+            67,
+            29850746,
+            1160,
+            60.5,
+            70.8
+          ],
+          [
+            "reserving(64/64)",
+            1,
+            29.3,
+            34129692,
+            12,
+            27.4,
+            31
+          ],
+          [
+            "reserving(64/64)",
+            8,
+            103.3,
+            9680542,
+            480,
+            92.1,
+            118.4
+          ]
+        ]
+      },
+      "expect": {
+        "aligned_tables": {
+          "16/48 vs": 2,
+          "reserving/slotwise": 1,
+          "atomic floor": 1,
+          "ns/op range": 2
+        },
+        "contains": [
+          "processors available to this process: 8",
+          "reserving(64/64)"
+        ],
+        "absent": []
+      }
+    },
+    {
+      "name": "spans_wide_enough_to_overrun_a_fixed_column",
+      "why": "A cell's width is a function of measured data: `format_ratio_bounded` sizes its interval from the observed span, so no constant is provably sufficient. These values are chosen to exceed a fixed width rather than to depict a likely run -- and the margin matters, because the width of 22 that two tables carried was NOT overrun by an ordinary outlier. A 300ms repetition against a 4ns one renders 21 characters. Reaching 23 needs a hundredfold ratio as well. The argument for deriving the width is that the bound cannot be established, not that 22 was obviously too small.",
+      "observation": {
+        "available_parallelism": 8,
+        "isolated": [
+          [
+            "baseline_fetch_add",
+            1,
+            2.3,
+            434782608,
+            0,
+            2.1,
+            2.5
+          ],
+          [
+            "baseline_fetch_add",
+            2,
+            12.1,
+            165289256,
+            0,
+            11,
+            13
+          ],
+          [
+            "slotwise_mpsc",
+            1,
+            6,
+            166666666,
+            0,
+            4,
+            6
+          ],
+          [
+            "slotwise_mpsc",
+            2,
+            30,
+            66666666,
+            0,
+            4,
+            60
+          ],
+          [
+            "reserving_mpsc",
+            1,
+            5,
+            200000000,
+            0,
+            4,
+            6
+          ],
+          [
+            "reserving_mpsc",
+            2,
+            3000,
+            666666,
+            0,
+            40,
+            90000
+          ],
+          [
+            "permit_mpsc",
+            1,
+            8,
+            125000000,
+            0,
+            4,
+            6
+          ],
+          [
+            "permit_mpsc",
+            2,
+            3000,
+            666666,
+            0,
+            40,
+            90000
+          ],
+          [
+            "reserving(32/32)",
+            1,
+            5,
+            200000000,
+            0,
+            4,
+            6
+          ],
+          [
+            "reserving(32/32)",
+            2,
+            30,
+            66666666,
+            0,
+            4,
+            6
+          ],
+          [
+            "reserving(16/48)",
+            1,
+            50,
+            20000000,
+            0,
+            40,
+            6000
+          ],
+          [
+            "reserving(16/48)",
+            2,
+            3000,
+            666666,
+            0,
+            40,
+            90000
+          ],
+          [
+            "reserving(8/56)",
+            1,
+            60,
+            16666666,
+            0,
+            40,
+            7000
+          ],
+          [
+            "reserving(8/56)",
+            2,
+            3200,
+            625000,
+            0,
+            40,
+            95000
+          ]
+        ],
+        "drained": [
+          [
+            "slotwise_mpsc",
+            1,
+            11,
+            90909090,
+            0,
+            4,
+            6
+          ],
+          [
+            "slotwise_mpsc",
+            2,
+            30,
+            66666666,
+            1200,
+            4,
+            60
+          ],
+          [
+            "reserving_mpsc",
+            1,
+            26,
+            38461538,
+            0,
+            4,
+            60
+          ],
+          [
+            "reserving_mpsc",
+            2,
+            3000,
+            666666,
+            1100,
+            40,
+            90000
+          ],
+          [
+            "permit_mpsc",
+            1,
+            64,
+            15625000,
+            0,
+            4,
+            60
+          ],
+          [
+            "permit_mpsc",
+            2,
+            3000,
+            666666,
+            900,
+            40,
+            90000
+          ],
+          [
+            "reserving(32/32)",
+            1,
+            25,
+            40000000,
+            0,
+            4,
+            6
+          ],
+          [
+            "reserving(32/32)",
+            2,
+            30,
+            66666666,
+            1150,
+            4,
+            6
+          ],
+          [
+            "reserving(16/48)",
+            1,
+            250,
+            4000000,
+            0,
+            40,
+            9000
+          ],
+          [
+            "reserving(16/48)",
+            2,
+            3000,
+            666666,
+            1180,
+            40,
+            90000
+          ],
+          [
+            "reserving(8/56)",
+            1,
+            270,
+            3703703,
+            0,
+            40,
+            9000
+          ],
+          [
+            "reserving(8/56)",
+            2,
+            3200,
+            625000,
+            1160,
+            40,
+            95000
+          ]
+        ]
+      },
+      "expect": {
+        "aligned_tables": {
+          "16/48 vs": 2,
+          "reserving/slotwise": 1,
+          "atomic floor": 1,
+          "ns/op range": 2
+        },
+        "contains": [
+          "100.00x [6.67-22500.00]"
+        ],
+        "absent": []
+      }
+    },
+    {
+      "name": "a_shape_that_did_not_run",
+      "why": "A row present but carrying the did-not-run sentinel. Zero is not an obviously broken value in any of this report's columns, so the rendered cells must be marked rather than published: `0.0` ns/op reads as immeasurably fast and `0.00x` as a ratio of one.",
+      "observation": {
+        "available_parallelism": 4,
+        "isolated": [
+          [
+            "baseline_fetch_add",
+            1,
+            2.3,
+            434782608,
+            0,
+            2.1,
+            2.5
+          ],
+          [
+            "slotwise_mpsc",
+            1,
+            6.3,
+            158730158,
+            0,
+            6,
+            6.8
+          ],
+          [
+            "reserving_mpsc",
+            1,
+            5.4,
+            185185185,
+            0,
+            5.2,
+            5.9
+          ],
+          [
+            "permit_mpsc",
+            1,
+            0,
+            0,
+            0,
+            0,
+            0
+          ],
+          [
+            "reserving(32/32)",
+            1,
+            5.5,
+            181818181,
+            0,
+            5.3,
+            6
+          ],
+          [
+            "reserving(16/48)",
+            1,
+            0,
+            0,
+            0,
+            0,
+            0
+          ],
+          [
+            "reserving(8/56)",
+            1,
+            5.7,
+            175438596,
+            0,
+            5.5,
+            6.2
+          ]
+        ],
+        "drained": [
+          [
+            "slotwise_mpsc",
+            1,
+            11.4,
+            87719298,
+            0,
+            10.9,
+            12.1
+          ],
+          [
+            "reserving_mpsc",
+            1,
+            26.2,
+            38167938,
+            0,
+            24.9,
+            27.8
+          ],
+          [
+            "permit_mpsc",
+            1,
+            0,
+            0,
+            0,
+            0,
+            0
+          ],
+          [
+            "reserving(32/32)",
+            1,
+            24.8,
+            40322580,
+            0,
+            23.6,
+            26.3
+          ],
+          [
+            "reserving(16/48)",
+            1,
+            0,
+            0,
+            0,
+            0,
+            0
+          ],
+          [
+            "reserving(8/56)",
+            1,
+            27.6,
+            36231884,
+            0,
+            26.1,
+            29
+          ]
+        ]
+      },
+      "expect": {
+        "aligned_tables": {
+          "16/48 vs": 2,
+          "reserving/slotwise": 1,
+          "atomic floor": 1,
+          "ns/op range": 2
+        },
+        "contains": [
+          "--"
+        ],
+        "absent": [
+          "0.00x",
+          " 0.0 ",
+          "infx",
+          "NaN"
+        ]
+      }
+    },
+    {
+      "name": "nothing_measured_at_all",
+      "why": "Every shape absent, which is what a `cfg`-elided target or a failed run looks like from the renderer's side. It must still produce a report with its headers rather than panicking or printing figures it does not have.",
+      "observation": {
+        "available_parallelism": null,
+        "isolated": [],
+        "drained": []
+      },
+      "expect": {
+        "aligned_tables": {
+          "16/48 vs": 2,
+          "reserving/slotwise": 1,
+          "atomic floor": 1
+        },
+        "contains": [
+          "processors available to this process: unknown (the query failed)",
+          "ns/op range"
+        ],
+        "absent": [
+          "0.00x",
+          "infx",
+          "NaN"
+        ]
+      }
+    },
+    {
+      "name": "a_row_whose_median_looks_fine_but_whose_endpoints_do_not",
+      "why": "A median is not the only field a row publishes. `render_table` prints ops/sec and both range endpoints directly once `is_measured` says the row counts, so a plausible median beside a poisoned endpoint reached the report as an ordinary-looking cell. These rows keep an ordinary median and spoil one other field each: a zero slowest endpoint, a negative fastest one, a zero ops/sec. JSON cannot express infinity, so the non-finite half of the guard is not reachable from a corpus case and is covered by the same predicate.",
+      "observation": {
+        "available_parallelism": 4,
+        "isolated": [
+          [
+            "baseline_fetch_add",
+            1,
+            2.3,
+            0,
+            0,
+            2.1,
+            2.5
+          ],
+          [
+            "slotwise_mpsc",
+            1,
+            6.3,
+            158730158,
+            0,
+            6,
+            0
+          ],
+          [
+            "reserving_mpsc",
+            1,
+            5.4,
+            185185185,
+            0,
+            -1,
+            5.9
+          ],
+          [
+            "permit_mpsc",
+            1,
+            0,
+            0,
+            0,
+            0,
+            0
+          ],
+          [
+            "reserving(32/32)",
+            1,
+            5.5,
+            181818181,
+            0,
+            5.3,
+            6
+          ],
+          [
+            "reserving(16/48)",
+            1,
+            0,
+            0,
+            0,
+            0,
+            0
+          ],
+          [
+            "reserving(8/56)",
+            1,
+            5.7,
+            175438596,
+            0,
+            5.5,
+            6.2
+          ]
+        ],
+        "drained": [
+          [
+            "slotwise_mpsc",
+            1,
+            11.4,
+            87719298,
+            0,
+            10.9,
+            12.1
+          ],
+          [
+            "reserving_mpsc",
+            1,
+            26.2,
+            38167938,
+            0,
+            24.9,
+            27.8
+          ],
+          [
+            "permit_mpsc",
+            1,
+            0,
+            0,
+            0,
+            0,
+            0
+          ],
+          [
+            "reserving(32/32)",
+            1,
+            24.8,
+            40322580,
+            0,
+            23.6,
+            26.3
+          ],
+          [
+            "reserving(16/48)",
+            1,
+            0,
+            0,
+            0,
+            0,
+            0
+          ],
+          [
+            "reserving(8/56)",
+            1,
+            27.6,
+            36231884,
+            0,
+            26.1,
+            29
+          ]
+        ]
+      },
+      "expect": {
+        "aligned_tables": {
+          "16/48 vs": 2,
+          "reserving/slotwise": 1,
+          "atomic floor": 1,
+          "ns/op range": 2
+        },
+        "contains": [
+          "--"
+        ],
+        "absent": [
+          "6.0-0.0",
+          "-1.0-5.9",
+          "0.00x",
+          "infx",
+          "NaN"
+        ]
+      }
+    }
+  ]
+}

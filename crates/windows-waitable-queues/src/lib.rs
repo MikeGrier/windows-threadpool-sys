@@ -87,16 +87,39 @@
 //! **This is a property of the default layout, not of the shape**, and that is
 //! a change: it was previously a defect a caller had to live with. The claim
 //! word packs an outstanding-reservation count beside the position, and how its
-//! bits are divided is now a caller's choice. Reservations are bounded by how
-//! many producers are mid-send -- hundreds at most -- so giving up a ceiling
-//! nobody reaches buys positions:
+//! bits are divided is now a caller's choice. A narrower count field buys
+//! position bits, and what it costs is reservations held simultaneously:
+//! `Producer::reserve` takes `&self` and returns an owned `Reservation`, so a
+//! single producer can hold as many as the field allows, and a caller that
+//! holds many at once is choosing against the narrower layouts rather than
+//! against a producer count.
 //!
-//! | Layout | Outstanding reservations | Pushes to recurrence | At sustained maximum rate |
+//! | Layout | Reservation-count field ceiling | Pushes to recurrence | At the pre-correction planning rate |
 //! |---|---|---|---|
-//! | `Balanced` (default) | 2^32 | 2^32 | about 37 seconds |
+//! | `Balanced` (default) | 4,294,967,295 | 2^32 | about 37 seconds |
 //! | `Enduring` | 65,535 | 2^48 | about 28 days |
 //! | `Perpetual` | 255 | 2^56 | about 20 years |
-//! | `Wide` (needs `dwcas`) | 2^32 | 2^64 | unreachable |
+//! | `Wide` (needs `dwcas`) | 4,294,967,295 | 2^64 | about 5,000 years |
+//!
+//! The last column is arithmetic, not a measurement: pushes-to-recurrence
+//! divided by a sustained rate of about 116 million pushes per second. **That
+//! rate predates a correction to the probe's timing window**, which had
+//! overstated throughput -- so the true sustained rate is lower and these
+//! horizons longer. They are kept as a floor, saying the wrap arrives sooner
+//! than it does -- a shorter horizon than the corrected rate gives. The horizon
+//! that matters is the one on your hardware at your rate.
+//!
+//! The reservation-count column is the field's ceiling rather than the count any
+//! particular queue reaches: admission is also bounded by capacity, so the
+//! achievable count is the lesser of the two. It is reachable where capacity
+//! allows -- one producer alone fills `Perpetual`'s 255 in a loop given a ring
+//! that large, which `one_producer_alone_can_exhaust_the_reservation_field`
+//! pins. For `Balanced` the capacity bound binds first --
+//! that layout accepts at most 2^31 slots on a 64-bit target, and 2^30 on a
+//! 32-bit one. For the others the field is the smaller number only once
+//! the queue is at least that large: a `Perpetual` queue of capacity 64 can
+//! hold 64 reservations, not 255. The achievable count is always the lesser
+//! of the two.
 //!
 //! ```
 //! use windows_waitable_queues::reserving_mpsc::{self, Perpetual};
@@ -107,16 +130,39 @@
 //! # Ok::<(), windows_waitable_queues::CapacityError>(())
 //! ```
 //!
-//! **A deeper position costs nothing measurable.** `Balanced`, `Enduring`, and
-//! `Perpetual` all issue the same exchange on the same 64-bit word and differ
-//! only in shift and mask constants; a probe comparing them found no difference
-//! outside noise. `Wide` is the exception: it needs a 128-bit exchange, which
-//! measured 2-3x slower on the claim, and it is the only thing in this crate
-//! that costs a third-party dependency. Prefer `Perpetual` unless you want the
-//! guarantee rather than the twenty years.
+//! **A deeper position is the same exchange on the same word.** `Balanced`,
+//! `Enduring`, and `Perpetual` all issue the same exchange on the same 64-bit
+//! word and differ only in shift and mask constants, so there is no structural
+//! reason for one to be slower -- but **what that costs in throughput is not
+//! established**: a probe comparing them found them indistinguishable at low
+//! producer counts, and at high counts sat outside the probe's same-code control but too close to it to establish an ordering or a cost on this host. `Wide` is a separate
+//! matter: it needs a 128-bit exchange, and the whole push path was measured as
+//! slower under it at every producer count measured -- smallest at one or two,
+//! several times by thirty-two, in the isolated regime -- and it is the only
+//! thing in
+//! this crate
+//! that costs a third-party dependency. What it provides that `Perpetual` does
+//! not is a 64-bit position: the recurrence moves to 2^64 pushes -- about 5,000
+//! years at the rate the table above uses, against the twenty `Perpetual` buys.
+//! A longer horizon rather than the absence of one, and it moves with the
+//! caller's rate like every other figure in that column.
+//!
+//! **Where the layout evidence is.** The `What was measured` table this section
+//! links carries the queue *shapes*, not the claim-word layouts, so it does not
+//! contain the `Wide` figures. Those come from two other places: a seven-run
+//! sweep whose raw runs were never committed, and a three-run capture that was,
+//! at
+//! [captures/2026-09-16-drained-handshake/](https://github.com/MikeGrier/windows-threadpool-sys/blob/main/crates/windows-platform-probes/captures/2026-09-16-drained-handshake/README.md),
+//! whose [isolated.js](https://github.com/MikeGrier/windows-threadpool-sys/blob/main/crates/windows-platform-probes/captures/2026-09-16-drained-handshake/isolated.js) derives the
+//! per-count layout ratios against a same-code control. The two agree on the
+//! direction. Until the sweep is re-run with its data kept, the capture is the
+//! part of this claim a reader can check.
 //!
 //! The default remains `Balanced` so that no existing caller's behaviour
-//! changed when the choice was introduced. It is not the recommended layout.
+//! changed when the choice was introduced. Under it, a queue driven past 2^32
+//! pushes by two or more producers can **silently lose an item** -- the defect
+//! described above. `Enduring` and `Perpetual` move that point out, and `Wide`
+//! moves it to 2^64 pushes.
 //!
 //! **What happens.** A producer checks that there is room, is descheduled, and
 //! resumes after other producers have driven the position field through a
@@ -130,10 +176,15 @@
 //! observable says so -- which is why this is documented here rather than left
 //! to a caller to discover, and why it cannot be mitigated after the fact.
 //!
-//! **The exposure, measured rather than estimated.** Under `Balanced`, 2^32
-//! pushes is 37 seconds to roughly four minutes of *sustained* pushing at this
-//! crate's own measured rates -- about two minutes at two producers, which is
-//! the smallest count that can trigger it at all. That is sustained throughput,
+//! **The exposure, as arithmetic over a disclosed rate.** Under `Balanced`, 2^32
+//! pushes is about 37 seconds of *sustained* pushing at the rate the layout
+//! table above discloses. Two producers is the smallest count that can trigger
+//! the defect at all. **That rate predates a
+//! correction to the probe's timing window** and is kept as a floor for the
+//! reason the layout table above gives: the correction lowers the rate and
+//! lengthens the horizon, so these figures say the wrap arrives sooner than it
+//! does -- a shorter horizon than the corrected rate gives. That is sustained
+//! throughput,
 //! not a total accumulated over an uptime. Reaching the wrap is necessary but
 //! not sufficient: a producer must also be stalled inside a window a few
 //! instructions wide. Rare, but a preemption is enough, and "rare" over
@@ -144,18 +195,23 @@
 //! drain cannot sustain the fastest rate measured, and a slower producer takes
 //! proportionally longer to reach its wrap.
 //!
-//! **What to do about it.**
+//! **What bears on it.**
 //!
-//! - **Name a layout.** `Perpetual` puts the recurrence about twenty years out
-//!   at no measured cost, which takes it past any real deployment. This is the
-//!   answer for almost every caller who is exposed at all.
+//! - **Naming a layout moves it.** `Perpetual` puts the recurrence about twenty
+//!   years out. **What it costs in throughput is not established** -- it issues
+//!   the same atomic compare-exchange on the same `u64` as the default, and was
+//!   measured as indistinguishable from it at low producer counts; at high counts sat outside the probe's same-code control but too close to it to establish an ordering or a cost on this host.
 //! - **[`slotwise_mpsc`] does not have this hazard** under any layout. Its
 //!   positions are 64 bits on every target, so the equivalent wrap needs 2^64
-//!   claims. Prefer it unless you need [`Reserving`].
+//!   claims. It does not offer [`Reserving`].
 //! - **[`spsc`] never had it**, having no contended claim to race.
-//! - **The default layout is sound below its wrap.** A queue that will not push
-//!   4.3 billion items in one run, or that is not driven at sustained maximum
-//!   rate by two or more producers, is not exposed even on `Balanced`.
+//! - **The default layout's exposure is a count, not a rate.** Two conditions
+//!   must both hold: two or more producers (one producer has no race to lose),
+//!   and 4.3 billion pushes accumulated over the life of one queue. A lower
+//!   sustained rate does not remove the exposure -- the position advances once
+//!   per push regardless of how fast they arrive, so a slow queue with two or
+//!   more producers reaches the same wrap, just later. An earlier version of
+//!   this bullet listed a low rate as its own exemption, which was wrong.
 //!
 //! This is disclosed on the same principle as the ordering gap below: an
 //! adopter gets the information we have rather than an assurance we cannot
@@ -262,41 +318,78 @@
 //! answered at all. Both are well-studied designs in production use elsewhere,
 //! which is why this crate ships both instead of picking one for you.
 //!
-//! - **Pushing more than ~4 billion items in one run, from two or more
-//!   producers?** Use [`slotwise_mpsc`]. [`reserving_mpsc`] has a known
-//!   item-loss defect past that volume, on every target -- see the section
-//!   above, which you should read before choosing.
-//! - Need [`Reserving`]? Only [`reserving_mpsc`] has it; [`slotwise_mpsc`] structurally
-//!   cannot. Weigh that against the defect above rather than treating the
-//!   capability as settling the choice.
-//! - Otherwise **start with [`reserving_mpsc`]**: it was the faster of the two
-//!   at every producer count above one that we measured.
-//! - One producer *and* one consumer? Use [`spsc`], which beats both.
+//! - **Pushing more than ~4 billion items through one queue, from two or more
+//!   producers?** [`reserving_mpsc`] under its default layout has a known
+//!   item-loss defect past that volume, on every target. The count is cumulative
+//!   over that queue's whole life, not per run: many short bursts reach the wrap
+//!   as surely as one long one. [`slotwise_mpsc`]'s
+//!   positions are 64 bits under every configuration, and naming a deeper layout
+//!   on [`reserving_mpsc`] moves the recurrence out. The mechanism is in the
+//!   section above.
+//! - **Of the two MPSC shapes, only [`reserving_mpsc`] implements
+//!   [`Reserving`]**; [`slotwise_mpsc`] structurally cannot. ([`spsc`]
+//!   implements it too, and the experimental `permit_mpsc` exposes its own
+//!   `reserve`.) Wanting it no longer means accepting the default layout's
+//!   recurrence, but the trade is not gone -- it changes axis: a deeper position
+//!   is paid for with a lower ceiling on outstanding reservations -- a *field*
+//!   ceiling of 65,535 under
+//!   `Enduring` and 255 under `Perpetual` against `u32::MAX` under the default,
+//!   with the count a given queue can actually hold being the lesser of that and
+//!   its capacity.
+//! - **[`spsc`] requires exactly one producer and one consumer**, and does less
+//!   work than either MPSC shape because of it.
 //!
-//! Measured ns per push, isolated regime, median of three. An AMD EPYC 7763
-//! slice (8 cores, 16 threads) and a Snapdragon X2 Elite (12 cores, no SMT):
+//! **The measurements live in one place, not two.** This crate's
+//! [README][readme-measurements] carries the capture: the isolated-regime table,
+//! every cell's observed range, and the attribution -- host banner, profile,
+//! sampling parameters, run count, the instrument's commit, and when it was
+//! taken. That is deliberately not duplicated here, because a figure with two
+//! hand-maintained homes is a figure that will disagree with itself the first
+//! time one of them is retaken. This branch did exactly that once already.
 //!
-//! | producers | `slotwise_mpsc` x64 | `reserving` x64 | `slotwise_mpsc` ARM64 | `reserving` ARM64 |
-//! |---|---|---|---|---|
-//! | 1 | 9.0 | 8.6 | 6.5 | 6.1 |
-//! | 2 | 49.0 | 28.0 | 29.8 | 9.4 |
-//! | 4 | 84.4 | 33.3 | 60.6 | 12.9 |
-//! | 8 | 140.8 | 38.5 | 167.4 | 29.8 |
-//! | 16 | 193.5 | 52.2 | 194.9 | 30.6 |
-//! | 32 | 239.7 | 56.9 | 195.0 | 30.6 |
+//! What is worth saying without the digits:
 //!
-//! **Read these as two data points, not as a law**, and measure your own
-//! workload before treating them as settled. This comparison has already
-//! inverted once: the split was designed on the assumption that `slotwise_mpsc` would be
-//! the cheaper shape, and measurement disagreed on both machines. Producer
-//! count, how hard the consumer drains, and where the threads are scheduled all
-//! move the answer -- placement alone moved an SPSC handoff by 5.6x on one of
-//! these hosts.
+//! - The figures are **one host's observation**, not a ranking, and which shape
+//!   suits a deployment is the deployment's question.
+//! - **The ranges matter more than the medians.** Every cell carries the span
+//!   its repetitions covered, because
+//!   [`D-observations-not-verdicts`] obliges a published figure to arrive with
+//!   its run count *and* its dispersion. At some producer counts that span is
+//!   wide enough to swallow the difference between shapes.
+//! - An *operation* is one successful push for the three queue shapes; for
+//!   `baseline_fetch_add` it is one `fetch_add` on a shared `AtomicU64`, which is
+//!   why the column is labelled per operation rather than per push. It is
+//!   included so the queue figures can be read against what this processor does
+//!   to a contended line at all.
+//! - The host is a single NUMA node holding all its processors, so **nothing
+//!   there says anything about cross-domain behaviour**, and producer counts
+//!   above its physical core count oversubscribe it.
+//! - `permit_mpsc` is behind `experimental-permit-claim` and is outside the
+//!   semver promise.
 //!
-//! Two things that look like reasons to choose and are not. **Capacity**: on a
-//! 64-bit target `slotwise_mpsc` reaches 2^62 slots and `reserving_mpsc` 2^31.
+//! An earlier capture compared two machines and was removed rather than carried
+//! forward: its figures predate a correction to the probe's timing window, and
+//! neither machine is available here to retake them. One finding from it was
+//! structural rather than numeric and is worth keeping -- the split was designed
+//! on the assumption that `slotwise_mpsc` would be the cheaper shape, and
+//! measurement disagreed on both machines.
+//!
+//! [readme-measurements]: https://github.com/MikeGrier/windows-threadpool-sys/blob/main/crates/windows-waitable-queues/README.md#what-was-measured
+//! [`D-observations-not-verdicts`]: https://github.com/MikeGrier/windows-threadpool-sys/blob/main/crates/windows-platform-probes/DESIGN-NOTES.md#d-observations-not-verdicts
+//!
+//! **What moves these numbers.** Producer count, how hard the consumer drains,
+//! and where the threads are scheduled -- placement alone moved an SPSC handoff
+//! by several times on an earlier host this workspace measured; the figure is in
+//! the README's measurement section rather than repeated here.
+//!
+//! Two things that look like reasons to choose and are not. **Capacity**: the
+//! ceiling is the layout's, not the shape's. On a 64-bit target `slotwise_mpsc`
+//! reaches 2^62 slots, and `reserving_mpsc` reaches 2^31 under `Balanced`, 2^47
+//! under `Enduring`, 2^55 under `Perpetual` and 2^62 under `Wide` -- the last
+//! being the crate-wide ceiling, so under `Wide` the two shapes reach the same
+//! number.
 //! On a 32-bit one the crate-wide ceiling is 2^30 and **both** shapes land
-//! there -- `reserving_mpsc`'s packed 2^31 is clamped down to it too -- so the
+//! there -- every `reserving_mpsc` layout is clamped down to it too -- so the
 //! difference disappears entirely and the comparison means nothing at all.
 //! Either way it counts slots allocated up front rather than items ever pushed,
 //! and 2^31 slots is tens of gigabytes before the ring holds anything useful.
