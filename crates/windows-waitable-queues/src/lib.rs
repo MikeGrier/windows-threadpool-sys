@@ -379,12 +379,17 @@
 //!
 //! **What moves these numbers.** Producer count, how hard the consumer drains,
 //! and where the threads are scheduled -- placement alone moved an SPSC handoff
-//! by 5.6x on an earlier host this workspace measured.
+//! by several times on an earlier host this workspace measured; the figure is in
+//! the README's measurement section rather than repeated here.
 //!
-//! Two things that look like reasons to choose and are not. **Capacity**: on a
-//! 64-bit target `slotwise_mpsc` reaches 2^62 slots and `reserving_mpsc` 2^31.
+//! Two things that look like reasons to choose and are not. **Capacity**: the
+//! ceiling is the layout's, not the shape's. On a 64-bit target `slotwise_mpsc`
+//! reaches 2^62 slots, and `reserving_mpsc` reaches 2^31 under `Balanced`, 2^47
+//! under `Enduring`, 2^55 under `Perpetual` and 2^62 under `Wide` -- the last
+//! being the crate-wide ceiling, so under `Wide` the two shapes reach the same
+//! number.
 //! On a 32-bit one the crate-wide ceiling is 2^30 and **both** shapes land
-//! there -- `reserving_mpsc`'s packed 2^31 is clamped down to it too -- so the
+//! there -- every `reserving_mpsc` layout is clamped down to it too -- so the
 //! difference disappears entirely and the comparison means nothing at all.
 //! Either way it counts slots allocated up front rather than items ever pushed,
 //! and 2^31 slots is tens of gigabytes before the ring holds anything useful.

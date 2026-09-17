@@ -1328,11 +1328,13 @@ undecidable. It is decidable, and it is the slash count.
 
 The failure does not look like an error, which is why it survives review. It reads as helpfulness:
 
-- A table gives 8/56 twenty years and 64/64 5,039 years at the same rate; the paragraph above it
-  says 8/56 "reaches the same practical headroom a 128-bit word gives." Nothing is inconsistent —
-  the prose has simply decided, on the reader's behalf, that a factor of 250 does not matter to
+- A table gives one layout a horizon of years and another a horizon hundreds of times longer at the
+  same rate; the paragraph above it says the shorter one "reaches the same practical headroom a
+  128-bit word gives." Nothing is inconsistent —
+  the prose has simply decided, on the reader's behalf, that a factor of that size does not matter to
   them.
-- A table gives 12/52 202 days; the prose calls it "the first row that is not reachable."
+- A table gives a layout a horizon of months; the prose calls it "the first row that is not
+  reachable."
 - **Flipping the verdict is not the fix.** Replacing "not reachable" with "reachable by a busy
   long-lived process" is the same move with the opposite conclusion. Delete the conclusion, do not
   correct it: *"every row recurs; what changes down the column is how long that takes at a given
