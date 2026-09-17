@@ -61,16 +61,15 @@ fn run_from(value: &Value) -> Run {
             .as_f64()
             .unwrap_or_else(|| panic!("field {index} of a run is a number"))
     };
-    // `as` truncates a fraction and saturates a negative, so `1.5` would become
-    // producer count 1 and `-3` would become 0 -- a fixture exercising a case it
-    // does not name, silently. Counts are checked for being counts first.
+    // Read as an integer, not through `f64`. `as_f64` rounds past 2^53, so a
+    // refusal count of 9007199254740993 would silently become ...992; and `as`
+    // on the way back truncates a fraction and saturates a negative, so `1.5`
+    // would become producer count 1. A fixture must fail rather than quietly
+    // exercise a case it does not name.
     let whole = |index: usize| -> u64 {
-        let value = number(index);
-        assert!(
-            value.is_finite() && value >= 0.0 && value.fract() == 0.0,
-            "field {index} of a run is a non-negative whole number, not {value}"
-        );
-        value as u64
+        row[index]
+            .as_u64()
+            .unwrap_or_else(|| panic!("field {index} of a run is a non-negative whole number"))
     };
     Run {
         // Leaked so the fixture can hand back the `&'static str` the field
@@ -118,18 +117,19 @@ fn observation_from(value: &Value) -> Observation {
             panic!("a case states `available_parallelism`, using null where the query failed")
         }) {
             Value::Null => None,
-            other => Some(
-                other
-                    .as_u64()
-                    .unwrap_or_else(|| {
-                        panic!(
-                            "`available_parallelism` is a non-negative whole number or null, \
-                             not {other}"
-                        )
-                    })
-                    .try_into()
-                    .expect("a processor count fits a usize"),
-            ),
+            other => {
+                // The real value comes from `NonZeroUsize`, so zero is not a
+                // processor count the probe can ever observe. `null` is the only
+                // representation of a failed query; accepting `0` as well would
+                // let a malformed corpus publish an impossible figure.
+                let count = other.as_u64().unwrap_or_else(|| {
+                    panic!(
+                        "`available_parallelism` is a positive whole number or null, not {other}"
+                    )
+                });
+                assert!(count > 0, "`available_parallelism` is null when the query failed, not 0");
+                Some(usize::try_from(count).expect("a processor count fits a usize"))
+            }
         },
     }
 }
