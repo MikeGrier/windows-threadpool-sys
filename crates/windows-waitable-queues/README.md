@@ -140,10 +140,13 @@ floor, saying the wrap arrives sooner than it does, which is the conservative
 direction for a hazard. The horizon that matters is the one on your hardware at
 your rate.
 
-The middle column is the field's ceiling, not a reachable number of reservations:
-admission is also bounded by capacity -- `reserve` refuses once the ring has no
-room beyond the reservations already outstanding -- so the achievable count is
-the lesser of the two. For `Balanced` the capacity bound binds first, since that
+The middle column is the field's ceiling rather than the count any particular
+queue reaches: admission is also bounded by capacity -- `reserve` refuses once
+the ring has no room beyond the reservations already outstanding -- so the
+achievable count is the lesser of the two. It is reachable where capacity allows:
+one producer alone fills `Perpetual`'s 255 in a loop given a ring that large,
+which `one_producer_alone_can_exhaust_the_reservation_field` pins. For `Balanced`
+the capacity bound binds first, since that
 layout accepts at most 2^31 slots on a 64-bit target, and 2^30 on a 32-bit
 one. For the others the field is the smaller number only once the queue is at least that large: a `Perpetual` queue of capacity 64 can hold 64 reservations, not 255. The achievable count is always the lesser of the two.
 
