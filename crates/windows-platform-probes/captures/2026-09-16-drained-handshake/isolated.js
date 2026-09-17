@@ -46,6 +46,15 @@ if (files.length === 0) {
   // identical bytes -- and the run count would still present it as a second
   // observation, narrowing the reported range without adding data. What is being
   // claimed here is independent runs, so identical bytes cannot be two of them.
+  //
+  // **This is a heuristic, and its assumption is worth stating.** The report
+  // carries no per-invocation identifier, so "identical bytes" stands in for
+  // "same run". Two genuinely independent runs producing identical bytes would
+  // be refused -- possible in principle, since the figures are rounded, and
+  // vanishingly unlikely across this many of them. The refusal is loud and
+  // diagnosable; accepting a duplicated run would silently fabricate agreement,
+  // which is the worse of the two. `M4.8` replaces the heuristic with a real
+  // identity once the report carries one.
   const seen = new Map();
   for (const file of files) {
     const digest = crypto.createHash("sha256").update(fs.readFileSync(file)).digest("hex");
@@ -142,11 +151,24 @@ function isolatedRows(file) {
     }
   }
   // Every shape this script reads must appear at exactly the swept producer
-  // counts, and nothing else. `ratios()` looks up only the counts in `COUNTS`,
-  // so an extra row -- a newly added 64-producer sweep, say -- would sit in the
-  // map unread while the summary reported success over a capture it had only
-  // partly used.
-  for (const shape of [DEFAULT_LAYOUT, CONTROL_TWIN, ...LAYOUTS]) {
+  // counts, and no *layout* it does not read may appear at all. `ratios()` looks
+  // up only the counts in `COUNTS` for only the shapes it knows, so both an
+  // extra count and an unrecognised layout would sit in the map unread while the
+  // summary reported success over a capture it had only partly used.
+  //
+  // Scoped to `reserving(...)` rows deliberately: the isolated table also
+  // carries `baseline_fetch_add`, `slotwise_mpsc` and `permit_mpsc`, which this
+  // script does not derive from and which are not anomalies. An earlier version
+  // rejected every unknown shape and refused the committed capture on its first
+  // row.
+  const known = [DEFAULT_LAYOUT, CONTROL_TWIN, ...LAYOUTS];
+  for (const key of rows.keys()) {
+    const shape = key.slice(0, key.lastIndexOf("@"));
+    if (shape.startsWith("reserving(") && !known.includes(shape)) {
+      throw new Error(`${file}: unexpected claim-word layout ${shape}`);
+    }
+  }
+  for (const shape of known) {
     const seen = [...rows.keys()]
       .filter((k) => k.startsWith(`${shape}@`))
       .map((k) => Number(k.slice(shape.length + 1)))

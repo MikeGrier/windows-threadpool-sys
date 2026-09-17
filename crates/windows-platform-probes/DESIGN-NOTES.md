@@ -1136,7 +1136,10 @@ data kept.
 
 **Widening the word is the one effect this probe establishes.** At sixteen and
 thirty-two producers the isolated 128-bit rows fall outside the same-code
-control band; the `u64` re-apportionments do not, at any producer count.
+control band by a wide margin. The `u64` re-apportionments also sit outside it at
+those counts, but too close to it to establish an ordering or a cost -- which is
+the distinction the next paragraph withdraws the apportionment claim over, and
+stating it as "they do not" contradicted both that paragraph and the capture.
 That is a real effect on this machine, and its direction is mechanically
 unsurprising -- `cmpxchg16b` against `lock cmpxchg`. Whether it reproduces on
 another microarchitecture is a question for the probe, not for this note.

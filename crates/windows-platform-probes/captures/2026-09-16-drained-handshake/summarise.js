@@ -214,6 +214,15 @@ if (paths.length === 0) {
   // identical bytes -- and `paths.length` is both the run count and the control
   // band's `(n)`, so a copy would narrow the reported range and inflate the
   // sample size without adding an observation.
+  //
+  // **This is a heuristic, and its assumption is worth stating.** The report
+  // carries no per-invocation identifier, so "identical bytes" stands in for
+  // "same run". Two genuinely independent runs producing identical bytes would
+  // be refused -- possible in principle, since the figures are rounded, and
+  // vanishingly unlikely across this many of them. The refusal is loud and
+  // diagnosable; accepting a duplicated run would silently fabricate agreement,
+  // which is the worse of the two. `M4.8` replaces the heuristic with a real
+  // identity once the report carries one.
   const seen = new Map();
   for (const path of paths) {
     const digest = crypto.createHash("sha256").update(fs.readFileSync(path)).digest("hex");
