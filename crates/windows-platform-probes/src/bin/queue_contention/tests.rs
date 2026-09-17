@@ -42,8 +42,10 @@ fn assert_aligned(name: &str, lines: &[&str], why: &str) {
     }
 }
 
-/// Compiled in, so a missing or malformed corpus is a build failure rather than
-/// a test that silently runs nothing.
+/// Compiled in, so a missing corpus is a build failure rather than a test that
+/// silently runs nothing. Malformed JSON is caught a step later, when the corpus
+/// is parsed: that is a test failure, not a build failure, because
+/// `include_str!` checks only that the bytes exist.
 const CORPUS: &str = include_str!("corpus.json");
 
 /// A row is `[shape, producers, nanos_per_op, ops_per_second, refusals,

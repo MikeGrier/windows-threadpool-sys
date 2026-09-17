@@ -17,11 +17,11 @@ let sink = (text) => process.stdout.write(text + "\n");
 const out = (text = "") => sink(text);
 const fail = (text) => process.stderr.write(text + "\n");
 
-// A ratio cell, with all three numbers required to be plain decimals. The
-// looser `[0-9.]+` also matched a run of dots, so a malformed `...x [..-..]`
-// parsed and `Number("...")` became NaN -- which compares false against every
-// guard downstream and would surface in the output rather than be rejected.
-const RATIO = /(\d+\.\d+)x \[(\d+\.\d+)-(\d+\.\d+)\]/g;
+// A ratio cell, with all three numbers required to be plain decimals, and the
+// whole cell required to stand alone between whitespace. Unanchored, the pattern
+// matches a SUFFIX of malformed text -- `1.2.3x [1.0-2.0]` yields `2.3x
+// [1.0-2.0]`, which then passes every downstream check as an ordinary cell.
+const RATIO = /(?<=^|\s)(\d+\.\d+)x \[(\d+\.\d+)-(\d+\.\d+)\](?=\s|$)/g;
 
 function median(values) {
   const sorted = [...values].sort((a, b) => a - b);
@@ -239,7 +239,21 @@ function attribution(text, where) {
     }
     return found.trim();
   };
-  return [line("host:"), line("profile:"), line("sampling:")].join(" | ");
+  const profile = line("profile:");
+  // Agreement is not enough on its own: three debug reports agree with each
+  // other, and the probe stamps a debug run "NOT A MEASUREMENT" precisely
+  // because its figures are not one. A capture built from them would be
+  // internally consistent and meaningless.
+  if (profile !== "profile: release") {
+    fail(`${where}: ${profile} -- only a release run is a measurement`);
+    process.exit(2);
+  }
+  // Included because it can differ while the host banner does not: an affinity
+  // mask changes how many processors the process may use without changing the
+  // machine it names, and producer counts are read against that number.
+  return [line("host:"), profile, line("sampling:"), line("processors available to this process:")].join(
+    " | ",
+  );
 }
 
 function requireOneConfiguration(entries) {
@@ -266,6 +280,7 @@ function requireOneConfiguration(entries) {
 }
 
 const layouts = [];
+const comparisons = [];
 const controls = [];
 requireOneConfiguration(
   paths.map((p) => ({ name: p, attribution: attribution(fs.readFileSync(p, "utf8"), p) })),
@@ -275,6 +290,7 @@ for (const path of paths) {
   const layout = drainedLayout(lines, path);
   const comparison = drainedComparison(lines, path);
   layouts.push(layout);
+  comparisons.push(comparison);
   // The same code measured twice in one run: `reserving_mpsc` in the comparison
   // table against `32/32` in the layout table.
   const control = new Map();
@@ -304,6 +320,19 @@ layouts.forEach((layout, i) => {
   if (seen.join(",") !== EXPECTED_PRODUCERS.join(",")) {
     problems.push(
       `${paths[i]}: drained layout covers producers [${seen}], expected [${EXPECTED_PRODUCERS}]`,
+    );
+  }
+});
+
+// The comparison table needs the same check, and for the same reason: the loop
+// that builds the control iterates the LAYOUT's keys, so an extra comparison row
+// is accepted into its map and then never looked at. Only the layout side was
+// checked, which left half the capture able to carry rows nothing reported.
+comparisons.forEach((comparison, i) => {
+  const seen = [...comparison.keys()].sort((a, b) => a - b);
+  if (seen.join(",") !== EXPECTED_PRODUCERS.join(",")) {
+    problems.push(
+      `${paths[i]}: drained comparison covers producers [${seen}], expected [${EXPECTED_PRODUCERS}]`,
     );
   }
 });

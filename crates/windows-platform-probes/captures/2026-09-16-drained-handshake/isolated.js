@@ -72,7 +72,21 @@ function attribution(text, where) {
     }
     return found.trim();
   };
-  return [line("host:"), line("profile:"), line("sampling:")].join(" | ");
+  const profile = line("profile:");
+  // Agreement is not enough on its own: three debug reports agree with each
+  // other, and the probe stamps a debug run "NOT A MEASUREMENT" precisely
+  // because its figures are not one. A capture built from them would be
+  // internally consistent and meaningless.
+  if (profile !== "profile: release") {
+    fail(`${where}: ${profile} -- only a release run is a measurement`);
+    process.exit(2);
+  }
+  // Included because it can differ while the host banner does not: an affinity
+  // mask changes how many processors the process may use without changing the
+  // machine it names, and producer counts are read against that number.
+  return [line("host:"), profile, line("sampling:"), line("processors available to this process:")].join(
+    " | ",
+  );
 }
 
 function requireOneConfiguration(entries) {
@@ -125,6 +139,22 @@ function isolatedRows(file) {
         throw new Error(`${file}: a second isolated row for ${key}`);
       }
       rows.set(key, Number(m[3]));
+    }
+  }
+  // Every shape this script reads must appear at exactly the swept producer
+  // counts, and nothing else. `ratios()` looks up only the counts in `COUNTS`,
+  // so an extra row -- a newly added 64-producer sweep, say -- would sit in the
+  // map unread while the summary reported success over a capture it had only
+  // partly used.
+  for (const shape of [DEFAULT_LAYOUT, CONTROL_TWIN, ...LAYOUTS]) {
+    const seen = [...rows.keys()]
+      .filter((k) => k.startsWith(`${shape}@`))
+      .map((k) => Number(k.slice(shape.length + 1)))
+      .sort((a, b) => a - b);
+    if (seen.length !== 0 && seen.join(",") !== COUNTS.join(",")) {
+      throw new Error(
+        `${file}: ${shape} covers producers [${seen}], expected [${COUNTS}]`,
+      );
     }
   }
   return rows;
