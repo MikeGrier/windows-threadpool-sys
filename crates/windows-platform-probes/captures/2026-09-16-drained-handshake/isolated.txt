@@ -15,6 +15,6 @@ where every run sat above the control's whole observed range:
   reserving(8/56)    32 producers
   reserving(64/64)   1, 2, 4, 8, 16, 32 producers
 
-The control's range here is three observations per count, which is not a
-band. This reports what these runs did; it does not establish that a fresh
+The control's range here is 3 observation(s) per count, which is not
+a band. This reports what these runs did; it does not establish that a fresh
 run would land the same way.

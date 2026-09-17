@@ -131,7 +131,7 @@ for (const l of LAYOUTS) {
 }
 
 console.log(
-  "\nThe control's range here is three observations per count, which is not a\n" +
-    "band. This reports what these runs did; it does not establish that a fresh\n" +
+  `\nThe control's range here is ${files.length} observation(s) per count, which is not\n` +
+    "a band. This reports what these runs did; it does not establish that a fresh\n" +
     "run would land the same way.",
 );

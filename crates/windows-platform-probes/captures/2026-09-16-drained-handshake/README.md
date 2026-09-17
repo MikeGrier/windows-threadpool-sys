@@ -58,10 +58,18 @@ node isolated.js run1.txt run2.txt run3.txt
 ```
 
 The two cover different regimes and are kept apart for that reason: `summarise.js`
-derives the **drained** tables, `isolated.js` the **isolated** ones. The isolated
-figures are cited by the queue crate's own documentation -- which says the whole
-push path was measured as slower under `Wide` at every producer count -- so they
-need a derivation a reader can run rather than a number taken on trust.
+derives the **drained** tables, `isolated.js` the **isolated** ones.
+
+The isolated figures matter beyond this directory because the queue crate's
+documentation makes a claim about them -- that the whole push path was measured
+as slower under `Wide` at every producer count. That claim rests on a **separate**
+seven-run sweep whose raw runs were never committed, and on the crate's own
+attributed table, which is a **third** capture built from `fecd352`. This
+directory is neither of those: it is three runs from `68198359`, and what
+`isolated.js` provides is an independent cross-check that can actually be run,
+against figures that otherwise have none. Where this and the crate's table
+disagree, the crate's table is the attributed figure for that crate; this one is
+evidence about how far such a figure moves.
 
 Both are committed so the derivation can be checked rather than taken on trust, and
 so nothing downstream has to retype a figure. The scripts derive what the runs do

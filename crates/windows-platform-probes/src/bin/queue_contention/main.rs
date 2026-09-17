@@ -246,9 +246,13 @@ fn render_observation(out: &mut dyn std::fmt::Write, observation: &Observation) 
                 format_ratio_bounded(reserving, plain),
                 format_nanos(permit),
                 // The column SH-15.5 exists to fill: the experimental claim
-                // against the shipping shape it would replace. Below 1.00 means
-                // the permit claim is cheaper; above means removing the
-                // room-decision race costs throughput.
+                // against the shipping shape it would replace. It is an
+                // end-to-end ratio of two whole push paths, not a price on the
+                // room-decision race: the shapes also differ in refusal and
+                // retry behaviour, and the queue crate's D-35 records that in
+                // this regime their refusal counts differ by orders of
+                // magnitude the harness cannot attribute -- which is what
+                // SH-15.5.1 exists to settle.
                 format_ratio_bounded(permit, reserving),
             )
         })
@@ -322,24 +326,29 @@ fn render_observation(out: &mut dyn std::fmt::Write, observation: &Observation) 
     );
     let _ = writeln!(
         out,
-        "     the trade. Read the INTERVAL, not the point: an interval entirely"
+        "     the trade. Read the INTERVAL, not the point: one that crosses"
     );
     let _ = writeln!(
         out,
-        "     below 1.00 has the safer claim also the cheaper one, entirely"
+        "     1.00 orders nothing, however far the point estimate sits from"
     );
     let _ = writeln!(
         out,
-        "     above it has closing the hole costing throughput, and one that"
+        "     it -- 0.78x [0.53-1.16] is such a case. An interval clear of"
     );
     let _ = writeln!(
         out,
-        "     crosses 1.00 leaves the ordering unsettled however far the point"
+        "     1.00 orders the two WHOLE PUSH PATHS and not the room-decision"
     );
     let _ = writeln!(
         out,
-        "     estimate sits from it -- 0.78x [0.53-1.16] is such a case."
+        "     race on its own: the shapes differ in refusal and retry"
     );
+    let _ = writeln!(
+        out,
+        "     behaviour too, and here their refusal counts differ by orders"
+    );
+    let _ = writeln!(out, "     of magnitude this harness cannot attribute.");
 
     // Question 3: what does the claim word's apportionment and width cost?
     let _ = writeln!(out, "\n  3. claim-word layout\n");

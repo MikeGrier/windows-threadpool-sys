@@ -1211,6 +1211,21 @@ three control observations, which is not a band. Three runs do not settle the dr
 either direction. The capture now reports per-count figures and emits no verdict, and the
 pre-handshake reading rests on the seven-run sweep, which this does not replace.
 
+**Two further corrections, appended because this archive is append-only.** The
+paragraph above names `await_consumer` as what closes the window; that helper is
+only the *waiting* half -- a producer spinning until the flag is set. The
+ordering the item is actually about lives in `drain_then_announce`, which pops
+once and only then publishes readiness, and which was extracted into a single
+definition later (see the M4.3 review round) precisely because four timers had
+been writing it by hand with nothing able to test it.
+
+And "closes it" overstates what any flag can do. The window is *narrowed to a
+stated guarantee*: no producer begins timing until the consumer has executed its
+pop path at least once. Continuous draining is not guaranteed and cannot be --
+the consumer can be descheduled immediately afterwards, as it can at any point
+during the run. `await_consumer`'s own doc said so from the start, which is what
+makes this entry's wording a restatement that drifted from the thing it restated.
+
 ## Moved 2026-09-16 17:31:31 UTC-04:00 -- M2.16: the census that broke the prose around it
 
 ### <a id="m216"></a>M2.16 -- Repair the garbled `Report` doc comment, and drop the two counts that had rotted beside it. *(completed 2026-09-16 17:31:31 UTC-04:00)*
