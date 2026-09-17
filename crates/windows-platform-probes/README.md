@@ -65,7 +65,7 @@ probe that no longer compiles has already rotted.
 ## Running
 
 ```text
-cargo test  --package windows-platform-probes     # the asserted tier
+cargo test  --package windows-platform-probes --features oracle-in-renderer     # asserted tier + required-feature integration target
 cargo run   --bin probe-error-mode                # observations, including the irreversible one
 cargo run   --bin probe-handle-state
 ```
