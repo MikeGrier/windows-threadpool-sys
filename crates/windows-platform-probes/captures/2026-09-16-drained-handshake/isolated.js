@@ -1,3 +1,5 @@
+// Copyright (c) Mike Grier.
+
 // Isolated regime: each claim-word layout against the default, read against a
 // same-code control.
 //
@@ -86,19 +88,34 @@ const cell = (xs) => `${fmt(median(xs))}x [${fmt(Math.min(...xs))}-${fmt(Math.ma
 const control = ratios(DEFAULT_LAYOUT, CONTROL_TWIN);
 const measured = new Map(LAYOUTS.map((l) => [l, ratios(l, DEFAULT_LAYOUT)]));
 
+// Widths derived from the cells, not fixed. `cell()` renders a median and a
+// range of measured ratios, which have no upper bound, so a fixed field shifts
+// every column after it the first time a value outgrows it -- the same argument
+// `column_width` makes for the Rust report's columns.
+const COLUMNS = ["control", ...LAYOUTS.map((l) => l.replace("reserving", ""))];
+const body = COUNTS.map((n) => [cell(control.get(n)), ...LAYOUTS.map((l) => cell(measured.get(l).get(n)))]);
+// The widths this table has always used, kept as floors so the committed
+// output is unchanged; the derivation only ever widens.
+const width = COLUMNS.map((name, column) =>
+  Math.max(18, name.length, ...body.map((row) => row[column].length)),
+);
+const PRODUCERS_WIDTH = Math.max(9, ...COUNTS.map((n) => String(n).length));
+
 console.log(`isolated regime, ${files.length} run(s): ${files.join(", ")}`);
 console.log(`each layout against ${DEFAULT_LAYOUT}; control is ${DEFAULT_LAYOUT} against ${CONTROL_TWIN}`);
 console.log("median of the per-run ratios, with the observed range beside it\n");
 
-const head = ["producers".padEnd(11), "control".padEnd(20)].concat(
-  LAYOUTS.map((l) => l.replace("reserving", "").padEnd(20)),
+console.log(
+  ["producers".padEnd(PRODUCERS_WIDTH + 2), ...COLUMNS.map((name, i) => name.padEnd(width[i] + 2))].join(""),
 );
-console.log(head.join(""));
-for (const n of COUNTS) {
-  const row = [String(n).padEnd(11), cell(control.get(n)).padEnd(20)];
-  for (const l of LAYOUTS) row.push(cell(measured.get(l).get(n)).padEnd(20));
-  console.log(row.join(""));
-}
+COUNTS.forEach((n, row) => {
+  console.log(
+    [
+      String(n).padEnd(PRODUCERS_WIDTH + 2),
+      ...body[row].map((c, i) => c.padEnd(width[i] + 2)),
+    ].join(""),
+  );
+});
 
 console.log("\nwhere every run sat above the control's whole observed range:");
 for (const l of LAYOUTS) {

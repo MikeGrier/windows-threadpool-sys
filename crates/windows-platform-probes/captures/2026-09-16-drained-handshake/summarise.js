@@ -125,7 +125,22 @@ for (const path of paths) {
   controls.push(control);
 }
 
-const producers = [...layouts[0].keys()].sort((a, b) => a - b);
+// The sweep the probe runs, stated rather than inferred. Deriving the expected
+// set from the first capture makes the completeness check circular: three runs
+// all truncated at the same producer count agree with each other, `rows` stays
+// non-empty, and the script reports a partial capture as a whole one.
+const EXPECTED_PRODUCERS = [1, 2, 4, 8, 16, 32];
+
+layouts.forEach((layout, i) => {
+  const seen = [...layout.keys()].sort((a, b) => a - b);
+  if (seen.join(",") !== EXPECTED_PRODUCERS.join(",")) {
+    problems.push(
+      `${paths[i]}: drained layout covers producers [${seen}], expected [${EXPECTED_PRODUCERS}]`,
+    );
+  }
+});
+
+const producers = EXPECTED_PRODUCERS;
 console.log(`runs: ${paths.length}`);
 
 // **Reported per producer count, and deliberately without a verdict.**
@@ -186,16 +201,22 @@ console.log(
 );
 console.log("each layout's median ratio against 32/32, across runs.");
 console.log("");
-console.log("producers   control(n)        16/48   8/56   64/64");
-for (const row of rows) {
+// Derived, with the table's original width as a floor: a control band is built
+// from measured ratios and has no upper bound, so a fixed field would shift the
+// layout columns the first time one outgrew it.
+const bands = rows.map((row) => {
   const low = Math.min(...row.control);
   const high = Math.max(...row.control);
-  const band = `${low.toFixed(2)}-${high.toFixed(2)}(${row.control.length})`;
+  return `${low.toFixed(2)}-${high.toFixed(2)}(${row.control.length})`;
+});
+const bandWidth = Math.max(16, "control(n)".length, ...bands.map((b) => b.length));
+console.log(`producers   ${"control(n)".padEnd(bandWidth)}  16/48   8/56   64/64`);
+rows.forEach((row, i) => {
   console.log(
-    `${String(row.producers).padStart(9)}   ${band.padEnd(16)}  ` +
+    `${String(row.producers).padStart(9)}   ${bands[i].padEnd(bandWidth)}  ` +
       row.medians.map((m) => `${m.toFixed(2)}x`).join("  "),
   );
-}
+});
 
 const everyControl = rows.flatMap((row) => row.control);
 console.log("");
