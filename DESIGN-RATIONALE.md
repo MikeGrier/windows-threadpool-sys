@@ -230,7 +230,7 @@ citation obligation is unchanged by the wording; only the transcription failure 
 earlier draft of the rule said the digit-free form "cannot drift", which overstated it.
 
 The mechanism -- how a figure gets from an artifact into rendered prose -- is deliberately left
-open; markdown has no include, and rustdoc's is whole-file. That is stated in the decision as an
+open; markdown has no include, and rustdoc's include is whole-file. That is stated in the decision as an
 unsettled trade rather than resolved here, and no work is scheduled against it.
 
 ## References
