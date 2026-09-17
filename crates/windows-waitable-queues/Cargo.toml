@@ -58,7 +58,7 @@ experimental-permit-claim = []
 # target and the build fails naming it.
 #
 # This feature adds only the `Wide` layout. The whole push path was measured as
-# slower under it as producer count rises -- near parity at one or two, several times by
+# slower under it at every producer count measured -- smallest at one or two, several times by
 # thirty-two, in the isolated regime. The probe times the complete push, so that
 # is the layout's effect on that path, not the exchange in isolation.
 #

@@ -624,10 +624,13 @@ impl ClaimLayout for Perpetual {
 /// documents, against the twenty [`Perpetual`] buys. Longer, not unbounded.
 ///
 /// The whole push path was measured as slower under this layout than under a
-/// `u64` one, and the difference **grows with producer count** -- near parity
-/// at one or two, several times by thirty-two, in the isolated regime on one
-/// x86-64 host; against a draining consumer the difference fell inside that
-/// host's same-code control and could not be called at all. The probe times the
+/// `u64` one at every producer count measured, and the difference **grows with
+/// producer count** -- smallest at one or two, several times by thirty-two, in
+/// the isolated regime on one x86-64 host. Against a draining consumer the
+/// comparison is not settled in either direction: the control there was pooled
+/// across producer counts, and it is not independent of producer count, so
+/// containment followed from the pooling rather than from the data. The probe
+/// times the
 /// complete push, so this is the layout's effect on that path and not a
 /// measurement of the 128-bit exchange on its own. The per-count table is in the
 /// queue-contention section of

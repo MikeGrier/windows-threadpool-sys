@@ -161,8 +161,8 @@ let (tx, rx) = reserving_mpsc::bounded_as::<u32, Perpetual>(64)?;
 and differ only in shift and mask constants, so there is no structural reason for
 one to be slower -- but **what that costs in throughput is not established**: a
 probe comparing them found them indistinguishable at low producer counts, and at high counts sat outside the probe's same-code control but too close to it to establish an ordering or a cost on this host. `Wide` is a separate matter: it needs a 128-bit exchange,
-and the whole push path was measured as slower under it as producer count rises
--- near parity at one or two, several times by thirty-two, in the isolated
+and the whole push path was measured as slower under it at every producer count
+measured -- smallest at one or two, several times by thirty-two, in the isolated
 regime -- and it is the only thing in
 this crate that costs a third-party dependency.
 
@@ -237,8 +237,8 @@ stops at 64 bits -- so the double-width compare-and-swap comes from
 `portable-atomic`. `Perpetual` reaches roughly
 twenty years before its claim position recurs with no dependency, though what
 that costs in throughput is not established, while under `Wide` the whole push
-path was measured as slower as producer count rises -- near parity at one or
-two, several times by thirty-two, in the isolated regime. What `Wide` provides
+path was measured as slower at every producer count measured -- smallest at one
+or two, several times by thirty-two, in the isolated regime. What `Wide` provides
 that the `u64` layouts do not is a 64-bit position: the recurrence moves to
 2^64 pushes -- about 5,000 years at the same rate the table above uses, rather
 than the twenty `Perpetual` buys. That is a longer horizon, not the absence of

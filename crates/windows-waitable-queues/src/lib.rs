@@ -134,7 +134,7 @@
 //! established**: a probe comparing them found them indistinguishable at low
 //! producer counts, and at high counts sat outside the probe's same-code control but too close to it to establish an ordering or a cost on this host. `Wide` is a separate
 //! matter: it needs a 128-bit exchange, and the whole push path was measured as
-//! slower under it as producer count rises -- near parity at one or two,
+//! slower under it at every producer count measured -- smallest at one or two,
 //! several times by thirty-two, in the isolated regime -- and it is the only
 //! thing in
 //! this crate
