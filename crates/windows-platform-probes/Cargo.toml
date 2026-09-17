@@ -22,7 +22,7 @@ path = "src/lib.rs"
 # ordinary dependency -- without `cfg(test)` -- for anything under `tests/`, so
 # the binding does not reach them. Measured: an integration test rendered a
 # report whose banner architecture contradicted its NDJSON and did not panic.
-# This feature closes that, via the self dev-dependency below.
+# This feature closes that for the explicit integration-test target below.
 #
 # Never enable it for a shipping build. A real probe run must PRINT a
 # self-contradicting report rather than panic: the contradiction is a finding
@@ -96,6 +96,11 @@ path = "src/bin/long_path_aware.rs"
 [[bin]]
 name = "probe-long-path-unaware"
 path = "src/bin/long_path_unaware.rs"
+
+[[test]]
+name = "a_real_report_agrees_with_itself"
+path = "tests/a_real_report_agrees_with_itself.rs"
+required-features = ["oracle-in-renderer"]
 
 [dependencies]
 # **Optional, and reached only through `oracle-in-renderer`.** The report
@@ -218,24 +223,12 @@ windows-waitable-queues = { path = "../windows-waitable-queues", features = [
 # rather than by cutting the text.
 #
 # **Not to satisfy `report_oracle`'s gate, which an earlier version of this
-# comment claimed.** That claim was backwards: it said `cfg(test)` builds compile
-# the module without `oracle-in-renderer`. They do not. The self dev-dependency
-# below is an edge from this package to itself, so under resolver 2 the feature
-# unifies onto the package in ANY build that includes dev-dependencies -- the
-# `cfg(test)` lib build included. Measured with a `compile_error!` probe in both
-# directions: `cargo check --tests` succeeds under `not(feature = ...)` and fails
-# under `feature = ...`, while a plain `--lib` build has the feature off.
-#
-# So the two arms of `cfg(any(test, feature = "oracle-in-renderer"))` are never
-# exercised separately, the optional `serde`/`serde_json` are already active in
-# every test build, and a matching `serde` dev-dependency was dead weight --
-# removed after confirming all 213 tests still pass without it.
+# comment claimed.** The integration test that needs that gate is instead
+# declared explicitly above with `required-features = ["oracle-in-renderer"]`,
+# so ordinary unit-test builds keep exercising the `cfg(test)` arm while that
+# one target runs with the feature on.
+serde = "1.0"
 serde_json = "1.0"
-# A dependency on ITSELF, which cargo permits for dev-dependencies and which is
-# the only way to turn a feature on for this package's own integration tests:
-# a test under `tests/` links the library as a plain dependency, so `cfg(test)`
-# is not set for it and the renderer's oracle binding would be compiled out.
-windows-platform-probes = { path = ".", features = ["oracle-in-renderer"] }
 
 [dependencies.windows-sys]
 version = "0.61.2"

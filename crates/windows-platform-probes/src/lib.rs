@@ -92,9 +92,9 @@
 //! # Running them
 //!
 //! ```text
-//! cargo test -p windows-platform-probes                          # asserted tier
-//! cargo test -p windows-platform-probes -- --include-ignored     # both tiers
-//! cargo test -p windows-platform-probes -- --ignored             # ignored tier only
+//! cargo test -p windows-platform-probes --features oracle-in-renderer                          # asserted tier
+//! cargo test -p windows-platform-probes --features oracle-in-renderer -- --include-ignored     # both tiers
+//! cargo test -p windows-platform-probes --features oracle-in-renderer -- --ignored             # ignored tier only
 //! cargo run  -p windows-platform-probes --bin probe-cancel-io    # binary only
 //!
 //! # binary only, and --release is not optional: a debug build reports
@@ -159,8 +159,8 @@ pub mod report;
 /// The report oracle. **Test-support: present only where it is used.**
 ///
 /// Every caller is already behind this gate -- the renderers' `assert_row_is_well_formed`
-/// bindings, the unit tests, and the integration tests, which reach it through the
-/// self dev-dependency. Stating that here rather than leaving it implied is what
+/// bindings, unit tests, and the required-feature integration target that enables
+/// `oracle-in-renderer`. Stating that here rather than leaving it implied is what
 /// lets the module depend on a real JSON parser without putting one in a shipping
 /// probe binary.
 #[cfg(any(test, feature = "oracle-in-renderer"))]
