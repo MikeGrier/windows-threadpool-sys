@@ -76,6 +76,15 @@ function attribution(text, where) {
 }
 
 function requireOneConfiguration(entries) {
+  // **What this cannot check.** The report carries no build identity, so two
+  // runs of DIFFERENT probe commits on one host under one profile agree here.
+  // That matters most for exactly this capture: `M4.3` changed the drained
+  // procedure, so a pre-handshake and a post-handshake run would pass and have
+  // their medians combined as though one procedure produced both. The
+  // instrument commit is asserted by the capture README, which is a claim by
+  // the person who took the capture rather than something these scripts verify.
+  // Closing it needs the probe to stamp its own build identity into the report;
+  // `M4.8` in CHECKLIST.md owns that.
   const first = entries[0];
   for (const entry of entries.slice(1)) {
     if (entry.attribution !== first.attribution) {

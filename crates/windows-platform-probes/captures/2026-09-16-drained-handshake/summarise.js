@@ -96,6 +96,22 @@ function orderedTriple(point, low, high, where) {
   return true;
 }
 
+// A table's rows, from `from` to the blank line that ends it.
+//
+// A fixed six-row slice discards a seventh row without reporting it, so a
+// capture carrying an extra or duplicated producer row past the sixth would
+// satisfy `EXPECTED_PRODUCERS` on the truncated map and be certified while its
+// data was silently dropped. Reading to the terminator puts every row in front
+// of the duplicate and expected-set checks instead.
+function tableBody(lines, from) {
+  const body = [];
+  for (let i = from; i < lines.length; i += 1) {
+    if (lines[i].trim() === "") break;
+    body.push(lines[i]);
+  }
+  return body;
+}
+
 // producers -> { narrowNanos, ratios: [16/48, 8/56, 64/64] }
 function drainedLayout(lines, path) {
   let start = -1;
@@ -111,7 +127,7 @@ function drainedLayout(lines, path) {
     return new Map();
   }
   const rows = new Map();
-  for (const line of lines.slice(start + 2, start + 8)) {
+  for (const line of tableBody(lines, start + 2)) {
     const fields = line.trim().split(/\s+/);
     const producers = wholeCount(fields[0], `${path}: a drained layout producer count`);
     if (producers === null) continue;
@@ -157,7 +173,7 @@ function drainedLayout(lines, path) {
 function drainedComparison(lines, path) {
   const start = lines.findIndex((line) => line.includes("reserving/slotwise"));
   const rows = new Map();
-  for (const line of lines.slice(start + 2, start + 8)) {
+  for (const line of tableBody(lines, start + 2)) {
     const fields = line.trim().split(/\s+/);
     const producers = wholeCount(fields[0], `${path}: a comparison producer count`);
     if (producers === null) continue;
@@ -227,6 +243,15 @@ function attribution(text, where) {
 }
 
 function requireOneConfiguration(entries) {
+  // **What this cannot check.** The report carries no build identity, so two
+  // runs of DIFFERENT probe commits on one host under one profile agree here.
+  // That matters most for exactly this capture: `M4.3` changed the drained
+  // procedure, so a pre-handshake and a post-handshake run would pass and have
+  // their medians combined as though one procedure produced both. The
+  // instrument commit is asserted by the capture README, which is a claim by
+  // the person who took the capture rather than something these scripts verify.
+  // Closing it needs the probe to stamp its own build identity into the report;
+  // `M4.8` in CHECKLIST.md owns that.
   const first = entries[0];
   for (const entry of entries.slice(1)) {
     if (entry.attribution !== first.attribution) {

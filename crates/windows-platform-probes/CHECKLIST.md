@@ -237,6 +237,27 @@ correctness in the archive.
   them. Until this lands, a shape that needs two dimensions must be added by hand, which is exactly
   the imagination-driven process M2.12 exists to replace.
 
+- [ ] **M4.8** -- Have the queue-contention report carry the build identity that produced it, and
+  have the capture scripts require it to agree.
+
+  **Gap:** a run's report states its `host:`, `profile:` and `sampling:`, and the capture scripts
+  now refuse a set whose runs disagree on any of those. None of it identifies the *instrument*. Two
+  runs from different probe commits, on one machine, under one profile, pass that check -- and this
+  is the capture where that matters most, because `M4.3` changed the drained procedure, so a
+  pre-handshake and a post-handshake run would have their medians combined as though one procedure
+  produced both. The instrument commit is recorded in the capture README, which is an assertion by
+  whoever took the capture rather than something anything verifies.
+
+  **Target:** `windows-placement-probe`'s `build_identity` module is the worked example -- a build
+  script stamps the commit, the dirty flag and the build source into env vars that the binary reads
+  at run time, and `BuildIdentity::current()` renders them. `windows-platform-probes` has no build
+  script today, so this adds one. The report prints the identity beside the existing attribution
+  lines, `requireOneConfiguration` in both capture scripts includes it, and the sabotage is two runs
+  of different commits being refused.
+
+  **Blocker recorded when queued:** none. The dependency exists next door and is already proven by
+  that crate's own tests.
+
 
 ## M5 -- Carried over from M2: unblocked hygiene
 
