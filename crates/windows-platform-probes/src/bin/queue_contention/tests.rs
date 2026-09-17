@@ -91,9 +91,28 @@ fn observation_from(value: &Value) -> Observation {
     Observation {
         isolated: rows("isolated"),
         drained: rows("drained"),
-        available_parallelism: value["available_parallelism"]
-            .as_u64()
-            .map(|count| count as usize),
+        // `null` is a real observation -- the processor-count query failed -- so
+        // it cannot also be what a typo produces. `as_u64().map(...)` would
+        // return `None` for a missing field, a string, a negative, or a
+        // fraction, rendering the unknown-parallelism case and passing, while
+        // the corpus said something else entirely. Every other malformed shape
+        // is rejected here so a broken fixture fails instead of testing a
+        // different case than it names.
+        available_parallelism: match &value["available_parallelism"] {
+            Value::Null => None,
+            other => Some(
+                other
+                    .as_u64()
+                    .unwrap_or_else(|| {
+                        panic!(
+                            "`available_parallelism` is a non-negative whole number or null, \
+                             not {other}"
+                        )
+                    })
+                    .try_into()
+                    .expect("a processor count fits a usize"),
+            ),
+        },
     }
 }
 
