@@ -619,6 +619,37 @@ jobs:
       - name: cargo check (MSRV)
         run: cargo check --workspace --all-targets --all-features --locked
 
+  dwcas-gating:
+    name: probes build where a 128-bit exchange is unavailable
+    runs-on: windows-latest
+    # See build-test's comment: forces the floating stable toolchain over the
+    # repo's rust-toolchain.toml pin.
+    env:
+      RUSTUP_TOOLCHAIN: stable
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: i686-pc-windows-msvc
+      - uses: Swatinem/rust-cache@v2
+      # `windows-platform-probes` takes the queue crate's `dwcas` feature from
+      # two `[target.'cfg(...)']` tables, so the manifest predicate and the
+      # source's `cfg(feature = "dwcas")` gating have to agree. Nothing else in
+      # CI builds a configuration where they can disagree: every other job is
+      # x86-64 or aarch64 with `cmpxchg16b` on, where the feature is always
+      # enabled and the ungated path is never compiled.
+      #
+      # These two are the configurations the gating exists for. A 32-bit target
+      # has no `AtomicU128` at all, and `-C target-feature=-cmpxchg16b` removes
+      # it from x86-64 -- each was verified by hand when the gating was written,
+      # which is precisely the kind of check that stops being run.
+      - name: cargo check (i686, no 128-bit atomic)
+        run: cargo check -p windows-platform-probes --all-targets --target i686-pc-windows-msvc --locked
+      - name: cargo check (x86-64 with cmpxchg16b disabled)
+        env:
+          RUSTFLAGS: "-C target-feature=-cmpxchg16b"
+        run: cargo check -p windows-platform-probes --all-targets --target x86_64-pc-windows-msvc --locked
+
   alloc-only:
     name: wtf-string (alloc-only, no_std)
     runs-on: windows-latest
