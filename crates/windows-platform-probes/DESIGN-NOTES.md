@@ -19,6 +19,204 @@ concentrated form: a hand-written second copy of a platform check is not a check
 of the platform, it is a check of the copy. When the two disagree, nothing
 detects it.
 
+## A probe reports observations parameterized by their capture; it does not draw the client's conclusion
+
+<a id="d-observations-not-verdicts"></a>
+
+Every figure this crate publishes is **what one machine did on one day**, and it
+is recorded together with the parameters of its capture -- at minimum the probe's
+host banner (architecture, logical and core counts, SMT, cache groupings,
+efficiency classes, NUMA nodes), the build profile, and the number of runs with
+their dispersion. A ratio quoted without those is an anecdote, not data a reader
+can compare against their own hardware.
+
+**Some capture parameters are approximated, and some are simply absent; the
+difference is stated rather than elided.** Windows exposes no NUMA *distance*
+table -- there is no Win32 equivalent of reading ACPI SLIT, as recorded at the
+`proximity` site in
+[core_affinity.rs](../windows-placement-probe/src/core_affinity.rs). What it does
+expose, and what this crate uses as the best available analog, is the
+**assignment of processors to NUMA nodes** -- which is what the banner's
+`numa[...]` field carries, as processors-per-node. Device-to-node mapping is
+obtainable on the same footing. That analog answers "are these two things in the
+same domain", which is the question most placement decisions actually turn on; it
+does not answer "how much further is node 2 than node 1", and no amount of
+probing on Windows will. Memory configuration and BIOS state are not captured at
+all.
+
+**Reading the analog is part of reading the figure.** A banner of `numa[16]` is
+a *single-domain* machine, so measurements taken on it say nothing whatever about
+cross-domain behaviour -- not "a little", nothing. A figure is only evidence
+about the domain structure its banner records.
+
+**The conclusions this crate is willing to draw are coarse, mechanically
+reasoned, and observation-backed** -- "the buffers should be in the same memory
+domain as the executor" is the shape of a claim that earns its place, because it
+follows from how the hardware works *and* the measurements agree. **Fine-grained
+topological and layout choices are handed to the client, not made for them.**
+Which position/reservation apportionment a queue should use is exactly such a
+choice: the layout is a type parameter of the shipping queue, the probe measures
+every candidate, and the note reports what it saw. It does not name a winner.
+
+### Do not tell a reader what to do about a measurement
+
+<a id="d-no-client-prescriptions"></a>
+
+State what was observed, under what parameters, and what the procedure could not
+determine. Stop there. Advice built on top of a measurement -- "prefer this
+layout", "most callers do not need that", "measure on your own target if
+throughput matters", "start with this shape" -- **takes on a responsibility this
+crate has no standing to hold**: it has measured one machine, and the reader's
+deployment is not that machine. A recommendation converts an observation into an
+undertaking, and the undertaking is one nobody here can honour.
+
+This is not the same as withholding information. Everything needed to decide
+still gets published: the figures, their capture parameters, their dispersion,
+the hazards, the structural differences between the shapes, and the limits of
+what the instrument can separate. What is removed is the imperative mood.
+
+Two forms are easy to miss because they sound like caution rather than advice.
+"Measure on your own hardware before choosing" is still an instruction, and it
+implies the reader's not having done so is a mistake we warned them about.
+"This is the answer for almost every caller" is a recommendation wearing a
+hedge. Both are struck. A statement about what a *layout provides* is a fact and
+stays; a statement about what a *reader should pick* is not.
+
+This is why the apportionment claim in the queue-contention section was
+*withdrawn in both directions* rather than reversed. The measurement stopped
+supporting "re-apportioning is free", but it equally did not support "it costs
+30%" -- one host, seven runs, against a control that wanders. The correct output
+of a probe that cannot call something is **the record that it could not**, never
+a verdict chosen because a verdict reads better. What a reader does with that is
+the reader's decision, and stating it for them would take a responsibility this
+crate has no standing to hold: it has measured one machine.
+
+The failure this prevents is a reader inheriting a number as though it were a
+property of the code. It is a property of the code **on that machine**, and the
+distinction is the whole value of shipping the probe rather than only its output.
+
+**A figure here is the output of a procedure, and that is what review checks.**
+An observation is not an opinion, a position, or a point of view, so it is not
+something to be argued for or against. The reviewable questions are procedural:
+was the right instrument used, were the capture parameters recorded, was the
+dispersion reported, does the stated conclusion stay inside what the procedure can
+support. If the answer to those is yes, the figure stands as an observation --
+including when a reader would have characterised it differently.
+
+**So do not re-litigate a number or its wording.** A challenge of the form "this
+should be called 1.4x rather than 1.1x", or "this ought to be phrased as a bound
+rather than a comparison", is answered by pointing at the procedure and the table,
+not by renegotiating the prose. The exception is a statement that the procedure
+cannot support at all -- an attribution to a cause the measurement does not
+isolate, a claim of significance a control contradicts, a figure restated
+somewhere it can drift from its source. Those are procedural defects and are
+fixed. The distinction is worth holding because the two look alike in a review
+comment and only one is worth the time.
+
+This is a consequence of the decision above rather than a separate rule: once
+figures are published as parameterised observations rather than as verdicts, there
+is no verdict left to disagree with, and treating each characterisation as a
+position to defend re-introduces exactly the authority the decision removes.
+
+### High variance in our own control is a finding about the instrument, not just a wider yardstick
+
+<a id="d-variance-is-a-finding"></a>
+
+When the same code measured twice in the same run disagrees by tens of percent,
+the first thing that has been measured is **the method**. It is tempting to treat
+a wide control as merely a coarser ruler -- to widen the band and carry on
+judging ratios against it -- and that is the mistake this decision exists to stop.
+A control that wanders is a defect report against the measurement, and it is
+logged as one even when the measurement is still used.
+
+The candidate causes are not distinguishable from the dispersion alone, and all
+of them are live here:
+
+- **The wrong instrument for the variable.** A probe that moves several things at
+  once cannot attribute a difference to the one under test.
+- **A control that is not a paired control.** This probe's same-code control is
+  the `reserving_mpsc` row against the `reserving(32/32)` row, and `measure()`
+  runs them **four measurements apart** -- the permit shape and all three drained
+  shapes fall between them, each five repetitions of 50,000 pushes per producer.
+  Any frequency, thermal or scheduler drift across that interval lands inside the
+  control, and by the same token inside every candidate row it is compared
+  against. This is a specific, mechanical candidate for the spread above rather
+  than a general worry, and it was proposed by review rather than found here.
+  Queued as M4.4 in [CHECKLIST.md](CHECKLIST.md), because interleaving changes the
+  measurement and so obsoletes the published figures.
+- **A defect in the probe itself.** This crate has already shipped one -- the
+  timing window that read the coordinator's clock rather than the producers'.
+  That defect was invisible in the numbers until it was found by reading, and it
+  moved high-producer figures by roughly 45%.
+- **Insufficient runs or too short a duration** -- straightforward hygiene, and
+  the cheapest to rule out.
+- **A noisy machine.** These are fine-grained measurements taken on a shared,
+  general-purpose desktop running everything else it normally runs. Scheduling,
+  frequency scaling, and other tenants all land inside the timed region.
+
+**How much this matters depends entirely on what the number is for, and that
+calibration is recorded rather than assumed.** In benchmarking or marketing
+literature it would be disqualifying: those documents exist to support a
+comparative claim, and a comparative claim resting on a control this wide is not
+supported. Here the purpose is *planning for deployment environments resembling
+the measured one* -- and a figure gathered on an ordinary loaded machine is not
+obviously the wrong input for planning on ordinary loaded machines. So the
+honest treatment is neither to suppress the data nor to promote it: **record it,
+record the dispersion beside it, and record that the dispersion is itself
+unexplained.**
+
+### What to try first, and how to tell when you have reached the floor
+
+**The cheapest move is always to gather more of the same before gathering
+anything different.** Lengthen the timed span, raise the repetition count, or
+both, on the *unchanged* configuration. This costs only wall time and it
+partitions the problem in one step: if the control narrows, the dispersion was
+sampling noise and the previous run simply had too few samples to resolve
+anything; if it does not, the width is structural and the remaining candidates
+are the interesting ones. Do this before pinning threads, before quiescing the
+machine, and before suspecting the probe -- each of those changes what is being
+measured, and a change made before the cheap check cannot be evaluated.
+
+**A warmup pass separates transient cost from ongoing noise, and the two are
+different things.** This probe already discards one untimed pass -- though not for
+the reason an earlier version of this paragraph gave. Every timed repetition
+builds and drops its own queue, so the discarded pass cannot fault in any
+allocation a timed pass will use; what it warms is process state, the allocator's
+size class, the OS page cache, the instruction cache and the branch predictors.
+Cold caches, predictors, and CPU
+frequency ramp are the same *kind* of cost -- one-time, front-loaded, not a
+property of the steady state -- and lengthening the timed span dilutes them
+whether or not a warmup removes them.
+
+It is worth being clear that this does **not** contradict the position that some
+noise is inherent to a shared machine. A warmup removes *transients*; contention
+with other tenants continues for the whole run and is not removable by any amount
+of warming. The two widen dispersion for unrelated reasons, and removing the
+transients is what makes the inherent floor *visible* rather than what hides it.
+Expect warming and lengthening to shrink the spread to some value and then stop
+shrinking it, and treat that plateau as the interesting result.
+
+**There is always a floor, and recognising it is the skill this decision is
+really about.** A measurement cannot resolve a difference smaller than the noise
+in the quantity being differenced, and past that point more runs buy nothing --
+continuing to gather them is how a project spends a week proving that two numbers
+are the same. The floor is a real, findable property of the setup, not a failure.
+
+**The floor is not necessarily a percentage of the measured value**, and assuming
+it is will mislead you in both directions. It can be set by the sampling regime
+instead: the granularity of the clock, how many independent samples the run
+actually takes, or how the measured span is constructed. This probe times a whole
+pass and divides -- two timestamps per worker per repetition -- so at small
+absolute values the resolvable difference is governed by how many independent
+passes were taken, not by any fixed fraction of the nanoseconds reported. That is
+why "the 1-producer rows are noisy because the numbers are small" is a guess
+rather than a diagnosis, and why the first move above is to add samples: it tests
+that guess directly.
+
+What this decision forbids is the quiet version -- reporting a wide control as
+though a wide control were normal. It is not normal. It is an open question, and
+where it is open, the note says so and the checklist carries the work.
+
 ## Three tiers, because "run all the probes" is not a safe instruction
 
 <a id="d-three-tiers"></a>
@@ -481,6 +679,502 @@ architecture. It would fail on any host with a longer user name, on either
 architecture. Recorded here because it is exactly the kind of result this
 comparison exists to classify correctly: a red build that is **not** a finding.
 
+## The queue-contention probe, and why it must not run in the CI probe job
+
+`probe-queue-contention` measures two things a design decision is waiting on: whether the bounded
+array queue's tail claim contends badly enough to justify the linked and sharded MPSC shapes, and how
+[`reserving_mpsc`](../windows-waitable-queues/src/reserving_mpsc.rs) and `slotwise_mpsc` compare end
+to end in the regime where `reserving_mpsc`'s extra read of the consumer's position is most expensive.
+
+**An end-to-end comparison, and deliberately nothing finer.** Two earlier wordings of this sentence
+were both wrong: the first said the probe *prices* that read, the second said it *bounds* it from
+above. Neither holds. Writing `R` and `S` for the two shapes' total push costs, `R - S` contains the
+read plus the differences in claim protocol, slot metadata and retry behaviour, and those terms are
+not ordered -- so the difference constrains the read in neither direction. Isolating it would need a
+matched control this probe does not have.
+
+**The checklists carrying those decisions are not in this repository yet** -- they arrive with the
+rest of the queue work -- so this note deliberately names the QUESTIONS rather than linking to items
+that would dangle. The probe is the instrument; it is useful before the plan that consumes it lands,
+and it is landed first precisely so the decision is made against measurement rather than argument.
+
+**It is deliberately absent from the `platform-probes` CI job, and the reasons are a core count and a
+clock rather than a preference.** A contention curve needs more cores than a hosted runner has: the
+sixteen- and thirty-two-producer rows on a four-core runner would measure the scheduler and report it as
+contention. And the run costs about 65 seconds, against a job whose other probes are seconds apiece.
+
+**It must be run in release, which is a measurement and not a preference.** In a debug build
+`slotwise_mpsc` and `reserving_mpsc` come out at 249.7 and 254.0 ns/push at sixteen producers --
+indistinguishable. In release, on the same machine in the same minute, 193.5 and 52.2. The un-inlined
+overhead of a debug build swamps the cache-coherence effects that *are* the finding, so a debug run does
+not merely lose precision: it reports the two shapes as equivalent, which is a confident wrong answer of
+exactly the kind this crate's `doorbell_cost` notes warn about.
+
+**Those four figures predate a correction to the timing window and have not been retaken.** The
+qualitative finding is unaffected -- a debug build still swamps the effect -- but the numbers themselves
+were measured while the probe timed from this thread's clock rather than from the producers' own, which
+overstated throughput at high producer counts. Measured on `x86_64 16p/8c` after the correction:
+`reserving_mpsc` at sixteen producers moved from 35.0 to a median of 52.3 ns/push across seven runs
+(46.3-55.6). The move is larger than that shape's own run-to-run spread on this host, so the direction
+is not in doubt; the magnitude is a single host's observation. Any figure in this note taken before the
+correction should be read as optimistic until retaken.
+
+**An earlier version of this paragraph put that run-to-run spread at "2-6%", which seven runs do not
+support** -- the same shape and configuration ranges 18% at sixteen producers, and the layout rows below
+range considerably wider. The 2-6% figure came from comparing two runs, which cannot measure a spread; it
+is corrected here rather than quietly dropped because several conclusions in this note were written
+against it, and one of them did not survive the correction (see the layout section below).
+
+**That is a constraint on HOW it runs, not an argument for keeping it out**, and an earlier draft of this
+paragraph confused the two -- it said the CI job "runs `cargo run` without `--release`", which is not true
+of the job it describes: `probe-doorbell-cost` and `probe-request-cost` already run there with `--release`,
+under a comment establishing exactly the rule this probe would fall under. It also said "unlike every other
+probe", and `probe-cancel-io` is likewise absent. Corrected by a review. The release precedent exists; what
+keeps this one out is that it costs an order of magnitude more than the two probes that use it, on hardware
+that cannot answer the question anyway.
+
+So this one is run by hand, on a known machine, and its numbers are recorded with the machine attached.
+
+### Reading it
+
+Two regimes, and the pair is the point.
+
+**Isolated** gives producers a capacity large enough that nothing is ever refused and runs no consumer, so
+whatever curve appears against N is the producer side alone, with no consumer traffic in it. It is not
+the claim alone -- what is timed is each shape's whole push path, tail claim and slot write and
+publication and doorbell together, so a difference here is a difference in PUSH COST rather than
+evidence about the claim on its own. **Drained** runs a consumer looping on `pop`,
+which is the regime in which `reserving_mpsc`'s read of `head` is most expensive -- that
+read is
+cheap until a consumer is *writing* the line, and measuring it in isolation would report it as free.
+It neither isolates that read nor bounds it: the ratio is between two complete push paths whose other
+differences are not ordered.
+
+The drained regime has a **single** consumer, because that is what MPSC means, so at high producer counts
+it becomes consumer-bound and a plateau there says nothing about the claim. Each row carries the refusal
+count from the queue's own `Observable` counters precisely so that is visible as a fact rather than
+mistaken for contention: the sixteen- and thirty-two-producer drained rows show millions of refusals and
+should be read as measurements of the consumer.
+
+## The claim word's width costs 1.1x to 3.8x in isolation, and the drained figure is withdrawn
+
+Measured by `probe-queue-contention` on one host, `x86_64-pc-windows-msvc`.
+Four apportionments of `reserving_mpsc`'s claim word: 32/32, 16/48 and 8/56 over
+`AtomicU64`, and 64/64 over `AtomicU128`. The last is measured only where a
+128-bit exchange is native: aarch64, and x86-64 **built with `cmpxchg16b`** --
+the gate is the target feature rather than the architecture, because an x86-64
+build with the instruction switched off has no `AtomicU128` either. On a target
+without one the report carries the other three and leaves its column empty.
+
+**These were duplicated scaffolding when the measurement was taken, and they
+ship now.** The layouts were built as copies so the shipping crate was not
+disturbed while the question was open; the measurement below is what closed it,
+and they are now
+[`ClaimLayout`](../windows-waitable-queues/src/reserving_mpsc.rs) with
+`Balanced`, `Enduring`, `Perpetual` and `Wide` as its implementations -- which is
+what this probe imports. Recorded because the original wording still described
+the scaffolding, and a reader who went looking for `claim_layout.rs` would not
+find it.
+
+`AtomicU128::is_always_lock_free()` is **true** on this target and
+`cfg(target_feature = "cmpxchg16b")` is enabled by default, so the 128-bit
+exchange is a compile-time-guaranteed native instruction here and no CPUID
+branch was measured as though it were the algorithm.
+
+| producers | 16/48 vs 32/32 (isolated) | 64/64 vs 32/32 (isolated) | 64/64 vs 32/32 (drained) |
+|---|---|---|---|
+| 1 | 1.14x | 2.05x | 1.05x |
+| 4 | 1.21x | 1.37x | 1.12x |
+| 8 | 1.00x | 2.33x | 1.07x |
+| 16 | 0.88x | 2.37x | 1.00x |
+| 32 | 0.98x | 2.99x | 1.11x |
+
+**Re-apportioning the bits looked free here, and that reading was withdrawn.**
+The reasoning was that both layouts issue the same `lock cmpxchg` on the same
+`u64`, so only the shift and mask constants differ, and the table above was read
+as confirming it. The table cannot carry that weight: these are single-run
+figures, and the same-code control measured later ranges 0.69-1.12x isolated and
+0.68-1.27x drained, either of which is
+wider than most of the differences being called "noise" -- note that this very
+table has 16/48 at 1.14x and 1.21x while the prose beneath it says "within
+noise". See
+[Re-measured on the shipping type](#d-queue-layout-observations)
+below for the seven-run figures and the withdrawal. What the re-apportionment
+buys is not in dispute: the recurrence moves from 2^32 to 2^48, from about 37
+seconds of sustained maximum-rate pushing to about 28 days.
+
+**Widening the word is not free in the isolated regime, and the drained figure
+below does not survive the re-measurement.** Isolated, where no consumer touches
+the queue, `cmpxchg16b` cost 2-3x on the stand-in and the penalty *grows* with
+contention; that is the one conclusion in this section the seven-run
+re-measurement strengthened, to 3.45x and 3.81x at sixteen and thirty-two
+producers. (These are shares of total push cost, not of the exchange: the
+isolated regime times the whole push path, and only the layout differs between
+these rows.) The drained figure of 5-12% is **withdrawn** -- not because the
+number moved, but because nothing was measuring whether it meant anything. The
+re-measured drained 128-bit rows run 2-13%, which resembles the old figure
+closely enough to look like confirmation, while every one of them sits inside a
+same-code control spanning -32% to +27%. A number that agrees with its
+predecessor is not thereby established; that is precisely the trap the control
+exists to catch, and this is the case where it catches it.
+
+### The drained regime is hard to read, and the refusal counts do not settle it
+
+The two regimes must not be averaged, and the drained one must not be read as
+the answer on its own. The mechanism is structural: **a slower producer is less
+backpressured**, so it earns fewer refusals, and refusal retries are inside the
+timed region -- which means part of what makes a slower shape's per-push number
+look close may be that it spent less time being turned away.
+
+**The refusal counts were offered here as evidence of that, and they do not
+support it.** An earlier version of this section reported the 64/64 layout taking
+12,149 refusals at eight producers against 32/32's 74,181, and read the
+asymmetry as the mechanism showing through. Re-measured three times on the same
+host, the counts are neither stable nor consistently ordered:
+
+| run | 32/32 refusals | 64/64 refusals |
+|---|---|---|
+| 1 | 925 | 14,461 |
+| 2 | 12,613 | 2,152 |
+| 3 | 1,814 | 10,337 |
+
+The ordering reverses between runs and the magnitudes span more than an order of
+magnitude either way, so no single run's counts establish anything about which
+shape was more backpressured. The original figures were one run, and they are not
+reproducible in direction or in size.
+
+What survives is the confound, not a measurement of it: the drained numbers
+contain retry time whose amount is unknown and varies between runs, so a drained
+difference cannot be read as a difference in push cost. That is a reason to
+distrust the drained ratios, which is weaker than the claim this section
+previously made and is what the data supports.
+
+**The isolated regime removes consumer traffic; it does not isolate the claim.**
+Both regimes time the whole push path -- the tail claim, the slot-sequence load,
+the item write, the publication store and the doorbell's fence. An earlier
+version of this paragraph called the isolated regime "the clean measurement of
+the claim itself", said the drained one shows the claim "is not the dominant
+cost", and placed a real application between the two. None of the three follows:
+the first attributes a whole-path number to one operation, the second rests on
+drained figures the paragraph above has just shown to be confounded, and the
+third is an interpolation between two regimes that measure different things,
+offered about deployments this crate has not seen.
+
+### What the control caught
+
+The first run reported 3.7x against the shipping shape and a completely
+different scaling curve. The cause was that the duplicate had not padded `head`
+and the claim word onto separate cache lines, which `reserving_mpsc` does
+deliberately -- every producer reads `head` on every push, so sharing a line
+puts the consumer's writes in their path. Aligned, the duplicate tracks the
+shipping shape's curve.
+
+A residual gap remains: the duplicate runs about 1.26x slower than
+`reserving_mpsc` at high producer counts. That offset applies equally to all
+three layouts, so the ratios above stand, but it means these figures are **not**
+absolute numbers for the shipping shape and must not be quoted as such.
+
+**Comparing a duplicate against the original it stands in for is what made both
+of these visible.** A run of three layouts that agreed with each other and
+disagreed with reality would have looked entirely healthy.
+
+### What each apportionment actually buys
+
+The rollover figures for candidate splits, computed from the rates above. The
+rate model reproduces the crate's own published figure -- 32/32 at 116M/s gives
+37 seconds, which is what `reserving_mpsc`'s module documentation discloses -- so
+these are an extension of that disclosure rather than a competing estimate.
+
+| split (reserved/position) | reservation field width | @257M/s | @116M/s | @33M/s |
+|---|---|---|---|---|
+| 32/32 (ships) | 2^32 | 17 s | 37 s | 2.2 min |
+| 24/40 | 2^24 | 71 min | 2.6 hr | 9.2 hr |
+| 21/43 | 2^21 | 9.5 hr | 21.1 hr | 3.1 days |
+| 20/44 | 2^20 | 19.0 hr | 42.1 hr | 6.1 days |
+| 16/48 | 2^16 | 12.7 days | 28.1 days | 98 days |
+| 12/52 | 2^12 | 202 days | 449 days | 4 yr |
+| 8/56 | 2^8 | 9 yr | 20 yr | 69 yr |
+| 64/64 (`u128`) | 2^64 | 2,270 yr | 5,039 yr | 17,607 yr |
+
+**The second column is a field width, not a reachable reservation count**, and
+the distinction matters twice. A field of 2^n encodings holds a maximum count of
+2^n - 1; and the shipping type caps the count at `u32::MAX` however wide the
+field is, because it is handed back to callers as a `u32` -- so the 64/64 row's
+2^64 encodings buy no more reservations than 32/32's. Admission is bounded by
+capacity as well, which for the shipping 32/32 layout binds first at 2^31 slots.
+The time columns are unaffected: they depend on the *position* half, which is
+what this table exists to compare.
+
+Rates: 257M/s is the measured isolated peak at one producer, which has no
+consumer and so is not a rate any draining queue can sustain -- it is a
+conservative floor on time-to-wrap. 33M/s is the measured drained rate at one
+producer. 116M/s is the crate's own disclosed figure and is the honest planning
+number.
+
+**The reservation half is where the bits are being spent, and the trade it makes
+is a real one.** The field currently *encodes* up to four billion outstanding
+reservations, which is a field ceiling rather than a reachable count: on
+`Balanced` the ring's capacity binds first (at most 2^31 slots on a 64-bit
+target, 2^30 on a 32-bit one), and a smaller queue binds it sooner still.
+Narrowing the field is what buys the position bits: 2^21 reservations leaves
+about a
+day, 2^12 leaves over a year, and 2^8 leaves twenty years. That last is a plain
+`AtomicU64`, so it reaches twenty years without a third-party dependency and
+without reopening `D-18`'s i686 question -- against the 128-bit word's 5,039 at
+the same rate. Both are finite and both scale with the caller's rate; which of
+them is enough is a question about a deployment, not one this table answers.
+
+**An earlier version of this paragraph called the reservation half "the half
+worth least", on the premise that outstanding reservations are bounded by how
+many producers are mid-flight -- hundreds, perhaps thousands -- so that narrowing
+the field gave up "reservations nobody will allocate". That premise is
+withdrawn as false.** `Producer::reserve` takes `&self` and returns an owned
+`Reservation`, so one producer can hold as many as the field allows: the bound is
+the lesser of the ring capacity and the field, not a producer count. The queue
+crate's `one_producer_alone_can_exhaust_the_reservation_field` fills `Perpetual`'s
+255 from a single thread and is then refused. The arithmetic above is unaffected,
+but what it costs is not free -- a caller holding many simultaneous reservations
+is choosing against the narrower layouts. See
+[D-41](../windows-waitable-queues/DESIGN-NOTES.md#d-41).
+
+**This paragraph previously added "at no measured cost", and that clause is
+withdrawn** -- it was the same claim the layout section below withdrew, restated
+a third time in a section about counter arithmetic rather than about speed. The
+arithmetic above is unaffected, because time-to-wrap follows from the field width
+and a rate, not from a measurement of either layout; what does not follow is any
+statement about what the re-apportionment costs to run. See
+[Re-measured on the shipping type](#d-queue-layout-observations).
+
+So the arithmetic separates the rows this way: every row recurs, and what changes
+down the column is how long that takes at a given rate -- 16/48 at 12.7 days
+against 12/52 at 202 days, at the conservative floor. Which of
+them a caller wants is the caller's question,
+and the shipping type takes the layout as a parameter so it stays theirs -- see
+[D-no-client-prescriptions](#d-no-client-prescriptions).
+
+### Re-measured on the shipping type, with the probe's own control to read it against
+
+<a id="d-queue-layout-observations"></a>
+
+`CW-1.6` deleted the duplicated protocol in this crate once
+`windows-waitable-queues` took the layout as a parameter, so the probe now
+instantiates the real type at each layout. The numbers below supersede the ones
+above, which were taken from the stand-in.
+
+**Read every figure here as one host's observation, not as a portable result.**
+The capture parameters are the probe's own banner, reproduced in full because a
+ratio without them is an anecdote rather than data someone else can use:
+
+```
+host:  x86_64 16p/8c smt+ L2[2,2,2,2,2,2,2,2] ec[0:16] numa[16]
+```
+
+Seven runs, median of the per-run ratios with the observed range beside it,
+release build. **The sampling parameters are capture parameters too**: each run
+is a whole probe invocation, within which every configuration is measured five
+times and the median reported, each measurement being 50,000 pushes per producer
+thread, preceded by one untimed pass. That pass does **not** pre-touch any
+allocation a timed pass will use -- every repetition builds and drops its own
+queue -- so what it warms is process state: the allocator's size class, the OS
+page cache, the instruction cache and the branch predictors. So a figure below
+rests on 35 timed passes per
+configuration, and "seven runs" alone would not let anyone reproduce it. These
+are fixed at
+[src/queue_contention.rs](src/queue_contention.rs)`::PUSHES_PER_PRODUCER` and
+`REPETITIONS`; M4.2 in [CHECKLIST.md](CHECKLIST.md) makes them adjustable, which
+is what the first diagnostic step above needs and cannot currently do.
+
+**The banner's `numa[16]` is load-bearing here: it means a single
+NUMA node holding all sixteen processors**, so every figure below was taken
+inside one memory domain and says nothing about cross-domain behaviour. What is
+not pinned down at all is memory configuration and BIOS state; NUMA *distances*
+are unavailable on Windows by platform limit rather than by omission, and the
+processor-to-node assignment in the banner is the analog this crate uses in their
+place (see [A probe reports observations parameterized by their
+capture](#d-observations-not-verdicts)).
+
+The layout is a *parameter* of the shipping type, so this note's job is to report
+what this machine did and hand the reader the tooling -- the probe -- to measure
+the machine they actually care about. It is not to pick a winner on their behalf.
+
+**The probe emits its own noise control, and it is the only honest yardstick for
+these ratios.** The `reserving_mpsc` row and the `reserving(32/32)` row are the
+same code at the same layout, measured twice in the same run, so their ratio is
+what "no difference" looks like on this host:
+
+| regime | same-code control (`reserving_mpsc` vs `32/32`) |
+|---|---|
+| isolated | median 0.94-1.05x, observed 0.69-1.12x |
+| drained | median 0.98-1.07x, observed 0.68-1.27x |
+
+**Amended 2026-09-16: the drained row measures a probe that no longer exists.**
+`M4.3` added a readiness handshake, so producers now hold until the consumer
+announces that it is draining rather than starting the moment the gate releases.
+The row above was taken before that and is kept as what the earlier instrument
+measured. A capture taken after it, on the same host, is in
+[captures/2026-09-16-drained-handshake/](captures/2026-09-16-drained-handshake/README.md);
+its control span is in that capture's `summary.txt` rather than restated here.
+The two are not a like-for-like comparison of dispersion -- the row above spans
+seven runs and the new capture three -- so the amendment records that the
+measurement changed, not that the spread narrowed. The isolated row is
+unaffected: those timers have no consumer, and so no handshake.
+
+So a ratio inside roughly 0.9-1.1x is indistinguishable from zero effect here,
+and at sixteen and thirty-two producers the control alone wanders past 1.12x.
+
+**That control is far too wide, and saying so is part of reporting it.** Two
+measurements of *the same code in the same run* should not differ by 27%, and
+the same-configuration spread across seven runs reaches 61%. Used above as a
+yardstick, this is the honest yardstick available -- but a yardstick this elastic
+is first a defect report against the probe, not a fact about the queue. The cause
+is not determined: it could be the probe measuring more than the variable under
+test, a residual defect like the timing window already found and fixed here, too
+few runs or too short a measured span, or simply that these are nanosecond-scale
+measurements taken on a shared desktop that is doing other things. The dispersion
+alone cannot distinguish them, and this note does not guess. See
+[High variance in our own control is a finding about the
+instrument](#d-variance-is-a-finding) for what to try first and how to recognise
+the floor, and M4.2 in [CHECKLIST.md](CHECKLIST.md) for the probe controls that
+make those steps executable without a source edit.
+
+What follows is therefore reported as *data with a known-unexplained spread*.
+
+**Isolated regime**, median of the per-run ratios with the observed range beside
+it. The drained regime is reported in the paragraph below the table, and mixing
+the two is the reading this label exists to prevent:
+
+| producers | 16/48 vs 32/32 (isolated) | 8/56 vs 32/32 (isolated) | 64/64 vs 32/32 (isolated) |
+|---|---|---|---|
+| 1 | 1.00x [0.74-1.00] | 1.00x [0.67-1.04] | 1.37x [1.16-1.57] |
+| 2 | 0.94x [0.89-1.05] | 0.96x [0.80-0.98] | 1.13x [1.02-1.15] |
+| 4 | 0.96x [0.83-1.03] | 1.00x [0.90-1.10] | 1.29x [1.14-1.36] |
+| 8 | 1.01x [0.95-1.13] | 0.94x [0.92-1.08] | 1.82x [1.64-2.20] |
+| 16 | 1.23x [1.09-1.35] | 1.26x [1.16-1.33] | **3.45x [2.91-4.27]** |
+| 32 | 1.30x [1.15-1.41] | 1.28x [1.11-1.42] | **3.81x [2.70-4.31]** |
+
+In the drained regime nothing separates at all -- every u64 layout *and* the
+128-bit word sit inside the control band at every producer count (the widest
+median is 1.13x at one producer, against a control that reaches 1.27x).
+
+**Amended 2026-09-16: the isolated table above has a committed cross-check, and
+it agrees.** The seven-run sweep's raw runs were not kept, which is the gap the
+drained amendment below is about. The three-run capture taken for `M4.3` records
+the isolated regime as well, and
+[isolated.js](captures/2026-09-16-drained-handshake/isolated.js) derives it --
+so the isolated figures, unlike the drained ones, can be checked against a
+second independent measurement. The two agree on 64/64 at every producer count:
+
+| producers | seven-run (above) | three-run capture | same-code control, capture |
+|---|---|---|---|
+| 1 | 1.37x [1.16-1.57] | 1.39x [1.32-1.74] | 0.96x [0.79-1.06] |
+| 2 | 1.13x [1.02-1.15] | 1.10x [1.10-1.16] | 0.97x [0.96-1.00] |
+| 4 | 1.29x [1.14-1.36] | 1.37x [1.36-1.70] | 1.04x [0.97-1.06] |
+| 8 | 1.82x [1.64-2.20] | 1.67x [1.59-2.05] | 1.01x [0.99-1.12] |
+| 16 | 3.45x [2.91-4.27] | 4.00x [3.94-4.10] | 1.09x [0.87-1.14] |
+| 32 | 3.81x [2.70-4.31] | 4.77x [3.54-4.99] | 1.02x [0.94-1.07] |
+
+In the capture, all three runs put 64/64 above the control's whole observed
+range at **every** producer count; 16/48 and 8/56 each do so at 16 and 32.
+Three control observations per count is not a band, so this reports what these
+runs did rather than what a fresh run would do.
+
+**Corrected 2026-09-17: the control column above was inverted when first
+published.** `isolated.js` divided the control the other way round --
+`reserving(32/32)` over `reserving_mpsc`, while every layout ratio beside it
+divides *by* `reserving(32/32)` -- so a reciprocal was tabulated as though it
+were comparable. These ranges are not symmetric about 1.00, so the difference is
+real: the reciprocal of `[0.95-1.26]` is `[0.79-1.05]`. It moved a reported
+result, not just a column: 8/56 sits above its control at 16 producers as well as
+32, where the inverted control had shown 32 alone. `summarise.js` computed its
+control in the correct direction throughout, which is why the drained figures are
+unaffected. Found by review.
+
+**An earlier reading of the small-count end said "near parity at one or two",
+and that is withdrawn.** It was restated in six places across the queue crate --
+rustdoc, the crate doc, the README twice, `Cargo.toml`, and D-41 -- while the
+table directly above it read 1.37x at one producer, and the capture reads 1.39x
+against a control of 1.04x. Whatever 1.37x is, it is not parity, and the phrase
+asserted an absence of difference that neither measurement shows. The six sites
+now say the path was measured as slower at every producer count measured,
+smallest at one or two. Found by review of the isolated figures against the
+capture.
+
+**Amended 2026-09-16: re-measured after the `M4.3` handshake, and the
+re-measurement does not settle it.** That paragraph was taken before producers
+held for the consumer, so it describes a drained regime whose opening was
+briefly undrained. Re-measured on the same host without that window, the figures
+are in
+[captures/2026-09-16-drained-handshake/](captures/2026-09-16-drained-handshake/README.md).
+
+**What the re-measurement establishes is less than first claimed here, and the
+correction is worth stating plainly.** This amendment originally said every
+layout median still sat inside the same-code control band. That rested on
+pooling every control observation into one band, and the pooling is what
+produced the answer: the control is not independent of producer count -- it
+spans about 0.82-0.98x at one producer against 0.95-1.23x at thirty-two in that
+capture -- so pooling builds a band wider than any count's own, and containment
+follows from the method. Compared per count, several medians fall outside their
+own count's range. Compared per count the other way, three runs give three
+control observations, and the range of three samples is not a band to judge
+anything against.
+
+So the drained comparison is **not established by three runs**, in either
+direction. The capture reports the per-count figures and declines a verdict;
+the pre-handshake reading above rests on the seven-run sweep, which this does
+not replace. Reported by review, after the pooled framing had already been
+published here.
+
+**The same caveat reaches the paragraph above, and saying so is the honest
+scope of this correction.** That reading compares a per-count median against a
+control quoted as a single pooled figure -- "the widest median is 1.13x at one
+producer, against a control that reaches 1.27x" -- which is the same comparison
+this amendment has just withdrawn for the three-run capture. Its raw runs are
+not committed, so the per-count bands behind it cannot be recomputed here and
+the conclusion is neither confirmed nor refuted. What can be said is that it
+rests on the same framing, and that settling it needs the sweep re-run with its
+data kept.
+
+**Widening the word is the one effect this probe establishes.** At sixteen and
+thirty-two producers the isolated 128-bit rows fall outside the same-code
+control band by a wide margin. The `u64` re-apportionments also sit outside it at
+those counts, but too close to it to establish an ordering or a cost -- which is
+the distinction the next paragraph withdraws the apportionment claim over, and
+stating it as "they do not" contradicted both that paragraph and the capture.
+That is a real effect on this machine, and its direction is mechanically
+unsurprising -- `cmpxchg16b` against `lock cmpxchg`. Whether it reproduces on
+another microarchitecture is a question for the probe, not for this note.
+
+**The apportionment claim is withdrawn, in both directions.** This section
+previously said the `u64` re-apportionments "track the default within noise" and
+that twenty years of headroom is therefore "free". That was asserted from a
+single run against a noise floor quoted as 2-6%, and neither half holds: the
+measured control is far wider than 2-6%, and the re-apportionments do not sit
+inside it at sixteen and thirty-two producers. But the replacement is *not* the
+opposite claim. 1.23-1.30x against a control that itself reaches 1.12x is a
+flag, not a finding -- what it records is that this probe, on this host, at seven
+runs, could not separate the layouts at high producer counts. Nothing here
+establishes an ordering between them, in either direction. This is
+[the rule for what this crate concludes](#d-observations-not-verdicts) applied to
+the case that earned it.
+
+**The residual offset is gone, which is the point of the deletion.** The
+duplicate ran about 1.26x slower than `reserving_mpsc` at high producer counts,
+an error that had to be carried as a caveat on every figure. That the same-code
+control now sits on 1.00x is what says the offset is gone -- and building that
+control into the probe's output, rather than asserting a noise floor in prose,
+is what let every ratio above be read honestly.
+
+The general lesson is worth keeping even though the duplicate is gone:
+**a stand-in is only evidence about the thing it stands in for while something
+checks that it still does.** This one was checked, which is how the missing
+cache padding was caught; but the checking only ever bounded the error, and the
+bound was loose enough to hide a third of the wide word's cost.
+
+A second lesson the correction above earned: **a ratio means nothing without the
+dispersion of the thing it is a ratio of.** Two runs cannot measure a spread, so
+quoting one to two decimal places invites exactly the over-reading that produced
+the withdrawn claim. Where this note gives a ratio it now gives the range too.
+
 ## The report is buffered, and what that costs
 
 <a id="d-buffered-report"></a>
@@ -539,18 +1233,28 @@ The choice was between giving `Report` a method taking `fmt::Arguments` (with a
 `report_line!` macro), implementing `fmt::Write` on a sink so existing
 `writeln!` calls keep working, and keeping the `String` while flushing it at
 line boundaries. **It was decided by counting rather than by taste.** Every
-renderer already writes through `writeln!(out, ...)` against a `String`'s
-`fmt::Write`, at **332 sites** in this crate; only 18 functions take the `&mut
-String` those sites write into. A sink method would have been the most explicit
-option and would have rewritten all 332; `fmt::Write` moves the 18 and leaves
-the 332 untouched, because `String` implements `fmt::Write` too and the call
-sites cannot tell the difference.
+renderer already wrote through `writeln!(out, ...)` against a `String`'s
+`fmt::Write`, at far more sites than there were functions taking the `&mut
+String` they wrote into. A sink method would have been the most explicit option
+and would have rewritten every one of those write sites; `fmt::Write` moves the
+signatures and leaves the write sites untouched, because `String` implements
+`fmt::Write` too and the call sites cannot tell the difference.
 
-Worth recording that M1 estimated "upwards of 160" of those sites. The real
-figure is twice that, and it is the whole of the argument -- an option whose
-cost is "rewrite every call site" is affordable at 160 and is not at 332. A
-plan's estimate is worth re-measuring at the moment it becomes a decision.
+**The census as it stood when the decision was taken, on 2026-09-09: 332 write
+sites against 18 signatures.** It is recorded as what was measured that day, not
+as a description of the crate now, and the distinction earns its place here. The
+same passage in the sink's own doc comment first carried 504 sites and "about
+twenty" functions; the edit that revised those figures is the same edit that
+dropped a sentence out of that comment and left it reading "is arithmetic" with
+nothing before it. Keeping the census true by hand is what broke the prose
+around it. The relation above is what the decision actually turned on, and it
+cannot rot.
 
+Worth recording that M1 estimated "upwards of 160" of those sites, and the
+measured figure was roughly twice that. The gap is the whole of the argument --
+an option whose cost is "rewrite every call site" is affordable at 160 and is
+not at twice that. A plan's estimate is worth re-measuring at the moment it
+becomes a decision.
 ### What the adapter has to reassemble, and why that is not a detail
 
 `fmt::Write` is **line-agnostic**: `write_str` receives whatever slices the

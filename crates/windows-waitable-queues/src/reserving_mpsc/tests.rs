@@ -1765,3 +1765,39 @@ fn try_iter_and_drain_are_the_same_iterator_and_need_no_import() {
     let taken: Vec<u32> = rx.drain().collect();
     assert_eq!(taken, vec![4, 5]);
 }
+
+/// A single producer handle can hold many reservations at once, because
+/// `reserve` takes `&self` and returns an owned `Reservation`. The
+/// reservation-count field is therefore reachable by ONE producer in a loop,
+/// and the bound has nothing to do with how many producers exist.
+///
+/// This is asserted because the crate's documentation once claimed the opposite
+/// -- that reservations were "bounded by how many producers are mid-send" --
+/// which would have made `Perpetual`'s 255 ceiling unreachable in practice. It
+/// is reachable by one thread, and this pins that.
+#[test]
+fn one_producer_alone_can_exhaust_the_reservation_field() {
+    // Perpetual is 8/56: the count field holds at most 255.
+    let (tx, _rx) = bounded_as::<u64, Perpetual>(1024).expect("a valid capacity");
+
+    // Bounded deliberately. Were the guard to regress to never refusing, an
+    // unbounded `repeat_with` would allocate until the process died -- and this
+    // suite runs its tests as threads in one process, so that takes every other
+    // test with it. One attempt past the ceiling is enough: the assertion below
+    // then reports a count one too high instead of the harness disappearing.
+    let held: Vec<_> = std::iter::repeat_with(|| tx.reserve())
+        .take(Perpetual::MAX_RESERVED as usize + 1)
+        .take_while(Option::is_some)
+        .flatten()
+        .collect();
+
+    assert_eq!(
+        held.len(),
+        Perpetual::MAX_RESERVED as usize,
+        "one producer filled the field to its ceiling, not to a producer count"
+    );
+    assert!(
+        tx.reserve().is_none(),
+        "the field is full, so the next reservation must be refused"
+    );
+}

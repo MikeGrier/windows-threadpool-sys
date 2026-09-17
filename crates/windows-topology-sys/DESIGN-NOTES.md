@@ -54,7 +54,7 @@ additional CPU and memory cost; do not solve the consumer's architecture for the
 Three ways to obtain a `MachineMemoryTopology` are supported on purpose, and the crate's own front page advertises
 the third: "deserialize one from JSON written for a machine you do not have". That is a feature -- it
 is how a consumer tests against hardware it lacks, and this workspace needs it right now, because
-`probe-core-affinity` must exercise NUMA selection logic on hosts that have exactly one NUMA node.
+`placement-probe` must exercise NUMA selection logic on hosts that have exactly one NUMA node.
 
 The hazard is that **the resulting value looked exactly like a discovered one**. There is a passing
 test in this crate that parses a *Linux-shaped* description, complete with an ACPI SLIT-style distance

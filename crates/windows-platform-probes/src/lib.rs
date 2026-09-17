@@ -96,6 +96,11 @@
 //! cargo test -p windows-platform-probes -- --include-ignored     # both tiers
 //! cargo test -p windows-platform-probes -- --ignored             # ignored tier only
 //! cargo run  -p windows-platform-probes --bin probe-cancel-io    # binary only
+//!
+//! # binary only, and --release is not optional: a debug build reports
+//! # slotwise_mpsc and reserving_mpsc as equivalent, which is a confident
+//! # wrong answer rather than a merely imprecise one. Takes about a minute.
+//! cargo run --release -p windows-platform-probes --bin probe-queue-contention
 //! ```
 //!
 //! `--include-ignored` is what CI runs, and is almost always what a human
@@ -134,6 +139,7 @@
 //! | [`doorbell_cost::measure`] | binary only | the absolute cost of `SetEvent`, a set/reset cycle and a satisfied wait against an uncontended atomic, and how much batching drives the doorbell below the push it accompanies |
 //! | [`doorbell_cost::measure_park_and_wake`] | asserted | that the park-and-wake handshake completes rather than deadlocking, which its first implementation did |
 //! | [`request_cost::measure`] | binary only | the absolute cost of preparing a path, building an owned `OpenFile`, and duplicating a handle |
+//! | [`queue_contention::measure`] | binary only | how the bounded array queue's whole push path scales with producer count, against a contended `fetch_add` floor -- the tail claim is one term in that path, not the whole of it; how `reserving_mpsc` and `slotwise_mpsc` compare end to end in the regime where `reserving_mpsc`'s read of the consumer's position is most expensive (an end-to-end shape comparison -- it neither isolates that read nor bounds it, since the shapes differ in claim protocol and slot metadata too and those differences are not ordered); and each claim-word apportionment available on the target -- the 128-bit `64/64` row is measured only where that exchange is native, so a 32-bit or `cmpxchg16b`-less build reports three -- and its effect on that same whole path -- binary only because it wants more cores than a hosted runner has, takes about a minute, and reports the two shapes as equivalent unless built with `--release` |
 #![cfg(windows)]
 #![forbid(unsafe_op_in_unsafe_fn)]
 #![warn(missing_docs)]
@@ -148,6 +154,7 @@ pub mod ioring;
 pub mod long_path;
 pub mod long_path_report;
 pub mod pool_growth;
+pub mod queue_contention;
 pub mod report;
 /// The report oracle. **Test-support: present only where it is used.**
 ///

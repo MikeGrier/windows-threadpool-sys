@@ -500,6 +500,54 @@ jobs:
           RUSTDOCFLAGS: "-D rustdoc::broken_intra_doc_links -D rustdoc::private_intra_doc_links"
         run: cargo doc -p windows-placement-probe --no-deps --no-default-features --locked
 
+  waitable-queues-default-features:
+    name: windows-waitable-queues (default features)
+    runs-on: windows-latest
+    # **This job exists because adding `probe-queue-contention` took the default
+    # configuration away from every other job.** That probe needs `dwcas` and
+    # `experimental-permit-claim`, and enabling them on a workspace member
+    # unifies them across the whole workspace -- so the `--workspace` steps that
+    # deliberately omit `--all-features` stopped being a default-features build
+    # of THIS crate, and no job was left compiling it without `dwcas`.
+    #
+    # That matters because `dwcas` is additive: `Wide` and its `ClaimLayout` impl
+    # exist only under it, so the configuration that loses them is the one that
+    # can break unnoticed. The crate's manifest says `dwcas` is "non-default so
+    # nothing depends on it by accident" and is "the only thing in this crate
+    # that costs a third-party dependency" -- a claim that is only true while
+    # something still builds without it.
+    #
+    # Named per-crate rather than fixed by making the probe's dependency
+    # optional: the probe must stay buildable by a plain `cargo build`, and a
+    # feature that has to be remembered before the probe compiles is a worse
+    # trade than a job that cannot be forgotten.
+    env:
+      RUSTUP_TOOLCHAIN: stable
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+      - name: cargo build
+        run: cargo build -p windows-waitable-queues --all-targets --locked
+      - name: cargo clippy
+        run: cargo clippy -p windows-waitable-queues --all-targets --locked -- -D warnings
+      - name: cargo test
+        env:
+          RUST_BACKTRACE: 1
+          RUST_LIB_BACKTRACE: 1
+        run: cargo test -p windows-waitable-queues --locked --no-fail-fast
+      # The `docs` job documents `--all-features` only, so a link into a
+      # `dwcas`-gated item resolves there and dangles in this configuration.
+      # `private_intra_doc_links` is denied here for the same reason it is in the
+      # placement-probe job: locally it is only a warning, so nothing but a deny
+      # catches a public item documented against a private one.
+      - name: cargo doc (deny broken intra-doc links)
+        env:
+          RUSTDOCFLAGS: "-D rustdoc::broken_intra_doc_links -D rustdoc::private_intra_doc_links"
+        run: cargo doc -p windows-waitable-queues --no-deps --locked
+
   fmt:
     name: rustfmt
     runs-on: windows-latest
@@ -570,6 +618,37 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - name: cargo check (MSRV)
         run: cargo check --workspace --all-targets --all-features --locked
+
+  dwcas-gating:
+    name: probes build where a 128-bit exchange is unavailable
+    runs-on: windows-latest
+    # See build-test's comment: forces the floating stable toolchain over the
+    # repo's rust-toolchain.toml pin.
+    env:
+      RUSTUP_TOOLCHAIN: stable
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: i686-pc-windows-msvc
+      - uses: Swatinem/rust-cache@v2
+      # `windows-platform-probes` takes the queue crate's `dwcas` feature from
+      # two `[target.'cfg(...)']` tables, so the manifest predicate and the
+      # source's `cfg(feature = "dwcas")` gating have to agree. Nothing else in
+      # CI builds a configuration where they can disagree: every other job is
+      # x86-64 or aarch64 with `cmpxchg16b` on, where the feature is always
+      # enabled and the ungated path is never compiled.
+      #
+      # These two are the configurations the gating exists for. A 32-bit target
+      # has no `AtomicU128` at all, and `-C target-feature=-cmpxchg16b` removes
+      # it from x86-64 -- each was verified by hand when the gating was written,
+      # which is precisely the kind of check that stops being run.
+      - name: cargo check (i686, no 128-bit atomic)
+        run: cargo check -p windows-platform-probes --all-targets --target i686-pc-windows-msvc --locked
+      - name: cargo check (x86-64 with cmpxchg16b disabled)
+        env:
+          RUSTFLAGS: "-C target-feature=-cmpxchg16b"
+        run: cargo check -p windows-platform-probes --all-targets --target x86_64-pc-windows-msvc --locked
 
   alloc-only:
     name: wtf-string (alloc-only, no_std)

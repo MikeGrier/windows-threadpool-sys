@@ -57,10 +57,15 @@ experimental-permit-claim = []
 # while still compiling. With them off, `AtomicU128` does not exist on such a
 # target and the build fails naming it.
 #
-# Most callers should not need this. `Perpetual` reaches roughly twenty years
-# before its claim position recurs, on a plain `AtomicU64` at no measured cost,
-# whereas the 128-bit exchange measured 2-3x slower on the claim itself. See
-# `ClaimLayout` for the comparison.
+# This feature adds only the `Wide` layout. The whole push path was measured as
+# slower under it at every producer count measured -- smallest at one or two, several times by
+# thirty-two, in the isolated regime. The probe times the complete push, so that
+# is the layout's effect on that path, not the exchange in isolation.
+#
+# `Perpetual` needs no feature: it reaches roughly twenty years before its claim
+# position recurs on a plain `AtomicU64`, and what THAT costs in throughput is not
+# established -- a separate question from the figures above, which are `Wide`'s.
+# See `ClaimLayout` for both.
 dwcas = ["dep:portable-atomic"]
 
 [lib]
