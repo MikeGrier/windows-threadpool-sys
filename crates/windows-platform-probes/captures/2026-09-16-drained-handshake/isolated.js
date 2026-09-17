@@ -24,7 +24,7 @@ const fs = require("fs");
 
 // One writer for the generated artifact, per this repository's output rule: no
 // formatting site picks a destination, so retargeting the report to a file is a
-// change here and nowhere else. ail is the diagnostic path and stays separate
+// change here and nowhere else. `fail` is the diagnostic path and stays separate
 // from the artifact, which is why they are two sinks rather than one with a flag.
 let sink = (text) => process.stdout.write(text + "\n");
 const out = (text = "") => sink(text);

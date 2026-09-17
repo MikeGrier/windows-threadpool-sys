@@ -217,9 +217,23 @@ impl Run {
     /// never ran. Fixing that one accessor left the same hole in four other
     /// paths, because the sentinel was a convention rather than a definition.
     /// A renderer can now only get this wrong by not asking.
+    ///
+    /// **Every field a renderer prints, not just the median.** An earlier
+    /// version tested `nanos_per_op` alone, so a row with a plausible median and
+    /// a poisoned `ops_per_second` or range endpoint answered `true` and
+    /// [`render_table`] then formatted those fields directly -- publishing `NaN`
+    /// or `inf` in a column of measurements, which is the failure the sentinel
+    /// exists to prevent. `refusals` is an integer and carries no such value.
     #[must_use]
     pub fn is_measured(&self) -> bool {
-        self.nanos_per_op.is_finite() && self.nanos_per_op > 0.0
+        [
+            self.nanos_per_op,
+            self.ops_per_second,
+            self.fastest_nanos_per_op,
+            self.slowest_nanos_per_op,
+        ]
+        .iter()
+        .all(|value| value.is_finite() && *value > 0.0)
     }
 
     /// The spread across this configuration's repetitions, as a multiple.
