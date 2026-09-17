@@ -195,34 +195,81 @@ correctness in the archive.
   **Blocker recorded when queued:** none. The dependency exists next door and is already proven by
   that crate's own tests.
 
-- [ ] **M4.9** -- Route a placement probe's refusal-to-measure through the report sink instead of a
+- [x] **M4.9** -- Route a placement probe's refusal-to-measure through the report sink instead of a
   panic, so a host that cannot be pinned is a reported observation rather than a crash.
 
-  **Gap:** `windows-placement-probe`'s pinning helper asserts on `SetThreadGroupAffinity`, and
+  **Gap:** `windows-placement-probe`'s pinning helper asserted on `SetThreadGroupAffinity`, and
   `core_affinity::measure()` reaches it through `time_model_on` / `time_model_placed`. **The
-  decision to stop is correct and is not what this item changes** -- the assert's own message makes
-  the argument, that an unpinned thread "would produce a plausible number that answers a different
-  question, and nothing in the output would say so." That is this repository's position and it
-  should stand. What is wrong is the *mechanism*: a panic bypasses `emit_report`, so the refusal
-  lands on stderr while stdout carries a truncated report with no row saying why it stopped. A
-  fleet survey mining stdout sees a probe that produced a banner and then nothing, which is
-  indistinguishable from a job that died for an unrelated reason -- the same "cannot tell a
-  measured absence from a missing run" defect that `report_unmeasured` exists to close for
-  discovery failure, left open for pinning failure.
+  decision to stop was correct and did not change** -- the assert's own message makes the argument,
+  that an unpinned thread "would produce a plausible number that answers a different question, and
+  nothing in the output would say so." What was wrong is the *mechanism*: a panic bypasses
+  `emit_report`, so the refusal landed on stderr while stdout carried a truncated report with no
+  row saying why it stopped.
 
-  **Reachability changed with the probe binaries.** The assert predates them and `main` carries it
-  untouched, but `main` has no binary that reaches it; `probe-core-affinity` and
-  `probe-peer-index-cache` are the first consumers, so this is newly reachable rather than newly
-  written.
+  **Measured, before and after.** With every pin forced to fail, the old binary wrote three lines
+  to stdout -- banner, heading, blank -- and exited 101, with the explanation only on stderr. It
+  now writes the refusal itself to stdout and exits 0, matching how the same binary already reports
+  a topology-discovery failure.
 
-  **Target:** the pinning helper returns a domain error instead of asserting, `measure()`
-  propagates it, and the binaries render it after the banner the way they already render a
-  topology-discovery failure -- with an `x-probe-*` row carrying the refusal, so the absence is
-  mineable. The assert's message text is kept; it is the right message, in the wrong channel.
+  **Done:** `pin_current_thread` returns `io::Result`; `time_model`, `time_model_on`,
+  `time_model_placed`, `median` and `peer_index_cache::measure` propagate it; both probe binaries
+  handle it. The assert's message text is kept -- it was the right message, in the wrong channel.
+  `PinSignal` still publishes `PIN_FAILED`, now on the early-return path as well as on an unwind,
+  so the consumer never waits on a producer that has left.
 
-  **Blocker recorded when queued:** this changes a public signature in `windows-placement-probe`,
-  which the branch that introduced the probe binaries deliberately does not touch. Raised rather
-  than taken unilaterally, per the mono-repo bug policy.
+  **Two things a later review corrected in the first attempt at this item, both the same mistake --
+  a claim made about the code rather than from it.**
+
+  `check_group_support` (then `assert_group_support`) tests the *same* predicate as the
+  `usize::BITS` branch, over every discovered processor, and runs before any pin. So converting
+  only the branch left this one deciding the outcome: the probe still died with banner, heading and
+  nothing else. Fixing one site of a rule and leaving its twin is the blast-radius miss this
+  repository has a rule against, and the before/after measurement recorded here did not catch it
+  because it forced the pin argument rather than the discovered set. Both sites now refuse.
+
+  `peer_index_cache::measure` **cannot** refuse -- it starts only unpinned runs -- so its `# Errors`
+  section documented a failure mode no host can produce, and the entry here said "both probe
+  binaries render it" as though both could decline. Only `probe-core-affinity` pins. The signature
+  stays `Result` because its helpers are fallible in general; the docs now say that instead of the
+  opposite.
+
+  **Also corrected:** the refusal text was shared by both causes while being written for one. For
+  the mask-width cause it claimed the processor "was reported by this machine's own topology, so
+  this is unexpected rather than a limit of the tool" and invited a bug report -- the exact reverse
+  of that cause, which *is* a limit of the tool. The explanation is now a parameter, verified in
+  both directions.
+
+  **One correction to this item as written.** The blocker recorded when queuing was **wrong** --
+  `windows-placement-probe` is `publish = false` and absent from
+  [.release-please-manifest.json](../../.release-please-manifest.json), and
+  [check-commit-scope.ps1](../../tools/check-commit-scope.ps1) says in terms that such a crate
+  "cannot be poisoned, because it is never released -- so it is not a finding." The `x-probe-*` row
+  it called for is deferred to `M4.10`, which turned out to be a larger question than these two
+  probes.
+
+- [ ] **M4.10** -- Decide whether a probe's report owes a machine-readable row, and make the answer
+  uniform.
+
+  **Gap:** three of this crate's sixteen probe binaries emit an `x-probe-*` NDJSON line beside
+  their prose -- `doorbell_cost`, `request_cost`, and `topology` through `topology_report`. The
+  other thirteen emit prose only, `probe-core-affinity` and `probe-peer-index-cache` among them,
+  and so does `queue_contention` despite being the probe whose captures are analysed by committed
+  scripts. So a survey can mine three probes and must scrape or skip the rest.
+
+  **This item was first written the other way round**, asserting that the two placement probes were
+  the exception and that `queue_contention` emitted a row. Both halves were false: prose-only is
+  the majority, by four to one. The correction changes what is being proposed -- not "bring two
+  stragglers up to the norm" but "the crate has two conventions and no stated rule for which
+  applies."
+
+  **Target:** state the rule first, in [DESIGN-NOTES.md](DESIGN-NOTES.md), since it decides twelve
+  more binaries than it decides these two: which probes owe a row, and what a refusal looks like in
+  one. `report_unmeasured` already draws the "measured and declined" against "never ran"
+  distinction for the topology probe, and the cost probes' `EVERY_LABEL` arrangement is the worked
+  example for keeping a row and its prose from drifting. Then apply it.
+
+  **Blocker recorded when queued:** none, but note this is a design decision before it is a code
+  change, so it wants the engineer's call on scope rather than a unilateral sweep.
 
 
 ## M5 -- Carried over from M2: unblocked hygiene

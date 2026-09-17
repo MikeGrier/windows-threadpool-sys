@@ -551,24 +551,48 @@ pub fn representative_pairs(
 /// and not available again: a wrong answer there is not a wrong answer we get to
 /// correct. A refusal costs one message.
 ///
-/// # Panics
+/// # Errors
 ///
 /// If the discovered processors cannot be measured as they are.
-fn assert_group_support(processors: &[ProcessorPlace]) {
-    assert!(
-        !processors.is_empty(),
-        "no processors were discovered, so there is nothing to measure"
-    );
+///
+/// **This is the same predicate `pin_current_thread` checks, and converting only
+/// that one left this one deciding the outcome.** It runs over every discovered
+/// processor *before* any pin is attempted, so a machine with a processor too
+/// wide for an affinity mask died here -- with the banner, the heading and
+/// nothing else on stdout -- and never reached the branch that had just been
+/// made to report it. Fixing one site of a rule and leaving its twin is how the
+/// fix came to be measured as working while the binary's behaviour was
+/// unchanged.
+fn check_group_support(processors: &[ProcessorPlace]) -> std::io::Result<()> {
+    if processors.is_empty() {
+        return Err(std::io::Error::other(
+            "no processors were discovered, so there is nothing to measure",
+        ));
+    }
     // Every discovered processor must be pinnable. A number at or above the
     // width of an affinity mask cannot be expressed in one, and measuring the
     // rest while dropping it would report a machine smaller than the real one.
     for place in processors {
-        assert!(
-            u32::from(place.number) < usize::BITS,
-            "processor {place} has a number no affinity mask can express; \
-             this machine cannot be measured honestly and the run is stopping"
-        );
+        if u32::from(place.number) >= usize::BITS {
+            return Err(std::io::Error::other(format!(
+                "
+This run is stopping, and no measurement was taken.
+
+Processor {place} has a number no affinity mask can express: a group
+affinity mask on this target holds {width} processors.
+
+A group affinity mask is one machine word wide, so this is a limit of this
+build on this target rather than a fault in the machine. The host is fine;
+this build cannot name that processor.
+
+Measuring the rest while dropping it would report a machine smaller than
+the real one, so the run stops instead.
+",
+                width = usize::BITS
+            )));
+        }
     }
+    Ok(())
 }
 
 /// Choose one representative processor pair for each *distinct pair of NUMA
@@ -673,7 +697,7 @@ pub fn measure() -> std::io::Result<Observation> {
         std::io::Error::new(ErrorKind::InvalidData, unplaceable.to_string())
     })?;
     let host = Fingerprint::from_topology(&topology);
-    assert_group_support(&processors);
+    check_group_support(&processors)?;
     let pairs = representative_pairs(&processors);
     let mut measurements = Vec::new();
 
@@ -681,7 +705,7 @@ pub fn measure() -> std::io::Result<Observation> {
         for strategy in [Strategy::Baseline, Strategy::Cached] {
             let mut samples: Vec<_> = (0..REPETITIONS)
                 .map(|_| time_model_on(strategy, Some(producer.id()), Some(consumer.id())))
-                .collect();
+                .collect::<std::io::Result<Vec<_>>>()?;
             samples.sort_by(|a, b| a.nanos.total_cmp(&b.nanos));
             let median = samples[samples.len() / 2];
 
@@ -715,7 +739,7 @@ pub fn measure() -> std::io::Result<Observation> {
         for strategy in [Strategy::Baseline, Strategy::Cached] {
             let mut samples: Vec<_> = (0..REPETITIONS)
                 .map(|_| time_model_on(strategy, Some(producer.id()), Some(consumer.id())))
-                .collect();
+                .collect::<std::io::Result<Vec<_>>>()?;
             samples.sort_by(|a, b| a.nanos.total_cmp(&b.nanos));
             let median = samples[samples.len() / 2];
             by_class.push(Measurement {
@@ -751,7 +775,7 @@ pub fn measure() -> std::io::Result<Observation> {
                             Some(memory_node),
                         )
                     })
-                    .collect();
+                    .collect::<std::io::Result<Vec<_>>>()?;
                 samples.sort_by(|a, b| a.nanos.total_cmp(&b.nanos));
                 let median = samples[samples.len() / 2];
                 by_node_pair.push(Measurement {

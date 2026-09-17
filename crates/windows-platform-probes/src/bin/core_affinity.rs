@@ -33,12 +33,24 @@ fn render(out: &mut dyn std::fmt::Write) {
     // in `main`'s argument list where it used to sit. A measurement called
     // before the renderer is entered is outside the sink entirely, so a host
     // where it fails gives a reader no banner and no indication of which probe
-    // died. `measure` reads the topology and can fail, which is exactly the
-    // case worth naming.
+    // died.
+    //
+    // **`measure` now has two ways to fail, and this must not name the wrong
+    // one.** It reads the topology, which can fail; and it pins each side to a
+    // chosen processor, which a job object or container can refuse. This arm
+    // used to say "could not read this machine's topology" for whatever came
+    // back, so a pin refusal would have been reported as a discovery failure --
+    // a specific, checkable claim about the machine, made from an error that
+    // says something else. The refusal's own text explains itself, so the
+    // wording here stays neutral and lets it.
     let observation = &match measure() {
         Ok(observation) => observation,
         Err(error) => {
-            let _ = writeln!(out, "could not read this machine's topology: {error}");
+            let _ = writeln!(
+                out,
+                "this host could not be measured:\n{}",
+                error.to_string().trim_end()
+            );
             let _ = writeln!(
                 out,
                 "\nNothing below could be measured, so nothing below is reported. This is\n\

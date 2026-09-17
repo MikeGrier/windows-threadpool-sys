@@ -31,7 +31,32 @@ fn render(out: &mut dyn std::fmt::Write) {
         "== what does caching the peer's index buy an SPSC ring? ==\n"
     );
 
-    let observation = measure();
+    // Measured after the banner and heading are already out, so a host that
+    // refuses still gives a reader the line naming which probe declined and on
+    // what machine.
+    //
+    // **This arm is required by the type, not reachable today.**
+    // `peer_index_cache::measure` starts only unpinned runs, so nothing it does
+    // can currently return `Err`; the handler exists because the signature is
+    // `Result` and deleting it would mean discarding the error instead. Said
+    // here because an earlier version of this comment implied this binary could
+    // decline, which it cannot -- `probe-core-affinity` is the one that pins.
+    let observation = match measure() {
+        Ok(observation) => observation,
+        Err(error) => {
+            let _ = writeln!(
+                out,
+                "this host declined to be measured:\n{}",
+                error.to_string().trim_end()
+            );
+            let _ = writeln!(
+                out,
+                "Nothing below could be measured, so nothing below is reported. This is\n\
+                 a refusal to measure the host, not a finding about it."
+            );
+            return;
+        }
+    };
 
     let _ = writeln!(
         out,
