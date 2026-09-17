@@ -1288,7 +1288,8 @@ sites in three wordings.
   contention, over a spread that overlaps the same-code control at every producer count" cannot
   drift from the data, because it restates none of it.
 - **When a figure must appear, it has exactly one home.** Prefer a committed capture the prose links
-  to (`mutation-sweeps/<date>/` is this repository's existing example) over the same figure typed
+  to ([mutation-sweeps/2026-09-02/](../mutation-sweeps/2026-09-02) is this repository's existing
+  example) over the same figure typed
   into two documents. Provenance — host, commit, date — travels with the data rather than in a
   hand-maintained table beside it.
 - **Never restate a proportion over data you already showed.** A ratio over counts in the same

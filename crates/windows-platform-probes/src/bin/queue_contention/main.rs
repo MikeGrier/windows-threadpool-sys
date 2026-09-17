@@ -5,7 +5,7 @@
 //! **An experiment, not a component.** These probes measure platform behaviour
 //! and are not for production use. Do not call them from production code, and
 //! do not lift a technique out of here. See this crate's
-//! [DESIGN-NOTES.md](../../DESIGN-NOTES.md).
+//! [DESIGN-NOTES.md](../../../DESIGN-NOTES.md).
 //!
 //! This reports observations that bear on two questions otherwise settled by
 //! taste: whether the linked and sharded MPSC shapes are ever needed, and
@@ -332,10 +332,7 @@ fn render_observation(out: &mut dyn std::fmt::Write, observation: &Observation) 
         out,
         "     1.00 orders nothing, however far the point estimate sits from"
     );
-    let _ = writeln!(
-        out,
-        "     it -- 0.78x [0.53-1.16] is such a case. An interval clear of"
-    );
+    let _ = writeln!(out, "     it. An interval clear of");
     let _ = writeln!(
         out,
         "     1.00 orders the two WHOLE PUSH PATHS and not the room-decision"

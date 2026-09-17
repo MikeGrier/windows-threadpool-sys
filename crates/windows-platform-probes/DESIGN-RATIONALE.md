@@ -623,6 +623,17 @@ probe all move the measurement as well as the noise, and a change made ahead of
 the cheap check cannot be evaluated against anything. That this also happens to
 be the least effortful step is a convenience, not the reason.
 
+**That ordering has since been revised, and the revision is in
+[CHECKLIST.md](CHECKLIST.md): `M4.4` comes before `M4.2`.** The argument above
+holds only if the control is comparable to the candidate, and in this probe it is
+not: `measure()` runs the control roughly four configurations away from the row
+it is a control for, so a lengthened run still carries whatever drifts across
+that distance. Lengthening an unpaired control buys a narrower interval around a
+quantity that is still confounded by sequence, which is not an interpretable
+result -- so interleaving the control with its candidate has to land first. The
+paragraph above is kept as the reasoning that was current when the diagnosis was
+first written down; where the two disagree, the checklist is the execution order.
+
 The other half is knowing when to stop. Every setup has a floor, and past it more
 runs buy nothing; the failure mode is a week spent establishing that two numbers
 are the same. What makes the floor easy to misjudge is the assumption that it

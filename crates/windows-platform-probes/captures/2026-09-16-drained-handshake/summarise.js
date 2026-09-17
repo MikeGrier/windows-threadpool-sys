@@ -120,6 +120,14 @@ function drainedComparison(lines, path) {
 }
 
 const paths = process.argv.slice(2);
+// An empty argument list summarises nothing: every completeness check below
+// iterates the captures, so with none of them there is nothing to complain
+// about, `median([])` is NaN, and the script prints an empty summary and exits
+// successfully. Rejected here, as `isolated.js` does.
+if (paths.length === 0) {
+  console.error("usage: node summarise.js <run.txt> [run.txt ...]");
+  process.exit(2);
+}
 const layouts = [];
 const controls = [];
 for (const path of paths) {
