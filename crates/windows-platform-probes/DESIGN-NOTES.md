@@ -812,9 +812,11 @@ the finer conclusion; on such a host several of its placement rows come back `n/
 a placement as
 inexpressible is deliberately not the same as reporting that it made no difference.
 
-Two construction notes. **Pinning failures panic** rather than warn: a silently unpinned thread turns a
+Two construction notes. **Pinning failures refuse** rather than warn: a silently unpinned thread turns a
 placement experiment into a measurement of the scheduler's preferences while still printing a confident
-number. And **batch depth is read from the cached runs only** -- the baseline strategy reads the shared
+number. The refusal is returned and rendered into the report rather than raised, so a host that cannot
+be pinned is a reported observation rather than a probe that died with a banner and nothing under it;
+the argument for stopping is unchanged, only the channel it travels on. And **batch depth is read from the cached runs only** -- the baseline strategy reads the shared
 line on every operation by definition, so its depth is ~1 at every placement and carries no
 information. An earlier revision compared the baseline depths and duly reported 0.8 against 0.4, which
 is noise around a constant being read as a finding.

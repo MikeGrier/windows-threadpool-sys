@@ -848,20 +848,49 @@ fn render_node_distances(out: &mut dyn std::fmt::Write, observation: &Observatio
         if spanned.len() < 2 {
             continue;
         }
+        // **One representative per hop, so the comparison is like against
+        // like.** Two corrections are folded in here, and the second only became
+        // visible once the first was made.
+        //
+        // A plain minimum and maximum within a locality can land on the two
+        // directions of a single hop -- `0 -> 1` with the ring on node 0 and
+        // `1 -> 0` with it on node 1 are both producer-local -- and that pair
+        // would then win the "widest" contest, making the run report itself
+        // unable to compare hops while discarding a comparison it did hold.
+        //
+        // Restricting to pairs on different hops fixes that and leaves a subtler
+        // version: pairing one hop's fastest row against another hop's slowest
+        // still spans a direction difference as well as a hop difference, and
+        // reports the sum as the hop's. Measured on synthetic rows built for it,
+        // that read 25x where the hops differ by 6x. Each hop is therefore
+        // reduced to its fastest row at this locality -- the measurement least
+        // perturbed by whatever else the machine was doing -- and the spread is
+        // taken across those. Direction asymmetry within a hop is two adjacent
+        // rows of the table above; it is not what this paragraph compares.
+        let representatives: Vec<&NodeRow> = spanned
+            .iter()
+            .filter_map(|hop| {
+                within
+                    .iter()
+                    .copied()
+                    .filter(|row| row.hop == *hop)
+                    .min_by(|a, b| a.nanos.total_cmp(&b.nanos))
+            })
+            .collect();
         let (Some(best), Some(worst)) = (
-            within
+            representatives
                 .iter()
                 .copied()
                 .min_by(|a, b| a.nanos.total_cmp(&b.nanos)),
-            within
+            representatives
                 .iter()
                 .copied()
                 .max_by(|a, b| a.nanos.total_cmp(&b.nanos)),
         ) else {
             continue;
         };
-        // The widest within-locality spread is the strongest hop evidence the
-        // run holds, so that is the one reported.
+        // The widest cross-hop spread any one placement shows is the strongest
+        // hop evidence the run holds, so that is the one reported.
         let wider = verdict.is_none_or(|(_, previous_best, previous_worst)| {
             worst.nanos / best.nanos > previous_worst.nanos / previous_best.nanos
         });
@@ -912,14 +941,12 @@ fn render_node_distances(out: &mut dyn std::fmt::Write, observation: &Observatio
         worst.nanos,
         spread
     );
-    if undirected(best.directed) == undirected(worst.directed) {
-        let _ = writeln!(
-            out,
-            "  Both extremes are the same hop, so that spread is within it --\n  \
-             between its two directions -- and says nothing about how the hops\n  \
-             compare."
-        );
-    } else if spread < 1.2 {
+    // No same-hop arm: the selection above only considers pairs on different
+    // hops, so the two extremes cannot be one hop's two directions. A direction
+    // asymmetry within a hop is still visible -- it is two adjacent rows of the
+    // table above -- but it is not what this paragraph is comparing, and an arm
+    // that could never fire would be a claim about a state the code excludes.
+    if spread < 1.2 {
         let _ = writeln!(
             out,
             "  That spread is small enough that this host's nodes are close to\n  \

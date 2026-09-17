@@ -2003,9 +2003,12 @@ its row being emitted from `topology_report` in the library. The asserted set wa
 neither half of the method was.
 
 No proxy over the source could have fixed it, because the emission may live in any module the
-binary calls. The honest rung is the one that crosses a process boundary: run every registered
-probe and read its output, which costs about ten seconds and answers the question asked. A rule
-pushed below the rung its fact supports does not become cheap; it becomes decoration.
+binary calls. The honest rung is the one that crosses a process boundary: run the registered probes
+and read their output, which costs about ten seconds and answers the question asked. Two are
+excluded by name and by reason -- one too slow to run every time, one documented as unsafe to launch
+from a test at all -- and censused by the weaker source question instead, which the test states as
+weaker rather than blending in with the rest. A rule pushed below the rung its fact supports does
+not become cheap; it becomes decoration.
 
 **No work is scheduled by this note**, per "design notes are not a work queue". The rules it
 explains are binding where they are stated; the encodings taken at the time of writing --

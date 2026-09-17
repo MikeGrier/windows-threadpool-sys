@@ -99,9 +99,14 @@
 //! The owning crate now settles both halves rather than leaving them to be
 //! re-derived from a probe: see `windows-namespace-request-sys`'
 //! [DESIGN-NOTES.md](../../windows-namespace-request-sys/DESIGN-NOTES.md) ->
-//! `D-18`, which states what the call actually does, records keeping it over
-//! the cheaper lexical alternative, and says plainly that whether it enters the
-//! kernel is not established.
+//! `D-18`, which states what the call actually does and records keeping it over
+//! the canonicalizers that do not root. It claims no cost comparison against
+//! those alternatives, because nothing here measures them -- but it does settle
+//! the mechanism question this module once left open: resolving a
+//! drive-relative path for another drive checks that drive's recorded entry
+//! against the filesystem, and writes the entry back **when that check rejects
+//! it** -- an accepted entry is left alone, so the write is conditional rather
+//! than part of every such resolution.
 //!
 //! The two schemes that might reduce it recover different halves. **Inline
 //! storage** removes the allocation and copy, which is what
