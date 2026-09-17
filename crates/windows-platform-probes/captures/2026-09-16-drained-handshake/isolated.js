@@ -22,9 +22,17 @@
 
 const fs = require("fs");
 
+// One writer for the generated artifact, per this repository's output rule: no
+// formatting site picks a destination, so retargeting the report to a file is a
+// change here and nowhere else. ail is the diagnostic path and stays separate
+// from the artifact, which is why they are two sinks rather than one with a flag.
+let sink = (text) => process.stdout.write(text + "\n");
+const out = (text = "") => sink(text);
+const fail = (text) => process.stderr.write(text + "\n");
+
 const files = process.argv.slice(2);
 if (files.length === 0) {
-  console.error("usage: node isolated.js <run.txt> [run.txt ...]");
+  fail("usage: node isolated.js <run.txt> [run.txt ...]");
   process.exit(2);
 }
 
@@ -105,15 +113,15 @@ const width = COLUMNS.map((name, column) =>
 );
 const PRODUCERS_WIDTH = Math.max(9, ...COUNTS.map((n) => String(n).length));
 
-console.log(`isolated regime, ${files.length} run(s): ${files.join(", ")}`);
-console.log(`each layout against ${DEFAULT_LAYOUT}; control is ${DEFAULT_LAYOUT} against ${CONTROL_TWIN}`);
-console.log("median of the per-run ratios, with the observed range beside it\n");
+out(`isolated regime, ${files.length} run(s): ${files.join(", ")}`);
+out(`each layout against ${DEFAULT_LAYOUT}; control is ${DEFAULT_LAYOUT} against ${CONTROL_TWIN}`);
+out("median of the per-run ratios, with the observed range beside it\n");
 
-console.log(
+out(
   ["producers".padEnd(PRODUCERS_WIDTH + 2), ...COLUMNS.map((name, i) => name.padEnd(width[i] + 2))].join(""),
 );
 COUNTS.forEach((n, row) => {
-  console.log(
+  out(
     [
       String(n).padEnd(PRODUCERS_WIDTH + 2),
       ...body[row].map((c, i) => c.padEnd(width[i] + 2)),
@@ -121,16 +129,16 @@ COUNTS.forEach((n, row) => {
   );
 });
 
-console.log("\nwhere every run sat above the control's whole observed range:");
+out("\nwhere every run sat above the control's whole observed range:");
 for (const l of LAYOUTS) {
   const above = COUNTS.filter((n) => {
     const top = Math.max(...control.get(n));
     return measured.get(l).get(n).every((x) => x > top);
   });
-  console.log(`  ${l.padEnd(18)} ${above.length ? above.join(", ") + " producers" : "no producer count"}`);
+  out(`  ${l.padEnd(18)} ${above.length ? above.join(", ") + " producers" : "no producer count"}`);
 }
 
-console.log(
+out(
   `\nThe control's range here is ${files.length} observation(s) per count, which is not\n` +
     "a band. This reports what these runs did; it does not establish that a fresh\n" +
     "run would land the same way.",

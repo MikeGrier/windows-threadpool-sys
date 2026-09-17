@@ -1275,10 +1275,12 @@ result beneath a table produced by one invocation.
 `render` now writes the banner and calls `render_observation(out, &measure())`. The banner stays
 outside because it is a fresh topology read rather than a function of the observation, which is what
 keeps the rendering half pure and therefore drivable by a fixture. The binary moved to
-`src/bin/queue_contention/main.rs` so it can carry a sibling `tests.rs`, following
+[src/bin/queue_contention/main.rs](src/bin/queue_contention/main.rs) so it can carry a sibling
+[tests.rs](src/bin/queue_contention/tests.rs), following
 `windows-placement-probe`'s layout; git recorded it as a rename, so history follows.
 
-**The cases are data, not code.** `corpus.json` holds an observation and what the rendered report
+**The cases are data, not code.** [corpus.json](src/bin/queue_contention/corpus.json) holds an
+observation and what the rendered report
 must be true of, so adding a case needs no Rust. The central check is *derived rather than
 restated*: `aligned_tables` asserts every line of a named table is the same length, which is exactly
 the property a cell wider than its column breaks. It therefore catches width bugs the corpus never

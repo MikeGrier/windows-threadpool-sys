@@ -8,6 +8,14 @@
 
 const fs = require("fs");
 
+// One writer for the generated artifact, per this repository's output rule: no
+// formatting site picks a destination, so retargeting the report to a file is a
+// change here and nowhere else. ail is the diagnostic path and stays separate
+// from the artifact, which is why they are two sinks rather than one with a flag.
+let sink = (text) => process.stdout.write(text + "\n");
+const out = (text = "") => sink(text);
+const fail = (text) => process.stderr.write(text + "\n");
+
 // A ratio cell, with all three numbers required to be plain decimals. The
 // looser `[0-9.]+` also matched a run of dots, so a malformed `...x [..-..]`
 // parsed and `Number("...")` became NaN -- which compares false against every
@@ -77,10 +85,10 @@ function drainedLayout(lines, path) {
     if (producers === null) continue;
     const where = `${path}, drained layout, ${producers} producers`;
     const narrowNanos = positive(fields[1], `${where}: the 32/32 cost`);
-    // Through `positive` like every other captured value, and all three numbers
-    // of each cell are checked -- the two bounds are not used by this script,
-    // but a capture carrying an unreadable bound is not a capture this script
-    // should certify as summarised.
+    // Pass every value through `positive`, like every other captured quantity,
+    // and check all three numbers of each cell -- the two bounds are not used by
+    // this script, but a capture carrying an unreadable bound is not a capture
+    // this script should certify as summarised.
     const ratios = [...line.matchAll(RATIO)].flatMap((m, i) => [
       positive(m[1], `${where}: layout ratio ${i + 1}`),
       positive(m[2], `${where}: layout ratio ${i + 1} lower bound`),
@@ -125,7 +133,7 @@ const paths = process.argv.slice(2);
 // about, `median([])` is NaN, and the script prints an empty summary and exits
 // successfully. Rejected here, as `isolated.js` does.
 if (paths.length === 0) {
-  console.error("usage: node summarise.js <run.txt> [run.txt ...]");
+  fail("usage: node summarise.js <run.txt> [run.txt ...]");
   process.exit(2);
 }
 const layouts = [];
@@ -169,7 +177,7 @@ layouts.forEach((layout, i) => {
 });
 
 const producers = EXPECTED_PRODUCERS;
-console.log(`runs: ${paths.length}`);
+out(`runs: ${paths.length}`);
 
 // **Reported per producer count, and deliberately without a verdict.**
 //
@@ -215,20 +223,20 @@ for (const p of producers) {
 // comparison against `NaN` is false -- so an unreadable cell used to empty the
 // "outside the band" list and print `true`.
 if (problems.length > 0 || rows.length === 0) {
-  console.log("");
-  console.log("CAPTURE INCOMPLETE -- not summarised:");
-  if (rows.length === 0) console.log("  - no complete producer counts were read");
-  for (const problem of problems) console.log(`  - ${problem}`);
+  out("");
+  out("CAPTURE INCOMPLETE -- not summarised:");
+  if (rows.length === 0) out("  - no complete producer counts were read");
+  for (const problem of problems) out(`  - ${problem}`);
   process.exitCode = 1;
   return;
 }
 
-console.log("");
-console.log(
+out("");
+out(
   "drained, per producer count: the same-code control's observed range, then",
 );
-console.log("each layout's median ratio against 32/32, across runs.");
-console.log("");
+out("each layout's median ratio against 32/32, across runs.");
+out("");
 // Derived, with the table's original width as a floor: a control band is built
 // from measured ratios and has no upper bound, so a fixed field would shift the
 // layout columns the first time one outgrew it.
@@ -238,21 +246,21 @@ const bands = rows.map((row) => {
   return `${low.toFixed(2)}-${high.toFixed(2)}(${row.control.length})`;
 });
 const bandWidth = Math.max(16, "control(n)".length, ...bands.map((b) => b.length));
-console.log(`producers   ${"control(n)".padEnd(bandWidth)}  16/48   8/56   64/64`);
+out(`producers   ${"control(n)".padEnd(bandWidth)}  16/48   8/56   64/64`);
 rows.forEach((row, i) => {
-  console.log(
+  out(
     `${String(row.producers).padStart(9)}   ${bands[i].padEnd(bandWidth)}  ` +
       row.medians.map((m) => `${m.toFixed(2)}x`).join("  "),
   );
 });
 
 const everyControl = rows.flatMap((row) => row.control);
-console.log("");
-console.log(
+out("");
+out(
   `control observations: ${everyControl.length} across ${rows.length} producer counts, ` +
     `${Math.min(...everyControl).toFixed(2)}x to ${Math.max(...everyControl).toFixed(2)}x pooled`,
 );
-console.log(
+out(
   "Pooled only to show the spread; it is not a band to judge a median against,",
 );
-console.log("for the reason recorded in this script beside the table above.");
+out("for the reason recorded in this script beside the table above.");
