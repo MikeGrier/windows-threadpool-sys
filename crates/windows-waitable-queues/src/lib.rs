@@ -147,6 +147,16 @@
 //! A longer horizon rather than the absence of one, and it moves with the
 //! caller's rate like every other figure in that column.
 //!
+//! **Where the layout evidence is.** The `What was measured` table this section
+//! links carries the queue *shapes*, not the claim-word layouts, so it does not
+//! contain the `Wide` figures. Those come from two other places: a seven-run
+//! sweep whose raw runs were never committed, and a three-run capture that was,
+//! at `windows-platform-probes`'
+//! `captures/2026-09-16-drained-handshake/`, whose `isolated.js` derives the
+//! per-count layout ratios against a same-code control. The two agree on the
+//! direction. Until the sweep is re-run with its data kept, the capture is the
+//! part of this claim a reader can check.
+//!
 //! The default remains `Balanced` so that no existing caller's behaviour
 //! changed when the choice was introduced. Under it, a queue driven past 2^32
 //! pushes by two or more producers can **silently lose an item** -- the defect
