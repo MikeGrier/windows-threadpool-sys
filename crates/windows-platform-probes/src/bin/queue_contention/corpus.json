@@ -6,11 +6,21 @@
     "were unreachable by the suite until M4.7, and two defects shipped through",
     "that gap.",
     "",
-    "`aligned_tables` names a header substring. Every non-blank line of that",
-    "table, header included, must be the same length. That is exactly the",
+    "`aligned_tables` maps a header substring to how many tables the report must",
+    "head with it. Every non-blank line of each of those tables, header included,",
+    "must be the same length. That is exactly the",
     "property a cell wider than its column breaks, and it is derived from the",
     "output rather than restated as a golden -- so it catches a width bug the",
-    "corpus never anticipated, which a golden cannot."
+    "corpus never anticipated, which a golden cannot.",
+    "The count is part of the expectation rather than a minimum: the raw table",
+    "and the claim-layout table are each rendered twice, once per regime, under",
+    "identical headers. Checking only that at least one matched would let a",
+    "regime stop being reported without any assertion failing -- there would",
+    "simply be one fewer table to check, which is silence rather than failure.",
+    "A table that is legitimately empty is named in `contains` instead of here:",
+    "when nothing was measured the raw table is still headed but has no data",
+    "rows, and a header on its own always aligns with itself, so listing it",
+    "would buy a vacuous assertion rather than a check."
   ],
   "cases": [
     {
@@ -50,7 +60,7 @@
         ]
       },
       "expect": {
-        "aligned_tables": ["16/48 vs", "reserving/slotwise", "atomic floor", "ns/op range"],
+        "aligned_tables": { "16/48 vs": 2, "reserving/slotwise": 1, "atomic floor": 1, "ns/op range": 2 },
         "contains": ["processors available to this process: 8"],
         "absent": []
       }
@@ -92,7 +102,7 @@
         ]
       },
       "expect": {
-        "aligned_tables": ["16/48 vs", "reserving/slotwise", "atomic floor", "ns/op range"],
+        "aligned_tables": { "16/48 vs": 2, "reserving/slotwise": 1, "atomic floor": 1, "ns/op range": 2 },
         "contains": ["100.00x [6.67-22500.00]"],
         "absent": []
       }
@@ -121,7 +131,7 @@
         ]
       },
       "expect": {
-        "aligned_tables": ["16/48 vs", "reserving/slotwise", "atomic floor", "ns/op range"],
+        "aligned_tables": { "16/48 vs": 2, "reserving/slotwise": 1, "atomic floor": 1, "ns/op range": 2 },
         "contains": ["--"],
         "absent": ["0.00x", " 0.0 ", "infx", "NaN"]
       }
@@ -135,7 +145,7 @@
         "drained": []
       },
       "expect": {
-        "aligned_tables": ["16/48 vs", "reserving/slotwise", "atomic floor"],
+        "aligned_tables": { "16/48 vs": 2, "reserving/slotwise": 1, "atomic floor": 1 },
         "contains": [
           "processors available to this process: unknown (the query failed)",
           "ns/op range"

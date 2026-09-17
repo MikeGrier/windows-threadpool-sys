@@ -167,15 +167,22 @@ fn every_corpus_case_renders_a_report_whose_tables_line_up() {
         render_observation(&mut report, &observation);
 
         let expect = &case["expect"];
-        for header in expect["aligned_tables"]
-            .as_array()
-            .expect("`aligned_tables` is an array")
-        {
-            let header = header.as_str().expect("a header is a string");
+        let aligned = expect["aligned_tables"]
+            .as_object()
+            .expect("`aligned_tables` maps a header to how many times it must appear");
+        for (header, count) in aligned {
+            let expected = count
+                .as_u64()
+                .expect("an expected occurrence count is a number")
+                as usize;
             let found = tables(&report, header);
-            assert!(
-                !found.is_empty(),
-                "[{name}] no table header containing {header:?} in:\n{why}\n{report}"
+            assert_eq!(
+                found.len(),
+                expected,
+                "[{name}] the report has {} table(s) headed {header:?}, expected {expected}. \
+                 A count that has dropped means a table stopped being rendered, which every \
+                 alignment assertion below would otherwise pass in silence.\n{why}\n{report}",
+                found.len()
             );
             for (occurrence, lines) in found.iter().enumerate() {
                 assert!(
@@ -247,32 +254,4 @@ fn the_alignment_check_can_tell_a_misaligned_table_from_an_aligned_one() {
 
     let aligned = tables("producers      ratio\n        1      1.00x\n", "ratio").remove(0);
     assert_aligned("fixture", &aligned, "an aligned table must not be reported");
-}
-
-/// The layout table is rendered for both regimes, and both are checked.
-///
-/// Returning every occurrence only helps if there are two to find. Were the
-/// drained layout table to stop being rendered, every alignment assertion above
-/// would still pass -- there would simply be one fewer table to check, which is
-/// silence rather than failure. This pins the count so the disappearance is a
-/// test failure instead of a quietly smaller suite.
-#[test]
-fn an_ordinary_observation_renders_the_layout_table_for_both_regimes() {
-    let corpus: Value = serde_json::from_str(CORPUS).expect("the corpus parses");
-    let case = corpus["cases"]
-        .as_array()
-        .expect("`cases` is an array")
-        .iter()
-        .find(|case| case["name"] == "ordinary")
-        .expect("the corpus has an `ordinary` case");
-
-    let mut report = String::new();
-    render_observation(&mut report, &observation_from(&case["observation"]));
-
-    assert_eq!(
-        tables(&report, "16/48 vs").len(),
-        2,
-        "the claim-word layout table is rendered once isolated and once drained, \
-         so a count other than two means a regime stopped being reported\n{report}"
-    );
 }
