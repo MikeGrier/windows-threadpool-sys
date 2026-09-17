@@ -1285,8 +1285,10 @@ one file away, an attribution naming a superseded capture, one horizon left unqu
 sites in three wordings.
 
 - **Write the claim, not the digits, wherever the digits are not the point.** "Measured faster under
-  contention, over a spread that overlaps the same-code control at every producer count" cannot
-  drift from the data, because it restates none of it.
+  contention, over a spread that overlaps the same-code control at every producer count" carries no
+  transcribed figure, so it cannot drift *from* the artifact the way a pasted number does. It can
+  still be made false by a retake -- so **it links the artifact**, and a reader who follows the link
+  can settle it. Omitting digits removes the transcription failure, not the obligation to cite.
 - **When a figure must appear, it has exactly one home.** Prefer a committed capture the prose links
   to ([mutation-sweeps/2026-09-02/](../mutation-sweeps/2026-09-02) is this repository's existing
   example) over the same figure typed

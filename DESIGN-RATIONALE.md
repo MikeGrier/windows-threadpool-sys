@@ -205,6 +205,34 @@ following the rule that a binding which cannot be shown to fail is cosmetic. Fiv
 mutations -- three manifest values, a deleted claim, and a stale version planted in prose --
 each produce a distinct, located failure.
 
+## Why a measured figure is asked to have one home
+
+[DESIGN-NOTES.md](DESIGN-NOTES.md)'s restatement-drift section records the rule; this is how it was
+reached, and what was rejected on the way.
+
+The evidence was a review history, not an argument. Across the rounds on PR #90, most findings were
+not wrong measurements -- they were transcriptions that had drifted from the thing they restated: a
+table disagreeing with its own copy, a control quoted for the wrong regime, a horizon stated in
+minutes that the crate's own rate put at thirty-seven seconds. The measurements were fine. The
+copies were not.
+
+Two weaker rules were considered and rejected. **"Keep the copies in sync"** is what had already
+been happening, and the failure mode is that nothing enforces it; every drifted figure on that
+branch was written by someone intending to keep it in sync. **"Never publish a figure"** fails the
+other way: a caller choosing a layout needs a number, and hiding it behind a link that may not be
+followed trades one failure for another. What survived is narrower -- the *figure* lives in a
+committed artifact, and prose carries the *claim* plus a link to it.
+
+A correction from review is recorded with the rule itself: dropping the digits does **not** make a
+claim permanent. A qualitative sentence cannot suffer transcription drift, because it transcribes
+nothing, but a retake can still falsify it and a reader cannot see that from the sentence. So the
+citation obligation is unchanged by the wording; only the transcription failure is removed. An
+earlier draft of the rule said the digit-free form "cannot drift", which overstated it.
+
+The mechanism -- how a figure gets from an artifact into rendered prose -- is deliberately left
+open; markdown has no include, and rustdoc's is whole-file. That is stated in the decision as an
+unsettled trade rather than resolved here, and no work is scheduled against it.
+
 ## References
 
 - [`QueueUserWorkItem` and `WT_TRANSFER_IMPERSONATION`](https://learn.microsoft.com/windows/win32/api/threadpoollegacyapiset/nf-threadpoollegacyapiset-queueuserworkitem)

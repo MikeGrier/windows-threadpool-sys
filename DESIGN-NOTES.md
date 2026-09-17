@@ -2000,8 +2000,10 @@ So the principle, which holds regardless of which mechanism is eventually chosen
 
 - **A claim belongs in prose.** "`reserving_mpsc` measured faster than `slotwise_mpsc` under
   contention, over a spread that overlaps the same-code control at every producer count" is a
-  claim. It contains no digits, so it cannot drift from the data -- it can only be wrong about it,
-  which a reader can see.
+  claim. It transcribes no figure, so it cannot drift from the artifact the way a pasted number
+  does -- but it is not thereby permanent: a retake can make it false, and a reader cannot tell from
+  the sentence alone. That is why the claim cites the artifact. Dropping the digits removes the
+  transcription failure and leaves the citation obligation exactly where it was.
 - **A number belongs in an artifact.** A measured cost, a capture's commit, a count of occurrences:
   one copy, with its provenance travelling *with* it rather than in a hand-maintained attribution
   table beside it.
