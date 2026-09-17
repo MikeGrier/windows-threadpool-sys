@@ -151,8 +151,9 @@
 //! links carries the queue *shapes*, not the claim-word layouts, so it does not
 //! contain the `Wide` figures. Those come from two other places: a seven-run
 //! sweep whose raw runs were never committed, and a three-run capture that was,
-//! at `windows-platform-probes`'
-//! `captures/2026-09-16-drained-handshake/`, whose `isolated.js` derives the
+//! at
+//! [captures/2026-09-16-drained-handshake/](../../windows-platform-probes/captures/2026-09-16-drained-handshake/README.md),
+//! whose `isolated.js` derives the
 //! per-count layout ratios against a same-code control. The two agree on the
 //! direction. Until the sweep is re-run with its data kept, the capture is the
 //! part of this claim a reader can check.
@@ -330,8 +331,11 @@
 //!   implements it too, and the experimental `permit_mpsc` exposes its own
 //!   `reserve`.) Wanting it no longer means accepting the default layout's
 //!   recurrence, but the trade is not gone -- it changes axis: a deeper position
-//!   is paid for with a lower ceiling on outstanding reservations, 65,535 under
-//!   `Enduring` and 255 under `Perpetual` against `u32::MAX` under the default.
+//!   is paid for with a lower ceiling on outstanding reservations -- a *field*
+//!   ceiling of 65,535 under
+//!   `Enduring` and 255 under `Perpetual` against `u32::MAX` under the default,
+//!   with the count a given queue can actually hold being the lesser of that and
+//!   its capacity.
 //! - **[`spsc`] requires exactly one producer and one consumer**, and does less
 //!   work than either MPSC shape because of it.
 //!
