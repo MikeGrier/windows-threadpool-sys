@@ -44,8 +44,21 @@ three runs, regenerated with:
 node summarise.js run1.txt run2.txt run3.txt
 ```
 
-It is committed so the derivation can be checked rather than taken on trust, and
-so nothing downstream has to retype a figure. The script derives what the runs do
+[isolated.txt](isolated.txt) is the output of [isolated.js](isolated.js) over the
+same three runs, regenerated with:
+
+```
+node isolated.js run1.txt run2.txt run3.txt
+```
+
+The two cover different regimes and are kept apart for that reason: `summarise.js`
+derives the **drained** tables, `isolated.js` the **isolated** ones. The isolated
+figures are cited by the queue crate's own documentation -- which says the whole
+push path was measured as slower under `Wide` at every producer count -- so they
+need a derivation a reader can run rather than a number taken on trust.
+
+Both are committed so the derivation can be checked rather than taken on trust, and
+so nothing downstream has to retype a figure. The scripts derive what the runs do
 not state individually: the across-run median per producer count, and the
 same-code control -- which is a relation *between* two tables, since
 `reserving_mpsc` in the comparison table and `32/32` in the layout table are the

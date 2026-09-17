@@ -1055,6 +1055,38 @@ In the drained regime nothing separates at all -- every u64 layout *and* the
 128-bit word sit inside the control band at every producer count (the widest
 median is 1.13x at one producer, against a control that reaches 1.27x).
 
+**Amended 2026-09-16: the isolated table above has a committed cross-check, and
+it agrees.** The seven-run sweep's raw runs were not kept, which is the gap the
+drained amendment below is about. The three-run capture taken for `M4.3` records
+the isolated regime as well, and
+[isolated.js](captures/2026-09-16-drained-handshake/isolated.js) derives it --
+so the isolated figures, unlike the drained ones, can be checked against a
+second independent measurement. The two agree on 64/64 at every producer count:
+
+| producers | seven-run (above) | three-run capture | same-code control, capture |
+|---|---|---|---|
+| 1 | 1.37x [1.16-1.57] | 1.39x [1.32-1.74] | 1.04x [0.95-1.26] |
+| 2 | 1.13x [1.02-1.15] | 1.10x [1.10-1.16] | 1.03x [1.00-1.04] |
+| 4 | 1.29x [1.14-1.36] | 1.37x [1.36-1.70] | 0.96x [0.95-1.03] |
+| 8 | 1.82x [1.64-2.20] | 1.67x [1.59-2.05] | 0.99x [0.90-1.01] |
+| 16 | 3.45x [2.91-4.27] | 4.00x [3.94-4.10] | 0.92x [0.88-1.16] |
+| 32 | 3.81x [2.70-4.31] | 4.77x [3.54-4.99] | 0.98x [0.93-1.06] |
+
+In the capture, all three runs put 64/64 above the control's whole observed
+range at **every** producer count; 16/48 does so at 16 and 32, and 8/56 at 32.
+Three control observations per count is not a band, so this reports what these
+runs did rather than what a fresh run would do.
+
+**An earlier reading of the small-count end said "near parity at one or two",
+and that is withdrawn.** It was restated in six places across the queue crate --
+rustdoc, the crate doc, the README twice, `Cargo.toml`, and D-41 -- while the
+table directly above it read 1.37x at one producer, and the capture reads 1.39x
+against a control of 1.04x. Whatever 1.37x is, it is not parity, and the phrase
+asserted an absence of difference that neither measurement shows. The six sites
+now say the path was measured as slower at every producer count measured,
+smallest at one or two. Found by review of the isolated figures against the
+capture.
+
 **Amended 2026-09-16: re-measured after the `M4.3` handshake, and the
 re-measurement does not settle it.** That paragraph was taken before producers
 held for the consumer, so it describes a drained regime whose opening was
