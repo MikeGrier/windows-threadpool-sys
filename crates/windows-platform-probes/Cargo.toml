@@ -227,6 +227,7 @@ windows-waitable-queues = { path = "../windows-waitable-queues", features = [
 # declared explicitly above with `required-features = ["oracle-in-renderer"]`,
 # so ordinary unit-test builds keep exercising the `cfg(test)` arm while that
 # one target runs with the feature on.
+serde = "1.0"
 serde_json = "1.0"
 
 [dependencies.windows-sys]
