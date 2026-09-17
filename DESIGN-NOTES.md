@@ -1873,8 +1873,10 @@ surface.
 
 ### The measurement, and why it is not written down here
 
-Prose in this workspace runs at somewhat less than a line per line of code, counting Rust comment
-lines and markdown together. That ratio turns out to be the wrong thing to watch.
+Prose volume was looked at first and set aside: whatever the ratio of prose to code is here, it is
+not what the findings track. That ratio is deliberately not quoted, because quoting a measurement
+this section takes no position on would be an uncited figure inside the argument against uncited
+figures.
 
 The thing to watch is that in `windows-waitable-queues`, a handful of single facts -- `Perpetual`'s
 reservation-count ceiling, `Balanced`'s recurrence horizon, `Perpetual`'s position span, `Balanced`'s
