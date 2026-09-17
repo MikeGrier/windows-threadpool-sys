@@ -375,8 +375,10 @@ both rather than picking one for you.
 
 **What distinguishes them:**
 
-- **Pushing more than ~4 billion items in one run, from two or more producers?**
+- **Pushing more than ~4 billion items through one queue, from two or more producers?**
   Under its default layout `reserving_mpsc` can lose an item past that volume.
+  The count is cumulative over that queue's whole life, not per run: many short
+  bursts reach the wrap as surely as one long one.
   `slotwise_mpsc`'s positions are 64 bits under every configuration, and naming a
   deeper layout on `reserving_mpsc` moves the recurrence out -- `Perpetual` to
   about twenty years -- though what that costs in throughput is not established.
@@ -480,12 +482,15 @@ moved an SPSC handoff by 5.6x on an earlier host this workspace measured. The
 
 Two things that look like reasons to choose and are not:
 
-- **Capacity.** On a 64-bit target `slotwise_mpsc` reaches 2^62 slots and
-  `reserving_mpsc` 2^31. On a 32-bit one the crate-wide ceiling is 2^30 and
-  **both** shapes land there -- `reserving_mpsc`'s packed 2^31 is clamped down
-  to it as well -- so the difference disappears and the comparison means
-  nothing. Either way it counts slots allocated up front, not items ever pushed:
-  a ring of 2^31 slots is tens of gigabytes before it holds anything useful.
+- **Capacity.** `reserving_mpsc` has no single ceiling: it is the layout's, one
+  bit narrower than that layout's position. On a 64-bit target `Balanced`
+  reaches 2^31, `Enduring` 2^47, `Perpetual` 2^55, and `Wide` 2^62 -- the last
+  being the crate-wide ceiling, which is also `slotwise_mpsc`'s, so under `Wide`
+  the two shapes reach the same number and there is nothing to compare. On a
+  32-bit target the crate-wide ceiling is 2^30 and every layout of both shapes
+  lands there, so the difference disappears again. Either way it counts slots
+  allocated up front, not items ever pushed: a ring of 2^31 slots is tens of
+  gigabytes before it holds anything useful.
 - **`slotwise_mpsc` winning at one producer.** True in one regime, and at one producer
   you want `spsc` anyway.
 

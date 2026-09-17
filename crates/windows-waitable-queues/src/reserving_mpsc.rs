@@ -657,6 +657,24 @@ impl ClaimLayout for Wide {
     const POSITION_BITS: u32 = 64;
 }
 
+/// The per-layout capacity ceilings the README publishes, pinned to the source.
+///
+/// [The README](../README.md) names 2^31, 2^47, 2^55 and 2^62 for the four
+/// layouts on a 64-bit target, and the reader is entitled to rely on them.
+/// Nothing in a markdown file can fail a build, so the numbers are asserted
+/// against `BOUNDS_MAX` here: widening or narrowing a layout's position moves
+/// one of these and stops the build, which is the prompt to go and correct the
+/// prose. Held to a 64-bit target because on a 32-bit one the crate-wide
+/// ceiling binds first and every layout lands on it instead.
+#[cfg(target_pointer_width = "64")]
+const _: () = {
+    assert!(<Balanced as ClaimLayout>::BOUNDS_MAX == 1usize << 31);
+    assert!(<Enduring as ClaimLayout>::BOUNDS_MAX == 1usize << 47);
+    assert!(<Perpetual as ClaimLayout>::BOUNDS_MAX == 1usize << 55);
+    #[cfg(feature = "dwcas")]
+    assert!(<Wide as ClaimLayout>::BOUNDS_MAX == 1usize << 62);
+};
+
 /// The position after `position`, wrapping at the width the layout gives it.
 ///
 /// **Centralised because the width is no longer the type's.** A position is
