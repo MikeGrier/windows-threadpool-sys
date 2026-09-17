@@ -99,14 +99,9 @@
 //! The owning crate now settles both halves rather than leaving them to be
 //! re-derived from a probe: see `windows-namespace-request-sys`'
 //! [DESIGN-NOTES.md](../../windows-namespace-request-sys/DESIGN-NOTES.md) ->
-//! `D-18`, which states what the call actually does and records keeping it over
-//! the canonicalizers that do not root. It claims no cost comparison against
-//! those alternatives, because nothing here measures them -- but it does settle
-//! the mechanism question this module once left open: resolving a
-//! drive-relative path for another drive checks that drive's recorded entry
-//! against the filesystem, and writes the entry back **when that check rejects
-//! it** -- an accepted entry is left alone, so the write is conditional rather
-//! than part of every such resolution.
+//! `D-18`, which states what the call actually does, records keeping it over
+//! the cheaper lexical alternative, and says plainly that whether it enters the
+//! kernel is not established.
 //!
 //! The two schemes that might reduce it recover different halves. **Inline
 //! storage** removes the allocation and copy, which is what
@@ -145,6 +140,57 @@ pub struct Timing {
     /// Nanoseconds per iteration.
     pub nanos_per_op: f64,
 }
+
+/// The machine-readable name for a timing's label.
+///
+/// **The one place a figure's two names are related.** Both renderings walk
+/// [`Observation::timings`] and this decides only what the machine-readable one
+/// calls each entry, so the prose row and the NDJSON field cannot disagree about
+/// a value or exist without each other.
+///
+/// Written for the same reason as `doorbell_cost::json_key`: the prose iterated
+/// what was measured while the NDJSON named each field by hand, making them two
+/// independent restatements of one measurement. The M2.4 matrix found that class
+/// unchecked here, and deriving both from one source makes the disagreement
+/// unrepresentable rather than merely detectable.
+///
+/// # Panics
+///
+/// Panics on a label it does not know, so a timing added to `measure` without a
+/// name here fails at the render rather than silently missing from the
+/// machine-readable line -- the omission a fleet survey would never notice.
+#[must_use]
+pub fn json_key(label: &str) -> &'static str {
+    match label {
+        "prepare_short_path" => "prepare_short_cycle_ns",
+        "prepare_long_path" => "prepare_long_cycle_ns",
+        "build_open_request" => "build_open_request_cycle_ns",
+        "clone_prepared_units" => "clone_prepared_units_cycle_ns",
+        "capture_handle" => "capture_handle_ns",
+        "close_handle" => "close_handle_ns",
+        other => panic!(
+            "`{other}` is measured but has no machine-readable name; add it to \
+             `json_key` so it reaches the NDJSON line too"
+        ),
+    }
+}
+
+/// Every label [`measure`] records, in the order the report renders them.
+///
+/// All six are unconditional -- unlike `doorbell_cost`, nothing here is gated on
+/// a platform capability -- so this list needs no presence marker. It exists for
+/// the direction a renderer that walks [`Observation::timings`] cannot check:
+/// iterating what was measured cannot notice that something *stopped* being
+/// measured, so a dropped timing would quietly shrink the NDJSON schema. `main`
+/// caught that with a per-field panic; this is the same guard, stated once.
+pub const EVERY_LABEL: [&str; 6] = [
+    "prepare_short_path",
+    "prepare_long_path",
+    "build_open_request",
+    "clone_prepared_units",
+    "capture_handle",
+    "close_handle",
+];
 
 /// Every timing taken by [`measure`].
 #[derive(Debug, Clone)]

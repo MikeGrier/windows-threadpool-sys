@@ -142,20 +142,49 @@ use crate::topology::{
 /// [`preamble`], which has to recognise an attribution-shaped banner to pass it
 /// through. A second copy of this sentence in the recogniser would be a
 /// restatement that could drift out of step with the one that writes it.
-const READINGS_DISAGREE: &str = "HOST READINGS DISAGREE: the two readings above bracket the measurement\n\
-     and differ, so which of them names the machine the body below describes\n\
+const READINGS_DISAGREE: &str = "HOST READINGS DISAGREE: the two readings that bracket the measurement\n\
+     differ, so which of them names the machine the body below describes\n\
      was not established.";
 
 /// The disclaimer `attribution` renders when at least one bracket read failed.
 const NOT_ESTABLISHED: &str = "HOST NOT ESTABLISHED: at least one of the two readings that bracket the measurement\n\
      failed, so nothing confirmed the machine held still under it.";
 
+/// The disclaimer `attribution` renders when the brackets agree with each other
+/// but not with the read the body describes.
+///
+/// **Agreeing endpoints are not agreement.** `measured` was added so the banner
+/// would name the read the body came from rather than an endpoint -- but naming
+/// it silently is not the same as establishing it. Two endpoints can agree with
+/// each other and both differ from the middle read, and that is exactly the
+/// flaky-enumeration case `attribution`'s own rustdoc calls this probe's survey
+/// population: `Fingerprint::discover` returns `Ok` on a parse that dropped a
+/// record, so three reads of one unchanged machine can disagree. With no
+/// disclaimer for it, that host printed an unqualified banner while the run
+/// held the evidence against it.
+const MEASURED_UNCONFIRMED: &str = "HOST READING UNCONFIRMED: the two readings that bracket the measurement agree\n\
+     with each other but not with the read the body below describes, so one of\n\
+     the three discoveries did not see what the others saw.";
+
 /// Whether `banner` is a shape [`attribution`] can produce.
 ///
-/// [`attribution`] has exactly three outputs, and the count of `host:` lines is
-/// not free in any of them: one reading prints ONE line and no disclaimer, and
-/// both of the two-reading arms print TWO lines and a disclaimer. So the
-/// cardinality is part of the shape, and this checks it.
+/// The count of `host:` lines is not free: an undisclaimed banner carries
+/// exactly ONE reading, and a disclaimed one carries the readings its own
+/// disclaimer is about. So the cardinality is part of the shape, and this checks
+/// it against the disclaimer that was found rather than against the mere fact
+/// that one was.
+///
+/// **The count is per disclaimer, not per disclaimed-or-not.** The two bracket
+/// disclaimers carry every reading the run holds, so two without a measured read
+/// and three with one; `MEASURED_UNCONFIRMED` is reached only when the brackets
+/// are equal, so it carries exactly two. An earlier form accepted only two for
+/// all of them, which forced a disclaimed banner to drop one of its three
+/// readings -- it dropped the measured one, so a report that disclaimed its own
+/// attribution no longer showed the reading its body came from. Widening that to
+/// a flat two-or-three for every disclaimer then admitted a three-line
+/// `MEASURED_UNCONFIRMED` body, which this renderer cannot produce. Both are the
+/// same mistake: a rule about cardinality that does not name which shape it is
+/// the cardinality OF.
 ///
 /// **A looser recogniser let the banner state a disagreement while denying
 /// there was one.** It accepted any number of `host:` lines with the disclaimer
@@ -183,19 +212,31 @@ fn is_attribution_shaped(banner: &str) -> bool {
     //
     // Exactly one newline rather than `trim_end_matches`: `attribution` emits
     // one, and accepting several would admit another shape it cannot produce.
-    let (body, disclaimed) = [READINGS_DISAGREE, NOT_ESTABLISHED]
-        .iter()
-        .find_map(|disclaimer| {
-            banner
-                .strip_suffix(disclaimer)
-                .and_then(|head| head.strip_suffix('\n'))
-        })
-        .map_or((banner, false), |head| (head, true));
+    // **The admissible count depends on WHICH disclaimer, not merely on whether
+    // there was one.** Widening this to a flat `2..=3` for every disclaimer was
+    // half a rule: it admitted a three-reading body under `MEASURED_UNCONFIRMED`,
+    // and `attribution` cannot emit that -- that arm is reached only when the
+    // brackets are equal, so it prints the measured read and ONE bracket, the
+    // second being a copy of the first. A shape this renderer cannot produce
+    // passing the recogniser is the precise hole the rustdoc above argues was
+    // closed, reopened by the fix that widened it.
+    let (body, admissible) = [
+        (READINGS_DISAGREE, 2..=3),
+        (NOT_ESTABLISHED, 2..=3),
+        (MEASURED_UNCONFIRMED, 2..=2),
+    ]
+    .into_iter()
+    .find_map(|(disclaimer, admissible)| {
+        banner
+            .strip_suffix(disclaimer)
+            .and_then(|head| head.strip_suffix('\n'))
+            .map(|head| (head, admissible))
+    })
+    .unwrap_or((banner, 1..=1));
 
     let lines = body.lines().collect::<Vec<_>>();
-    let expected = if disclaimed { 2 } else { 1 };
 
-    lines.len() == expected && lines.iter().all(|line| line.starts_with("host:"))
+    admissible.contains(&lines.len()) && lines.iter().all(|line| line.starts_with("host:"))
 }
 
 /// Caller-supplied text, reduced to something that cannot create a line.
@@ -301,8 +342,38 @@ fn preamble(banner: &str) -> String {
 /// that changed. That is a claim about the machine drawn from a gap in the
 /// measurement: a failed read establishes neither that the host moved nor that
 /// it held still.
+/// **`measured` names the read the body describes, and that is the point.**
+/// The banner used to be built from `before` -- an *endpoint* read -- so equal
+/// endpoints printed an unqualified banner without anything having established
+/// that the middle read agreed with them. `measure_observed` returns the
+/// fingerprint of the topology it actually parsed, so passing it here makes the
+/// banner describe the body by construction.
+///
+/// **Naming it is not establishing it, and the two were conflated.** Making the
+/// banner name the measured read fixes *which* machine the body is attributed
+/// to; it says nothing about whether the brackets confirmed that read. Equal
+/// endpoints that both differ from it are a real and documented case -- see
+/// `MEASURED_UNCONFIRMED` -- and it now has a disclaimer of its own rather than
+/// printing unqualified. That is a comparison, and deliberately so: the
+/// alternative is not "no comparison", it is an unstated one.
+///
+/// `None` for a run whose discovery failed: there is no measured read to name,
+/// so the banner falls back to the first endpoint as before. That is the
+/// `report_unmeasured` path, where the body describes no topology either.
+///
+/// **Every disclaimed banner shows every reading the run holds**, so a reader
+/// who is told the attribution is in doubt can see what the readings were. With
+/// a measured read that is three lines, not two.
+///
+/// The endpoints keep their job. They bracket a **wider** window than
+/// `measure`'s counter bracket -- which covers only its own discovery -- so they
+/// still catch structural change the counters cannot see.
 #[must_use]
-pub fn attribution(before: &io::Result<Fingerprint>, after: &io::Result<Fingerprint>) -> String {
+pub fn attribution(
+    measured: Option<&Fingerprint>,
+    before: &io::Result<Fingerprint>,
+    after: &io::Result<Fingerprint>,
+) -> String {
     // **Each reading is flattened HERE, because a banner line is a line.**
     // `banner_line_for` interpolates a failed read's `io::Error` verbatim, and
     // an OS error is free to contain a newline -- so a reading could arrive as
@@ -317,17 +388,74 @@ pub fn attribution(before: &io::Result<Fingerprint>, after: &io::Result<Fingerpr
     // Containing each line as it is built keeps the composition's shape a
     // function of the number of READINGS rather than of what the OS wrote, which
     // is what every reader below assumes.
-    let first = renderer_owns_every_line(&banner_line_for(before));
-    let second = || renderer_owns_every_line(&banner_line_for(after));
+    // **Both changes survive the merge, and they are independent.** The
+    // containment above is main's; `measured` is this branch's -- one decides
+    // HOW a reading is contained, the other WHICH reading names the body. The
+    // merge that brought them together took main's body and re-applied the
+    // parameter rather than picking a side, because picking either would have
+    // silently dropped a fix.
+    //
+    // Routed through `banner_line_for` rather than formatted here, even though
+    // wrapping in `Ok` to do it looks roundabout: a probe's banner is comparable
+    // with every other probe's only while exactly one place produces that line.
+    //
+    // **Which lines each arm prints is decided by what its disclaimer says, and
+    // getting that backwards printed two identical lines under a sentence
+    // asserting they differ.** `measured` names the read the body describes, so
+    // it is the right banner for the arm that emits ONE unqualified line. Every
+    // disclaimed arm then prints every reading the run holds -- the two
+    // brackets, and the measured read when there is one -- because dropping one
+    // is how both earlier defects happened: substituting the measured line for
+    // `before` hid the reading that actually disagreed and, on a failed read,
+    // hid the `io::Error` with it; dropping the measured line instead left a
+    // report that disclaimed its own attribution without showing the reading
+    // its body came from.
+    //
+    // **Agreeing brackets are not agreement, which is what the third arm is
+    // for.** Two endpoints can agree with each other and both differ from the
+    // middle read -- the flaky-enumeration case this rustdoc names as the survey
+    // population -- and with no arm for it that host printed an unqualified
+    // banner while the run held the evidence against it.
+    let measured_line = || {
+        renderer_owns_every_line(&measured.map_or_else(
+            || banner_line_for(before),
+            |fingerprint| banner_line_for(&Ok(fingerprint.clone())),
+        ))
+    };
+    let bracket = |reading| renderer_owns_every_line(&banner_line_for(reading));
+    // Every reading, measured first: the banner's first line names the machine
+    // the body describes whenever the run knows it.
+    let every_reading = || match measured {
+        Some(_) => format!(
+            "{}\n{}\n{}",
+            measured_line(),
+            bracket(before),
+            bracket(after)
+        ),
+        None => format!("{}\n{}", bracket(before), bracket(after)),
+    };
     match (before, after) {
-        (Ok(one), Ok(two)) if one == two => first,
-        (Ok(_), Ok(_)) => format!("{first}\n{}\n{READINGS_DISAGREE}", second()),
+        (Ok(one), Ok(two)) if one == two => match measured {
+            // The brackets agree and the body's own read agrees with them, so
+            // there is one reading to report and nothing to qualify.
+            Some(fingerprint) if fingerprint == one => measured_line(),
+            // They agree with each other and not with it. One bracket is shown
+            // rather than both: they are equal here, so the second would be a
+            // copy of the first, and the disclaimer says which relation failed.
+            Some(_) => format!(
+                "{}\n{}\n{MEASURED_UNCONFIRMED}",
+                measured_line(),
+                bracket(before)
+            ),
+            None => measured_line(),
+        },
+        (Ok(_), Ok(_)) => format!("{}\n{READINGS_DISAGREE}", every_reading()),
         // Covers (Err, Ok), (Ok, Err) AND (Err, Err), so the text says "at
         // least one". "One of the two readings failed" understates the case
         // where both did -- a small thing, but the same shape as every other
         // sentence corrected here: claiming a more specific state than the run
         // established.
-        _ => format!("{first}\n{}\n{NOT_ESTABLISHED}", second()),
+        _ => format!("{}\n{NOT_ESTABLISHED}", every_reading()),
     }
 }
 

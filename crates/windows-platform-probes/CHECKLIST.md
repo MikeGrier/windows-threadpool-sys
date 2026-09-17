@@ -18,27 +18,6 @@ so renumbering would leave dangling references in a file that may not be edited 
 Stable IDs cost a mismatch between an item number and its milestone; renumbering would cost
 correctness in the archive.
 
-- [ ] **M2.4** -- Explore, with the sparse matrix as the instrument, whether `Coherence`,
-  `BracketOutcome` and `Verdict` carry invariants the row does not yet publish -- as VALUES on the
-  observation, not as correspondences between two renderings -- and whether the sibling probes'
-  renderers have the same gaps. Expect the matrix to be mostly empty; that is the expected shape and
-  not a sign the exercise failed. **Record the vacuous results as well as the findings** -- "X and Y
-  were examined and need not be related" is what stops the next person re-exploring the same cells,
-  and is the half that normally evaporates. Promote only what proves meaningful into the invariant
-  set from M3.2.
-
-  Re-scoped by M3.2; the note at the top of this milestone gives the reasoning. **The item text
-  above was rewritten when M3 was archived, to match**: it still asked for "the same correspondence
-  failures" and for promotion "into the oracle from M2.1", both retired by M3, so a reader working
-  the list linearly would have been sent after the half that no longer exists. Found by a review --
-  and the lesson generalises, since a re-scoping note 25 lines above an item does not reach someone
-  executing the item.
-
-> **-> OPEN QUESTION for the engineer:** M2.4 may show this generalises past this crate, in which case
-> the oracle belongs somewhere shared and the question becomes a repository-wide convention rather than
-> a probe-crate one. That is a design decision, not a mechanical follow-on, and is deliberately left
-> unanswered here.
-
 - [ ] **M4.1** -- Model the observation-readable `ParseIncomplete` conditions that
   `blocking_states` currently omits, so a deleted push site in `cross_check` is caught for all of
   them rather than for the subset.
@@ -149,48 +128,6 @@ correctness in the archive.
 
 - [x] **M4.6** -- Make the start gate releasable, so a failed thread spawn cannot deadlock the probe. -> [completed 2026-09-16 UTC-04:00](COMPLETED-CHECKLIST.md#m46)
 
-- [ ] **M2.5** -- Make the banner describe the read the body describes.
-
-  Gated by M3.1 and M3.3, both landed: establishing that the middle of three discoveries agreed
-  produces a new FACT, which M3.1 says must reach the row rather than only the banner, and M3.3
-  changed how the banner is built. Written before those, it would have been written into machinery
-  about to move.
-
-  A probe run performs
-  **three** independent `MachineMemoryTopology::discover()` calls: `Fingerprint::discover()` for the
-  banner, `measure()`'s own discovery for the body, and `Fingerprint::discover()` again. `attribution`
-  compares only the two endpoints, so equal endpoints print an unqualified banner without establishing
-  that the middle read agreed with them.
-
-  **The uncovered window is narrow, and worth stating precisely so it is not over- or under-sold.**
-  `measure()` brackets its counters around its own discovery, so a processor, group or NUMA change
-  during the middle read is already caught as `BracketOutcome::Changed`. What no counter reaches is
-  cache and efficiency-class structure. So the reachable case is a run where the cache structure
-  differs between the endpoint reads and the middle read while the processor, group and NUMA counts
-  stay identical -- near-impossible on real hardware, since caches do not change without processors
-  changing, but reachable on a hypervisor returning inconsistent `GetLogicalProcessorInformationEx`
-  results, which is exactly the population this probe exists to survey.
-
-  Prefer **construction over comparison**: return the measured topology from `measure()` (as a sibling
-  function, so the six existing `measure()` callers are untouched) and build the banner with the
-  already-public `Fingerprint::from_topology`. The banner then describes the body's read *by
-  construction* and the contradiction becomes unrepresentable, rather than detected by a third
-  comparison that is itself new prose able to drift. The endpoint reads still earn their place: they
-  catch structural change across the wider window that the counter bracket cannot see.
-
-  **Express it where M3 put the invariants, not in the M2.1 oracle.** "The banner describes the
-  measured read" is an invariant over the OBSERVATION, so it belongs in the invariant set from M3.2
-  and, if the fact reaches the artifact, in the row schema -- checked on every rendered report through
-  the renderer binding rather than asserted once in a single test. **These two paragraphs were
-  rewritten when M3 landed**: they asked for the relation to be expressed in the M2.1 prose oracle,
-  which M3.4 deleted, so an executor would have gone looking for machinery that no longer exists.
-  Found by a review, and the same defect M2.4 carried.
-
-  Reviewer disagreement is recorded deliberately, because it is evidence about the instrument rather
-  than noise: across two rounds one reader raised this twice while two others cleared it, one of them
-  explicitly after being pointed at the question. Nothing in the suite decides it either way, which is
-  itself the argument for making it an invariant rather than a test.
-
 - [x] **M4.7** -- Make the queue-contention report renderer testable, by taking the observation as an argument instead of measuring inside it. -> [completed 2026-09-16 UTC-04:00](COMPLETED-CHECKLIST.md#m47)
 
 - [ ] **M2.15** -- Run the probe suite on a second architecture in CI.
@@ -258,6 +195,35 @@ correctness in the archive.
   **Blocker recorded when queued:** none. The dependency exists next door and is already proven by
   that crate's own tests.
 
+- [ ] **M4.9** -- Route a placement probe's refusal-to-measure through the report sink instead of a
+  panic, so a host that cannot be pinned is a reported observation rather than a crash.
+
+  **Gap:** `windows-placement-probe`'s pinning helper asserts on `SetThreadGroupAffinity`, and
+  `core_affinity::measure()` reaches it through `time_model_on` / `time_model_placed`. **The
+  decision to stop is correct and is not what this item changes** -- the assert's own message makes
+  the argument, that an unpinned thread "would produce a plausible number that answers a different
+  question, and nothing in the output would say so." That is this repository's position and it
+  should stand. What is wrong is the *mechanism*: a panic bypasses `emit_report`, so the refusal
+  lands on stderr while stdout carries a truncated report with no row saying why it stopped. A
+  fleet survey mining stdout sees a probe that produced a banner and then nothing, which is
+  indistinguishable from a job that died for an unrelated reason -- the same "cannot tell a
+  measured absence from a missing run" defect that `report_unmeasured` exists to close for
+  discovery failure, left open for pinning failure.
+
+  **Reachability changed with the probe binaries.** The assert predates them and `main` carries it
+  untouched, but `main` has no binary that reaches it; `probe-core-affinity` and
+  `probe-peer-index-cache` are the first consumers, so this is newly reachable rather than newly
+  written.
+
+  **Target:** the pinning helper returns a domain error instead of asserting, `measure()`
+  propagates it, and the binaries render it after the banner the way they already render a
+  topology-discovery failure -- with an `x-probe-*` row carrying the refusal, so the absence is
+  mineable. The assert's message text is kept; it is the right message, in the wrong channel.
+
+  **Blocker recorded when queued:** this changes a public signature in `windows-placement-probe`,
+  which the branch that introduced the probe binaries deliberately does not touch. Raised rather
+  than taken unilaterally, per the mono-repo bug policy.
+
 
 ## M5 -- Carried over from M2: unblocked hygiene
 
@@ -267,66 +233,6 @@ discovered during M2 and parked there under a heading none of them fit. M3, whic
 gated these, is complete and archived.
 
 IDs keep their M2 numbers, for the reason given under M4.
-
-- [ ] **M2.7** -- Decide whether the other nine probe steps in CI should carry `if: '!cancelled()'`,
-  and apply or record the decision.
-
-  **Measured 2026-09-09:** twelve probe steps in [ci.yml](../../.github/workflows/ci.yml), of which
-  three are guarded -- topology, and the doorbell/request pair added with this note. The other nine
-  (`error mode`, `handle state`, `worker context`, `pool growth`, `device map`, `IoRing`,
-  `completion port`, and both halves of the long-path pair) are skipped whenever an earlier step in
-  the job fails, because Actions defaults to `if: success()`.
-
-  The argument for guarding is already written at the topology step and is not specific to it: a
-  probe step exists to emit diagnostics, so skipping it on failure suppresses it in exactly the run
-  that wanted it. **The long-path pair is the sharpest case** -- its own comment says either half
-  alone "says nothing", since the finding is the difference between two executables, so a partial
-  run of that pair is worse than useless.
-
-  **It is queued rather than done because there is a real tradeoff, and it is an operational call.**
-  `!cancelled()` also runs the step when the *build* failed, where `cargo run` cannot compile and
-  the step turns from skipped (grey) into failed (red). That trades quieter broken-build output for
-  better broken-test output. The topology step already took that trade; whether all twelve should is
-  a judgement about how the CI log is read, not something to settle by consistency alone.
-
-- [ ] **M2.8** -- Carry the OS error in the remaining Win32 assertion messages.
-
-  `last_os_error()` (or a raw `GetLastError`) is in the messages in `doorbell_cost`, `request_cost`
-  and `handle_state`, and missing from four sites in probes this peel did not touch:
-  `completion_port.rs:224` and `:234` ("create a completion port"), `ioring.rs:320` ("create the
-  probe pipe"), and `pool_growth.rs:62` ("create the gate event"). Each says what was being attempted
-  and not why it failed, which is the whole of what a CI log can offer someone who cannot rerun under
-  a debugger.
-
-  Two rules worth carrying over, both learned the expensive way in this peel. Read the error
-  **immediately after the single call whose failure is reported** -- a code attached to a condition
-  spanning two calls belongs to whichever ran last, not whichever failed, and can print "The
-  operation completed successfully" under a message saying something failed. And attach it only to a
-  condition that is genuinely an OS failure: a call that returned a size rather than an error should
-  not carry one, since `GetLastError` says nothing about it.
-
-- [ ] **M2.9** -- Stop `request_cost` calling a cross-host ratio "the finding".
-
-  [src/request_cost.rs](src/request_cost.rs) ends its module doc with "Absolute values are
-  host-specific; the **ratios against the doorbell and the atomic** are the finding." The ratios that
-  [src/bin/request_cost.rs](src/bin/request_cost.rs) actually prints divide THIS host's measurement by
-  `DOORBELL_NS_REFERENCE` / `ATOMIC_NS_REFERENCE`, which are constants measured on the Snapdragon X2
-  development machine. A ratio with this host's numerator and another host's denominator is neither a
-  same-host ratio nor a portable finding, and the emitted report says as much two lines later:
-  "re-read that probe on this host before trusting them". So the module doc promotes to "the finding"
-  exactly the number its own output tells the reader not to trust.
-
-  **Pre-existing, and deliberately not fixed in the `GetFullPathNameW` peel (PR #86) that found it.**
-  It arrived in `ae1e39f`, is already on `main`, and is outside that branch's diff; folding it in
-  would have put an unrelated behavioural change into a documentation peel that had already run to
-  nineteen review rounds.
-
-  The fix is a decision, not a sweep, which is why this is queued rather than taken: either compute
-  both figures on the same host and run (the probe would have to measure the doorbell itself, or read
-  a companion artifact), or keep the fixed references and demote them in the prose from "the finding"
-  to a labelled cross-host comparison. The first is more useful and more work; the second is honest
-  and cheap. Same defect class as PR #86's subject -- a claim stated more strongly than the evidence
-  supports -- so whichever is chosen, the wording has to end up matching what the numbers can carry.
 
 - [ ] **M2.13** -- Lint the completed-checklist archive mechanically in CI.
 

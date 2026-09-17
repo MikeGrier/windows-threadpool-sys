@@ -221,7 +221,11 @@ pub fn measure() -> IoRingSupport<CompletionPortFinding> {
     // creates a fresh one.
     let port =
         unsafe { CreateIoCompletionPort(associated_raw, std::ptr::null_mut(), COMPLETION_KEY, 0) };
-    assert!(!port.is_null(), "create a completion port");
+    assert!(
+        !port.is_null(),
+        "create a completion port: {}",
+        std::io::Error::last_os_error()
+    );
     let after_iocp_association = attempt(associated_raw);
 
     // Case 3: ring first (which must pass), then associate, then ring again.
@@ -231,7 +235,11 @@ pub fn measure() -> IoRingSupport<CompletionPortFinding> {
     // SAFETY: as above.
     let late_port =
         unsafe { CreateIoCompletionPort(late_raw, std::ptr::null_mut(), COMPLETION_KEY, 0) };
-    assert!(!late_port.is_null(), "create the second completion port");
+    assert!(
+        !late_port.is_null(),
+        "create the second completion port: {}",
+        std::io::Error::last_os_error()
+    );
     let after_late_association = attempt(late_raw);
 
     // Case 4, the second control: is the associated handle still usable through

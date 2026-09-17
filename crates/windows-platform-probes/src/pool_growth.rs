@@ -59,7 +59,14 @@ impl Gate {
         // SAFETY: null attributes and name are valid; TRUE selects manual
         // reset, FALSE leaves it unsignalled.
         let handle = unsafe { CreateEventW(std::ptr::null(), 1, 0, std::ptr::null()) };
-        assert!(!handle.is_null(), "create the gate event");
+        // The code is read only on failure, and nothing runs between
+        // `CreateEventW` and this format but a null test, so it belongs to that
+        // call and no other.
+        assert!(
+            !handle.is_null(),
+            "create the gate event: {}",
+            std::io::Error::last_os_error()
+        );
         Self(handle)
     }
 

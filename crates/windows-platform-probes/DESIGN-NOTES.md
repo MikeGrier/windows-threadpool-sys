@@ -359,6 +359,26 @@ knowledge of what the crate *should* have said -- only two readings and whether
 they agree. A probe that grew a hard-coded expectation would be back on the
 wrong side of the rule above.
 
+## This crate is never distributed, and its dependencies carry no versions
+
+Not to a registry, and not as a released binary either -- unlike
+`windows-placement-probe`, which ships a CI-built binary to people running it on
+hardware this workspace does not own. These probes are a development
+instrument, run from a checkout by someone who has the checkout. `publish =
+false` is the whole story, and it is permanent rather than "not yet".
+
+**The consequence is that every workspace dependency here is path-only.** A
+`version` beside a `path` exists to tell a registry what to resolve when the
+depending crate is packaged. Nothing packages this crate, so those pins named a
+version no one would ever consult -- while still having to be correct, because
+cargo requires the path crate's own version to satisfy the pin **at every
+build**, not merely at publication.
+
+That is not a theoretical tidy-up. Measured on 2026-09-02: bumping
+`windows-topology-sys` to 0.2.0 while this crate pinned `"0.1.0"` failed
+`cargo metadata` for the whole workspace. Six such pins were six standing
+chances to break `main` on someone else's release, in exchange for nothing,
+and they are gone.
 ## The earlier probes are migrated, and two of them corrected in the move
 
 <a id="d-migration"></a>
@@ -755,6 +775,153 @@ it becomes consumer-bound and a plateau there says nothing about the claim. Each
 count from the queue's own `Observable` counters precisely so that is visible as a fact rather than
 mistaken for contention: the sixteen- and thirty-two-producer drained rows show millions of refusals and
 should be read as measurements of the consumer.
+
+## `probe-core-affinity`: placement costs 5.6x, and it refuted the hypothesis it was written to test
+
+This probe pins an SPSC producer and consumer to chosen logical processors and measures the handoff
+under each placement the machine can express. It exists because
+[`probe-peer-index-cache`](#probe-peer-index-cache-a-result-that-inverts-by-host-which-is-why-it-is-kept)
+gave opposite answers on two hosts, and the obvious suspect was *placement*: a machine with two
+efficiency classes might be decoupling the two threads in a way a homogeneous one does not.
+
+**The plain answer, which is the useful one.** On the ARM64 development host the unoptimised handoff
+costs **38.5 ns/item within a domain and 215.3 ns/item across domains -- 5.6x, for no change but where
+the two threads run.** Within a class, the performance cores (class 1) run the same handoff at 30.4 ns
+against the efficiency cores' 38.7, about 27% apart, which is a real but far smaller effect than
+crossing the boundary. Medians of three, stable across three invocations.
+
+**The hypothesis was refuted, and backwards.** The prediction was that mismatched core speeds would
+decouple the two sides, letting a backlog form and giving peer-index caching the deep batch it needs.
+Measured, threads placed *together* batch **~135x deeper** than threads placed apart (49.6 against 0.4
+items per shared read). A coherent reading is that a cheap handoff lets the producer race ahead and
+build a backlog while an expensive one throttles it into lockstep -- so cost drives depth rather than
+core speed driving it -- but **this run does not test that**, and the probe says so rather than
+recording a replacement conclusion it did not earn. What is established is only that the original
+prediction is wrong.
+
+**It also failed to explain the host disagreement, which was its main purpose.** Caching wins at *both*
+placements here (14.4x together, 3.0x apart), so placement alone does not account for x64 rejecting the
+technique while ARM64 accepts it. That question stays open under `D-28` and M-inf.4.
+
+**A confound this machine cannot escape, stated because it bounds every reading above.** Its efficiency
+classes and its cache domains coincide exactly -- processors 0-5 are class 0 behind one L2, 6-11 are
+class 1 behind the other -- so every cross-class pair is also a cross-cache pair. The 5.6x is
+"across domains", and attributing it to core speed *or* to cache would need a machine whose classes and
+caches cut differently. The probe detects this and prints a CAUTION rather than letting a reader draw
+the finer conclusion; on such a host several of its placement rows come back `n/a`, and reporting
+a placement as
+inexpressible is deliberately not the same as reporting that it made no difference.
+
+Two construction notes. **Pinning failures panic** rather than warn: a silently unpinned thread turns a
+placement experiment into a measurement of the scheduler's preferences while still printing a confident
+number. And **batch depth is read from the cached runs only** -- the baseline strategy reads the shared
+line on every operation by definition, so its depth is ~1 at every placement and carries no
+information. An earlier revision compared the baseline depths and duly reported 0.8 against 0.4, which
+is noise around a constant being read as a finding.
+
+## `probe-peer-index-cache`: a result that inverts by host, which is why it is kept
+
+This probe measures peer-index caching -- each side of an SPSC ring keeping a plain copy of the other
+side's position, so the shared line is read once per batch instead of once per item -- against the
+`windows-waitable-queues` `spsc` shape. **It gives opposite answers on our two architectures**: roughly
+1.8x slower on x64, roughly 17x faster on ARM64, because the batch depth it amortises over is set by how
+the two threads interleave on that host rather than by our code. The full reasoning lives with the queue
+as [DESIGN-NOTES.md](../windows-waitable-queues/DESIGN-NOTES.md) -> `D-28`.
+
+This section previously described the probe as recording a settled rejection, on x64 evidence alone.
+
+Three things about its construction are deliberate and worth keeping if it is ever edited.
+
+**It counts shared reads, not just time.** A timing-only result would have been unreadable: "caching is
+slower" is indistinguishable from "the caching was implemented wrongly and never engaged". The read
+counters settle that directly, and they are also what made the two hosts comparable -- the reads reveal
+a batch depth near 1 on x64 against roughly 150 on ARM64, which is the mechanism rather than the
+symptom. Any future variant added here must keep the counters for the same reason.
+
+**Its interpretation is derived from the run, and must never go back to prose.** It used to print the
+x64 conclusion as a fixed paragraph -- "the technique WORKED and still lost", "roughly 3.6x", "the
+producer count goes UP" -- with only the speedup ratio computed. Run on ARM64 it printed all three while
+its own table three lines above showed the opposite, and the contradiction was noticed by a reader
+rather than by the tool. A probe that states its finding regardless of what it measured is worse than no
+probe, because it is believed. The interpretation now computes the batch depths and says outright that
+this verdict is host-dependent.
+
+**It carries a calibration row and a warming control.** The calibration times the real shipping `spsc`
+beside the model, and the probe prints a CAUTION when they diverge by more than 25% -- which they
+currently do, so the probe says out loud that its rows describe the model rather than the shipped
+queue. That guard earned its place immediately: the first run's 3x gap would otherwise have been read
+straight past. The warming variant is a control for the hypothesis that a discarded prefetch could
+substitute for the real thing; it removes no read and moves no time, which is exactly what a control
+that confirms the null should do.
+
+Like `probe-queue-contention`, this probe is **absent from the CI probe job**, and for the same
+measured reason: the effects it studies are coherence effects that a debug build's overhead buries.
+
+## The fingerprint carries provenance inside the string, not beside it
+
+The fingerprint is a **canonical summary of a machine's marginal shape**: two hosts rendering the
+same string have the same processor, core, cache-domain, class and node sizes, so string equality
+is a supported way to group results by shape. (It does *not* mean the two can express the same
+placements -- the sizes are recorded without how the partitions intersect. See
+[`Fingerprint::provenance`](../windows-placement-probe/src/fingerprint.rs).) That the string is
+compared at all is what forces the provenance marker to live *inside* the rendered form. A marker kept alongside -- a separate field, a
+second printed line, a note in the surrounding prose -- would leave a fabricated machine claiming the
+exact shape of a real one **comparing equal to it**. That is a concrete bug rather than a display
+preference, and it has a test named for it.
+
+Three details are deliberate:
+
+- **A measured host renders exactly as before, with no prefix.** Every fingerprint already recorded in
+  a checklist or design note came from a real machine, so those strings stay valid and comparable
+  rather than being silently reinterpreted by this change.
+- **The prefix leads**, so a reader scanning a column of pasted results cannot skip it, and it is
+  removable -- stripping `!!SYNTHETIC!! ` yields exactly the measured rendering, so a synthetic host
+  can still be compared against a real one on purpose.
+- **`RESTORED` and `SYNTHETIC` are distinguished** rather than collapsed into one "untrusted". They
+  are different claims: one describes some real machine, the other describes none, and a reader
+  deciding how far to believe a number needs to know which.
+
+`Fingerprint::from_topology` exists so provenance *flows* from the topology rather than being stamped
+on afterwards. `discover` is now a thin wrapper over it, which means there is no path that invents an
+answer -- whatever the topology says is what the fingerprint reports.
+
+`print_banner` was split so the line is available as a string. The taint marker reaching that line is
+the entire point of carrying provenance, and a property that load-bearing should not rest on someone
+having read a format string correctly.
+
+## Which seams are safe: data may be injected, labels may not reach hardware
+
+Two topology-injection seams were considered during this work and they were decided opposite ways.
+The rule that separates them is worth stating on its own, because "add a seam for testability" reads
+as unambiguously good and here it is only half true:
+
+**A seam that only moves data is safe. A seam that lets fabricated labels reach real hardware is
+not.**
+
+- [`places_from_topology`](../windows-placement-probe/src/fingerprint.rs) **has** a seam. It is a pure conversion -- topology in,
+  processor positions out, nothing pinned and nothing timed. A synthetic topology yields synthetic
+  positions, which is what the caller asked for and cannot be mistaken for a measurement.
+- [`measure`](../windows-placement-probe/src/core_affinity.rs) **must not**, and its documentation says so at the definition.
+  A synthetic topology's processor *numbers* are still valid on the real host, so every pin would
+  succeed and the run would produce genuine timings filed under fabricated node ids -- output
+  indistinguishable from a real NUMA measurement that measured no such thing. The pin assertion does
+  not catch it: it rejects a processor that does not exist, not a label that is wrong.
+
+The absence of the second seam is also what lets `Slice` carry no provenance marker of its own, so
+the two decisions hold each other up.
+
+### The hole this closed, and how it was proven
+
+`discover_places` took no argument and appeared in no test. It was untestable, not merely untested,
+and it carries the rules for the partitioning cache level, core and class membership, and the NUMA
+node. The NUMA lookup in particular was **unverifiable on every host available to this workspace**:
+with a single node, a correct map and a completely broken one both yield node 0.
+
+Replacing the entire lookup with a hardcoded `0` was run against the suite as it stood before this
+change. **It passed everything.** Against the suite now, three tests fail. That is the difference the
+seam bought, and it is why the existing `ProcessorPlace` fixtures were kept rather than treated as
+sufficient: they encode what a test author assumed the conversion produces, which is precisely the
+thing that cannot catch the conversion being wrong.
 
 ## The claim word's width costs 1.1x to 3.8x in isolation, and the drained figure is withdrawn
 
@@ -1294,40 +1461,24 @@ and a `Drop` that writes can panic while unwinding, which aborts and replaces a
 diagnosable failure with one that explains nothing. An unterminated fragment is
 not a finding, so the trade is one-sided.
 
-Every probe in this crate needed only the signature change, because each already
-went through `emit_report` rather than composing a `String` and calling `emit`
-itself. That is worth stating because it was not free: it is what the one-sink
-refactor bought, and it is why converting thirteen probes to stream is a
-mechanical change to one function plus one line per renderer.
+Two probes needed more than a signature change, because they were composing a
+`String` and calling `emit` directly rather than going through `emit_report` at
+all: `core_affinity` and `peer_index_cache`. They are the probes this change
+adds, and they had never been through the round that fixed the same bypass in
+the probes already here -- the crate's "every probe routes through this" claim
+was false for both until now. `core_affinity` also measured in
+`main`'s argument list, so a failure to read the topology produced no banner and
+no indication of which probe had died; it now measures inside the renderer,
+after the banner, and reports a failed read as a failure to observe rather than
+as a finding.
 
-Three further probes are being developed on a branch and do **not** hold that
-property -- they compose a `String` and call `emit` directly, so the crate's
-"every probe routes through this" claim is false for them. They are converted
-where they land rather than here, since they do not exist in this crate yet.
-
-**Verifying that no report changed needed a control, because several of these
-probes are not deterministic.** Comparing before and after directly showed four
-of the thirteen reports differing -- which proves nothing on its own, since
+**Verifying that no report changed needed a control, because most of these
+probes are not deterministic.** Comparing before and after directly showed
+differences in most reports -- which proves nothing on its own, since
 these probes print measured nanoseconds and render verdicts branching on them.
-
-Running the *same* build twice is the control, and it differs in **five**, by
-the same amount or more in every case:
-
-| probe | lines differing, same build twice | lines differing, across the change |
-|---|---|---|
-| `probe-doorbell-cost` | 34 | 30 |
-| `probe-request-cost` | 32 | 32 |
-| `probe-pool-growth` | 14 | 14 |
-| `probe-device-map` | 4 | 4 |
-| `probe-cancel-io` | 2 | **0** |
-
-`probe-cancel-io` is the one that makes the point sharpest: it is *not*
-deterministic, yet it happened to match across the change. Had the before/after
-diff been read on its own, that would have counted as evidence of no change --
-from a probe whose output varies run to run regardless. The eight reports the
-control showed to be genuinely deterministic were byte-identical across the
-conversion, and those are the eight that carry the argument.
-
+Running the *same* build twice showed differences of the same size or larger
+(`peer-index-cache` 22 lines between two runs of one build, against 20 across
+the conversion). The reports that are deterministic were structurally identical.
 A before/after diff on a probe is not evidence without that control.
 
 ### Measured: an interrupted probe keeps what it had already measured
@@ -1336,8 +1487,14 @@ M1.3 asked for this to be measured once rather than assumed, because it is the
 property the whole milestone exists for and no unit test reaches it -- a test
 cannot terminate its own process without taking the harness with it.
 
-`probe-doorbell-cost` is the longest-running probe in this crate at about 0.8
-seconds, which makes it the subject. Started with stdout redirected, left for
+`probe-doorbell-cost` runs for about 0.8 seconds, which makes it the subject.
+(It was **the** longest-running probe when this was measured, on a crate that
+did not yet have `probe-queue-contention`'s ~65 seconds. The merge that brought
+the branch-local probes back invalidated the superlative, not the measurement:
+the numbers below are unchanged and were taken against the shorter probe, which
+is the harder case -- a 300 ms window against 800 ms leaves far less room for a
+slow start to masquerade as buffering than it would against 65 seconds.)
+Started with stdout redirected, left for
 300 milliseconds, then terminated -- **six runs of each build**, with every run
 confirmed to have still been alive at the moment it was killed, since a probe
 that had already exited would be measuring nothing:
@@ -1955,3 +2112,156 @@ The work this implies was M3, which is complete and archived in
 CHECKLIST.md" until a review pointed out that the canonical design note was
 advertising landed work as pending.) The session that produced it is
 [design-sessions/DESIGN-SESSION-2026-09-12-what-the-oracle-should-read.md](design-sessions/DESIGN-SESSION-2026-09-12-what-the-oracle-should-read.md).
+
+## Decisions carried in from the deferred-namespace-ops branch
+
+These were recorded on `mikegrier/deferred-namespace-ops` while the probe work ran in parallel on
+`main`, and the merge brought them across because `main` has no copy of them: M2.5 and M2.9 are still
+OPEN items there, and M2.7 was archived on the branch alone.
+
+**The branch's other design sections were deliberately NOT carried in.** Its oracle-era notes -- the
+oracle's refusal to know, the M2.4 correspondence matrix, the binding measurement -- already exist on
+`main` in [DESIGN-RATIONALE.md](DESIGN-RATIONALE.md), where M3 relocated them as Tier 2 history.
+Re-inserting them here would have put one decision in two tiers at once, which is the restatement
+drift this component spends its review rounds on.
+
+Read them against M3: the row is the machine contract and the prose is reviewed rather than parsed,
+so where one of these notes says "correspondence between two renderings", the surviving form is an
+invariant over the observation or a rule in the row schema.
+### M2.9: two renderings that must match come from a common source
+
+The M2.4 finding was that both cost probes rendered every measured figure twice
+with nothing comparing the two. The obvious response was a third oracle rule
+set. **The decision was that a fact rendered twice must be derived once**, so
+both renderings now walk the same `Observation::timings` and a `json_key`
+function decides only what the machine-readable one calls each entry.
+
+That is strictly stronger than an oracle rule and it is cheaper. An oracle finds
+a contradiction that already exists; deriving both from one value means there is
+none to find. It also **deleted** code -- ten hand-named NDJSON fields and a
+`get` closure went, because naming each figure separately was exactly what made
+the two renderings independent restatements.
+
+`json_key` panics on a label it does not know, which is the whole safety of the
+scheme: a figure added to `measure` reaches both renderings or fails loudly, and
+cannot reach one only. Verified by adding an unnamed timing -- the probe printed
+its prose row and then died naming the missing key. (That the row appeared
+before the panic is M1.2's streaming; the two milestones compose.)
+
+**What is left to test is narrow, and that is the mark of the right fix.** The
+derivation is structural in the source, so the only remaining question is
+whether the structure survives rendering, formatting and the process boundary.
+One integration test per probe runs the real binary and compares each table row
+against its NDJSON field, reusing the crate's own `json_key` rather than
+restating the pairing -- a test carrying its own copy would be checking the
+copy, which is the defect this milestone is about.
+
+Its emptiness guard fired on the first run: `request_cost`'s table has ratio
+columns after the figure, so a parser requiring exactly two tokens matched
+nothing and the test would have passed having compared zero rows. That is the
+third time in M1-M2 that a check written to prevent a vacuous pass caught one
+immediately.
+
+#### Why the topology report is not converted too
+
+Its prose and NDJSON are still written separately, guarded by the M2.1 oracle.
+That is a real inconsistency and it is deliberate rather than overlooked: the
+topology renderer's two sides are not one list rendered twice but many
+individually-formatted claims, several with prose that has no NDJSON counterpart
+and vice versa, so a common source is a much larger change than a `json_key`
+map. The oracle covers it today and the eight cells M2.4 promoted are what make
+that coverage real. Converting it is a decision available later, not a gap left
+by accident.
+
+
+### M2.5: the banner is built from the read the body describes
+
+A `probe-topology` run makes **three** independent discoveries of the machine --
+one before, `measure`'s own, and one after -- and the banner naming the host was
+built from an *endpoint*. `attribution` compared only those two endpoints, so
+when they agreed it printed their fingerprint unqualified, with nothing having
+established that the middle read agreed with either. The line naming the machine
+could therefore describe a different topology from the body beneath it, and the
+report would say so nowhere.
+
+**The uncovered window is narrow, and stating it exactly is the point.**
+`measure` already brackets counter reads around its own discovery, so a
+processor, group or NUMA change during the middle read is caught as
+`BracketOutcome::Changed`. What no counter reaches is cache and
+efficiency-class structure. The reachable case is a run whose cache structure
+differs between the endpoints and the middle read while processor, group and
+NUMA counts stay identical -- near-impossible on real hardware, since caches do
+not change without processors changing, and entirely reachable on a hypervisor
+returning inconsistent `GetLogicalProcessorInformationEx` results, which is
+precisely the population this probe exists to survey.
+
+**Construction, not a third comparison** -- the same choice M2.9 made, for the
+same reason. A third comparison would be new prose able to drift from what it
+compares; a banner built from the body's own read cannot disagree with it,
+because there is no second value to disagree. `measure_observed` is a sibling of
+`measure` returning the observation *and* `Fingerprint::from_topology` of the
+very topology it parsed, so `measure`'s six existing callers are untouched.
+
+The endpoint reads keep their job rather than being deleted: they bracket a
+**wider** window than `measure`'s counter bracket, which spans only its own
+discovery, so they still detect structural change the counters cannot see. They
+simply no longer supply the banner.
+
+**The fix nearly reintroduced the defect it removes.** The first attempt
+formatted `host:  {fingerprint}` inline -- a second copy of a line whose owning
+function documents, in the crate that owns it, that a probe's banner is
+comparable with every other probe's only while exactly one place produces it. It
+now routes through `banner_line_for`, wrapping in `Ok` to do so.
+
+Measured, not read: sabotaging the banner back to the endpoint turns exactly one
+test red. The real-host test does **not** catch that sabotage -- on a stable host
+all three fingerprints are equal -- and its comment now says so. What it does
+catch is the seam construction leaves open: `Fingerprint::from_topology` and
+`observe` are two derivations from that one topology, each with its own filter
+for which processors count, and they have already disagreed once, when
+`from_topology` summed core-domain membership and printed `0p` for a machine
+about to be measured on four processors.
+
+### M2.7: probe steps are gated on the build, not on the job
+
+All twelve probe steps in [ci.yml](../../.github/workflows/ci.yml) now carry
+`if: "!cancelled() && steps.build.outcome == 'success'"`, against three before.
+
+**The item posed this as a trade and it turned out not to be one.** Its argument
+for guarding was already settled -- a probe step exists to emit diagnostics, so
+Actions' default `if: success()` suppresses it in exactly the run that wanted it,
+and the long-path pair is the sharpest case since either half alone "says
+nothing". What kept it queued was the cost: a plain `!cancelled()` also runs the
+step when the *build* failed, where `cargo run` cannot compile, turning a skipped
+grey step into a failed red one.
+
+Gating on the build takes both halves. A failing test still emits its
+diagnostics; a broken build still goes quiet. The trade the first three steps
+accepted is no longer necessary, so the decision the item reserved for an
+engineer was answered by removing the thing being traded rather than by choosing
+a side.
+
+**Two defects found while implementing it, both by verification rather than by
+reading.**
+
+The first: `id: build` was added to the workspace build step, which lives in job
+`build-test`, while every probe runs in `platform-probes`. `steps.build` does not
+cross a job boundary, so the expression would have evaluated against an empty
+context, made the condition permanently false, and **silently skipped all twelve
+probes** -- a guard that reads as more careful while disabling everything it
+guards. The probes job had no build step at all (its first step is `cargo test`,
+which builds implicitly but whose outcome cannot separate "did not compile" from
+"a test failed"), so one was added there.
+
+The second was pre-existing and unrelated: a conflict resolution in merge
+`1abcaaf` had welded a step's `if:` and `run:` onto one line, which is not valid
+YAML. It survived the merge and the repository's own workflow gate, which checks
+references by regex without parsing the document. The welded step is fixed here.
+**The gate's own gap is recorded and not yet queued**: giving it an owner means
+deciding where a workflow-parsing check belongs, which is a repository-level call
+rather than this crate's, and no checklist item exists for it. Naming the absence
+is the point -- a design note cannot schedule work, so an unqueued gap has to be
+visible as unqueued rather than described as though something will pick it up.
+
+Both are the same lesson this milestone keeps producing: the failure mode of a
+check is to pass.
