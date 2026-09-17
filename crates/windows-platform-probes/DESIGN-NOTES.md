@@ -793,7 +793,8 @@ branch was measured as though it were the algorithm.
 The reasoning was that both layouts issue the same `lock cmpxchg` on the same
 `u64`, so only the shift and mask constants differ, and the table above was read
 as confirming it. The table cannot carry that weight: these are single-run
-figures, and the same-code control measured later ranges 0.68-1.27x, which is
+figures, and the same-code control measured later ranges 0.69-1.12x isolated and
+0.68-1.27x drained, either of which is
 wider than most of the differences being called "noise" -- note that this very
 table has 16/48 at 1.14x and 1.21x while the prose beneath it says "within
 noise". See

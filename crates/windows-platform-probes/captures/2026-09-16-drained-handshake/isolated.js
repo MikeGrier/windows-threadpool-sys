@@ -63,7 +63,11 @@ function ratios(numerator, denominator) {
         const b = t.get(`${denominator}@${n}`);
         // A missing or unusable row is an error, not a skipped count: silently
         // dropping one would quietly narrow every range printed below.
-        if (!Number.isFinite(a) || !Number.isFinite(b) || b <= 0) {
+        // Both operands must be positive, not merely finite and the denominator
+        // non-zero: a zero or negative numerator divides cleanly and publishes
+        // an ordinary-looking `0.00x`. The probe's did-not-run sentinel used to
+        // be `0.0`, so that is the shape a legacy capture actually takes.
+        if (!Number.isFinite(a) || !Number.isFinite(b) || a <= 0 || b <= 0) {
           throw new Error(`${files[i]}: no usable ${numerator}/${denominator} at ${n} producers`);
         }
         return a / b;

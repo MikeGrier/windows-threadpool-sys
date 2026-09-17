@@ -30,10 +30,16 @@ are comparable; nothing here says anything about any other hardware, and the
 banner's `numa[16]` is a single node holding all sixteen processors.
 
 The runs' regime banner reads `a consumer popping continuously`, which is what
-`68198359` printed. A later commit changed that label to `a consumer looping on
+`68198359` printed; a later commit changed that label to `a consumer looping on
 pop`, because the handshake guarantees the consumer's pop path has run once, not
-that it is scheduled without gaps. The label is the only difference: the runs
-below are not retaken for it, since nothing about what was measured moved.
+that it is scheduled without gaps. A later commit also rewrote the paragraph
+under the comparison table, which used to read the point estimate as a verdict
+and now directs the reader to the interval.
+
+Both are prose the probe prints around its tables, not measurements, so the runs
+below are not retaken for them: nothing about what was measured moved. Expect the
+committed runs to differ from a fresh one in wording of this kind, and compare
+the figures rather than the surrounding text.
 
 ## Reading it
 

@@ -8,7 +8,11 @@
 
 const fs = require("fs");
 
-const RATIO = /([0-9.]+)x \[([0-9.]+)-([0-9.]+)\]/g;
+// A ratio cell, with all three numbers required to be plain decimals. The
+// looser `[0-9.]+` also matched a run of dots, so a malformed `...x [..-..]`
+// parsed and `Number("...")` became NaN -- which compares false against every
+// guard downstream and would surface in the output rather than be rejected.
+const RATIO = /(\d+\.\d+)x \[(\d+\.\d+)-(\d+\.\d+)\]/g;
 
 function median(values) {
   const sorted = [...values].sort((a, b) => a - b);
@@ -37,6 +41,21 @@ function finite(text, what) {
   return value;
 }
 
+// Every quantity this script reads is a cost or a ratio of costs, so zero and
+// negative are as invalid as NaN -- and more dangerous, because `0.00x` is
+// finite and renders as an ordinary-looking measurement. The probe's own
+// did-not-run sentinel used to be `0.0`, so this is the shape a legacy or
+// malformed capture actually takes.
+function positive(text, what) {
+  const value = finite(text, what);
+  if (value === null) return null;
+  if (value <= 0) {
+    problems.push(`${what}: ${JSON.stringify(text)} is not positive`);
+    return null;
+  }
+  return value;
+}
+
 // producers -> { narrowNanos, ratios: [16/48, 8/56, 64/64] }
 function drainedLayout(lines, path) {
   let start = -1;
@@ -57,26 +76,27 @@ function drainedLayout(lines, path) {
     const producers = finite(fields[0], `${path}: a drained layout producer count`);
     if (producers === null) continue;
     const where = `${path}, drained layout, ${producers} producers`;
-    const narrowNanos = finite(fields[1], `${where}: the 32/32 cost`);
-    // Through `finite` like every other captured value. The ratio pattern
-    // accepts any run of digits and dots, so a malformed cell such as `...x`
-    // matches, and a bare `Number` would turn it into NaN -- which compares
-    // false against everything, so it would pass every guard downstream and
-    // surface as `NaN` in the output rather than as a rejected capture.
-    const ratios = [...line.matchAll(RATIO)].map((m, i) =>
-      finite(m[1], `${where}: layout ratio ${i + 1}`),
-    );
+    const narrowNanos = positive(fields[1], `${where}: the 32/32 cost`);
+    // Through `positive` like every other captured value, and all three numbers
+    // of each cell are checked -- the two bounds are not used by this script,
+    // but a capture carrying an unreadable bound is not a capture this script
+    // should certify as summarised.
+    const ratios = [...line.matchAll(RATIO)].flatMap((m, i) => [
+      positive(m[1], `${where}: layout ratio ${i + 1}`),
+      positive(m[2], `${where}: layout ratio ${i + 1} lower bound`),
+      positive(m[3], `${where}: layout ratio ${i + 1} upper bound`),
+    ]);
     // A row that did not run renders `--`, which the ratio pattern does not
     // match, so a short list is the signal that this row cannot be summarised.
-    if (ratios.length !== 3) {
+    if (ratios.length !== 9) {
       problems.push(
-        `${where}: found ${ratios.length} layout ratios, expected 3`,
+        `${where}: found ${ratios.length / 3} layout ratios, expected 3`,
       );
       continue;
     }
     if (ratios.some((r) => r === null)) continue;
     if (narrowNanos === null) continue;
-    rows.set(producers, { narrowNanos, ratios });
+    rows.set(producers, { narrowNanos, ratios: [ratios[0], ratios[3], ratios[6]] });
   }
   return rows;
 }
@@ -89,7 +109,7 @@ function drainedComparison(lines, path) {
     const fields = line.trim().split(/\s+/);
     const producers = finite(fields[0], `${path}: a comparison producer count`);
     if (producers === null) continue;
-    const reserving = finite(
+    const reserving = positive(
       fields[2],
       `${path}, drained comparison, ${producers} producers: the reserving_mpsc cost`,
     );

@@ -322,11 +322,23 @@ fn render_observation(out: &mut dyn std::fmt::Write, observation: &Observation) 
     );
     let _ = writeln!(
         out,
-        "     the trade -- below 1.00 and the safer claim is also the cheaper"
+        "     the trade. Read the INTERVAL, not the point: an interval entirely"
     );
     let _ = writeln!(
         out,
-        "     one; above 1.00 and closing the hole costs throughput."
+        "     below 1.00 has the safer claim also the cheaper one, entirely"
+    );
+    let _ = writeln!(
+        out,
+        "     above it has closing the hole costing throughput, and one that"
+    );
+    let _ = writeln!(
+        out,
+        "     crosses 1.00 leaves the ordering unsettled however far the point"
+    );
+    let _ = writeln!(
+        out,
+        "     estimate sits from it -- 0.78x [0.53-1.16] is such a case."
     );
 
     // Question 3: what does the claim word's apportionment and width cost?
