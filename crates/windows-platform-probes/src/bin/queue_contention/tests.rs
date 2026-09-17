@@ -16,7 +16,31 @@
 
 use super::render_observation;
 use serde_json::Value;
+use std::panic::AssertUnwindSafe;
 use windows_platform_probes::queue_contention::{Observation, Run};
+
+/// Asserts every line of a table shares its header's width.
+///
+/// **The one statement of the alignment rule.** The corpus check calls it, and
+/// so does the anti-vacuity test at the bottom of this file, so that test
+/// exercises the assertion the corpus actually relies on. A test that compared
+/// the line lengths itself would be a second copy of the rule, and would keep
+/// passing after this body was deleted.
+#[track_caller]
+fn assert_aligned(name: &str, lines: &[&str], why: &str) {
+    let width = lines[0].len();
+    for line in lines {
+        assert_eq!(
+            line.len(),
+            width,
+            "[{name}] a cell overran its column, so every column after it \
+             no longer lines up with its header.\n{why}\n\
+             header ({width}): {:?}\n  line ({}): {line:?}",
+            lines[0],
+            line.len()
+        );
+    }
+}
 
 /// Compiled in, so a missing or malformed corpus is a build failure rather than
 /// a test that silently runs nothing.
@@ -120,18 +144,7 @@ fn every_corpus_case_renders_a_report_whose_tables_line_up() {
                 "[{name}] the table at {header:?} has no rows, so its alignment \
                  is not being checked\n{why}"
             );
-            let width = lines[0].len();
-            for line in &lines {
-                assert_eq!(
-                    line.len(),
-                    width,
-                    "[{name}] a cell overran its column, so every column after it \
-                     no longer lines up with its header.\n{why}\n\
-                     header ({width}): {:?}\n  line ({}): {line:?}",
-                    lines[0],
-                    line.len()
-                );
-            }
+            assert_aligned(name, &lines, why);
         }
 
         for needle in expect["contains"]
@@ -158,26 +171,38 @@ fn every_corpus_case_renders_a_report_whose_tables_line_up() {
 /// The alignment check must be able to fail, or the corpus proves nothing.
 ///
 /// Every case above passes, which is indistinguishable from a check that cannot
-/// fail. This hands the detector a deliberately overrun table and asserts it
-/// notices -- the anti-vacuity half of a sabotage run, made in-suite because the
-/// detector is the instrument here.
+/// fail. This hands [`assert_aligned`] a deliberately overrun table and asserts
+/// it panics -- the anti-vacuity half of a sabotage run, made in-suite because
+/// the detector is the instrument here.
+///
+/// It calls the same function the corpus calls rather than re-deriving the rule
+/// from the fixture's line lengths. A test that compared the lengths itself
+/// would keep passing after [`assert_aligned`]'s body was deleted, which is
+/// exactly the failure it exists to rule out.
+///
+/// The caught panic prints its message through the default hook, so a backtrace
+/// line appears in this test's output on success. That is left alone: silencing
+/// it means installing a process-global no-op panic hook, and this suite runs
+/// its tests as threads in one process, so the window would swallow a concurrent
+/// test's failure message.
 #[test]
 fn the_alignment_check_can_tell_a_misaligned_table_from_an_aligned_one() {
-    let misaligned = "producers      ratio\n1          1.00x [1.00-1.00]\n";
-    let lines = table_lines(misaligned, "ratio");
-    assert_eq!(lines.len(), 2, "the fixture has a header and one row");
-    assert_ne!(
-        lines[0].len(),
-        lines[1].len(),
-        "this fixture exists to be misaligned; if it is not, the corpus check is \
-         being asked to detect something that is not there"
+    let misaligned = table_lines(
+        "producers      ratio\n1          1.00x [1.00-1.00]\n",
+        "ratio",
+    );
+    assert_eq!(misaligned.len(), 2, "the fixture has a header and one row");
+    let caught = std::panic::catch_unwind(AssertUnwindSafe(|| {
+        assert_aligned("fixture", &misaligned, "a deliberately overrun table");
+    }));
+    assert!(
+        caught.is_err(),
+        "the detector passed a table whose row is {} wide against a {} header; \
+         it cannot report a real overrun either",
+        misaligned[1].len(),
+        misaligned[0].len()
     );
 
-    let aligned = "producers      ratio\n        1      1.00x\n";
-    let lines = table_lines(aligned, "ratio");
-    assert_eq!(
-        lines[0].len(),
-        lines[1].len(),
-        "and it must not call an aligned table misaligned"
-    );
+    let aligned = table_lines("producers      ratio\n        1      1.00x\n", "ratio");
+    assert_aligned("fixture", &aligned, "an aligned table must not be reported");
 }
