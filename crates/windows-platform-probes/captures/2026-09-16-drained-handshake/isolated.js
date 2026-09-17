@@ -35,6 +35,20 @@ if (files.length === 0) {
   fail("usage: node isolated.js <run.txt> [run.txt ...]");
   process.exit(2);
 }
+// `files.length` is reported as the number of independent runs, so the same
+// path given twice would publish a two-run comparison -- with a zero-width
+// control range -- derived from one set of bytes. A typo must not make the
+// capture look more reproducible than it is.
+{
+  const seen = new Set();
+  for (const file of files) {
+    if (seen.has(file)) {
+      fail(`the same capture was given more than once: ${file}`);
+      process.exit(2);
+    }
+    seen.add(file);
+  }
+}
 
 const COUNTS = [1, 2, 4, 8, 16, 32];
 const DEFAULT_LAYOUT = "reserving(32/32)";

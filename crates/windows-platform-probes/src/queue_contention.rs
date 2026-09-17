@@ -261,6 +261,12 @@ impl Run {
         if self.fastest_nanos_per_op.is_finite()
             && self.fastest_nanos_per_op > 0.0
             && self.slowest_nanos_per_op.is_finite()
+            // Positive too, not merely finite: a zero slowest endpoint divides
+            // cleanly to a spread of zero -- the most reassuring value this
+            // column can hold -- and a negative one yields a negative spread,
+            // which is not a dispersion at all. `is_measured` keeps both out of
+            // the report, but `spread` is public and answers callers directly.
+            && self.slowest_nanos_per_op > 0.0
         {
             Some(self.slowest_nanos_per_op / self.fastest_nanos_per_op)
         } else {

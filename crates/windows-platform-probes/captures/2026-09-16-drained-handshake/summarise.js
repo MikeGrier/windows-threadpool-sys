@@ -188,6 +188,19 @@ if (paths.length === 0) {
   fail("usage: node summarise.js <run.txt> [run.txt ...]");
   process.exit(2);
 }
+// The run count and the control's `(n)` are both `paths.length`, so the same
+// capture given twice would be certified as two independent runs -- repeated
+// bytes reported as agreement.
+{
+  const seen = new Set();
+  for (const path of paths) {
+    if (seen.has(path)) {
+      fail(`the same capture was given more than once: ${path}`);
+      process.exit(2);
+    }
+    seen.add(path);
+  }
+}
 const layouts = [];
 const controls = [];
 for (const path of paths) {
