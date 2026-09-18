@@ -808,12 +808,15 @@ classes and its cache domains coincide exactly -- processors 0-5 are class 0 beh
 class 1 behind the other -- so every cross-class pair is also a cross-cache pair. The 5.6x is
 "across domains", and attributing it to core speed *or* to cache would need a machine whose classes and
 caches cut differently. The probe detects this and prints a CAUTION rather than letting a reader draw
-the finer conclusion; two of its four placement rows come back `n/a`, and reporting a placement as
+the finer conclusion; on such a host several of its placement rows come back `n/a`, and reporting
+a placement as
 inexpressible is deliberately not the same as reporting that it made no difference.
 
-Two construction notes. **Pinning failures panic** rather than warn: a silently unpinned thread turns a
+Two construction notes. **Pinning failures refuse** rather than warn: a silently unpinned thread turns a
 placement experiment into a measurement of the scheduler's preferences while still printing a confident
-number. And **batch depth is read from the cached runs only** -- the baseline strategy reads the shared
+number. The refusal is returned and rendered into the report rather than raised, so a host that cannot
+be pinned is a reported observation rather than a probe that died with a banner and nothing under it;
+the argument for stopping is unchanged, only the channel it travels on. And **batch depth is read from the cached runs only** -- the baseline strategy reads the shared
 line on every operation by definition, so its depth is ~1 at every placement and carries no
 information. An earlier revision compared the baseline depths and duly reported 0.8 against 0.4, which
 is noise around a constant being read as a finding.
@@ -1460,12 +1463,12 @@ and a `Drop` that writes can panic while unwinding, which aborts and replaces a
 diagnosable failure with one that explains nothing. An unterminated fragment is
 not a finding, so the trade is one-sided.
 
-Three probes needed more than a signature change, because they were composing a
+Two probes needed more than a signature change, because they were composing a
 `String` and calling `emit` directly rather than going through `emit_report` at
-all: `core_affinity`, `peer_index_cache` and `queue_contention`. They are the
-branch-local probes, and they had never been through the round that fixed the
-same bypass in the peeled ones -- the crate's "every probe routes through this"
-claim was false in three places until now. `core_affinity` also measured in
+all: `core_affinity` and `peer_index_cache`. They are the probes this change
+adds, and they had never been through the round that fixed the same bypass in
+the probes already here -- the crate's "every probe routes through this" claim
+was false for both until now. `core_affinity` also measured in
 `main`'s argument list, so a failure to read the topology produced no banner and
 no indication of which probe had died; it now measures inside the renderer,
 after the banner, and reports a failed read as a failure to observe rather than
@@ -1473,11 +1476,11 @@ as a finding.
 
 **Verifying that no report changed needed a control, because most of these
 probes are not deterministic.** Comparing before and after directly showed
-differences in nine of fifteen reports -- which proves nothing on its own, since
+differences in most reports -- which proves nothing on its own, since
 these probes print measured nanoseconds and render verdicts branching on them.
 Running the *same* build twice showed differences of the same size or larger
 (`peer-index-cache` 22 lines between two runs of one build, against 20 across
-the conversion). The twelve deterministic reports were structurally identical.
+the conversion). The reports that are deterministic were structurally identical.
 A before/after diff on a probe is not evidence without that control.
 
 ### Measured: an interrupted probe keeps what it had already measured
@@ -2255,8 +2258,12 @@ which builds implicitly but whose outcome cannot separate "did not compile" from
 The second was pre-existing and unrelated: a conflict resolution in merge
 `1abcaaf` had welded a step's `if:` and `run:` onto one line, which is not valid
 YAML. It survived the merge and the repository's own workflow gate, which checks
-references by regex without parsing the document. Fixed, and the gap queued as
-M34.5 in the root checklist.
+references by regex without parsing the document. The welded step is fixed here.
+**The gate's own gap is recorded and not yet queued**: giving it an owner means
+deciding where a workflow-parsing check belongs, which is a repository-level call
+rather than this crate's, and no checklist item exists for it. Naming the absence
+is the point -- a design note cannot schedule work, so an unqueued gap has to be
+visible as unqueued rather than described as though something will pick it up.
 
 Both are the same lesson this milestone keeps producing: the failure mode of a
 check is to pass.

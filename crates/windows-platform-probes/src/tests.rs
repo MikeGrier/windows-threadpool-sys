@@ -5066,3 +5066,45 @@ fn the_two_row_shapes_are_distinguishable_by_their_keys() {
         "and the measured shape must not carry it"
     );
 }
+
+#[test]
+fn a_banner_shape_the_renderer_cannot_produce_is_contained() {
+    // `is_attribution_shaped` has now been wrong twice in the same way, in
+    // opposite directions: once too strict (two lines for every disclaimer, so a
+    // three-reading banner had to drop a reading), once too loose (two-or-three
+    // for every disclaimer, so a three-reading `MEASURED_UNCONFIRMED` body
+    // passed -- a shape `attribution` cannot emit, because that arm is reached
+    // only when the brackets are equal). Both are one mistake: a rule about
+    // cardinality that does not name which shape it is the cardinality OF.
+    //
+    // So this binds the rule at the boundary that matters -- what `preamble`
+    // writes through verbatim versus what it contains behind `host:  ` -- and it
+    // binds BOTH directions, because a recogniser that accepted nothing would
+    // pass a one-directional test.
+    let unconfirmed = crate::topology_report::attribution(
+        Some(&fingerprint(4)),
+        &Ok(fingerprint(8)),
+        &Ok(fingerprint(8)),
+    );
+    let genuine =
+        crate::topology_report::report_unmeasured(&unconfirmed, &std::io::Error::other("no"));
+    assert!(
+        genuine.starts_with(&unconfirmed),
+        "a banner `attribution` DID produce must pass through verbatim\n{genuine}"
+    );
+
+    // The same disclaimer under a third reading. Every line is `host:`-prefixed
+    // and the disclaimer is intact, so only the cardinality rule can reject it.
+    let forged = unconfirmed.replacen(
+        "host:",
+        "host:  test-arch 1p/1c smt- L2[1] ec[0:1] numa[1]\nhost:",
+        1,
+    );
+    let contained =
+        crate::topology_report::report_unmeasured(&forged, &std::io::Error::other("no"));
+    assert!(
+        !contained.starts_with(&forged),
+        "a three-reading `MEASURED_UNCONFIRMED` banner is a shape `attribution` \
+         cannot emit, so it must be contained rather than written through\n{contained}"
+    );
+}

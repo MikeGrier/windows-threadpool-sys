@@ -13,7 +13,7 @@
 use std::fmt::Write as _;
 
 use windows_platform_probes::report::emit_report;
-use windows_platform_probes::request_cost::{json_key, measure};
+use windows_platform_probes::request_cost::{EVERY_LABEL, json_key, measure};
 
 /// Measured by `probe-doorbell-cost` on a **Snapdragon X2 (ARM64)** machine,
 /// and recorded in [the 2026-08-30 design session]. Restated here only to
@@ -400,10 +400,11 @@ fn render(out: &mut dyn std::fmt::Write) {
     // nothing stopped them disagreeing or one omitting a figure the other
     // showed.
     //
-    // The `expect`-per-field the closure existed for is gone too, and is not
-    // missed -- "every label is present" was a property of a hand-written list
-    // that could name a label `measure` never recorded. Iterating what was
-    // measured cannot ask for something absent, so the question does not arise.
+    // The `expect`-per-field the closure existed for is NOT gone -- it moved,
+    // and it had to. Iterating what was measured cannot ask for something
+    // absent, so this loop cannot fail on a missing label; it just emits one
+    // key fewer, shrinking the schema with nothing saying so. `main` caught
+    // that per field. The census below is the same guard in one place.
     let mut fields = String::new();
     for timing in &observation.timings {
         let _ = write!(
@@ -411,6 +412,18 @@ fn render(out: &mut dyn std::fmt::Write) {
             r#""{}":{:.1},"#,
             json_key(timing.label),
             timing.nanos_per_op
+        );
+    }
+
+    for label in EVERY_LABEL {
+        assert!(
+            observation
+                .timings
+                .iter()
+                .any(|timing| timing.label == label),
+            "`{label}` is recorded on every host, so its absence means it was \
+             renamed or dropped in one place and not the other; the NDJSON line \
+             must not quietly ship one field fewer"
         );
     }
     // The trailing comma the loop leaves is trimmed rather than avoided with a

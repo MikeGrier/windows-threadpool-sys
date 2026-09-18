@@ -46,7 +46,7 @@ dependency to a publishable crate and could not disturb the
   feature here, so no CPUID branch was timed as though it were the algorithm.
 
 - [x] **CW-1.2** -- Implement the three claim-word layouts as self-contained
-  `u64`-item queues in [claim_layout.rs](src/claim_layout.rs).
+  `u64`-item queues in `claim_layout.rs`.
 
 - [x] **CW-1.3** -- Wire the three layouts into `probe-queue-contention` as
   named shapes in both regimes.
@@ -195,7 +195,7 @@ dependency at all -- only 64/64 does, which is `CW-2.3`.
 ## M3: retire the duplicate
 
 - [x] **CW-1.6** -- Delete the duplicated *implementation* in
-  [claim_layout.rs](src/claim_layout.rs), keeping only what `CW-2.3` leaves no
+  `claim_layout.rs`, keeping only what `CW-2.3` leaves no
   other way to measure.
 
   **This is not a decision about which layouts to offer.** That is settled --
@@ -584,11 +584,14 @@ request as it was written, and quotes the module doc as it read before the corre
   alone "says nothing", since the finding is the difference between two executables, so a partial
   run of that pair is worse than useless.
 
-  **It is queued rather than done because there is a real tradeoff, and it is an operational call.**
-  `!cancelled()` also runs the step when the *build* failed, where `cargo run` cannot compile and
-  the step turns from skipped (grey) into failed (red). That trades quieter broken-build output for
-  better broken-test output. The topology step already took that trade; whether all twelve should is
-  a judgement about how the CI log is read, not something to settle by consistency alone.
+  **Decided and applied: gate on the build's outcome, not on `!cancelled()`.** The tradeoff above is
+  real for `!cancelled()`, which also runs the step when the *build* failed, turning skipped (grey)
+  into failed (red) exactly when `cargo run` cannot compile anything. Gating on
+  `steps.build.outcome == 'success'` takes neither horn: a broken build still skips quietly, and a
+  failing *test* -- the run that wanted the diagnostics -- still emits them. All twelve probe steps
+  now carry it, and an explicit `cargo build` step ahead of the tests exists only to give them
+  something to gate on, since `cargo test`'s outcome cannot separate "did not compile" from
+  "compiled and a test failed".
 
 - [x] **M2.8** -- Carry the OS error in the remaining Win32 assertion messages.
 

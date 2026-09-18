@@ -19,10 +19,16 @@ fn render(out: &mut dyn std::fmt::Write) {
     // First line of the report, and part of the returned text rather than
     // written out here: a captured report must carry the line naming the
     // machine that produced it, and the taint marker with it.
+    //
+    // **Kept, rather than taken from the measurement, so a run that dies still
+    // names its machine** -- and then reconciled below, because the banner and
+    // the rows would otherwise come from two separate discoveries with nothing
+    // saying so.
+    let announced = windows_placement_probe::fingerprint::Fingerprint::discover();
     let _ = writeln!(
         out,
         "{}",
-        windows_placement_probe::fingerprint::banner_line()
+        windows_placement_probe::fingerprint::banner_line_for(&announced)
     );
     let _ = writeln!(
         out,
@@ -33,12 +39,24 @@ fn render(out: &mut dyn std::fmt::Write) {
     // in `main`'s argument list where it used to sit. A measurement called
     // before the renderer is entered is outside the sink entirely, so a host
     // where it fails gives a reader no banner and no indication of which probe
-    // died. `measure` reads the topology and can fail, which is exactly the
-    // case worth naming.
+    // died.
+    //
+    // **`measure` now has two ways to fail, and this must not name the wrong
+    // one.** It reads the topology, which can fail; and it pins each side to a
+    // chosen processor, which a job object or container can refuse. This arm
+    // used to say "could not read this machine's topology" for whatever came
+    // back, so a pin refusal would have been reported as a discovery failure --
+    // a specific, checkable claim about the machine, made from an error that
+    // says something else. The refusal's own text explains itself, so the
+    // wording here stays neutral and lets it.
     let observation = &match measure() {
         Ok(observation) => observation,
         Err(error) => {
-            let _ = writeln!(out, "could not read this machine's topology: {error}");
+            let _ = writeln!(
+                out,
+                "this host could not be measured:\n{}",
+                error.to_string().trim_end()
+            );
             let _ = writeln!(
                 out,
                 "\nNothing below could be measured, so nothing below is reported. This is\n\
@@ -48,7 +66,61 @@ fn render(out: &mut dyn std::fmt::Write) {
         }
     };
 
-    let _ = writeln!(out, "processors, as discovered:");
+    // **The banner and the rows must describe the same machine, or the report is
+    // a splice of two.** The banner came from the discovery above; every row
+    // came from the one `measure` took. A processor going offline, or moving
+    // group or node, between them is enough to produce a report whose header
+    // names one machine and whose body describes another, with nothing saying
+    // so -- and `Observation::host` exists precisely so a caller can notice,
+    // its own rustdoc saying it "lets the caller compare the two and refuse".
+    //
+    // **Three readings, not two, because `Observation::host` is taken at the
+    // START of the measurement.** `core_affinity::measure` discovers the
+    // topology, derives `host` from it, and only then runs every timed pair --
+    // so comparing the banner against `host` brackets the gap before the work
+    // and leaves the work itself, which is the long part, unwatched. A reading
+    // taken after `measure` returns closes that window. This is the same
+    // bracket `topology_report::attribution` puts around the topology probe's
+    // measurement, applied to the one that takes far longer.
+    //
+    // `windows-placement-probe`'s own binary refuses on a mismatch, because it
+    // is writing a corpus record a runner consented to. This one is a
+    // fleet-survey report, so it discloses instead: the rows below were still
+    // measured, and a reader told which machine they belong to can use them.
+    // What must not happen is the reader being told nothing.
+    let settled = windows_placement_probe::fingerprint::Fingerprint::discover();
+    let disagreement = match (&announced, &settled) {
+        (Ok(announced), Ok(settled)) => {
+            *announced != observation.host || *settled != observation.host
+        }
+        // A bracket read that failed establishes nothing either way, so it is
+        // reported rather than treated as agreement.
+        _ => true,
+    };
+    if disagreement {
+        let describe = |reading: &std::io::Result<
+            windows_placement_probe::fingerprint::Fingerprint,
+        >| match reading {
+            Ok(fingerprint) => fingerprint.to_string(),
+            Err(error) => format!("UNKNOWN -- topology discovery failed: {error}"),
+        };
+        let _ = writeln!(
+            out,
+            "\nHOST NOT HELD STILL: the three readings that bracket this run do not\n\
+             all describe the same machine, so which one the measurements belong to\n\
+             was not established.\n  \
+             before:   {}\n  \
+             measured: {}\n  \
+             after:    {}\n\
+             The rows below were measured on the middle one. Read them through it,\n\
+             or run again on a machine that is not changing shape.",
+            describe(&announced),
+            observation.host,
+            describe(&settled)
+        );
+    }
+
+    let _ = writeln!(out, "\nprocessors, as discovered:");
     let _ = writeln!(
         out,
         "  {:>8}  {:>16}  {:>13}",
@@ -81,19 +153,45 @@ fn render(out: &mut dyn std::fmt::Write) {
         seen.dedup();
         seen
     };
+    // Count only domains that were actually reported, and keep the two reasons a
+    // processor has none apart. `Absent` means the topology reported no cache
+    // level that partitions this machine; `NotObserved` means this processor was
+    // left out of the level that does. Reporting both as "reported none" states
+    // a negative about a machine where the truth is that nothing was observed --
+    // the same conflation of missing data with a finding that this probe's
+    // placement classification keeps separate, and that the caution below is
+    // built around.
+    let (known_domains, absent, unobserved) = {
+        let mut seen: Vec<u32> = Vec::new();
+        let mut absent = 0usize;
+        let mut unobserved = 0usize;
+        for processor in &observation.processors {
+            match processor.cache_domain {
+                Observed::Known(id) => seen.push(id),
+                Observed::Absent => absent += 1,
+                Observed::NotObserved => unobserved += 1,
+            }
+        }
+        seen.sort_unstable();
+        seen.dedup();
+        (seen.len(), absent, unobserved)
+    };
+    let mut caveats: Vec<String> = Vec::new();
+    if absent > 0 {
+        caveats.push(format!("{absent} in no reported cache domain"));
+    }
+    if unobserved > 0 {
+        caveats.push(format!("{unobserved} not observed at that level"));
+    }
     let _ = writeln!(
         out,
-        "\n  {} efficiency class(es), {} cache domain(s)",
+        "\n  {} efficiency class(es), {} reported cache domain(s){}",
         classes.len(),
-        {
-            let mut seen: Vec<_> = observation
-                .processors
-                .iter()
-                .map(|p| p.cache_domain)
-                .collect();
-            seen.sort_unstable();
-            seen.dedup();
-            seen.len()
+        known_domains,
+        if caveats.is_empty() {
+            String::new()
+        } else {
+            format!(" ({})", caveats.join(", "))
         }
     );
 
@@ -154,6 +252,12 @@ fn render(out: &mut dyn std::fmt::Write) {
     // it is the placement the caching hypothesis is about, and on an SMT host it
     // is where the interesting result lives. Omitting it once already produced a
     // table that disagreed with the interpretation printed directly beneath it.
+    //
+    // The two `UnknownCache*` variants MUST be here for the same reason, and
+    // were omitted in exactly the way this comment warns about. They are real
+    // measurements -- a handoff timed between two named processors -- on a host
+    // whose topology did not report the partitioning level. Leaving them out
+    // drops measured rows from the table silently.
     let all = [
         Placement::SameCoreSiblings,
         Placement::SameCacheSameClass,
@@ -161,6 +265,8 @@ fn render(out: &mut dyn std::fmt::Write) {
         Placement::CrossCacheSameClass,
         Placement::CrossCacheCrossClass,
         Placement::CrossNumaNode,
+        Placement::UnknownCacheSameClass,
+        Placement::UnknownCacheCrossClass,
     ];
 
     for placement in all {
@@ -234,8 +340,57 @@ interpretation:
     // cross-class pair is also cross-cache, they are perfectly confounded and
     // no amount of measurement here separates them -- which is a fact to state,
     // not to reason past.
-    let confounded = !expressible.contains(&Placement::SameCacheCrossClass)
+    //
+    // **Confounding is a property of structure that EXISTS, never of structure
+    // that is missing, and testing it by inexpressibility alone got that
+    // backwards twice.** Both bugs printed the same sentence -- classes and
+    // cache domains "coincide exactly" -- on a host that had established no
+    // cache structure at all, and they arrived by different routes:
+    //
+    // - Topology omitted a processor from the partitioning level, so every pair
+    //   became `UnknownCache*`. `cache_unobserved` covers that one.
+    // - Topology reported no partitioning cache at all, so `Fingerprint` marked
+    //   every processor `Observed::Absent`. `Absent == Absent` compares equal,
+    //   so those pairs classify as `SameCacheSameClass` and NO `Unknown*`
+    //   variant appears -- `cache_unobserved` is false and cannot see it. On a
+    //   homogeneous SMT VM (one class, no cache partition) both separators are
+    //   then vacuously inexpressible and the claim fired, directly beneath this
+    //   same report's "0 reported cache domain(s)" line.
+    //
+    // Requiring `CrossCacheCrossClass` to be expressible is what closes both,
+    // and closes them for the right reason rather than by naming each route: the
+    // sentence is about a pair that is cross-class AND cross-cache, so unless
+    // the host can express one, there is nothing for the two factors to be
+    // confounded IN. A vacuous truth is not a measurement result.
+    let cache_unobserved = expressible.contains(&Placement::UnknownCacheSameClass)
+        || expressible.contains(&Placement::UnknownCacheCrossClass);
+    let confounded = !cache_unobserved
+        && expressible.contains(&Placement::CrossCacheCrossClass)
+        && !expressible.contains(&Placement::SameCacheCrossClass)
         && !expressible.contains(&Placement::CrossCacheSameClass);
+    if cache_unobserved {
+        let _ = writeln!(
+            out,
+            "  CAUTION: this machine's topology did not report the level that"
+        );
+        let _ = writeln!(
+            out,
+            "  partitions it, so some pairs above carry no cache relationship."
+        );
+        let _ = writeln!(
+            out,
+            "  Their rows are labelled 'unknown cache' rather than filed under a"
+        );
+        let _ = writeln!(
+            out,
+            "  relationship nobody established. The class comparison below still"
+        );
+        let _ = writeln!(
+            out,
+            "  holds -- the efficiency class was observed -- but nothing here"
+        );
+        let _ = writeln!(out, "  says what the cache did.");
+    }
     if confounded {
         let _ = writeln!(
             out,
@@ -460,7 +615,16 @@ interpretation:
     verdicts.sort_unstable();
     verdicts.dedup();
 
-    if verdicts.len() > 1 {
+    // A SIGN flip, not merely disagreement. `no effect` beside `caching WINS`
+    // is one magnitude larger than the other, which is not a technique whose
+    // direction depends on placement -- and saying it is, is the failure this
+    // crate's `probe-peer-index-cache` note names: an instrument that states
+    // its finding regardless of what it measured is worse than none, because
+    // it is believed. Observed on a 16-processor host printing the flip over
+    // 1.04x and 1.31x, which share a sign.
+    let wins = verdicts.contains(&"caching WINS");
+    let loses = verdicts.contains(&"caching LOSES");
+    if wins && loses {
         let _ = writeln!(
             out,
             "\n  THE VERDICT FLIPS WITHIN ONE MACHINE. A technique whose sign"
@@ -474,6 +638,16 @@ interpretation:
             "  rejected by a fixed decision. Any answer has to name the"
         );
         let _ = writeln!(out, "  placement it holds for.");
+    } else if verdicts.len() > 1 {
+        let _ = writeln!(
+            out,
+            "\n  The verdicts differ in MAGNITUDE across placements but not in"
+        );
+        let _ = writeln!(
+            out,
+            "  sign, so placement changes how much the technique is worth here"
+        );
+        let _ = writeln!(out, "  rather than whether it helps at all.");
     } else {
         let _ = writeln!(
             out,
@@ -484,6 +658,71 @@ interpretation:
             "  placement alone does not explain the disagreement between hosts."
         );
     }
+}
+
+/// The undirected hop a directed pair belongs to.
+///
+/// **One definition, because two copies is how this went wrong twice.** A hop is
+/// measured in both directions, so `(0, 1)` and `(1, 0)` are one hop. Forgetting
+/// that made a single-pair guard unreachable in one review round; the fix for
+/// that wrote the rule inline, and a later round then attributed a spread to
+/// "the hops" when it came entirely from reversing one hop -- because the fix
+/// for *that* wrote the same expression a second time, fifty lines below the
+/// first, instead of calling it.
+///
+/// Two consistent copies are not themselves a defect. The defect is the next
+/// change reaching one of them, and a function cannot be half-converted.
+fn undirected(pair: (u32, u32)) -> (u32, u32) {
+    if pair.0 <= pair.1 {
+        (pair.0, pair.1)
+    } else {
+        (pair.1, pair.0)
+    }
+}
+
+/// Where a row's ring sat relative to the two ends of its hop.
+///
+/// The axis that has to be held fixed before two hops can be compared. A hop
+/// measured with the ring on the producer's node and the same hop measured with
+/// it on the consumer's are different costs, so a minimum drawn from one and a
+/// maximum from the other says nothing about the hops.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Locality {
+    /// The ring was asked for the producer's node.
+    Producer,
+    /// The ring was asked for the consumer's node.
+    Consumer,
+    /// Asked for a third node, or not asked for one at all.
+    Elsewhere,
+}
+
+impl Locality {
+    fn of(pair: (u32, u32), requested: Option<u32>) -> Self {
+        match requested {
+            Some(node) if node == pair.0 => Self::Producer,
+            Some(node) if node == pair.1 => Self::Consumer,
+            _ => Self::Elsewhere,
+        }
+    }
+
+    fn label(self) -> &'static str {
+        match self {
+            Self::Producer => "with the ring on the producer's node",
+            Self::Consumer => "with the ring on the consumer's node",
+            Self::Elsewhere => "with the ring elsewhere",
+        }
+    }
+}
+
+/// One measured node-pair row, reduced to what the spread analysis needs.
+struct NodeRow {
+    /// The undirected hop, which is the unit hops are compared as.
+    hop: (u32, u32),
+    /// The directed pair, kept so a row can be named the way the table names it.
+    directed: (u32, u32),
+    locality: Locality,
+    ring: Option<u32>,
+    nanos: f64,
 }
 
 /// Print the per-node-pair handoff cost, when the host has nodes to cross.
@@ -513,11 +752,24 @@ fn render_node_distances(out: &mut dyn std::fmt::Write, observation: &Observatio
     // names.
     let _ = writeln!(
         out,
-        "  (`ring on` is the node requested; `!` means it landed elsewhere)"
+        "  (`ring on` is the node requested; `!base`, `!cached` or `!both` names\n  \
+         any run whose memory did not land there)"
     );
 
-    let mut slowest: Option<(f64, (u32, u32))> = None;
-    let mut fastest: Option<(f64, (u32, u32))> = None;
+    // **Every row, not just the extremes, because the extremes alone cannot say
+    // what varied.** Taking a global minimum and maximum mixes two factors: a
+    // hop can be measured with the ring on the producer's node or the
+    // consumer's, and those are different costs. The cheapest row may be
+    // producer-local on one hop while the dearest is consumer-local on another,
+    // so their ratio spans a change of hop AND a change of locality -- and
+    // attributing it to the hops is the same error as reporting a direction
+    // reversal as a hop difference, one level further out. Holding locality
+    // fixed is what makes a hop comparison a comparison.
+    let mut rows: Vec<NodeRow> = Vec::new();
+    // Rows the table shows but the verdict must not use: their allocation did
+    // not land where it was asked, so they belong to no locality. Counted so the
+    // report can say the comparison is thinner than the table looks.
+    let mut redirected = 0_usize;
 
     for pair in &pairs {
         for base in observation.node_pair_rows(*pair, Strategy::Baseline) {
@@ -544,13 +796,30 @@ fn render_node_distances(out: &mut dyn std::fmt::Write, observation: &Observatio
                 // apart.
                 format!("{} -> {}", pair.0, pair.1),
                 // The requested node, matching the key above and the probe
-                // crate's own report. A trailing `!` marks a row whose memory
-                // did not land where it was asked to go, so a redirected run
-                // is not read as a measurement of the placement it names.
-                match (base.requested_memory_node, base.memory_node) {
-                    (Some(asked), Some(got)) if asked == got => format!("node {asked}"),
-                    (Some(asked), _) => format!("node {asked}!"),
-                    (None, _) => "unspecified".to_owned(),
+                // crate's own report. A trailing marker names any run whose
+                // memory did not land where it was asked to go, so a redirected
+                // run is not read as a measurement of the placement it names.
+                //
+                // **Both runs, not just the baseline.** The row prints a
+                // baseline and a cached timing side by side as a comparison at
+                // one placement, but the marker was computed from `base` alone
+                // -- so a cached allocation that was redirected, or whose
+                // placement could not be determined, printed under an
+                // unqualified `node N` beside a baseline that did land there.
+                // The reader was shown a same-placement comparison that was not
+                // achieved, which is the defect the marker exists to prevent,
+                // applied to one of the two columns only.
+                match base.requested_memory_node {
+                    None => "unspecified".to_owned(),
+                    Some(asked) => {
+                        let landed = |node: Option<u32>| node == Some(asked);
+                        match (landed(base.memory_node), landed(cached.memory_node)) {
+                            (true, true) => format!("node {asked}"),
+                            (false, true) => format!("node {asked}!base"),
+                            (true, false) => format!("node {asked}!cached"),
+                            (false, false) => format!("node {asked}!both"),
+                        }
+                    }
                 },
                 format!("g{}/cpu{}", base.producer.group, base.producer.number),
                 format!("g{}/cpu{}", base.consumer.group, base.consumer.number),
@@ -558,17 +827,38 @@ fn render_node_distances(out: &mut dyn std::fmt::Write, observation: &Observatio
                 cached.nanos_per_item,
                 cached.consumer_batch
             );
-            let seen = (base.nanos_per_item, *pair);
-            if slowest.is_none_or(|(worst, _)| seen.0 > worst) {
-                slowest = Some(seen);
-            }
-            if fastest.is_none_or(|(best, _)| seen.0 < best) {
-                fastest = Some(seen);
+            // **Only a row that landed where it was asked can carry a
+            // locality-controlled conclusion.** The marker above already
+            // recognises a redirected or undeterminable allocation, and the row
+            // stays in the table because it was measured -- but classifying it
+            // by the node it *requested* would let the verdict below say "at the
+            // producer's placement" about a timing taken somewhere else. The
+            // whole point of holding locality fixed is lost if a row can be
+            // filed under a locality it did not achieve.
+            match (base.requested_memory_node, base.memory_node) {
+                (Some(asked), Some(landed)) if asked == landed => rows.push(NodeRow {
+                    hop: undirected(*pair),
+                    directed: *pair,
+                    locality: Locality::of(*pair, base.requested_memory_node),
+                    ring: base.requested_memory_node,
+                    nanos: base.nanos_per_item,
+                }),
+                _ => redirected += 1,
             }
         }
     }
 
-    if pairs.len() == 1 {
+    // Directed pairs, so a host with two nodes yields `(0,1)` and `(1,0)` --
+    // two entries for one hop measured both ways. Counting entries would make
+    // this guard unreachable, which it was: `pairs.len()` is 0 on a single-node
+    // host and even and >= 2 otherwise, so `== 1` never held and a two-node
+    // machine fell into the spread analysis below, where it compared a hop
+    // against its own reverse and reported the two as different hops.
+    let mut hops: Vec<(u32, u32)> = pairs.iter().copied().map(undirected).collect();
+    hops.sort_unstable();
+    hops.dedup();
+
+    if hops.len() == 1 {
         let _ = writeln!(
             out,
             "\n  One node pair, so this restates the `cross NUMA node` row above\n  \
@@ -578,35 +868,152 @@ fn render_node_distances(out: &mut dyn std::fmt::Write, observation: &Observatio
         return;
     }
 
-    let (Some((worst, worst_pair)), Some((best, best_pair))) = (slowest, fastest) else {
+    // **The comparison is made WITHIN a ring locality, never across them.** A
+    // global minimum and maximum span whatever varied between those two rows,
+    // and two things vary here: which hop, and where the ring sat. On a machine
+    // where locality dominates -- every hop cheap producer-local and dear
+    // consumer-local -- the cheapest row and the dearest row can be one percent
+    // apart at matching placements while their ratio is tenfold, and reporting
+    // that as "the hops are not interchangeable" attributes to the hops a
+    // difference the hops did not make.
+    //
+    // So each locality is compared against itself, and only a locality that
+    // actually spans two or more hops can say anything about hops at all.
+    let mut verdict: Option<(Locality, &NodeRow, &NodeRow)> = None;
+    for locality in [Locality::Producer, Locality::Consumer, Locality::Elsewhere] {
+        let within: Vec<&NodeRow> = rows.iter().filter(|row| row.locality == locality).collect();
+        let mut spanned: Vec<(u32, u32)> = within.iter().map(|row| row.hop).collect();
+        spanned.sort_unstable();
+        spanned.dedup();
+        if spanned.len() < 2 {
+            continue;
+        }
+        // **One representative per hop, so the comparison is like against
+        // like.** Two corrections are folded in here, and the second only became
+        // visible once the first was made.
+        //
+        // A plain minimum and maximum within a locality can land on the two
+        // directions of a single hop -- `0 -> 1` with the ring on node 0 and
+        // `1 -> 0` with it on node 1 are both producer-local -- and that pair
+        // would then win the "widest" contest, making the run report itself
+        // unable to compare hops while discarding a comparison it did hold.
+        //
+        // Restricting to pairs on different hops fixes that and leaves a subtler
+        // version: pairing one hop's fastest row against another hop's slowest
+        // still spans a direction difference as well as a hop difference, and
+        // reports the sum as the hop's. Measured on synthetic rows built for it,
+        // that read 25x where the hops differ by 6x. Each hop is therefore
+        // reduced to its fastest row at this locality -- the measurement least
+        // perturbed by whatever else the machine was doing -- and the spread is
+        // taken across those. Direction asymmetry within a hop is two adjacent
+        // rows of the table above; it is not what this paragraph compares.
+        let representatives: Vec<&NodeRow> = spanned
+            .iter()
+            .filter_map(|hop| {
+                within
+                    .iter()
+                    .copied()
+                    .filter(|row| row.hop == *hop)
+                    .min_by(|a, b| a.nanos.total_cmp(&b.nanos))
+            })
+            .collect();
+        let (Some(best), Some(worst)) = (
+            representatives
+                .iter()
+                .copied()
+                .min_by(|a, b| a.nanos.total_cmp(&b.nanos)),
+            representatives
+                .iter()
+                .copied()
+                .max_by(|a, b| a.nanos.total_cmp(&b.nanos)),
+        ) else {
+            continue;
+        };
+        // The widest cross-hop spread any one placement shows is the strongest
+        // hop evidence the run holds, so that is the one reported.
+        let wider = verdict.is_none_or(|(_, previous_best, previous_worst)| {
+            worst.nanos / best.nanos > previous_worst.nanos / previous_best.nanos
+        });
+        if wider {
+            verdict = Some((locality, best, worst));
+        }
+    }
+
+    // Said wherever a verdict is reached or declined, because a reader comparing
+    // the table to the paragraph would otherwise count more rows than the
+    // paragraph used and have no way to learn why.
+    let excluded = |out: &mut dyn std::fmt::Write| {
+        if redirected > 0 {
+            let _ = writeln!(
+                out,
+                "  {redirected} row(s) above are not in that comparison: their memory did not\n  \
+                 land on the node they asked for, so they belong to no placement."
+            );
+        }
+    };
+
+    // `hops.len()`, not `pairs.len()`. `pairs` is directed, so a three-node host
+    // has six entries for the three hops the guard above just counted -- and
+    // printing the directed count here made two adjacent paragraphs describe one
+    // machine with two different numbers.
+    let Some((locality, best, worst)) = verdict else {
+        let _ = writeln!(
+            out,
+            "\n  {} node hop(s), but no single ring placement covers two of them,\n  \
+             so this run cannot compare hops: every pair of rows differs in where\n  \
+             the ring sat as well as which hop it crossed.",
+            hops.len()
+        );
+        excluded(out);
+        let _ = writeln!(
+            out,
+            "  This measures the handoff between two nodes; it is not a distance\n  \
+             matrix read from firmware. Windows exposes no NUMA distance table, so\n  \
+             these numbers are the observable rather than a restatement of ACPI."
+        );
         return;
     };
+    let ring = |node: Option<u32>| match node {
+        Some(node) => format!("ring on node {node}"),
+        None => "ring unspecified".to_owned(),
+    };
+    let spread = worst.nanos / best.nanos;
     let _ = writeln!(
         out,
-        "\n  {} node pairs. Cheapest hop {} <-> {} at {:.1} ns/item; dearest\n  \
-         {} <-> {} at {:.1} ns/item -- a spread of {:.1}x.",
-        pairs.len(),
-        best_pair.0,
-        best_pair.1,
-        best,
-        worst_pair.0,
-        worst_pair.1,
-        worst,
-        worst / best
+        "\n  {} node hop(s). Compared {}, which is the widest spread any single\n  \
+         placement shows: cheapest {} -> {} ({}) at {:.1} ns/item; dearest\n  \
+         {} -> {} ({}) at {:.1} ns/item -- a spread of {:.1}x.",
+        hops.len(),
+        locality.label(),
+        best.directed.0,
+        best.directed.1,
+        ring(best.ring),
+        best.nanos,
+        worst.directed.0,
+        worst.directed.1,
+        ring(worst.ring),
+        worst.nanos,
+        spread
     );
-    if worst / best < 1.2 {
+    excluded(out);
+    // No same-hop arm: the selection above only considers pairs on different
+    // hops, so the two extremes cannot be one hop's two directions. A direction
+    // asymmetry within a hop is still visible -- it is two adjacent rows of the
+    // table above -- but it is not what this paragraph is comparing, and an arm
+    // that could never fire would be a claim about a state the code excludes.
+    if spread < 1.2 {
         let _ = writeln!(
             out,
             "  That spread is small enough that this host's nodes are close to\n  \
-             equidistant, so the single `cross NUMA node` row above is a fair\n  \
-             summary of it."
+             equidistant at this placement, so the single `cross NUMA node` row\n  \
+             above is a fair summary of it."
         );
     } else {
         let _ = writeln!(
             out,
-            "  The hops are NOT interchangeable, so the single `cross NUMA node`\n  \
-             row above reports whichever one was enumerated first and should not\n  \
-             be read as 'the' cost of leaving a node."
+            "  The hops are NOT interchangeable at this placement, so the single\n  \
+             `cross NUMA node` row above reports whichever one was enumerated\n  \
+             first and should not be read as 'the' cost of leaving a node."
         );
     }
     let _ = writeln!(

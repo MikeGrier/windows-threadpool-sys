@@ -78,14 +78,42 @@ fn ndjson_number(line: &str, key: &str) -> Option<f64> {
     rest[..end].trim().parse().ok()
 }
 
-fn assert_table_matches_ndjson(binary: &str, key_for: impl Fn(&str) -> &'static str) {
+fn assert_table_matches_ndjson(
+    binary: &str,
+    key_for: impl Fn(&str) -> &'static str,
+    every_label: &[&str],
+) {
     let (rows, ndjson) = run(binary);
 
-    assert!(
-        !rows.is_empty(),
-        "no table rows were read from {binary}, so this test is checking \
-         nothing -- the prose table's shape has probably changed"
-    );
+    // **`!rows.is_empty()` was the only guard on the recovery, and one row
+    // satisfies it.** The filter above recovers rows heuristically -- column-0
+    // alphabetic start, second token parses as a number -- so a renderer that
+    // printed ONE of the table's rows and dropped the rest passed this test
+    // unchanged: the surviving row matched its NDJSON field, the set was
+    // non-empty, and nothing related the count to anything.
+    //
+    // **The census asks the NDJSON which labels to require, rather than holding
+    // a list of its own.** A static list had to be filtered down to the
+    // unconditional labels, since a conditional one is legitimately absent on a
+    // host that cannot measure it -- and that filter was the hole: it excluded
+    // `submit_io_ring_empty` on every host, including the ones where it IS
+    // measured, so dropping its prose row while keeping its NDJSON field passed.
+    // Deriving the requirement from the line under test has no such gap: a label
+    // the NDJSON reports a NUMBER for was measured, so the prose owes a row for
+    // it; a label it reports `null` for was not, so nothing is owed. This is the
+    // NDJSON -> prose direction, which nothing checked before; the loop below is
+    // the prose -> NDJSON one.
+    for label in every_label {
+        let key = key_for(label);
+        if ndjson_number(&ndjson, key).is_some() {
+            assert!(
+                rows.iter().any(|(read, _)| read == label),
+                "the NDJSON carries a number for `{key}` but the prose table did \
+                 not print `{label}`, so a figure reached a mining pass and not a \
+                 reader\n{ndjson}"
+            );
+        }
+    }
 
     for (label, prose) in rows {
         let key = key_for(&label);
@@ -109,9 +137,17 @@ fn assert_table_matches_ndjson(binary: &str, key_for: impl Fn(&str) -> &'static 
 
 #[test]
 fn the_doorbell_probe_prints_every_figure_to_both_readers() {
+    // Every label, not just the unconditional ones: the census asks the NDJSON
+    // which of them were measured, so a conditional label is required exactly on
+    // the hosts that measured it.
+    let every: Vec<&str> = windows_platform_probes::doorbell_cost::EVERY_LABEL
+        .iter()
+        .map(|(label, _)| *label)
+        .collect();
     assert_table_matches_ndjson(
         env!("CARGO_BIN_EXE_probe-doorbell-cost"),
         windows_platform_probes::doorbell_cost::json_key,
+        &every,
     );
 }
 
@@ -120,5 +156,6 @@ fn the_request_probe_prints_every_figure_to_both_readers() {
     assert_table_matches_ndjson(
         env!("CARGO_BIN_EXE_probe-request-cost"),
         windows_platform_probes::request_cost::json_key,
+        &windows_platform_probes::request_cost::EVERY_LABEL,
     );
 }

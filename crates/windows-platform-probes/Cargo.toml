@@ -157,7 +157,8 @@ windows-topology-sys = { path = "../windows-topology-sys" }
 # It renders the banner too: every probe's report opens with a line naming the
 # machine that produced it and whether the measurement is tainted, so a captured
 # finding cannot be pasted somewhere and compared against something it does not
-# describe. That banner is this crate's to render, not a second copy here.
+# describe. That banner is `windows-placement-probe`'s to render, not a second
+# copy here.
 windows-placement-probe = { path = "../windows-placement-probe" }
 # The request-cost probe measures the real request type the design would put on
 # a queue, not a stand-in, for the same reason the topology probe reads the
@@ -258,9 +259,6 @@ features = [
 	# half of what a relative path resolves against, so the probe has to place
 	# it deliberately rather than inherit whatever launched it.
 	"Win32_System_Environment",
-	# GetSystemDirectoryW, so the request probe measures the real system
-	# directory instead of assuming Windows is installed on C:.
-	"Win32_System_SystemInformation",
 	"Win32_System_Diagnostics_Debug",
 	"Win32_System_IO",
 	"Win32_System_Pipes",

@@ -171,15 +171,34 @@ impl Observation {
 }
 
 /// Time the shipping queue and every model strategy.
-#[must_use]
-pub fn measure() -> Observation {
-    Observation {
-        calibration: median("shipping spsc", time_real_spsc),
+///
+/// # Errors
+///
+/// **Cannot refuse today, and the signature says `Result` anyway.** Every run
+/// this starts is unpinned -- `time_model` passes `None` for both sides, and
+/// `pin_current_thread(None)` returns before it touches anything -- so no host
+/// can make this return `Err`. The `Result` is here because the helpers it
+/// calls are fallible in general, not because this path has a failure mode; an
+/// earlier version of this section claimed it "refuses when a thread cannot be
+/// confined to the processor it was given", which describes [`time_model_on`]'s
+/// pinned callers rather than anything reachable from here.
+///
+/// The probe that *can* refuse is `core_affinity::measure`, which chooses
+/// processors and pins to them.
+pub fn measure() -> std::io::Result<Observation> {
+    Ok(Observation {
+        // Neither arm pins, so neither can refuse -- the `?`s below propagate a
+        // failure that no caller of this function can currently produce. Said
+        // plainly because the previous note here contrasted the calibration
+        // with the strategies as though only the first were unpinned, which
+        // would have sent the next reader looking for a refusal path in the
+        // second.
+        calibration: median("shipping spsc", || Ok(time_real_spsc()))?,
         strategies: [Strategy::Baseline, Strategy::Cached, Strategy::Warmed]
             .into_iter()
             .map(|strategy| median(strategy.label(), || time_model(strategy)))
-            .collect(),
-    }
+            .collect::<std::io::Result<Vec<_>>>()?,
+    })
 }
 
 /// One timed pass, with the shared-read counts that pass performed.
@@ -199,22 +218,27 @@ pub struct Sample {
     pub producer_refreshes: u64,
 }
 
-fn median(label: &'static str, mut timer: impl FnMut() -> Sample) -> Run {
+fn median(
+    label: &'static str,
+    mut timer: impl FnMut() -> std::io::Result<Sample>,
+) -> std::io::Result<Run> {
     // One untimed pass: first touch of a fresh allocation faults pages in, and
     // that belongs to the allocator rather than to the ring.
-    let _ = timer();
+    let _ = timer()?;
 
-    let mut samples: Vec<Sample> = (0..REPETITIONS).map(|_| timer()).collect();
+    let mut samples: Vec<Sample> = (0..REPETITIONS)
+        .map(|_| timer())
+        .collect::<std::io::Result<Vec<_>>>()?;
     samples.sort_by(|left, right| left.nanos.total_cmp(&right.nanos));
     let sample = samples[REPETITIONS / 2];
 
-    Run {
+    Ok(Run {
         label,
         nanos_per_item: sample.nanos / ITEMS as f64,
         items_per_second: ITEMS as f64 / (sample.nanos / 1e9),
         consumer_refreshes: sample.consumer_refreshes,
         producer_refreshes: sample.producer_refreshes,
-    }
+    })
 }
 
 /// The shipping queue, driven the same way the model is.
@@ -618,7 +642,7 @@ fn working_set_flags(address: *mut c_void) -> Option<usize> {
     Some(unsafe { info.VirtualAttributes.Flags })
 }
 
-fn time_model(strategy: Strategy) -> Sample {
+fn time_model(strategy: Strategy) -> std::io::Result<Sample> {
     time_model_on(strategy, None, None)
 }
 
@@ -635,11 +659,19 @@ fn time_model(strategy: Strategy) -> Sample {
 /// `None` leaves a side unconstrained, which is what the unpinned entry points
 /// pass and is deliberately not the same thing as pinning it to every
 /// processor: an unconstrained thread can migrate mid-run.
+///
+/// # Errors
+///
+/// Refuses, rather than measuring, when either side cannot be confined to the
+/// processor it was given -- a process restricted by a job object, a container
+/// or `start /affinity` being the usual cause. An unpinned run would produce a
+/// plausible number that answers a different question, so the refusal is the
+/// result; returning it lets the caller report it rather than die on it.
 pub fn time_model_on(
     strategy: Strategy,
     producer_cpu: Option<(u16, u8)>,
     consumer_cpu: Option<(u16, u8)>,
-) -> Sample {
+) -> std::io::Result<Sample> {
     time_model_placed(strategy, producer_cpu, consumer_cpu, None)
 }
 
@@ -649,71 +681,77 @@ pub fn time_model_on(
 /// writes locally and the consumer reads remotely; moving it to the consumer's
 /// node reverses exactly that, and those are different costs rather than two
 /// samples of one.
+///
+/// # Errors
+///
+/// As [`time_model_on`].
 pub fn time_model_placed(
     strategy: Strategy,
     producer_cpu: Option<(u16, u8)>,
     consumer_cpu: Option<(u16, u8)>,
     memory_node: Option<u32>,
-) -> Sample {
+) -> std::io::Result<Sample> {
     let ring = Ring::new_on(CAPACITY, memory_node);
     let placed_on = ring.memory_node();
 
-    // **Pinned before anything is spawned.** `pin_current_thread` panics on
+    // **Pinned before anything is spawned.** `pin_current_thread` refuses on
     // failure, and this used to run *after* the producer was already started:
-    // the unwind then reached `thread::scope`'s cleanup, which waits for a
+    // the failure then reached `thread::scope`'s cleanup, which waits for a
     // producer that is itself blocked forever on a ring nobody is draining. A
     // failure that should stop the run hung it instead. Nothing is running yet
-    // here, so the panic simply propagates.
-    let _consumer_pinned = pin_current_thread(consumer_cpu);
+    // here, so the refusal simply returns.
+    let _consumer_pinned = pin_current_thread(consumer_cpu)?;
 
     // Outside the scope so it outlives every borrow the spawned thread takes.
     let producer_pin = AtomicU8::new(PIN_PENDING);
 
     let started = Instant::now();
-    let (consumer_refreshes, producer_refreshes) = thread::scope(|scope| {
-        let shared = &ring;
-        let producer_pin = &producer_pin;
-        let producer = scope.spawn(move || {
-            // Armed *before* the pin attempt, so an unwind out of it still
-            // publishes an answer. Without that the consumer below waits on a
-            // thread that has already died.
-            let signal = PinSignal(producer_pin);
-            // Bound, not discarded: an unbound guard drops at the end of its
-            // own statement, which would unpin the thread immediately and
-            // measure the scheduler's choice while claiming to measure this
-            // processor. `#[must_use]` makes that mistake a warning.
-            let _pinned = pin_current_thread(producer_cpu);
-            producer_pin.store(PIN_READY, Ordering::Release);
-            // Its work is done; dropping it now cannot overwrite `PIN_READY`.
-            drop(signal);
-            produce(shared, strategy)
-        });
+    let (consumer_refreshes, producer_refreshes) =
+        thread::scope(|scope| -> std::io::Result<(u64, u64)> {
+            let shared = &ring;
+            let producer_pin = &producer_pin;
+            let producer = scope.spawn(move || -> std::io::Result<u64> {
+                // Armed *before* the pin attempt, so leaving it without success
+                // still publishes an answer -- by an early return now, and by an
+                // unwind out of anything below. Without that the consumer waits
+                // on a thread that has already finished.
+                let signal = PinSignal(producer_pin);
+                // Bound, not discarded: an unbound guard drops at the end of its
+                // own statement, which would unpin the thread immediately and
+                // measure the scheduler's choice while claiming to measure this
+                // processor. `#[must_use]` makes that mistake a warning.
+                let _pinned = pin_current_thread(producer_cpu)?;
+                producer_pin.store(PIN_READY, Ordering::Release);
+                // Its work is done; dropping it now cannot overwrite `PIN_READY`.
+                drop(signal);
+                Ok(produce(shared, strategy))
+            });
 
-        // **Neither side enters the transfer until both pins are settled.**
-        // Spinning rather than parking because the wait is a pin call long,
-        // and because this thread is already pinned and must not be handed to
-        // another processor by a blocking primitive.
-        while producer_pin.load(Ordering::Acquire) == PIN_PENDING {
-            std::hint::spin_loop();
-        }
+            // **Neither side enters the transfer until both pins are settled.**
+            // Spinning rather than parking because the wait is a pin call long,
+            // and because this thread is already pinned and must not be handed to
+            // another processor by a blocking primitive.
+            while producer_pin.load(Ordering::Acquire) == PIN_PENDING {
+                std::hint::spin_loop();
+            }
 
-        // On failure `consume` is skipped entirely: it would spin forever on
-        // items no living producer will write. `join` then surfaces the
-        // producer's panic, which is the outcome the caller should see.
-        let consumer_refreshes = if producer_pin.load(Ordering::Acquire) == PIN_READY {
-            consume(&ring, strategy)
-        } else {
-            0
-        };
-        let producer_refreshes = producer.join().expect("the producer must not panic");
-        (consumer_refreshes, producer_refreshes)
-    });
-    Sample {
+            // On failure `consume` is skipped entirely: it would spin forever on
+            // items no living producer will write. `join` then surfaces the
+            // producer's refusal, which is the outcome the caller should see.
+            let consumer_refreshes = if producer_pin.load(Ordering::Acquire) == PIN_READY {
+                consume(&ring, strategy)
+            } else {
+                0
+            };
+            let producer_refreshes = producer.join().expect("the producer must not panic")?;
+            Ok((consumer_refreshes, producer_refreshes))
+        })?;
+    Ok(Sample {
         nanos: started.elapsed().as_nanos() as f64,
         consumer_refreshes,
         producer_refreshes,
         memory_node: placed_on,
-    }
+    })
 }
 
 /// The producer has not yet reached the end of its pin attempt.
@@ -723,12 +761,13 @@ const PIN_READY: u8 = 1;
 /// The producer left its pin attempt without succeeding, so no data is coming.
 const PIN_FAILED: u8 = 2;
 
-/// Publishes [`PIN_FAILED`] if the producer unwinds before it reports success.
+/// Publishes [`PIN_FAILED`] if the producer leaves without reporting success.
 ///
-/// **The point is the unwind path, not the success path.** A plain store after
-/// `pin_current_thread` would never run when that call panics, and the consumer
-/// would then wait on a producer that no longer exists. A guard armed before
-/// the attempt runs either way, so the wait always ends.
+/// **The point is the path that skips the success store, not the success path.**
+/// A plain store after `pin_current_thread` never runs when that call refuses --
+/// the `?` returns first -- and the consumer would then wait on a producer that
+/// has already finished. A guard armed before the attempt runs on every exit
+/// from the closure, early return and unwind alike, so the wait always ends.
 struct PinSignal<'a>(&'a AtomicU8);
 
 impl Drop for PinSignal<'_> {
@@ -751,10 +790,12 @@ impl Drop for PinSignal<'_> {
 /// the return value -- unpins the thread at once, so the work that follows
 /// measures wherever the scheduler puts it while the row claims a processor.
 ///
-/// Panics rather than warns on failure. A silently unpinned thread would turn
+/// Refuses rather than warns on failure. A silently unpinned thread would turn
 /// a placement experiment into a measurement of the scheduler's preferences,
 /// and the run would still print a confident number -- the same failure mode as
-/// a probe that asserts its conclusion.
+/// a probe that asserts its conclusion. The refusal is returned rather than
+/// raised, so the caller can render it into a report instead of dying on it;
+/// what it must never do is continue.
 ///
 /// # Why not `SetThreadAffinityMask`
 ///
@@ -763,14 +804,36 @@ impl Drop for PinSignal<'_> {
 /// processors that is not a matter of widening the mask; the call has no way to
 /// express the target at all. `SetThreadGroupAffinity` takes the group
 /// explicitly, and is the only way to pin across the whole machine.
-fn pin_current_thread(cpu: Option<(u16, u8)>) -> AffinityGuard {
+fn pin_current_thread(cpu: Option<(u16, u8)>) -> std::io::Result<AffinityGuard> {
     let Some((group, number)) = cpu else {
-        return AffinityGuard { previous: None };
+        return Ok(AffinityGuard { previous: None });
     };
-    assert!(
-        u32::from(number) < usize::BITS,
-        "processor number {number} does not fit a group affinity mask"
-    );
+    // **The predicate lives in `is_nameable_in_a_mask`, not here.** It is also
+    // asked by `core_affinity::check_group_support` over every discovered
+    // processor, and when the two were separate expressions, converting this one
+    // from a panic to a refusal left that one deciding the outcome -- so the fix
+    // changed nothing a binary could reach. One definition cannot be
+    // half-converted.
+    //
+    // An error rather than an assert, and for the same reason the OS failure
+    // below is one: a group affinity mask is a `usize`, so on a 32-bit target a
+    // processor numbered 32 or above cannot be named at all. That is a limit of
+    // the mask, not a caller mistake, and it is the condition the pinning tests
+    // use because it is the only one reachable deterministically on an ordinary
+    // host. Leaving it a panic would have left the fallible path with no test
+    // that could reach it.
+    if !is_nameable_in_a_mask(number) {
+        return Err(refusal(
+            group,
+            number,
+            &format!(
+                "a group affinity mask on this target holds {} processors, so \
+                 processor {number} cannot be named in one",
+                mask_width()
+            ),
+            MASK_TOO_NARROW,
+        ));
+    }
 
     let affinity = GROUP_AFFINITY {
         Mask: 1_usize << number,
@@ -795,38 +858,110 @@ fn pin_current_thread(cpu: Option<(u16, u8)>) -> AffinityGuard {
         Reserved: [0; 3],
     };
     let ok = unsafe { SetThreadGroupAffinity(GetCurrentThread(), &affinity, &raw mut previous) };
-    // A raw string rather than an escaped-continuation one: `cargo fmt`
-    // reindents a multi-line string literal and the backslash continuations
-    // then swallow the blank lines, which turns a carefully laid-out message
-    // into one paragraph. This is the message a stranger sees when the tool
-    // gives up, so its shape matters.
-    assert!(
-        ok != 0,
+    if ok == 0 {
+        return Err(refusal(
+            group,
+            number,
+            &std::io::Error::last_os_error().to_string(),
+            ENVIRONMENT_REFUSED,
+        ));
+    }
+
+    Ok(AffinityGuard {
+        previous: Some(previous),
+    })
+}
+
+/// Whether a processor number can be named in a group affinity mask.
+///
+/// **One definition, because the split between two is exactly how a fix came to
+/// be measured as working while the binary's behaviour was unchanged.** This
+/// predicate lived inline in `pin_current_thread` and again in
+/// `core_affinity::check_group_support`, which runs over every discovered
+/// processor *before* any pin. Converting only the first from a panic to a
+/// refusal changed nothing a binary could reach: the run still died at the
+/// second, with the banner, the heading and nothing else.
+///
+/// Both sites were consistent before that change and neither was wrong. The
+/// hazard is **partial conversion** -- and a shared predicate makes the two
+/// impossible to get out of step, which is stronger than remembering to grep.
+#[must_use]
+pub fn is_nameable_in_a_mask(number: u8) -> bool {
+    u32::from(number) < usize::BITS
+}
+
+/// How many processors a group affinity mask can name on this target.
+///
+/// Reported by both refusals, so the reader is told the actual bound rather
+/// than being left to infer it from a pointer width.
+#[must_use]
+pub fn mask_width() -> u32 {
+    usize::BITS
+}
+
+/// The refusal a failed pin carries, as an error rather than a panic.
+///
+/// **The decision to stop is unchanged; only the channel is.** The message
+/// below is the one this helper has always produced, and the paragraph about
+/// measuring without pinning is still the argument for refusing. What changed
+/// is that a panic bypassed the probe's report sink: stdout carried a banner
+/// and nothing else, so a survey mining it could not tell a host that declined
+/// to be measured from a job that died for an unrelated reason. Returned as an
+/// error, the same words reach the report, and the refusal becomes an
+/// observation the fleet can count.
+///
+/// **`explanation` is a parameter because the two causes are opposites, and one
+/// message for both told a reader the wrong thing.** A `SetThreadGroupAffinity`
+/// failure names a processor the topology reported, so something about the
+/// environment is unexpected and a bug report is welcome. A number too wide for
+/// an affinity mask is the exact reverse -- a limit of this build on this
+/// target -- and the shared text told that reader the machine was misbehaving
+/// and invited a report about a documented limitation.
+///
+/// A raw string rather than an escaped-continuation one: `cargo fmt` reindents
+/// a multi-line string literal and the backslash continuations then swallow the
+/// blank lines, which turns a carefully laid-out message into one paragraph.
+/// This is the message a stranger sees when the tool gives up, so its shape
+/// matters.
+fn refusal(group: u16, number: u8, cause: &str, explanation: &str) -> std::io::Error {
+    std::io::Error::other(format!(
         r"
 This run is stopping, and no measurement was taken.
 
 Could not confine a thread to processor {number} in group {group}:
-  {error}
+  {cause}
 
-That processor was reported by this machine's own topology, so this is
-unexpected rather than a limit of the tool. A process restricted to a
-subset of processors -- by a job object, a container, or a `start /affinity`
--- is the usual cause.
+{explanation}
 
 The run stops rather than measuring without pinning. An unpinned thread
 measures wherever the scheduler happened to put it, which would produce a
 plausible number that answers a different question, and nothing in the
 output would say so.
-
-Reporting this is genuinely useful: please include this message.
-",
-        error = std::io::Error::last_os_error()
-    );
-
-    AffinityGuard {
-        previous: Some(previous),
-    }
+"
+    ))
 }
+
+/// Why a `SetThreadGroupAffinity` failure is worth reporting.
+///
+/// The processor came from the machine's own topology, so the environment is
+/// doing something the topology did not describe.
+const ENVIRONMENT_REFUSED: &str =
+    "That processor was reported by this machine's own topology, so this is
+unexpected rather than a limit of the tool. A process restricted to a
+subset of processors -- by a job object, a container, or a `start /affinity`
+-- is the usual cause.
+
+Reporting this is genuinely useful: please include this message.";
+
+/// Why a processor too wide for an affinity mask is not worth reporting.
+///
+/// The opposite case, and it must not borrow the sentence above: nothing is
+/// wrong with the host, and inviting a bug report for a documented limit of the
+/// tool wastes the reader's time and ours.
+const MASK_TOO_NARROW: &str =
+    "A group affinity mask is one machine word wide, so this is a limit of this
+build on this target rather than a fault in the machine. The host is fine;
+this build cannot name that processor.";
 
 /// This thread's group affinity as the system currently reports it.
 ///
@@ -848,10 +983,10 @@ fn current_affinity() -> Option<GROUP_AFFINITY> {
 
 /// Puts the calling thread's affinity back when it goes out of scope.
 ///
-/// A guard rather than a call at the end of the timed section, so an unwind
-/// restores it too: a panic between pinning and restoring would otherwise leave
-/// the thread confined for the rest of the process, and this crate's pinning
-/// failure path panics by design.
+/// A guard rather than a call at the end of the timed section, so an early
+/// return or an unwind restores it too: either one between pinning and
+/// restoring would otherwise leave the thread confined for the rest of the
+/// process, and this crate's pinning failure path returns early by design.
 #[must_use = "the thread is unpinned as soon as this guard is dropped"]
 struct AffinityGuard {
     /// What to restore, or `None` when nothing was changed.

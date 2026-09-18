@@ -1351,6 +1351,122 @@ crate that happens to publish measurements. Every instance found so far has been
 existing decision rather than a gap in it. Apply it while writing: no checker can find these,
 because nothing is inconsistent.
 
+## FAIL FAST — push every rule to the earliest rung that can enforce it
+
+CONTRACT INTEGRITY above tells you to keep restatements in step. This tells you where to put the
+enforcement, and it applies to **code** as much as to prose. The rationale and the evidence are in
+[DESIGN-NOTES.md](../DESIGN-NOTES.md) -> [Push every rule down the detection ladder](../DESIGN-NOTES.md#detection-ladder);
+what follows is the rule.
+
+**The ladder, strongest first. Always ask what the next rung down would cost, and take it if you
+can afford it:**
+
+1. **The build.** A defect that cannot compile cannot ship. Prefer making a mistake
+   *unrepresentable* over making it detectable: one definition rather than two agreeing ones, a
+   type that excludes the bad state, a `const` assertion. This is the only rung that cannot be
+   skipped, run stale, or pass on a machine that never exercised the path.
+2. **Unit tests.** They run on **every developer's machine, every time**, in under a second. A rule
+   that lands here is checked by everyone who touches the tree, including the person who has never
+   read the rule.
+3. **Integration tests.** Reserved for what genuinely crosses a process, filesystem, device or OS
+   boundary (see "Quality" below). These run before a milestone closes, so a defect here is caught
+   days after it is written rather than minutes.
+4. **CI.** The **last** resort, not the first. CI catches a defect after it is pushed, on a machine
+   the author is not sitting at, in a log they have to go and read. A rule that exists only in CI
+   has already cost the author a context switch before it says anything.
+
+**Take the lowest rung the fact supports, not the lowest rung available.** The ladder is about
+where a rule *can* be enforced, and a rule pushed below that point does not become cheap -- it
+becomes decoration that reads like enforcement. A property of a program's output cannot be
+established by a proxy over its source; a property of one run cannot be established by a constant.
+When the honest rung is expensive, pay it or say plainly what is left unchecked.
+
+**Prose is not a rung.** A rule that lives only in a comment, a design note or a checklist is
+enforced by whoever happens to remember it, which over a long change is nobody.
+
+Six specific rules follow. Each is written because it was violated, repeatedly, in work that had
+already passed several review rounds; each names the rung it belongs on.
+
+### 1. Never half-convert a rule that lives at two sites -- give it one site
+
+**Two consistent copies of a predicate are not a defect. The defect is the next change reaching one
+of them.** This is the single most expensive pattern measured here: one predicate at two or three
+sites, corrected at one, three separate times over three distinct predicates.
+
+- **Rung: the build.** Extract the predicate to one function and the split becomes impossible
+  rather than merely discouraged. `is_nameable_in_a_mask` and `undirected` in
+  `windows-placement-probe` / `windows-platform-probes` are the worked examples; each replaced two
+  copies of an expression that had already been half-converted once.
+- Before changing a predicate, **grep for the expression, not the identifier** -- a duplicated rule
+  usually has no shared name, which is exactly why it was duplicated.
+- CONTRACT INTEGRITY rule 3 already required this sweep and says so in one clause; it is repeated
+  here because its section is framed around *stated claims*, so a `>=` in a function does not
+  announce itself as "a stated contract rule" and the sweep never fires.
+
+### 2. Sabotage must enter where the real condition enters
+
+A sabotage that forces an internal variable proves only that the site you already changed responds.
+**Inject at the input the real condition would arrive through**, and confirm the failure reaches
+your change from there.
+
+Worked example of getting it wrong: a pinning refusal was verified by forcing the processor
+*argument* inside the pinning helper. That bypassed a second check, over the *discovered processor
+set*, which ran first and still panicked -- so the change was measured as working while the
+binary's behaviour was unchanged. Sabotaging the discovered set would have shown it immediately.
+
+### 3. A guard is bidirectional; test that it rejects AND that it accepts
+
+Every guard has two failure modes and testing one is the normal mistake. A census that proves
+`A subset B` says nothing about `B subset A`; a recogniser that accepts everything valid may also
+accept things the producer cannot emit; a message shared by two causes is wrong for at least one.
+
+- **Rung: unit tests.** Assert both directions in the same test, or the one-directional half will
+  be written and the other forgotten.
+- This generalises the `expect: "survives"` control the sabotage harness already requires -- a
+  manifest with no control can only tell you the tests are sensitive, never that they are sensitive
+  to the right thing.
+
+### 4. Every new error edge needs a test that traverses it
+
+A `?`, an `Err` return, or a new match arm is a path. **If no test can reach it, it is not
+implemented, it is only written.** When a path genuinely cannot be reached on any host, say so at
+the definition and say what would reach it -- do not leave it silently untested.
+
+Prefer a deterministic reachable condition over a host-dependent one, and be willing to convert an
+assert into an error *for the sake of testability* when that is the only condition a developer
+machine can produce on demand.
+
+### 5. When you change an item's contract, re-read that item's own doc comment first
+
+The nearest restatement of any contract is the `///` block attached to it, and it is the easiest to
+skip because you are looking at the body. Measured: every `//` comment in a file was updated and
+both `///` headers -- on the two items whose contract the change altered -- were left asserting the
+behaviour that had just been removed.
+
+Do this before the wider sweep, not after.
+
+### 6. A claim that counts or enumerates repository artifacts must come from a command
+
+"Every other probe emits a row", "several of its six placement rows", "three probes do X" -- these
+are facts about our own tree, not measurements of the world, so **the build can establish them and
+recollection must not.** Run the command, paste nothing, and where the claim matters, bind it:
+
+- **Rung: integration tests**, and the first attempt got that wrong, which is the lesson.
+  `the_probes_that_emit_a_machine_readable_row` in `windows-platform-probes` runs every registered
+  probe binary except two it names with a reason, and asserts which ones emit a row. It replaced a
+  *unit* test that walked `src/bin`
+  and grepped for a substring -- cheaper, and unsound twice over: the walk was shallow, so it never
+  saw the one probe whose classification the test existed to pin down, and a bare substring matched
+  a probe whose only mention of the tag is a `//!` comment. **The asserted set was correct while
+  neither half of the method was.**
+- **This is the ladder clause above, in its worked failure.** Emitting a row is a property of a
+  probe's *output*, so no proxy over its source can establish it -- the emission may live in any
+  module the binary calls. Reaching for the cheaper rung produced a test that looked like
+  enforcement and was decoration.
+- This is distinct from CONTRACT INTEGRITY rule 4, which governs *measured* numbers. A census of
+  our own source has no artifact to cite and no measurement error; it is simply either checked or
+  invented.
+
 ## REVIEW FEEDBACK — answer it where it was raised, not only in the commit
 
 **A review round is not finished when the code changes. It is finished when the reviewer has

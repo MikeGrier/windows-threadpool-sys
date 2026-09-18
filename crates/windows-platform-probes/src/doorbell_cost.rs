@@ -116,6 +116,44 @@ pub fn json_key(label: &str) -> &'static str {
     }
 }
 
+/// Whether a label's absence from an observation is a real outcome or a defect.
+///
+/// The distinction is the whole reason this type exists. `main` guarded the four
+/// unconditional timings with `expect`, deliberately -- a lookup that misses
+/// means a label was renamed in one place and not the other, and the comment
+/// there said so. A renderer that emits `null` for every absent label throws
+/// that guard away: a renamed timing publishes `null` and looks exactly like a
+/// host that legitimately could not run it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Presence {
+    /// `measure` records this on every host; absence is a defect, not a result.
+    Always,
+    /// `measure` records this only when the platform offers it, so absence is a
+    /// measurement outcome and is published as `null`.
+    WhenAvailable,
+}
+
+/// Every label [`measure`] can produce, in the order the report renders them,
+/// each with whether it may legitimately be missing.
+///
+/// **A timing that did not run must still say so.** `submit_io_ring_empty` is
+/// pushed only when `IoRing` is available, so a renderer that walks
+/// [`Observation::timings`] alone omits the key entirely on a host without it --
+/// and a fleet-mining pass then cannot tell "measured, absent" from "this build
+/// did not have the field". Emitting `null` for such a label keeps the row's
+/// shape fixed across hosts, which is what makes the shape mineable at all.
+///
+/// The [`Presence`] marker is what keeps that from costing the guard it
+/// replaced: only a [`Presence::WhenAvailable`] label renders as `null`, and a
+/// missing [`Presence::Always`] label still fails loudly.
+pub const EVERY_LABEL: [(&str, Presence); 5] = [
+    ("atomic_fetch_add", Presence::Always),
+    ("set_event_already_signalled", Presence::Always),
+    ("set_reset_event", Presence::Always),
+    ("wait_zero_signalled", Presence::Always),
+    ("submit_io_ring_empty", Presence::WhenAvailable),
+];
+
 /// Nanoseconds per operation for one timed loop.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Timing {

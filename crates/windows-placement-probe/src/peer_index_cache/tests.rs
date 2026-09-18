@@ -308,9 +308,12 @@ fn asking_for_no_pin_leaves_the_affinity_alone() {
 
 /// A processor number no group can hold, so `pin_current_thread` always fails.
 ///
-/// 200 is past `usize::BITS`, which the pin asserts on before it ever reaches
+/// 200 is past `usize::BITS`, which the pin refuses on before it ever reaches
 /// Windows -- deterministic on every machine rather than dependent on which
-/// processors happen to be online.
+/// processors happen to be online, and the only pin failure an ordinary
+/// developer host can produce on demand. That makes it the only route by which
+/// a test can reach the refusal path at all, which is why that condition
+/// returns an error rather than asserting.
 const UNPINNABLE: (u16, u8) = (0, 200);
 
 /// Well inside the time either case takes when it works (both return in
@@ -319,47 +322,118 @@ const MUST_FINISH_WITHIN: std::time::Duration = std::time::Duration::from_secs(2
 
 #[test]
 fn a_failed_producer_pin_stops_the_run_rather_than_hanging_it() {
-    // **The defect this guards.** `pin_current_thread` panics on failure. When
-    // the producer was the one to fail, the consumer still entered `consume`
-    // and spun forever on items no living thread would ever write -- an
-    // unbounded loop with no deadline, so the process simply stopped making
-    // progress. A run that should have failed loudly hung instead, which in CI
-    // is a job timeout rather than a diagnosis.
+    // **The defect this guards.** When the producer was the one to fail, the
+    // consumer still entered `consume` and spun forever on items no living
+    // thread would ever write -- an unbounded loop with no deadline, so the
+    // process simply stopped making progress. A run that should have failed
+    // loudly hung instead, which in CI is a job timeout rather than a
+    // diagnosis.
+    //
+    // No `catch_unwind` any more: the refusal is a value, so the test asks for
+    // it directly instead of inferring it from an unwind. That is a stronger
+    // check, because an unwind proves only that *something* panicked.
     let started = std::time::Instant::now();
-    let outcome = std::panic::catch_unwind(|| {
-        super::time_model_on(super::Strategy::Baseline, Some(UNPINNABLE), None)
-    });
+    let outcome = super::time_model_on(super::Strategy::Baseline, Some(UNPINNABLE), None);
 
-    assert!(
-        outcome.is_err(),
-        "an impossible pin must not report success"
-    );
+    let error = outcome.expect_err("an impossible pin must not report success");
     assert!(
         started.elapsed() < MUST_FINISH_WITHIN,
         "the run did not terminate: {:?}",
         started.elapsed()
+    );
+    // The refusal has to say what it could not do, because it is now rendered
+    // into a report rather than printed by the panic handler.
+    let text = error.to_string();
+    assert!(
+        text.contains("Could not confine a thread to processor 200 in group 0"),
+        "the refusal must name the processor it could not pin: {text}"
+    );
+    assert!(
+        text.contains("no measurement was taken"),
+        "the refusal must say that nothing was measured: {text}"
     );
 }
 
 #[test]
 fn a_failed_consumer_pin_stops_the_run_rather_than_hanging_it() {
     // The other direction, and it hung for a different reason: the consumer
-    // was pinned *after* the producer had been spawned, so the panic unwound
+    // was pinned *after* the producer had been spawned, so the failure unwound
     // into `thread::scope`'s cleanup, which waits for a producer that is
     // itself blocked forever on a ring nobody is draining.
     let started = std::time::Instant::now();
-    let outcome = std::panic::catch_unwind(|| {
-        super::time_model_on(super::Strategy::Baseline, None, Some(UNPINNABLE))
-    });
+    let outcome = super::time_model_on(super::Strategy::Baseline, None, Some(UNPINNABLE));
 
-    assert!(
-        outcome.is_err(),
-        "an impossible pin must not report success"
-    );
+    let error = outcome.expect_err("an impossible pin must not report success");
     assert!(
         started.elapsed() < MUST_FINISH_WITHIN,
         "the run did not terminate: {:?}",
         started.elapsed()
+    );
+    assert!(
+        error
+            .to_string()
+            .contains("Could not confine a thread to processor 200 in group 0"),
+        "the refusal must name the processor it could not pin: {error}"
+    );
+}
+
+#[test]
+fn a_refusal_to_pin_reaches_the_caller_of_measure() {
+    // `time_model_placed` is the deepest frame that can refuse, so this pins
+    // down the error it produces before the propagation tests below use it.
+    let error = super::time_model_placed(super::Strategy::Baseline, Some(UNPINNABLE), None, None)
+        .expect_err("an impossible pin must not report success");
+
+    assert_eq!(
+        error.kind(),
+        std::io::ErrorKind::Other,
+        "the refusal is a domain error, not an OS error code: {error}"
+    );
+}
+
+#[test]
+fn a_refusal_during_the_warm_up_pass_stops_median_before_it_times_anything() {
+    // `median` takes an untimed warm-up sample and then `REPETITIONS` more. The
+    // warm-up's `?` is one of the two propagation points this commit added, and
+    // nothing reached either: the other `median` tests all supply `Ok`, and the
+    // pinning tests stop one frame below `median`. A fallible path with no test
+    // able to reach it is exactly what the `usize::BITS` conversion was argued
+    // on, so leaving these two untested would have repeated it.
+    let mut calls = 0_u32;
+    let outcome = super::median("under test", || {
+        calls += 1;
+        Err(std::io::Error::other("refused"))
+    });
+
+    assert!(outcome.is_err(), "the refusal must reach the caller");
+    assert_eq!(
+        calls, 1,
+        "a refusal on the warm-up must stop there rather than going on to time \
+         REPETITIONS samples against a machine that already declined"
+    );
+}
+
+#[test]
+fn a_refusal_after_the_warm_up_stops_median_at_the_sample_that_refused() {
+    // The second propagation point: `collect::<io::Result<Vec<_>>>()` short
+    // circuits, so the samples after the refusal are never taken. Asserting the
+    // call count is what distinguishes short-circuiting from collecting every
+    // sample and returning the first error afterwards -- both return `Err`, and
+    // only one of them stops asking a machine that has already refused.
+    let mut calls = 0_u32;
+    let outcome = super::median("under test", || {
+        calls += 1;
+        if calls <= 2 {
+            Ok(sample_of(100.0))
+        } else {
+            Err(std::io::Error::other("refused"))
+        }
+    });
+
+    assert!(outcome.is_err(), "the refusal must reach the caller");
+    assert_eq!(
+        calls, 3,
+        "one warm-up, one good sample, then the refusal -- and nothing after it"
     );
 }
 
@@ -396,12 +470,13 @@ fn the_median_is_the_middle_sample_not_the_first_or_the_last() {
     // repetitions: the first is consumed and must not reach the result.
     let mut supplied = [900.0, 500.0, 100.0, 400.0, 300.0, 200.0].into_iter();
     let run = super::median("under test", || {
-        sample_of(
+        Ok(sample_of(
             supplied
                 .next()
                 .expect("the median takes REPETITIONS + 1 samples"),
-        )
-    });
+        ))
+    })
+    .expect("a supplied sample cannot refuse to pin");
 
     // Timed samples are 500, 100, 400, 300, 200 -> sorted 100, 200, 300, 400,
     // 500 -> median 300.
@@ -423,8 +498,9 @@ fn the_warm_up_pass_is_discarded_rather_than_measured() {
     // An absurd first value makes that visible: it must not move the answer.
     let mut supplied = [1e12, 100.0, 200.0, 300.0, 400.0, 500.0].into_iter();
     let run = super::median("under test", || {
-        sample_of(supplied.next().expect("six samples"))
-    });
+        Ok(sample_of(supplied.next().expect("six samples")))
+    })
+    .expect("a supplied sample cannot refuse to pin");
 
     assert!(
         (run.nanos_per_item - 300.0 / super::ITEMS as f64).abs() < f64::EPSILON,
@@ -445,8 +521,9 @@ fn the_two_rates_are_reciprocal_views_of_the_same_sample() {
     let nanos = 4_000_000.0;
     let mut supplied = std::iter::repeat_n(nanos, super::REPETITIONS + 1);
     let run = super::median("under test", || {
-        sample_of(supplied.next().expect("enough samples"))
-    });
+        Ok(sample_of(supplied.next().expect("enough samples")))
+    })
+    .expect("a supplied sample cannot refuse to pin");
 
     assert!(
         (run.nanos_per_item - nanos / super::ITEMS as f64).abs() < f64::EPSILON,

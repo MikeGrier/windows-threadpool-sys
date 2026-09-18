@@ -108,13 +108,6 @@
 //! it** -- an accepted entry is left alone, so the write is conditional rather
 //! than part of every such resolution.
 //!
-//! The owning crate now settles both halves rather than leaving them to be
-//! re-derived from a probe: see `windows-namespace-request-sys`'
-//! [DESIGN-NOTES.md](../../windows-namespace-request-sys/DESIGN-NOTES.md) ->
-//! `D-18`, which states what the call actually does, records keeping it over
-//! the cheaper lexical alternative, and says plainly that whether it enters the
-//! kernel is not established.
-//!
 //! The two schemes that might reduce it recover different halves. **Inline
 //! storage** removes the allocation and copy, which is what
 //! `clone_prepared_units` measures, and cannot touch the resolution at all.
@@ -187,7 +180,25 @@ pub fn json_key(label: &str) -> &'static str {
     }
 }
 
-/// Every timing taken by [`measure`].#[derive(Debug, Clone)]
+/// Every label [`measure`] records, in the order the report renders them.
+///
+/// All six are unconditional -- unlike `doorbell_cost`, nothing here is gated on
+/// a platform capability -- so this list needs no presence marker. It exists for
+/// the direction a renderer that walks [`Observation::timings`] cannot check:
+/// iterating what was measured cannot notice that something *stopped* being
+/// measured, so a dropped timing would quietly shrink the NDJSON schema. `main`
+/// caught that with a per-field panic; this is the same guard, stated once.
+pub const EVERY_LABEL: [&str; 6] = [
+    "prepare_short_path",
+    "prepare_long_path",
+    "build_open_request",
+    "clone_prepared_units",
+    "capture_handle",
+    "close_handle",
+];
+
+/// Every timing taken by [`measure`].
+#[derive(Debug, Clone)]
 pub struct Observation {
     /// Each timed loop, in the order run.
     pub timings: Vec<Timing>,

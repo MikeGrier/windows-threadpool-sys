@@ -31,7 +31,32 @@ fn render(out: &mut dyn std::fmt::Write) {
         "== what does caching the peer's index buy an SPSC ring? ==\n"
     );
 
-    let observation = measure();
+    // Measured after the banner and heading are already out, so a host that
+    // refuses still gives a reader the line naming which probe declined and on
+    // what machine.
+    //
+    // **This arm is required by the type, not reachable today.**
+    // `peer_index_cache::measure` starts only unpinned runs, so nothing it does
+    // can currently return `Err`; the handler exists because the signature is
+    // `Result` and deleting it would mean discarding the error instead. Said
+    // here because an earlier version of this comment implied this binary could
+    // decline, which it cannot -- `probe-core-affinity` is the one that pins.
+    let observation = match measure() {
+        Ok(observation) => observation,
+        Err(error) => {
+            let _ = writeln!(
+                out,
+                "this host declined to be measured:\n{}",
+                error.to_string().trim_end()
+            );
+            let _ = writeln!(
+                out,
+                "Nothing below could be measured, so nothing below is reported. This is\n\
+                 a refusal to measure the host, not a finding about it."
+            );
+            return;
+        }
+    };
 
     let _ = writeln!(
         out,
@@ -67,8 +92,18 @@ fn render(out: &mut dyn std::fmt::Write) {
 
     // The model has to reproduce the shipping queue before anything it says
     // about variants is worth reading.
-    let drift = (baseline.nanos_per_item - observation.calibration.nanos_per_item).abs()
+    //
+    // `signed` and `drift` are kept apart deliberately. The magnitude decides
+    // whether to caution at all; the SIGN decides what may then be said, and
+    // conflating them printed a conclusion backwards. The floor argument below
+    // reads "the shipping queue spends much more per item than this model, so
+    // whatever the shared read costs it is a minority of that" -- which holds
+    // only when the model is the FASTER of the two. Taken on `abs()` alone it
+    // fired just as readily when the model was slower, where the same words
+    // assert a floor the measurement does not support.
+    let signed = (baseline.nanos_per_item - observation.calibration.nanos_per_item)
         / observation.calibration.nanos_per_item;
+    let drift = signed.abs();
     let _ = writeln!(
         out,
         "  calibration: the model's baseline differs from the shipping spsc by
@@ -78,7 +113,7 @@ fn render(out: &mut dyn std::fmt::Write) {
         baseline.nanos_per_item,
         observation.calibration.nanos_per_item
     );
-    if drift > 0.25 {
+    if drift > 0.25 && signed < 0.0 {
         let _ = writeln!(
             out,
             "  CAUTION: that is a wide gap, so the rows below describe the MODEL"
@@ -99,15 +134,57 @@ fn render(out: &mut dyn std::fmt::Write) {
             out,
             "  the gap between those, and no such attribution should be read into"
         );
+        // **The bound is the model's SHARE of shipping cost, not a verdict about
+        // it.** This said the shared read "is a minority of what the shipping
+        // queue spends per item, so removing it cannot be the large win", which
+        // does not follow from the gap being wide: the shared read sits inside
+        // the model baseline, so what the calibration bounds is the share the
+        // whole model occupies. At a 39% gap that share is 61% -- a majority,
+        // under a sentence asserting a minority. Correcting the SIGN in the
+        // previous round left the arithmetic wrong, because the sign was only
+        // half of what made the claim unsupported.
+        //
+        // So report the share and stop. A reader with a threshold in mind can
+        // apply it; this run does not have one.
         let _ = writeln!(
             out,
-            "  it. What the gap does establish is a floor: whatever the shared"
+            "  it. What the gap does bound is a share: the shared read sits"
         );
         let _ = writeln!(
             out,
-            "  read costs, it is a minority of what the shipping queue spends per"
+            "  inside the model's baseline, so whatever it costs, it is at most"
         );
-        let _ = writeln!(out, "  item, so removing it cannot be the large win.");
+        let _ = writeln!(
+            out,
+            "  {:.0}% of what the shipping queue spends per item.",
+            (baseline.nanos_per_item / observation.calibration.nanos_per_item) * 100.0
+        );
+    } else if drift > 0.25 {
+        let _ = writeln!(
+            out,
+            "  CAUTION: that is a wide gap, so the rows below describe the MODEL"
+        );
+        let _ = writeln!(
+            out,
+            "  and not the shipping queue -- and the model is the SLOWER of the"
+        );
+        let _ = writeln!(
+            out,
+            "  two, which is the direction that carries no floor argument. The"
+        );
+        let _ = writeln!(
+            out,
+            "  model is the shipping queue with work stripped out, so costing"
+        );
+        let _ = writeln!(
+            out,
+            "  MORE per item than the thing it strips from means it is not"
+        );
+        let _ = writeln!(
+            out,
+            "  measuring what it was built to measure. Nothing below can be read"
+        );
+        let _ = writeln!(out, "  as a statement about the shipping queue.");
     } else {
         let _ = writeln!(
             out,
@@ -190,13 +267,16 @@ fn render(out: &mut dyn std::fmt::Write) {
         let _ = writeln!(out, "  The technique engaged AND won, by {speedup:.2}x.");
         let _ = writeln!(
             out,
-            "  Peer-index caching trades freshness for fewer reads, and that"
+            "  Peer-index caching trades freshness for fewer reads. The depths"
         );
         let _ = writeln!(
             out,
-            "  trade pays when the batch it amortises over is deep. At the"
+            "  above say how far each side's reads were amortised; which side's"
         );
-        let _ = writeln!(out, "  depths above it is paying.");
+        let _ = writeln!(
+            out,
+            "  depth carries the win is not separated by this measurement."
+        );
     } else if speedup <= 0.9 {
         let _ = writeln!(
             out,
@@ -276,30 +356,47 @@ fn render(out: &mut dyn std::fmt::Write) {
     };
     let warm_reduction =
         baseline.consumer_refreshes as f64 / warmed.consumer_refreshes.max(1) as f64;
+    let warm_throughput = baseline.nanos_per_item / warmed.nanos_per_item;
     let _ = writeln!(out);
     let _ = writeln!(
         out,
-        "  control (warming load): {:.2}x throughput, {:.2}x fewer consumer reads.",
-        baseline.nanos_per_item / warmed.nanos_per_item,
-        warm_reduction
+        "  control (warming load): {warm_throughput:.2}x throughput, \
+         {warm_reduction:.2}x fewer consumer reads."
     );
     if warm_reduction < 1.5 {
+        // **The read count is what makes this a control; it is not a statement
+        // about speed.** This arm used to close with "a discarded load cannot
+        // help", which is a claim about throughput, decided entirely by the read
+        // count and contradicted by the figure printed one line above it
+        // whenever the run happened to come out faster. Measured on this host:
+        // one run in twelve reported 1.10x throughput under that sentence.
+        //
+        // What the control establishes is exactly the read count, so that is
+        // what is claimed. The throughput is reported beside it and left to the
+        // reader, because a single pair of runs cannot separate a real effect
+        // from this probe's own spread -- and saying which it is would be the
+        // same over-claim in the other direction.
         let _ = writeln!(
             out,
-            "  It removed no shared read, which is what a control should do. A"
+            "  It removed no shared read, which is what a control should do: the"
         );
         let _ = writeln!(
             out,
-            "  discarded load cannot help: the authoritative load still happens,"
+            "  authoritative load still happens, so the technique's saving has to"
         );
         let _ = writeln!(
             out,
-            "  and in a tight handoff loop the prefetch has no time to land."
+            "  come from REMOVING that load rather than from warming it."
         );
         let _ = writeln!(
             out,
-            "  So the technique works by REMOVING the load, not by warming it."
+            "  The throughput figure above is not part of that: this run does not"
         );
+        let _ = writeln!(
+            out,
+            "  separate a warming effect from its own run-to-run spread, and one"
+        );
+        let _ = writeln!(out, "  pair of runs is not enough to try.");
     } else {
         let _ = writeln!(
             out,
