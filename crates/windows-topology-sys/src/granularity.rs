@@ -323,7 +323,7 @@ pub struct Proximity<'a> {
     /// the machine can support and never learn why -- and under this crate's own
     /// bar it cannot go and measure to find out.
     ///
-    /// [EP-D-2]: ../../topology-planner/DESIGN-NOTES.md
+    /// [EP-D-2]: ../../topology-planner/DESIGN-NOTES.md#ep-d-2
     pub finer_unobserved: bool,
     /// Processors the query named that this platform cannot express, and which
     /// therefore took no part in [`Self::shared`].
