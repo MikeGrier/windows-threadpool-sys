@@ -255,7 +255,7 @@ keeps the established asymmetry: unknown cache placement can degrade, unknown me
 no honest default.
 
 The directed-cost half remains an open requirement on `topology-model` plus adapter inputs and stays
-tracked as `SH-16.11`.
+tracked as [CHECKLIST.md](CHECKLIST.md) `EP-1+.4`.
 
 ### Historical rationale
 

@@ -73,7 +73,7 @@ whether the topology can answer it today -- so the model is designed against a r
   the other. **Gap already identified:** [D-20](../windows-topology-sys/DESIGN-NOTES.md#d-20)
   removed `MachineMemoryTopology::distances` at the Win32 boundary, so this cost has to enter through
   the abstract model via the inward adapter/synthesizer path. That contract is still missing and
-  remains tracked as `SH-16.11`.
+  remains tracked as `EP-1+.4`.
   **Done:** stated as [EP-D-3](DESIGN-NOTES.md#ep-d-3). This is where the direction EP-1.2 refused
   lands -- proximity is the link and symmetric, residency is the hop and is not.
   The processor-to-node half is answered, with one asymmetry worth preserving: an unknown *cache*
@@ -159,6 +159,11 @@ model question -- they are this component's own.
   the observed machine keeps the bare name (qualified only by its crate), gains a qualifier, or is
   renamed outright, and what the synthesized arrangement is called. Cheap now; expensive once either
   name is public. This one blocks nothing but should not be settled by whoever writes the first type.
+
+- [ ] **EP-1+.4** -- **Assign measurement ownership for directed residency cost in the four-part
+  architecture.** [EP-D-3](DESIGN-NOTES.md#ep-d-3) requires directed cross-domain cost input with
+  measurement context. Record which layer owns collecting, validating, and supplying that measurement
+  context to `topology-model` through the inward adapter/synthesizer path.
 
 ## M2+: the plan as a value
 

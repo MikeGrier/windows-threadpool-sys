@@ -22,5 +22,6 @@ EP-D-4 intentionally left several follow-ups unresolved:
 - Measurement ownership in the new four-part architecture.
 - Consumer behavior for not-observed facts after the boundary split.
 
-These are tracked as checklist work in [CHECKLIST.md](CHECKLIST.md) rather than as canonical
-decisions.
+These are tracked as checklist work in [CHECKLIST.md](CHECKLIST.md) as `EP-1.4` (not-observed
+behavior), `EP-1+.3` (adapter naming), and `EP-1+.4` (measurement ownership), rather than as
+canonical decisions.
