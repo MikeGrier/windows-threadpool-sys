@@ -525,6 +525,9 @@ establish one).
 
 ## Status of dependent work
 
+**Historical, as the section read when the session was held. SH-16.5 was discharged on 2026-09-03 by
+`MMT M5+.4` -- `cache_domain` is `Observed<u32>` and the refusal is gone. As written:**
+
 - **SH-16.5 is blocked on this session.** The contradiction it reports is real and still
   unfixed; `windows-placement-probe` still refuses a partially-covering level that
   `windows-topology-sys` deliberately permits.

@@ -22,7 +22,7 @@ backwards. Only M1 through M6 are a sequence.
 |---|---|---|
 | M1 settle the public surface | **done, archived** | -- |
 | M2 repair the release plumbing | 1 of 5 open | only SH-2.3, which needs the merge commit |
-| M3 land the branch | 2 of 9 open | SH-3.2 (gate the merge result) and SH-3.4 (merge); gated on M16 |
+| M3 land the branch | 2 of 9 open | SH-3.2 (gate the merge result) and SH-3.4 (merge); M16's gate has discharged |
 | M4 release | open | M3 |
 | M5 verify from outside | open | M4 |
 | M6 long-running validation | open | gates SH-4.3, so it gates the queue crate's publication |
@@ -32,19 +32,21 @@ backwards. Only M1 through M6 are a sequence.
 | M16 tenth review round | 7 done, 6 superseded | its own findings are fixed; the model work moved to `MMT-*` |
 | M-inf parked | ungated | not scheduled, deliberately |
 
-**The critical path is M16's locality-model work -> SH-3.1.1 -> SH-3.4 -> M4.** M14 and M15 do not
-block it: SH-14.1 ships disclosed rather than fixed
+**The critical path was M16's locality-model work -> SH-3.1.1 -> SH-3.4 -> M4, and it has cleared.**
+M14 and M15 do not block it: SH-14.1 ships disclosed rather than fixed
 ([D-36](crates/windows-waitable-queues/DESIGN-NOTES.md#d-36)) and the disclosure -- which was the
 actual release blocker -- landed at SH-15.8, so both conclude after 0.1.0 provided the pull request
 **says** that is deliberate. SH-3.1.1 owns saying it.
 
-**M16 is different, and this was decided rather than drifted into.** Its four gated items
-(SH-16.5, SH-16.8, SH-16.9, SH-16.10) are one piece of work -- replacing the locality model,
-consuming CPU Sets, and collapsing three restatements of one rule -- and the decision is that
-**PR #56 does not merge until it lands**. They were briefly listed here as non-blocking; that is
-corrected. It is gated in turn on
-[DESIGN-SESSION-2026-09-02-cache-locality-model.md](design-sessions/DESIGN-SESSION-2026-09-02-cache-locality-model.md),
-which has open questions, so **design concludes before implementation starts**.
+**M16 was different, and this was decided rather than drifted into -- but it is now complete.** Six
+of its items (SH-16.5, SH-16.8, SH-16.9, SH-16.11, SH-16.12, SH-16.13) were one piece of work --
+replacing the locality model, consuming CPU Sets, and collapsing three restatements of one rule --
+and the decision at the time was that **PR #56 does not merge until it lands**. That work became the
+`MMT-*` plan, which is archived in
+[crates/windows-topology-sys/COMPLETED-PLANS.md](crates/windows-topology-sys/COMPLETED-PLANS.md);
+the session that gated it has concluded, M16 itself is archived, and topology 0.2.0 published the new
+model on 2026-09-05. **So nothing in M3 waits on M16 any longer.** What remains open in M3 is SH-3.2
+and SH-3.4, and `SH-4.15` owns reconciling M4 with a release that has already happened.
 
 What blocks the queue crate specifically, and separately, is M6.
 
@@ -236,10 +238,11 @@ open in M15 is follow-on work on the fix. What *did* gate the release was the di
 landed. So SH-3.4 may proceed with M14 and M15 still open -- but a reviewer must be told that is
 deliberate, which is SH-3.1.1's job below.
 
-**M16 is the exception, by decision.** Its locality-model work (SH-16.5, SH-16.8, SH-16.9,
-SH-16.10) is a merge blocker: the model it replaces is the one `windows-topology-sys` 0.2.0 would
-publish, and shipping a public surface that is already known to be the wrong shape is what the
-milestone exists to avoid. So SH-3.4 waits on it.
+**M16 was the exception, by decision -- and the gate has since discharged.** Its locality-model work
+(SH-16.5, SH-16.8, SH-16.9, SH-16.11, SH-16.12, SH-16.13) was a merge blocker: the model it replaces
+is the one `windows-topology-sys` 0.2.0 would publish, and shipping a public surface that is already
+known to be the wrong shape is what the milestone exists to avoid. So SH-3.4 waited on it. It no
+longer does: that work became the `MMT-*` plan, which has landed, and 0.2.0 published the new model.
 
 **Updated 2026-09-03 -- what that work now is, and what discharges the gate.** All six of those items
 are superseded into the `MMT-*` plan in

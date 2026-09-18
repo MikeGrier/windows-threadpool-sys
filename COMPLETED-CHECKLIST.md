@@ -3527,10 +3527,11 @@ at M2-M6, M14, M15 and M-inf.
 > are all the same piece of work seen from different angles -- reshaping the machine memory topology
 > -- and they now live in
 > [crates/windows-topology-sys/COMPLETED-CHECKLIST.md](crates/windows-topology-sys/COMPLETED-CHECKLIST.md) as a plan of
-> their own, numbered `MMT-*`. They are left here, unchecked and marked, rather than deleted: each
-> records how the defect was *found*, which the new plan does not repeat.
+> their own, numbered `MMT-*`. They are left here, checked and marked `DISCHARGED` with the `MMT-*`
+> item that did the work, rather than deleted: each records how the defect was *found*, which the new
+> plan does not repeat.
 >
-> **Read the new plan for what to do; read these for why.** The six that remain live here are the
+> **Read the new plan for what to do; read these for why.** The seven that remain live here are the
 > review round's own findings, already fixed.
 
 **This round is the one [SH-3.1.1](CHECKLIST-ship-topology-and-queues.md#m3-land-the-branch) asked for**, and it is the first that read the
