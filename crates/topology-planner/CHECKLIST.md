@@ -32,7 +32,7 @@ prerequisites rather than on someone else's decision.
 
 | Milestone | State | What it is waiting on |
 |---|---|---|
-| M1 the input contract | 4 done, 1 open | `EP-1.5`'s coverage half, which wants a settled model |
+| M1 the input contract | 3 done, 2 open | `EP-1.4` and `EP-1.5`'s coverage half, which want a settled model |
 | M1+ scenario and naming | **partly answered** | the name is settled (EP-D-4); the goal input is deferred for litigation, by direction |
 | M2+ the plan as a value | parked, **and needs re-cutting** | re-cut against EP-D-4/EP-D-5, then the topology reshape landing |
 | M3+ the policies | parked | M2+ |
@@ -45,23 +45,7 @@ consumers, and **this crate is the consumer**. Answering in the abstract has alr
 wrong answer this session. Each item below states a query the planner makes, why it makes it, and
 whether the topology can answer it today -- so the model is designed against a real caller.
 
-- [x] **EP-1.1** -- **The shard-set query.** Which processors may host a domain: online, with
-  identity carried as `(group, number)` rather than a bare number, with efficiency class and SMT
-  structure available so a policy can choose one domain per core or per thread and can decide
-  whether efficiency cores are peers. **Gap already identified:** parked and allocated state is not
-  available at all, and pinning a domain to a parked processor is a defect a client cannot detect.
-  Tracked as `SH-16.10`.
-  **Done:** stated as [EP-D-1](DESIGN-NOTES.md#ep-d-1), with each of its five inputs checked against
-  the model rather than assumed. Three are answered cleanly; availability is not answered at all;
-  and the fourth turned up a defect the item had not anticipated.
-  **`Processor::capacity` is unsafe for reading efficiency class.** It is
-  `online.then(find owning Core).flatten().unwrap_or(0)`, so `0` means offline, *or* in no core
-  domain, *or* genuinely class zero -- and the third is every processor on every non-hybrid machine,
-  so the sentinel collides with the common legitimate value. Worse here than elsewhere, because
-  Windows orders class `0` as *least* performant: on a hybrid part an unknown processor is
-  indistinguishable from an efficiency core, so a policy excluding them silently drops a possible
-  performance core and a policy tiering them mis-tiers it. Neither fails a functional test. Filed
-  against the owning crate as `SH-16.12`; use `DomainKind::Core { efficiency_class }` meanwhile.
+- [x] **EP-1.1** -- The shard-set query requirements and discovered efficiency-class sentinel defect are recorded. -> [completed 2026-09-18 18:50:30 +00:00](COMPLETED-CHECKLIST.md#ep-11)
 
 - [x] **EP-1.2** -- **The proximity query, which is the crux.** For an ~~*ordered pair*~~
   **unordered pair** of processors, how close are they -- because that is what chooses SPSC versus
@@ -86,10 +70,10 @@ whether the topology can answer it today -- so the model is designed against a r
 
 - [x] **EP-1.3** -- **The residency query.** Which memory domain each processor belongs to, and --
   for a pair spanning two of them -- what it costs to place a shared buffer on one side rather than
-  the other. **Gap already identified:** `MachineMemoryTopology::distances` exists, is never populated, and Win32
-  cannot populate it; the measurement exists in `windows-placement-probe` and reaches nothing.
-  Tracked as `SH-16.11`. The probe measures this per node pair with a dedicated ring-placement
-  column precisely because it was found to matter.
+  the other. **Gap already identified:** [D-20](../windows-topology-sys/DESIGN-NOTES.md#d-20)
+  removed `MachineMemoryTopology::distances` at the Win32 boundary, so this cost has to enter through
+  the abstract model via the inward adapter/synthesizer path. That contract is still missing and
+  remains tracked as `EP-1+.4`.
   **Done:** stated as [EP-D-3](DESIGN-NOTES.md#ep-d-3). This is where the direction EP-1.2 refused
   lands -- proximity is the link and symmetric, residency is the hop and is not.
   The processor-to-node half is answered, with one asymmetry worth preserving: an unknown *cache*
@@ -97,17 +81,10 @@ whether the topology can answer it today -- so the model is designed against a r
   pool must be allocated somewhere and guessing means quietly allocating remote memory for the life
   of the process. `windows-placement-probe` already refuses on the second while tolerating the
   first, and that judgement was correct.
-  **The cost half needs SH-16.11 restated, and it was.** That item read as though someone had
-  forgotten to populate a field. Two sharper problems replace it: `distances` can never carry
-  `Measured` provenance **by construction** -- its only inputs are a literal (`Synthetic`) and a file
-  (capped at `Restored`) -- so populating it would not help; and even populated it is SLIT-shaped,
-  one symmetric workload-independent scalar, while the question is directional. `D-9` in the
-  topology crate already deferred the attributed edge list that would answer it, naming *asymmetry*
-  among what it would absorb, with the trigger being that a scalar "demonstrably mismodels a machine
-  somebody is tuning for" -- and this planner is that machine-tuner.
-  **The trigger is approached, not met**, and the gap is a measurement nobody here can take: both
-  development hosts are single-node, so every directional run prints "VACUOUS ON THIS MACHINE".
-  Recorded so D-9 is reopened on evidence rather than on argument.
+  **The cost half is now scoped to the current boundary.** The planner still needs directed
+  residency-cost input plus measurement context, but those facts no longer live in
+  `windows-topology-sys`; they are requirements on `topology-model` and the adapter that populates it.
+  Historical trigger analysis remains in [DESIGN-RATIONALE.md](DESIGN-RATIONALE.md#ep-d-3-rationale-and-history).
 
 - [ ] **EP-1.4** -- **What the planner does with an unanswered query**, given the model's bar is
   that it answers without further measurement. A fact that was not observed cannot be acquired at
@@ -180,8 +157,15 @@ model question -- they are this component's own.
   are graphs of processors and their relations, so "topology" fits all of them and distinguishes
   none -- and a reader seeing the word twice will eventually take one for the other. Decide whether
   the observed machine keeps the bare name (qualified only by its crate), gains a qualifier, or is
-  renamed outright, and what the synthesized arrangement is called. Cheap now; expensive once either
-  name is public. This one blocks nothing but should not be settled by whoever writes the first type.
+  renamed outright; what the synthesized arrangement is called; and whether the inward/outward
+  adapters keep those role names or gain more specific crate/type names. Cheap now; expensive once
+  any of those names are public. This one blocks nothing but should not be settled by whoever writes
+  the first type.
+
+- [ ] **EP-1+.4** -- **Assign measurement ownership for directed residency cost in the four-part
+  architecture.** [EP-D-3](DESIGN-NOTES.md#ep-d-3) requires directed cross-domain cost input with
+  measurement context. Record which layer owns collecting, validating, and supplying that measurement
+  context to `topology-model` through the inward adapter/synthesizer path.
 
 ## M2+: the plan as a value
 

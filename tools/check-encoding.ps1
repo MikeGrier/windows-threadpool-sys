@@ -154,17 +154,21 @@ foreach ($file in $files) {
     #    leaving its own `# Errors` section truncated or empty where the moved
     #    text had come from.
     #
-    #    `\S///` is the whole condition: a doc marker touching a non-space
-    #    character. The surrounding `^.*` and `.*$` the pattern used to carry are
-    #    not just redundant once the anchors are gone, they are the expensive
-    #    part -- `^.*` matches to end of line and then backtracks looking for the
-    #    marker, on every line of every file. Measured over 1.47 MB of this
-    #    repository's own Rust, dropping them cut a no-match scan (the case CI
-    #    runs on every clean build) from 872 ms to 288 ms across 20 passes. The
-    #    match index still identifies the line, because the marker and the
-    #    character it is glued to are on it.
+    #    A doc marker touching a non-space character is the whole condition. The
+    #    `^.*` and `.*$` the pattern used to carry are not merely redundant once
+    #    the anchors are gone, they are the expensive part -- `^.*` matches to
+    #    end of line and then backtracks looking for the marker, on every line of
+    #    every file. Measured over 1.47 MB of this repository's own Rust,
+    #    dropping them cut a no-match scan (the case CI runs on every clean
+    #    build) from 872 ms to 288 ms across 20 passes. The match index still
+    #    identifies the line, because the marker and the character it is glued to
+    #    are on it.
+    #
+    #    A preceding slash is excluded -- `[^\s/]` rather than `\S` -- so a
+    #    `////` banner comment is not flagged. `\S///` matched every one of them,
+    #    because the third slash of the banner is itself a non-space character.
     if ([System.IO.Path]::GetExtension($file) -eq '.rs') {
-        $glued = [regex]::Match($text, '\S///')
+        $glued = [regex]::Match($text, '[^\s/]///')
         if ($glued.Success) {
             $prefix = $text.Substring(0, $glued.Index)
             $line = ($prefix -split "`n").Count
