@@ -167,19 +167,28 @@ fn the_probes_that_emit_a_machine_readable_row_are_the_ones_we_say_they_are() {
     // them, and the assertion says so rather than quietly going stale.
     for (name, source_path) in NOT_RUN {
         let path = crate_root().join(source_path);
-        let sources: Vec<String> = if path.is_dir() {
-            walk(&path)
-                .iter()
-                .map(|file| std::fs::read_to_string(file).unwrap_or_default())
-                .collect()
-        } else {
-            vec![std::fs::read_to_string(&path).unwrap_or_else(|error| {
+        // **One read for both shapes, and it fails loudly.** These were two
+        // reads with opposite failure behaviour: the file branch panicked on an
+        // unreadable source, the directory branch mapped it to an empty string
+        // through `unwrap_or_default`. An empty string contains no emission
+        // literal, so a source this census could not read passed it -- and the
+        // non-empty guard below passed too, because the vector still had an
+        // entry. The weaker half of the census could therefore report a clean
+        // answer having read nothing, which is the one outcome it must not have.
+        let read = |file: &Path| -> String {
+            std::fs::read_to_string(file).unwrap_or_else(|error| {
                 panic!(
-                    "{}'s source at {} is readable: {error}",
-                    name,
-                    path.display()
+                    "{name}'s source at {} could not be read: {error} -- the \
+                     source census cannot stand in for running it if it cannot \
+                     read it",
+                    file.display()
                 )
-            })]
+            })
+        };
+        let sources: Vec<String> = if path.is_dir() {
+            walk(&path).iter().map(|file| read(file)).collect()
+        } else {
+            vec![read(&path)]
         };
         assert!(
             !sources.is_empty(),
