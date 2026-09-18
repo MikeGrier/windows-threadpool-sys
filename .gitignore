@@ -13,5 +13,17 @@ target
 
 # Scratch / diagnostic output (git-ignored per repo instructions)
 .scratch/
+
+# windows-placement-probe writes its backup record into the working directory,
+# so running the tool from inside a checkout leaves one of these behind. Ignored
+# because `git add -A` will otherwise sweep a machine's measurements into a
+# commit, which has already happened once.
+placement-probe-v*.json
 .vs
 .vscode/settings.json
+
+# tpu-mcp writes <file>.bak beside any file it repairs. Those are transient
+# backups of a repair that has already been verified and committed, so they are
+# never wanted in history -- and being adjacent to the file they back up, they
+# are easy to sweep up with `git add -A` without noticing.
+*.bak
