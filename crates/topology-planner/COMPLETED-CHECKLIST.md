@@ -81,3 +81,18 @@ The reconciliation also restates the boundary owned by
 directionless, memory-safe elevation of Win32 processor and memory topology facts. A mismatch with
 the planner's goal is handled in the adapter or neutral model rather than by reshaping that facts
 crate; defects in the facts layer are still fixed at their source.
+
+## Moved 2026-09-18 19:41:49 -04:00 -- Correct locality query totality
+
+### <a id="ep-r14"></a>EP-R1.4 -- Query totality, the scoped universe, and specified partitions are distinguished from order totality. *(completed 2026-09-18 19:41:49 -04:00)*
+
+[EP-D-2](DESIGN-NOTES.md#ep-d-2) now defines physical locality as a partial order by membership.
+The planning universe is an input that defaults to the supplied real or mocked system and may be
+narrowed by a constraint. Its selected membership is the top for that scope, so every valid
+non-empty known-processor query has an answer without forcing incomparable physical relations into
+an arbitrary linear order.
+
+Developer-defined partitions constrain candidate plans but remain distinct from physical-locality
+facts. A cheap structural diagnostic may report that a constraint crosses a cache or NUMA boundary,
+but its intent decides whether that is accidental or deliberate. The intent-aware diagnostic
+contract is scheduled by `EP-R1.7`.

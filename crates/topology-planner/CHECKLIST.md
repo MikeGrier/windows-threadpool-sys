@@ -33,7 +33,7 @@ prerequisites rather than on someone else's decision.
 
 | Milestone | State | What it is waiting on |
 |---|---|---|
-| MR1 design-review reconciliation | 3 done, 5 open | active; work in item order |
+| MR1 design-review reconciliation | 4 done, 4 open | active; work in item order |
 | M1 the input contract | 3 done, 2 open | `EP-1.4` waits on EP-R1.7; `EP-1.5`'s coverage half is EP-R1.6 |
 | M1+ scenario and naming | 1 done, 3 open | EP-R1.5 settles remaining names; EP-R1.7 owns the topology specification and callbacks |
 | M2+ the plan as a value | parked, **and needs re-cutting** | MR1, then EP-R1.8 and the resulting `topology-model` work |
@@ -50,11 +50,7 @@ These items are in dependency order. Resolve and commit one item before beginnin
 
 - [x] **EP-R1.3** -- Stale external gates are replaced by the component's real internal dependencies. -> [completed 2026-09-18](COMPLETED-CHECKLIST.md#ep-r13)
 
-- [ ] **EP-R1.4** -- **Correct query totality versus order totality everywhere.** The locality
-  relation is a partial order with a top and may contain incomparable minimal shared granularities;
-  the top makes the query total but does not make the order total. Correct the stale "order must be
-  total" handoff and record both the ordered-collection correction and this distinct correction in
-  the current canonical documentation.
+- [x] **EP-R1.4** -- Query totality, the scoped universe, and specified partitions are distinguished from order totality. -> [completed 2026-09-18](COMPLETED-CHECKLIST.md#ep-r14)
 
 - [ ] **EP-R1.5** -- **Split completed naming work from names that remain open.** Record the settled
   planner and graph vocabulary as completed, retain explicit work for the measurement foundation,
@@ -73,9 +69,11 @@ These items are in dependency order. Resolve and commit one item before beginnin
   interconnect policy, routed-hop representation, and synthetic acceptance cases. Decide how much
   higher-level work-item and buffer-flow machinery this project supplies between completed I/O,
   parsing, serial or parallel processing, workers, and cross-domain migration, including whether
-  existing repository code or the Windows thread pool already owns any part. Include at least ten
-  normal cases plus every identified edge case, and replace "deferred for litigation" with a linked
-  decision or a concrete blocker and graduation trigger.
+  existing repository code or the Windows thread pool already owns any part. Define intent-aware
+  diagnostics for constraints that cross physical cache or memory strata, so the planner reports the
+  observed consequence without treating a deliberate transfer as inherently wrong. Include at least
+  ten normal cases plus every identified edge case, and replace "deferred for litigation" with a
+  linked decision or a concrete blocker and graduation trigger.
 
 - [ ] **EP-R1.8** -- **Materialize executable component-local plans after names and contracts are
   settled.** Create dependency-ordered checklists and reciprocal cross-component handoffs for
@@ -147,16 +145,16 @@ whether the topology can answer it today -- so the model is designed against a r
   input it asked for, and record in the session which of them the settled model answers and which
   it deliberately does not.
   **Half done, and split because the halves have different prerequisites.** The *handover* is
-  complete: the session now carries the three queries in a table, plus the four model properties that
-  follow from them -- a pairwise query must exist, the order must be total, an answer must be able to
-  be an upper bound, and a measured number must carry what it measured. That was the part the model
-  designer needs in front of them, and it did not depend on the model existing.
-  **One of the four has since been corrected**, and it is recorded here rather than rewritten in the
-  session, which is an append-only record of what was handed over. "A pairwise query must exist" is
-  right about the requirement and wrong about the shape: per
+  complete: the session received the three queries plus four derived claims. Two were later
+  corrected in current documentation rather than by rewriting the append-only session. "A pairwise
+  query must exist" was right about the requirement and wrong about the primary shape: per
   [windows-topology-sys](../windows-topology-sys/COMPLETED-CHECKLIST.md) `M4+.1` the ordered collection is the
   surface and the pairwise query is derived from it, because an answer obliged to carry the block
-  containing both processors is a question about the partition rather than about the pair.
+  containing both processors is a question about the partition rather than about the pair. "The
+  order must be total" confused the relation order with the query: [EP-D-2](DESIGN-NOTES.md#ep-d-2)
+  now specifies a partial order whose selected planning universe is a top, making the query total in
+  scope. The requirements that an answer can be an upper bound and that a measured number carries
+  what it measured remain unchanged.
   **The old gate has cleared.** The locality-model session concluded and the Windows topology
   reshape shipped. The coverage half is now an in-component documentation action under `EP-R1.6`:
   record which requirements are available as policy-free Windows facts, which the inward adapter

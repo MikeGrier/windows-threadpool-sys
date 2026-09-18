@@ -15,7 +15,9 @@ produces a concrete result for the current run:
 
 - **a topology specification** -- what the caller intends the arrangement to achieve, what
   constraints it must obey, and what runtime characterization it is permitted to perform. Its
-  detailed shape remains open.
+  detailed shape remains open. The planning universe defaults to the supplied system and may be
+  narrowed by a constraint; developer-defined partitions constrain candidate plans without becoming
+  claims about physical proximity.
 - **an abstracted idealized description of a machine** -- processors, memory, storage, interconnects,
   distances and bottlenecks. Not Windows-shaped, and richer than any single platform reports. It is
   **mockable by construction**: a description of a machine nobody has is an ordinary input, which is

@@ -20,7 +20,7 @@ renamed to match.
 | ID | Decision |
 |---|---|
 | <a id="ep-d-1"></a>EP-D-1 | **The shard-set query**: what the planner must know to choose which processors host a domain, and what today's model cannot tell it. |
-| <a id="ep-d-2"></a>EP-D-2 | **The proximity query**: how close two processors are, which selects the channel between their domains. Takes an **unordered** pair; the model has no answer today. |
+| <a id="ep-d-2"></a>EP-D-2 | **The proximity query**: how close processors are within an input planning universe. Locality is a partial order by physical membership; the selected universe is its top, making the query total without making the order total. Developer-specified partitions constrain plans but do not become physical-locality facts. |
 | <a id="ep-d-3"></a>EP-D-3 | **The residency query**: where a domain's pool lives, and which side of a cross-domain pair should host a shared ring. **Ordered**, with directed cost entering through the abstract model/adapter path under [D-20](../windows-topology-sys/DESIGN-NOTES.md#d-20). |
 | <a id="ep-d-4"></a>EP-D-4 | **The original four-part architecture, and the planner's name.** The planner is **`topology-planner`** (no `windows-` prefix); it takes a goal description, queries an abstracted idealized model, and emits a JSON-serializable platform-neutral plan. Its component count is superseded by [EP-D-7](#ep-d-7), which adds the active measurement foundation without changing the planner name or the two adapter boundaries. |
 | <a id="ep-d-5"></a>EP-D-5 | **The shared-vocabulary layout and dependency direction.** The abstract model, planner query traits, and plan type live in `topology-model`, which the planner and platform components depend on; non-planner components do not depend on `topology-planner`. [EP-D-7](#ep-d-7) extends this layout with neutral measurement contracts and a separate platform measurement foundation while preserving the one-way dependency rule. |
@@ -183,16 +183,19 @@ Not a boolean, and not a bare identifier. Three things:
    than the machine can support and never learn why. Under the model's bar -- usable without further
    measurement -- it cannot go and check, so the distinction has to be in the answer.
 
-### The query should be total, which needs a top element
+### The query is total over an input planning universe
 
-Two processors in the same machine always share *something*: one address space, one scheduler, one
-memory system, however far apart. If the granularity order has no top, the query returns "nothing
-in common" for a cross-node pair and every caller writes the same empty-case branch.
+The universe is an input. It defaults to every processor represented by the supplied real or mocked
+system, and the topology specification may select that full set or a subset for one planning run.
+The selected universe is the top element for proximity queries in that scope.
 
-Making "the machine" an explicit top granularity is honest -- it is a real, if loose, locality tier
--- and makes the query total. A bottom ("this processor alone") is the same argument at the other
-end and makes `proximity(a, a)` answerable rather than a special case, though a planner has no
-reason to ask it.
+Every non-empty set of processors known to the selected universe therefore shares at least the top,
+so the query always has an answer even when no finer physical relation contains them. A processor
+outside the selected universe is an invalid query input rather than a fabricated top-level match.
+An empty input is invalid because every relation vacuously contains it and no useful proximity
+question was asked. Duplicate processor IDs are normalized because proximity is over a set.
+
+The top makes the **query** total. It does not make the relation order total.
 
 ### A partial order means the answer may not be a single granularity
 
@@ -202,9 +205,29 @@ unique, and the honest answer is the set of *minimal* shared granularities, whic
 exactly one.
 
 This is a cost, and it is worth naming rather than discovering later: every caller either handles a
-multi-element answer or documents that it takes the first. But the alternative -- forcing a linear
-order -- means silently discarding a real boundary on a machine whose levels do not nest, and this
-repository has been bitten specifically by structure that was assumed rather than checked.
+multi-element answer or explicitly refuses it. The model never silently takes the first. The
+alternative -- forcing a linear order -- means silently discarding a real boundary on a machine
+whose levels do not nest, and this repository has been bitten specifically by structure that was
+assumed rather than checked.
+
+### Specified partitions constrain planning without becoming locality facts
+
+The topology specification may define its own partitions inside the selected universe. These are
+logical constraints or candidate domain boundaries: workload ownership, serialization boundaries,
+load-balancing groups, or other developer intent. They may overlap, nest, or cut across physical
+cache and memory strata.
+
+Specified partitions participate in determining which plans are admissible, but a proximity query
+does not return them as evidence that processors physically share something. The planner combines
+the logical and physical dimensions, for example by intersecting a required workload partition with
+observed NUMA and cache relations. A synthetic claim about hardware belongs in the supplied abstract
+machine or its mocked source, not in a planning constraint.
+
+When a specified partition cheaply cuts across a physical stratum, the planner should report the
+observed relationship and likely consequence. It must not call the constraint inappropriate without
+knowing its intent: an SPSC edge crossing a NUMA boundary may be a mistake or a deliberate transfer.
+The topology-specification contract must therefore carry enough intent to distinguish those cases;
+that diagnostic contract is scheduled by [CHECKLIST.md](CHECKLIST.md) `EP-R1.7`.
 
 ### What today's model answers: nothing
 
@@ -227,7 +250,8 @@ this query is the cause of that defect, not a separate problem.
   and a pairwise-primary surface would force the planner into the O(n^2) reconstruction that `SH-16.9`
   records going wrong three times. The three *requirements* below are unchanged; only the shape is.
 - Unobserved granularities represented, so an answer can be an upper bound and say so.
-- A top element, so the query is total.
+- An input planning universe whose selected membership is the top, so the query is total in scope.
+- Specified logical partitions kept distinct from physical locality relations.
 
 ## EP-D-3: the residency query
 

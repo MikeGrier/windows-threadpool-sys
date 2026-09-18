@@ -95,3 +95,27 @@ Final component-local plans were not written under provisional names. Their firs
 items also depend on contracts still owned by `EP-R1.7`. The completed architecture item therefore
 spawns [CHECKLIST.md](CHECKLIST.md) `EP-R1.8`, after naming and contract work, rather than pretending
 those prerequisites do not exist.
+
+## EP-D-2 totality correction and scoped-universe rationale
+
+The consumer handoff said "the order must be total" because it was trying to avoid an empty answer
+for processors that shared no recorded cache or memory boundary. That stated the remedy as the
+property. The implemented Windows relation model later made the distinction visible: its order is a
+poset with a top, and incomparable relations are real.
+
+The corrected requirement is that the **query** be total over a chosen universe. The universe
+defaults to the supplied system, including a mocked system, and a topology specification may narrow
+it to a subset. That subset becomes the top for the planning scope. Nothing requires two finer
+physical relations to be comparable.
+
+The engineer also identified developer-defined partitions as a separate input. Folding them into the
+physical relation order would make a workload grouping look like evidence of hardware proximity.
+They therefore constrain candidate plans without changing what a proximity answer means. Synthetic
+hardware structure belongs in the abstract-machine input; logical workload structure belongs in the
+topology specification.
+
+A second consequence is diagnostic rather than mathematical. A logical partition that crosses a
+physical boundary may be suspicious, but it may also express deliberate transfer. The planner can
+cheaply state the crossing and its measured or structural consequence; whether it warns, accepts, or
+refuses depends on intent carried by the constraint. That contract remains scheduled by
+[CHECKLIST.md](CHECKLIST.md) `EP-R1.7`.
