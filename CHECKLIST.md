@@ -108,13 +108,16 @@ be settled rather than discovered later.
 
 ## M34 -- Tooling
 
-Numbered M34 rather than M22 because three of the root-level checklists share one milestone space:
-[CHECKLIST.md](CHECKLIST.md) opened M19-M21, [CHECKLIST-thread-ambient.md](CHECKLIST-thread-ambient.md)
-took M22-M29, and [CHECKLIST-io-domains.md](CHECKLIST-io-domains.md) M30-M33. The feature-scoped
-checklists -- [CHECKLIST-placement-tool.md](CHECKLIST-placement-tool.md),
-[CHECKLIST-ship-topology-and-queues.md](CHECKLIST-ship-topology-and-queues.md) and
-[CHECKLIST-mutation-survivors.md](CHECKLIST-mutation-survivors.md) -- number from M1 independently and
-are not part of that space. M30 is currently used twice inside it, by this file and by io-domains;
+Numbered M34 rather than M22 because the root-level checklists share one milestone space:
+[CHECKLIST.md](CHECKLIST.md) opened M19-M21 and later took M30, M34, M35 and M37;
+[CHECKLIST-thread-ambient.md](CHECKLIST-thread-ambient.md) took M22-M29;
+[CHECKLIST-io-domains.md](CHECKLIST-io-domains.md) M30-M33; and
+[CHECKLIST-placement-tool.md](CHECKLIST-placement-tool.md) M36, which is why the M37 section below
+skips past it. That last one is the case to watch: placement-tool numbers *its own* milestones from
+M1, and drew M36 from the shared space as well, so a file numbering from M1 is not evidence that it
+stays out of the space. [CHECKLIST-ship-topology-and-queues.md](CHECKLIST-ship-topology-and-queues.md)
+and [CHECKLIST-mutation-survivors.md](CHECKLIST-mutation-survivors.md) number from M1 and have taken
+nothing from it so far. M30 is currently used twice inside the space, by this file and by io-domains;
 M34.6 owns that.
 
 - [x] **M34.1** -- Promote the ad-hoc sabotage harness into a reusable tool. -> [completed 2026-08-31](COMPLETED-CHECKLIST.md#m341)
