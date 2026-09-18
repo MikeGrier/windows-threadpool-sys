@@ -256,7 +256,8 @@ Write-Host '  consumer (chore), then delete the alias (feat!, owning crate only)
 Write-Host ''
 Write-Host '  Already committed and not worth rewriting? Correct it at release time with a'
 Write-Host '  `Release-As: x.y.z` footer on a commit touching only that crate.'
-exit 1}
+exit 1
+}
 finally {
     Pop-Location
 }
