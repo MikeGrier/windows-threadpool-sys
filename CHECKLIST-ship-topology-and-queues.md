@@ -19,7 +19,7 @@ backwards. Only M1 through M6 are a sequence.
 |---|---|---|
 | M1 settle the public surface | **done, archived** | -- |
 | M2 repair the release plumbing | 1 of 5 open | only SH-2.3, which needs the merge commit |
-| M3 land the branch | 4 of 5 open | now gated on M16; SH-3.1.1 runs after the model lands |
+| M3 land the branch | 2 of 9 open | SH-3.2 (gate the merge result) and SH-3.4 (merge); gated on M16 |
 | M4 release | open | M3 |
 | M5 verify from outside | open | M4 |
 | M6 long-running validation | open | gates SH-4.3, so it gates the queue crate's publication |

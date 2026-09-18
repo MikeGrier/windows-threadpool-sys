@@ -86,7 +86,7 @@ conclusions belong to it until it converges.
   The corrected prose in [strategy.rs](examples/epoch_log/strategy.rs) and
   [DESIGN-NOTES.md](DESIGN-NOTES.md) both point here.
   *(Numbered M20.6 rather than M20.5 because M20.5 was in flight on a separate branch when this was
-  written. That branch has since merged, and M20.5 arrived dissolved -- see above.)*
+  written. That branch was closed unmerged; M20.5 arrives here instead, dissolved -- see above.)*
 
 
 ## M6+ -- Model B: explicit-thread delivery and affinity

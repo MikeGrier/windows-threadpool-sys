@@ -121,7 +121,7 @@ about the shape it would take. What forced the change is that a fat trait is not
 inelegant but **unimplementable** by shapes this crate intends to ship: a queue that is never
 waited on has no doorbell to return, and an unbounded one has no capacity to report. So the
 capability is sliced the way `std::io` slices it -- `Read`, `Write`, `Seek`, rather than one
-`Io` -- and what ships is `Bounded`, `Consumer`, `Drain`, `Observable`, `Producer`, `Reserving`
+`Io` -- and what ships is `Bounded`, `Claim`, `Consumer`, `Observable`, `Producer`, `Reserving`
 and `Waitable`, with each shape implementing the subset it genuinely has.
 
 **What survives unchanged is the constraint that motivated recording this early.** If one shape

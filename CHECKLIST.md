@@ -108,10 +108,14 @@ be settled rather than discovered later.
 
 ## M34 -- Tooling
 
-Numbered M34 rather than M22 because the three root-level checklists share one milestone space:
-[CHECKLIST.md](CHECKLIST.md) holds M19-M21, [CHECKLIST-thread-ambient.md](CHECKLIST-thread-ambient.md)
-M22-M29, and [CHECKLIST-io-domains.md](CHECKLIST-io-domains.md) M30-M33.
-
+Numbered M34 rather than M22 because three of the root-level checklists share one milestone space:
+[CHECKLIST.md](CHECKLIST.md) opened M19-M21, [CHECKLIST-thread-ambient.md](CHECKLIST-thread-ambient.md)
+took M22-M29, and [CHECKLIST-io-domains.md](CHECKLIST-io-domains.md) M30-M33. The feature-scoped
+checklists -- [CHECKLIST-placement-tool.md](CHECKLIST-placement-tool.md),
+[CHECKLIST-ship-topology-and-queues.md](CHECKLIST-ship-topology-and-queues.md) and
+[CHECKLIST-mutation-survivors.md](CHECKLIST-mutation-survivors.md) -- number from M1 independently and
+are not part of that space. M30 is currently used twice inside it, by this file and by io-domains;
+M34.4 owns that.
 - [x] **M34.1** -- Promote the ad-hoc sabotage harness into a reusable tool. -> [completed 2026-08-31](COMPLETED-CHECKLIST.md#m341)
 
 - [ ] **M34.3** -- **Archive the completed bodies in the three root checklists that still carry
@@ -208,6 +212,18 @@ M22-M29, and [CHECKLIST-io-domains.md](CHECKLIST-io-domains.md) M30-M33.
 
   Whatever is chosen must be verified by **re-injecting this exact weld** and confirming the gate
   goes red, since the point of the item is that the current one does not.
+
+- [ ] **M34.4** -- **Resolve the `M30` collision inside the shared milestone space.** This file's
+  `M30` (machine-checkable correctness, M30.1-M30.5 open) and
+  [CHECKLIST-io-domains.md](CHECKLIST-io-domains.md)'s archived `M30` (the queue crate's name,
+  skeleton and SPSC shape) are different work under one number, and their sub-items collide too:
+  this file defines `M30.1`-`M30.5`, while io-domains refers to an `M30.2`-`M30.5` of its own.
+  The collision was created when io-domains arrived
+  alongside a file that already held `M30` on `main`, and it is invisible from either file alone.
+  Renumbering this file's `M30` is the cheaper side, since io-domains' is already archived and
+  cited from [COMPLETED-CHECKLIST.md](COMPLETED-CHECKLIST.md); but the choice is the engineer's,
+  because the number is referenced from the M37 preamble's "first free number" argument and from
+  [PLANS.md](PLANS.md). Decide, then sweep every reference to whichever `M30` moves.
 
 ## M37 -- Discharge the failable-call standard across the workspace
 
@@ -404,23 +420,4 @@ Ungated work with no identified predecessor deliverable.
   the fallback was redundant -- not because the crash was understood. Parked rather than dropped so the
   unexplained result is not mistaken for a tested one.
 
-- [ ] **M-inf.2** -- Archive the eight completed milestone groups in
-  [CHECKLIST-thread-ambient.md](CHECKLIST-thread-ambient.md) into
-  [COMPLETED-CHECKLIST.md](COMPLETED-CHECKLIST.md).
-
-  **Raised by a review that named one item, and measured to be eight groups.** The comment asked for
-  M26.5's completed multi-line body to be replaced by a one-line stub, per the checklist-hygiene rule
-  that an active checklist is an action queue. That rule is right and the file does violate it -- but
-  M26.5 is not exceptional: its five siblings in M26 are written the same way, so stubbing only the
-  reported item would have made it inconsistent with the group it belongs to rather than more
-  consistent with the rule.
-
-  Counted rather than assumed, every group in the file is complete and due for migration under the
-  "move the completed group" rule: M22 (8 items), M23 (6), M24 (6), M25 (7), M26 (6), M27 (6),
-  M28 (4) and M29 (5). Only `M26+` has open items, and it is what keeps the file alive.
-
-  Not taken in PR #86 because that branch corrects `GetFullPathNameW` documentation and touched
-  M26.5 only to fix one technical premise inside it. Migrating roughly 400 lines of another feature's
-  bookkeeping through it would bury the change it exists to make. The migration is mechanical, is its
-  own commit, and needs the group headings dated per the archive format -- date-only on the `## Moved`
-  line, with any precise timestamp reserved for an anchored item heading.
+- [x] **M-inf.2** -- Archived the eight completed milestone groups in [CHECKLIST-thread-ambient.md](CHECKLIST-thread-ambient.md), leaving only the parked `M26+`. -> [completed 2026-09-17](COMPLETED-CHECKLIST.md#m-inf2)
