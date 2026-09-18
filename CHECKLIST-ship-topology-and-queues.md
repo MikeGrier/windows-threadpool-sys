@@ -6,19 +6,24 @@ against and other people can run it on hardware this workspace does not own.
 
 ## Where this stands
 
-The release has not happened. PR #56 has been open as a **draft** since 2026-08-31 and is 221 commits
-ahead of `main`.
+Both crates are published: `windows-topology-sys` 0.2.0 and `windows-waitable-queues` 0.1.0 reached
+crates.io on 2026-09-05, neither yanked. They did not arrive by the route below. PR #56 was opened
+from `mikegrier/deferred-namespace-ops` on 2026-08-31 and **closed unmerged on 2026-09-15**; the
+content is landing in peeled pieces instead: the first merged as PR #94 and the second as
+PR #95, both of which this branch has since merged back. The milestones below were written
+while #56 was open and describe a path that was not taken, so M4 still reads as though
+nothing has shipped -- SH-4.15 owns reconciling it.
 
 **Milestone numbers are not a running order.** M7 through M15 are *review rounds on PR #56*, so they
-happened -- and continue to happen -- **inside M3**, between the pull request opening and a merge
-that has not occurred. Reading the file top to bottom puts the review of a pull request after the
-merge that closes it, which is backwards. Only M1 through M6 are a sequence.
+happened **inside M3**, between the pull request opening and a merge that never came. Reading the
+file top to bottom puts the review of a pull request after the merge that closes it, which is
+backwards. Only M1 through M6 are a sequence.
 
 | Milestone | State | What it is waiting on |
 |---|---|---|
 | M1 settle the public surface | **done, archived** | -- |
 | M2 repair the release plumbing | 1 of 5 open | only SH-2.3, which needs the merge commit |
-| M3 land the branch | 4 of 5 open | now gated on M16; SH-3.1.1 runs after the model lands |
+| M3 land the branch | 2 of 9 open | SH-3.2 (gate the merge result) and SH-3.4 (merge); M16's gate has discharged |
 | M4 release | open | M3 |
 | M5 verify from outside | open | M4 |
 | M6 long-running validation | open | gates SH-4.3, so it gates the queue crate's publication |
@@ -28,19 +33,21 @@ merge that closes it, which is backwards. Only M1 through M6 are a sequence.
 | M16 tenth review round | 7 done, 6 superseded | its own findings are fixed; the model work moved to `MMT-*` |
 | M-inf parked | ungated | not scheduled, deliberately |
 
-**The critical path is M16's locality-model work -> SH-3.1.1 -> SH-3.4 -> M4.** M14 and M15 do not
-block it: SH-14.1 ships disclosed rather than fixed
+**The critical path was M16's locality-model work -> SH-3.1.1 -> SH-3.4 -> M4, and it has cleared.**
+M14 and M15 do not block it: SH-14.1 ships disclosed rather than fixed
 ([D-36](crates/windows-waitable-queues/DESIGN-NOTES.md#d-36)) and the disclosure -- which was the
 actual release blocker -- landed at SH-15.8, so both conclude after 0.1.0 provided the pull request
 **says** that is deliberate. SH-3.1.1 owns saying it.
 
-**M16 is different, and this was decided rather than drifted into.** Its four gated items
-(SH-16.5, SH-16.8, SH-16.9, SH-16.10) are one piece of work -- replacing the locality model,
-consuming CPU Sets, and collapsing three restatements of one rule -- and the decision is that
-**PR #56 does not merge until it lands**. They were briefly listed here as non-blocking; that is
-corrected. It is gated in turn on
-[DESIGN-SESSION-2026-09-02-cache-locality-model.md](design-sessions/DESIGN-SESSION-2026-09-02-cache-locality-model.md),
-which has open questions, so **design concludes before implementation starts**.
+**M16 was different, and this was decided rather than drifted into -- but it is now complete.** Six
+of its items (SH-16.5, SH-16.8, SH-16.9, SH-16.11, SH-16.12, SH-16.13) were one piece of work --
+replacing the locality model, consuming CPU Sets, and collapsing three restatements of one rule --
+and the decision at the time was that **PR #56 does not merge until it lands**. That work became the
+`MMT-*` plan, which is archived in
+[crates/windows-topology-sys/COMPLETED-PLANS.md](crates/windows-topology-sys/COMPLETED-PLANS.md);
+the session that gated it has concluded, M16 itself is archived, and topology 0.2.0 published the new
+model on 2026-09-05. **So nothing in M3 waits on M16 any longer.** What remains open in M3 is SH-3.2
+and SH-3.4, and `SH-4.15` owns reconciling M4 with a release that has already happened.
 
 What blocks the queue crate specifically, and separately, is M6.
 
@@ -232,10 +239,11 @@ open in M15 is follow-on work on the fix. What *did* gate the release was the di
 landed. So SH-3.4 may proceed with M14 and M15 still open -- but a reviewer must be told that is
 deliberate, which is SH-3.1.1's job below.
 
-**M16 is the exception, by decision.** Its locality-model work (SH-16.5, SH-16.8, SH-16.9,
-SH-16.10) is a merge blocker: the model it replaces is the one `windows-topology-sys` 0.2.0 would
-publish, and shipping a public surface that is already known to be the wrong shape is what the
-milestone exists to avoid. So SH-3.4 waits on it.
+**M16 was the exception, by decision -- and the gate has since discharged.** Its locality-model work
+(SH-16.5, SH-16.8, SH-16.9, SH-16.11, SH-16.12, SH-16.13) was a merge blocker: the model it replaces
+is the one `windows-topology-sys` 0.2.0 would publish, and shipping a public surface that is already
+known to be the wrong shape is what the milestone exists to avoid. So SH-3.4 waited on it. It no
+longer does: that work became the `MMT-*` plan, which has landed, and 0.2.0 published the new model.
 
 **Updated 2026-09-03 -- what that work now is, and what discharges the gate.** All six of those items
 are superseded into the `MMT-*` plan in
@@ -261,7 +269,7 @@ that previously stood in the way are gone:
 - [x] **SH-3.1.1** -- **Review the PR as a diff rather than as a memory of having written it, then
   mark it ready.**
   **Done 2026-09-03 for the review and the description; the promotion is SH-3.1.2, which is the
-  engineer''s.** The item was right that nobody owned "who decides it is ready", so it is now assigned
+  engineer's.** The item was right that nobody owned "who decides it is ready", so it is now assigned
   rather than left implicit.
   The description was rewritten against the diff and the title with it: both dated from 2026-08-31 at
   54 commits, against a branch now 282, and neither mentioned the topology reshape -- the largest
@@ -315,7 +323,7 @@ that previously stood in the way are gone:
   sabotages **were not run at all**. Three guards on the crate about to be published were silently
   unverified, and a green sweep summary would never have said so -- the tool reports staleness
   precisely because a sabotage that does not apply proves nothing.
-  **This branch''s own work caused the drift**, which is why it had to be caught here rather than
+  **This branch's own work caused the drift**, which is why it had to be caught here rather than
   assumed: `slotwise_mpsc frees a slot one short of the next lap` broke when positions widened to 64
   bits and the expression gained an `as Position` cast; `slotwise_mpsc accepts a capacity of one`
   broke when `WRAPPING_MAX_CAPACITY` was renamed `MAX_ADMISSIBLE_CAPACITY`; and `reserving_mpsc:
@@ -396,7 +404,7 @@ that previously stood in the way are gone:
   **The harness bump is the `cargo-workspace` plugin, and it is verified rather than assumed.** The
   harness has a *runtime* dependency `windows-file-watcher = "0.1.3"`, which `^0.1.3` does **not**
   satisfy once that crate reaches 0.2.0 -- so something must rewrite it or the published manifest is
-  broken. The plugin does exactly that, as this repository''s own history shows: `8b37f9f` and
+  broken. The plugin does exactly that, as this repository's own history shows: `8b37f9f` and
   `5f7f6af` (both `chore: release main`) each bumped the harness *and* rewrote its
   `windows-file-watcher` requirement in the same commit. Confirm it happened again rather than
   trusting it; it is the one dependency edge in the workspace that a bump can actually break.
@@ -453,12 +461,12 @@ that previously stood in the way are gone:
 
   **This is not hypothetical -- it has already shipped.** `windows-ioring-sys`'s existing CHANGELOG
   carries two `**guard-alloc:**` entries (`983afbc`, `36ecd8a`), which landed there because those
-  commits touched `crates/windows-ioring-sys/tests/registration.rs`; guard-alloc is a dev-dependency,
+  commits touched [crates/windows-ioring-sys/tests/registration.rs](crates/windows-ioring-sys/tests/registration.rs); guard-alloc is a dev-dependency,
   so exercising it meant editing ioring's tests. Same mechanism, one release earlier, unnoticed.
 
   **Splitting the commit is the right shape, and a naive two-way split is wrong.** The obvious fix --
   "rename in topology, then update the ioring example in a `chore:` commit" -- produces a commit that
-  **does not compile**: `examples/ring_copy/plan.rs` does `use windows_topology_sys::{..., Topology}`
+  **does not compile**: [examples/ring_copy/plan.rs](crates/windows-ioring-sys/examples/ring_copy/plan.rs) does `use windows_topology_sys::{..., Topology}`
   and `pub fn build_plan(topology: &Topology, ...)`, so a topology-only rename breaks it until the
   follow-up lands. CI would not catch it (it builds the PR head and main's tip, not each commit), but
   `git bisect` across that range would.
@@ -480,7 +488,7 @@ that previously stood in the way are gone:
 
   **Measured, because the rule had to be affordable before it could be recommended.** Nine
   release-triggering commits on this branch span more than one *released* crate -- and only two of
-  those are the ioring case. **Seven genuinely changed both crates'' source**, so a blanket
+  those are the ioring case. **Seven genuinely changed both crates' source**, so a blanket
   "one crate per commit" rule would have forced non-compiling commits seven times to fix a problem
   that existed twice. That is why the standing rule flags rather than blocks.
   The measurement also **found a hole in the first version of the check**. `983afbc`
@@ -528,7 +536,7 @@ that previously stood in the way are gone:
 
 - [ ] **SH-4.4** -- **State the supported Windows baseline in the crates this PR did not release.**
   `windows-topology-sys` was corrected in PR #56 (it claimed Vista / Server 2008 while statically
-  importing a Windows 10 API), and the engineer''s ruling is that a crate should claim **Windows 11
+  importing a Windows 10 API), and the engineer's ruling is that a crate should claim **Windows 11
   and the matching server release** -- the floor that is *tested*, not the oldest the APIs might
   work on. **Scoped deliberately to the releasing crates at the time**, so the rest are queued here
   rather than changed under a PR that does not publish them.
@@ -536,13 +544,13 @@ that previously stood in the way are gone:
   `windows-file-enumeration-sys`, `windows-impersonation-token-sys`, `windows-namespace-request-sys`,
   `wtf-string`, and `windows-file-watcher`.
   **Two traps found doing the first one.** A statement about *when an API appeared* is not a baseline
-  claim and must not be rewritten -- `windows-ioring-sys`'' "Windows 11 and Server 2022 added
-  `IoRing`" and `windows-file-watcher`''s "supported from Windows 10 version 1803 onward" are both
+  claim and must not be rewritten -- `windows-ioring-sys`' "Windows 11 and Server 2022 added
+  `IoRing`" and `windows-file-watcher`'s "supported from Windows 10 version 1803 onward" are both
   correct as API facts. And **Server 2022 is not the Windows 11 counterpart**: it is built on the
-  Windows 10 "Iron" codebase (build 20348), while Server 2025 shares Windows 11 24H2''s build 26100.
+  Windows 10 "Iron" codebase (build 20348), while Server 2025 shares Windows 11 24H2's build 26100.
   A crate claiming a Windows 11 floor pairs with **Server 2025**.
 
-- [ ] **SH-4.5** -- **Propagate enumeration incompleteness into the placement probe''s traceability
+- [ ] **SH-4.5** -- **Propagate enumeration incompleteness into the placement probe's traceability
   state.**
   Raised in PR #56 review. `places_from_topology` ignores
   `MachineMemoryTopology::enumeration_anomalies`, and `SubmissionRecord::is_fully_traceable` gates
@@ -562,7 +570,7 @@ that previously stood in the way are gone:
   `pub mod` are observable API even when non-default, so a consumer can enable the feature and depend
   on `permit_mpsc`. Deleting it in a later compatible release would break that build, and no amount
   of documentation exempts it from semver -- which is exactly what `SH-15.6` currently plans to do.
-  Three options, and this is the engineer''s call: commit to compatibility for the published feature;
+  Three options, and this is the engineer's call: commit to compatibility for the published feature;
   move the experiment behind `#[doc(hidden)]` and a `cfg` that is not a Cargo feature, so it is not
   observable API; or keep it out of the published crate entirely and measure it from a path
   dependency. The disclosure in the module docs is honest but does not settle the semver question.
@@ -571,16 +579,16 @@ that previously stood in the way are gone:
   contract half was fixed on 2026-09-04: `Reservation::send` returns `Disconnected<T>` instead of
   publishing into a ring nobody will read. Originally: one of which contradicts a
   prior review.** Both are in the experimental module, so neither blocks the release, and both should
-  be settled before `SH-15.6` decides the module''s fate.
+  be settled before `SH-15.6` decides the module's fate.
   **Contract:** `Reservation::send` publishes unconditionally even when the consumer is already
   dropped, so the caller gets no indication and the item is discarded at teardown -- where
   `reserving_mpsc::Reservation::send` returns `Disconnected<T>` with the item. The module claims only
   the *admission* protocol differs, so this is a divergence it does not disclose.
   **Memory ordering -- settled by SH-3.3.1, 2026-09-04.** The reviewer argued the relaxed ticket
-  operation gives no acquire edge from the consumer''s most recent `release_permit`; a prior round
+  operation gives no acquire edge from the consumer's most recent `release_permit`; a prior round
   concluded the opposite, that the release sequence supplies it. Both were reasoning about whether
   the edge could be *rescued*, and the answer taken was to stop depending on the rescue: the permit
-  counter''s overdraw undo is now `Release` rather than `Relaxed`, so the counter carries one
+  counter's overdraw undo is now `Release` rather than `Relaxed`, so the counter carries one
   discipline throughout and the edge holds without appealing to the release-sequence rule -- a rule
   that was narrowed once already, when C++20 dropped same-thread relaxed stores from it. Recorded as
   `D-38` in [DESIGN-NOTES.md](crates/windows-waitable-queues/DESIGN-NOTES.md). The cost is one
@@ -593,25 +601,31 @@ that previously stood in the way are gone:
   and `overlapped` while the queued IRP may still write through both. Production
   `classify_submission` handles this case; the test does not. Wait for or cancel the operation
   before dropping.
-  **`reserving_mpsc`''s `head` acquire load** (`reserving_mpsc.rs:608`), which **contradicts an
-  earlier review round** that called it the only acquire edge `Reservation::send`''s non-atomic slot
+  **`reserving_mpsc`'s `head` acquire load** (`reserving_mpsc.rs:608`), which **contradicts an
+  earlier review round** that called it the only acquire edge `Reservation::send`'s non-atomic slot
   write has. This is a shipping shape, so settle it with a written argument naming the execution and
   the edge -- do not strengthen the ordering to be safe, which hides whichever model is wrong.
   **Overlapping domains resolved by iteration order**: `memory_domain_of` returns the first match and
   the core map lets a later domain replace an earlier one. For hand-built and deserialized
   topologies -- which the API explicitly accepts -- an overlap is an *ambiguity*, and
   `memory_domain_of` is the sharper case because its value reaches `VirtualAllocExNuma`.
-  **A live-host test asserting cross-API agreement** (`cpu_set/tests.rs:242`) contradicts the model''s
+  **A live-host test asserting cross-API agreement** (`cpu_set/tests.rs:242`) contradicts the model's
   premise that CPU Sets may disagree with the walk; it is a latent failure on untried hardware.
   Assert that both observations are *recorded*, not that they agree.
-  **`release-placement-probe.yml` gating -- DONE 2026-09-04.** `workflow_dispatch` against an
+  **[release-placement-probe.yml](.github/workflows/release-placement-probe.yml) gating -- DONE 2026-09-04.** `workflow_dispatch` against an
   existing release tag satisfied the tag-prefix condition, so a build-only run could create or modify
-  a release. All four publishing guards now require `github.event_name == ''push''`, and the trigger''s
+  a release. All four publishing guards now require `github.event_name == 'push'`, and the trigger's
   own comment no longer claims the restriction is "inherent" -- it was not, which is precisely how
   the hole survived. Raised again by Copilot at review `5117514238` before it was fixed.
-  **`queue_contention.rs:241`** starts its clock without ordering against workers entering their
-  loops, so a descheduled coordinator under-reports the baseline -- the optimistic direction, in a
-  probe whose numbers are quoted as evidence.
+  **`queue_contention.rs` clock ordering -- DONE, already on main.** The finding was that the
+  coordinator started its clock without ordering against workers entering their loops, so a
+  descheduled coordinator would time an interval the producers had already begun. Each producer now
+  times itself and `measured_span` takes the earliest start and the latest finish; that function's
+  doc comment names both ends the earlier arrangement got wrong -- a `Barrier::wait` return that
+  lets a worker push before the coordinator is rescheduled, and a `thread::scope` join that folds
+  thread exit into the interval. The line number the finding carried named neither the binary nor
+  the module it meant, so it is dropped rather than re-pointed. See
+  [crates/windows-platform-probes/src/queue_contention.rs](crates/windows-platform-probes/src/queue_contention.rs).
 
 - [ ] **SH-4.10** -- **The fingerprint collapses multi-source observations by last-write-wins, and
   privileges the relationship walk.** Raised by Copilot across reviews `5117032381`, `5117514238` and
@@ -629,10 +643,10 @@ that previously stood in the way are gone:
   the topology model was reshaped to prevent, reappearing one layer up in its first consumer.
   **The fix is a design decision, not a patch**: accept a sole or agreed label, and refuse the
   measurement as ambiguous when the sources actually conflict. Refusing is consistent with this
-  seam''s existing rule that an invented value is worse than a lost one. Relates to `SH-4.8`''s
+  seam's existing rule that an invented value is worse than a lost one. Relates to `SH-4.8`'s
   overlapping-domain finding, which is the same shape one layer down in `memory_domain_of`.
 
-- [ ] **SH-4.11** -- **The record''s anti-splice guard compares fingerprints, which cannot establish
+- [ ] **SH-4.11** -- **The record's anti-splice guard compares fingerprints, which cannot establish
   what it claims.** Raised by Copilot at review `5117911029`.
   [main.rs](crates/windows-placement-probe/src/bin/placement_probe/main.rs) compares
   `observation.host != host` to refuse a record whose announced shape and measured rows came from two
@@ -649,7 +663,7 @@ that previously stood in the way are gone:
   every case observed so far. It is weaker than its own comment claims, and the comment must be
   corrected even if the check is not.
 
-- [ ] **SH-4.12** -- **`ring_copy`''s `ByL3` policy restates the partition rule instead of asking for
+- [ ] **SH-4.12** -- **`ring_copy`'s `ByL3` policy restates the partition rule instead of asking for
   it.** Raised by Copilot at reviews `5116772196` and `5116886015`.
   [policy.rs](crates/windows-ioring-sys/examples/ring_copy/policy.rs) selects domains with
   `matches!(domain.kind, DomainKind::Cache { level: 3, .. })`. The reshaped topology model makes
@@ -657,20 +671,20 @@ that previously stood in the way are gone:
   level numbering is explicitly **not** the ordering contract. So this consumer can produce
   **overlapping ring domains** where two cache kinds are reported at level 3, and degrades to a single
   whole-machine domain on a host whose outermost partition is at some other level -- neither of which
-  the policy''s own documentation admits to.
+  the policy's own documentation admits to.
   This is the consumer-side twin of the platform-integrity rule: bind to the specified primitive, not
-  to the level number that happens to be L3 on today''s hardware. The fix renames the policy as well
+  to the level number that happens to be L3 on today's hardware. The fix renames the policy as well
   as changing it, since `byl3` is a user-facing CLI value that would no longer describe what it does.
 
 - [ ] **SH-4.13** -- **`ProcessorSet` cannot represent every `u8` processor id, and the public API
   cannot uphold both "every processor" and "no abort".** Raised by Copilot across three unresolved
   review threads -- `topology.rs:100`, `topology.rs:946` and `granularity.rs:94` -- which share one
-  root and are recorded once here. The reviewer''s own phrasing on the third is the clearest statement
+  root and are recorded once here. The reviewer's own phrasing on the third is the clearest statement
   of the problem and is quoted deliberately.
   `MachineMemoryTopology` and `Processor::id` are **public and constructible**, and the derived
   deserializer accepts `number: 255` under `processors` even though `ProcessorSet` rejects the same id
   under `domains`. Such a topology then **panics** in `machine_processors()`, and on a 32-bit target a
-  processor number of 40 panics in `granularity`''s `insert` before the argument guard can answer.
+  processor number of 40 panics in `granularity`'s `insert` before the argument guard can answer.
   **Not fixable site by site**: validating each lookup closes the path that was reported and leaves
   the next one open, because the gap is between what a `Processor` may say and what a `ProcessorSet`
   can hold. The decision is which of the two moves -- widen `ProcessorSet` to the full `u8` range, or
@@ -693,7 +707,7 @@ that previously stood in the way are gone:
   unexercised -- the honest sequencing is to add the target to CI first and then make this fail
   against it, rather than writing a guard nothing runs.
 
-- [ ] **SH-4.9** -- **`tools/check-publishable.ps1`: three findings with one root.** Its checks are
+- [ ] **SH-4.9** -- **[tools/check-publishable.ps1](tools/check-publishable.ps1): three findings with one root.** Its checks are
   **text searches standing in for structural facts**, which is how a check goes quietly vacuous.
   An unanchored pattern is satisfied by a *commented-out* assignment, so CI would believe the
   dependency registry exists while the shell never defines it -- re-creating the publish race the
@@ -703,6 +717,26 @@ that previously stood in the way are gone:
   probe is "not on crates.io yet", implying a registry publication that `publish = false` ruled out.
   Fix together by parsing the workflow structure rather than adding anchors until the next false
   green.
+
+- [ ] **SH-4.15** -- **Reconcile M4 with what actually shipped.** Both crates reached crates.io on
+  2026-09-05 -- `windows-topology-sys` 0.2.0 and `windows-waitable-queues` 0.1.0, neither yanked --
+  by a route this file does not describe, since PR #56 closed unmerged. Several items now instruct
+  or assume the opposite of what happened, and three are confirmed rather than suspected:
+  - **SH-4.3** reasons from "a crate that has never been published -- so 0.1.0 would be skipped
+    entirely". 0.1.0 is what shipped, so the premise and its conclusion are both gone.
+  - **SH-4.2** says to update `windows-ioring-sys` to the published 0.2.0 and release it "per the
+    order settled in SH-2.2" -- but SH-2.2 is checked and concludes that decision "does not arise",
+    the topology dependency being a dev-dependency only. The item instructs what its own cited
+    authority rejected.
+  - **SH-15.9** schedules a `reserving_mpsc_wide` peer. That shape was never built: the 128-bit word
+    ships as a layout inside `reserving_mpsc` per `D-37` as amended by `D-41`, and
+    [reserving_mpsc.rs](crates/windows-waitable-queues/src/reserving_mpsc.rs) says so in its module
+    documentation.
+
+  This is a re-plan, not a correction, which is why it is one item rather than edits scattered
+  through M4 and M15: deciding which of these are done, which are void and which survive in an
+  altered form is the engineer's call. Do not check items off without that decision -- a release
+  plan that says a shipped crate is unshipped is the safer of the two failure modes.
 
 ## M5: verify from outside the workspace
 
@@ -1093,7 +1127,7 @@ gap; the options in SH-14.3 instead make the recurrence harder to reach.
   - **`reserving_mpsc` is unchanged and always ships**, on every target, with SH-15.8's warnings. It
     is never silently swapped for the wide one on targets that could support it: a shape whose
     contract changes with the target is exactly what
-    [PLATFORM INTEGRITY](../.github/copilot-instructions.md) rule 2 forbids, and a caller reading
+    [PLATFORM INTEGRITY](.github/copilot-instructions.md) rule 2 forbids, and a caller reading
     "2^32" in the docs must get 2^32.
   - **`reserving_mpsc_wide` is new**: the same claim protocol with a `u128` word split 64/64. The
     position then needs 2^64 pushes to recur -- about 16,000 years at this crate's measured rates --

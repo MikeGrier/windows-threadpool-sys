@@ -9,7 +9,7 @@ moved to [COMPLETED-CHECKLIST.md](COMPLETED-CHECKLIST.md).
 Authoritative decisions are in [DESIGN-NOTES.md](DESIGN-NOTES.md); the session that produced them is
 [DESIGN-SESSION-2026-08-30-numa-sharded-io-execution-domains.md](design-sessions/DESIGN-SESSION-2026-08-30-numa-sharded-io-execution-domains.md),
 which is **still open**. Milestone numbers continue the workspace sequence: [CHECKLIST.md](CHECKLIST.md)
-holds M19-M21 and [CHECKLIST-thread-ambient.md](CHECKLIST-thread-ambient.md) held M22-M27.
+holds M19-M21 and [CHECKLIST-thread-ambient.md](CHECKLIST-thread-ambient.md) held M22-M29.
 
 ## What is ready, and what deliberately is not
 

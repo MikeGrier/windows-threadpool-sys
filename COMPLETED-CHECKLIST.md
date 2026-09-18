@@ -1587,7 +1587,7 @@ with the three rejected alternatives).
 
 ## Moved 2026-08-31 -- topology provenance: a topology now carries where it came from, and cannot pass as measured
 
-# Checklist: topology provenance
+# <a id="checklist-topology-provenance"></a>Checklist: topology provenance
 
 **Problem.** [crates/windows-topology-sys/src/topology.rs](crates/windows-topology-sys/src/topology.rs)
 documents that a `Topology` is "built either by `Topology::discover` from the running system, by hand,
@@ -3527,13 +3527,14 @@ at M2-M6, M14, M15 and M-inf.
 > are all the same piece of work seen from different angles -- reshaping the machine memory topology
 > -- and they now live in
 > [crates/windows-topology-sys/COMPLETED-CHECKLIST.md](crates/windows-topology-sys/COMPLETED-CHECKLIST.md) as a plan of
-> their own, numbered `MMT-*`. They are left here, unchecked and marked, rather than deleted: each
-> records how the defect was *found*, which the new plan does not repeat.
+> their own, numbered `MMT-*`. They are left here, checked and marked `DISCHARGED` with the `MMT-*`
+> item that did the work, rather than deleted: each records how the defect was *found*, which the new
+> plan does not repeat.
 >
-> **Read the new plan for what to do; read these for why.** The six that remain live here are the
+> **Read the new plan for what to do; read these for why.** The seven that remain live here are the
 > review round's own findings, already fixed.
 
-**This round is the one [SH-3.1.1](#m3-land-the-branch) asked for**, and it is the first that read the
+**This round is the one [SH-3.1.1](CHECKLIST-ship-topology-and-queues.md#m3-land-the-branch) asked for**, and it is the first that read the
 branch as a *diff* rather than reacting to a reviewer's comment. Five reviewers took non-overlapping
 crate scopes across all 200 changed files; seven findings came back, listed here worst-first rather
 than by crate.
@@ -3825,3 +3826,32 @@ predicted about a 222-commit branch.
   sibling naming does not apply -- a transaction restore either sets a real handle or clears to
   "none", and both succeed, so unlike a null WOW64 cookie or `SEM_NOALIGNMENTFAULTEXCEPT` there is no
   naturally-rejecting value to provoke. Written down so the missing half is not re-attempted.
+
+## Moved 2026-09-17 20:08:42 -07:00 -- M-inf.2: the thread-ambient archival it asked for
+
+### <a id="m-inf2"></a>M-inf.2 -- Archive the eight completed milestone groups in CHECKLIST-thread-ambient.md into COMPLETED-CHECKLIST.md. *(completed 2026-09-17 20:08:42 -07:00)*
+
+Done: M22 through M29 are archived above under `Moved 2026-09-09 21:28:45 -04:00`, and
+[CHECKLIST-thread-ambient.md](CHECKLIST-thread-ambient.md) retains only `M26+`, whose items are
+parked rather than pending.
+
+The item's original body follows, including its reading of the archive format, which the
+repository instruction has since settled the other way -- a `## Moved` heading carries the full
+timestamp and its offset.
+
+**Raised by a review that named one item, and measured to be eight groups.** The comment asked for
+M26.5's completed multi-line body to be replaced by a one-line stub, per the checklist-hygiene rule
+that an active checklist is an action queue. That rule is right and the file does violate it -- but
+M26.5 is not exceptional: its five siblings in M26 are written the same way, so stubbing only the
+reported item would have made it inconsistent with the group it belongs to rather than more
+consistent with the rule.
+
+Counted rather than assumed, every group in the file is complete and due for migration under the
+"move the completed group" rule: M22 (8 items), M23 (6), M24 (6), M25 (7), M26 (6), M27 (6),
+M28 (4) and M29 (5). Only `M26+` has open items, and it is what keeps the file alive.
+
+Not taken in PR #86 because that branch corrects `GetFullPathNameW` documentation and touched
+M26.5 only to fix one technical premise inside it. Migrating roughly 400 lines of another feature's
+bookkeeping through it would bury the change it exists to make. The migration is mechanical, is its
+own commit, and needs the group headings dated per the archive format -- date-only on the `## Moved`
+line, with any precise timestamp reserved for an anchored item heading.

@@ -2265,12 +2265,14 @@ well-formed YAML, which nothing currently does. Giving it an owner meant decidin
 where a workflow-parsing check belongs, which is a repository-level call rather
 than this crate's, and the root checklist is where that lands.
 
-**This paragraph reads differently on `main`, and deliberately so.** The version
-merged from there says the gap is recorded and not yet queued, because `main` has
-no `M34` for it to belong to -- the milestone is this branch's. A design note
-cannot schedule work, so it has to name the item that does when one exists and
-name the absence when one does not; which of those is true depends on the
-lineage, and each side says what is true of itself.
+**This paragraph used to read differently on `main`, and the difference has since
+collapsed.** The `main` version said the gap was recorded and not yet queued,
+because `main` had no `M34` for it to belong to. The peel that became PR #95
+moved the root checklist there, so `main` now carries `M34.5` itself and both
+copies say the same thing. The lesson survives the divergence it described: a
+design note cannot schedule work, so it names the item that does when one exists
+and names the absence when one does not -- and which of those is true can change
+under it without anything failing.
 
 Both are the same lesson this milestone keeps producing: the failure mode of a
 check is to pass.

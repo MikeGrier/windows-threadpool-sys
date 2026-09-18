@@ -108,23 +108,33 @@ be settled rather than discovered later.
 
 ## M34 -- Tooling
 
-Numbered M34 rather than M22 because the three root-level checklists share one milestone space:
-[CHECKLIST.md](CHECKLIST.md) holds M19-M21, [CHECKLIST-thread-ambient.md](CHECKLIST-thread-ambient.md)
-M22-M29, and [CHECKLIST-io-domains.md](CHECKLIST-io-domains.md) M30-M33.
+Numbered M34 rather than M22 because the root-level checklists share one milestone space:
+[CHECKLIST.md](CHECKLIST.md) opened M19-M21 and later took M30, M34, M35 and M37;
+[CHECKLIST-thread-ambient.md](CHECKLIST-thread-ambient.md) took M22-M29;
+[CHECKLIST-io-domains.md](CHECKLIST-io-domains.md) M30-M33; and
+[CHECKLIST-placement-tool.md](CHECKLIST-placement-tool.md) M36, which is why the M37 section below
+skips past it. That last one is the case to watch: placement-tool numbers *its own* milestones from
+M1, and drew M36 from the shared space as well, so a file numbering from M1 is not evidence that it
+stays out of the space. [CHECKLIST-ship-topology-and-queues.md](CHECKLIST-ship-topology-and-queues.md)
+and [CHECKLIST-mutation-survivors.md](CHECKLIST-mutation-survivors.md) number from M1 and have taken
+nothing from it so far. M30 is currently used twice inside the space, by this file and by io-domains;
+M34.6 owns that.
 
 - [x] **M34.1** -- Promote the ad-hoc sabotage harness into a reusable tool. -> [completed 2026-08-31](COMPLETED-CHECKLIST.md#m341)
 
-- [ ] **M34.3** -- **Archive the completed bodies in
-  [CHECKLIST-io-domains.md](CHECKLIST-io-domains.md)**, which holds twelve checked items still
-  carrying their full write-ups. The completed-item rule moves a large one to
+- [ ] **M34.3** -- **Archive the completed bodies in the three root checklists that still carry
+  them**: [CHECKLIST-io-domains.md](CHECKLIST-io-domains.md),
+  [CHECKLIST-placement-tool.md](CHECKLIST-placement-tool.md) and
+  [CHECKLIST-ship-topology-and-queues.md](CHECKLIST-ship-topology-and-queues.md). Not one of their
+  checked items is a stub. The completed-item rule moves a large one to
   [COMPLETED-CHECKLIST.md](COMPLETED-CHECKLIST.md) immediately and leaves a one-line anchored stub, so
   the active file stays a list of what is *left*. Raised in review 5072735803 on pull request #56,
   where it was noted that the problem recurs throughout that file rather than at the one line cited.
   [M34.1](COMPLETED-CHECKLIST.md#m341) is the worked example of the shape: `### <a id="..."></a>` in
   the archive under a dated group, a stub with a completion link in its place.
   Bookkeeping with no bearing on correctness, which is why it is queued rather than folded into a
-  branch already under review -- but it is 757 lines of checklist that a reader currently has to scan
-  past to find the open work, so it is not cosmetic either.
+  branch already under review -- but a reader currently has to scan past every completed write-up to
+  reach the open work, so it is not cosmetic either.
 
 - [ ] **M34.2** -- **Route every tool's output through one sink, per the repository's own rule**: never
   call `println!`/`eprintln!` from more than one site in a tool; introduce a writer trait, sink or
@@ -141,7 +151,7 @@ M22-M29, and [CHECKLIST-io-domains.md](CHECKLIST-io-domains.md) M30-M33.
   **Updated 2026-09-04: the conversion is done; what remains is the capture test.** The item said
   "seven binaries violate this today" and named them, from review 5072622803 on pull request #56.
   Five had already been converted when a later review round re-checked, and the last two --
-  [queue_contention.rs](crates/windows-platform-probes/src/bin/queue_contention.rs) and
+  [queue_contention/main.rs](crates/windows-platform-probes/src/bin/queue_contention/main.rs) and
   [peer_index_cache.rs](crates/windows-platform-probes/src/bin/peer_index_cache.rs) -- were fixed in
   that pull request, so all seven now compose their whole report as text and hand it to a sink at one
   place. Verified by counting, not by reading: no probe binary contains a direct `println!`/
@@ -162,18 +172,25 @@ M22-M29, and [CHECKLIST-io-domains.md](CHECKLIST-io-domains.md) M30-M33.
   [run-numa-spikes.ps1](tools/run-numa-spikes.ps1), [run-mutants.ps1](tools/run-mutants.ps1) and
   [run-sabotage.ps1](tools/run-sabotage.ps1) each now route everything through one `Write-Report`
   sink. They were small enough to convert in place, which is exactly why they did not need deferring.
-  (`run-sabotage.ps1`'s `Exit-WithMessage` is deliberately outside its sink: that path writes to
+  ([run-sabotage.ps1](tools/run-sabotage.ps1)'s `Exit-WithMessage` is deliberately outside its sink: that path writes to
   stderr and exits, and there the destination is part of the meaning.)
   **What remains is the capture test, and it has a structural obstacle worth naming.**
   The point of the rule is that output becomes testable, so this item is not checked off on the
   refactor alone -- an abstraction introduced without a capture-based test spends the cost and skips
   the benefit. `Captured` exists in [report.rs](crates/windows-platform-probes/src/report.rs) for
   exactly that purpose, and `banner_line` is already asserted directly.
-  **The obstacle: each probe's `render()` lives in its own `bin` target, which nothing can import.**
-  That is precisely why the two banner defects survived every test -- there was no reachable seam to
-  assert against. Closing it means moving each `render()` into the crate's library and leaving `main`
-  as the one place that names the stream, which is a real refactor rather than a test to write.
-  Decide the seam once and apply it uniformly.
+  **The obstacle is narrower than this item first claimed.** It said each probe's `render()` lives in
+  a `bin` target "which nothing can import", and concluded that closing the gap means moving every
+  `render()` into the crate's library. A `bin` target cannot be imported from *outside*, but it can
+  carry its own test module, and this crate already does it: `queue_contention`'s
+  [main.rs](crates/windows-platform-probes/src/bin/queue_contention/main.rs) declares
+  `mod tests;`, and
+  [tests.rs](crates/windows-platform-probes/src/bin/queue_contention/tests.rs) calls
+  `render_observation` into a `String` and asserts on the result. So a renderer in a `bin` is
+  testable where it stands, and no library extraction is required to reach one. What the two banner
+  defects actually needed was a test, not a seam. Extraction may still be worth doing to share one
+  sink across probes -- that is the item's other half -- but it is not a precondition for asserting
+  on a report.
   A PowerShell sink is a function whose destination can be swapped, but this workspace runs no
   PowerShell test harness in which to assert against it, and inventing one to cover five diagnostic
   scripts is not a cost this item is willing to spend without deciding to adopt such a harness first.
@@ -181,7 +198,7 @@ M22-M29, and [CHECKLIST-io-domains.md](CHECKLIST-io-domains.md) M30-M33.
   discussion thread, so "can this be captured and asserted end to end?" has real value there rather
   than being architectural tidiness.
 
-- [x] **M34.4** -- Share the native-command guard through a dot-sourced `tools/common.ps1`, route
+- [x] **M34.4** -- Share the native-command guard through a dot-sourced [tools/common.ps1](tools/common.ps1), route
   every capture site through it, and prove it on both PowerShell hosts.
   -> [completed 2026-09-07](COMPLETED-CHECKLIST.md#m344)
 
@@ -206,6 +223,29 @@ M22-M29, and [CHECKLIST-io-domains.md](CHECKLIST-io-domains.md) M30-M33.
 
   Whatever is chosen must be verified by **re-injecting this exact weld** and confirming the gate
   goes red, since the point of the item is that the current one does not.
+
+- [ ] **M34.6** -- **Resolve the `M30` collision inside the shared milestone space.** This file's
+  `M30` (machine-checkable correctness, M30.1-M30.5 open) and
+  [CHECKLIST-io-domains.md](CHECKLIST-io-domains.md)'s archived `M30` (the queue crate's name,
+  skeleton and SPSC shape) are different work under one number, and their sub-items collide too:
+  this file defines `M30.1`-`M30.5`, while io-domains refers to an `M30.2`-`M30.5` of its own.
+  The collision was created when io-domains arrived
+  alongside a file that already held `M30` on `main`, and it is invisible from either file alone.
+  Renumbering this file's `M30` is the cheaper side, since io-domains' is already archived and
+  cited from [COMPLETED-CHECKLIST.md](COMPLETED-CHECKLIST.md); but the choice is the engineer's,
+  because the number is referenced from the M37 preamble's "first free number" argument and from
+  [PLANS.md](PLANS.md). Decide, then sweep every reference to whichever `M30` moves.
+
+- [ ] **M34.7** -- **Graduate `M26+` now that its gate has lifted.**
+  [CHECKLIST-thread-ambient.md](CHECKLIST-thread-ambient.md)'s three remaining items were parked on
+  the namespace-facility design branch reaching `main`; both
+  [crates/windows-namespace-request-sys](crates/windows-namespace-request-sys) and
+  [crates/windows-thread-ambient-sys](crates/windows-thread-ambient-sys) are there now. The
+  `M{n}+` convention says the milestone that unblocks such items pulls them in and gives them a
+  number, but here the unblocking event was a branch landing rather than a milestone, so there is no
+  number waiting. Pick one in the shared space that `M34.6` is also about -- and note that whichever
+  is chosen, the file becomes deletable once the three are done, since none of its own milestones
+  are outstanding.
 
 ## M37 -- Discharge the failable-call standard across the workspace
 
@@ -402,23 +442,4 @@ Ungated work with no identified predecessor deliverable.
   the fallback was redundant -- not because the crash was understood. Parked rather than dropped so the
   unexplained result is not mistaken for a tested one.
 
-- [ ] **M-inf.2** -- Archive the eight completed milestone groups in
-  [CHECKLIST-thread-ambient.md](CHECKLIST-thread-ambient.md) into
-  [COMPLETED-CHECKLIST.md](COMPLETED-CHECKLIST.md).
-
-  **Raised by a review that named one item, and measured to be eight groups.** The comment asked for
-  M26.5's completed multi-line body to be replaced by a one-line stub, per the checklist-hygiene rule
-  that an active checklist is an action queue. That rule is right and the file does violate it -- but
-  M26.5 is not exceptional: its five siblings in M26 are written the same way, so stubbing only the
-  reported item would have made it inconsistent with the group it belongs to rather than more
-  consistent with the rule.
-
-  Counted rather than assumed, every group in the file is complete and due for migration under the
-  "move the completed group" rule: M22 (8 items), M23 (6), M24 (6), M25 (7), M26 (6), M27 (6),
-  M28 (4) and M29 (5). Only `M26+` has open items, and it is what keeps the file alive.
-
-  Not taken in PR #86 because that branch corrects `GetFullPathNameW` documentation and touched
-  M26.5 only to fix one technical premise inside it. Migrating roughly 400 lines of another feature's
-  bookkeeping through it would bury the change it exists to make. The migration is mechanical, is its
-  own commit, and needs the group headings dated per the archive format -- date-only on the `## Moved`
-  line, with any precise timestamp reserved for an anchored item heading.
+- [x] **M-inf.2** -- Archived the eight completed milestone groups in [CHECKLIST-thread-ambient.md](CHECKLIST-thread-ambient.md), leaving only the parked `M26+`. -> [completed 2026-09-17](COMPLETED-CHECKLIST.md#m-inf2)

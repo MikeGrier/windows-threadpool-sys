@@ -355,7 +355,8 @@ jobs:
       - name: probe magnitudes (request cost)
         if: "!cancelled() && steps.build.outcome == 'success'"
         run: cargo run -p windows-platform-probes --bin probe-request-cost --locked --release
-      # Both halves of the long-path pair, deliberately. Either alone says      # nothing: the finding is the *difference* between two executables that
+      # Both halves of the long-path pair, deliberately. Either alone says
+      # nothing: the finding is the *difference* between two executables that
       # differ only in whether `build.rs` embedded the `longPathAware` manifest,
       # so a run that reported one of them would be reporting a number with no
       # baseline to read it against.

@@ -1,6 +1,10 @@
 # Design session: the cache-locality model
 
-**Status: OPEN, with direction settled and the representation converging.** The engineer has
+**Status: CONCLUDED -- the reshape shipped.** The `MMT-*` plan implemented this direction and is
+archived in
+[crates/windows-topology-sys/COMPLETED-PLANS.md](../crates/windows-topology-sys/COMPLETED-PLANS.md);
+`windows-topology-sys` 0.2.0 published the new model on 2026-09-05. What follows is the session as it
+was held, in the present tense it was written in. The engineer has
 taken sides on both underlying questions (see "Direction taken" below) and settled three
 sub-questions about the proposed shape: provenance is **per-relation**, "determined absent"
 is a **distinct record**, and the whole-object `Provenance` is **superseded** rather than
@@ -10,7 +14,9 @@ options section further down predates that direction and is kept as a record of 
 considered -- Options 1 and 2 are now insufficient on their own, because both preserve the
 `Option`-shaped absence the direction rejects.
 
-**This session is on PR #56's critical path.** The work it gates is in scope for that PR by
+**Historical, and it did not play out this way: PR #56 closed unmerged on 2026-09-15 and the model
+shipped by another route.** As written: this session is on PR #56's critical path. The work it gates
+is in scope for that PR by
 decision -- #56 does not merge until the new model lands -- because the model being replaced is
 the one `windows-topology-sys` 0.2.0 would publish, and a published model cannot be reshaped
 without another break. So this session concludes before implementation starts, and
@@ -180,7 +186,7 @@ principles these are two things one scalar was forced to conflate: **trust asser
 (never upgradeable) and **origin history** (recorded, conferring no trust).
 
 **Can one relation hold more than one observation?** It probably must, and the project already
-reasons this way. From `file-handle-numa-spike.rs`:
+reasons this way. From [file-handle-numa-spike.rs](../crates/windows-ioring-sys/design-sessions/spikes/file-handle-numa-spike.rs):
 
 > **Agreement is consistent with volume locality; it does not establish it.** A genuinely
 > per-file answer may equal its volume's node ... so one file agreeing rules nothing out. Only
@@ -214,7 +220,7 @@ was explicit, and the repository's history supports it: this project has repeate
 information it had was inadequate -- the ARM64 host with no L3 that forced "outermost level
 that partitions" rather than "level 3"; the guard test against a consumer sweeping `1..=4`;
 group-awareness, where "a bare `cpu5` cannot tell a reader whether the group was considered and
-was zero, or never consulted at all"; and `machine.rs` distinguishing a withheld field from an
+was zero, or never consulted at all"; and [machine.rs](../crates/windows-placement-probe/src/machine.rs) distinguishing a withheld field from an
 unanswerable one. Foreclosing on any single moment's understanding risks losing exactly what is
 needed next.
 
@@ -518,6 +524,9 @@ establish one).
 6. Where should the note about write buffers being outside the OS surface live?
 
 ## Status of dependent work
+
+**Historical, as the section read when the session was held. SH-16.5 was discharged on 2026-09-03 by
+`MMT M5+.4` -- `cache_domain` is `Observed<u32>` and the refusal is gone. As written:**
 
 - **SH-16.5 is blocked on this session.** The contradiction it reports is real and still
   unfixed; `windows-placement-probe` still refuses a partially-covering level that
