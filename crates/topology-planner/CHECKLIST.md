@@ -16,9 +16,9 @@ everything depends on and that depends on nothing.
 
 ## Where this stands
 
-**Nothing is implemented.** M1 is the only active milestone, and it is deliberately a
-*requirements* milestone rather than an implementation one: its output is the concrete statement
-of what the model must answer, which the open design session needs in order to settle it.
+**Nothing is implemented.** MR1 is the active milestone: it records and resolves the contradictions
+and execution gaps found in the 2026-09-18 design review before the existing requirements work
+resumes. M1 remains a *requirements* milestone rather than an implementation one.
 
 **Deferred past PR #56, by direction.** This component contributes only planning documents to that
 PR and no code. `windows-topology-sys`'s reshape lands there without it: per
@@ -32,11 +32,60 @@ prerequisites rather than on someone else's decision.
 
 | Milestone | State | What it is waiting on |
 |---|---|---|
+| MR1 design-review reconciliation | 0 done, 7 open | active; work in item order |
 | M1 the input contract | 3 done, 2 open | `EP-1.4` and `EP-1.5`'s coverage half, which want a settled model |
 | M1+ scenario and naming | **partly answered** | the name is settled (EP-D-4); the goal input is deferred for litigation, by direction |
 | M2+ the plan as a value | parked, **and needs re-cutting** | re-cut against EP-D-4/EP-D-5, then the topology reshape landing |
 | M3+ the policies | parked | M2+ |
 | M-inf parked | ungated | not scheduled, deliberately |
+
+## MR1: reconcile the 2026-09-18 design review
+
+These items are in dependency order. Resolve and commit one item before beginning the next.
+
+- [ ] **EP-R1.1** -- **Settle measurement ownership and its data boundary.** Reconcile the concluded
+  design session's statement that the permissioned synthesizer measures with
+  [EP-D-3](DESIGN-NOTES.md#ep-d-3), [EP-D-5](DESIGN-NOTES.md#ep-d-5), and `EP-1+.4`, which still
+  describe ownership as open or route directed residency cost into `topology-model` through an
+  adapter/synthesizer path. Decide whether measurements are planner working state, persisted model
+  data, or adapter-supplied input; state who collects, validates, retains, and serializes measurement
+  context; and propagate the answer through every current restatement.
+
+- [ ] **EP-R1.2** -- **Re-cut the four-part architecture into executable component plans.** Create
+  dependency-ordered work and reciprocal cross-component handoffs for `topology-model`,
+  `topology-planner`, the inward Windows adapter, and the outward realizer. Move ownership of the
+  model, query traits, and plan value out of this checklist wherever
+  [EP-D-5](DESIGN-NOTES.md#ep-d-5) assigns them elsewhere. The result must identify the first
+  implementable item in each component without requiring an executor to infer a dependency.
+
+- [ ] **EP-R1.3** -- **Remove stale gates and make current work states truthful.** Reconcile the
+  milestone table and item bodies with the concluded locality-model session and the shipped
+  `windows-topology-sys` reshape. `EP-1.4`, the coverage half of `EP-1.5`, M1+, and M2+ must name
+  their real current prerequisites rather than waiting on work that has already landed.
+
+- [ ] **EP-R1.4** -- **Correct query totality versus order totality everywhere.** The locality
+  relation is a partial order with a top and may contain incomparable minimal shared granularities;
+  the top makes the query total but does not make the order total. Correct the stale "order must be
+  total" handoff and record both the ordered-collection correction and this distinct correction in
+  the current canonical documentation.
+
+- [ ] **EP-R1.5** -- **Split completed naming work from names that remain open.** Record the settled
+  planner and graph vocabulary as completed, retain explicit work for adapter and public type names,
+  and make the milestone table agree with the remaining scope rather than describing one mixed item
+  as both settled and unchecked.
+
+- [ ] **EP-R1.6** -- **Refresh Tier 1 against the model that shipped.** Move historical claims about
+  CPU Sets being unconsumed and proximity having no answer into
+  [DESIGN-RATIONALE.md](DESIGN-RATIONALE.md), then state which shard-set, proximity, and residency
+  requirements the current Windows topology surface answers and which still belong to the abstract
+  model, planner, or adapters.
+
+- [ ] **EP-R1.7** -- **Complete the contracts and acceptance matrix before implementation.** Plan
+  the scenario/goal contract, plan invariants and errors, deterministic policy and tie-breaking,
+  measurement permission and failure behavior, callback semantics, JSON compatibility, storage and
+  interconnect policy, routed-hop representation, and synthetic acceptance cases. Include at least
+  ten normal cases plus every identified edge case, and replace "deferred for litigation" with a
+  linked decision or a concrete blocker and graduation trigger.
 
 ## M1: state what the planner needs from the topology
 
