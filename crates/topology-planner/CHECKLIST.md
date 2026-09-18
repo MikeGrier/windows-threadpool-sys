@@ -33,9 +33,9 @@ prerequisites rather than on someone else's decision.
 
 | Milestone | State | What it is waiting on |
 |---|---|---|
-| MR1 design-review reconciliation | 4 done, 4 open | active; work in item order |
+| MR1 design-review reconciliation | 5 done, 3 open | active; work in item order |
 | M1 the input contract | 3 done, 2 open | `EP-1.4` waits on EP-R1.7; `EP-1.5`'s coverage half is EP-R1.6 |
-| M1+ scenario and naming | 1 done, 3 open | EP-R1.5 settles remaining names; EP-R1.7 owns the topology specification and callbacks |
+| M1+ scenario and naming | 2 done, 3 open | EP-R1.7 owns the topology specification and callbacks; `EP-1+.5` then settles remaining names |
 | M2+ the plan as a value | parked, **and needs re-cutting** | MR1, then EP-R1.8 and the resulting `topology-model` work |
 | M3+ the policies | parked | M2+ |
 | M-inf parked | ungated | not scheduled, deliberately |
@@ -52,10 +52,7 @@ These items are in dependency order. Resolve and commit one item before beginnin
 
 - [x] **EP-R1.4** -- Query totality, the scoped universe, and specified partitions are distinguished from order totality. -> [completed 2026-09-18](COMPLETED-CHECKLIST.md#ep-r14)
 
-- [ ] **EP-R1.5** -- **Split completed naming work from names that remain open.** Record the settled
-  planner and graph vocabulary as completed, retain explicit work for the measurement foundation,
-  adapters, and public type names, and make the milestone table agree with the remaining scope rather
-  than describing one mixed item as both settled and unchecked.
+- [x] **EP-R1.5** -- Settled naming is separated from contract-dependent component and type names. -> [completed 2026-09-18](COMPLETED-CHECKLIST.md#ep-r15)
 
 - [ ] **EP-R1.6** -- **Refresh Tier 1 against the model that shipped.** Move historical claims about
   CPU Sets being unconsumed and proximity having no answer into
@@ -164,8 +161,9 @@ whether the topology can answer it today -- so the model is designed against a r
 ## M1+: the scenario input, and the naming
 
 Raised when the engineer described this component's function, which turned out to be richer than
-"takes a topology, applies policy". No external model work gates these items. `EP-R1.5` owns the
-remaining names, while `EP-R1.7` owns the topology specification and callback contract.
+"takes a topology, applies policy". No external model work gates these items. `EP-R1.7` owns the
+topology specification and callback contract; `EP-1+.5` names the remaining components and types
+after those responsibilities are settled.
 
 - [ ] **EP-1+.1** -- **Describe the scenario input.** The synthesizer takes *two* inputs and only one
   is described anywhere. The scenario says what the caller intends to run, and it is what makes a
@@ -179,16 +177,15 @@ remaining names, while `EP-R1.7` owns the topology specification and callback co
   is what decides whether this is one trait or several, and it cannot be done before EP-1+.1 says
   what the scenario already answers.
 
-- [ ] **EP-1+.3** -- **Settle the naming, before any type is written.** Both inputs and the output
-  are graphs of processors and their relations, so "topology" fits all of them and distinguishes
-  none -- and a reader seeing the word twice will eventually take one for the other. Decide whether
-  the observed machine keeps the bare name (qualified only by its crate), gains a qualifier, or is
-  renamed outright; what the synthesized arrangement is called; and whether the inward/outward
-  adapters keep those role names or gain more specific crate/type names. Cheap now; expensive once
-  any of those names are public. This one blocks nothing but should not be settled by whoever writes
-  the first type.
+- [x] **EP-1+.3** -- The planner, model, and conceptual input/output vocabulary are named. -> [completed 2026-09-18](COMPLETED-CHECKLIST.md#ep-1+3)
 
 - [x] **EP-1+.4** -- Measurement ownership for directed residency cost is assigned. -> [completed 2026-09-18](COMPLETED-CHECKLIST.md#ep-1+4)
+
+- [ ] **EP-1+.5** -- **Name the remaining platform components and public contract types after
+  EP-R1.7 settles their responsibilities.** Apply [EP-D-8](DESIGN-NOTES.md#ep-d-8): platform crates
+  use `windows-`, only direct low-level wrappers use `-sys`, role names are preferred over generic
+  `adapter`, and physical facts, developer intent, and allocation-specific results use distinct
+  nouns. Complete this before `EP-R1.8` creates component-local plans.
 
 ## M2+: the plan as a value
 

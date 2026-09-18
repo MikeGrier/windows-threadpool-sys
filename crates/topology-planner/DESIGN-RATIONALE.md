@@ -28,14 +28,16 @@ remained deferred rather than claimed as proved.
 
 EP-D-4 intentionally left several follow-ups unresolved:
 
-- Adapter naming.
+- Platform component naming, now governed by [EP-D-8](DESIGN-NOTES.md#ep-d-8) and tracked by
+  [CHECKLIST.md](CHECKLIST.md) `EP-1+.5`.
 - Measurement ownership in the new four-part architecture, since resolved by
   [EP-D-6](DESIGN-NOTES.md#ep-d-6).
 - Consumer behavior for not-observed facts after the boundary split.
 
 These are tracked as checklist work in [CHECKLIST.md](CHECKLIST.md) as `EP-1.4` (not-observed
-behavior) and `EP-1+.3` (planner/model/adapter naming). Measurement ownership was completed by
-`EP-1+.4` and `EP-R1.1`; the current decision is [EP-D-6](DESIGN-NOTES.md#ep-d-6).
+behavior) and `EP-1+.5` (remaining component and public type names). Measurement ownership was
+completed by `EP-1+.4` and `EP-R1.1`; the current decision is
+[EP-D-6](DESIGN-NOTES.md#ep-d-6).
 
 ## EP-D-6 rationale and discussion
 
@@ -119,3 +121,20 @@ physical boundary may be suspicious, but it may also express deliberate transfer
 cheaply state the crossing and its measured or structural consequence; whether it warns, accepts, or
 refuses depends on intent carried by the constraint. That contract remains scheduled by
 [CHECKLIST.md](CHECKLIST.md) `EP-R1.7`.
+
+## EP-D-8 naming rationale
+
+The review found one naming item treated as both complete and open. It had originally bundled the
+planner name, the input and output vocabulary, both adapter names, and eventual public type names.
+EP-D-4 and EP-D-5 had settled only the first part, while the checklist status described the whole
+item as settled.
+
+Forcing the remaining names now would repeat the defect the item was meant to prevent: the first
+implementation would choose names before the responsibilities were known. The outward component's
+name depends directly on the unresolved work-item and buffer-flow boundary in `EP-R1.7`, and exact
+public type names depend on the contract shapes established there.
+
+The completed and open halves are therefore separated. [EP-D-8](DESIGN-NOTES.md#ep-d-8) records the
+settled crate and conceptual vocabulary plus the naming rules; [CHECKLIST.md](CHECKLIST.md)
+`EP-1+.5` retains the contract-dependent decisions. `EP-R1.8` cannot materialize component-local
+plans until those names are settled.

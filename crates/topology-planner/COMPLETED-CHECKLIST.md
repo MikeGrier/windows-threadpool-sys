@@ -96,3 +96,19 @@ Developer-defined partitions constrain candidate plans but remain distinct from 
 facts. A cheap structural diagnostic may report that a constraint crosses a cache or NUMA boundary,
 but its intent decides whether that is accidental or deliberate. The intent-aware diagnostic
 contract is scheduled by `EP-R1.7`.
+
+## Moved 2026-09-18 19:46:04 -04:00 -- Separate settled and open naming work
+
+### <a id="ep-r15"></a>EP-R1.5 -- Settled naming is separated from contract-dependent component and type names. *(completed 2026-09-18 19:46:04 -04:00)*
+
+[EP-D-8](DESIGN-NOTES.md#ep-d-8) records the settled `topology-model` and `topology-planner` crate
+names, the conceptual distinction among facts, developer constraints, and allocation-specific
+plans, and the naming rules for later work. Names that depend on EP-R1.7's unresolved responsibilities
+remain explicitly owned by `EP-1+.5` rather than being chosen by the first implementation.
+
+### <a id="ep-1+3"></a>EP-1+.3 -- The planner, model, and conceptual input/output vocabulary are named. *(completed 2026-09-18 19:46:04 -04:00)*
+
+The neutral crates are `topology-model` and `topology-planner`. Current prose distinguishes Windows
+machine facts, the neutral abstract machine, the checked-in topology specification, and the concrete
+runtime plan. Final names for the platform components and public Rust types are deliberately moved
+to `EP-1+.5`, after their contracts are settled.

@@ -26,6 +26,7 @@ renamed to match.
 | <a id="ep-d-5"></a>EP-D-5 | **The shared-vocabulary layout and dependency direction.** The abstract model, planner query traits, and plan type live in `topology-model`, which the planner and platform components depend on; non-planner components do not depend on `topology-planner`. [EP-D-7](#ep-d-7) extends this layout with neutral measurement contracts and a separate platform measurement foundation while preserving the one-way dependency rule. |
 | <a id="ep-d-6"></a>EP-D-6 | **Runtime measurement is a planner-owned campaign over shared measurement mechanisms.** Runtime planning is the normal path, not a fallback: the planner decides what the scenario and current allocation require, sequences and interprets measurements, and stops when it has enough evidence. Neutral request/result contracts live in `topology-model`; platform components execute them; probe tools and the planner use the same underlying kernels. The client repository carries constraints and permissions rather than an exact allocation, and the concrete runtime plan retains the scenario-specific evidence for its choices without promoting it into an abstract machine fact. |
 | <a id="ep-d-7"></a>EP-D-7 | **Five components, with active measurement as a foundation rather than an adapter concern.** `topology-model`, `topology-planner`, the inward Windows adapter, a Windows measurement foundation, and the outward realizer have distinct dependency sets and responsibilities. Measurement contracts are neutral; measurement mechanisms are platform-specific; probes and runtime planning share those mechanisms; and exhaustive mocked platform-interaction testing is kept separate from real-hardware timing evidence. |
+| <a id="ep-d-8"></a>EP-D-8 | **Names follow settled ownership and keep facts, intent, and results distinct.** `topology-model` and `topology-planner` are settled. Platform-specific crates use `windows-`; only direct low-level API wrappers use `-sys`; role names are preferred over generic `adapter`; and public nouns must distinguish physical facts, developer constraints, and allocation-specific plans. Names whose responsibilities depend on EP-R1.7 remain explicitly open rather than being chosen by the first implementation. |
 
 ## EP-D-1: the shard-set query
 
@@ -413,8 +414,9 @@ the caller did not ask for" rule that decided the layout in the first place.
 
 ### What is still open
 
-- **The adapters' names.** Deliberately not settled here; naming has been getting decided by
-  whoever writes the first type, and this component has already been renamed once.
+- **The platform component and public type names.** Deliberately not settled here; their ownership
+  boundaries must be defined before their names. [EP-D-8](#ep-d-8) records the governing principles,
+  and [CHECKLIST.md](CHECKLIST.md) `EP-1+.5` owns the decision after `EP-R1.7`.
 - **Whether `topology-model` is one crate or eventually two.** The machine description and the plan
   vocabulary are different enough that they might separate later. They are together now because
   splitting on speculation costs more than merging on evidence.
@@ -543,3 +545,45 @@ The architecture and dependency order are settled here, but final component-loca
 the remaining component names and the contracts that define their first implementable items.
 [CHECKLIST.md](CHECKLIST.md) `EP-R1.8` materializes those plans after `EP-R1.5` and `EP-R1.7`;
 this dependency is recorded rather than hidden behind provisional crate names.
+
+## EP-D-8: naming follows ownership
+
+*The engineer's decision, 2026-09-18. Recorded by [CHECKLIST.md](CHECKLIST.md) `EP-R1.5` and
+`EP-1+.3`.*
+
+### What is settled
+
+The neutral shared-vocabulary crate is `topology-model`, and the neutral policy and campaign crate
+is `topology-planner`. The conceptual vocabulary also distinguishes:
+
+- Windows processor and memory topology facts;
+- the neutral abstract machine;
+- the checked-in topology specification carrying developer intent and constraints;
+- the allocation-specific concrete runtime plan.
+
+These distinctions are settled even though the eventual Rust type names are not.
+
+### What remains open
+
+The final crate names for the inward Windows fact source, Windows measurement foundation, and
+outward realization/runtime component remain open. So do the exact public names for the abstract
+machine, topology specification, measurement requests and evidence, diagnostics, and concrete plan.
+
+Those names depend on responsibilities still being defined by [CHECKLIST.md](CHECKLIST.md)
+`EP-R1.7`. The outward component is the clearest example: whether it only instantiates a plan or also
+owns higher-level work-item and buffer-flow machinery changes the noun that honestly describes it.
+The remaining names are therefore owned by `EP-1+.5`, after `EP-R1.7` and before `EP-R1.8`
+materializes component-local plans.
+
+### Naming rules
+
+- A platform-specific crate uses the `windows-` prefix.
+- The `-sys` suffix is reserved for direct low-level API wrappers such as
+  `windows-topology-sys`; safe policy, measurement, translation, and realization layers do not use
+  it.
+- Prefer the owned role over the generic word `adapter` when the role is settled. Direction-only
+  labels remain useful in architecture discussion but are not automatically crate names.
+- Public nouns distinguish physical facts, developer intent, and allocation-specific results rather
+  than calling all three a topology.
+- A name is not chosen merely because implementation needs an identifier. If the responsibility is
+  still open, the naming work stays open with it.
