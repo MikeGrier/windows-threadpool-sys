@@ -3533,7 +3533,7 @@ at M2-M6, M14, M15 and M-inf.
 > **Read the new plan for what to do; read these for why.** The six that remain live here are the
 > review round's own findings, already fixed.
 
-**This round is the one [SH-3.1.1](#m3-land-the-branch) asked for**, and it is the first that read the
+**This round is the one [SH-3.1.1](CHECKLIST-ship-topology-and-queues.md#m3-land-the-branch) asked for**, and it is the first that read the
 branch as a *diff* rather than reacting to a reviewer's comment. Five reviewers took non-overlapping
 crate scopes across all 200 changed files; seven findings came back, listed here worst-first rather
 than by crate.

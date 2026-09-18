@@ -180,7 +180,7 @@ principles these are two things one scalar was forced to conflate: **trust asser
 (never upgradeable) and **origin history** (recorded, conferring no trust).
 
 **Can one relation hold more than one observation?** It probably must, and the project already
-reasons this way. From `file-handle-numa-spike.rs`:
+reasons this way. From [file-handle-numa-spike.rs](../crates/windows-ioring-sys/design-sessions/spikes/file-handle-numa-spike.rs):
 
 > **Agreement is consistent with volume locality; it does not establish it.** A genuinely
 > per-file answer may equal its volume's node ... so one file agreeing rules nothing out. Only
@@ -214,7 +214,7 @@ was explicit, and the repository's history supports it: this project has repeate
 information it had was inadequate -- the ARM64 host with no L3 that forced "outermost level
 that partitions" rather than "level 3"; the guard test against a consumer sweeping `1..=4`;
 group-awareness, where "a bare `cpu5` cannot tell a reader whether the group was considered and
-was zero, or never consulted at all"; and `machine.rs` distinguishing a withheld field from an
+was zero, or never consulted at all"; and [machine.rs](../crates/windows-placement-probe/src/machine.rs) distinguishing a withheld field from an
 unanswerable one. Foreclosing on any single moment's understanding risks losing exactly what is
 needed next.
 

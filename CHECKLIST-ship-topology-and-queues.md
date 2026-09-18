@@ -6,14 +6,15 @@ against and other people can run it on hardware this workspace does not own.
 
 ## Where this stands
 
-The release has not happened. PR #56 has been open as a **draft** since 2026-08-31 and is 221 commits
-ahead of `main`.
+The release has not happened. PR #56 was opened from `mikegrier/deferred-namespace-ops` on
+2026-08-31 and **closed unmerged on 2026-09-15**. Its content is landing in peeled pieces instead:
+the first merged as PR #94, and this branch is the second. The milestones below were written while
+#56 was open, and describe it in the present tense.
 
 **Milestone numbers are not a running order.** M7 through M15 are *review rounds on PR #56*, so they
-happened -- and continue to happen -- **inside M3**, between the pull request opening and a merge
-that has not occurred. Reading the file top to bottom puts the review of a pull request after the
-merge that closes it, which is backwards. Only M1 through M6 are a sequence.
-
+happened **inside M3**, between the pull request opening and a merge that never came. Reading the
+file top to bottom puts the review of a pull request after the merge that closes it, which is
+backwards. Only M1 through M6 are a sequence.
 | Milestone | State | What it is waiting on |
 |---|---|---|
 | M1 settle the public surface | **done, archived** | -- |
@@ -453,12 +454,12 @@ that previously stood in the way are gone:
 
   **This is not hypothetical -- it has already shipped.** `windows-ioring-sys`'s existing CHANGELOG
   carries two `**guard-alloc:**` entries (`983afbc`, `36ecd8a`), which landed there because those
-  commits touched `crates/windows-ioring-sys/tests/registration.rs`; guard-alloc is a dev-dependency,
+  commits touched [crates/windows-ioring-sys/tests/registration.rs](crates/windows-ioring-sys/tests/registration.rs); guard-alloc is a dev-dependency,
   so exercising it meant editing ioring's tests. Same mechanism, one release earlier, unnoticed.
 
   **Splitting the commit is the right shape, and a naive two-way split is wrong.** The obvious fix --
   "rename in topology, then update the ioring example in a `chore:` commit" -- produces a commit that
-  **does not compile**: `examples/ring_copy/plan.rs` does `use windows_topology_sys::{..., Topology}`
+  **does not compile**: [examples/ring_copy/plan.rs](crates/windows-ioring-sys/examples/ring_copy/plan.rs) does `use windows_topology_sys::{..., Topology}`
   and `pub fn build_plan(topology: &Topology, ...)`, so a topology-only rename breaks it until the
   follow-up lands. CI would not catch it (it builds the PR head and main's tip, not each commit), but
   `git bisect` across that range would.
@@ -604,7 +605,7 @@ that previously stood in the way are gone:
   **A live-host test asserting cross-API agreement** (`cpu_set/tests.rs:242`) contradicts the model's
   premise that CPU Sets may disagree with the walk; it is a latent failure on untried hardware.
   Assert that both observations are *recorded*, not that they agree.
-  **`release-placement-probe.yml` gating -- DONE 2026-09-04.** `workflow_dispatch` against an
+  **[release-placement-probe.yml](.github/workflows/release-placement-probe.yml) gating -- DONE 2026-09-04.** `workflow_dispatch` against an
   existing release tag satisfied the tag-prefix condition, so a build-only run could create or modify
   a release. All four publishing guards now require `github.event_name == 'push'`, and the trigger's
   own comment no longer claims the restriction is "inherent" -- it was not, which is precisely how
@@ -699,7 +700,7 @@ that previously stood in the way are gone:
   unexercised -- the honest sequencing is to add the target to CI first and then make this fail
   against it, rather than writing a guard nothing runs.
 
-- [ ] **SH-4.9** -- **`tools/check-publishable.ps1`: three findings with one root.** Its checks are
+- [ ] **SH-4.9** -- **[tools/check-publishable.ps1](tools/check-publishable.ps1): three findings with one root.** Its checks are
   **text searches standing in for structural facts**, which is how a check goes quietly vacuous.
   An unanchored pattern is satisfied by a *commented-out* assignment, so CI would believe the
   dependency registry exists while the shell never defines it -- re-creating the publish race the

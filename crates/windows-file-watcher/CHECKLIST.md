@@ -91,4 +91,4 @@ when a post-v1 line of work takes one up. None is an open obligation of any curr
 - [ ] **M-inf.3** -- Per-volume capability cache: remember detailed-vs-coarse (and extended-record) support per
   volume so establish/re-establish need not re-probe each time (D-17/D-19).
 
-- [x] **M-inf.4** -- Root-caused M11.2's fast reopen path: not an IOCP defect at all, but Windows refusing a directory-change read on any by-id open, so the path was removed rather than fixed. -> [completed 2026-09-01](COMPLETED-CHECKLIST.md#m152)
+- [x] **M-inf.4** -- Root-caused M11.2's fast reopen path: not an IOCP defect at all, but Windows refusing a directory-change read on any by-id open, so the path was removed rather than fixed. -> [completed 2026-09-01](COMPLETED-CHECKLIST.md#m-inf4)
