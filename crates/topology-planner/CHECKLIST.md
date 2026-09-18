@@ -33,8 +33,8 @@ prerequisites rather than on someone else's decision.
 
 | Milestone | State | What it is waiting on |
 |---|---|---|
-| MR1 design-review reconciliation | 5 done, 3 open | active; work in item order |
-| M1 the input contract | 3 done, 2 open | `EP-1.4` waits on EP-R1.7; `EP-1.5`'s coverage half is EP-R1.6 |
+| MR1 design-review reconciliation | 6 done, 2 open | active; work in item order |
+| M1 the input contract | 4 done, 1 open | `EP-1.4` waits on EP-R1.7 |
 | M1+ scenario and naming | 2 done, 3 open | EP-R1.7 owns the topology specification and callbacks; `EP-1+.5` then settles remaining names |
 | M2+ the plan as a value | parked, **and needs re-cutting** | MR1, then EP-R1.8 and the resulting `topology-model` work |
 | M3+ the policies | parked | M2+ |
@@ -54,16 +54,14 @@ These items are in dependency order. Resolve and commit one item before beginnin
 
 - [x] **EP-R1.5** -- Settled naming is separated from contract-dependent component and type names. -> [completed 2026-09-18](COMPLETED-CHECKLIST.md#ep-r15)
 
-- [ ] **EP-R1.6** -- **Refresh Tier 1 against the model that shipped.** Move historical claims about
-  CPU Sets being unconsumed and proximity having no answer into
-  [DESIGN-RATIONALE.md](DESIGN-RATIONALE.md), then state which shard-set, proximity, and residency
-  requirements the current Windows topology surface answers and which still belong to the abstract
-  model, planner, or adapters.
+- [x] **EP-R1.6** -- Tier 1 now distinguishes shipped Windows facts, adapter projections, I/O endpoint attachment, and planner-owned measurements. -> [completed 2026-09-18](COMPLETED-CHECKLIST.md#ep-r16)
 
 - [ ] **EP-R1.7** -- **Complete the contracts and acceptance matrix before implementation.** Plan
   the scenario/goal contract, plan invariants and errors, deterministic policy and tie-breaking,
-  measurement permission and failure behavior, callback semantics, JSON compatibility, storage and
-  interconnect policy, routed-hop representation, and synthetic acceptance cases. Decide how much
+  measurement permission and failure behavior, callback semantics, JSON compatibility, storage,
+  network, and interconnect policy, routed-hop representation, and synthetic acceptance cases.
+  Define the common I/O endpoint contract plus typed storage and network capabilities, including
+  network receive steering and RSS constraints. Decide how much
   higher-level work-item and buffer-flow machinery this project supplies between completed I/O,
   parsing, serial or parallel processing, workers, and cross-domain migration, including whether
   existing repository code or the Windows thread pool already owns any part. Define intent-aware
@@ -90,8 +88,8 @@ whether the topology can answer it today -- so the model is designed against a r
 
 - [x] **EP-1.2** -- **The proximity query, which is the crux.** For an ~~*ordered pair*~~
   **unordered pair** of processors, how close are they -- because that is what chooses SPSC versus
-  MPSC versus a routed hop, and it is asked once per pair rather than once per machine. **The
-  current model cannot answer it**: `outermost_partitioning_cache` reports one global level and
+  MPSC versus a routed hop, and it is asked once per pair rather than once per machine. **The model
+  available when this item was written could not answer it**: `outermost_partitioning_cache` reports one global level and
   `same_cache_domain` reduces it to a boolean at that level, so a client reconstructs the rest and,
   per `SH-16.9`, reconstructs it differently each time. State the query precisely enough that the
   session can design against it.
@@ -138,25 +136,7 @@ whether the topology can answer it today -- so the model is designed against a r
   decision depends on the topology-specification, measurement-permission, and plan-evidence
   contracts, so it is resolved with `EP-R1.7`.
 
-- [ ] **EP-1.5** -- **Hand the resulting requirements to the design session** as the consumer-side
-  input it asked for, and record in the session which of them the settled model answers and which
-  it deliberately does not.
-  **Half done, and split because the halves have different prerequisites.** The *handover* is
-  complete: the session received the three queries plus four derived claims. Two were later
-  corrected in current documentation rather than by rewriting the append-only session. "A pairwise
-  query must exist" was right about the requirement and wrong about the primary shape: per
-  [windows-topology-sys](../windows-topology-sys/COMPLETED-CHECKLIST.md) `M4+.1` the ordered collection is the
-  surface and the pairwise query is derived from it, because an answer obliged to carry the block
-  containing both processors is a question about the partition rather than about the pair. "The
-  order must be total" confused the relation order with the query: [EP-D-2](DESIGN-NOTES.md#ep-d-2)
-  now specifies a partial order whose selected planning universe is a top, making the query total in
-  scope. The requirements that an answer can be an upper bound and that a measured number carries
-  what it measured remain unchanged.
-  **The old gate has cleared.** The locality-model session concluded and the Windows topology
-  reshape shipped. The coverage half is now an in-component documentation action under `EP-R1.6`:
-  record which requirements are available as policy-free Windows facts, which the inward adapter
-  translates into the client-shaped neutral model, and which require planner-owned runtime
-  measurement.
+- [x] **EP-1.5** -- The locality-model handoff and shipped-model coverage reconciliation are complete. -> [completed 2026-09-18](COMPLETED-CHECKLIST.md#ep-15)
 
 ## M1+: the scenario input, and the naming
 

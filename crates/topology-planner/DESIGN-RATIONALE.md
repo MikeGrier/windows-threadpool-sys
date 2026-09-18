@@ -138,3 +138,78 @@ The completed and open halves are therefore separated. [EP-D-8](DESIGN-NOTES.md#
 settled crate and conceptual vocabulary plus the naming rules; [CHECKLIST.md](CHECKLIST.md)
 `EP-1+.5` retains the contract-dependent decisions. `EP-R1.8` cannot materialize component-local
 plans until those names are settled.
+
+## <a id="ep-d-1-shipped-coverage-history"></a>EP-D-1 shipped-coverage history
+
+The first shard-set analysis correctly identified the facts the planner needed but described the
+then-current implementation as though it were the enduring boundary. At that time CPU-set
+enumeration was absent, availability observations were unavailable, and efficiency class could be
+read through `Processor::capacity`, whose zero sentinel conflated offline, unplaced, and genuine
+class-zero processors.
+
+The shipped reshape added `ProcessorFacts` and `MachineMemoryTopology::shard_set()`. That assembled
+view preserves missing observations, core gaps, genuine class zero, parked state, explicit CPU-set
+allocation, and memory placement as distinct values. The CPU-set allocation flags also produced a
+new fact the original requirement could not anticipate: on the measured Windows build they remained
+zero even after explicit allocation and therefore cannot support a `usable()` policy decision.
+
+The current decision is [EP-D-9](DESIGN-NOTES.md#ep-d-9). This section retains why the old text once
+said availability was absent and why the no-sentinel requirement remains load-bearing.
+
+## <a id="ep-d-2-shipped-coverage-history"></a>EP-D-2 shipped-coverage history
+
+The first proximity analysis found only a machine-wide outermost cache choice and consumer-side
+boolean helpers, so it correctly reported that no pairwise proximity answer existed at that time.
+It proposed a pairwise query as the primary surface and called for a total order.
+
+The shipped reshape corrected both shapes. The primary surface is the relation collection ordered by
+processor-set inclusion, because membership and grouping are properties of relations rather than
+pairs. `proximity()` is derived from that collection. The order is partial, the whole machine is a
+top, and multiple minimal shared relations remain visible rather than being forced into an arbitrary
+linear order.
+
+[EP-D-2](DESIGN-NOTES.md#ep-d-2) further scopes the neutral query to a selected planning universe.
+That adapter-level contract is stricter than the Windows convenience query without implying that
+the policy-free Windows representation is defective.
+
+## EP-D-9 rationale and I/O endpoint discussion
+
+Refreshing the three original queries against shipped code showed that a binary covered/not-covered
+classification was too coarse. `windows-topology-sys` now supplies substantial processor, memory,
+and relation facts, while deliberately declining the planner-shaped judgments those facts inform.
+The inward component must preserve that distinction while projecting the facts into the neutral
+selected-universe contract.
+
+The storage question exposed a missing category in the coverage review. Windows documents
+[`FSCTL_QUERY_VOLUME_NUMA_INFO`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ifs/fsctl-query-volume-numa-info)
+for the current NUMA node of a volume and
+[`DEVPKEY_Numa_Proximity_Domain`](https://learn.microsoft.com/en-us/windows-hardware/drivers/install/devpkey-numa-proximity-domain)
+for a device instance's firmware proximity domain. Those are topological attachment observations and should not be discarded merely because
+`windows-topology-sys` is intentionally scoped to processor and memory facts. The inward Windows
+component can gather them from separate platform surfaces and present a unified neutral machine
+without changing the identity of the lower-level crate.
+
+The engineer then generalized the same shape to very high-performance network adapters. Windows'
+RSS configuration confirms both halves of that analogy. The standardized
+[`*NumaNodeId`](https://learn.microsoft.com/en-us/windows-hardware/drivers/network/standardized-inf-keywords-for-rss)
+is the preferred node for adapter memory allocations and for initial RSS processor preference, and
+its documentation warns that a PCI card's closest node depends on the slot. At the same time,
+[`Get-NetAdapterRss`](https://learn.microsoft.com/en-us/powershell/module/netadapter/get-netadapterrss)
+exposes a processor set and indirection-based receive configuration. A NIC therefore has a physical
+attachment like an NVMe controller, plus steerable queue and processor behavior that belongs in
+typed network capabilities and runtime evidence.
+
+The attachment does not establish end-to-end I/O cost. Windows documents that the ACPI SLIT
+relative-distance matrix is
+[not exposed by Windows functions](https://learn.microsoft.com/en-us/windows/win32/api/winbase/nf-winbase-getnumaproximitynode),
+and a volume may add filesystem, virtualization,
+aggregation, or other layers above a physical NVMe controller. Runtime measurement therefore stays
+necessary even when discovery names a home node.
+
+The engineer identified the planning consequence: high-throughput pipelines may assign different
+logical stages and tasks to different NVMe drives and domains. One side may read and parse while
+another collates, formats, and writes. The same structure applies to NIC receive and transmit paths,
+including mixed network-to-storage and storage-to-network flows. I/O endpoints and logical pipeline
+partitions are therefore first-class inputs to the same flow-planning problem as processors,
+buffers, queues, and intentional cross-domain transfers. The exact executable stage and ownership
+contract remains part of [CHECKLIST.md](CHECKLIST.md) `EP-R1.7`.

@@ -27,6 +27,7 @@ renamed to match.
 | <a id="ep-d-6"></a>EP-D-6 | **Runtime measurement is a planner-owned campaign over shared measurement mechanisms.** Runtime planning is the normal path, not a fallback: the planner decides what the scenario and current allocation require, sequences and interprets measurements, and stops when it has enough evidence. Neutral request/result contracts live in `topology-model`; platform components execute them; probe tools and the planner use the same underlying kernels. The client repository carries constraints and permissions rather than an exact allocation, and the concrete runtime plan retains the scenario-specific evidence for its choices without promoting it into an abstract machine fact. |
 | <a id="ep-d-7"></a>EP-D-7 | **Five components, with active measurement as a foundation rather than an adapter concern.** `topology-model`, `topology-planner`, the inward Windows adapter, a Windows measurement foundation, and the outward realizer have distinct dependency sets and responsibilities. Measurement contracts are neutral; measurement mechanisms are platform-specific; probes and runtime planning share those mechanisms; and exhaustive mocked platform-interaction testing is kept separate from real-hardware timing evidence. |
 | <a id="ep-d-8"></a>EP-D-8 | **Names follow settled ownership and keep facts, intent, and results distinct.** `topology-model` and `topology-planner` are settled. Platform-specific crates use `windows-`; only direct low-level API wrappers use `-sys`; role names are preferred over generic `adapter`; and public nouns must distinguish physical facts, developer constraints, and allocation-specific plans. Names whose responsibilities depend on EP-R1.7 remain explicitly open rather than being chosen by the first implementation. |
+| <a id="ep-d-9"></a>EP-D-9 | **Windows fact coverage includes processor, memory, relation, and I/O endpoint attachment observations, but not planning policy or measured cost.** The inward component scopes and translates those facts into the neutral model. Storage and network endpoints are first-class resources attached to observed NUMA domains; runtime measurement supplies directed endpoint, queue, buffer, and worker cost; and logical pipeline partitions assign responsibilities without becoming hardware facts. |
 
 ## EP-D-1: the shard-set query
 
@@ -63,49 +64,21 @@ sized against it.
 5. **Whether the processor is available to this process at all** -- parked by the scheduler, or
    outside the CPU-set allocation the process was given.
 
-### What today's model answers
+### Coverage in the shipped Windows fact surface
 
-Points 1 through 3 cleanly. `ProcessorId` is `(group, number)` by construction and documents why
-(D-7). `Processor::online` is exactly the distinction in point 2. `DomainKind::Core` carries
-`simultaneous_multithreading` and the sibling set, so point 3 is a walk of `MachineMemoryTopology::cores()`.
+`MachineMemoryTopology::shard_set()` now assembles the processor facts needed by points 1 through 4:
+`(group, number)` identity, online state, optional core membership, SMT state, and efficiency class.
+Every absence whose meaning matters is explicit rather than encoded by a sentinel.
 
-Point 4 is answered, but **twice, in two shapes, and one of them is unsafe to use** -- see below.
+The same view carries CPU-set observations for parked state and explicit allocation to the target
+process. Those fields are facts reported by the platform, not a `usable()` policy judgment, and the
+owning crate documents that the allocation flags carried no information on the Windows build it
+measured. The inward component preserves the observations and their provenance. The planner decides
+eligibility from the selected universe, caller constraints, and any permitted runtime evidence; it
+must not reinterpret an uninformative flag as proof that a processor is unavailable.
 
-Point 5 is **not answered at all**. `GetSystemCpuSetInformation` is consumed nowhere in the
-workspace, so `Parked`, `Allocated` and `AllocatedToTargetProcess` are unavailable. A planner
-cannot currently avoid pinning a domain to a parked processor, and the client cannot detect that it
-happened. Tracked as `SH-16.10` in
-[CHECKLIST-ship-topology-and-queues.md](../../CHECKLIST-ship-topology-and-queues.md).
-
-### `Processor::capacity` must not be used for point 4
-
-**Use `DomainKind::Core { efficiency_class, .. }`. Do not use `Processor::capacity`.**
-
-`capacity` is computed as `online.then(|| find the owning Core domain).flatten().unwrap_or(0)`, so
-the value `0` means any of three different things:
-
-- the processor is offline;
-- the processor is online but no `Core` domain names it, which the topology tolerates by design
-  since firmware coverage is not guaranteed;
-- the processor is online, has a core, and its efficiency class genuinely **is** `0`.
-
-The third is not an edge case. It is **every processor on every non-hybrid machine**, so the
-sentinel collides with the overwhelmingly common legitimate value.
-
-For this planner the collision is worse than for most consumers, because Windows orders efficiency
-class with `0` as the *least* performant. On a hybrid part an unknown processor is therefore
-indistinguishable from an efficiency core, and a policy that excludes efficiency cores would
-silently drop a processor that might be a performance core -- while a policy that tiers them would
-place it in the wrong tier. Both failures are invisible in a functional test.
-
-`Core { efficiency_class }` carries the firmware value with no sentinel, and absence is represented
-by the processor being in no `Core` domain, which is a distinguishable state rather than a value.
-
-**This is the same defect the locality-model session exists to fix, in a third place.** The others:
-`ProcessorPlace::cache_domain: Option<u32>`, where `None` conflates "no level partitions this
-machine" with "this processor was not named at the level that does" (`SH-16.5`); and
-`MachineDescription::cpu_model`, where the same conflation was noticed and solved with a side
-boolean. Recorded here so the sweep that fixes the model does not stop at the two already known.
+Historical absence and sentinel findings that drove this surface are retained in
+[DESIGN-RATIONALE.md](DESIGN-RATIONALE.md#ep-d-1-shipped-coverage-history).
 
 ### Partial core coverage is a real state, not a corruption
 
@@ -115,15 +88,15 @@ group -- it is a candidate host whose SMT relationships and class are unknown, w
 "unanswered query" case that [CHECKLIST.md](CHECKLIST.md) EP-1.4 owns. It is named here so that
 item is not written as though the case were hypothetical.
 
-### What this asks of the topology model
+### What this asks of the neutral topology model
 
-Nothing new in shape; three things in substance.
-
-- Availability (parked, allocated) has to become expressible, since no policy can be correct
-  without it.
-- Efficiency class has to have exactly one representation, and it must distinguish "class zero"
-  from "not known".
-- Core membership has to admit that a processor may be in no core, without that being an error.
+- Availability observations and their provenance remain expressible without becoming a `usable()`
+  judgment.
+- Efficiency class has exactly one representation and distinguishes "class zero" from "not known".
+- Core membership admits that a processor may be in no core without treating that state as an
+  error.
+- Planner eligibility is a separate result derived from facts, constraints, and permitted runtime
+  evidence.
 
 ## EP-D-2: the proximity query
 
@@ -135,9 +108,9 @@ For two domains, what connects them: a dedicated SPSC ring, a shared MPSC ring f
 producers into one consumer, or a routed hop through an intermediate domain. That choice is made
 once per pair, and it is made from how close the two processors are.
 
-This is the query the whole model question turns on. Everything else the planner asks is either
-per-processor (EP-D-1) or per-memory-domain (EP-1.3); this is the only one that is *relational*,
-and it is the one today's model cannot answer.
+This is the query the original processor-locality model question turned on. It is the relational
+half of the processor and memory requirements; [EP-D-9](#ep-d-9) extends the abstract machine with
+storage attachment and measured endpoint flows without changing this physical-proximity contract.
 
 ### It takes an unordered pair. The checklist item said ordered, and was wrong.
 
@@ -230,29 +203,24 @@ knowing its intent: an SPSC edge crossing a NUMA boundary may be a mistake or a 
 The topology-specification contract must therefore carry enough intent to distinguish those cases;
 that diagnostic contract is scheduled by [CHECKLIST.md](CHECKLIST.md) `EP-R1.7`.
 
-### What today's model answers: nothing
+### Coverage in the shipped Windows fact surface
 
-`MachineMemoryTopology::outermost_partitioning_cache` reports **one level for the whole machine**, and
-`Slice::same_cache_domain` reduces that to a boolean at that one level. Neither is pairwise. There
-is no query anywhere in `windows-topology-sys` that takes two processors.
+`MachineMemoryTopology` now exposes the observed relation collection ordered by processor-set
+inclusion and derives `proximity()` from it. The answer carries all minimal shared granularities,
+their membership through the relation values, whether a finer reported kind failed to cover an
+input processor, and processors the platform representation cannot express. The machine itself is
+the top when no finer relation covers the query.
 
-So a planner today reconstructs proximity from the partition list -- which is exactly what
-`SH-16.9` records three consumers already doing, in two mutually inconsistent ways. The absence of
-this query is the cause of that defect, not a separate problem.
+The neutral contract is deliberately stricter and differently scoped. Its top is the selected
+planning universe rather than necessarily the whole observed machine; processors outside that
+universe and empty queries are invalid; duplicates are normalized; and every caller must handle or
+refuse multiple incomparable minima explicitly. The inward component therefore translates and
+scopes the Windows relation facts rather than exposing the convenience query as the planner's
+contract. This is an adapter responsibility, not a defect requiring the policy-free facts crate to
+become client-shaped.
 
-### What this asks of the model
-
-- A granularity order derived from **observed set inclusion**, not firmware level numbers, so a
-  measured-only tier and a machine with no L3 both have positions.
-- Access to that order **as a collection**, with a pairwise helper derived from it, returning minimal
-  shared granularities plus their membership. Stated here first as a pairwise query, which
-  [windows-topology-sys](../windows-topology-sys/COMPLETED-CHECKLIST.md) `M4+.1` corrected: requiring the answer
-  to carry the block containing both processors makes it a question about the partition, not the pair,
-  and a pairwise-primary surface would force the planner into the O(n^2) reconstruction that `SH-16.9`
-  records going wrong three times. The three *requirements* below are unchanged; only the shape is.
-- Unobserved granularities represented, so an answer can be an upper bound and say so.
-- An input planning universe whose selected membership is the top, so the query is total in scope.
-- Specified logical partitions kept distinct from physical locality relations.
+Historical text claiming that the Windows model had no proximity answer is retained in
+[DESIGN-RATIONALE.md](DESIGN-RATIONALE.md#ep-d-2-shipped-coverage-history).
 
 ## EP-D-3: the residency query
 
@@ -309,8 +277,9 @@ re-scopes the component that records it.*
   Windows-shaped, and materially richer than what any one platform reports.
 - **Output**: a data structure that **serializes to JSON** and is **still abstracted from Windows**.
 - **Adapters, in two directions**:
-  - *inward* -- exposing the traits the planner needs **over the topology objects already designed**,
-    so `windows_topology_sys::MachineMemoryTopology` becomes one source feeding the abstract model;
+  - *inward* -- exposing the traits the planner needs over platform observations, with
+    `windows_topology_sys::MachineMemoryTopology` supplying processor and memory facts and separate
+    Windows surfaces supplying facts such as storage attachment;
   - *outward* -- **realizing** a planned topology in the current process as buffers, rings and
     threads, with the user's processing code inserted at the appropriate steps.
 
@@ -344,10 +313,10 @@ the attributed-edge shape D-9 sketched, and they live in the abstract model, so 
 facts crate **stands unreopened** while the need it named is met elsewhere. The measurement condition
 still applies before claiming asymmetry is real; it just no longer gates the schema.
 
-**Storage becomes representable**, which `windows-topology-sys` D-9 also excluded -- on the grounds
-that it "changes the crate's identity from processor topology to system topology". That exclusion was
-about *that crate* and still holds. NVMe belongs to the abstract model, which was never scoped to a
-processor topology.
+**I/O endpoints become representable**, which `windows-topology-sys` D-9 also excluded for storage
+-- on the grounds that it "changes the crate's identity from processor topology to system
+topology". That exclusion was about *that crate* and still holds. NVMe and network endpoints belong
+to the abstract model, which was never scoped to a processor topology.
 
 Open follow-up history for this decision is recorded in
 [DESIGN-RATIONALE.md](DESIGN-RATIONALE.md#ep-d-4-open-follow-ups); current actionable work is tracked
@@ -487,7 +456,7 @@ question is tracked by [CHECKLIST.md](CHECKLIST.md) `EP-R1.7`; EP-D-6 does not a
 |---|---|---|---|
 | `topology-model` | neutral | Abstract machine, topology specification, concrete plan, planner query traits, measurement request/result/evidence vocabulary | nothing |
 | `topology-planner` | neutral | Runtime measurement campaign, policy, interpretation, constraint resolution, concrete-plan construction | `topology-model` |
-| inward topology adapter | Windows | Translation of platform-published topology facts into the abstract machine | `topology-model`, `windows-topology-sys` |
+| inward topology adapter | Windows | Discovery and translation of platform-published processor, memory, relation, and I/O endpoint attachment facts into the abstract machine | `topology-model`, `windows-topology-sys`, Windows device, volume, and network APIs |
 | measurement foundation | Windows | Active measurement kernels and the live platform backend | `topology-model`, Windows APIs, measured queue and I/O primitives |
 | outward realizer | Windows | Construction of threads, buffers, rings, affinities, and other runtime objects from a concrete plan | `topology-model`, runtime crates |
 
@@ -587,3 +556,81 @@ materializes component-local plans.
   than calling all three a topology.
 - A name is not chosen merely because implementation needs an identifier. If the responsibility is
   still open, the naming work stays open with it.
+
+## EP-D-9: shipped Windows facts and first-class I/O endpoint attachment
+
+*The engineer's decision, 2026-09-18. Recorded by [CHECKLIST.md](CHECKLIST.md) `EP-R1.6` and
+`EP-1.5`.*
+
+### The fact-source boundary
+
+The Windows fact source provides observations, not eligibility or placement policy:
+
+| Planner need | Windows fact coverage | Responsibility above the fact source |
+|---|---|---|
+| Candidate processors | Identity, online state, core and SMT membership, efficiency class, memory domain, and CPU-set observations | The inward component maps them into the selected universe; the planner decides eligibility |
+| Physical proximity | Ordered relations, incomparable minima, membership, incomplete-coverage evidence, and a whole-machine top | The inward component scopes them to the selected universe; the neutral model owns the planner-facing query contract |
+| Memory placement | Processor-to-memory-domain membership and explicit unplaced processors | The planner decides whether an unplaced processor is admissible |
+| I/O endpoint attachment | A volume or device may report a NUMA node or proximity domain; a network adapter may also report NUMA affinity and receive-steering configuration | The inward component reconciles workload-visible storage and network endpoints with those observations and preserves unknown or ambiguous attachment |
+| Directed processor, memory, storage, and network cost | No timeless fact is claimed | The planner requests contextual runtime measurement and interprets the evidence |
+| Developer partitions and intent | Not a platform fact | The topology specification constrains admissible plans |
+
+`windows-topology-sys` remains the policy-free processor and memory fact layer. The inward component
+may use additional Windows device, volume, and network discovery surfaces for I/O endpoints; that
+does not broaden `windows-topology-sys` into a system-topology or planning crate.
+
+The documented Windows inputs include
+[`FSCTL_QUERY_VOLUME_NUMA_INFO`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ifs/fsctl-query-volume-numa-info)
+for the current NUMA node of a volume and
+[`DEVPKEY_Numa_Proximity_Domain`](https://learn.microsoft.com/en-us/windows-hardware/drivers/install/devpkey-numa-proximity-domain)
+for a device instance's firmware proximity domain. The latter can be mapped to a Windows node with
+[`GetNumaProximityNodeEx`](https://learn.microsoft.com/en-us/windows/win32/api/systemtopologyapi/nf-systemtopologyapi-getnumaproximitynodeex).
+For network adapters,
+[`Get-NetAdapterRss`](https://learn.microsoft.com/en-us/powershell/module/netadapter/get-netadapterrss)
+exposes receive-side scaling configuration, while the standardized
+[`*NumaNodeId`](https://learn.microsoft.com/en-us/windows-hardware/drivers/network/standardized-inf-keywords-for-rss)
+describes the preferred node for adapter memory allocation and RSS processor preference.
+
+### I/O endpoints are topology resources
+
+An I/O endpoint used by a workload is represented in the neutral abstract machine with stable
+identity for the planning run and an observed attachment to a NUMA or memory domain when Windows can
+report one. Absence and ambiguity remain explicit.
+
+The common endpoint vocabulary covers identity, attachment, direction, queue capabilities, buffer
+domains, and observed steering. Typed capability records preserve distinctions the common shape
+must not erase. A storage controller, namespace, volume, file-system path, virtual disk, and
+composite volume are not assumed to be interchangeable identities. A network interface additionally
+has receive/transmit direction, RSS processor sets and indirection, interrupt or completion
+behavior, and offload capabilities. The inward component records only reconciliations and
+capabilities it can establish.
+
+The attachment is comparatively stable physical evidence and belongs in discovery for each runtime
+planning campaign. It is not durable client configuration: device paths, volume composition,
+network configuration, virtualization, hot-plug state, and the process allocation may differ on the
+next run.
+
+### Logical pipeline partitions describe work, not hardware
+
+The topology specification may partition a pipeline across I/O endpoints and logical workload
+stages. For example, one NVMe endpoint and domain may own reading and parsing while another owns
+collation, formatting, and output. A network pipeline may place receive processing and parsing near
+one NIC, transform elsewhere, and place transmit processing near another NIC. A mixed pipeline may
+flow from NIC receive through processing to NVMe write, or from NVMe read through formatting to NIC
+transmit. These partitions express ownership, serialization, throughput, and transfer intent. They
+do not become evidence that two resources are physically close.
+
+The planner combines that intent with discovered attachment and measured directed cost. It may
+place completion handling, buffers, parsing, workers, and output near their endpoints and make a
+cross-domain handoff explicit where the pipeline requires one. The higher-level work-item and
+buffer-flow contract that makes those stages executable remains scheduled by
+[CHECKLIST.md](CHECKLIST.md) `EP-R1.7`.
+
+### Discovery does not replace measurement
+
+A reported home NUMA node establishes attachment, not the cost of every route to the endpoint.
+Queue form, queue depth, transfer direction, buffer residency, filesystem and volume layers, RSS
+indirection, flow distribution, interrupt and completion steering, offloads, current load, and
+completion processing can change the observed result. The measurement foundation therefore
+measures endpoint, queue, buffer, and worker combinations through neutral requests, and the concrete
+plan retains that contextual evidence.

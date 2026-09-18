@@ -112,3 +112,31 @@ The neutral crates are `topology-model` and `topology-planner`. Current prose di
 machine facts, the neutral abstract machine, the checked-in topology specification, and the concrete
 runtime plan. Final names for the platform components and public Rust types are deliberately moved
 to `EP-1+.5`, after their contracts are settled.
+
+## Moved 2026-09-18 19:54:44 -04:00 -- Reconcile shipped fact coverage and I/O endpoint topology
+
+### <a id="ep-r16"></a>EP-R1.6 -- Tier 1 now distinguishes shipped Windows facts, adapter projections, I/O endpoint attachment, and planner-owned measurements. *(completed 2026-09-18 19:54:44 -04:00)*
+
+[EP-D-1](DESIGN-NOTES.md#ep-d-1) now records that the shipped shard-set surface supplies processor
+identity, online state, core and SMT membership, efficiency class, memory placement, and CPU-set
+observations without converting them into a planner eligibility judgment.
+[EP-D-2](DESIGN-NOTES.md#ep-d-2) now records that the shipped relation collection and derived
+proximity query supply policy-free physical structure, while the inward component scopes those
+facts to the selected planning universe and the neutral model owns the stricter planner-facing
+contract.
+
+[EP-D-9](DESIGN-NOTES.md#ep-d-9) records the resulting coverage boundary. Storage and network
+endpoints are first-class topology resources with observed NUMA attachment when Windows can report
+it. Logical pipeline partitions may assign responsibilities across drives, NICs, and domains, while
+runtime measurement establishes directed endpoint, queue, buffer, and worker cost. Historical
+claims about missing CPU-set and proximity surfaces moved to
+[DESIGN-RATIONALE.md](DESIGN-RATIONALE.md).
+
+### <a id="ep-15"></a>EP-1.5 -- The locality-model handoff and shipped-model coverage reconciliation are complete. *(completed 2026-09-18 19:54:44 -04:00)*
+
+The design session received the shard-set, proximity, and residency requirements. Current
+documentation preserves the requirements while correcting two proposed shapes: the physical
+relation order is partial rather than total, and the relation collection is primary while
+proximity is derived. [EP-D-9](DESIGN-NOTES.md#ep-d-9) records which requirements are available as
+policy-free Windows facts, which the inward component translates into the client-shaped neutral
+model, and which require planner-owned runtime measurement.

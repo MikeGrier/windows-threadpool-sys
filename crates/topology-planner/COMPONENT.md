@@ -18,10 +18,11 @@ produces a concrete result for the current run:
   detailed shape remains open. The planning universe defaults to the supplied system and may be
   narrowed by a constraint; developer-defined partitions constrain candidate plans without becoming
   claims about physical proximity.
-- **an abstracted idealized description of a machine** -- processors, memory, storage, interconnects,
-  distances and bottlenecks. Not Windows-shaped, and richer than any single platform reports. It is
-  **mockable by construction**: a description of a machine nobody has is an ordinary input, which is
-  what makes this component testable without the hardware it plans for.
+- **an abstracted idealized description of a machine** -- processors, memory, storage and network
+  endpoints with their observed NUMA attachment and typed capabilities, interconnects, distances
+  and bottlenecks. Not Windows-shaped, and richer than any single platform reports. It is
+  **mockable by construction**: a description of a machine nobody has is an ordinary input, which
+  is what makes this component testable without the hardware it plans for.
 
 The planner normally runs a permissioned measurement campaign against the current allocation before
 producing **a concrete plan**: which processors host domains, where each thread pins, which memory
@@ -44,7 +45,7 @@ components execute them; and the probe tools use the same underlying measurement
 |---|---|---|
 | `topology-model` | neutral | nothing |
 | `topology-planner` (this one) | neutral | `topology-model` |
-| the inward adapter | Windows | `topology-model`, `windows-topology-sys` |
+| the inward adapter | Windows | `topology-model`, `windows-topology-sys`, Windows device, volume, and network APIs |
 | the measurement foundation | Windows | `topology-model`, Windows APIs, measured queue and I/O primitives |
 | the outward adapter (the realizer) | Windows | `topology-model`, the runtime crates |
 
@@ -65,18 +66,20 @@ depending on each other. See [EP-D-7](DESIGN-NOTES.md#ep-d-7).
 
 ## Two kinds of adapter
 
-**Inward** -- exposes the model's traits over the topology objects already designed, so
-`windows_topology_sys::MachineMemoryTopology` becomes one source feeding the abstract model. It is
-one source among several: storage and interconnect facts do not come from there, and neither do
-scenario-specific measurements. The inward adapter translates observed facts; it does not run the
-planner's measurement campaign.
+**Inward** -- exposes the model's traits over platform observations.
+`windows_topology_sys::MachineMemoryTopology` supplies processor, memory, and relation facts.
+Separate Windows device, volume, and network surfaces may supply I/O endpoint identity, NUMA
+attachment, and capabilities such as RSS receive steering. Interconnect costs and scenario-specific
+measurements do not come from those sources. The inward adapter reconciles and translates observed
+facts; it does not run the planner's measurement campaign. See
+[EP-D-9](DESIGN-NOTES.md#ep-d-9).
 
 **Outward (the realizer)** -- takes a plan and **realizes** it in the current process: buffers,
 rings and threads, with the user's processing code inserted at the appropriate steps.
 
 They are separate crates despite both being Windows adapters, because their dependency sets barely
-overlap -- the inward one needs only `windows-topology-sys`, while the realizer needs the runtime.
-Fusing them would mean anyone reading a topology pulls in the whole runtime.
+overlap -- the inward one needs fact-discovery APIs and `windows-topology-sys`, while the realizer
+needs the runtime. Fusing them would mean anyone reading a topology pulls in the whole runtime.
 
 ## Why the planner is separate from the facts
 
