@@ -9,7 +9,8 @@
   structure available so a policy can choose one domain per core or per thread and can decide
   whether efficiency cores are peers. **Gap already identified:** parked and allocated state is not
   available at all, and pinning a domain to a parked processor is a defect a client cannot detect.
-  Tracked as `SH-16.10`.
+  Tracked as [CHECKLIST-ship-topology-and-queues.md](../../CHECKLIST-ship-topology-and-queues.md)
+  -> `SH-16.10`.
   **Done:** stated as [EP-D-1](DESIGN-NOTES.md#ep-d-1), with each of its five inputs checked against
   the model rather than assumed. Three are answered cleanly; availability is not answered at all;
   and the fourth turned up a defect the item had not anticipated.
@@ -20,4 +21,5 @@
   Windows orders class `0` as *least* performant: on a hybrid part an unknown processor is
   indistinguishable from an efficiency core, so a policy excluding them silently drops a possible
   performance core and a policy tiering them mis-tiers it. Neither fails a functional test. Filed
-  against the owning crate as `SH-16.12`; use `DomainKind::Core { efficiency_class }` meanwhile.
+  against the owning crate as [CHECKLIST-ship-topology-and-queues.md](../../CHECKLIST-ship-topology-and-queues.md)
+  -> `SH-16.12`; use `DomainKind::Core { efficiency_class }` meanwhile.
