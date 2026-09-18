@@ -33,6 +33,7 @@
 
 use std::io;
 
+use windows_placement_probe::fingerprint::Fingerprint;
 use windows_sys::Win32::System::Threading::{
     ALL_PROCESSOR_GROUPS, GetActiveProcessorCount, GetActiveProcessorGroupCount,
     GetNumaHighestNodeNumber,
@@ -1044,6 +1045,44 @@ pub enum Verdict {
 ///
 /// Propagates a failure from [`MachineMemoryTopology::discover`].
 pub fn measure() -> io::Result<Observation> {
+    measure_observed().map(|(observation, _)| observation)
+}
+
+/// [`measure`], also returning a fingerprint of the topology it actually parsed.
+///
+/// **The banner and the body describe one read, by construction.** A probe run
+/// makes three independent discoveries -- one for the banner, `measure`'s own,
+/// and one more for the closing bracket -- and the banner was built from an
+/// *endpoint*. Equal endpoints therefore printed an unqualified banner without
+/// anything establishing that the middle read agreed with them, so the line
+/// naming the machine could describe a different topology from the body under
+/// it.
+///
+/// The window is narrow and worth stating exactly rather than over- or
+/// under-selling. `measure` brackets its counters around its own discovery, so a
+/// processor, group or NUMA change during the middle read is already caught as
+/// [`BracketOutcome::Changed`]. What no counter reaches is cache and
+/// efficiency-class structure. The reachable case is a run whose cache structure
+/// differs between the endpoint reads and the middle read while the processor,
+/// group and NUMA counts stay identical -- near-impossible on real hardware,
+/// since caches do not change without processors changing, and entirely
+/// reachable on a hypervisor returning inconsistent
+/// `GetLogicalProcessorInformationEx` results, which is exactly the population
+/// this probe exists to survey.
+///
+/// Construction rather than a third comparison, for the reason M2.9 chose a
+/// common source over a third oracle rule: a comparison is new prose that can
+/// drift from what it compares, while a banner built from the body's own read
+/// cannot disagree with it. The endpoint reads keep their job -- they catch
+/// structural change across the wider window the counter bracket does not span.
+///
+/// A sibling rather than a changed signature, so `measure`'s existing callers
+/// are untouched.
+///
+/// # Errors
+///
+/// Propagates a failure from [`MachineMemoryTopology::discover`].
+pub fn measure_observed() -> io::Result<(Observation, Fingerprint)> {
     // Bracketed, because the parse and the counters are separate reads of a
     // machine that can change between them: Windows supports processor hot-add,
     // and a machine that gained one mid-run would have both readings correct
@@ -1061,7 +1100,7 @@ pub fn measure() -> io::Result<Observation> {
         after.2,
         bracket_outcome(before, after),
     );
-    Ok(observation)
+    Ok((observation, Fingerprint::from_topology(&topology)))
 }
 
 /// Whether two bracketing counter reads establish that the machine changed.

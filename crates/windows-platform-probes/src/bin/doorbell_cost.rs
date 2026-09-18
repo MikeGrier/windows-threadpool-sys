@@ -12,7 +12,11 @@
 //! adequate and the more delicate protocol -- publish intent, re-check, park --
 //! can wait for evidence that it is worth its lost-wakeup risk.
 
-use windows_platform_probes::doorbell_cost::{measure, measure_park_and_wake};
+use std::fmt::Write as _;
+
+use windows_platform_probes::doorbell_cost::{
+    EVERY_LABEL, Presence, json_key, measure, measure_park_and_wake,
+};
 
 use windows_platform_probes::report::emit_report;
 
@@ -264,23 +268,80 @@ fn render(out: &mut dyn std::fmt::Write) {
     // into unparseable output for any consumer doing what this format exists
     // for.
     //
-    // Note the contrast with the three fields below, which correctly emit
-    // `null`. That is right for *them*: a parked handshake can time out and an
-    // `IoRing` may be unavailable, so absent is a real outcome those fields
-    // must be able to say. Absent is not a real outcome for these four, and
-    // giving them a way to say it only hid the bug.
-    let atomic = observation
-        .get("atomic_fetch_add")
-        .expect("measure always records atomic_fetch_add");
-    let already = observation
-        .get("set_event_already_signalled")
-        .expect("measure always records set_event_already_signalled");
-    let cycle = observation
-        .get("set_reset_event")
-        .expect("measure always records set_reset_event");
-    let wait0 = observation
-        .get("wait_zero_signalled")
-        .expect("measure always records wait_zero_signalled");
+    // Note the contrast with `park_and_wake_round_trip_ns` below, which emits
+    // `null` when the handshake times out, and with `submit_io_ring_empty_ns`
+    // in the loop, which emits `null` when this host has no `IoRing`. Absent is
+    // a real outcome for both, and the row's shape stays fixed across hosts so a
+    // mining pass can tell "measured, absent" from "field not present". Absent
+    // is not a real outcome for the other four, and an earlier revision that
+    // omitted a key entirely -- rather than saying `null` -- is what made this
+    // distinction worth stating.
+    // Built by walking the SAME labels the prose table above walked, with
+    // `json_key` deciding only what each entry is called here.
+    //
+    // That is the point, and it replaces four hand-written fields. Prose and
+    // NDJSON were previously independent restatements of one measurement -- the
+    // prose iterating what was measured, this line naming each figure by hand in
+    // a format string -- so nothing stopped them disagreeing about a value, or
+    // one carrying a figure the other omitted. The M2.4 matrix found exactly
+    // that class unchecked in this probe.
+    //
+    // Deriving both from one source makes the disagreement **unrepresentable**
+    // rather than detectable, which is better than any oracle rule: a rule finds
+    // a contradiction that already exists, and there is now none to find. A
+    // figure added to `measure` reaches both renderings or fails loudly -- in
+    // `json_key` if it is named nowhere, in the `Presence::Always` arm below if
+    // it is named but stopped being measured, and in the census after the loop
+    // if it is measured but unnamed; it cannot reach one only.
+    let mut fields = String::new();
+    for (label, presence) in EVERY_LABEL {
+        let measured = observation
+            .timings
+            .iter()
+            .find(|timing| timing.label == label);
+        match (measured, presence) {
+            (Some(timing), _) => {
+                let _ = write!(
+                    fields,
+                    r#""{}":{:.1},"#,
+                    json_key(timing.label),
+                    timing.nanos_per_op
+                );
+            }
+            // Absent is a real outcome for `submit_io_ring_empty`, so the key
+            // says so rather than vanishing. See `EVERY_LABEL`.
+            (None, Presence::WhenAvailable) => {
+                let _ = write!(fields, r#""{}":null,"#, json_key(label));
+            }
+            // Absent is NOT a real outcome for the rest, and publishing `null`
+            // here would make a renamed timing indistinguishable from a host
+            // that could not run one. This is the `expect` the label-driven
+            // loop would otherwise have quietly dropped.
+            (None, Presence::Always) => {
+                panic!(
+                    "`{label}` is recorded on every host, so its absence means \
+                     it was renamed or dropped in one place and not the other; \
+                     the NDJSON line must not publish `null` for it"
+                );
+            }
+        }
+    }
+
+    // The loop above walks `EVERY_LABEL`, not `timings`, so it renders a fixed
+    // set of keys -- which is the point, and also the way it can go wrong. A
+    // timing added to `measure` but not to `EVERY_LABEL` would be iterated by
+    // the prose and skipped here, silently reinstating the split this whole
+    // arrangement removes. So the relation is checked in the direction the loop
+    // cannot check itself: every measured label must be one the line emits.
+    for timing in &observation.timings {
+        assert!(
+            EVERY_LABEL.iter().any(|(label, _)| *label == timing.label),
+            "`{}` was measured but is not in `EVERY_LABEL`, so the NDJSON line \
+             would omit a figure the prose reports",
+            timing.label
+        );
+    }
+
     // `doorbell_over_empty_submit`, not `doorbell_share_of_submit`. The prose
     // above tells a human that an empty submit is not a fair denominator and
     // that any figure derived from it is a confident wrong answer -- and this
@@ -296,23 +357,22 @@ fn render(out: &mut dyn std::fmt::Write) {
     // reach -- and a reviewer duly read the method as promising a meaningful
     // share. A rename for precision is not finished until every name for the
     // quantity moves; the field and the method are one fact with two spellings.
+    //
+    // The two below stay separate because neither is a row of that table: the
+    // handshake is measured by a different function and can time out, and the
+    // ratio is derived rather than measured. `null` is a real outcome for the
+    // handshake, and for `submit_io_ring_empty_ns` in the loop above, which is
+    // conditional on this host having an `IoRing`; the other three timings
+    // always run and never say it.
     let _ = writeln!(
         out,
         concat!(
-            r#"{{"reason":"x-probe-doorbell-cost","arch":"{}","atomic_ns":{:.1},"#,
-            r#""set_event_already_signalled_ns":{:.1},"set_reset_event_ns":{:.1},"#,
-            r#""wait_zero_signalled_ns":{:.1},"park_and_wake_round_trip_ns":{},"#,
-            r#""submit_io_ring_empty_ns":{},"doorbell_over_empty_submit":{}}}"#
+            r#"{{"reason":"x-probe-doorbell-cost","arch":"{}",{}"#,
+            r#""park_and_wake_round_trip_ns":{},"doorbell_over_empty_submit":{}}}"#
         ),
         std::env::consts::ARCH,
-        atomic,
-        already,
-        cycle,
-        wait0,
+        fields,
         park.map_or("null".to_string(), |n| format!("{n:.1}")),
-        observation
-            .submit_nanos
-            .map_or("null".to_string(), |n| format!("{n:.1}")),
         observation
             .doorbell_over_empty_submit()
             .map_or("null".to_string(), |s| format!("{s:.4}")),

@@ -42,7 +42,7 @@
 
 use windows_placement_probe::fingerprint::Fingerprint;
 use windows_platform_probes::report_oracle;
-use windows_platform_probes::topology::{invariant, measure};
+use windows_platform_probes::topology::{invariant, measure_observed};
 use windows_platform_probes::topology_report::{attribution, report, report_unmeasured};
 
 /// The report exactly as `probe-topology` composes it.
@@ -53,14 +53,25 @@ use windows_platform_probes::topology_report::{attribution, report, report_unmea
 /// deliberately -- a report assembled some other way would be checking an
 /// artifact no one ships.
 fn real_report() -> (String, bool) {
+    // **`measure_observed`, because the banner is built from the read the body
+    // describes.** The binary this mirrors passes the fingerprint of the
+    // topology it actually parsed, so the banner names the middle read by
+    // construction rather than naming an endpoint and hoping. Mirroring that
+    // here is the whole point of composing the report by hand -- a report
+    // assembled some other way would be checking an artifact no one ships.
     let before = Fingerprint::discover();
-    let measured = measure();
+    let measured = measure_observed();
     let after = Fingerprint::discover();
-    let banner = attribution(&before, &after);
 
     match measured {
-        Ok(observation) => (report(&banner, &observation), true),
-        Err(error) => (report_unmeasured(&banner, &error), false),
+        Ok((observation, fingerprint)) => {
+            let banner = attribution(Some(&fingerprint), &before, &after);
+            (report(&banner, &observation), true)
+        }
+        Err(error) => {
+            let banner = attribution(None, &before, &after);
+            (report_unmeasured(&banner, &error), false)
+        }
     }
 }
 

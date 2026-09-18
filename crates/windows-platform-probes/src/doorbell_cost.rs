@@ -78,6 +78,82 @@ use windows_sys::Win32::System::Threading::{
 
 use crate::ioring;
 
+/// The machine-readable name for a timing's label.
+///
+/// **The one place a figure's two names are related**, so the prose row and the
+/// NDJSON field cannot drift apart or disagree about a value: both renderings
+/// walk [`Observation::timings`] and this decides what the second one calls each
+/// entry.
+///
+/// It exists because the alternative had already gone wrong twice. The prose
+/// iterated the measured timings while the NDJSON named each field by hand in a
+/// format string, so the two were independent restatements of one fact -- the
+/// arrangement that produced `"efficiency_classes":1` beside a prose `[0]` in
+/// the topology report, and that the M2.4 matrix found unchecked in both cost
+/// probes. Relating the names here makes a disagreement unrepresentable rather
+/// than detectable, which is strictly better than an oracle rule: there is
+/// nothing left to check.
+///
+/// # Panics
+///
+/// Panics on a label it does not know. That is deliberate and is the whole
+/// safety of the scheme: adding a timing to `measure` without naming it here
+/// fails loudly at the render rather than silently omitting it from the
+/// machine-readable line, which is the failure a fleet survey would never
+/// notice.
+#[must_use]
+pub fn json_key(label: &str) -> &'static str {
+    match label {
+        "atomic_fetch_add" => "atomic_ns",
+        "set_event_already_signalled" => "set_event_already_signalled_ns",
+        "set_reset_event" => "set_reset_event_ns",
+        "wait_zero_signalled" => "wait_zero_signalled_ns",
+        "submit_io_ring_empty" => "submit_io_ring_empty_ns",
+        other => panic!(
+            "`{other}` is measured but has no machine-readable name; add it to \
+             `json_key` so it reaches the NDJSON line too"
+        ),
+    }
+}
+
+/// Whether a label's absence from an observation is a real outcome or a defect.
+///
+/// The distinction is the whole reason this type exists. `main` guarded the four
+/// unconditional timings with `expect`, deliberately -- a lookup that misses
+/// means a label was renamed in one place and not the other, and the comment
+/// there said so. A renderer that emits `null` for every absent label throws
+/// that guard away: a renamed timing publishes `null` and looks exactly like a
+/// host that legitimately could not run it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Presence {
+    /// `measure` records this on every host; absence is a defect, not a result.
+    Always,
+    /// `measure` records this only when the platform offers it, so absence is a
+    /// measurement outcome and is published as `null`.
+    WhenAvailable,
+}
+
+/// Every label [`measure`] can produce, in the order the report renders them,
+/// each with whether it may legitimately be missing.
+///
+/// **A timing that did not run must still say so.** `submit_io_ring_empty` is
+/// pushed only when `IoRing` is available, so a renderer that walks
+/// [`Observation::timings`] alone omits the key entirely on a host without it --
+/// and a fleet-mining pass then cannot tell "measured, absent" from "this build
+/// did not have the field". Emitting `null` for such a label keeps the row's
+/// shape fixed across hosts, which is what makes the shape mineable at all.
+///
+/// The [`Presence`] marker is what keeps that from costing the guard it
+/// replaced: only a [`Presence::WhenAvailable`] label renders as `null`, and a
+/// missing [`Presence::Always`] label still fails loudly.
+pub const EVERY_LABEL: [(&str, Presence); 5] = [
+    ("atomic_fetch_add", Presence::Always),
+    ("set_event_already_signalled", Presence::Always),
+    ("set_reset_event", Presence::Always),
+    ("wait_zero_signalled", Presence::Always),
+    ("submit_io_ring_empty", Presence::WhenAvailable),
+];
+
 /// Nanoseconds per operation for one timed loop.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Timing {

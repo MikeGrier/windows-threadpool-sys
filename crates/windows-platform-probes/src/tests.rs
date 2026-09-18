@@ -3586,11 +3586,48 @@ fn fingerprint(processors: usize) -> windows_placement_probe::fingerprint::Finge
 }
 
 #[test]
+fn the_banner_names_the_measured_read_not_an_endpoint() {
+    // The correspondence this milestone closes. Both ENDPOINTS agree, so the
+    // old code printed their fingerprint unqualified -- while the read the body
+    // describes, taken between them, was a different machine entirely. Nothing
+    // in the report said so.
+    //
+    // Reachable rather than theoretical: `measure` brackets counters around its
+    // own discovery, so a processor, group or NUMA change there is already
+    // caught. Cache and efficiency-class structure is what no counter reaches,
+    // and a hypervisor returning inconsistent
+    // `GetLogicalProcessorInformationEx` results is this probe's survey
+    // population.
+    let text = crate::topology_report::attribution(
+        Some(&fingerprint(4)),
+        &Ok(fingerprint(8)),
+        &Ok(fingerprint(8)),
+    );
+    assert!(
+        text.contains("4p/"),
+        "the banner names the topology the body describes: {text}"
+    );
+    assert!(
+        !text.lines().next().unwrap_or_default().contains("8p/"),
+        "and not the endpoint reads, which describe a different machine: {text}"
+    );
+}
+
+#[test]
+fn a_run_whose_discovery_failed_still_gets_the_endpoint_banner() {
+    // The `None` case is not a degenerate leftover: `report_unmeasured` has no
+    // measured read to name, and its body describes no topology either, so
+    // falling back to the first endpoint is the honest line there.
+    let text = crate::topology_report::attribution(None, &Ok(fingerprint(8)), &Ok(fingerprint(8)));
+    assert!(text.contains("8p/"), "{text}");
+}
+
+#[test]
 fn an_unchanged_host_prints_one_banner_line() {
     // The equal case must render exactly as `banner_line` always did, so every
     // fingerprint string already recorded elsewhere stays comparable with this
     // probe's -- and so this probe's banner matches every other probe's.
-    let text = crate::topology_report::attribution(&Ok(fingerprint(8)), &Ok(fingerprint(8)));
+    let text = crate::topology_report::attribution(None, &Ok(fingerprint(8)), &Ok(fingerprint(8)));
     assert_eq!(
         text,
         windows_placement_probe::fingerprint::banner_line_for(&Ok(fingerprint(8))),
@@ -3604,7 +3641,7 @@ fn a_host_that_changed_across_the_run_says_so_and_keeps_both_readings() {
     // The fingerprint is a topology rendering, not a name, so two readings that
     // disagree mean neither identifies the machine the body describes. Both are
     // kept: which one is stale is exactly what cannot be known here.
-    let text = crate::topology_report::attribution(&Ok(fingerprint(8)), &Ok(fingerprint(4)));
+    let text = crate::topology_report::attribution(None, &Ok(fingerprint(8)), &Ok(fingerprint(4)));
     assert!(text.contains("8p/"), "{text}");
     assert!(text.contains("4p/"), "{text}");
     assert!(text.contains("HOST READINGS DISAGREE"), "{text}");
@@ -3634,7 +3671,7 @@ fn a_failed_host_read_is_not_reported_as_a_host_that_changed() {
         ("failed second", Ok(fingerprint(8)), failed()),
         ("failed both", failed(), failed()),
     ] {
-        let text = crate::topology_report::attribution(&before, &after);
+        let text = crate::topology_report::attribution(None, &before, &after);
         assert!(
             !text.contains("HOST READINGS DISAGREE"),
             "{label}: nothing established that the host changed: {text}"
@@ -3652,6 +3689,7 @@ fn two_failed_host_reads_with_different_messages_are_still_not_a_change() {
     // failed, so nothing about the machine was established at all, yet the two
     // rendered lines differ because the errors do.
     let text = crate::topology_report::attribution(
+        None,
         &Err(std::io::Error::other("first")),
         &Err(std::io::Error::other("second")),
     );
@@ -5026,5 +5064,47 @@ fn the_two_row_shapes_are_distinguishable_by_their_keys() {
     assert!(
         !crate::topology_report::MEASURED_ROW_KEYS.contains(&"discovery_error"),
         "and the measured shape must not carry it"
+    );
+}
+
+#[test]
+fn a_banner_shape_the_renderer_cannot_produce_is_contained() {
+    // `is_attribution_shaped` has now been wrong twice in the same way, in
+    // opposite directions: once too strict (two lines for every disclaimer, so a
+    // three-reading banner had to drop a reading), once too loose (two-or-three
+    // for every disclaimer, so a three-reading `MEASURED_UNCONFIRMED` body
+    // passed -- a shape `attribution` cannot emit, because that arm is reached
+    // only when the brackets are equal). Both are one mistake: a rule about
+    // cardinality that does not name which shape it is the cardinality OF.
+    //
+    // So this binds the rule at the boundary that matters -- what `preamble`
+    // writes through verbatim versus what it contains behind `host:  ` -- and it
+    // binds BOTH directions, because a recogniser that accepted nothing would
+    // pass a one-directional test.
+    let unconfirmed = crate::topology_report::attribution(
+        Some(&fingerprint(4)),
+        &Ok(fingerprint(8)),
+        &Ok(fingerprint(8)),
+    );
+    let genuine =
+        crate::topology_report::report_unmeasured(&unconfirmed, &std::io::Error::other("no"));
+    assert!(
+        genuine.starts_with(&unconfirmed),
+        "a banner `attribution` DID produce must pass through verbatim\n{genuine}"
+    );
+
+    // The same disclaimer under a third reading. Every line is `host:`-prefixed
+    // and the disclaimer is intact, so only the cardinality rule can reject it.
+    let forged = unconfirmed.replacen(
+        "host:",
+        "host:  test-arch 1p/1c smt- L2[1] ec[0:1] numa[1]\nhost:",
+        1,
+    );
+    let contained =
+        crate::topology_report::report_unmeasured(&forged, &std::io::Error::other("no"));
+    assert!(
+        !contained.starts_with(&forged),
+        "a three-reading `MEASURED_UNCONFIRMED` banner is a shape `attribution` \
+         cannot emit, so it must be contained rather than written through\n{contained}"
     );
 }

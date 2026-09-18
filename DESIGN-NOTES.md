@@ -1908,3 +1908,110 @@ that has never been wrong while leaving the prose that keeps being wrong in prop
 was taken, which findings it is drawn from, what was rejected on the way, and the one cheap remedy
 that was costed but not adopted are in
 [DESIGN-RATIONALE.md](DESIGN-RATIONALE.md#why-restatement-count-is-what-is-watched).
+
+## <a id="detection-ladder"></a>Push every rule down the detection ladder
+
+The normative rule is in
+[copilot-instructions.md](.github/copilot-instructions.md) -> "FAIL FAST -- push every rule to the
+earliest rung that can enforce it". This records why it exists and what it was measured against;
+it does not restate the rule.
+
+### Why the order is the cost order
+
+The rungs, and what each one costs, are enumerated once in the rule -- follow the link above rather
+than looking for them here. **An earlier revision of this section restated all four under a
+sentence saying it would not**, which is the defect the rule's own first hazard describes and which
+this note exists to explain, so it is worth recording that it survived a review round in this very
+file.
+
+What belongs here is the argument for the ordering, which is not obvious from the list: the order
+is not a preference about tooling, and not a statement about which mechanism is most rigorous. It
+is the order of **how much a defect costs once it escapes the rung above** -- measured from the
+moment it is written to the moment its author reads about it. That framing is what makes CI last
+rather than first despite being the most thorough gate: thoroughness is not the axis.
+
+This extends
+[A failable call has its failure handled, always](#a-failable-call-has-its-failure-handled-always)
+-> "Prefer to discharge the rule in a type, where no caller can see it", which made the same
+argument for one rule. The ladder is that argument generalised.
+
+### What it was measured against
+
+Successive independent review rounds on one branch
+(`mikegrier/platform-probes-cost-and-placement`). The per-round counts are not restated here --
+they moved with every round while this note existed, which is exactly the drift CONTRACT INTEGRITY
+rule 4 describes, and they are recoverable from the branch's commit messages.
+
+The shape is the finding, and it held across every round but one: **each round's defects were
+predominantly in the code the previous round had just written to fix its findings.** The rounds
+were not reaching new ground; they were finding the corrections. One round broke the pattern by
+surfacing a pre-existing condition instead, and even that one was reachable only because of code
+the branch had added.
+
+Classifying them by **how they escaped** rather than by what they were gives one dominant
+mechanism: a predicate implemented at two or three sites and corrected at one. Three distinct
+predicates, eight findings between them.
+
+| predicate | sites | rounds it recurred in |
+|---|---|---|
+| directed pair vs undirected hop | 3 | 1, 3, 4 |
+| processor number against affinity-mask width | 2 | 6, 7 |
+| `Observed::Absent` against `Observed::NotObserved` | 3 | 2, 4, 7 |
+
+Every one was greppable within a single file. The sweep that would have found them was already
+required -- CONTRACT INTEGRITY rule 3, "grep the commit's other files for the same defect" -- and
+the file was in the commit each time. So the rule was not missing. **It was mis-filed:** rule 3
+opens "Before committing a change to a stated contract rule", sits under a heading about
+restatement drift, and its worked example sweeps a word across documents. A `>=` in a function does
+not present itself as a stated contract rule, so the sweep never fires at the moment of need.
+
+That is the finding worth keeping from the exercise: a rule filed where it will not be recalled is
+indistinguishable, in outcome, from a rule that does not exist. Hence the ladder -- the remedy is
+not to file it better but to stop relying on recall.
+
+### The hazard is partial conversion, not duplication
+
+Worth stating separately because it exonerates six review rounds that looked at the code and
+correctly saw nothing. Before the change that broke it, the mask-width predicate was implemented
+twice and **both sites panicked** -- consistent, no defect, nothing to find. Converting one to a
+returned refusal created the inconsistency, and the probe went on dying at the other with a banner
+and nothing else while the change was recorded as verified.
+
+So "duplicated logic" is the wrong thing to hunt. The reviewable event is a change that makes two
+agreeing sites disagree, and the durable remedy is to leave only one site to change.
+
+### Altitude is the question none of the rules asked
+
+Across the rounds the reviewers kept describing findings in the same shape, which the rules had no
+word for: "still crashes the probe, one frame higher"; "loses the census in the reverse direction";
+"count against *which* disclaimer, not against disclaimed-or-not". Each asks whether a fix sits at
+the level the rule lives at, or at the level the author happened to be editing. The six rules the
+instructions now carry are that question, made specific enough to act on.
+
+### Taking a rung below the one the fact supports
+
+The ladder says take the lowest rung you can afford. It does **not** say take the lowest rung, and
+the first attempt at encoding the census rule got that wrong in a way worth recording, because the
+result passed and looked like enforcement.
+
+"Which probes emit a machine-readable row" is a property of a probe's *output*. The first encoding
+was a unit test that walked `src/bin` and grepped each file for the tag -- cheaper by a rung, and
+unsound twice: the walk was shallow, so it never saw `queue_contention`, whose source is nested one
+directory down and which is exactly the probe whose classification the test was written to pin
+down; and a bare substring matched `topology.rs`, whose only mention of the tag is a `//!` comment,
+its row being emitted from `topology_report` in the library. The asserted set was correct while
+neither half of the method was.
+
+No proxy over the source could have fixed it, because the emission may live in any module the
+binary calls. The honest rung is the one that crosses a process boundary: run the registered probes
+and read their output, which costs about ten seconds and answers the question asked. Two are
+excluded by name and by reason -- one too slow to run every time, one documented as unsafe to launch
+from a test at all -- and censused by the weaker source question instead, which the test states as
+weaker rather than blending in with the rest. A rule pushed below the rung its fact supports does
+not become cheap; it becomes decoration.
+
+**No work is scheduled by this note**, per "design notes are not a work queue". The rules it
+explains are binding where they are stated; the encodings taken at the time of writing --
+`is_nameable_in_a_mask` and `undirected` as single definitions, and an integration test asserting
+which probes emit a machine-readable row -- are in the commits that added this section and the one
+that corrected it.
