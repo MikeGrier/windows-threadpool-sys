@@ -46,3 +46,23 @@ Completed by [EP-D-6](DESIGN-NOTES.md#ep-d-6). The planner requests and interpre
 residency measurements; a platform measurement component executes the neutral request; and the
 result travels with the concrete plan as scenario-specific evidence rather than being inserted into
 the abstract machine description.
+
+## Moved 2026-09-18 19:13:56 -04:00 -- Settle the measurement-foundation architecture
+
+### <a id="ep-r12"></a>EP-R1.2 -- The five-component architecture and its dependency order are settled. *(completed 2026-09-18 19:13:56 -04:00)*
+
+Recorded as [EP-D-7](DESIGN-NOTES.md#ep-d-7). The architecture contains `topology-model`,
+`topology-planner`, an inward Windows topology adapter, a Windows measurement foundation, and an
+outward realizer. The planner owns the campaign and interpretation; the measurement foundation owns
+active kernels and their live backend; and probes call the same kernels rather than supplying a
+second implementation.
+
+The existing probe code is reusable source material but not the production dependency: its current
+contracts explicitly describe it as experimental. The extracted foundation has an injected
+platform-operations boundary so degenerate, erroneous, and partial-success behavior can be tested in
+volume. Simulated interactions prove validation and cleanup; only the live backend produces
+hardware timing evidence.
+
+Final component-local checklists require the names and contracts still owned by `EP-R1.5` and
+`EP-R1.7`. Their materialization is scheduled as `EP-R1.8` rather than performed under provisional
+crate names.

@@ -5,13 +5,14 @@ description of a machine. See [COMPONENT.md](COMPONENT.md) for what this crate i
 separate from both the topology crate and the runtime, and
 [EP-D-4](DESIGN-NOTES.md#ep-d-4) for the architecture it now sits in.
 
-**The component has been re-scoped**, per [EP-D-4](DESIGN-NOTES.md#ep-d-4) and
-[EP-D-5](DESIGN-NOTES.md#ep-d-5). It is named `topology-planner` and the directory now matches; it
+**The component has been re-scoped**, per [EP-D-4](DESIGN-NOTES.md#ep-d-4) through
+[EP-D-7](DESIGN-NOTES.md#ep-d-7). It is named `topology-planner` and the directory now matches; it
 queries an abstract model covering processors, memory, storage, interconnects, distances and
 bottlenecks rather than `MachineMemoryTopology` directly; and **adapters** bracket it -- one exposing
 the model's traits over the Windows topology objects, one realizing a plan as buffers, rings and
 threads. The model, its traits, and the plan type live in a separate `topology-model` crate that
-everything depends on and that depends on nothing.
+everything depends on and that depends on nothing. A fifth component owns active Windows measurement
+kernels shared by the probes and runtime planner.
 **M2+ onward are written against the superseded shape and are not yet re-cut.**
 
 ## Where this stands
@@ -32,10 +33,10 @@ prerequisites rather than on someone else's decision.
 
 | Milestone | State | What it is waiting on |
 |---|---|---|
-| MR1 design-review reconciliation | 1 done, 6 open | active; work in item order |
+| MR1 design-review reconciliation | 2 done, 6 open | active; work in item order |
 | M1 the input contract | 3 done, 2 open | `EP-1.4` and `EP-1.5`'s coverage half, which want a settled model |
 | M1+ scenario and naming | **partly answered** | the name is settled (EP-D-4); the goal input is deferred for litigation, by direction |
-| M2+ the plan as a value | parked, **and needs re-cutting** | re-cut against EP-D-4/EP-D-5, then the topology reshape landing |
+| M2+ the plan as a value | parked, **and needs re-cutting** | re-cut against EP-D-4 through EP-D-7, then the topology reshape landing |
 | M3+ the policies | parked | M2+ |
 | M-inf parked | ungated | not scheduled, deliberately |
 
@@ -45,12 +46,7 @@ These items are in dependency order. Resolve and commit one item before beginnin
 
 - [x] **EP-R1.1** -- Runtime measurement ownership and its data boundary are settled. -> [completed 2026-09-18](COMPLETED-CHECKLIST.md#ep-r11)
 
-- [ ] **EP-R1.2** -- **Re-cut the four-part architecture into executable component plans.** Create
-  dependency-ordered work and reciprocal cross-component handoffs for `topology-model`,
-  `topology-planner`, the inward Windows adapter, and the outward realizer. Move ownership of the
-  model, query traits, and plan value out of this checklist wherever
-  [EP-D-5](DESIGN-NOTES.md#ep-d-5) assigns them elsewhere. The result must identify the first
-  implementable item in each component without requiring an executor to infer a dependency.
+- [x] **EP-R1.2** -- The five-component architecture and its dependency order are settled. -> [completed 2026-09-18](COMPLETED-CHECKLIST.md#ep-r12)
 
 - [ ] **EP-R1.3** -- **Remove stale gates and make current work states truthful.** Reconcile the
   milestone table and item bodies with the concluded locality-model session and the shipped
@@ -64,9 +60,9 @@ These items are in dependency order. Resolve and commit one item before beginnin
   the current canonical documentation.
 
 - [ ] **EP-R1.5** -- **Split completed naming work from names that remain open.** Record the settled
-  planner and graph vocabulary as completed, retain explicit work for adapter and public type names,
-  and make the milestone table agree with the remaining scope rather than describing one mixed item
-  as both settled and unchecked.
+  planner and graph vocabulary as completed, retain explicit work for the measurement foundation,
+  adapters, and public type names, and make the milestone table agree with the remaining scope rather
+  than describing one mixed item as both settled and unchecked.
 
 - [ ] **EP-R1.6** -- **Refresh Tier 1 against the model that shipped.** Move historical claims about
   CPU Sets being unconsumed and proximity having no answer into
@@ -83,6 +79,13 @@ These items are in dependency order. Resolve and commit one item before beginnin
   existing repository code or the Windows thread pool already owns any part. Include at least ten
   normal cases plus every identified edge case, and replace "deferred for litigation" with a linked
   decision or a concrete blocker and graduation trigger.
+
+- [ ] **EP-R1.8** -- **Materialize executable component-local plans after names and contracts are
+  settled.** Create dependency-ordered checklists and reciprocal cross-component handoffs for
+  `topology-model`, `topology-planner`, the inward adapter, the measurement foundation, and the
+  realizer. Move the model, specification, query-trait, measurement-vocabulary, and plan-value work
+  to their owning component. Each plan must identify its first implementable item without a
+  provisional crate name or an unstated contract prerequisite.
 
 ## M1: state what the planner needs from the topology
 

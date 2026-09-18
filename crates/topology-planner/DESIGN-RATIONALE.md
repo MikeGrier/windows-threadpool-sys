@@ -65,3 +65,33 @@ The discussion also exposed a later boundary question rather than answering it: 
 queue and I/O ring primitives, but it has not yet established how much higher-level work-item,
 buffer, parsing-stage, serial-stream, parallel-stream, and cross-domain migration machinery it must
 provide. That question is deliberately queued in [CHECKLIST.md](CHECKLIST.md) `EP-R1.7`.
+
+## EP-D-7 rationale and discussion
+
+EP-D-6 separated who chooses and interprets a measurement from who executes it. Applying that split
+to EP-D-5 showed that the four-component count had hidden active measurement inside a boundary whose
+other responsibilities did not fit it.
+
+The inward adapter could not own measurement without becoming scenario-aware, expensive, and
+dependent on queue and I/O mechanisms. The realizer could not own it because probes and planning
+need measurement before an application topology exists. The neutral planner could not execute it
+without acquiring Windows dependencies. A separate measurement foundation was therefore a
+dependency consequence rather than another conceptual preference.
+
+Reading the current probes found substantial reusable source material rather than a ready production
+component. `windows-placement-probe` already separates pure placement selection from live execution,
+and `windows-platform-probes` already calls into that crate instead of duplicating the placement
+measurement. But the probe source and manifest explicitly reject production dependency and stable
+measurement-code compatibility. The production boundary must therefore be extracted downward, with
+the probes becoming clients of the extracted owner.
+
+The engineer added a testability requirement: platform inputs must be mockable so degenerate and
+erroneous behaviors can be generated in volume before hardware testing. The boundary recorded in
+[EP-D-7](DESIGN-NOTES.md#ep-d-7) keeps that strong without confusing a simulated duration with
+evidence about a real machine. Mocked tests prove interaction and validation behavior; real hardware
+produces timing evidence.
+
+Final component-local plans were not written under provisional names. Their first implementable
+items also depend on contracts still owned by `EP-R1.7`. The completed architecture item therefore
+spawns [CHECKLIST.md](CHECKLIST.md) `EP-R1.8`, after naming and contract work, rather than pretending
+those prerequisites do not exist.

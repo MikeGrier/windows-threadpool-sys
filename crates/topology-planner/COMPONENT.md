@@ -36,13 +36,14 @@ how their answers shape the plan. Neutral measurement contracts live in `topolog
 components execute them; and the probe tools use the same underlying measurement kernels. See
 [EP-D-6](DESIGN-NOTES.md#ep-d-6).
 
-## The four components, and which way the arrows point
+## The five components, and which way the arrows point
 
 | Component | Platform | Depends on |
 |---|---|---|
 | `topology-model` | neutral | nothing |
 | `topology-planner` (this one) | neutral | `topology-model` |
 | the inward adapter | Windows | `topology-model`, `windows-topology-sys` |
+| the measurement foundation | Windows | `topology-model`, Windows APIs, measured queue and I/O primitives |
 | the outward adapter (the realizer) | Windows | `topology-model`, the runtime crates |
 
 `topology-model` holds the abstract machine description, **the traits the planner queries**, and
@@ -54,6 +55,11 @@ That is the whole point of the arrangement. If the traits lived here, an adapter
 to describe a machine would have to depend on a planner, and anyone wanting to read a topology would
 pull in planning policy they did not ask for. The plan type is here for the same reason one level
 down: the realizer *executes* a plan and has no business depending on the policy that chose it.
+
+The measurement foundation is separate for the same dependency reason. The inward adapter reports
+platform facts; the measurement foundation performs active scenario-specific work; and the realizer
+constructs a completed plan. Probe tools and the planner use the same measurement kernels without
+depending on each other. See [EP-D-7](DESIGN-NOTES.md#ep-d-7).
 
 ## Two kinds of adapter
 

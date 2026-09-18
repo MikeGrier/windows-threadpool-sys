@@ -22,9 +22,10 @@ renamed to match.
 | <a id="ep-d-1"></a>EP-D-1 | **The shard-set query**: what the planner must know to choose which processors host a domain, and what today's model cannot tell it. |
 | <a id="ep-d-2"></a>EP-D-2 | **The proximity query**: how close two processors are, which selects the channel between their domains. Takes an **unordered** pair; the model has no answer today. |
 | <a id="ep-d-3"></a>EP-D-3 | **The residency query**: where a domain's pool lives, and which side of a cross-domain pair should host a shared ring. **Ordered**, with directed cost entering through the abstract model/adapter path under [D-20](../windows-topology-sys/DESIGN-NOTES.md#d-20). |
-| <a id="ep-d-4"></a>EP-D-4 | **The four-part architecture, and the planner's name.** The engineer's position: the planner is **`topology-planner`** (no `windows-` prefix); it takes a **goal** description (shape deferred for litigation), queries an **abstracted idealized** model covering processors, memory, storage, interconnects, distances and bottlenecks, and emits a **JSON-serializable, platform-neutral** plan. Two kinds of **adapter** bracket it: one exposing the planner's traits over the Windows topology objects, one **realizing** a plan as buffers, rings and threads with the user's code inserted at the right steps. Settles `MMT-1.5` (the facts crate keeps its `-sys` name), the "two graphs, one word" ambiguity, and where distance lives -- the attributed interconnect shape D-9 sketched goes in the abstract model, so D-9's deferral in the facts crate stands unreopened. |
-| <a id="ep-d-5"></a>EP-D-5 | **The component layout: `topology-model` is its own crate, and dependencies point one way.** The abstract model and the traits the planner queries live in `topology-model`, which the planner and both adapters depend on; non-planner components do not depend on `topology-planner`. Putting the traits in the planner would make a crate whose job is to *describe a machine* depend on one that applies *policy* -- the same defect as `outermost_partitioning_cache`, arriving as a dependency edge instead of an API. Two consequences derived from the same rule rather than decided separately: **the plan type also lives in `topology-model`** (otherwise the realizer depends on the planner), and the inward adapter and the realizer are **separate crates** (their dependency sets barely overlap, and fusing them would make reading a topology pull in the whole runtime). |
+| <a id="ep-d-4"></a>EP-D-4 | **The original four-part architecture, and the planner's name.** The planner is **`topology-planner`** (no `windows-` prefix); it takes a goal description, queries an abstracted idealized model, and emits a JSON-serializable platform-neutral plan. Its component count is superseded by [EP-D-7](#ep-d-7), which adds the active measurement foundation without changing the planner name or the two adapter boundaries. |
+| <a id="ep-d-5"></a>EP-D-5 | **The shared-vocabulary layout and dependency direction.** The abstract model, planner query traits, and plan type live in `topology-model`, which the planner and platform components depend on; non-planner components do not depend on `topology-planner`. [EP-D-7](#ep-d-7) extends this layout with neutral measurement contracts and a separate platform measurement foundation while preserving the one-way dependency rule. |
 | <a id="ep-d-6"></a>EP-D-6 | **Runtime measurement is a planner-owned campaign over shared measurement mechanisms.** Runtime planning is the normal path, not a fallback: the planner decides what the scenario and current allocation require, sequences and interprets measurements, and stops when it has enough evidence. Neutral request/result contracts live in `topology-model`; platform components execute them; probe tools and the planner use the same underlying kernels. The client repository carries constraints and permissions rather than an exact allocation, and the concrete runtime plan retains the scenario-specific evidence for its choices without promoting it into an abstract machine fact. |
+| <a id="ep-d-7"></a>EP-D-7 | **Five components, with active measurement as a foundation rather than an adapter concern.** `topology-model`, `topology-planner`, the inward Windows adapter, a Windows measurement foundation, and the outward realizer have distinct dependency sets and responsibilities. Measurement contracts are neutral; measurement mechanisms are platform-specific; probes and runtime planning share those mechanisms; and exhaustive mocked platform-interaction testing is kept separate from real-hardware timing evidence. |
 
 ## EP-D-1: the shard-set query
 
@@ -266,6 +267,8 @@ Detailed trigger analysis and prior framing are recorded in
 
 ## EP-D-4: the four-part architecture, and the planner's name
 
+**Superseded in component count by [EP-D-7](#ep-d-7); the planner name and adapter boundaries remain current.**
+
 *The engineer's position, 2026-09-03. This is a **choice**, not one of M1's queries, and it
 re-scopes the component that records it.*
 
@@ -333,6 +336,8 @@ they are now satisfied by traits over an abstract model rather than by methods o
 They were written against a real caller, which is what makes them portable in this way.
 
 ## EP-D-5: the component layout, and which way dependencies point
+
+**Superseded in component count by [EP-D-7](#ep-d-7); the shared-vocabulary ownership and dependency direction remain current.**
 
 *The engineer's choice, following [EP-D-4](#ep-d-4). Recorded separately because EP-D-4 explicitly
 left it open.*
@@ -445,3 +450,72 @@ particular, later design work must determine the interface between completed I/O
 serial and parallel work streams, worker placement, and intentional cross-domain migration, and
 whether existing repository code or the Windows thread pool already supplies any part of it. That
 question is tracked by [CHECKLIST.md](CHECKLIST.md) `EP-R1.7`; EP-D-6 does not answer it.
+
+## EP-D-7: five components and the measurement foundation
+
+*The engineer's decision, 2026-09-18. Recorded by [CHECKLIST.md](CHECKLIST.md) `EP-R1.2`.*
+
+### The five responsibilities
+
+| Component role | Platform | Owns | Depends on |
+|---|---|---|---|
+| `topology-model` | neutral | Abstract machine, topology specification, concrete plan, planner query traits, measurement request/result/evidence vocabulary | nothing |
+| `topology-planner` | neutral | Runtime measurement campaign, policy, interpretation, constraint resolution, concrete-plan construction | `topology-model` |
+| inward topology adapter | Windows | Translation of platform-published topology facts into the abstract machine | `topology-model`, `windows-topology-sys` |
+| measurement foundation | Windows | Active measurement kernels and the live platform backend | `topology-model`, Windows APIs, measured queue and I/O primitives |
+| outward realizer | Windows | Construction of threads, buffers, rings, affinities, and other runtime objects from a concrete plan | `topology-model`, runtime crates |
+
+The measurement foundation is not a third adapter. The inward adapter translates already-published
+facts and stays cheap and scenario-independent. The realizer consumes a completed plan. Active
+measurement is permissioned, scenario-shaped work between those two stages and has a dependency set
+of its own.
+
+### The execution flow
+
+The dependency and data flow is:
+
+1. The inward adapter produces an abstract machine from the current Windows topology facts.
+2. The planner combines that machine with the client's topology specification.
+3. The planner issues neutral measurement requests when the specification permits and the current
+   evidence is insufficient.
+4. The measurement foundation executes those requests and returns contextual evidence.
+5. The planner resolves constraints and produces a concrete allocation-specific plan.
+6. The realizer constructs the runtime objects named by that plan.
+
+Neither the measurement foundation nor the realizer depends on `topology-planner`; both consume
+shared vocabulary from `topology-model`. A probe depends on the measurement foundation and presents
+its mechanisms to a developer, while the planner reaches the same mechanisms through the neutral
+measurement contracts.
+
+### Existing probe code is source material, not the production dependency
+
+The current probes already establish useful seams. Placement classification, representative-pair
+selection, and NUMA-hop selection are pure functions in
+[core_affinity.rs](../windows-placement-probe/src/core_affinity.rs), while the live measurement is
+assembled separately. [windows-platform-probes/Cargo.toml](../windows-platform-probes/Cargo.toml)
+already depends on `windows-placement-probe` rather than carrying a second placement measurement.
+
+The existing ownership is nevertheless deliberately experimental:
+[peer_index_cache.rs](../windows-placement-probe/src/peer_index_cache.rs) says production code must
+not call it, and [windows-placement-probe/Cargo.toml](../windows-placement-probe/Cargo.toml) says its
+measurement code is not a compatibility surface. Production planning therefore does not depend on a
+probe crate. Reusable kernels move into the measurement foundation, and probes become front ends
+over that owner.
+
+### Mocked interaction testing and real evidence are different claims
+
+The measurement foundation has an injected platform-operations boundary covering affinity,
+allocation, achieved-placement inspection, clocks, threads, queue execution, I/O operations, and
+cleanup. Tests can then generate degenerate topology, API error, partial-success, impossible-result,
+and malformed-response cases in volume before hardware is involved.
+
+Those tests prove orchestration, validation, refusal, and cleanup. They do not manufacture valid
+performance evidence. A timing or coherence result is trusted as hardware evidence only when the
+live Windows backend measured it on the machine the result describes.
+
+### Planning consequence
+
+The architecture and dependency order are settled here, but final component-local checklists require
+the remaining component names and the contracts that define their first implementable items.
+[CHECKLIST.md](CHECKLIST.md) `EP-R1.8` materializes those plans after `EP-R1.5` and `EP-R1.7`;
+this dependency is recorded rather than hidden behind provisional crate names.
