@@ -9,9 +9,10 @@ against and other people can run it on hardware this workspace does not own.
 Both crates are published: `windows-topology-sys` 0.2.0 and `windows-waitable-queues` 0.1.0 reached
 crates.io on 2026-09-05, neither yanked. They did not arrive by the route below. PR #56 was opened
 from `mikegrier/deferred-namespace-ops` on 2026-08-31 and **closed unmerged on 2026-09-15**; the
-content is landing in peeled pieces instead, the first of which merged as PR #94, and this branch is
-the second. The milestones below were written while #56 was open and describe a path that was not
-taken, so M4 still reads as though nothing has shipped -- SH-4.15 owns reconciling it.
+content is landing in peeled pieces instead: the first merged as PR #94 and the second as
+PR #95, both of which this branch has since merged back. The milestones below were written
+while #56 was open and describe a path that was not taken, so M4 still reads as though
+nothing has shipped -- SH-4.15 owns reconciling it.
 
 **Milestone numbers are not a running order.** M7 through M15 are *review rounds on PR #56*, so they
 happened **inside M3**, between the pull request opening and a merge that never came. Reading the
