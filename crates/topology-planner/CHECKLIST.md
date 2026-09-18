@@ -45,7 +45,7 @@ consumers, and **this crate is the consumer**. Answering in the abstract has alr
 wrong answer this session. Each item below states a query the planner makes, why it makes it, and
 whether the topology can answer it today -- so the model is designed against a real caller.
 
-- [x] **EP-1.1** -- The shard-set query requirements and discovered efficiency-class sentinel defect are recorded. *(completed 2026-09-18 18:50:30 +00:00)* -> [completed 2026-09-18](COMPLETED-CHECKLIST.md#ep-11)
+- [x] **EP-1.1** -- The shard-set query requirements and discovered efficiency-class sentinel defect are recorded. -> [completed 2026-09-18](COMPLETED-CHECKLIST.md#ep-11)
 
 - [x] **EP-1.2** -- **The proximity query, which is the crux.** For an ~~*ordered pair*~~
   **unordered pair** of processors, how close are they -- because that is what chooses SPSC versus
