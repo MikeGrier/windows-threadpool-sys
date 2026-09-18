@@ -32,6 +32,13 @@
     The Conventional Commits type you are about to use, e.g. 'feat', 'fix!',
     'chore'. Only meaningful with -Staged.
 
+.PARAMETER RepoRoot
+    The repository to read `release-please-config.json` from, and to run git in.
+    Defaults to this script's parent directory, which is the normal case. Exists
+    so the tests can drive the script against a throwaway repository rather than
+    this one -- a guard with no test is enforced by whoever remembers it, and
+    this one was silently reading the wrong file until a review found it.
+
 .EXAMPLE
     .\tools\check-commit-scope.ps1
     .\tools\check-commit-scope.ps1 -Range 'origin/main..HEAD'
@@ -41,18 +48,52 @@
 param(
     [string] $Range,
     [switch] $Staged,
-    [string] $Type
+    [string] $Type,
+    [string] $RepoRoot
 )
 
 $ErrorActionPreference = 'Stop'
-$repo = Split-Path $PSScriptRoot -Parent
+$repo = if ($RepoRoot) { (Resolve-Path $RepoRoot).Path } else { Split-Path $PSScriptRoot -Parent }
+Push-Location $repo
+try {
 
-# The crates release-please actually versions. A `publish = false` crate cannot
-# be poisoned, because it is never released -- so it is not a finding.
+# The crates release-please actually versions -- read from the CONFIG, which is
+# the authority for which packages it manages. A `publish = false` crate cannot
+# be poisoned, because it is never released, and a crate release-please is not
+# configured for is not released whatever its manifest says.
+#
+# **The manifest is the wrong source, and reading it made this script wrong.**
+# `.release-please-manifest.json` records the current version of each managed
+# package, but nothing prunes an entry when a package leaves the config: this
+# repository's manifest still carries `crates/windows-platform-probes`, which
+# `release-please-config.json` does not manage and whose `Cargo.toml` says
+# `publish = false`. Reading the manifest therefore treated that crate as
+# released and flagged a commit for mislabelling a changelog entry that could
+# never be written.
+$configPath = Join-Path $repo 'release-please-config.json'
+if (-not (Test-Path $configPath)) { throw "No release-please-config.json at $configPath" }
+$config = Get-Content $configPath -Raw | ConvertFrom-Json
+$released = @()
+if ($config.packages) {
+    $released = @($config.packages.PSObject.Properties | ForEach-Object { Split-Path $_.Name -Leaf })
+}
+# An empty package list is a misread file, not an empty release set. Passing
+# every commit silently is the one outcome a guard must not have.
+if ($released.Count -eq 0) { throw "release-please-config.json names no packages" }
+
+# Drift between the two files is what produced the defect above, so it is
+# reported rather than silently resolved in the config's favour. Not a failure:
+# a stale manifest entry is harmless to releases, and only misleads a reader who
+# takes it for the package list.
 $manifestPath = Join-Path $repo '.release-please-manifest.json'
-if (-not (Test-Path $manifestPath)) { throw "No .release-please-manifest.json at $manifestPath" }
-$released = (Get-Content $manifestPath -Raw | ConvertFrom-Json).PSObject.Properties.Name |
-    ForEach-Object { Split-Path $_ -Leaf }
+if (Test-Path $manifestPath) {
+    $inManifest = (Get-Content $manifestPath -Raw | ConvertFrom-Json).PSObject.Properties.Name |
+        ForEach-Object { Split-Path $_ -Leaf }
+    $orphans = $inManifest | Where-Object { $_ -notin $released }
+    if ($orphans) {
+        Write-Host ("note: {0} in .release-please-manifest.json but not managed by release-please-config.json; not treated as released." -f ($orphans -join ', ')) -ForegroundColor DarkGray
+    }
+}
 
 function Get-ReleasedCrates([string[]] $paths) {
     $paths |
@@ -215,4 +256,7 @@ Write-Host '  consumer (chore), then delete the alias (feat!, owning crate only)
 Write-Host ''
 Write-Host '  Already committed and not worth rewriting? Correct it at release time with a'
 Write-Host '  `Release-As: x.y.z` footer on a commit touching only that crate.'
-exit 1
+exit 1}
+finally {
+    Pop-Location
+}
