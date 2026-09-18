@@ -1587,7 +1587,7 @@ with the three rejected alternatives).
 
 ## Moved 2026-08-31 -- topology provenance: a topology now carries where it came from, and cannot pass as measured
 
-# Checklist: topology provenance
+# <a id="checklist-topology-provenance"></a>Checklist: topology provenance
 
 **Problem.** [crates/windows-topology-sys/src/topology.rs](crates/windows-topology-sys/src/topology.rs)
 documents that a `Topology` is "built either by `Topology::discover` from the running system, by hand,
