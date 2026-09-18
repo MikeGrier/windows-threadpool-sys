@@ -74,24 +74,49 @@ fn render(out: &mut dyn std::fmt::Write) {
     // so -- and `Observation::host` exists precisely so a caller can notice,
     // its own rustdoc saying it "lets the caller compare the two and refuse".
     //
-    // `windows-placement-probe`'s own binary does refuse here, because it is
-    // writing a corpus record a runner consented to. This one is a fleet-survey
-    // report, so it discloses instead: the rows below were still measured, and
-    // a reader told which machine they belong to can use them. What must not
-    // happen is the reader being told nothing.
-    if let Ok(announced) = &announced
-        && *announced != observation.host
-    {
+    // **Three readings, not two, because `Observation::host` is taken at the
+    // START of the measurement.** `core_affinity::measure` discovers the
+    // topology, derives `host` from it, and only then runs every timed pair --
+    // so comparing the banner against `host` brackets the gap before the work
+    // and leaves the work itself, which is the long part, unwatched. A reading
+    // taken after `measure` returns closes that window. This is the same
+    // bracket `topology_report::attribution` puts around the topology probe's
+    // measurement, applied to the one that takes far longer.
+    //
+    // `windows-placement-probe`'s own binary refuses on a mismatch, because it
+    // is writing a corpus record a runner consented to. This one is a
+    // fleet-survey report, so it discloses instead: the rows below were still
+    // measured, and a reader told which machine they belong to can use them.
+    // What must not happen is the reader being told nothing.
+    let settled = windows_placement_probe::fingerprint::Fingerprint::discover();
+    let disagreement = match (&announced, &settled) {
+        (Ok(announced), Ok(settled)) => {
+            *announced != observation.host || *settled != observation.host
+        }
+        // A bracket read that failed establishes nothing either way, so it is
+        // reported rather than treated as agreement.
+        _ => true,
+    };
+    if disagreement {
+        let describe = |reading: &std::io::Result<
+            windows_placement_probe::fingerprint::Fingerprint,
+        >| match reading {
+            Ok(fingerprint) => fingerprint.to_string(),
+            Err(error) => format!("UNKNOWN -- topology discovery failed: {error}"),
+        };
         let _ = writeln!(
             out,
-            "\nHOST CHANGED DURING THE RUN: the banner above and the rows below\n\
-             describe different machines, so which one the measurements belong to\n\
+            "\nHOST NOT HELD STILL: the three readings that bracket this run do not\n\
+             all describe the same machine, so which one the measurements belong to\n\
              was not established.\n  \
-             banner:   {announced}\n  \
-             measured: {}\n\
-             The rows below were measured on the second. Read them through it, or\n\
-             run again on a machine that is not changing shape.",
-            observation.host
+             before:   {}\n  \
+             measured: {}\n  \
+             after:    {}\n\
+             The rows below were measured on the middle one. Read them through it,\n\
+             or run again on a machine that is not changing shape.",
+            describe(&announced),
+            observation.host,
+            describe(&settled)
         );
     }
 
@@ -741,6 +766,10 @@ fn render_node_distances(out: &mut dyn std::fmt::Write, observation: &Observatio
     // reversal as a hop difference, one level further out. Holding locality
     // fixed is what makes a hop comparison a comparison.
     let mut rows: Vec<NodeRow> = Vec::new();
+    // Rows the table shows but the verdict must not use: their allocation did
+    // not land where it was asked, so they belong to no locality. Counted so the
+    // report can say the comparison is thinner than the table looks.
+    let mut redirected = 0_usize;
 
     for pair in &pairs {
         for base in observation.node_pair_rows(*pair, Strategy::Baseline) {
@@ -798,13 +827,24 @@ fn render_node_distances(out: &mut dyn std::fmt::Write, observation: &Observatio
                 cached.nanos_per_item,
                 cached.consumer_batch
             );
-            rows.push(NodeRow {
-                hop: undirected(*pair),
-                directed: *pair,
-                locality: Locality::of(*pair, base.requested_memory_node),
-                ring: base.requested_memory_node,
-                nanos: base.nanos_per_item,
-            });
+            // **Only a row that landed where it was asked can carry a
+            // locality-controlled conclusion.** The marker above already
+            // recognises a redirected or undeterminable allocation, and the row
+            // stays in the table because it was measured -- but classifying it
+            // by the node it *requested* would let the verdict below say "at the
+            // producer's placement" about a timing taken somewhere else. The
+            // whole point of holding locality fixed is lost if a row can be
+            // filed under a locality it did not achieve.
+            match (base.requested_memory_node, base.memory_node) {
+                (Some(asked), Some(landed)) if asked == landed => rows.push(NodeRow {
+                    hop: undirected(*pair),
+                    directed: *pair,
+                    locality: Locality::of(*pair, base.requested_memory_node),
+                    ring: base.requested_memory_node,
+                    nanos: base.nanos_per_item,
+                }),
+                _ => redirected += 1,
+            }
         }
     }
 
@@ -899,6 +939,19 @@ fn render_node_distances(out: &mut dyn std::fmt::Write, observation: &Observatio
         }
     }
 
+    // Said wherever a verdict is reached or declined, because a reader comparing
+    // the table to the paragraph would otherwise count more rows than the
+    // paragraph used and have no way to learn why.
+    let excluded = |out: &mut dyn std::fmt::Write| {
+        if redirected > 0 {
+            let _ = writeln!(
+                out,
+                "  {redirected} row(s) above are not in that comparison: their memory did not\n  \
+                 land on the node they asked for, so they belong to no placement."
+            );
+        }
+    };
+
     // `hops.len()`, not `pairs.len()`. `pairs` is directed, so a three-node host
     // has six entries for the three hops the guard above just counted -- and
     // printing the directed count here made two adjacent paragraphs describe one
@@ -911,6 +964,7 @@ fn render_node_distances(out: &mut dyn std::fmt::Write, observation: &Observatio
              the ring sat as well as which hop it crossed.",
             hops.len()
         );
+        excluded(out);
         let _ = writeln!(
             out,
             "  This measures the handoff between two nodes; it is not a distance\n  \
@@ -941,6 +995,7 @@ fn render_node_distances(out: &mut dyn std::fmt::Write, observation: &Observatio
         worst.nanos,
         spread
     );
+    excluded(out);
     // No same-hop arm: the selection above only considers pairs on different
     // hops, so the two extremes cannot be one hop's two directions. A direction
     // asymmetry within a hop is still visible -- it is two adjacent rows of the
