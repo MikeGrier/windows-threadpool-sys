@@ -1,6 +1,10 @@
 # Design session: the cache-locality model
 
-**Status: OPEN, with direction settled and the representation converging.** The engineer has
+**Status: CONCLUDED -- the reshape shipped.** The `MMT-*` plan implemented this direction and is
+archived in
+[crates/windows-topology-sys/COMPLETED-PLANS.md](../crates/windows-topology-sys/COMPLETED-PLANS.md);
+`windows-topology-sys` 0.2.0 published the new model on 2026-09-05. What follows is the session as it
+was held, in the present tense it was written in. The engineer has
 taken sides on both underlying questions (see "Direction taken" below) and settled three
 sub-questions about the proposed shape: provenance is **per-relation**, "determined absent"
 is a **distinct record**, and the whole-object `Provenance` is **superseded** rather than
@@ -10,7 +14,9 @@ options section further down predates that direction and is kept as a record of 
 considered -- Options 1 and 2 are now insufficient on their own, because both preserve the
 `Option`-shaped absence the direction rejects.
 
-**This session is on PR #56's critical path.** The work it gates is in scope for that PR by
+**Historical, and it did not play out this way: PR #56 closed unmerged on 2026-09-15 and the model
+shipped by another route.** As written: this session is on PR #56's critical path. The work it gates
+is in scope for that PR by
 decision -- #56 does not merge until the new model lands -- because the model being replaced is
 the one `windows-topology-sys` 0.2.0 would publish, and a published model cannot be reshaped
 without another break. So this session concludes before implementation starts, and

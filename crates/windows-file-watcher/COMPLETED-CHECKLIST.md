@@ -609,7 +609,7 @@ restatements of one fact, none of which moved when the fact did; all four correc
 `queue/tests.rs`. Recorded in [DESIGN-NOTES.md](DESIGN-NOTES.md) -> `Dead code that could not have run`.
 ## Moved 2026-09-01 -- M15.2 / M-inf.4: why a by-id reopen cannot be watched
 
-### <a id="m152"></a><a id="m-inf4"></a>M15.2 -- Explain, then either fix or document, why a handle from `reopen_by_id` rejects the very read the watcher exists to issue. *(completed 2026-09-01 19:05:00 -04:00)*
+### <a id="m152"></a>M15.2 -- Explain, then either fix or document, why a handle from `reopen_by_id` rejects the very read the watcher exists to issue. *(completed 2026-09-01 19:05:00 -04:00)*
 
 Closes **M-inf.4** as well, which had parked exactly this root-cause question.
 

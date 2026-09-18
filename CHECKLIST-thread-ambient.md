@@ -15,10 +15,13 @@ Authoritative decisions are in [DESIGN-NOTES.md](DESIGN-NOTES.md) and, for the f
 
 **M22-M29 are complete and archived** in
 [COMPLETED-CHECKLIST.md](COMPLETED-CHECKLIST.md) under `Moved 2026-09-09 21:28:45 -04:00`. What remains below is
-parked rather than pending: every `M26+` item is gated on the namespace-facility design branch reaching
-`main`, so this file is not yet deletable even though none of its own milestones are outstanding.
+parked no longer: every `M26+` item was gated on the namespace-facility design branch reaching
+`main`, and both [crates/windows-namespace-request-sys](crates/windows-namespace-request-sys) and
+[crates/windows-thread-ambient-sys](crates/windows-thread-ambient-sys) are on `main` now, so the
+gate has lifted and the three items are pending. They keep the `M26+` id until someone graduates
+them to a number, which `M34.7` in [CHECKLIST.md](CHECKLIST.md) owns.
 
-## M26+ -- Gated on the namespace-facility design branch landing
+## M26+ -- Was gated on the namespace-facility design branch landing; that gate has lifted
 
 - [ ] **M26+.1** -- Reconcile the duplicated design background. This branch imported
   [DESIGN-NOTES.md](DESIGN-NOTES.md)'s namespace-plane section and its design session byte-identical from

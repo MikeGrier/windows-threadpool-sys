@@ -116,6 +116,7 @@ checklists -- [CHECKLIST-placement-tool.md](CHECKLIST-placement-tool.md),
 [CHECKLIST-mutation-survivors.md](CHECKLIST-mutation-survivors.md) -- number from M1 independently and
 are not part of that space. M30 is currently used twice inside it, by this file and by io-domains;
 M34.6 owns that.
+
 - [x] **M34.1** -- Promote the ad-hoc sabotage harness into a reusable tool. -> [completed 2026-08-31](COMPLETED-CHECKLIST.md#m341)
 
 - [ ] **M34.3** -- **Archive the completed bodies in the three root checklists that still carry
@@ -168,7 +169,7 @@ M34.6 owns that.
   [run-numa-spikes.ps1](tools/run-numa-spikes.ps1), [run-mutants.ps1](tools/run-mutants.ps1) and
   [run-sabotage.ps1](tools/run-sabotage.ps1) each now route everything through one `Write-Report`
   sink. They were small enough to convert in place, which is exactly why they did not need deferring.
-  (`run-sabotage.ps1`'s `Exit-WithMessage` is deliberately outside its sink: that path writes to
+  ([run-sabotage.ps1](tools/run-sabotage.ps1)'s `Exit-WithMessage` is deliberately outside its sink: that path writes to
   stderr and exits, and there the destination is part of the meaning.)
   **What remains is the capture test, and it has a structural obstacle worth naming.**
   The point of the rule is that output becomes testable, so this item is not checked off on the
@@ -178,7 +179,8 @@ M34.6 owns that.
   **The obstacle is narrower than this item first claimed.** It said each probe's `render()` lives in
   a `bin` target "which nothing can import", and concluded that closing the gap means moving every
   `render()` into the crate's library. A `bin` target cannot be imported from *outside*, but it can
-  carry its own test module, and this crate already does it: `queue_contention`'s `main.rs` declares
+  carry its own test module, and this crate already does it: `queue_contention`'s
+  [main.rs](crates/windows-platform-probes/src/bin/queue_contention/main.rs) declares
   `mod tests;`, and
   [tests.rs](crates/windows-platform-probes/src/bin/queue_contention/tests.rs) calls
   `render_observation` into a `String` and asserts on the result. So a renderer in a `bin` is
@@ -193,7 +195,7 @@ M34.6 owns that.
   discussion thread, so "can this be captured and asserted end to end?" has real value there rather
   than being architectural tidiness.
 
-- [x] **M34.4** -- Share the native-command guard through a dot-sourced `tools/common.ps1`, route
+- [x] **M34.4** -- Share the native-command guard through a dot-sourced [tools/common.ps1](tools/common.ps1), route
   every capture site through it, and prove it on both PowerShell hosts.
   -> [completed 2026-09-07](COMPLETED-CHECKLIST.md#m344)
 
@@ -230,6 +232,17 @@ M34.6 owns that.
   cited from [COMPLETED-CHECKLIST.md](COMPLETED-CHECKLIST.md); but the choice is the engineer's,
   because the number is referenced from the M37 preamble's "first free number" argument and from
   [PLANS.md](PLANS.md). Decide, then sweep every reference to whichever `M30` moves.
+
+- [ ] **M34.7** -- **Graduate `M26+` now that its gate has lifted.**
+  [CHECKLIST-thread-ambient.md](CHECKLIST-thread-ambient.md)'s three remaining items were parked on
+  the namespace-facility design branch reaching `main`; both
+  [crates/windows-namespace-request-sys](crates/windows-namespace-request-sys) and
+  [crates/windows-thread-ambient-sys](crates/windows-thread-ambient-sys) are there now. The
+  `M{n}+` convention says the milestone that unblocks such items pulls them in and gives them a
+  number, but here the unblocking event was a branch landing rather than a milestone, so there is no
+  number waiting. Pick one in the shared space that `M34.6` is also about -- and note that whichever
+  is chosen, the file becomes deletable once the three are done, since none of its own milestones
+  are outstanding.
 
 ## M37 -- Discharge the failable-call standard across the workspace
 
