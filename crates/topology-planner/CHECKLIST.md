@@ -32,7 +32,7 @@ prerequisites rather than on someone else's decision.
 
 | Milestone | State | What it is waiting on |
 |---|---|---|
-| MR1 design-review reconciliation | 0 done, 7 open | active; work in item order |
+| MR1 design-review reconciliation | 1 done, 6 open | active; work in item order |
 | M1 the input contract | 3 done, 2 open | `EP-1.4` and `EP-1.5`'s coverage half, which want a settled model |
 | M1+ scenario and naming | **partly answered** | the name is settled (EP-D-4); the goal input is deferred for litigation, by direction |
 | M2+ the plan as a value | parked, **and needs re-cutting** | re-cut against EP-D-4/EP-D-5, then the topology reshape landing |
@@ -43,13 +43,7 @@ prerequisites rather than on someone else's decision.
 
 These items are in dependency order. Resolve and commit one item before beginning the next.
 
-- [ ] **EP-R1.1** -- **Settle measurement ownership and its data boundary.** Reconcile the concluded
-  design session's statement that the permissioned synthesizer measures with
-  [EP-D-3](DESIGN-NOTES.md#ep-d-3), [EP-D-5](DESIGN-NOTES.md#ep-d-5), and `EP-1+.4`, which still
-  describe ownership as open or route directed residency cost into `topology-model` through an
-  adapter/synthesizer path. Decide whether measurements are planner working state, persisted model
-  data, or adapter-supplied input; state who collects, validates, retains, and serializes measurement
-  context; and propagate the answer through every current restatement.
+- [x] **EP-R1.1** -- Runtime measurement ownership and its data boundary are settled. -> [completed 2026-09-18](COMPLETED-CHECKLIST.md#ep-r11)
 
 - [ ] **EP-R1.2** -- **Re-cut the four-part architecture into executable component plans.** Create
   dependency-ordered work and reciprocal cross-component handoffs for `topology-model`,
@@ -83,9 +77,12 @@ These items are in dependency order. Resolve and commit one item before beginnin
 - [ ] **EP-R1.7** -- **Complete the contracts and acceptance matrix before implementation.** Plan
   the scenario/goal contract, plan invariants and errors, deterministic policy and tie-breaking,
   measurement permission and failure behavior, callback semantics, JSON compatibility, storage and
-  interconnect policy, routed-hop representation, and synthetic acceptance cases. Include at least
-  ten normal cases plus every identified edge case, and replace "deferred for litigation" with a
-  linked decision or a concrete blocker and graduation trigger.
+  interconnect policy, routed-hop representation, and synthetic acceptance cases. Decide how much
+  higher-level work-item and buffer-flow machinery this project supplies between completed I/O,
+  parsing, serial or parallel processing, workers, and cross-domain migration, including whether
+  existing repository code or the Windows thread pool already owns any part. Include at least ten
+  normal cases plus every identified edge case, and replace "deferred for litigation" with a linked
+  decision or a concrete blocker and graduation trigger.
 
 ## M1: state what the planner needs from the topology
 
@@ -211,10 +208,7 @@ model question -- they are this component's own.
   any of those names are public. This one blocks nothing but should not be settled by whoever writes
   the first type.
 
-- [ ] **EP-1+.4** -- **Assign measurement ownership for directed residency cost in the four-part
-  architecture.** [EP-D-3](DESIGN-NOTES.md#ep-d-3) requires directed cross-domain cost input with
-  measurement context. Record which layer owns collecting, validating, and supplying that measurement
-  context to `topology-model` through the inward adapter/synthesizer path.
+- [x] **EP-1+.4** -- Measurement ownership for directed residency cost is assigned. -> [completed 2026-09-18](COMPLETED-CHECKLIST.md#ep-1+4)
 
 ## M2+: the plan as a value
 

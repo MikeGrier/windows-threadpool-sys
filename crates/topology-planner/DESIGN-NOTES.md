@@ -24,6 +24,7 @@ renamed to match.
 | <a id="ep-d-3"></a>EP-D-3 | **The residency query**: where a domain's pool lives, and which side of a cross-domain pair should host a shared ring. **Ordered**, with directed cost entering through the abstract model/adapter path under [D-20](../windows-topology-sys/DESIGN-NOTES.md#d-20). |
 | <a id="ep-d-4"></a>EP-D-4 | **The four-part architecture, and the planner's name.** The engineer's position: the planner is **`topology-planner`** (no `windows-` prefix); it takes a **goal** description (shape deferred for litigation), queries an **abstracted idealized** model covering processors, memory, storage, interconnects, distances and bottlenecks, and emits a **JSON-serializable, platform-neutral** plan. Two kinds of **adapter** bracket it: one exposing the planner's traits over the Windows topology objects, one **realizing** a plan as buffers, rings and threads with the user's code inserted at the right steps. Settles `MMT-1.5` (the facts crate keeps its `-sys` name), the "two graphs, one word" ambiguity, and where distance lives -- the attributed interconnect shape D-9 sketched goes in the abstract model, so D-9's deferral in the facts crate stands unreopened. |
 | <a id="ep-d-5"></a>EP-D-5 | **The component layout: `topology-model` is its own crate, and dependencies point one way.** The abstract model and the traits the planner queries live in `topology-model`, which the planner and both adapters depend on; non-planner components do not depend on `topology-planner`. Putting the traits in the planner would make a crate whose job is to *describe a machine* depend on one that applies *policy* -- the same defect as `outermost_partitioning_cache`, arriving as a dependency edge instead of an API. Two consequences derived from the same rule rather than decided separately: **the plan type also lives in `topology-model`** (otherwise the realizer depends on the planner), and the inward adapter and the realizer are **separate crates** (their dependency sets barely overlap, and fusing them would make reading a topology pull in the whole runtime). |
+| <a id="ep-d-6"></a>EP-D-6 | **Runtime measurement is a planner-owned campaign over shared measurement mechanisms.** Runtime planning is the normal path, not a fallback: the planner decides what the scenario and current allocation require, sequences and interprets measurements, and stops when it has enough evidence. Neutral request/result contracts live in `topology-model`; platform components execute them; probe tools and the planner use the same underlying kernels. The client repository carries constraints and permissions rather than an exact allocation, and the concrete runtime plan retains the scenario-specific evidence for its choices without promoting it into an abstract machine fact. |
 
 ## EP-D-1: the shard-set query
 
@@ -243,10 +244,10 @@ The planner needs two distinct residency facts:
 ### Boundary alignment with D-20
 
 [D-20](../windows-topology-sys/DESIGN-NOTES.md#d-20) deleted `MachineMemoryTopology::distances` and
-fixed the Win32 boundary for `windows-topology-sys`. Residency-cost data required by the planner
-therefore enters through the abstract model path and the adapter/synthesizer that populates it, not
-through `windows-topology-sys`. That required input remains explicitly directional and must carry
-measurement context with any measured value.
+fixed the Win32 boundary for `windows-topology-sys`. Per [EP-D-6](#ep-d-6), directed residency cost
+is scenario-specific planning evidence rather than a fact inserted into the abstract machine
+description. The planner requests it through a neutral measurement contract, a platform component
+executes the measurement, and the result carries the context that gives the number meaning.
 
 ### Current status
 
@@ -254,8 +255,9 @@ The processor-to-memory-domain half is available from topology memory-domain mem
 keeps the established asymmetry: unknown cache placement can degrade, unknown memory placement has
 no honest default.
 
-The directed-cost half remains an open requirement on `topology-model` plus adapter inputs and stays
-tracked as [CHECKLIST.md](CHECKLIST.md) `EP-1+.4`.
+The directed-cost requirement is settled at the ownership boundary by [EP-D-6](#ep-d-6). Its neutral
+request, result, and evidence vocabulary belongs in `topology-model`; its execution belongs in a
+platform measurement component; and its interpretation belongs to the planner.
 
 ### Historical rationale
 
@@ -384,10 +386,62 @@ the caller did not ask for" rule that decided the layout in the first place.
 
 - **The adapters' names.** Deliberately not settled here; naming has been getting decided by
   whoever writes the first type, and this component has already been renamed once.
-- **Who measures.** Carried forward from [EP-D-4](#ep-d-4) and not resolved by the layout: if
-  distance is a property of the abstract model, measurement plausibly belongs to whatever populates
-  that model. `topology-model` depends on nothing, so it cannot measure; that puts the measurement in
-  an adapter or in a fifth thing.
 - **Whether `topology-model` is one crate or eventually two.** The machine description and the plan
   vocabulary are different enough that they might separate later. They are together now because
   splitting on speculation costs more than merging on evidence.
+
+Measurement ownership is no longer open; [EP-D-6](#ep-d-6) assigns the campaign to the planner and
+execution to shared platform measurement mechanisms.
+
+## EP-D-6: runtime measurement ownership and its data boundary
+
+*The engineer's decision, 2026-09-18. Recorded by [CHECKLIST.md](CHECKLIST.md) `EP-R1.1` and
+`EP-1+.4`.*
+
+### Runtime planning is the primary product
+
+The planner is expected to do almost all matching at runtime, because the machine and NUMA
+allocation available to a deployed process are not reliably known in advance. A checked-in exact
+processor, queue, and buffer arrangement would be brittle across fleet evolution and allocation
+changes. The client instead supplies a topology specification carrying intent, constraints,
+permissions, and acceptable adaptation; the planner matches it to the current allocation and emits
+one concrete plan for that run.
+
+### The planner owns the campaign; providers own mechanisms
+
+The planner decides what must be learned for the scenario and allocation, sequences those
+measurements, interprets their results, and decides when it has enough evidence to produce or refuse
+a plan. The caller authorizes the work through the topology specification, including constraints on
+what may be measured and the resources it may consume.
+
+The neutral measurement request, result, and evidence vocabulary lives in `topology-model`, so the
+planner, probes, and platform implementations share one contract without giving the neutral planner
+a Windows dependency. Platform measurement components execute the operations and return observations;
+they do not choose queue policy.
+
+### Probes and runtime planning share measurement kernels
+
+Developer-facing probes and the autonomous planner use the same underlying measurement mechanisms.
+The probes expose those mechanisms for early dependency evaluation, architecture work, deeper client
+benchmarking, and evidence checked into this repository. The planner invokes them as part of its
+normal runtime campaign. A separate runtime implementation would let the repository demonstrate one
+behavior while deployed decisions depend on another.
+
+### What persists
+
+Scenario-specific measurements are not inserted into the abstract machine description. Their meaning
+depends on direction, payload, queue form, concurrency, and current conditions, so treating them as
+timeless machine facts would erase the context required to interpret them.
+
+The concrete plan retains enough measurement evidence, context, assumptions, and constraint
+resolution to explain why its allocation-specific choices were made. A client may capture that plan
+for diagnostics, but the durable input in the client repository is normally the constraint
+specification rather than the exact runtime result.
+
+### Deferred boundary
+
+How much higher-level work-item and buffer-flow machinery this project supplies remains open. In
+particular, later design work must determine the interface between completed I/O, parsing stages,
+serial and parallel work streams, worker placement, and intentional cross-domain migration, and
+whether existing repository code or the Windows thread pool already supplies any part of it. That
+question is tracked by [CHECKLIST.md](CHECKLIST.md) `EP-R1.7`; EP-D-6 does not answer it.

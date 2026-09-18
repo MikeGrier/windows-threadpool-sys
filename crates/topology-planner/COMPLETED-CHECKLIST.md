@@ -23,3 +23,26 @@
   performance core and a policy tiering them mis-tiers it. Neither fails a functional test. Filed
   against the owning crate as [CHECKLIST-ship-topology-and-queues.md](../../CHECKLIST-ship-topology-and-queues.md)
   -> `SH-16.12`; use `DomainKind::Core { efficiency_class }` meanwhile.
+
+## Moved 2026-09-18 18:53:28 -04:00 -- Settle runtime measurement ownership
+
+### <a id="ep-r11"></a>EP-R1.1 -- Runtime measurement ownership and its data boundary are settled. *(completed 2026-09-18 18:53:28 -04:00)*
+
+Recorded as [EP-D-6](DESIGN-NOTES.md#ep-d-6). The runtime planner owns the autonomous measurement
+campaign: it decides what the scenario and current allocation require, sequences and interprets the
+measurements, and decides when evidence is sufficient. The caller authorizes the campaign through a
+checked-in topology specification. Neutral measurement contracts live in `topology-model`;
+platform-specific components execute them; and developer-facing probes and the planner share the
+same underlying measurement kernels.
+
+Scenario-specific measurements remain planning evidence rather than abstract machine facts. The
+concrete allocation-specific plan retains enough context, assumptions, and results to explain its
+choices. The client repository normally stores constraints and permissions rather than an exact
+processor and queue arrangement.
+
+### <a id="ep-1+4"></a>EP-1+.4 -- Measurement ownership for directed residency cost is assigned. *(completed 2026-09-18 18:53:28 -04:00)*
+
+Completed by [EP-D-6](DESIGN-NOTES.md#ep-d-6). The planner requests and interprets directed
+residency measurements; a platform measurement component executes the neutral request; and the
+result travels with the concrete plan as scenario-specific evidence rather than being inserted into
+the abstract machine description.

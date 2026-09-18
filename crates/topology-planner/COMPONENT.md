@@ -10,22 +10,31 @@ emits a platform-neutral plan, so nothing in it is Windows-specific. See
 
 ## What it is
 
-A **planner**. It takes two inputs and produces a third thing:
+A **runtime planner**. It takes two semantic inputs, may gather allocation-specific evidence, and
+produces a concrete result for the current run:
 
-- **a stated goal** -- what the caller intends the arrangement to achieve. Its shape is deliberately
-  **deferred for litigation**; that is a named deferral, not an omission.
+- **a topology specification** -- what the caller intends the arrangement to achieve, what
+  constraints it must obey, and what runtime characterization it is permitted to perform. Its
+  detailed shape remains open.
 - **an abstracted idealized description of a machine** -- processors, memory, storage, interconnects,
   distances and bottlenecks. Not Windows-shaped, and richer than any single platform reports. It is
   **mockable by construction**: a description of a machine nobody has is an ordinary input, which is
   what makes this component testable without the hardware it plans for.
 
-From those it produces **a plan**: which processors host domains, where each thread pins, which
-memory node each allocates from, what channel connects each pair, and where each channel's buffer
-lives. The plan **serializes to JSON** and stays abstracted from Windows.
+The planner normally runs a permissioned measurement campaign against the current allocation before
+producing **a concrete plan**: which processors host domains, where each thread pins, which memory
+node each allocates from, what channel connects each flow, where each channel's buffer lives, and
+where cross-domain movement is intentional. The plan **serializes to JSON**, stays abstracted from
+Windows, and retains the evidence and assumptions behind its allocation-specific choices.
 
 **It may ask.** Planning is a negotiation, not a pure function: the component may call back to its
 caller through traits for clarifying information the goal did not settle. Which questions those are
 is not yet known, and knowing them is what decides whether that is one trait or several.
+
+**It measures at runtime by default.** The planner owns which scenario-specific questions to ask and
+how their answers shape the plan. Neutral measurement contracts live in `topology-model`; Windows
+components execute them; and the probe tools use the same underlying measurement kernels. See
+[EP-D-6](DESIGN-NOTES.md#ep-d-6).
 
 ## The four components, and which way the arrows point
 
@@ -51,7 +60,8 @@ down: the realizer *executes* a plan and has no business depending on the policy
 **Inward** -- exposes the model's traits over the topology objects already designed, so
 `windows_topology_sys::MachineMemoryTopology` becomes one source feeding the abstract model. It is
 one source among several: storage and interconnect facts do not come from there, and neither do
-measured numbers.
+scenario-specific measurements. The inward adapter translates observed facts; it does not run the
+planner's measurement campaign.
 
 **Outward (the realizer)** -- takes a plan and **realizes** it in the current process: buffers,
 rings and threads, with the user's processing code inserted at the appropriate steps.
