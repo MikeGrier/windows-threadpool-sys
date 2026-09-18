@@ -11,6 +11,7 @@ plans tracker: [crates/windows-file-enumeration-sys/PLANS.md](crates/windows-fil
 [crates/windows-platform-probes/PLANS.md](crates/windows-platform-probes/PLANS.md),
 [crates/windows-thread-ambient-sys/PLANS.md](crates/windows-thread-ambient-sys/PLANS.md),
 [crates/windows-threadpool-sys/PLANS.md](crates/windows-threadpool-sys/PLANS.md),
+[crates/topology-planner/PLANS.md](crates/topology-planner/PLANS.md),
 [crates/windows-topology-sys/PLANS.md](crates/windows-topology-sys/PLANS.md),
 [crates/windows-waitable-queues/PLANS.md](crates/windows-waitable-queues/PLANS.md), and
 [crates/wtf-string/PLANS.md](crates/wtf-string/PLANS.md). Checklists whose work is finished move to
