@@ -157,8 +157,10 @@ model question -- they are this component's own.
   are graphs of processors and their relations, so "topology" fits all of them and distinguishes
   none -- and a reader seeing the word twice will eventually take one for the other. Decide whether
   the observed machine keeps the bare name (qualified only by its crate), gains a qualifier, or is
-  renamed outright, and what the synthesized arrangement is called. Cheap now; expensive once either
-  name is public. This one blocks nothing but should not be settled by whoever writes the first type.
+  renamed outright; what the synthesized arrangement is called; and whether the inward/outward
+  adapters keep those role names or gain more specific crate/type names. Cheap now; expensive once
+  any of those names are public. This one blocks nothing but should not be settled by whoever writes
+  the first type.
 
 - [ ] **EP-1+.4** -- **Assign measurement ownership for directed residency cost in the four-part
   architecture.** [EP-D-3](DESIGN-NOTES.md#ep-d-3) requires directed cross-domain cost input with
