@@ -37,7 +37,9 @@ is not yet known, and knowing them is what decides whether that is one trait or 
 | the outward adapter (the realizer) | Windows | `topology-model`, the runtime crates |
 
 `topology-model` holds the abstract machine description, **the traits the planner queries**, and
-**the plan type**. Everything depends on it; **nothing depends on this crate**.
+**the plan type**. Everything depends on it; components that only describe or realize topology
+depend on `topology-model` and do not depend on this crate. Callers that need planning policy do
+depend on this crate.
 
 That is the whole point of the arrangement. If the traits lived here, an adapter whose only job is
 to describe a machine would have to depend on a planner, and anyone wanting to read a topology would
