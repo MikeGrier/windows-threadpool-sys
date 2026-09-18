@@ -33,10 +33,10 @@ prerequisites rather than on someone else's decision.
 
 | Milestone | State | What it is waiting on |
 |---|---|---|
-| MR1 design-review reconciliation | 2 done, 6 open | active; work in item order |
-| M1 the input contract | 3 done, 2 open | `EP-1.4` and `EP-1.5`'s coverage half, which want a settled model |
-| M1+ scenario and naming | **partly answered** | the name is settled (EP-D-4); the goal input is deferred for litigation, by direction |
-| M2+ the plan as a value | parked, **and needs re-cutting** | re-cut against EP-D-4 through EP-D-7, then the topology reshape landing |
+| MR1 design-review reconciliation | 3 done, 5 open | active; work in item order |
+| M1 the input contract | 3 done, 2 open | `EP-1.4` waits on EP-R1.7; `EP-1.5`'s coverage half is EP-R1.6 |
+| M1+ scenario and naming | 1 done, 3 open | EP-R1.5 settles remaining names; EP-R1.7 owns the topology specification and callbacks |
+| M2+ the plan as a value | parked, **and needs re-cutting** | MR1, then EP-R1.8 and the resulting `topology-model` work |
 | M3+ the policies | parked | M2+ |
 | M-inf parked | ungated | not scheduled, deliberately |
 
@@ -48,10 +48,7 @@ These items are in dependency order. Resolve and commit one item before beginnin
 
 - [x] **EP-R1.2** -- The five-component architecture and its dependency order are settled. -> [completed 2026-09-18](COMPLETED-CHECKLIST.md#ep-r12)
 
-- [ ] **EP-R1.3** -- **Remove stale gates and make current work states truthful.** Reconcile the
-  milestone table and item bodies with the concluded locality-model session and the shipped
-  `windows-topology-sys` reshape. `EP-1.4`, the coverage half of `EP-1.5`, M1+, and M2+ must name
-  their real current prerequisites rather than waiting on work that has already landed.
+- [x] **EP-R1.3** -- Stale external gates are replaced by the component's real internal dependencies. -> [completed 2026-09-18](COMPLETED-CHECKLIST.md#ep-r13)
 
 - [ ] **EP-R1.4** -- **Correct query totality versus order totality everywhere.** The locality
   relation is a partial order with a top and may contain incomparable minimal shared granularities;
@@ -135,33 +132,16 @@ whether the topology can answer it today -- so the model is designed against a r
   `windows-topology-sys`; they are requirements on `topology-model` and the adapter that populates it.
   Historical trigger analysis remains in [DESIGN-RATIONALE.md](DESIGN-RATIONALE.md#ep-d-3-rationale-and-history).
 
-- [ ] **EP-1.4** -- **What the planner does with an unanswered query**, given the model's bar is
-  that it answers without further measurement. A fact that was not observed cannot be acquired at
-  planning time, so decide per query whether the planner degrades to a documented weaker policy,
-  refuses to plan, or emits a plan carrying an explicit "this was chosen without knowing X" marker.
-  The third is the only one that survives review of a plan by a human, which is one of the reasons
-  a plan is a value.
-  **BLOCKED, and not merely because it is downstream.** EP-1.1 through EP-1.3 push requirements
-  *into* the model's design, which is why they were worth doing against today's model and found real
-  defects in it. This item reads behaviour *out* of the model -- it asks what the planner does when
-  the answer is "not observed", a state the model cannot currently express reliably -- so doing it
-  now would be analysing a shape that does not exist yet.
-  **It is also a duplicate.** The design session's fourth open question, "what a consumer does when a
-  needed fact is `not measured`", is this same decision seen from the model's side; the two were
-  filed independently before anyone noticed. Taken separately they can disagree: a planner that
-  degrades in a way the model does not support, or a model offering a fallback no consumer wants.
-  Answer them together, in the session.
-  **Narrowed by [D-19](../windows-topology-sys/DESIGN-NOTES.md#d-19).** The item says "decide per
-  query", and that is now more work than the model requires. A subject the two sources genuinely
-  contested is one the unified view does not cover, which is indistinguishable from not-observed to a
-  consumer -- so this is one decision about one degradation path, not one per reason a fact is
-  missing. The three candidate behaviours are unchanged.
-  **And it is no longer a duplicate**, per [D-21](../windows-topology-sys/DESIGN-NOTES.md#d-21).
-  `windows-topology-sys` publishes a refined view of what the platform publishes; what a consumer
-  *does* with an unobserved fact is not a question about that view. That crate owes only that the
-  absence be representable and distinguishable, which its `M2+.5` implements. `MMT-1.3` is closed on
-  those grounds, so **this item is now this component's decision alone** -- there is nothing left to
-  take jointly, and it no longer blocks anything in the model crate.
+- [ ] **EP-1.4** -- **What the planner does when required evidence remains unavailable.** Runtime
+  characterization may answer a fact the initial machine observation did not, but measurement can
+  be disallowed, fail, exceed its budget, or remain inconclusive. Decide when the planner adapts to
+  a documented weaker policy, emits a plan carrying an explicit assumption or unresolved constraint,
+  or refuses to plan.
+  **Unblocked and owned here.** [D-21](../windows-topology-sys/DESIGN-NOTES.md#d-21) requires
+  `windows-topology-sys` only to state policy-free platform facts and distinguish absence; it does
+  not decide consumer behavior and will not be reshaped to match the planner's goal. The remaining
+  decision depends on the topology-specification, measurement-permission, and plan-evidence
+  contracts, so it is resolved with `EP-R1.7`.
 
 - [ ] **EP-1.5** -- **Hand the resulting requirements to the design session** as the consumer-side
   input it asked for, and record in the session which of them the settled model answers and which
@@ -177,18 +157,17 @@ whether the topology can answer it today -- so the model is designed against a r
   [windows-topology-sys](../windows-topology-sys/COMPLETED-CHECKLIST.md) `M4+.1` the ordered collection is the
   surface and the pairwise query is derived from it, because an answer obliged to carry the block
   containing both processors is a question about the partition rather than about the pair.
-  The *coverage* half -- recording which requirements the settled model answers and which it
-  deliberately does not -- can only be written once there is a settled model. It stays open here.
-  > **-> CROSS-COMPONENT HANDOFF:** next work is in the repository root ->
-  > [DESIGN-SESSION-2026-09-02-cache-locality-model.md](../../design-sessions/DESIGN-SESSION-2026-09-02-cache-locality-model.md)
-  > -> `SH-16.8` in
-  > [CHECKLIST-ship-topology-and-queues.md](../../CHECKLIST-ship-topology-and-queues.md).
+  **The old gate has cleared.** The locality-model session concluded and the Windows topology
+  reshape shipped. The coverage half is now an in-component documentation action under `EP-R1.6`:
+  record which requirements are available as policy-free Windows facts, which the inward adapter
+  translates into the client-shaped neutral model, and which require planner-owned runtime
+  measurement.
 
 ## M1+: the scenario input, and the naming
 
 Raised when the engineer described this component's function, which turned out to be richer than
-"takes a topology, applies policy". Both are gated on the locality-model session, but neither is a
-model question -- they are this component's own.
+"takes a topology, applies policy". No external model work gates these items. `EP-R1.5` owns the
+remaining names, while `EP-R1.7` owns the topology specification and callback contract.
 
 - [ ] **EP-1+.1** -- **Describe the scenario input.** The synthesizer takes *two* inputs and only one
   is described anywhere. The scenario says what the caller intends to run, and it is what makes a
@@ -215,8 +194,9 @@ model question -- they are this component's own.
 
 ## M2+: the plan as a value
 
-Parked, not pending. Gated on the topology model landing. Shape recorded so it is not lost, per the
-`M{n}+` convention.
+Parked, not pending. The Windows topology reshape has already shipped. This work waits on MR1,
+`EP-R1.8`'s component-local plans, and implementation of the resulting shared `topology-model`
+contracts. Shape recorded so it is not lost, per the `M{n}+` convention.
 
 - [ ] **M2+.1** -- The plan type: domains, each with its processor, its memory domain and its
   channels; inspectable and comparable, constructible against a synthetic topology so a machine

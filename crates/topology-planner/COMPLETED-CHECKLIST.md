@@ -66,3 +66,18 @@ hardware timing evidence.
 Final component-local checklists require the names and contracts still owned by `EP-R1.5` and
 `EP-R1.7`. Their materialization is scheduled as `EP-R1.8` rather than performed under provisional
 crate names.
+
+## Moved 2026-09-18 19:28:20 -04:00 -- Replace stale external gates
+
+### <a id="ep-r13"></a>EP-R1.3 -- Stale external gates are replaced by the component's real internal dependencies. *(completed 2026-09-18 19:28:20 -04:00)*
+
+The locality-model session concluded and the Windows topology reshape shipped, so neither remains a
+gate. `EP-1.4` now waits on the topology-specification and plan-evidence contracts in `EP-R1.7`;
+`EP-1.5`'s coverage half is assigned to `EP-R1.6`; M1+ maps to `EP-R1.5` and `EP-R1.7`; and M2+
+waits on MR1, `EP-R1.8`, and the resulting `topology-model` implementation.
+
+The reconciliation also restates the boundary owned by
+[D-21](../windows-topology-sys/DESIGN-NOTES.md#d-21): `windows-topology-sys` is a policy-free,
+directionless, memory-safe elevation of Win32 processor and memory topology facts. A mismatch with
+the planner's goal is handled in the adapter or neutral model rather than by reshaping that facts
+crate; defects in the facts layer are still fixed at their source.

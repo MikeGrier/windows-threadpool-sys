@@ -84,6 +84,12 @@ Because two different kinds of statement were being made by one crate.
 granularity, how that was established, and what was measured. It never says "use an SPSC ring
 here", because that is not a fact about the machine.
 
+Per [D-21](../windows-topology-sys/DESIGN-NOTES.md#d-21), it is a policy-free, directionless,
+memory-safe elevation of the processor and memory topology facts exposed by the Win32 APIs. A shape
+that does not directly match this planner's goal is an adapter or neutral-model concern, not a reason
+to reshape the facts crate. An actual defect in those facts or their memory-safe elevation is still
+fixed at its source.
+
 **This crate applies policy.** One domain per core or per thread? Are efficiency cores peers or
 excluded? SPSC everywhere, or SPSC within a cache domain and something else across one? Those are
 choices, they depend on the workload, and reasonable clients will differ.
@@ -100,9 +106,10 @@ consumers then re-derived differently. See
 partitions the machine, or reconstruct a mapping the model already knows, the seam is wrong and the
 missing query belongs in `topology-model` -- or, if it is a Windows fact, in the inward adapter.
 
-That test is the reason this component is being planned *before* the topology model is finished
-rather than after: its input requirements are the concrete statement of what the model has to
-answer, and they feed the open design session directly.
+That test is why this component's requirements were written before the Windows topology reshape:
+they gave the concluded locality-model session a real consumer to test against. The reshape has now
+shipped. Those requirements remain evidence and adapter input, while the client-shaped
+`topology-model` contract is this component family's own work.
 
 ## Why it is not the runtime either
 
@@ -123,12 +130,11 @@ runtime.
 
 ## Status and gating
 
-**Deferred past PR #56, by the engineer's direction.** This component contributes only planning
-documents to that PR and no code. The topology reshape it fed requirements into is landing there
-without it, because [D-21](../windows-topology-sys/DESIGN-NOTES.md#d-21) establishes that
-`windows-topology-sys` publishes a refined view of what the platform publishes and an **adapter**
-absorbs whatever this component needs beyond that -- so the reshape is self-justified and the two are
-no longer coupled.
+**Deferred past PR #56, by the engineer's direction.** This component contributed only planning
+documents to that effort and no code; PR #56 later closed unmerged. The topology reshape shipped by
+another route without this component, because [D-21](../windows-topology-sys/DESIGN-NOTES.md#d-21)
+establishes that `windows-topology-sys` publishes a refined view of what the platform publishes and
+an adapter absorbs whatever this component needs beyond that. The two are no longer coupled.
 
 The design session that previously blocked this component has concluded: its questions were answered
 as `D-13` through `D-21` in
