@@ -6,15 +6,18 @@ against and other people can run it on hardware this workspace does not own.
 
 ## Where this stands
 
-The release has not happened. PR #56 was opened from `mikegrier/deferred-namespace-ops` on
-2026-08-31 and **closed unmerged on 2026-09-15**. Its content is landing in peeled pieces instead:
-the first merged as PR #94, and this branch is the second. The milestones below were written while
-#56 was open, and describe it in the present tense.
+Both crates are published: `windows-topology-sys` 0.2.0 and `windows-waitable-queues` 0.1.0 reached
+crates.io on 2026-09-05, neither yanked. They did not arrive by the route below. PR #56 was opened
+from `mikegrier/deferred-namespace-ops` on 2026-08-31 and **closed unmerged on 2026-09-15**; the
+content is landing in peeled pieces instead, the first of which merged as PR #94, and this branch is
+the second. The milestones below were written while #56 was open and describe a path that was not
+taken, so M4 still reads as though nothing has shipped -- SH-4.15 owns reconciling it.
 
 **Milestone numbers are not a running order.** M7 through M15 are *review rounds on PR #56*, so they
 happened **inside M3**, between the pull request opening and a merge that never came. Reading the
 file top to bottom puts the review of a pull request after the merge that closes it, which is
 backwards. Only M1 through M6 are a sequence.
+
 | Milestone | State | What it is waiting on |
 |---|---|---|
 | M1 settle the public surface | **done, archived** | -- |
@@ -710,6 +713,26 @@ that previously stood in the way are gone:
   probe is "not on crates.io yet", implying a registry publication that `publish = false` ruled out.
   Fix together by parsing the workflow structure rather than adding anchors until the next false
   green.
+
+- [ ] **SH-4.15** -- **Reconcile M4 with what actually shipped.** Both crates reached crates.io on
+  2026-09-05 -- `windows-topology-sys` 0.2.0 and `windows-waitable-queues` 0.1.0, neither yanked --
+  by a route this file does not describe, since PR #56 closed unmerged. Several items now instruct
+  or assume the opposite of what happened, and three are confirmed rather than suspected:
+  - **SH-4.3** reasons from "a crate that has never been published -- so 0.1.0 would be skipped
+    entirely". 0.1.0 is what shipped, so the premise and its conclusion are both gone.
+  - **SH-4.2** says to update `windows-ioring-sys` to the published 0.2.0 and release it "per the
+    order settled in SH-2.2" -- but SH-2.2 is checked and concludes that decision "does not arise",
+    the topology dependency being a dev-dependency only. The item instructs what its own cited
+    authority rejected.
+  - **SH-15.9** schedules a `reserving_mpsc_wide` peer. That shape was never built: the 128-bit word
+    ships as a layout inside `reserving_mpsc` per `D-37` as amended by `D-41`, and
+    [reserving_mpsc.rs](crates/windows-waitable-queues/src/reserving_mpsc.rs) says so in its module
+    documentation.
+
+  This is a re-plan, not a correction, which is why it is one item rather than edits scattered
+  through M4 and M15: deciding which of these are done, which are void and which survive in an
+  altered form is the engineer's call. Do not check items off without that decision -- a release
+  plan that says a shipped crate is unshipped is the safer of the two failure modes.
 
 ## M5: verify from outside the workspace
 

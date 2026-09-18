@@ -13,19 +13,22 @@ tool by the length of the entire release sequence -- including M6's stress work 
 - **CI-built binaries are compiled from this repository**, so the tool's dependencies resolve through
   `path` and nothing has to exist on crates.io. **PT-5.1 is therefore not gated at all**, and it is the
   distribution that matters: the download is the provenance, per PT-3.2.
-- **GATED BY [CHECKLIST-ship-topology-and-queues.md](CHECKLIST-ship-topology-and-queues.md) SH-4.1
-  (topology 0.2.0) and SH-4.3 (queues 0.1.0): PT-5.3 only**, publishing the tool to crates.io, where a
-  path dependency needs a real published version behind it. **This bullet is the gate of record; when
-  those land, edit it to say so and name the two versions.** A gate that has silently lifted is as
-  harmful as one that has not.
+- **NOT GATED: the publication this gate existed for is withdrawn.** This bullet used to gate PT-5.3
+  on [CHECKLIST-ship-topology-and-queues.md](CHECKLIST-ship-topology-and-queues.md) SH-4.1 (topology
+  0.2.0) and SH-4.3 (queues 0.1.0), because a path dependency needs a real published version behind
+  it to reach crates.io. **PT-5.6 withdrew that publication**: `windows-placement-probe` is
+  `publish = false` and is never published to a registry, so the prerequisite is void. Both crates
+  shipped in any case, on 2026-09-05. Rewritten rather than deleted, because a gate that has
+  silently lifted is as harmful as one that has not.
 
 M1B and M6 are outside all of this and say so where they are defined.
 
-**Gated on shipping [crates/windows-topology-sys](crates/windows-topology-sys) and
-[crates/windows-waitable-queues](crates/windows-waitable-queues) first.** Not a preference: the tool
-depends on the former, and calibrates against the latter's `spsc`. Both are `0.1.0` and the topology
-crate now carries an unreleased breaking change (`feat(topology)!`), so it wants a release before
-anything downstream is published against it.
+**Both dependencies have shipped.** The tool depends on
+[crates/windows-topology-sys](crates/windows-topology-sys) and calibrates against
+[crates/windows-waitable-queues](crates/windows-waitable-queues)'s `spsc`. Topology 0.2.0 -- the
+release carrying the breaking change this paragraph used to call unreleased -- and queues 0.1.0 both
+reached crates.io on 2026-09-05, so nothing here waits on them. CI builds the tool from this
+repository through `path` regardless.
 
 **Why a new crate rather than publishing the existing probes.**
 [crates/windows-platform-probes](crates/windows-platform-probes) is `publish = false`, `version =

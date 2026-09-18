@@ -115,7 +115,7 @@ checklists -- [CHECKLIST-placement-tool.md](CHECKLIST-placement-tool.md),
 [CHECKLIST-ship-topology-and-queues.md](CHECKLIST-ship-topology-and-queues.md) and
 [CHECKLIST-mutation-survivors.md](CHECKLIST-mutation-survivors.md) -- number from M1 independently and
 are not part of that space. M30 is currently used twice inside it, by this file and by io-domains;
-M34.4 owns that.
+M34.6 owns that.
 - [x] **M34.1** -- Promote the ad-hoc sabotage harness into a reusable tool. -> [completed 2026-08-31](COMPLETED-CHECKLIST.md#m341)
 
 - [ ] **M34.3** -- **Archive the completed bodies in the three root checklists that still carry
@@ -175,11 +175,17 @@ M34.4 owns that.
   refactor alone -- an abstraction introduced without a capture-based test spends the cost and skips
   the benefit. `Captured` exists in [report.rs](crates/windows-platform-probes/src/report.rs) for
   exactly that purpose, and `banner_line` is already asserted directly.
-  **The obstacle: each probe's `render()` lives in its own `bin` target, which nothing can import.**
-  That is precisely why the two banner defects survived every test -- there was no reachable seam to
-  assert against. Closing it means moving each `render()` into the crate's library and leaving `main`
-  as the one place that names the stream, which is a real refactor rather than a test to write.
-  Decide the seam once and apply it uniformly.
+  **The obstacle is narrower than this item first claimed.** It said each probe's `render()` lives in
+  a `bin` target "which nothing can import", and concluded that closing the gap means moving every
+  `render()` into the crate's library. A `bin` target cannot be imported from *outside*, but it can
+  carry its own test module, and this crate already does it: `queue_contention`'s `main.rs` declares
+  `mod tests;`, and
+  [tests.rs](crates/windows-platform-probes/src/bin/queue_contention/tests.rs) calls
+  `render_observation` into a `String` and asserts on the result. So a renderer in a `bin` is
+  testable where it stands, and no library extraction is required to reach one. What the two banner
+  defects actually needed was a test, not a seam. Extraction may still be worth doing to share one
+  sink across probes -- that is the item's other half -- but it is not a precondition for asserting
+  on a report.
   A PowerShell sink is a function whose destination can be swapped, but this workspace runs no
   PowerShell test harness in which to assert against it, and inventing one to cover five diagnostic
   scripts is not a cost this item is willing to spend without deciding to adopt such a harness first.
@@ -213,7 +219,7 @@ M34.4 owns that.
   Whatever is chosen must be verified by **re-injecting this exact weld** and confirming the gate
   goes red, since the point of the item is that the current one does not.
 
-- [ ] **M34.4** -- **Resolve the `M30` collision inside the shared milestone space.** This file's
+- [ ] **M34.6** -- **Resolve the `M30` collision inside the shared milestone space.** This file's
   `M30` (machine-checkable correctness, M30.1-M30.5 open) and
   [CHECKLIST-io-domains.md](CHECKLIST-io-domains.md)'s archived `M30` (the queue crate's name,
   skeleton and SPSC shape) are different work under one number, and their sub-items collide too:
