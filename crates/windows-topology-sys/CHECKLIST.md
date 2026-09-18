@@ -19,5 +19,5 @@ Two things were deliberately left out of the reshape rather than forgotten:
 
 - **The planner adapters.** Per [D-21](DESIGN-NOTES.md#d-21) this crate is the refined view of what the
   platform publishes and is self-justified as such; the adapter onto
-  topology-planner's traits belongs on the planner's side of the
+  [topology-planner](../topology-planner/CHECKLIST.md)'s traits belongs on the planner's side of the
   boundary, and is planned there.

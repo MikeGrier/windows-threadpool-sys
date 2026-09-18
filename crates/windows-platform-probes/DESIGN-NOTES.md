@@ -2259,11 +2259,18 @@ The second was pre-existing and unrelated: a conflict resolution in merge
 `1abcaaf` had welded a step's `if:` and `run:` onto one line, which is not valid
 YAML. It survived the merge and the repository's own workflow gate, which checks
 references by regex without parsing the document. The welded step is fixed here.
-**The gate's own gap is recorded and not yet queued**: giving it an owner means
-deciding where a workflow-parsing check belongs, which is a repository-level call
-rather than this crate's, and no checklist item exists for it. Naming the absence
-is the point -- a design note cannot schedule work, so an unqueued gap has to be
-visible as unqueued rather than described as though something will pick it up.
+**The gate's own gap is queued as `M34.5`** in this branch's root
+[CHECKLIST.md](../../CHECKLIST.md) -- validate that every workflow file is
+well-formed YAML, which nothing currently does. Giving it an owner meant deciding
+where a workflow-parsing check belongs, which is a repository-level call rather
+than this crate's, and the root checklist is where that lands.
+
+**This paragraph reads differently on `main`, and deliberately so.** The version
+merged from there says the gap is recorded and not yet queued, because `main` has
+no `M34` for it to belong to -- the milestone is this branch's. A design note
+cannot schedule work, so it has to name the item that does when one exists and
+name the absence when one does not; which of those is true depends on the
+lineage, and each side says what is true of itself.
 
 Both are the same lesson this milestone keeps producing: the failure mode of a
 check is to pass.
