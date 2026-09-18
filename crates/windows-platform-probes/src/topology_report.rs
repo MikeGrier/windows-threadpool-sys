@@ -142,9 +142,21 @@ use crate::topology::{
 /// [`preamble`], which has to recognise an attribution-shaped banner to pass it
 /// through. A second copy of this sentence in the recogniser would be a
 /// restatement that could drift out of step with the one that writes it.
+///
+/// **It does not mention the body, and that is a correction.** It used to say
+/// which reading "names the machine the body below describes was not
+/// established", which was wrong in both directions once `measured` existed.
+/// When a measured read is passed, the body's machine IS known -- the measured
+/// reading names it by construction, and what the differing brackets leave
+/// unestablished is whether the machine held still, not which reading the body
+/// belongs to. And `report_unmeasured` renders this banner over a report with
+/// no topology body at all, so "the body below" referred to nothing there.
+///
+/// [`NOT_ESTABLISHED`] already had the right shape and this now matches it:
+/// state what the readings did, and what that leaves unconfirmed, without
+/// reaching forward to a body that may not exist.
 const READINGS_DISAGREE: &str = "HOST READINGS DISAGREE: the two readings that bracket the measurement\n\
-     differ, so which of them names the machine the body below describes\n\
-     was not established.";
+     differ, so nothing confirmed the machine held still under it.";
 
 /// The disclaimer `attribution` renders when at least one bracket read failed.
 const NOT_ESTABLISHED: &str = "HOST NOT ESTABLISHED: at least one of the two readings that bracket the measurement\n\
@@ -162,6 +174,13 @@ const NOT_ESTABLISHED: &str = "HOST NOT ESTABLISHED: at least one of the two rea
 /// record, so three reads of one unchanged machine can disagree. With no
 /// disclaimer for it, that host printed an unqualified banner while the run
 /// held the evidence against it.
+///
+/// **This one keeps its reference to the body, and the reason is reachability.**
+/// [`READINGS_DISAGREE`] lost its equivalent phrase because it renders on the
+/// `report_unmeasured` path, where there is no body to point at. This arm needs
+/// a measured read, and the unmeasured path has none by definition -- so
+/// wherever it is emitted, a body exists and the measured reading describes it.
+/// That holds by what the arm requires, not by a caller remembering.
 const MEASURED_UNCONFIRMED: &str = "HOST READING UNCONFIRMED: the two readings that bracket the measurement agree\n\
      with each other but not with the read the body below describes, so one of\n\
      the three discoveries did not see what the others saw.";
