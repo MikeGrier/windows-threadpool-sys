@@ -245,7 +245,8 @@ The planner needs two distinct residency facts:
 [D-20](../windows-topology-sys/DESIGN-NOTES.md#d-20) deleted `MachineMemoryTopology::distances` and
 fixed the Win32 boundary for `windows-topology-sys`. Residency-cost data required by the planner
 therefore enters through the abstract model path and the adapter/synthesizer that populates it, not
-through `windows-topology-sys`.
+through `windows-topology-sys`. That required input remains explicitly directional and must carry
+measurement context with any measured value.
 
 ### Current status
 
