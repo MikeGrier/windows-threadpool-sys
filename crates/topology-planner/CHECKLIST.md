@@ -120,7 +120,7 @@ item; do not start `EP-R1.8` merely because one experiment has finished.
 
 ## Experiment execution rules for MX1 through MX3
 
-**Further experiment execution is paused pending `EP-R1.7.1`; the authorized EP-X2.1 is complete.**
+**Only EP-X2.2 is now authorized as an offline behavioral experiment; other execution remains paused pending `EP-R1.7.1`.**
 [EP-D-10](DESIGN-NOTES.md#ep-d-10) remains the startup constraint. The shared NUMA
 validation policy is [EP-D-11](DESIGN-NOTES.md#ep-d-11); physical hardware is not an item
 or milestone gate. Other items retain their work and remain
@@ -222,6 +222,11 @@ same item ID; do not create an unowned implementation queue.
 - [x] **EP-X2.1** -- Validate placement and directed buffer-transfer behavior. -> [completed 2026-09-19](COMPLETED-CHECKLIST.md#ep-x21)
 
 - [ ] **EP-X2.2** -- **Compare shared completion service with assigned request lanes.**
+  **Authorized standalone scope:** implement in `experiments/request-reply` using the
+  protocol in [DESIGN-NOTES.md](experiments/request-reply/DESIGN-NOTES.md). Bring its
+  deterministic steady/burst arrival traces into this item without closing EP-X1.4.
+  This exception does not settle the production startup budget, resume other items,
+  require physical NUMA hardware or establish performance acceptance thresholds.
   **Question:** how do shared workers and explicit ownership respond to independent
   request/reply work and imbalance? **Controls:** implement both as genuine candidates
   over one backend, with the same request/reply semantics, worker ceiling, outstanding-work
@@ -231,7 +236,9 @@ same item ID; do not create an unowned implementation queue.
   from ownership locality; do not preselect pinning or invent an MPMC queue from an MPSC API.
   > **CROSS-COMPONENT PREREQUISITE:** `experiments/read-checksum` -> `MX2` ->
   > `EP-X2.1` has returned its [behavioral coverage](COMPLETED-CHECKLIST.md#ep-x21).
-  > This item still waits on EP-R1.7.1 scope reconciliation, not physical NUMA hardware.
+  > **-> CROSS-COMPONENT HANDOFF:** implementation moves to `experiments/request-reply`
+  > -> `MX2` -> `EP-X2.2`; its [PLANS.md](experiments/request-reply/PLANS.md) points here.
+  > Return to parent EP-R1.7 for the behavioral findings and path disposition.
 
 - [ ] **EP-X2.3** -- **Compare shared state with key-owned processing.**
   **Question:** when do routing and ownership change the cost of a stateful workload?

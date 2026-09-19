@@ -319,3 +319,16 @@ state. Existing live tests and captures remain separate; no NUMA timing fidelity
 claimed. The one physical follow-up remains `EP-HW.1`, and future component adoption
 is queued in [CHECKLIST.md](CHECKLIST.md) -> `EP-R1.8`. The discussion continues in
 [DESIGN-SESSION-2026-09-18-topology-first-startup.md](design-sessions/DESIGN-SESSION-2026-09-18-topology-first-startup.md#follow-up-consistent-faux-numa).
+
+## EP-X2.2: independent requests before further tuning
+
+The engineer requested EP-X2.2 after placement validation and approved a standalone
+offline behavioral experiment despite the broader scope hold. Its absent steady/burst
+trace prerequisite is implemented locally; that does not mark EP-X1.4 done or make
+startup run application workloads. A bounded MPMC channel provides one common backend
+for shared competing receivers and dedicated lane queues, without changing the SPSC/MPSC
+contracts of the repository queues. Equal outstanding credits bound admitted requests
+including their terminal replies, rather than merely queue occupancy.
+The protocol and disposition live in
+[DESIGN-NOTES.md](experiments/request-reply/DESIGN-NOTES.md); the single action queue
+remains [CHECKLIST.md](CHECKLIST.md) -> `EP-X2.2`.

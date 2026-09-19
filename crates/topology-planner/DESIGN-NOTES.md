@@ -650,6 +650,9 @@ combinations, with contextual evidence kept distinct from discovered attachment.
 
 **Offline exception:** the engineer has authorized [CHECKLIST.md](CHECKLIST.md) -> `EP-X2.1`
 with its generated-buffer prerequisite and local captures while `EP-R1.7.1` remains open.
+The subsequent `EP-X2.2` request/reply experiment is also explicitly authorized offline,
+including its deterministic steady/burst traces, under its
+[DESIGN-NOTES.md](experiments/request-reply/DESIGN-NOTES.md). Other work stays paused.
 Physical NUMA fidelity is tracked once under [EP-D-11](#ep-d-11), not as a completion
 gate on that item. This does not change the startup constraint.
 
