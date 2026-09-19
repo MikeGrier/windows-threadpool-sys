@@ -1,0 +1,54 @@
+{
+  "package": "windows-request-reply-experiment",
+  "description": "Actual request routing, reply correlation, evidence origin and oracle binding, with an equivalent compute-chunk control.",
+  "sabotages": [
+    {
+      "name": "assigned requests all enter worker zero",
+      "file": "src/engine.rs",
+      "expect": "caught",
+      "why": "Assigned replies must name the requested lane's worker, including nonzero cold lanes.",
+      "find": "Arrangement::Assigned => request.lane",
+      "replace": "Arrangement::Assigned => 0"
+    },
+    {
+      "name": "terminal replies lose request identity",
+      "file": "src/engine.rs",
+      "expect": "caught",
+      "why": "The real collector and common verifier must reject duplicate or unknown correlation IDs.",
+      "find": "id: job.request.id,",
+      "replace": "id: 0,"
+    },
+    {
+      "name": "responses hide pre-admission waiting",
+      "file": "src/engine.rs",
+      "expect": "caught",
+      "why": "Recorded response origin must be the trace's scheduled arrival, not successful admission.",
+      "find": "scheduled_ns: job.request.at_ns,",
+      "replace": "scheduled_ns: job.admitted_ns,"
+    },
+    {
+      "name": "runner skips the shared verifier",
+      "file": "src/engine.rs",
+      "expect": "caught",
+      "why": "A deliberately incorrect service reply must fail through the consumer, not only in direct verifier tests.",
+      "find": "verify(&report)?;",
+      "replace": "let _ = &report;"
+    },
+    {
+      "name": "global credit guard is disabled",
+      "file": "src/engine.rs",
+      "expect": "caught",
+      "why": "Queued, running and completed-but-uncollected requests share one ceiling, not one ceiling per worker.",
+      "find": "pending.len() < config.capacity",
+      "replace": "pending.len() < config.capacity * 4"
+    },
+    {
+      "name": "equivalent smaller service chunks",
+      "file": "src/engine.rs",
+      "expect": "survives",
+      "why": "Cancellation-check cadence changes without changing the request result or ownership/credit contract.",
+      "find": "const COMPUTE_CHUNK: u32 = 256;",
+      "replace": "const COMPUTE_CHUNK: u32 = 128;"
+    }
+  ]
+}

@@ -194,3 +194,34 @@ costs. Physical fidelity remains solely EP-HW.1, non-blocking for completion.
 > `EP-R1.7.1` for scope reconciliation in [CHECKLIST.md](CHECKLIST.md).
 > EP-X2.2 is not started by this completion; its hardware gate is discharged by policy,
 > and its scope hold remains unchanged.
+
+## Moved 2026-09-19 01:23:05 -07:00 -- Independent request/reply candidates
+
+### <a id="ep-x22"></a>EP-X2.2 -- Compare shared completion service with assigned request lanes. *(completed 2026-09-19 01:23:05 -07:00)*
+
+Implemented separate shared competing-receiver and assigned-lane layouts over the
+same bounded MPMC channel backend. Both use equal worker/aggregate queue/credit
+budgets, deterministic steady/burst and skewed service traces, a fixed blocking
+idle policy, correlated terminal replies and joined cancellation/rundown. The
+common verifier checks identities, reference results, owner assignments, scheduled
+latency origin, credit conservation and worker/per-lane census. Tests accept legal
+reordering and reject corruption, ownership errors and resource violations.
+
+The [demonstration](experiments/request-reply/captures/2026-09-19/README.md) retains
+raw outcomes, per-lane/aggregate response distributions, service-active wall time,
+pressure and same-code retakes. No pinning, NUMA inference, throughput ranking or
+performance acceptance threshold was introduced. Both candidates are retained
+under [DESIGN-NOTES.md](experiments/request-reply/DESIGN-NOTES.md) -> `RR-D4`.
+The working proposal now points to its ownership/admission/outcome requirements.
+
+Package tests, live CLI checks, doctests, formatting, workspace Clippy and sabotage
+passed. Real routing, correlation, timestamp-origin, credit and verifier-bypass
+defects were caught; the equivalent compute-chunk control survived. The required
+arrival traces were brought into this item by explicit authorization; EP-X1.4's
+remaining workload-specific comparisons are not marked complete by that work.
+
+> **CROSS-COMPONENT PREREQUISITE:** `experiments/read-checksum` -> `EP-X2.1`
+> supplied its completed behavioral coverage and shared fidelity policy.
+> **-> CROSS-COMPONENT HANDOFF:** return from `experiments/request-reply` -> `MX2`
+> -> `EP-X2.2` to parent `topology-planner` -> `MR1` -> `EP-R1.7.1` in
+> [CHECKLIST.md](CHECKLIST.md). Later experiments remain paused for scope reconciliation.

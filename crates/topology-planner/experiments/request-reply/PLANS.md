@@ -2,7 +2,7 @@
 
 | Path to CHECKLIST.md | Status | Brief description | Design Notes |
 |---|---|---|---|
-| [CHECKLIST.md](../../CHECKLIST.md) | in progress | EP-X2.2: standalone shared-service/assigned-lane comparison with deterministic traces. | [DESIGN-NOTES.md](DESIGN-NOTES.md) |
+| [CHECKLIST.md](../../CHECKLIST.md) | in progress | EP-X2.2 is complete in the parent's [COMPLETED-CHECKLIST.md](../../COMPLETED-CHECKLIST.md#ep-x22). Return to EP-R1.7.1 before further experiments; the parent program remains open. | [DESIGN-NOTES.md](DESIGN-NOTES.md) |
 
 > **CROSS-COMPONENT PREREQUISITE:** parent `topology-planner` -> `EP-X2.2` authorizes
 > this offline experiment following completed `read-checksum` -> `EP-X2.1`.

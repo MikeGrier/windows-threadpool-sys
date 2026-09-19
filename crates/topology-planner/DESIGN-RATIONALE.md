@@ -332,3 +332,16 @@ including their terminal replies, rather than merely queue occupancy.
 The protocol and disposition live in
 [DESIGN-NOTES.md](experiments/request-reply/DESIGN-NOTES.md); the single action queue
 remains [CHECKLIST.md](CHECKLIST.md) -> `EP-X2.2`.
+
+The implementation retained a trace-ordered coordinator for both candidates. It
+does not skip a full assigned lane to admit a later request elsewhere, because
+that would add a different admission policy to the ownership comparison. Separate
+offered/admitted timestamps expose the resulting waiting instead of resetting a
+request's response clock. Cancellation similarly preserves each admitted identity
+as a terminal outcome rather than deleting unfinished work from the observation.
+
+The [recorded demonstration](experiments/request-reply/captures/2026-09-19/README.md)
+and independent verifier fixtures establish these behavioral distinctions; no
+timing winner is selected. The completed item is in
+[COMPLETED-CHECKLIST.md](COMPLETED-CHECKLIST.md#ep-x22), and the experiment's `RR-D4`
+is the current disposition. EP-R1.7.1 and the remaining workload queue are unchanged.

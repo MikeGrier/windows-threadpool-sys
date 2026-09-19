@@ -1,0 +1,14 @@
+# Copyright (c) Mike Grier.
+[package]
+name = "windows-request-reply-experiment"
+version = "0.0.0"
+publish = false
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+
+[dependencies]
+crossbeam-channel = "0.5"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"

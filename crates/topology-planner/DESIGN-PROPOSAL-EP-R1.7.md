@@ -351,6 +351,13 @@ by EP-X1.2 are defined in the experiment's
 Its [capture record](experiments/read-checksum/captures/2026-09-19-ep-x1-2/README.md)
 is awaiting result discussion; it does not settle a production batch or queue default.
 
+EP-X2.2's request-service evidence requirements and path disposition are recorded in
+[DESIGN-NOTES.md](experiments/request-reply/DESIGN-NOTES.md) -> `RR-D4`, supported by
+its [demonstration](experiments/request-reply/captures/2026-09-19/README.md).
+Carry its distinction between logical lanes, worker eligibility, admitted-work credits,
+queue capacities and terminal outcomes into future plan/runtime contracts. The in-memory
+experiment supplies no physical placement or kernel-completion scheduling claim.
+
 ### Permissions and budgets
 
 The grant names allowed endpoints and operations, scratch storage, read ranges,

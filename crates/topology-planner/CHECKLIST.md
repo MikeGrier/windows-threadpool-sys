@@ -37,7 +37,7 @@ prerequisites rather than on someone else's decision.
 |---|---|---|
 | MR1 design-review reconciliation | active | EP-R1.7.1 reconciles the EP-D-10 startup-cost boundary before further MX work |
 | MX1 controlled read/checksum comparisons | paused for scope reconciliation | EP-X1.2 evidence retained; EP-R1.7.1 precedes closure or further execution |
-| MX2 locality and ownership patterns | EP-X2.1 complete | Placement behavior validated with EP-R1.7.2; later work remains paused by EP-R1.7.1 |
+| MX2 locality and ownership patterns | EP-X2.1 and EP-X2.2 complete | Placement and request ownership behavior validated; later work remains paused by EP-R1.7.1 |
 | MX3 real endpoints, composition and synthesis | not started | MX2 ownership/ordering evidence and the permissions/hardware named by each experiment |
 | M1 the input contract | 4 done, 1 open | `EP-1.4` waits on EP-R1.7 |
 | M1+ scenario and naming | 2 done, 3 open | EP-R1.7 owns the topology specification and callbacks; `EP-1+.5` then settles remaining names |
@@ -120,7 +120,7 @@ item; do not start `EP-R1.8` merely because one experiment has finished.
 
 ## Experiment execution rules for MX1 through MX3
 
-**Only EP-X2.2 is now authorized as an offline behavioral experiment; other execution remains paused pending `EP-R1.7.1`.**
+**EP-X2.2 is complete; further experiment execution remains paused pending `EP-R1.7.1`.**
 [EP-D-10](DESIGN-NOTES.md#ep-d-10) remains the startup constraint. The shared NUMA
 validation policy is [EP-D-11](DESIGN-NOTES.md#ep-d-11); physical hardware is not an item
 or milestone gate. Other items retain their work and remain
@@ -194,6 +194,9 @@ same item ID; do not create an unowned implementation queue.
   > `topology-planner` -> `EP-R1.7` before advancing to `EP-X1.4`.
 
 - [ ] **EP-X1.4** -- **Measure independently paced arrivals and overload behavior.**
+  Reuse the deterministic steady/burst trace and outcome-accounting contract from
+  [DESIGN-NOTES.md](experiments/request-reply/DESIGN-NOTES.md) -> `RR-D2` where applicable;
+  EP-X2.2's completion does not supply this read/checksum workload's overload comparison.
   **Question:** what happens below, near and beyond the service rate, including bursts?
   **Controls:** use deterministic scheduled-arrival traces and selected `EP-X1.2`/`EP-X1.3`
   configurations; keep resource limits and the admission/rejection contract equal.
@@ -221,24 +224,7 @@ same item ID; do not create an unowned implementation queue.
 
 - [x] **EP-X2.1** -- Validate placement and directed buffer-transfer behavior. -> [completed 2026-09-19](COMPLETED-CHECKLIST.md#ep-x21)
 
-- [ ] **EP-X2.2** -- **Compare shared completion service with assigned request lanes.**
-  **Authorized standalone scope:** implement in `experiments/request-reply` using the
-  protocol in [DESIGN-NOTES.md](experiments/request-reply/DESIGN-NOTES.md). Bring its
-  deterministic steady/burst arrival traces into this item without closing EP-X1.4.
-  This exception does not settle the production startup budget, resume other items,
-  require physical NUMA hardware or establish performance acceptance thresholds.
-  **Question:** how do shared workers and explicit ownership respond to independent
-  request/reply work and imbalance? **Controls:** implement both as genuine candidates
-  over one backend, with the same request/reply semantics, worker ceiling, outstanding-work
-  bound and idle policy; use MX1's steady/burst traces and deterministic uneven service costs.
-  **Evidence:** exact request/reply correlation, per-lane and aggregate response distributions,
-  utilization, admission pressure and rundown. **Review:** distinguish scheduling flexibility
-  from ownership locality; do not preselect pinning or invent an MPMC queue from an MPSC API.
-  > **CROSS-COMPONENT PREREQUISITE:** `experiments/read-checksum` -> `MX2` ->
-  > `EP-X2.1` has returned its [behavioral coverage](COMPLETED-CHECKLIST.md#ep-x21).
-  > **-> CROSS-COMPONENT HANDOFF:** implementation moves to `experiments/request-reply`
-  > -> `MX2` -> `EP-X2.2`; its [PLANS.md](experiments/request-reply/PLANS.md) points here.
-  > Return to parent EP-R1.7 for the behavioral findings and path disposition.
+- [x] **EP-X2.2** -- Compare shared completion service with assigned request lanes. -> [completed 2026-09-19](COMPLETED-CHECKLIST.md#ep-x22)
 
 - [ ] **EP-X2.3** -- **Compare shared state with key-owned processing.**
   **Question:** when do routing and ownership change the cost of a stateful workload?

@@ -36,6 +36,10 @@ deterministic inputs; the computation, result oracle and budgets are identical f
 both candidates. Per-request records include scheduled, admitted, processing-start,
 terminal and collected offsets; aggregate and logical-lane latency distributions
 use scheduled arrival through terminal outcome, with cancelled outcomes counted separately.
+First-offer time is also recorded so generator lateness and subsequent admission
+waiting are separately visible. The coordinator admits in trace order: a full
+assigned lane can block later arrivals for other lanes. That mechanism is recorded,
+not mistaken for an aggregate capacity shortage or silently removed by rerouting.
 
 Both candidates block on empty request queues. The coordinator waits for either
 the next arrival, reply or a bounded cancellation check interval. The fixed policy
@@ -65,8 +69,8 @@ device changes, thread affinity or application data access is authorized.
 
 Unit tests check ten or more deterministic shapes, invalid IDs/lanes/limits/times,
 pressure, reply reordering, cancellation, deadline exhaustion and rundown. Use an
-injected monotonic clock for deterministic schedule/accounting edge cases where
-necessary; real-thread timing tests make no speed assertion. Persistent sabotage
+explicit synthetic timeline in report fixtures for deterministic schedule/accounting
+edge cases; real-thread timing tests make no speed assertion. Persistent sabotage
 must change actual routing, correlation, credit or timing-origin behavior and be
 caught, alongside a non-defect control. The common result verifier owns the invariants.
 
@@ -74,3 +78,25 @@ Retain both paths through the result review; merge/delete only by an explicit la
 decision. This experiment owns no topology or allocation policy, so it does not create
 a second faux-NUMA model. Future placement consumers must adopt parent EP-D-11's
 shared environment rather than infer hardware locality from these logical lanes.
+
+## RR-D4: behavioral findings and disposition
+
+Retain both isolated queue layouts and the common request/result contract. Merge or
+delete neither: shared competition and assigned ownership are distinct legal candidates
+for independent requests. No candidate is selected by timing. Revisit their eventual
+production disposition under parent [CHECKLIST.md](../../CHECKLIST.md) -> `EP-X3.3`.
+The [demonstration](captures/2026-09-19/README.md) retains the observed outcomes.
+
+Candidate descriptors must distinguish logical request lane from actual worker,
+shared eligibility from assigned ownership, aggregate admitted-work credits from
+per-queue capacity, and admission order from completion order. Assigned ownership
+without stealing exposes hot-lane pressure; a shared backend distributes eligible
+work without promising an individual worker. Neither fact establishes NUMA locality.
+Report the admission head-of-line behavior explicitly when it is part of a candidate.
+
+Cancellation is not a missing result: admitted work has correlated terminal outcomes,
+while unadmitted work stays identified. The completed/cancelled split may depend on
+scheduling without breaking that census. Evidence must carry its response-time origin
+and distinguish service-active wall time from CPU use. Preserve these requirements
+when materializing the future planner/runtime contracts; no production API is created
+by this experiment. The next workload remains subject to EP-R1.7.1 scope reconciliation.
