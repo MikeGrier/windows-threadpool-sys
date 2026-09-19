@@ -17,6 +17,9 @@ renamed to match.
 
 ## Decision index
 
+The NUMA testing and completion policy is [EP-D-11](#ep-d-11); the physical-hardware
+limitation is shared across this component rather than repeated as an item gate.
+
 | ID | Decision |
 |---|---|
 | <a id="ep-d-1"></a>EP-D-1 | **The shard-set query**: what the planner must know to choose which processors host a domain, and what today's model cannot tell it. |
@@ -647,7 +650,8 @@ combinations, with contextual evidence kept distinct from discovered attachment.
 
 **Offline exception:** the engineer has authorized [CHECKLIST.md](CHECKLIST.md) -> `EP-X2.1`
 with its generated-buffer prerequisite and local captures while `EP-R1.7.1` remains open.
-Cross-NUMA timing stays unrun for missing hardware. This does not change the startup constraint.
+Physical NUMA fidelity is tracked once under [EP-D-11](#ep-d-11), not as a completion
+gate on that item. This does not change the startup constraint.
 
 The planner matches the application design and its constraints to the architecture available to
 the process. Processor and memory domains, endpoint attachment, ownership, ordering and permitted
@@ -684,3 +688,52 @@ planning, setup accounting, exhaustion and unknown-evidence outcomes, under
 [CHECKLIST.md](CHECKLIST.md) -> `EP-R1.7.1` before further MX execution. That item also reconciles
 the research queue with this boundary; no remaining experiment is silently cancelled or completed.
 Rationale is recorded in [DESIGN-RATIONALE.md](DESIGN-RATIONALE.md#ep-d-10-startup-cost-clarification).
+
+## <a id="ep-d-11"></a>EP-D-11: one consistent faux-NUMA environment and one fidelity limitation
+
+**Physical NUMA fidelity is unverified: multi-node hardware is unavailable. This is
+a shared, non-blocking qualification, not a repeated work-item or milestone gate.**
+
+Use one explicit faux-NUMA environment throughout a test. Inject its observations at
+the data-gathering boundary, then have discovery consumers, placement selection,
+allocation/binding operations and residency queries use the same logical identities
+and state. Fake realization records requested operations and produces controlled
+success, refusal, unknown-residency and mismatch outcomes from that environment.
+It must not independently invent a topology or silently consult the host's real
+node membership after synthetic discovery. Synthetic identities never reach live
+Windows affinity or NUMA allocation calls.
+
+Test ordinary and adversarial layouts deterministically: multiple and sparse node
+identities, processor groups, shared/separate/ambiguous caches, known and missing
+endpoint attachment where the owning model supports it, both transfer directions,
+resource bounds and cleanup after failure. Assert resulting decisions and requests,
+not only that synthetic input can be deserialized or passed to a selector. A supplied
+distance value can test how code uses that value; it cannot establish a physical
+memory-access cost. Do not add artificial sleeps or timing penalties and call them
+NUMA fidelity.
+
+Faux-NUMA execution validates behavior under the injected model. It does not mimic
+memory-distance effects, bandwidth, contention, cache coherence costs, device DMA
+locality or the OS's physical placement behavior. Outputs identify the synthetic
+environment; do not report fake residency or timings as hardware observations.
+Live single-node integration tests remain separate and retain their actual scope.
+
+An item or milestone can complete when its implementation and specified behavioral
+tests pass under this policy and any non-NUMA obligations are met. Missing physical
+hardware alone neither keeps it open nor creates a duplicate hardware follow-up.
+Conversely, an unimplemented fake boundary or an uncovered behavior is real pending
+software work; this decision does not mark it tested. Performance baselines, size-mix
+validation and universal tuning thresholds are not goals of this acceptance policy.
+An explicitly requested future performance claim must name its evidence separately.
+
+[CHECKLIST.md](CHECKLIST.md) -> `EP-R1.7.2` queues the shared faux environment and its
+adoption; existing synthetic selector tests are only part of that validation.
+`EP-HW.1` is the single later physical-NUMA follow-up, triggered by hardware access.
+It checks the real gathering/realization boundaries against behavior tested with
+faux NUMA and records discrepancies; it is not a prerequisite for other milestones.
+Existing captures and paths remain retained, with no hardware-timing obligation
+silently converted into a claimed measurement.
+
+This supersedes EP-X2.1's previous mandatory cross-NUMA-timing closure requirement,
+not the limitations of its recorded observations. Rationale is in
+[DESIGN-RATIONALE.md](DESIGN-RATIONALE.md#ep-d-11-shared-numa-fidelity).

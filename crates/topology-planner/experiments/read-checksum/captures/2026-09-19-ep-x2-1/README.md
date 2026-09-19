@@ -1,6 +1,6 @@
 # EP-X2.1: available core/cache placements
 
-**Local implementation and capture recorded; cross-NUMA timing and result review remain open in parent [CHECKLIST.md](../../../../CHECKLIST.md) -> `EP-X2.1`.**
+**Local capture retained. Its former cross-NUMA-timing completion gate is superseded by parent [EP-D-11](../../../../DESIGN-NOTES.md#ep-d-11); missing hardware is one shared non-blocking fidelity limitation.**
 
 Captured on 2026-09-19 UTC. This is explicitly authorized offline research under
 [EP-D-10](../../../../DESIGN-NOTES.md#ep-d-10), not startup characterization.
@@ -52,14 +52,14 @@ locality ranking or production queue/default choice is inferred from these rows.
 The paths remain experimental. Their current disposition and later review are
 recorded in [DESIGN-NOTES.md](../../DESIGN-NOTES.md#local-implementation-disposition).
 
-Cross-NUMA evidence is **unrun**, not a passing synthetic substitute. A host exposing
-distinct processor-associated memory nodes must run both worker directions with
-payload preference on each endpoint's node, and residency observations must establish
-what actually occurred. Unknown or mismatched pages cannot be reported as local.
-The engineer approved local implementation/capture while that hardware remains absent.
+This record contains no physical cross-NUMA observations. That limit on the data is
+unchanged by [EP-D-11](../../../../DESIGN-NOTES.md#ep-d-11)'s acceptance-policy correction.
+The single future physical follow-up is parent [CHECKLIST.md](../../../../CHECKLIST.md)
+-> `EP-HW.1`; no additional timing run is required to close EP-X2.1's software work.
 
-Return to parent `EP-R1.7` for discussion of this evidence and remaining hardware work.
-`EP-X2.1` stays unchecked; `EP-X2.2` and other paused MX work are not implicitly resumed.
+Remaining behavioral coverage and disposition review return to `EP-R1.7`. The shared
+faux environment is queued as `EP-R1.7.2`; existing selector tests alone do not claim
+that integration coverage. Other paused MX work is not implicitly resumed.
 The generated-buffer prerequisite is now implemented here; `EP-X1.5` still owns its
 working-set and device-path comparisons.
 

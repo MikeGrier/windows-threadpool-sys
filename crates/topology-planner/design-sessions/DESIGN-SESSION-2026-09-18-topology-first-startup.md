@@ -56,3 +56,22 @@ historical summary. Existing code and captures remain retained; the agreement
 does not silently complete EP-X1.2, delete experimental paths or collapse the
 measurement foundation into another layer. The follow-up item reconciles the
 budget, missing-evidence policy, acceptance criteria and remaining research queue.
+
+## Follow-up: consistent faux NUMA
+
+After the available EP-X2.1 capture, the engineer asked whether NUMA artifacts could
+be injected through gathering and questioned the repeated statement that work
+remained open for physical timings. The assistant distinguished behavioral testing
+from cost measurement and acknowledged that it had made the latter a completion
+gate without that following from the clarified product goal.
+
+The engineer accepted a shared fidelity limitation until actual multi-node hardware
+can be obtained: use a consistent "faux NUMA" model uniformly, while acknowledging
+that it cannot mimic memory-distance effects. The engineer rejected leaving every
+item and milestone undone for the same unavailable hardware. High-quality NUMA
+behavioral testing is still required; the physical gap is one uniform problem.
+
+The resulting policy is [EP-D-11](../DESIGN-NOTES.md#ep-d-11). Its follow-ups are
+the shared faux environment, `EP-R1.7.2`, and one non-blocking physical-hardware
+validation item, `EP-HW.1`, in [CHECKLIST.md](../CHECKLIST.md). No synthetic results
+are renamed as hardware measurements, and no existing captures are rewritten.

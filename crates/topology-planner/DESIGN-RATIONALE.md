@@ -272,14 +272,15 @@ The discussion is preserved in
 [DESIGN-SESSION-2026-09-18-topology-first-startup.md](design-sessions/DESIGN-SESSION-2026-09-18-topology-first-startup.md).
 
 ### EP-X2.1 offline exception
+**Hardware-dependent closure superseded by [EP-D-11](DESIGN-NOTES.md#ep-d-11); the original authorization and capture history below remain recorded.**
 
 The engineer next requested EP-X2.1 and approved proceeding as offline research after
 being told that the host exposes only NUMA node 0 and the generated-buffer prerequisite
 was missing. Its scope now includes that companion and independent buffer placement;
 synthetic selection tests and real local placements proceed while cross-NUMA timing
 remains unrun. This is an explicit sequence exception, not acceptance of startup
-benchmarking or completion of EP-R1.7.1. The authorized work and remaining hardware
-obligation are in [CHECKLIST.md](CHECKLIST.md) -> `EP-X2.1`.
+benchmarking or completion of EP-R1.7.1. The authorized work is in
+[CHECKLIST.md](CHECKLIST.md) -> `EP-X2.1`; the shared physical follow-up is now `EP-HW.1`.
 
 The generated and buffered companions now share byte identity and owned payload
 primitives while retaining their separate source-service paths. The heap baseline
@@ -290,5 +291,26 @@ a proximity rank; Windows node labels are never replaced by relation positions.
 The [local capture](experiments/read-checksum/captures/2026-09-19-ep-x2-1/README.md)
 records available core/cache placements and the missing cross-NUMA evidence.
 The shared-memory-node host can exercise allocation preference and observation, but
-cannot supply a remote-memory comparison. That remaining hardware obligation and
-the review stay in EP-X2.1; its implementation does not relax the startup boundary.
+cannot supply a remote-memory comparison. That observation remains unchanged, but
+it no longer prevents behavioral completion of EP-X2.1 under EP-D-11.
+
+## EP-D-11: shared NUMA fidelity
+
+After the local capture, the engineer questioned why cross-NUMA timing kept EP-X2.1
+open and asked whether NUMA artifacts could instead enter through data gathering.
+The assistant had treated physical cost measurement as a completion obligation even
+though the product goal was architectural behavior, not performance baselines.
+
+The engineer explicitly accepted the remaining fidelity limitation: until physical
+hardware is available, the tests must use a consistent faux-NUMA model uniformly.
+Nothing in that model mimics actual memory distances. Repeating this limitation as
+unfinished work across items and milestones adds no validation and prevents honest
+completion of software already tested against its specified inputs.
+
+[EP-D-11](DESIGN-NOTES.md#ep-d-11) records the decision. The shared environment is
+software work under [CHECKLIST.md](CHECKLIST.md) -> `EP-R1.7.2`; the one physical
+follow-up is `EP-HW.1`. Existing selector tests and local captures are retained,
+without claiming they already exercise a uniformly injected gathering-to-realization
+environment. Only that actual coverage gap, not absent hardware, stays with the
+current software review. The discussion continues in
+[DESIGN-SESSION-2026-09-18-topology-first-startup.md](design-sessions/DESIGN-SESSION-2026-09-18-topology-first-startup.md#follow-up-consistent-faux-numa).

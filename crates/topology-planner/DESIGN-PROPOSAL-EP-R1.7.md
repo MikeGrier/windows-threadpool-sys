@@ -518,12 +518,20 @@ These are proposed acceptance obligations, not tests claimed to exist or have ru
 integration. `H` means hardware/path characterization with the named topology; an
 unavailable host yields an explicit unrun result, never a passing mock substitute.
 
+[EP-D-11](DESIGN-NOTES.md#ep-d-11) governs NUMA acceptance across this matrix. Inject
+one consistent scenario through gathering and fake realization to validate behavior;
+do not make multi-node hardware a separate closure gate for each row. Physical NUMA
+checks belong to the single `EP-HW.1` follow-up in [CHECKLIST.md](CHECKLIST.md), not
+to each software milestone. `H` observations remain distinct from behavioral tests
+and do not establish a required performance baseline. Other OS/endpoint requirements
+are not silently waived by this NUMA-specific policy.
+
 ### Representative normal workloads
 
 | ID | Workload | Required acceptance |
 |---|---|---|
 | N1 | One source, serial parse/format, one sink, one CPU | U: legal single-domain candidate makes progress under full queues and bounded memory; I: implementation returns all accepted items |
-| N2 | Two NVMe roles, parse then serial collate then format | U: preserve collation owner and output order; compare source-local, sink-local and split placements; H: exercise distinct attachment domains |
+| N2 | Two NVMe roles, parse then serial collate then format | U: inject distinct endpoint attachment domains consistently through gathering and fake realization; preserve collation owner and output order; verify source-local, sink-local and split placement requests. Physical NUMA fidelity follows EP-D-11. |
 | N3 | Independent file partitions with pure transforms | U: enumerate replica counts within limits and preserve record boundaries; I: fixture outputs equal the serial application oracle |
 | N4 | Parallel parsing with ordered output | U: deliberately inverted completion order is resequenced within its bound; pressure propagates when the missing item stalls |
 | N5 | Per-key stateful aggregation | U: adversarial key skew never creates two simultaneous owners for one key; ordering remains per declared key |
@@ -533,7 +541,7 @@ unavailable host yields an explicit unrun result, never a passing mock substitut
 | N9 | Scatter with deterministic gather | U: preserve declared gather operation and correlation across interleaved completions; bounded gather storage |
 | N10 | Bounded request/response service | U: credits bound outstanding work; reordered replies correlate; cancellation and late completion do not collide with reused IDs |
 | N11 | Mixed shared-pool control and dedicated data domains | U: isolate execution contracts; I: callback path is not used to claim dedicated placement or ordering |
-| N12 | Same flow across synthetic machine families | U: single node, no L3, hybrid cores, multiple processor groups, incomparable relations and restricted universe all retain semantics without fabricated locality |
+| N12 | Same flow across synthetic machine families | U: one faux environment drives gathering, selection and fake realization for single/multiple nodes, no L3, hybrid cores, processor groups, incomparable relations and restricted universes; preserve unknowns and prevent synthetic identities reaching live placement calls |
 | N13 | Multiple logical endpoints on one physical controller/link | U: joint capacity accounting; H: composed trial reports interference rather than summing isolated throughputs |
 | N14 | Bursty flow with low steady rate | U: replay offered-arrival schedule and pressure accounting; I: observe recovery and drain, not just steady throughput |
 
@@ -573,7 +581,8 @@ unavailable host yields an explicit unrun result, never a passing mock substitut
 Unit tests use deterministic fixtures and bounded state exploration, not random
 runtime sampling. Integration tests run the shared execution mechanisms across the
 actual OS boundary. Hardware results carry host/path/provenance and stay separate
-from portable acceptance.
+from portable acceptance. Ordinary CPU/memory timing in a faux environment is not
+a simulation of NUMA distances, and no timing penalty is added to claim that fidelity.
 
 Bindings to the shared plan validator and evidence classifier need persistent sabotage:
 alter the owning predicate, verify generator/trial/realizer behavior changes, and include

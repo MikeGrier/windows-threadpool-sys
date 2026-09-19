@@ -223,6 +223,7 @@ Return the result to parent [CHECKLIST.md](../../CHECKLIST.md) -> `EP-R1.7` for
 discussion before closing the item or starting `EP-X1.3`.
 
 ## RC-D10: offline placement comparison
+**Hardware-timing completion requirement superseded by parent [EP-D-11](../../DESIGN-NOTES.md#ep-d-11). The capture protocol below remains the record of the offline experiment, not a required performance baseline.**
 
 EP-X2.1 is explicitly authorized offline research, not startup characterization.
 Retain the existing buffered-file backend and schedulers. Add a deterministic
@@ -264,9 +265,9 @@ caveat. Stop a case on correctness, binding, allocation, residency-query or dead
 failure; preserve its error rather than emitting successful timing. Capture unavailable
 placements separately from execution failures and make the campaign report name both.
 
-The current host exposes only Windows NUMA node 0. The engineer authorized implementation
-and local capture now, leaving cross-NUMA timing unrun for a multi-node host. EP-X2.1
-remains open for that evidence and result review. No other MX item is implicitly resumed.
+The current capture exposes only Windows NUMA node 0. Physical follow-up is now tracked
+once as parent [CHECKLIST.md](../../CHECKLIST.md) -> `EP-HW.1` under `EP-D-11`, not as
+EP-X2.1's closure requirement. No other MX item is implicitly resumed.
 
 ### Local implementation disposition
 
@@ -275,6 +276,8 @@ the existing isolated schedulers. These remain experimental, not a production
 planner dependency or default. Revisit retain/merge/delete under the parent's
 [CHECKLIST.md](../../CHECKLIST.md) -> `EP-X3.3`, or earlier on a changed question.
 The [local capture](captures/2026-09-19-ep-x2-1/README.md) records what was observed.
-Cross-NUMA evidence and result review remain actions of EP-X2.1, not discharged by
-synthetic selection or same-node allocation checks. The generated-buffer companion
+EP-X2.1's remaining review concerns behavioral coverage and disposition. Parent
+`EP-R1.7.2` implements the consistent faux environment; the existing selector tests
+are not a claim that gathering and fake realization have been exercised end to end.
+Physical timing is not required for behavioral completion. The generated-buffer companion
 is now available to EP-X1.5 without closing its working-set/device-path obligations.

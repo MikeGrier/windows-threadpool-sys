@@ -37,13 +37,14 @@ prerequisites rather than on someone else's decision.
 |---|---|---|
 | MR1 design-review reconciliation | active | EP-R1.7.1 reconciles the EP-D-10 startup-cost boundary before further MX work |
 | MX1 controlled read/checksum comparisons | paused for scope reconciliation | EP-X1.2 evidence retained; EP-R1.7.1 precedes closure or further execution |
-| MX2 locality and ownership patterns | EP-X2.1 locally captured | Cross-NUMA timing awaits a host exposing multiple nodes; result review remains open |
+| MX2 locality and ownership patterns | EP-X2.1 locally captured | Behavioral coverage/review only; shared faux-NUMA work is EP-R1.7.2, hardware fidelity is not a gate |
 | MX3 real endpoints, composition and synthesis | not started | MX2 ownership/ordering evidence and the permissions/hardware named by each experiment |
 | M1 the input contract | 4 done, 1 open | `EP-1.4` waits on EP-R1.7 |
 | M1+ scenario and naming | 2 done, 3 open | EP-R1.7 owns the topology specification and callbacks; `EP-1+.5` then settles remaining names |
 | M2+ the plan as a value | parked, **and needs re-cutting** | MR1, then EP-R1.8 and the resulting `topology-model` work |
 | M3+ the policies | parked | M2+ |
 | M-inf parked | ungated | not scheduled, deliberately |
+| MH1 physical NUMA fidelity | external hardware unavailable | EP-HW.1 is the single shared follow-up; does not gate other items or milestones |
 
 ## MR1: reconcile the 2026-09-18 design review
 
@@ -106,6 +107,17 @@ item; do not start `EP-R1.8` merely because one experiment has finished.
   zero probes, budget exhaustion and no hidden workload validation during setup. Settle EP-X1.2's
   disposition and the next experiment with the engineer before resuming MX execution.
 
+- [ ] **EP-R1.7.2** -- **Implement and adopt a consistent faux-NUMA test environment.**
+  Follow [EP-D-11](DESIGN-NOTES.md#ep-d-11): inject observations at the gathering boundary
+  and use the same scenario/state for fake allocation, binding and residency operations.
+  Exercise existing consumers through those boundaries with deterministic normal and edge
+  cases, including both transfer directions, unknowns, refusals and cleanup. Prove that
+  synthetic identities cannot reach live affinity/allocation calls and that changing injected
+  topology changes consumer decisions. Retain selector unit tests but do not count them alone
+  as end-to-end coverage. Queue adoption by future planner/realizer components in EP-R1.8;
+  do not claim tests of production components that do not yet exist. No physical timing model,
+  hardware acquisition or performance baseline is part of this software work.
+
 - [ ] **EP-R1.8** -- **Materialize executable component-local plans after names and contracts are
   settled.** Create dependency-ordered checklists and reciprocal cross-component handoffs for
   `topology-model`, `topology-planner`, the inward adapter, the measurement foundation, and the
@@ -117,8 +129,9 @@ item; do not start `EP-R1.8` merely because one experiment has finished.
 
 **Execution paused pending `EP-R1.7.1`, except the explicitly authorized offline `EP-X2.1`.**
 [EP-D-10](DESIGN-NOTES.md#ep-d-10) remains the startup constraint. EP-X2.1 includes its
-generated-buffer prerequisite and captures available hardware placements; cross-NUMA timing
-remains unrun until a multi-node host is available. Other items retain their work and remain
+generated-buffer prerequisite and captures available hardware placements. The shared NUMA
+validation policy is [EP-D-11](DESIGN-NOTES.md#ep-d-11); physical hardware is not an item
+or milestone gate. Other items retain their work and remain
 paused. Existing captures and completed work are unchanged.
 
 Keep this file as the experiment program's work queue; component plan indexes link to
@@ -143,7 +156,9 @@ Treat the order below as the current execution plan, not a promise that every hy
 survives. If evidence changes a dependency or the next useful question, revise this checklist
 before continuing. If hardware, permission or a missing primitive blocks work, name the
 blocker and discuss the workaround or reordering; leave unperformed work unchecked.
-Mocked topology never substitutes for a hardware timing capture. Before work moves into
+Faux NUMA establishes behavior, not hardware timings. Do not create per-item hardware
+completion gates for the shared limitation; physical follow-up belongs only to EP-HW.1.
+Actual software gaps and other external-boundary requirements remain pending. Before work moves into
 another source-component, record the exact destination and reciprocal handoff against the
 same item ID; do not create an unowned implementation queue.
 
@@ -212,33 +227,35 @@ same item ID; do not create an unowned implementation queue.
 
 ## MX2: locality and ownership patterns
 
-- [ ] **EP-X2.1** -- **Measure placement and directed buffer-transfer effects.**
+- [ ] **EP-X2.1** -- **Validate placement and directed buffer-transfer behavior.**
   **Implementation and local capture recorded:** review the
   [capture record](experiments/read-checksum/captures/2026-09-19-ep-x2-1/README.md).
-  Obtain cross-NUMA timing in both directions with payload placement on each endpoint's
-  node on suitable hardware, then finish the result/disposition review before closing this item.
+  Finish the behavioral coverage and disposition review under
+  [EP-D-11](DESIGN-NOTES.md#ep-d-11), using EP-R1.7.2's shared environment for the missing
+  gathering-to-consumer/fake-realization coverage. Physical cross-NUMA timing is not a
+  closure requirement. This remains open for software coverage/review, not absent hardware.
   **Authorized offline scope:** implement the generated-buffer companion, independent payload
   placement and synthetic selection checks; capture the core/cache placements exposed by this
-  host. Windows discovery reports only node 0. Keep cross-NUMA timing explicitly unrun, and
-  this item unchecked, until a multi-node host supplies both directions and the result is reviewed.
+  host. Existing physical observations remain labelled as recorded; the shared fidelity
+  limitation and eventual live multi-node follow-up are owned by EP-D-11 and EP-HW.1.
   The engineer approved this hardware-limited sequence; it does not complete EP-R1.7.1 or
   alter the production startup budget. Use the bounded protocol in
   [DESIGN-NOTES.md](experiments/read-checksum/DESIGN-NOTES.md#rc-d10-offline-placement-comparison).
-  **Question:** how do observed processor relationships and payload residency affect the
-  controlled comparisons? **Controls:** use the read/checksum and generated-buffer cases
+  **Question:** do processor relationships, directed transfers and payload placement produce
+  the specified decisions and operations? **Controls:** use the read/checksum and generated-buffer cases
   from MX1; vary worker bindings and buffer placement separately across available core,
   cache and memory-domain relationships, testing both transfer directions.
-  **Evidence:** topology provenance, achieved bindings, page residency, CPU/latency/throughput
-  and explicit unavailable placements. Validate selection with synthetic topology, but
-  obtain cross-domain timing from hardware exposing those domains.
-  **Review:** record conditional placement evidence without collapsing proximity into a
+  **Evidence:** injected-topology provenance, expected and recorded binding/allocation/transfer
+  requests, fake residency outcomes and failure/rundown checks; retain existing live captures
+  as exploratory evidence, not a performance baseline or acceptance threshold.
+  **Review:** record behavioral coverage without collapsing proximity into a
   total order or turning developer-chosen transfers into errors.
   > **CROSS-COMPONENT PREREQUISITE:** parent `topology-planner` authorizes
   > `experiments/read-checksum` -> `MX2` -> `EP-X2.1` as the sole exception to the pause.
   > It brings its generated-buffer prerequisite forward without closing EP-X1.5.
   > **-> CROSS-COMPONENT HANDOFF:** return from `experiments/read-checksum` -> `MX2` ->
-  > `EP-X2.1` to `topology-planner` -> `MR1` -> `EP-R1.7` for local-result and hardware-gap
-  > discussion. EP-X2.2 remains paused until its prerequisite is discharged or explicitly re-planned.
+  > `EP-X2.1` to `topology-planner` -> `MR1` -> `EP-R1.7` for behavioral coverage and
+  > disposition review. EP-X2.2 remains paused by scope reconciliation, not hardware fidelity.
 
 - [ ] **EP-X2.2** -- **Compare shared completion service with assigned request lanes.**
   **Question:** how do shared workers and explicit ownership respond to independent
@@ -249,8 +266,8 @@ same item ID; do not create an unowned implementation queue.
   utilization, admission pressure and rundown. **Review:** distinguish scheduling flexibility
   from ownership locality; do not preselect pinning or invent an MPMC queue from an MPSC API.
   > **CROSS-COMPONENT PREREQUISITE:** `experiments/read-checksum` -> `MX2` ->
-  > `EP-X2.1` returns its placement evidence and limitations before this component specifies
-  > the request experiment; any blocked hardware comparison must be explicitly re-planned.
+  > `EP-X2.1` returns its behavioral coverage and limitations before this component specifies
+  > the request experiment; the shared physical-hardware limitation is not a prerequisite.
 
 - [ ] **EP-X2.3** -- **Compare shared state with key-owned processing.**
   **Question:** when do routing and ownership change the cost of a stateful workload?
@@ -439,6 +456,17 @@ implementation one.
 
 - [ ] **M3+.3** -- Buffer residency for a channel spanning two memory domains, which the placement
   probe already measures and which has no default that is right on both sides.
+
+## MH1: shared physical-NUMA validation (external hardware gate)
+
+- [ ] **EP-HW.1** -- **Validate physical NUMA fidelity when a multi-node host becomes available.**
+  This is the single shared follow-up under [EP-D-11](DESIGN-NOTES.md#ep-d-11), outside
+  the software-completion path. Exercise actual gathering, node identities, affinity,
+  allocation, observed residency, both transfer directions and failure handling against
+  the same behavioral contracts as the faux environment. Record host-specific discrepancies
+  and fix the owning layer. Hardware access is the trigger; no existing or future item
+  waits on it solely for NUMA fidelity. Do not require performance baselines or invent
+  memory-distance criteria; a separately requested performance claim needs its own scope.
 
 ## M-inf: parked, ungated
 
