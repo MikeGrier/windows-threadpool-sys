@@ -130,10 +130,9 @@ required-features = ["oracle-in-renderer"]
 # carries the gate, which is also the clearest statement of what that module is.
 serde_json = { version = "1.0", optional = true }
 # **Every workspace dependency below is path-only, with no `version`**, because
-# this crate is never distributed at all -- not to a registry, and not as a
-# released binary either, unlike `windows-placement-probe` next door. These
-# probes are a development instrument, run from a checkout, and `publish = false`
-# above is the whole story.
+# released binaries are built from the workspace checkout, not cargo-packaged
+# for a registry. `publish = false` prevents registry publication; it does not
+# prevent the release workflow from distributing the compiled experiments.
 #
 # A `version` beside a `path` is consulted only when the depending crate is
 # packaged, but cargo still requires the path crate's own version to satisfy it

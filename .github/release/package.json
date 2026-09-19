@@ -1,0 +1,15 @@
+{
+  "name": "windows-probe-release-automation",
+  "version": "0.0.0",
+  "private": true,
+  "scripts": {
+    "test": "node --test *.test.cjs"
+  },
+  "dependencies": {
+    "@actions/core": "3.0.1",
+    "fflate": "0.8.3",
+    "release-please": "17.11.2",
+    "smol-toml": "1.8.0",
+    "yaml": "2.9.1"
+  }
+}

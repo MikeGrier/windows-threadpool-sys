@@ -3855,3 +3855,28 @@ M26.5 only to fix one technical premise inside it. Migrating roughly 400 lines o
 bookkeeping through it would bury the change it exists to make. The migration is mechanical, is its
 own commit, and needs the group headings dated per the archive format -- date-only on the `## Moved`
 line, with any precise timestamp reserved for an anchored item heading.
+
+## Moved 2026-09-19 14:29:03 -07:00 -- PB: automated probe binary releases
+
+### <a id="pb-1"></a>PB-1 -- Automate both probe binary releases through CI and release-please. *(completed 2026-09-19 14:29:03 UTC-07:00)*
+
+- [x] Preserve calendar versions and placement-probe's existing tag/asset
+  provenance. Keep both packages off crates.io. Build x64 and ARM64
+  default-feature binaries, package every declared platform-probe executable,
+  attach attestations to release assets, and keep PR/manual validation unable
+  to publish. Distinguish binary-only releases in publication checks; test
+  calendar/dependency bumps, workflow guards, complete packaging and version/tag
+  consistency. Update the distribution docs and preserve ordinary library
+  release behavior.
+
+Decision: [DESIGN-NOTES.md](DESIGN-NOTES.md#d-probe-releases) -> `D-PB`.
+Implementation and operating commands:
+[DEVELOPMENT.md](DEVELOPMENT.md#release-process).
+
+Verified locally: locked npm installation and release-tooling tests, real Rust
+release candidates and dependency-triggered lockfile updates, both platform
+archive architectures, both probe test suites and doctest phases, Rust formatting
+and Clippy, default-workspace debug/release checks, publication routes, workflow
+references and text encoding. The debug build reported non-failing incremental
+cache access notes. Hosted upload permissions and attestation issuance await the
+tag-push workflow after merge; no release or tag was created locally.

@@ -24,6 +24,17 @@ env:
 # `wtf-string` is portable, so it is additionally built, tested, and linted on
 # Linux and macOS (the `portable` job) to keep its non-Windows support verified.
 jobs:
+  probe-release-tests:
+    name: probe release policy and packaging tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+      - run: npm ci --prefix .github/release
+      - run: npm test --prefix .github/release
+
   encoding:
     name: encoding sanity check
     runs-on: windows-latest
@@ -45,6 +56,10 @@ jobs:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v7
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+      - run: npm ci --prefix .github/release
       - name: Run check-publishable.ps1
         shell: pwsh
         run: ./tools/check-publishable.ps1

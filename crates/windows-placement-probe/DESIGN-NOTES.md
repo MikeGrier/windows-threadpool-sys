@@ -121,14 +121,12 @@ discussion thread is from last week or from last year. `0.1.0` answered
 neither, and would have gone on answering neither indefinitely, because nothing
 would ever have forced it to move.
 
-**Nothing automated fights this.** Release-please does not manage this crate --
-it is absent from both `release-please-config.json`'s `packages` map and
-`.release-please-manifest.json`, and carries no `x-release-please-version`
-marker -- so the version is maintained by hand, which is the only way a date
-could be correct anyway. The release workflow's tag check needed no change: it
-parses `${GITHUB_REF_NAME##*-v}`, which yields `2026.902.0` from
-`placement-probe-v2026.902.0`, and still rejects a stale tag. Verified against
-the workflow's own logic rather than assumed.
+**Release-please now assigns this calendar version**, replacing hand-maintained
+bumps. The date is the UTC proposal date, which can precede the release-PR merge.
+The shared automation rule is in the root
+[DESIGN-NOTES.md](../../DESIGN-NOTES.md#d-probe-releases) -> `D-PB`.
+The tag prefix remains `placement-probe-v`, and the release workflow compares
+its version against the built executable before publication.
 
 ## The schema freezes at the first release, not before
 

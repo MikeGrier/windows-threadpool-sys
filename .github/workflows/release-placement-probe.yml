@@ -12,10 +12,7 @@ on:
       - 'placement-probe-v*'
   # **A pull request touching the tool builds and verifies it, without
   # releasing.** This is what makes the release path exercised rather than
-  # hoped for, and it matters most for the `aarch64` artifact: `ci.yml`
-  # cross-compiles only `thumbv7em` for `wtf-string`, so nothing else in this
-  # repository would ever build the ARM64 target before a tag turned a failure
-  # into a broken release.
+  # hoped for, including the cross-compiled `aarch64` artifact.
   #
   # It also covers a trap in the alternative. `workflow_dispatch` is only
   # offered for workflows that already exist on the **default branch**, so a
@@ -34,8 +31,7 @@ on:
   # true because of that.
   pull_request:
     # **The dependencies are in this filter for a reason specific to ARM64.**
-    # This is the only workflow in the repository that builds
-    # `aarch64-pc-windows-msvc`, and `windows-placement-probe` compiles both
+    # This workflow builds `aarch64-pc-windows-msvc`, and the tool compiles both
     # path dependencies into itself. Filtering on this crate's own directory
     # alone meant a change to either dependency was exercised on x64 by `ci.yml`
     # and on no other architecture at all, so an architecture-specific
@@ -50,6 +46,8 @@ on:
       - 'Cargo.toml'
       - 'Cargo.lock'
       - 'rust-toolchain.toml'
+      - '.github/release/**'
+      - 'release-please-config.json'
   # Kept for a re-run after merge, when the file does live on the default
   # branch. Build-and-verify-only -- but **that is enforced below rather than
   # inherent**, and an earlier revision of this comment claimed otherwise.
@@ -245,6 +243,7 @@ jobs:
     steps:
       - uses: actions/download-artifact@v8
         with:
+          pattern: placement-probe-*
           path: artifacts
           merge-multiple: true
 
@@ -319,11 +318,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           if gh release view "${GITHUB_REF_NAME}" --repo "${GITHUB_REPOSITORY}" >/dev/null 2>&1; then
-            echo "Release ${GITHUB_REF_NAME} already exists; updating its notes and assets."
-            gh release edit "${GITHUB_REF_NAME}" \
-              --repo "${GITHUB_REPOSITORY}" \
-              --title "windows-placement-probe ${GITHUB_REF_NAME##*-v}" \
-              --notes-file notes.md
+            echo "Release ${GITHUB_REF_NAME} already exists; preserving its release-please notes."
           else
             gh release create "${GITHUB_REF_NAME}" \
               --repo "${GITHUB_REPOSITORY}" \

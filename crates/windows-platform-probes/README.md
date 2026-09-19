@@ -4,8 +4,8 @@ Executable probes for the Windows behaviour this workspace's designs rest on --
 supported, documented APIs, in the specific cases their documentation does not
 describe.
 
-**Windows only. Not published** -- this crate exists to keep measurements honest,
-not to be depended on.
+**Windows only. Binary releases, not a crates.io library** -- this crate exists
+to keep measurements honest, not to be depended on.
 
 **An experiment, not a component.** These probes measure platform behaviour and
 are not for production use: that scope is what lets one do things a shipping
@@ -62,7 +62,30 @@ would make the test a check of the copy rather than of the platform.
 Every tier is **compiled** by an ordinary workspace build. That is the floor: a
 probe that no longer compiles has already rotted.
 
-## Running
+## Downloads
+
+Download the x64 or ARM64 ZIP from the
+[platform-probe releases](https://github.com/MikeGrier/windows-threadpool-sys/releases?q=windows-platform-probes-v).
+The archive contains the probe executables, this README, the license, and a
+build-identity JSON file naming the version, architecture and source commit.
+The SHA-256 sidecar detects a changed download; the GitHub attestation verifies
+the archive's provenance. For the x64 archive:
+
+```text
+gh attestation verify windows-platform-probes-x86_64.zip --repo MikeGrier/windows-threadpool-sys
+```
+
+ARM64 uses the corresponding `aarch64` filename. These are not Authenticode-signed
+executables. Extract the archive and run the particular experiment whose
+behavior you intend to measure; some experiments require privileges, change
+process-wide state or intentionally hang. The binary-only tier below is not
+a batch test suite.
+
+Release-please assigns UTC calendar versions and CI builds the default features;
+the test-only renderer oracle is excluded. See the repository's
+[release process](../../DEVELOPMENT.md#release-process).
+
+## Running From Source
 
 ```text
 cargo test  --package windows-platform-probes --features oracle-in-renderer     # asserted tier + required-feature integration target

@@ -1,4 +1,5 @@
 {
+  "crates/windows-placement-probe": "2026.902.0",
   "crates/windows-file-enumeration-sys": "0.1.1",
   "crates/windows-file-watcher": "0.2.0",
   "crates/windows-file-watcher-example-test-harness": "0.1.3",
