@@ -65,6 +65,10 @@ These items are in dependency order. Resolve and commit one item before beginnin
   constraints and correctness/measurement obligations. Record outcomes and review each speculative path for retention, revision,
   merge or deletion before generalizing the catalog. The full contract need not be settled before
   experiments can inform it.
+  > **-> CROSS-COMPONENT HANDOFF:** next work is the isolated
+  > `experiments/read-checksum` component -> `RC` -> `RC-1`; see its
+  > [CHECKLIST.md](experiments/read-checksum/CHECKLIST.md). Return here to interpret
+  > the measurements; this item remains open.
   Plan the scenario/goal contract, plan invariants and errors, deterministic policy and tie-breaking,
   measurement permission and failure behavior, callback semantics, JSON compatibility, storage,
   network, and interconnect policy, routed-hop representation, and synthetic acceptance cases.
