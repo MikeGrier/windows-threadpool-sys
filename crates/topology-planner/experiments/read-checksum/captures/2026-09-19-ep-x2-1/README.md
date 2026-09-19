@@ -57,9 +57,12 @@ unchanged by [EP-D-11](../../../../DESIGN-NOTES.md#ep-d-11)'s acceptance-policy 
 The single future physical follow-up is parent [CHECKLIST.md](../../../../CHECKLIST.md)
 -> `EP-HW.1`; no additional timing run is required to close EP-X2.1's software work.
 
-Remaining behavioral coverage and disposition review return to `EP-R1.7`. The shared
-faux environment is queued as `EP-R1.7.2`; existing selector tests alone do not claim
-that integration coverage. Other paused MX work is not implicitly resumed.
+Behavioral coverage and disposition are complete in parent
+[COMPLETED-CHECKLIST.md](../../../../COMPLETED-CHECKLIST.md#ep-x21), together with
+`EP-R1.7.2`. The actual gathering, selection and schedulers now run against one
+faux environment, as documented in [DESIGN-NOTES.md](../../DESIGN-NOTES.md) -> `RC-D11`.
+That later behavioral validation changes none of these recorded hardware observations.
+Other paused MX work is not implicitly resumed.
 The generated-buffer prerequisite is now implemented here; `EP-X1.5` still owns its
 working-set and device-path comparisons.
 

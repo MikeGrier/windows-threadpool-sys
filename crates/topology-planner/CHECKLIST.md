@@ -37,7 +37,7 @@ prerequisites rather than on someone else's decision.
 |---|---|---|
 | MR1 design-review reconciliation | active | EP-R1.7.1 reconciles the EP-D-10 startup-cost boundary before further MX work |
 | MX1 controlled read/checksum comparisons | paused for scope reconciliation | EP-X1.2 evidence retained; EP-R1.7.1 precedes closure or further execution |
-| MX2 locality and ownership patterns | EP-X2.1 locally captured | Behavioral coverage/review only; shared faux-NUMA work is EP-R1.7.2, hardware fidelity is not a gate |
+| MX2 locality and ownership patterns | EP-X2.1 complete | Placement behavior validated with EP-R1.7.2; later work remains paused by EP-R1.7.1 |
 | MX3 real endpoints, composition and synthesis | not started | MX2 ownership/ordering evidence and the permissions/hardware named by each experiment |
 | M1 the input contract | 4 done, 1 open | `EP-1.4` waits on EP-R1.7 |
 | M1+ scenario and naming | 2 done, 3 open | EP-R1.7 owns the topology specification and callbacks; `EP-1+.5` then settles remaining names |
@@ -107,16 +107,7 @@ item; do not start `EP-R1.8` merely because one experiment has finished.
   zero probes, budget exhaustion and no hidden workload validation during setup. Settle EP-X1.2's
   disposition and the next experiment with the engineer before resuming MX execution.
 
-- [ ] **EP-R1.7.2** -- **Implement and adopt a consistent faux-NUMA test environment.**
-  Follow [EP-D-11](DESIGN-NOTES.md#ep-d-11): inject observations at the gathering boundary
-  and use the same scenario/state for fake allocation, binding and residency operations.
-  Exercise existing consumers through those boundaries with deterministic normal and edge
-  cases, including both transfer directions, unknowns, refusals and cleanup. Prove that
-  synthetic identities cannot reach live affinity/allocation calls and that changing injected
-  topology changes consumer decisions. Retain selector unit tests but do not count them alone
-  as end-to-end coverage. Queue adoption by future planner/realizer components in EP-R1.8;
-  do not claim tests of production components that do not yet exist. No physical timing model,
-  hardware acquisition or performance baseline is part of this software work.
+- [x] **EP-R1.7.2** -- Implement and adopt a consistent faux-NUMA test environment. -> [completed 2026-09-19](COMPLETED-CHECKLIST.md#ep-r172)
 
 - [ ] **EP-R1.8** -- **Materialize executable component-local plans after names and contracts are
   settled.** Create dependency-ordered checklists and reciprocal cross-component handoffs for
@@ -124,12 +115,13 @@ item; do not start `EP-R1.8` merely because one experiment has finished.
   realizer. Move the model, specification, query-trait, measurement-vocabulary, and plan-value work
   to their owning component. Each plan must identify its first implementable item without a
   provisional crate name or an unstated contract prerequisite.
+  Carry EP-R1.7.2's consistent gathering/fake-realization acceptance into each owning
+  component, including zero leakage of synthetic identities into live placement calls.
 
 ## Experiment execution rules for MX1 through MX3
 
-**Execution paused pending `EP-R1.7.1`, except the explicitly authorized offline `EP-X2.1`.**
-[EP-D-10](DESIGN-NOTES.md#ep-d-10) remains the startup constraint. EP-X2.1 includes its
-generated-buffer prerequisite and captures available hardware placements. The shared NUMA
+**Further experiment execution is paused pending `EP-R1.7.1`; the authorized EP-X2.1 is complete.**
+[EP-D-10](DESIGN-NOTES.md#ep-d-10) remains the startup constraint. The shared NUMA
 validation policy is [EP-D-11](DESIGN-NOTES.md#ep-d-11); physical hardware is not an item
 or milestone gate. Other items retain their work and remain
 paused. Existing captures and completed work are unchanged.
@@ -227,35 +219,7 @@ same item ID; do not create an unowned implementation queue.
 
 ## MX2: locality and ownership patterns
 
-- [ ] **EP-X2.1** -- **Validate placement and directed buffer-transfer behavior.**
-  **Implementation and local capture recorded:** review the
-  [capture record](experiments/read-checksum/captures/2026-09-19-ep-x2-1/README.md).
-  Finish the behavioral coverage and disposition review under
-  [EP-D-11](DESIGN-NOTES.md#ep-d-11), using EP-R1.7.2's shared environment for the missing
-  gathering-to-consumer/fake-realization coverage. Physical cross-NUMA timing is not a
-  closure requirement. This remains open for software coverage/review, not absent hardware.
-  **Authorized offline scope:** implement the generated-buffer companion, independent payload
-  placement and synthetic selection checks; capture the core/cache placements exposed by this
-  host. Existing physical observations remain labelled as recorded; the shared fidelity
-  limitation and eventual live multi-node follow-up are owned by EP-D-11 and EP-HW.1.
-  The engineer approved this hardware-limited sequence; it does not complete EP-R1.7.1 or
-  alter the production startup budget. Use the bounded protocol in
-  [DESIGN-NOTES.md](experiments/read-checksum/DESIGN-NOTES.md#rc-d10-offline-placement-comparison).
-  **Question:** do processor relationships, directed transfers and payload placement produce
-  the specified decisions and operations? **Controls:** use the read/checksum and generated-buffer cases
-  from MX1; vary worker bindings and buffer placement separately across available core,
-  cache and memory-domain relationships, testing both transfer directions.
-  **Evidence:** injected-topology provenance, expected and recorded binding/allocation/transfer
-  requests, fake residency outcomes and failure/rundown checks; retain existing live captures
-  as exploratory evidence, not a performance baseline or acceptance threshold.
-  **Review:** record behavioral coverage without collapsing proximity into a
-  total order or turning developer-chosen transfers into errors.
-  > **CROSS-COMPONENT PREREQUISITE:** parent `topology-planner` authorizes
-  > `experiments/read-checksum` -> `MX2` -> `EP-X2.1` as the sole exception to the pause.
-  > It brings its generated-buffer prerequisite forward without closing EP-X1.5.
-  > **-> CROSS-COMPONENT HANDOFF:** return from `experiments/read-checksum` -> `MX2` ->
-  > `EP-X2.1` to `topology-planner` -> `MR1` -> `EP-R1.7` for behavioral coverage and
-  > disposition review. EP-X2.2 remains paused by scope reconciliation, not hardware fidelity.
+- [x] **EP-X2.1** -- Validate placement and directed buffer-transfer behavior. -> [completed 2026-09-19](COMPLETED-CHECKLIST.md#ep-x21)
 
 - [ ] **EP-X2.2** -- **Compare shared completion service with assigned request lanes.**
   **Question:** how do shared workers and explicit ownership respond to independent
@@ -266,8 +230,8 @@ same item ID; do not create an unowned implementation queue.
   utilization, admission pressure and rundown. **Review:** distinguish scheduling flexibility
   from ownership locality; do not preselect pinning or invent an MPMC queue from an MPSC API.
   > **CROSS-COMPONENT PREREQUISITE:** `experiments/read-checksum` -> `MX2` ->
-  > `EP-X2.1` returns its behavioral coverage and limitations before this component specifies
-  > the request experiment; the shared physical-hardware limitation is not a prerequisite.
+  > `EP-X2.1` has returned its [behavioral coverage](COMPLETED-CHECKLIST.md#ep-x21).
+  > This item still waits on EP-R1.7.1 scope reconciliation, not physical NUMA hardware.
 
 - [ ] **EP-X2.3** -- **Compare shared state with key-owned processing.**
   **Question:** when do routing and ownership change the cost of a stateful workload?

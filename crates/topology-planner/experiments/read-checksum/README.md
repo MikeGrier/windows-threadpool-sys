@@ -1,9 +1,9 @@
 # Read/checksum experiment
 
 An unpublished experiment supporting topology-planner `EP-R1.7`, not a production
-planner or measurement-foundation API. See [DESIGN-NOTES.md](DESIGN-NOTES.md) for
-the measurement contract and the parent [CHECKLIST.md](../../CHECKLIST.md), `MX1`
-and `EP-X2.1`, for remaining work.
+planner or measurement-foundation API. See [DESIGN-NOTES.md](DESIGN-NOTES.md) for the
+measurement contract and the parent [CHECKLIST.md](../../CHECKLIST.md) for remaining work.
+EP-X2.1's behavioral completion is in [COMPLETED-CHECKLIST.md](../../COMPLETED-CHECKLIST.md#ep-x21).
 The first observations are in the [capture record](captures/2026-09-19/README.md).
 The role-swapped repeats are in the
 [EP-X1.1 capture record](captures/2026-09-19-ep-x1-1/README.md).
@@ -183,3 +183,20 @@ Run the package's ordinary Cargo test suite for deterministic checks and live
 file/thread cases. The live comparison requires a host with a selectable same-domain,
 distinct-core processor pair. [sabotage.json](sabotage.json) supplies a wrong-offset injection
 and a non-defect control for [run-sabotage.ps1](../../../../tools/run-sabotage.ps1).
+
+## Faux-NUMA behavioral validation
+
+The package's unit suite injects one test-only platform through the actual discovery,
+placement-selection and scheduler paths. Binding, allocation, residency and CPU
+observations all come from its shared scenario; generated inputs need no file or
+completion port. Tests use sparse logical node IDs and synthetic processor groups,
+record directed payload use, and verify release after normal completion and failures.
+The CLI always uses the real Windows provider and has no synthetic-execution mode.
+
+Faux reports are labelled `faux_numa_behavior_only_not_hardware_timing`. Their CPU
+fields are zero placeholders and elapsed fields measure the host test harness, not
+NUMA distances. No timing comparison is an acceptance criterion. Existing live tests
+exercise the Windows path separately. The contract and path disposition are in
+[DESIGN-NOTES.md](DESIGN-NOTES.md#rc-d11-consistent-platform-injection-through-actual-consumers).
+Future production-component adoption and the one physical-hardware follow-up remain
+in parent [CHECKLIST.md](../../CHECKLIST.md); EP-X2.1 is complete under that policy.

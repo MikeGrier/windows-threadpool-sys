@@ -14,7 +14,7 @@ use serde::{Deserialize, Serialize};
 use windows_topology_sys::ProcessorId;
 
 pub use experiment::{Capture, run};
-pub use placement::{PlacementPlan, placement_plan};
+pub use placement::{PlacementPlan, discover_placements, placement_plan};
 
 const MAX_BUFFERS: usize = 1024;
 const MAX_POOL_BYTES: usize = 256 * 1024 * 1024;

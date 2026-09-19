@@ -12,6 +12,8 @@ use windows_sys::Win32::System::Threading::GetCurrentProcess;
 pub(crate) enum Payload {
     Heap(Vec<u8>),
     Numa(NumaPayload),
+    #[cfg(test)]
+    Faux(crate::platform::faux::FauxPayload),
 }
 
 pub(crate) struct NumaPayload {
@@ -24,6 +26,13 @@ pub(crate) struct NumaPayload {
 unsafe impl Send for NumaPayload {}
 
 impl Payload {
+    #[cfg(test)]
+    pub fn record_processing(&self) -> io::Result<()> {
+        if let Self::Faux(buffer) = self {
+            buffer.record_processing()?;
+        }
+        Ok(())
+    }
     pub fn is_numa(&self) -> bool {
         matches!(self, Self::Numa(_))
     }
@@ -59,12 +68,16 @@ impl Payload {
         match self {
             Self::Heap(buffer) => buffer.truncate(bytes),
             Self::Numa(buffer) => buffer.length = buffer.length.min(bytes),
+            #[cfg(test)]
+            Self::Faux(buffer) => buffer.bytes.truncate(bytes),
         }
     }
 
     pub fn resize(&mut self, bytes: usize, value: u8) {
         match self {
             Self::Heap(buffer) => buffer.resize(bytes, value),
+            #[cfg(test)]
+            Self::Faux(buffer) => buffer.bytes.resize(bytes, value),
             Self::Numa(buffer) => {
                 assert!(bytes <= buffer.capacity);
                 let old_length = buffer.length;
@@ -82,6 +95,8 @@ impl Deref for Payload {
     fn deref(&self) -> &[u8] {
         match self {
             Self::Heap(buffer) => buffer,
+            #[cfg(test)]
+            Self::Faux(buffer) => &buffer.bytes,
             Self::Numa(buffer) => unsafe {
                 std::slice::from_raw_parts(buffer.pointer.as_ptr(), buffer.length)
             },
@@ -93,6 +108,8 @@ impl DerefMut for Payload {
     fn deref_mut(&mut self) -> &mut [u8] {
         match self {
             Self::Heap(buffer) => buffer,
+            #[cfg(test)]
+            Self::Faux(buffer) => &mut buffer.bytes,
             Self::Numa(buffer) => unsafe {
                 std::slice::from_raw_parts_mut(buffer.pointer.as_ptr(), buffer.length)
             },

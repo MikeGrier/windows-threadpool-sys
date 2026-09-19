@@ -31,6 +31,8 @@ impl Job {
         queued: bool,
         check: impl FnMut() -> io::Result<()>,
     ) -> io::Result<Finished> {
+        #[cfg(test)]
+        self.buffer.record_processing()?;
         let started = Instant::now();
         let hash = checksum_checked(&self.buffer, passes, check)?;
         let completed = Instant::now();
@@ -61,7 +63,7 @@ struct Pending {
 
 pub(crate) struct Reader<'a> {
     endpoint: Option<AssociatedEndpoint<'a>>,
-    port: &'a CompletionPort,
+    port: Option<&'a CompletionPort>,
     pub free: Vec<Payload>,
     pending: HashMap<OperationId, Pending>,
     ready: VecDeque<Job>,
@@ -82,16 +84,20 @@ pub(crate) struct Reader<'a> {
 
 impl<'a> Reader<'a> {
     pub fn new(
-        port: &'a CompletionPort,
+        port: Option<&'a CompletionPort>,
         config: &Config,
         file_bytes: u64,
         blocks: usize,
         lane: usize,
         lanes: usize,
+        platform: &dyn crate::platform::Platform,
     ) -> io::Result<Self> {
         let endpoint = if config.input == InputKind::BufferedFile {
             let source = UnassociatedEndpoint::open(&config.file, true, false, 0)?;
-            Some(port.associate(source, FILE_COMPLETION_KEY)?)
+            Some(
+                port.expect("file reader has a completion port")
+                    .associate(source, FILE_COMPLETION_KEY)?,
+            )
         } else {
             None
         };
@@ -101,7 +107,7 @@ impl<'a> Reader<'a> {
             endpoint,
             port,
             free: (0..pool_size)
-                .map(|_| Payload::new(config.block_bytes, config.payload_node))
+                .map(|_| platform.allocate(config.block_bytes, config.payload_node))
                 .collect::<io::Result<_>>()?,
             pending: HashMap::with_capacity(pool_size),
             ready: VecDeque::with_capacity(pool_size),
@@ -193,7 +199,10 @@ impl<'a> Reader<'a> {
         if let Some(job) = self.ready.pop_front() {
             return Ok(Some(job));
         }
-        let Some(completion) = self.port.get(0)? else {
+        let Some(port) = self.port else {
+            return Ok(None);
+        };
+        let Some(completion) = port.get(0)? else {
             return Ok(None);
         };
         let id = completion

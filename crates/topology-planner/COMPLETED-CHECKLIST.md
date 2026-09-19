@@ -159,3 +159,38 @@ evidence requirements; `EP-X1.2` carries the repeat and role controls forward.
 > **-> CROSS-COMPONENT HANDOFF:** return from `experiments/read-checksum` -> `MX1` ->
 > `EP-X1.1` to `topology-planner` -> `MR1` -> `EP-R1.7` for the recorded result
 > discussion before advancing to `EP-X1.2` in [CHECKLIST.md](CHECKLIST.md).
+
+## Moved 2026-09-19 00:47:15 -07:00 -- Faux-NUMA behavioral completion
+
+### <a id="ep-r172"></a>EP-R1.7.2 -- Implement and adopt a consistent faux-NUMA test environment. *(completed 2026-09-19 00:47:15 -07:00)*
+
+The existing experiment now uses one injected platform for gathering, binding,
+allocation, CPU observations and residency. Its test-only faux provider shares
+topology, logical binding and allocation state across the real schedulers; owned
+fake payloads record processing and release. End-to-end tests exercise both transfer
+directions, changed topology, sparse nodes/groups, unknown/mismatched residency,
+refusals and cleanup after partial setup and processing failures. Sabotage confirms
+that bypassing gathering, binding or allocation, or ignoring the requested node,
+is detected. Live tests remain a separate check of the real Windows provider.
+
+Recorded as experiment [DESIGN-NOTES.md](experiments/read-checksum/DESIGN-NOTES.md)
+-> `RC-D11`, applying [EP-D-11](DESIGN-NOTES.md#ep-d-11). Adoption by future production
+components is explicitly carried into EP-R1.8 in [CHECKLIST.md](CHECKLIST.md), not
+claimed implemented here. This item and EP-X2.1 landed together because the injected
+boundary and its first actual-consumer validation are one coupled change.
+
+### <a id="ep-x21"></a>EP-X2.1 -- Validate placement and directed buffer-transfer behavior. *(completed 2026-09-19 00:47:15 -07:00)*
+
+Retain the separate schedulers, heap/NUMA allocation paths and generated companion
+as experimental paths with no production tuning default. The prior
+[local capture](experiments/read-checksum/captures/2026-09-19-ep-x2-1/README.md)
+remains exploratory evidence. The new gathering-to-selection-to-scheduler tests
+complete behavioral acceptance under EP-D-11; they do not model memory-distance
+costs. Physical fidelity remains solely EP-HW.1, non-blocking for completion.
+
+> **CROSS-COMPONENT PREREQUISITE:** parent `topology-planner` -> `EP-R1.7.2`
+> supplies the consistent environment used by `experiments/read-checksum` -> `EP-X2.1`.
+> **-> CROSS-COMPONENT HANDOFF:** return to `topology-planner` -> `MR1` ->
+> `EP-R1.7.1` for scope reconciliation in [CHECKLIST.md](CHECKLIST.md).
+> EP-X2.2 is not started by this completion; its hardware gate is discharged by policy,
+> and its scope hold remains unchanged.

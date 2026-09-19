@@ -17,7 +17,47 @@ use windows_sys::Win32::System::Threading::{
 };
 use windows_topology_sys::{MachineMemoryTopology, Observed, ProcessorId, Source};
 
+use crate::payload::Payload;
 use crate::{failed, invalid};
+
+#[cfg(test)]
+pub(crate) mod faux;
+
+pub(crate) trait Platform: Sync {
+    fn synthetic(&self) -> bool;
+    fn discover(&self) -> io::Result<MachineMemoryTopology>;
+    fn pin(&self, processor: ProcessorId) -> io::Result<()>;
+    fn current_processor(&self) -> ProcessorId;
+    fn cpu_ns(&self) -> io::Result<u64>;
+    fn allocate(&self, bytes: usize, node: Option<u32>) -> io::Result<Payload>;
+    fn residency(&self, buffers: &[Payload]) -> io::Result<Residency>;
+}
+
+pub(crate) struct WindowsPlatform;
+
+impl Platform for WindowsPlatform {
+    fn synthetic(&self) -> bool {
+        false
+    }
+    fn discover(&self) -> io::Result<MachineMemoryTopology> {
+        MachineMemoryTopology::discover()
+    }
+    fn pin(&self, processor: ProcessorId) -> io::Result<()> {
+        pin(processor)
+    }
+    fn current_processor(&self) -> ProcessorId {
+        current_processor()
+    }
+    fn cpu_ns(&self) -> io::Result<u64> {
+        cpu_ns()
+    }
+    fn allocate(&self, bytes: usize, node: Option<u32>) -> io::Result<Payload> {
+        Payload::new(bytes, node)
+    }
+    fn residency(&self, buffers: &[Payload]) -> io::Result<Residency> {
+        residency(buffers)
+    }
+}
 
 pub(crate) fn select_processors(
     machine: &MachineMemoryTopology,

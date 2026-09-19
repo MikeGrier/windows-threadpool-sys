@@ -354,6 +354,7 @@ fn processor_loop(
 }
 
 struct TrialContext<'a> {
+    platform: &'a dyn platform::Platform,
     config: &'a Config,
     file_bytes: u64,
     blocks: usize,
@@ -367,7 +368,8 @@ fn worker(
     gate: Gate,
 ) -> io::Result<WorkerResult> {
     let config = context.config;
-    platform::pin(processor)?;
+    let platform = context.platform;
+    platform.pin(processor)?;
     let mut report = WorkerReport {
         role: "processor",
         requested_processor: processor,
@@ -397,8 +399,8 @@ fn worker(
             deadline: start + Duration::from_millis(config.timeout_ms),
             cancel: context.cancel,
         };
-        report.processor_at_start = platform::current_processor();
-        let cpu_start = platform::cpu_ns()?;
+        report.processor_at_start = platform.current_processor();
+        let cpu_start = platform.cpu_ns()?;
         processor_loop(
             &receive,
             &returns,
@@ -407,8 +409,8 @@ fn worker(
             &budget,
             &mut report.batches,
         )?;
-        report.cpu_ns = platform::cpu_ns()? - cpu_start;
-        report.processor_at_end = platform::current_processor();
+        report.cpu_ns = platform.cpu_ns()? - cpu_start;
+        report.processor_at_end = platform.current_processor();
         let finished = Instant::now();
         report.completed = context.blocks;
         report.checksummed_blocks = context.blocks;
@@ -423,26 +425,31 @@ fn worker(
         Role::Direct { lane, lanes } => (*lane, *lanes),
         _ => (0, 1),
     };
-    let port = CompletionPort::new(1)?;
+    let port = if config.input == InputKind::BufferedFile {
+        Some(CompletionPort::new(1)?)
+    } else {
+        None
+    };
     let mut reader = Reader::new(
-        &port,
+        port.as_ref(),
         config,
         context.file_bytes,
         context.blocks,
         lane,
         lanes,
+        platform,
     )?;
     report.buffer_capacity = reader.free.len();
     report.numa_backed_buffers = reader.free.iter().filter(|buffer| buffer.is_numa()).count();
     report.read_capacity = reader.read_limit;
-    report.pages_before = Some(platform::residency(&reader.free)?);
+    report.pages_before = Some(platform.residency(&reader.free)?);
     let start = gate.wait()?;
     let budget = Budget {
         deadline: start + Duration::from_millis(config.timeout_ms),
         cancel: context.cancel,
     };
-    report.processor_at_start = platform::current_processor();
-    let cpu_start = platform::cpu_ns()?;
+    report.processor_at_start = platform.current_processor();
+    let cpu_start = platform.cpu_ns()?;
     match role {
         Role::Direct { .. } => {
             report.role = "direct";
@@ -457,20 +464,22 @@ fn worker(
         }
         Role::Processor { .. } => unreachable!(),
     }
-    report.cpu_ns = platform::cpu_ns()? - cpu_start;
-    report.processor_at_end = platform::current_processor();
+    report.cpu_ns = platform.cpu_ns()? - cpu_start;
+    report.processor_at_end = platform.current_processor();
     let finished = Instant::now();
     report.submitted = reader.submitted;
     report.completed = reader.results.len();
     report.peak_outstanding_reads = reader.peak_io;
     report.peak_leased_buffers = reader.peak_leased;
     report.buffer_pressure_observations = reader.buffer_pressure_observations;
-    if port.outstanding() != 0 || reader.free.len() != config.buffers() / lanes {
+    if port.as_ref().is_some_and(|port| port.outstanding() != 0)
+        || reader.free.len() != config.buffers() / lanes
+    {
         return Err(failed(
             "trial completed without draining all I/O and buffer credits",
         ));
     }
-    report.pages_after = Some(platform::residency(&reader.free)?);
+    report.pages_after = Some(platform.residency(&reader.free)?);
     Ok(WorkerResult {
         report,
         results: reader.results,
@@ -484,8 +493,8 @@ fn run_trial(
     expected: &[u64],
     pair: [ProcessorId; 2],
     comparison: Comparison,
-    repetition: usize,
-    position: usize,
+    trial_id: (usize, usize),
+    platform: &dyn platform::Platform,
 ) -> io::Result<Trial> {
     let arrangement = comparison.arrangement;
     let pair = comparison.processors(pair);
@@ -497,6 +506,7 @@ fn run_trial(
         .count();
     let cancel = AtomicBool::new(false);
     let context = TrialContext {
+        platform,
         config,
         file_bytes,
         blocks: expected.len(),
@@ -591,8 +601,8 @@ fn run_trial(
         .map(|report| report.buffer_capacity * config.block_bytes)
         .sum();
     Ok(Trial {
-        repetition,
-        position,
+        repetition: trial_id.0,
+        position: trial_id.1,
         arrangement,
         reversed: comparison.reversed,
         resources: Resources {
@@ -620,6 +630,18 @@ fn run_trial(
 }
 
 pub fn run(config: Config) -> io::Result<Capture> {
+    run_with_platform(config, &platform::WindowsPlatform)
+}
+
+pub(crate) fn run_with_platform(
+    config: Config,
+    platform: &dyn platform::Platform,
+) -> io::Result<Capture> {
+    if platform.synthetic() && config.input != InputKind::Generated {
+        return Err(invalid(
+            "faux NUMA only permits generated input; no live file/IOCP path",
+        ));
+    }
     let mut fixture = if config.input == InputKind::BufferedFile {
         Some(
             OpenOptions::new()
@@ -642,7 +664,7 @@ pub fn run(config: Config) -> io::Result<Capture> {
             .ok_or_else(|| invalid("generated_bytes is required"))?
     };
     let blocks = config.validate(file_bytes)?;
-    let topology = MachineMemoryTopology::discover()?;
+    let topology = platform.discover()?;
     if config
         .payload_node
         .is_some_and(|node| !platform::memory_nodes(&topology).contains(&node))
@@ -676,21 +698,39 @@ pub fn run(config: Config) -> io::Result<Capture> {
 
     drop(buffer);
     for comparison in comparison_order(0) {
-        run_trial(&config, file_bytes, &expected, pair, comparison, 0, 0)?;
+        run_trial(
+            &config,
+            file_bytes,
+            &expected,
+            pair,
+            comparison,
+            (0, 0),
+            platform,
+        )?;
     }
     let mut trials = Vec::with_capacity(config.repetitions * comparison_order(0).len());
     for repetition in 0..config.repetitions {
         for (position, comparison) in comparison_order(repetition).into_iter().enumerate() {
             trials.push(run_trial(
-                &config, file_bytes, &expected, pair, comparison, repetition, position,
+                &config,
+                file_bytes,
+                &expected,
+                pair,
+                comparison,
+                (repetition, position),
+                platform,
             )?);
         }
     }
     // The handle denying writes/deletion stays alive through reference validation and all trials.
     drop(fixture);
-    let evidence_class = match config.input {
-        InputKind::BufferedFile => "buffered_file_closed_loop_after_reference_read",
-        InputKind::Generated => "generated_buffers_closed_loop_including_producer_fill",
+    let evidence_class = if platform.synthetic() {
+        "faux_numa_behavior_only_not_hardware_timing"
+    } else {
+        match config.input {
+            InputKind::BufferedFile => "buffered_file_closed_loop_after_reference_read",
+            InputKind::Generated => "generated_buffers_closed_loop_including_producer_fill",
+        }
     };
     Ok(Capture {
         schema: "read-checksum-v4",

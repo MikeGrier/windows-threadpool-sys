@@ -1,6 +1,6 @@
 # Experimental contract
 
-**Only offline EP-X2.1 is authorized while parent [CHECKLIST.md](../../CHECKLIST.md) -> `EP-R1.7.1` remains open.**
+**EP-X2.1 is complete; further experiments await parent [CHECKLIST.md](../../CHECKLIST.md) -> `EP-R1.7.1`.**
 These protocols describe offline experiments, not required startup work. Parent
 [EP-D-10](../../DESIGN-NOTES.md#ep-d-10) controls the planning and realization budget;
 existing measurements and their experimental definitions remain retained.
@@ -276,8 +276,43 @@ the existing isolated schedulers. These remain experimental, not a production
 planner dependency or default. Revisit retain/merge/delete under the parent's
 [CHECKLIST.md](../../CHECKLIST.md) -> `EP-X3.3`, or earlier on a changed question.
 The [local capture](captures/2026-09-19-ep-x2-1/README.md) records what was observed.
-EP-X2.1's remaining review concerns behavioral coverage and disposition. Parent
-`EP-R1.7.2` implements the consistent faux environment; the existing selector tests
-are not a claim that gathering and fake realization have been exercised end to end.
-Physical timing is not required for behavioral completion. The generated-buffer companion
+EP-X2.1's behavioral acceptance is complete through `RC-D11`, including parent
+`EP-R1.7.2`'s consistent faux environment and actual scheduler execution. Physical
+timing is not required for behavioral completion. The generated-buffer companion
 is now available to EP-X1.5 without closing its working-set/device-path obligations.
+
+## RC-D11: consistent platform injection through actual consumers
+
+All discovery and NUMA-related worker operations in the experiment route through
+the internal `Platform` boundary in [platform.rs](src/platform.rs): discovery,
+binding/current processor, allocation, CPU sampling and payload residency. The
+production entry points select `WindowsPlatform`; the CLI exposes no synthetic-ID
+execution mode. The test-only [faux.rs](src/platform/faux.rs) owns one topology,
+binding map, allocation registry and event record for the entire run.
+
+The same placement selector, direct/independent/pipeline schedulers, checksum
+verification, credit bounds and cancellation/rundown code execute with either
+provider. Faux allocations are heap-backed owned payloads, not NUMA mappings; their
+logical nodes and before/after residency derive from the shared scenario. A fake
+payload cannot be observed by a foreign environment. Generated input needs no
+completion port; faux runs reject the live file/IOCP path before discovery or setup.
+
+Tests use synthetic processor groups and sparse node IDs outside this host's
+identities. Allocation/use/release events establish both transfer directions and
+cleanup. Topology changes enter through discovery and change automatic selection
+and default allocation placement. Controlled faults cover discovery, binding,
+partial allocation, pre/post residency, processing and CPU observations; unknown
+and mismatched residency remain distinct from the requested node.
+
+Synthetic reports use `faux_numa_behavior_only_not_hardware_timing`. CPU values
+are zero placeholders, and wall/latency fields are host test-harness durations,
+not simulated memory-distance or performance observations. No sleeps, distance
+penalties or tuning thresholds are introduced. Real file/NUMA integration remains
+covered by the existing live suite. [sabotage.json](sabotage.json) checks that
+bypassing the injected discovery/binding/allocation or ignoring a requested logical
+node changes behavior and fails the tests.
+
+Retain all experimental paths, with eventual disposition still owned by EP-X3.3.
+This closes the current-consumer software work of EP-X2.1 and EP-R1.7.2; future
+planner/realizer adoption is queued in parent EP-R1.8. The single physical-fidelity
+follow-up remains EP-HW.1 under parent [EP-D-11](../../DESIGN-NOTES.md#ep-d-11).

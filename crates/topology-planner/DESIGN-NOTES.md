@@ -726,8 +726,11 @@ software work; this decision does not mark it tested. Performance baselines, siz
 validation and universal tuning thresholds are not goals of this acceptance policy.
 An explicitly requested future performance claim must name its evidence separately.
 
-[CHECKLIST.md](CHECKLIST.md) -> `EP-R1.7.2` queues the shared faux environment and its
-adoption; existing synthetic selector tests are only part of that validation.
+[COMPLETED-CHECKLIST.md](COMPLETED-CHECKLIST.md#ep-r172) records the shared faux environment
+and adoption by the current experiment's actual consumers. Future planner/realizer
+adoption remains queued in [CHECKLIST.md](CHECKLIST.md) -> `EP-R1.8`. Existing synthetic
+selector tests are supplemented by the gathering-to-scheduler/fake-realization tests;
+this does not claim tests of production components not yet implemented.
 `EP-HW.1` is the single later physical-NUMA follow-up, triggered by hardware access.
 It checks the real gathering/realization boundaries against behavior tested with
 faux NUMA and records discrepancies; it is not a prerequisite for other milestones.

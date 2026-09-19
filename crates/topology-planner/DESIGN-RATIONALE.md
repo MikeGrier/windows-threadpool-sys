@@ -307,10 +307,15 @@ Nothing in that model mimics actual memory distances. Repeating this limitation 
 unfinished work across items and milestones adds no validation and prevents honest
 completion of software already tested against its specified inputs.
 
-[EP-D-11](DESIGN-NOTES.md#ep-d-11) records the decision. The shared environment is
-software work under [CHECKLIST.md](CHECKLIST.md) -> `EP-R1.7.2`; the one physical
-follow-up is `EP-HW.1`. Existing selector tests and local captures are retained,
-without claiming they already exercise a uniformly injected gathering-to-realization
-environment. Only that actual coverage gap, not absent hardware, stays with the
-current software review. The discussion continues in
+[EP-D-11](DESIGN-NOTES.md#ep-d-11) records the decision. The shared environment and
+its adoption by actual experimental consumers are now recorded in
+[COMPLETED-CHECKLIST.md](COMPLETED-CHECKLIST.md#ep-r172). A private platform boundary
+was added to the existing gathering and scheduler code rather than testing a second
+implementation of their decisions. Generated input avoids OS completion ports;
+fake payloads preserve logical residency and record cross-thread use and release.
+Controlled refusals exercise cancellation and cleanup through the same loops.
+Sabotaging provider use establishes that the tested consumers depend on the injected
+state. Existing live tests and captures remain separate; no NUMA timing fidelity is
+claimed. The one physical follow-up remains `EP-HW.1`, and future component adoption
+is queued in [CHECKLIST.md](CHECKLIST.md) -> `EP-R1.8`. The discussion continues in
 [DESIGN-SESSION-2026-09-18-topology-first-startup.md](design-sessions/DESIGN-SESSION-2026-09-18-topology-first-startup.md#follow-up-consistent-faux-numa).

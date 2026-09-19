@@ -42,6 +42,16 @@ pub struct PlacementPlan {
     pub unavailable: Vec<&'static str>,
 }
 
+pub fn discover_placements() -> std::io::Result<PlacementPlan> {
+    gather_placements(&crate::platform::WindowsPlatform)
+}
+
+pub(crate) fn gather_placements(
+    platform: &dyn crate::platform::Platform,
+) -> std::io::Result<PlacementPlan> {
+    Ok(placement_plan(&platform.discover()?))
+}
+
 fn members(
     machine: &MachineMemoryTopology,
     pair: [ProcessorId; 2],

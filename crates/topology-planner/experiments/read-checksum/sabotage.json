@@ -3,6 +3,38 @@
   "description": "Read identity, payload-credit measurement and checksum guards, plus an equivalent chunking control.",
   "sabotages": [
     {
+      "name": "consumer bypasses faux gathering",
+      "file": "src/experiment.rs",
+      "expect": "caught",
+      "why": "The scheduler must use the injected topology; live discovery cannot validate synthetic processor and node requests.",
+      "find": "let topology = platform.discover()?;",
+      "replace": "let topology = MachineMemoryTopology::discover()?;"
+    },
+    {
+      "name": "consumer bypasses faux binding",
+      "file": "src/experiment.rs",
+      "expect": "caught",
+      "why": "Synthetic group identities cannot be used as host affinity; the same worker must bind through the injected platform.",
+      "find": "platform.pin(processor)?;",
+      "replace": "platform::pin(processor)?;"
+    },
+    {
+      "name": "consumer bypasses faux allocation",
+      "file": "src/reader.rs",
+      "expect": "caught",
+      "why": "Real NUMA allocation cannot stand in for the scenario's tracked buffers and node identities.",
+      "find": "platform.allocate(config.block_bytes, config.payload_node)",
+      "replace": "Payload::new(config.block_bytes, config.payload_node)"
+    },
+    {
+      "name": "faux allocation ignores the requested node",
+      "file": "src/platform/faux.rs",
+      "expect": "caught",
+      "why": "Both endpoint payload placements must be observed independently of the binding of the allocating reader.",
+      "find": "let node = requested.or_else(||",
+      "replace": "let node = requested.filter(|_| false).or_else(||"
+    },
+    {
       "name": "NUMA request falls back silently to heap buffers",
       "file": "src/payload.rs",
       "expect": "caught",

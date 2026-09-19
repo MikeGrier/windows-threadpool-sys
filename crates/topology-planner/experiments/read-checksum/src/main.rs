@@ -11,10 +11,9 @@ use windows_read_checksum_experiment::{Config, run, write_fixture};
 fn execute(args: &[String], output: &mut impl Write) -> io::Result<()> {
     match args {
         [command] if command == "placements" => {
-            let topology = windows_topology_sys::MachineMemoryTopology::discover()?;
             serde_json::to_writer(
                 &mut *output,
-                &windows_read_checksum_experiment::placement_plan(&topology),
+                &windows_read_checksum_experiment::discover_placements()?,
             )?;
             writeln!(output)
         }
