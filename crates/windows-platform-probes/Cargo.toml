@@ -2,7 +2,7 @@
 
 [package]
 name = "windows-platform-probes"
-version = "0.0.1"
+version = "2026.919.0"
 publish = false
 authors.workspace = true
 edition.workspace = true
