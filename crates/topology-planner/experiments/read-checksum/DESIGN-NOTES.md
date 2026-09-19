@@ -97,6 +97,6 @@ change is scheduled by this decision.
 The observations and limitations are in the
 [capture record](captures/2026-09-19/README.md). They require keeping processing
 parallelism distinct from stage separation in the next design discussion. Return
-to parent [CHECKLIST.md](../../CHECKLIST.md) `EP-R1.7` for that discussion;
-additional experimental dimensions already have `RC-2` in
-[CHECKLIST.md](CHECKLIST.md).
+to parent [CHECKLIST.md](../../CHECKLIST.md) `EP-R1.7` for that discussion.
+Its `MX1` and `EP-X2.1` now schedule the additional experimental dimensions;
+the experiment no longer maintains a separate action checklist.

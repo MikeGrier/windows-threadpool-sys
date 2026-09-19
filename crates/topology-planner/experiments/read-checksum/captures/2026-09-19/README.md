@@ -40,8 +40,8 @@ depth or block size. No platform-general ranking is assigned.
 
 The retain/revise decision is [DESIGN-NOTES.md](../../DESIGN-NOTES.md) -> `RC-D6`.
 Next design discussion returns to parent [CHECKLIST.md](../../../../CHECKLIST.md)
-`EP-R1.7`, which remains open. Expanded experiments are tracked as `RC-2` in the
-experiment's [CHECKLIST.md](../../CHECKLIST.md).
+`EP-R1.7`, which remains open. Expanded experiments are tracked there in `MX1`
+and `EP-X2.1`, beginning with `EP-X1.1`; there is no separate experiment action queue.
 
 To reproduce, regenerate the fixture at the path and byte count in an artifact,
 then use its `config` object as the executable's configuration. The commands and

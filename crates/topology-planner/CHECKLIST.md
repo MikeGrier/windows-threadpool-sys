@@ -17,9 +17,11 @@ kernels shared by the probes and runtime planner.
 
 ## Where this stands
 
-**Nothing is implemented.** MR1 is the active milestone: it records and resolves the contradictions
-and execution gaps found in the 2026-09-18 design review before the existing requirements work
-resumes. M1 remains a *requirements* milestone rather than an implementation one.
+**The production planner is not implemented.** MR1 is the active design milestone.
+Its `EP-R1.7` experiment program is itemized here as MX1 through MX3; the isolated
+read/checksum baseline is recorded in its
+[COMPLETED-CHECKLIST.md](experiments/read-checksum/COMPLETED-CHECKLIST.md#rc-1).
+M1 remains a *requirements* milestone rather than an implementation one.
 
 **Deferred past PR #56, by direction.** This component contributes only planning documents to that
 PR and no code. `windows-topology-sys`'s reshape lands there without it: per
@@ -33,7 +35,10 @@ prerequisites rather than on someone else's decision.
 
 | Milestone | State | What it is waiting on |
 |---|---|---|
-| MR1 design-review reconciliation | 6 done, 2 open | active; work in item order |
+| MR1 design-review reconciliation | active | EP-R1.7 drives MX1 through MX3; EP-R1.8 follows the resulting contracts and names |
+| MX1 controlled read/checksum comparisons | not started | begin with EP-X1.1, using the completed RC-1 capture |
+| MX2 locality and ownership patterns | not started | MX1 measurement controls; revise the sequence at each experiment review |
+| MX3 real endpoints, composition and synthesis | not started | MX2 ownership/ordering evidence and the permissions/hardware named by each experiment |
 | M1 the input contract | 4 done, 1 open | `EP-1.4` waits on EP-R1.7 |
 | M1+ scenario and naming | 2 done, 3 open | EP-R1.7 owns the topology specification and callbacks; `EP-1+.5` then settles remaining names |
 | M2+ the plan as a value | parked, **and needs re-cutting** | MR1, then EP-R1.8 and the resulting `topology-model` work |
@@ -43,6 +48,8 @@ prerequisites rather than on someone else's decision.
 ## MR1: reconcile the 2026-09-18 design review
 
 These items are in dependency order. Resolve and commit one item before beginning the next.
+For `EP-R1.7`, execute and discuss the MX experiment items below before closing the parent
+item; do not start `EP-R1.8` merely because one experiment has finished.
 
 - [x] **EP-R1.1** -- Runtime measurement ownership and its data boundary are settled. -> [completed 2026-09-18](COMPLETED-CHECKLIST.md#ep-r11)
 
@@ -80,6 +87,11 @@ These items are in dependency order. Resolve and commit one item before beginnin
   observed consequence without treating a deliberate transfer as inherently wrong. Include at least
   ten normal cases plus every identified edge case, and replace "deferred for litigation" with a
   linked decision or a concrete blocker and graduation trigger.
+  Use MX1 through MX3 below as the experiment work queue, revising it as evidence changes the plan.
+  > **-> CROSS-COMPONENT HANDOFF:** first experimental work is in
+  > `crates/topology-planner/experiments/read-checksum` -> `MX1` -> `EP-X1.1`
+  > below. Its [PLANS.md](experiments/read-checksum/PLANS.md) points back here;
+  > return to this component's `EP-R1.7` discussion after each experiment.
 
 - [ ] **EP-R1.8** -- **Materialize executable component-local plans after names and contracts are
   settled.** Create dependency-ordered checklists and reciprocal cross-component handoffs for
@@ -87,6 +99,189 @@ These items are in dependency order. Resolve and commit one item before beginnin
   realizer. Move the model, specification, query-trait, measurement-vocabulary, and plan-value work
   to their owning component. Each plan must identify its first implementable item without a
   provisional crate name or an unstated contract prerequisite.
+
+## Experiment execution rules for MX1 through MX3
+
+Keep this file as the experiment program's work queue; component plan indexes link to
+the owning items here rather than duplicating them in another checklist. Use the
+[research](DESIGN-RESEARCH-WORKLOAD-PATTERNS.md) and
+[working proposal](DESIGN-PROPOSAL-EP-R1.7.md) as hypotheses, not a fixed archetype catalog.
+
+For each item, specify the workload constraints, candidate arrangements, bounded parameter
+matrix, permissions, resource ceilings, stopping conditions and comparison criteria before
+implementation. Hold semantics and aggregate resource budgets equal within each paired
+comparison; label intentionally unequal controls. Use deterministic reference outcomes and
+exercise invalid input, pressure, cancellation and rundown as applicable. Record actual
+placement and distinguish synthetic, cached-file and physical-device evidence.
+
+Retain raw observations with source/configuration provenance, balanced run order and
+same-code controls. Record inconclusive results without promoting them to a ranking.
+Discuss the result and explicitly retain, revise, merge or delete each speculative path;
+update the working contract and affected future items, then commit that item before starting
+another. Do not wait for the final synthesis to record what an experiment teaches.
+
+Treat the order below as the current execution plan, not a promise that every hypothesis
+survives. If evidence changes a dependency or the next useful question, revise this checklist
+before continuing. If hardware, permission or a missing primitive blocks work, name the
+blocker and discuss the workaround or reordering; leave unperformed work unchecked.
+Mocked topology never substitutes for a hardware timing capture. Before work moves into
+another source-component, record the exact destination and reciprocal handoff against the
+same item ID; do not create an unowned implementation queue.
+
+## MX1: controlled read/checksum comparisons
+
+- [ ] **EP-X1.1** -- **Separate repeatability, stage separation and processing parallelism.**
+  **Question:** which differences in the first
+  [capture](experiments/read-checksum/captures/2026-09-19/README.md) persist under repeated
+  controls and swapped processor roles? **Controls:** retain the direct, handoff and
+  independent-worker paths; compare matched total CPU/read/buffer budgets while varying
+  how many workers perform checksum work. Keep the single-worker case as an explicitly
+  unequal-CPU reference. **Evidence:** per-block correctness, individual throughput/latency
+  and CPU observations, same-code spread and actual bindings. **Review:** identify which
+  comparisons distinguish stage overlap from additional compute capacity; revise the next
+  sweeps if the observed variation prevents that distinction.
+  > **CROSS-COMPONENT PREREQUISITE:** parent `topology-planner` -> `EP-R1.7`
+  > selects this comparison using completed `read-checksum` -> `RC-1`; see
+  > [COMPLETED-CHECKLIST.md](experiments/read-checksum/COMPLETED-CHECKLIST.md#rc-1).
+  > **-> CROSS-COMPONENT HANDOFF:** return to `topology-planner` -> `EP-R1.7`
+  > for the result discussion before advancing to `EP-X1.2`.
+
+- [ ] **EP-X1.2** -- **Isolate block size, compute work, read depth, queue capacity and batching.**
+  **Question:** how does each dimension change the comparison, rather than several changing
+  together? **Controls:** use `EP-X1.1`'s arrangements and a bounded one-factor-at-a-time
+  matrix, adding explicitly selected interactions; match aggregate budgets between candidates
+  at each matrix point. Include partial batches and short final blocks.
+  **Evidence:** correctness, useful throughput, stage/queue latency, CPU use, payload
+  occupancy and pressure, with the changed dimension recorded. **Review:** retain conditional
+  observations and choose subsequent cases without inventing a universal queue or batch size.
+  > **-> CROSS-COMPONENT HANDOFF:** return from `experiments/read-checksum` to
+  > `topology-planner` -> `EP-R1.7` before advancing to `EP-X1.3`.
+
+- [ ] **EP-X1.3** -- **Compare polling, waiting and bounded hybrid idle policies.**
+  **Question:** how much of a candidate's CPU use and response time comes from its idle and
+  backpressure policy? **Controls:** hold the workload, placement, topology and resource
+  bounds from selected `EP-X1.2` cases fixed; apply equivalent policy choices to comparable
+  roles, including empty input, full queues and an intermittently stalled processor.
+  **Evidence:** CPU time, wake/queue latency, progress and shutdown under pressure; verify
+  the real notification path cannot lose work or a wakeup. **Review:** separate policy
+  effects from arrangement effects and retain the measured policy choices explicitly.
+  > **-> CROSS-COMPONENT HANDOFF:** return from `experiments/read-checksum` to
+  > `topology-planner` -> `EP-R1.7` before advancing to `EP-X1.4`.
+
+- [ ] **EP-X1.4** -- **Measure independently paced arrivals and overload behavior.**
+  **Question:** what happens below, near and beyond the service rate, including bursts?
+  **Controls:** use deterministic scheduled-arrival traces and selected `EP-X1.2`/`EP-X1.3`
+  configurations; keep resource limits and the admission/rejection contract equal.
+  **Evidence:** offered, admitted, completed, rejected and cancelled identities; latency
+  from scheduled arrival, including generator lateness and pre-admission waiting; queue
+  pressure and recovery after a burst. **Review:** distinguish throughput from responsiveness,
+  account for unfinished work, and refine the workload's admission/deadline constraints.
+  > **-> CROSS-COMPONENT HANDOFF:** return from `experiments/read-checksum` to
+  > `topology-planner` -> `EP-R1.7` before advancing to `EP-X1.5`.
+
+- [ ] **EP-X1.5** -- **Separate generated-buffer, buffered-file and device-path evidence.**
+  **Question:** which differences remain when file/cache service is changed or removed?
+  **Controls:** retain equal transforms, logical inputs and per-comparison budgets; compare
+  a labelled generated-buffer companion, buffered working-set sweeps and an explicitly
+  authorized device-path experiment with its alignment/cache conditions established.
+  **Evidence:** the actual I/O mode, working set, completed bytes, CPU/latency distributions
+  and observed cache/device conditions; do not infer physical service from a mode flag alone.
+  **Review:** identify which claims each evidence class supports and what remains unmeasured.
+  > **-> CROSS-COMPONENT HANDOFF:** return from `experiments/read-checksum` to
+  > `topology-planner` -> `EP-R1.7` before advancing to `MX2` -> `EP-X2.1`.
+
+## MX2: locality and ownership patterns
+
+- [ ] **EP-X2.1** -- **Measure placement and directed buffer-transfer effects.**
+  **Question:** how do observed processor relationships and payload residency affect the
+  controlled comparisons? **Controls:** use the read/checksum and generated-buffer cases
+  from MX1; vary worker bindings and buffer placement separately across available core,
+  cache and memory-domain relationships, testing both transfer directions.
+  **Evidence:** topology provenance, achieved bindings, page residency, CPU/latency/throughput
+  and explicit unavailable placements. Validate selection with synthetic topology, but
+  obtain cross-domain timing from hardware exposing those domains.
+  **Review:** record conditional placement evidence without collapsing proximity into a
+  total order or turning developer-chosen transfers into errors.
+  > **-> CROSS-COMPONENT HANDOFF:** after work in `experiments/read-checksum`,
+  > return to `topology-planner` -> `MX2` -> `EP-X2.2` to specify the request experiment.
+
+- [ ] **EP-X2.2** -- **Compare shared completion service with assigned request lanes.**
+  **Question:** how do shared workers and explicit ownership respond to independent
+  request/reply work and imbalance? **Controls:** implement both as genuine candidates
+  over one backend, with the same request/reply semantics, worker ceiling, outstanding-work
+  bound and idle policy; use MX1's steady/burst traces and deterministic uneven service costs.
+  **Evidence:** exact request/reply correlation, per-lane and aggregate response distributions,
+  utilization, admission pressure and rundown. **Review:** distinguish scheduling flexibility
+  from ownership locality; do not preselect pinning or invent an MPMC queue from an MPSC API.
+  > **CROSS-COMPONENT PREREQUISITE:** `experiments/read-checksum` -> `MX2` ->
+  > `EP-X2.1` returns its placement evidence and limitations before this component specifies
+  > the request experiment; any blocked hardware comparison must be explicitly re-planned.
+
+- [ ] **EP-X2.3** -- **Compare shared state with key-owned processing.**
+  **Question:** when do routing and ownership change the cost of a stateful workload?
+  **Controls:** use a small counter/lookup service with shared synchronized state versus
+  key-owned workers, identical per-key ordering/results and total resource bounds; vary
+  deterministic key skew, read/write mix and service cost while holding placement explicit.
+  **Evidence:** reference state, reply identities, hot-key/lane latency, queue pressure,
+  CPU use and cancellation outcomes. **Review:** specify the state-ownership and partitioning
+  constraints that distinguish legal candidates, rather than treating skew as a machine fact.
+
+- [ ] **EP-X2.4** -- **Compare serial and staged ordered ingestion.**
+  **Question:** what overlap is legal and useful when operations have dependencies?
+  **Controls:** give records dependent transform/publication steps; compare one owner with
+  staged overlap while preserving the same declared publication order and bounded buffers.
+  Vary batches, service-time imbalance and injected failure at each boundary.
+  **Evidence:** a checked observable sequence, head-of-line delay, completed/aborted effects,
+  pressure and rundown; add real output I/O only with an explicit effect/durability contract.
+  **Review:** separate per-record dependency from global order and write down the cancellation
+  and visibility obligations needed to describe either arrangement.
+
+- [ ] **EP-X2.5** -- **Exercise scatter/gather and broadcast/branch/join constraints.**
+  **Question:** how do partitioning, fan-out and joining change ownership and pressure?
+  **Controls:** use deterministic partitionable transforms and a branched transform with a
+  reference result; compare serial, partitioned and staged arrangements under matched
+  aggregate budgets. Vary skew and a slow branch while preserving declared order and identity.
+  **Evidence:** exact membership at the join, payload ownership/reclamation, bounded
+  intermediate state, latency, pressure and cancellation of partially completed branches.
+  **Review:** retain the required flow/cardinality constraints and reject invalid arrangements
+  before measuring them; do not force distinct dependency shapes into one archetype.
+
+## MX3: real endpoints, composition and contract synthesis
+
+- [ ] **EP-X3.1** -- **Compare network receive and application-processing arrangements.**
+  **Question:** how do completion-side processing, staged processing and per-flow lanes
+  behave with real stream input? **Controls:** use declared framing and per-flow order,
+  matched bytes/transforms/resource bounds and reproducible steady/burst traffic; record
+  receive steering separately from application bindings and payload residency.
+  **Evidence:** frame/correlation correctness, fragmentation, disconnect/cancellation,
+  backpressure and latency/CPU observations. Label loopback separately from physical-NIC
+  captures; establish RSS/adapter observations and endpoint permissions before physical runs.
+  **Review:** identify which network-specific capabilities belong beside the common I/O
+  endpoint contract, without assuming device receive processing determines application ownership.
+
+- [ ] **EP-X3.2** -- **Compose a multi-endpoint transform/collate/output workload.**
+  **Question:** what changes when source, processing, aggregation and destination placement
+  interact in the motivating complex example? **Controls:** build from MX2's validated
+  dependencies and `EP-X3.1`'s endpoint distinctions; start with a reduced composition and
+  extend to separately observed storage/network endpoints. Compare shared, endpoint-owned
+  and intentionally transferring arrangements with identical logical results, ordering,
+  output-effect contracts and aggregate budgets.
+  **Evidence:** end-to-end identities/effects, achieved endpoint/worker/buffer placement,
+  per-stage pressure, directed transfers and recovery from one slow or failed endpoint.
+  **Review:** record which constraints survive composition; do not claim independent devices
+  or cross-NUMA behavior from multiple logical handles to one underlying resource.
+
+- [ ] **EP-X3.3** -- **Synthesize the experimental constraints into the working planner contract.**
+  **Question:** what must a workload description and candidate plan express to reproduce
+  the tested legal arrangements? **Controls:** replay representative recorded descriptors
+  against deterministic candidate construction and a shared constraint validator; include
+  accepted and rejected arrangements, unavailable evidence and bounded search exhaustion.
+  **Evidence:** trace each proposed constraint and acceptance case to an experiment or an
+  explicit untested design obligation; keep measured costs allocation-specific.
+  **Review:** reconcile the [working proposal](DESIGN-PROPOSAL-EP-R1.7.md), canonical decisions
+  and acceptance matrix, and record retain/revise/merge/delete dispositions without freezing
+  the catalog merely because this sequence ended. Return to `EP-R1.7`'s remaining contract
+  decisions before closing it and handing off naming/component plans to `EP-R1.8`.
 
 ## M1: state what the planner needs from the topology
 

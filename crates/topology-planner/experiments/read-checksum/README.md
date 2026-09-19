@@ -2,7 +2,8 @@
 
 An unpublished experiment supporting topology-planner `EP-R1.7`, not a production
 planner or measurement-foundation API. See [DESIGN-NOTES.md](DESIGN-NOTES.md) for
-the measurement contract and [CHECKLIST.md](CHECKLIST.md) for remaining work.
+the measurement contract and the parent [CHECKLIST.md](../../CHECKLIST.md), `MX1`
+and `EP-X2.1`, for remaining work.
 The first observations are in the [capture record](captures/2026-09-19/README.md).
 
 From the workspace root, build the `windows-read-checksum-experiment` package in
