@@ -56,9 +56,15 @@ These items are in dependency order. Resolve and commit one item before beginnin
 
 - [x] **EP-R1.6** -- Tier 1 now distinguishes shipped Windows facts, adapter projections, I/O endpoint attachment, and planner-owned measurements. -> [completed 2026-09-18](COMPLETED-CHECKLIST.md#ep-r16)
 
-- [ ] **EP-R1.7** -- **Complete the contracts and acceptance matrix before implementation.**
-  **In progress:** review and settle the proposal in
-  [DESIGN-PROPOSAL-EP-R1.7.md](DESIGN-PROPOSAL-EP-R1.7.md); it is not an accepted contract.
+- [ ] **EP-R1.7** -- **Develop the contracts and acceptance matrix through research and bounded experiments.**
+  **In progress:** use [DESIGN-PROPOSAL-EP-R1.7.md](DESIGN-PROPOSAL-EP-R1.7.md) as a working
+  basis, not a frozen contract. Start from the primary-source survey and simpler workloads in
+  [DESIGN-RESEARCH-WORKLOAD-PATTERNS.md](DESIGN-RESEARCH-WORKLOAD-PATTERNS.md).
+  Select and specify a small first experiment before implementing it; the research recommends
+  comparing direct, queued-handoff, and independent-worker forms of read-and-checksum. Define its
+  constraints and correctness/measurement obligations. Record outcomes and review each speculative path for retention, revision,
+  merge or deletion before generalizing the catalog. The full contract need not be settled before
+  experiments can inform it.
   Plan the scenario/goal contract, plan invariants and errors, deterministic policy and tie-breaking,
   measurement permission and failure behavior, callback semantics, JSON compatibility, storage,
   network, and interconnect policy, routed-hop representation, and synthetic acceptance cases.

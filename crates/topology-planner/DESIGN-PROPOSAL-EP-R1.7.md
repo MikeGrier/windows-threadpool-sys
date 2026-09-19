@@ -1,9 +1,15 @@
 # EP-R1.7 proposal: describing flows and trying execution patterns
 
-**Proposed, not accepted.** Prepared 2026-09-18 19:03:36 -07:00 for discussion.
+**Working basis for iteration, not a frozen contract.** Prepared 2026-09-18 19:03:36 -07:00 for discussion.
 This is a design proposal, not an implemented API or a completed checklist item.
 Current decisions remain in [DESIGN-NOTES.md](DESIGN-NOTES.md). The work is owned by
 [CHECKLIST.md](CHECKLIST.md) `EP-R1.7`; final public names belong to `EP-1+.5`.
+
+The engineer accepted this as a basis, then clarified that the archetypes and runtime
+boundary must emerge through trying alternatives. Start with the smaller workloads in
+[DESIGN-RESEARCH-WORKLOAD-PATTERNS.md](DESIGN-RESEARCH-WORKLOAD-PATTERNS.md), not the
+complex multi-endpoint example. Define the constraints needed for each bounded
+experiment without requiring the entire framework contract to be final first.
 
 ## The recommendation
 
