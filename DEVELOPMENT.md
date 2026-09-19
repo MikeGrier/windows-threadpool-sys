@@ -68,7 +68,7 @@ declared in [.github/release/binary-packages.json](.github/release/binary-packag
 | `windows-placement-probe` | `placement-probe-v<version>` | `placement-probe-x86_64.exe`, `placement-probe-aarch64.exe` |
 | `windows-platform-probes` | `windows-platform-probes-v<version>` | `windows-platform-probes-x86_64.zip`, `windows-platform-probes-aarch64.zip`, SHA-256 sidecars |
 
-Both use UTC calendar versions, `YYYY.MMDD.N`, assigned when release-please
+Both use UTC calendar versions, `YYYY.(MMDD as an integer without zero padding).N`, assigned when release-please
 proposes an update. The date need not be the date the release PR is merged.
 Same-day updates increment `N`; a clock behind the previous release increments
 its counter rather than decreasing the version. The platform package's legacy

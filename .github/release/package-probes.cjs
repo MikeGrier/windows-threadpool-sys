@@ -53,7 +53,11 @@ function main(args) {
   if (!entry || !machines[target] || !output) throw new Error('usage: package-probes <package> <Windows target> <new scratch output directory> [tag]');
   const root = path.resolve(__dirname, '../..');
   const destination = path.resolve(output);
-  if (!destination.startsWith(path.join(root, '.scratch') + path.sep)) throw new Error('Output must be under .scratch');
+  const scratchRoot = path.join(root, '.scratch') + path.sep;
+  const withinScratch = process.platform === 'win32'
+    ? destination.toLowerCase().startsWith(scratchRoot.toLowerCase())
+    : destination.startsWith(scratchRoot);
+  if (!withinScratch) throw new Error('Output must be under .scratch');
   if (fs.existsSync(destination)) throw new Error('Output directory already exists');
   const run = (program, argv, extra = {}) => execFileSync(program, argv, { cwd: root, encoding: 'utf8', maxBuffer: 32 * 1024 * 1024, ...extra });
   const metadata = JSON.parse(run('cargo', ['metadata', '--locked', '--no-deps', '--format-version', '1']));

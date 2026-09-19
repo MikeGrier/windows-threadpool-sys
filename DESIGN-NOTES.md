@@ -8,7 +8,7 @@ The route registry is
 [binary-packages.json](.github/release/binary-packages.json); build and upload
 contracts are checked against the parsed manifests and workflows in CI.
 
-Versions use UTC `YYYY.MMDD.N` at proposal time. On the same or an earlier
+Versions use UTC `YYYY.(MMDD as an integer without zero padding).N` at proposal time. On the same or an earlier
 clock date, increment the previous counter; on a later date, reset it to zero.
 The platform package's legacy `0.x.y` baseline starts with today's date. The
 wrapper extends both direct and dependency-triggered probe bumps while retaining
