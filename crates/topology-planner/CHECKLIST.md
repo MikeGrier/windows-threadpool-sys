@@ -36,7 +36,7 @@ prerequisites rather than on someone else's decision.
 | Milestone | State | What it is waiting on |
 |---|---|---|
 | MR1 design-review reconciliation | active | EP-R1.7 drives MX1 through MX3; EP-R1.8 follows the resulting contracts and names |
-| MX1 controlled read/checksum comparisons | not started | begin with EP-X1.1, using the completed RC-1 capture |
+| MX1 controlled read/checksum comparisons | in progress | EP-X1.1 recorded; EP-X1.2 retains its controls |
 | MX2 locality and ownership patterns | not started | MX1 measurement controls; revise the sequence at each experiment review |
 | MX3 real endpoints, composition and synthesis | not started | MX2 ownership/ordering evidence and the permissions/hardware named by each experiment |
 | M1 the input contract | 4 done, 1 open | `EP-1.4` waits on EP-R1.7 |
@@ -67,7 +67,7 @@ item; do not start `EP-R1.8` merely because one experiment has finished.
   **In progress:** use [DESIGN-PROPOSAL-EP-R1.7.md](DESIGN-PROPOSAL-EP-R1.7.md) as a working
   basis, not a frozen contract. Start from the primary-source survey and simpler workloads in
   [DESIGN-RESEARCH-WORKLOAD-PATTERNS.md](DESIGN-RESEARCH-WORKLOAD-PATTERNS.md).
-  Review the first read/checksum [capture record](experiments/read-checksum/captures/2026-09-19/README.md)
+  Review the controlled read/checksum [capture record](experiments/read-checksum/captures/2026-09-19-ep-x1-1/README.md)
   before selecting the next experiment. Keep stage separation distinct from processing parallelism,
   and account for run-to-run variation before generalizing the catalog. Define each experiment's
   constraints and correctness/measurement obligations; review speculative paths for retention,
@@ -88,8 +88,8 @@ item; do not start `EP-R1.8` merely because one experiment has finished.
   ten normal cases plus every identified edge case, and replace "deferred for litigation" with a
   linked decision or a concrete blocker and graduation trigger.
   Use MX1 through MX3 below as the experiment work queue, revising it as evidence changes the plan.
-  > **-> CROSS-COMPONENT HANDOFF:** first experimental work is in
-  > `crates/topology-planner/experiments/read-checksum` -> `MX1` -> `EP-X1.1`
+  > **-> CROSS-COMPONENT HANDOFF:** next experimental work is in
+  > `crates/topology-planner/experiments/read-checksum` -> `MX1` -> `EP-X1.2`
   > below. Its [PLANS.md](experiments/read-checksum/PLANS.md) points back here;
   > return to this component's `EP-R1.7` discussion after each experiment.
 
@@ -130,30 +130,23 @@ same item ID; do not create an unowned implementation queue.
 
 ## MX1: controlled read/checksum comparisons
 
-- [ ] **EP-X1.1** -- **Separate repeatability, stage separation and processing parallelism.**
-  **Question:** which differences in the first
-  [capture](experiments/read-checksum/captures/2026-09-19/README.md) persist under repeated
-  controls and swapped processor roles? **Controls:** retain the direct, handoff and
-  independent-worker paths; compare matched total CPU/read/buffer budgets while varying
-  how many workers perform checksum work. Keep the single-worker case as an explicitly
-  unequal-CPU reference. **Evidence:** per-block correctness, individual throughput/latency
-  and CPU observations, same-code spread and actual bindings. **Review:** identify which
-  comparisons distinguish stage overlap from additional compute capacity; revise the next
-  sweeps if the observed variation prevents that distinction.
-  > **CROSS-COMPONENT PREREQUISITE:** parent `topology-planner` -> `EP-R1.7`
-  > selects this comparison using completed `read-checksum` -> `RC-1`; see
-  > [COMPLETED-CHECKLIST.md](experiments/read-checksum/COMPLETED-CHECKLIST.md#rc-1).
-  > **-> CROSS-COMPONENT HANDOFF:** return to `topology-planner` -> `EP-R1.7`
-  > for the result discussion before advancing to `EP-X1.2`.
+- [x] **EP-X1.1** -- Separate repeatability, stage separation and processing parallelism. -> [completed 2026-09-18](COMPLETED-CHECKLIST.md#ep-x11)
 
 - [ ] **EP-X1.2** -- **Isolate block size, compute work, read depth, queue capacity and batching.**
   **Question:** how does each dimension change the comparison, rather than several changing
   together? **Controls:** use `EP-X1.1`'s arrangements and a bounded one-factor-at-a-time
   matrix, adding explicitly selected interactions; match aggregate budgets between candidates
   at each matrix point. Include partial batches and short final blocks.
+  Retain all arrangements and both role orientations, balance treatment positions, and bracket
+  each sweep with same-code controls per
+  [DESIGN-NOTES.md](experiments/read-checksum/DESIGN-NOTES.md) -> `RC-D8`.
+  Compare per-orientation spread before ranking; do not select a sole baseline from EP-X1.1.
   **Evidence:** correctness, useful throughput, stage/queue latency, CPU use, payload
   occupancy and pressure, with the changed dimension recorded. **Review:** retain conditional
   observations and choose subsequent cases without inventing a universal queue or batch size.
+  > **CROSS-COMPONENT PREREQUISITE:** parent `topology-planner` -> `EP-R1.7`
+  > returns the `EP-X1.1` result review and its `RC-D8` controls before work resumes in
+  > `experiments/read-checksum` -> `MX1` -> `EP-X1.2`.
   > **-> CROSS-COMPONENT HANDOFF:** return from `experiments/read-checksum` to
   > `topology-planner` -> `EP-R1.7` before advancing to `EP-X1.3`.
 

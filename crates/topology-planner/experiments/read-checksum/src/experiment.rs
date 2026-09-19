@@ -16,8 +16,8 @@ use windows_waitable_queues::{Options, PushError, TryRecvError, spsc};
 use crate::platform::{self, Residency};
 use crate::reader::{Finished, Job, Reader};
 use crate::{
-    Arrangement, BlockResult, Config, Distribution, checksum_checked, failed, invalid, trial_order,
-    verify,
+    Arrangement, BlockResult, Comparison, Config, Distribution, checksum_checked, comparison_order,
+    failed, invalid, verify,
 };
 
 #[derive(Debug, Serialize)]
@@ -55,6 +55,8 @@ pub struct Trial {
     pub repetition: usize,
     pub position: usize,
     pub arrangement: Arrangement,
+    pub reversed: bool,
+    pub resources: Resources,
     pub work_wall_ns: u64,
     pub joined_wall_ns: u64,
     pub worker_cpu_ns: u64,
@@ -68,6 +70,16 @@ pub struct Trial {
 }
 
 #[derive(Debug, Serialize)]
+pub struct Resources {
+    pub worker_threads: usize,
+    pub participating_processors: usize,
+    pub checksum_workers: usize,
+    pub unequal_cpu_reference: bool,
+    pub max_pending_reads: usize,
+    pub payload_pool_bytes: usize,
+}
+
+#[derive(Debug, Serialize)]
 pub struct WorkerReport {
     pub role: &'static str,
     pub requested_processor: ProcessorId,
@@ -76,6 +88,8 @@ pub struct WorkerReport {
     pub cpu_ns: u64,
     pub submitted: usize,
     pub completed: usize,
+    pub checksummed_blocks: usize,
+    pub buffer_capacity: usize,
     pub peak_outstanding_reads: usize,
     pub peak_leased_buffers: usize,
     pub handoff_full_observations: usize,
@@ -293,6 +307,8 @@ fn worker(
         cpu_ns: 0,
         submitted: 0,
         completed: 0,
+        checksummed_blocks: 0,
+        buffer_capacity: 0,
         peak_outstanding_reads: 0,
         peak_leased_buffers: 0,
         handoff_full_observations: 0,
@@ -320,6 +336,7 @@ fn worker(
         report.processor_at_end = platform::current_processor();
         let finished = Instant::now();
         report.completed = context.blocks;
+        report.checksummed_blocks = context.blocks;
         report.return_high_water = returns.high_water();
         return Ok(WorkerResult {
             report,
@@ -340,6 +357,7 @@ fn worker(
         lane,
         lanes,
     )?;
+    report.buffer_capacity = reader.free.len();
     report.pages_before = Some(platform::residency(&reader.free)?);
     let start = gate.wait()?;
     let budget = Budget {
@@ -352,6 +370,7 @@ fn worker(
         Role::Direct { .. } => {
             report.role = "direct";
             direct_loop(&mut reader, config, &budget)?;
+            report.checksummed_blocks = reader.results.len();
         }
         Role::Reader { send, returns } => {
             report.role = "reader";
@@ -386,10 +405,18 @@ fn run_trial(
     file_bytes: u64,
     expected: &[u64],
     pair: [ProcessorId; 2],
-    arrangement: Arrangement,
+    comparison: Comparison,
     repetition: usize,
     position: usize,
 ) -> io::Result<Trial> {
+    let arrangement = comparison.arrangement;
+    let pair = comparison.processors(pair);
+    let roles = roles(arrangement, config)?;
+    let worker_threads = roles.len();
+    let checksum_workers = roles
+        .iter()
+        .filter(|role| !matches!(role, Role::Reader { .. }))
+        .count();
     let cancel = AtomicBool::new(false);
     let context = TrialContext {
         config,
@@ -401,7 +428,7 @@ fn run_trial(
         let (ready_send, ready_receive) = mpsc::channel();
         let mut starts = Vec::new();
         let mut handles = Vec::new();
-        for (index, role) in roles(arrangement, config)?.into_iter().enumerate() {
+        for (index, role) in roles.into_iter().enumerate() {
             let (send, receive) = mpsc::channel();
             starts.push(send);
             let gate = Gate {
@@ -480,10 +507,20 @@ fn run_trial(
         reports.push(worker.report);
     }
     verify(&mut results, expected)?;
+    let max_pending_reads = reports.iter().map(|report| report.buffer_capacity).sum();
     Ok(Trial {
         repetition,
         position,
         arrangement,
+        reversed: comparison.reversed,
+        resources: Resources {
+            worker_threads,
+            participating_processors: worker_threads,
+            checksum_workers,
+            unequal_cpu_reference: worker_threads == 1,
+            max_pending_reads,
+            payload_pool_bytes: max_pending_reads * config.block_bytes,
+        },
         work_wall_ns,
         joined_wall_ns: joined.duration_since(start).as_nanos() as u64,
         worker_cpu_ns: reports.iter().map(|worker| worker.cpu_ns).sum(),
@@ -532,27 +569,21 @@ pub fn run(config: Config) -> io::Result<Capture> {
     }
 
     drop(buffer);
-    for arrangement in trial_order(0) {
-        run_trial(&config, file_bytes, &expected, pair, arrangement, 0, 0)?;
+    for comparison in comparison_order(0) {
+        run_trial(&config, file_bytes, &expected, pair, comparison, 0, 0)?;
     }
-    let mut trials = Vec::with_capacity(config.repetitions * 3);
+    let mut trials = Vec::with_capacity(config.repetitions * comparison_order(0).len());
     for repetition in 0..config.repetitions {
-        for (position, arrangement) in trial_order(repetition).into_iter().enumerate() {
+        for (position, comparison) in comparison_order(repetition).into_iter().enumerate() {
             trials.push(run_trial(
-                &config,
-                file_bytes,
-                &expected,
-                pair,
-                arrangement,
-                repetition,
-                position,
+                &config, file_bytes, &expected, pair, comparison, repetition, position,
             )?);
         }
     }
     // The handle denying writes/deletion stays alive through reference validation and all trials.
     drop(fixture);
     Ok(Capture {
-        schema: "read-checksum-v1",
+        schema: "read-checksum-v2",
         status: "success",
         build: BuildProvenance {
             git_revision: env!("RC_GIT_REVISION"),

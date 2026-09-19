@@ -1,0 +1,912 @@
+{
+  "schema": "ep-x1-1-summary-v1",
+  "executable_sha256": "492CF3720A1E6FBF7A0C6ED2589CB011E5AB376243FCD505AE98555E4A07FEA9",
+  "script_sha256": "7EB6D24BA453D3C4F6EE97FB2C3810E25FE2DC65C9ACE95D1BE682483C86CBEF",
+  "generated_utc": "2026-09-19T04:55:22.3594538+00:00",
+  "median_method": "nearest_rank",
+  "captures": [
+    {
+      "artifact": "control-before.json",
+      "groups": [
+        {
+          "arrangement": "direct",
+          "reversed": false,
+          "samples": 12,
+          "bytes_per_second": {
+            "min": 601669550.5918173,
+            "median": 624747694.9773594,
+            "max": 662701825.6940166
+          },
+          "worker_cpu_ns": {
+            "min": 31250000.0,
+            "median": 46875000.0,
+            "max": 62500000.0
+          },
+          "cpu_per_wall": {
+            "min": 0.560348151030413,
+            "median": 0.8898266475318345,
+            "max": 1.2343777156309743
+          },
+          "checksum_p99_ns": {
+            "min": 991000.0,
+            "median": 1986300.0,
+            "max": 3867200.0
+          }
+        },
+        {
+          "arrangement": "direct",
+          "reversed": true,
+          "samples": 12,
+          "bytes_per_second": {
+            "min": 382736689.2590151,
+            "median": 652991960.7984322,
+            "max": 675819718.0261832
+          },
+          "worker_cpu_ns": {
+            "min": 46875000.0,
+            "median": 46875000.0,
+            "max": 93750000.0
+          },
+          "cpu_per_wall": {
+            "min": 0.9024176128816144,
+            "median": 0.9278301541336195,
+            "max": 1.158428540713666
+          },
+          "checksum_p99_ns": {
+            "min": 831700.0,
+            "median": 1002200.0,
+            "max": 38583800.0
+          }
+        },
+        {
+          "arrangement": "independent",
+          "reversed": false,
+          "samples": 12,
+          "bytes_per_second": {
+            "min": 1033128038.5485783,
+            "median": 1181548768.077412,
+            "max": 1291708332.050137
+          },
+          "worker_cpu_ns": {
+            "min": 31250000.0,
+            "median": 46875000.0,
+            "max": 62500000.0
+          },
+          "cpu_per_wall": {
+            "min": 1.0974461987975501,
+            "median": 1.5411398023395735,
+            "max": 2.400623778082497
+          },
+          "checksum_p99_ns": {
+            "min": 461000.0,
+            "median": 690500.0,
+            "max": 2229200.0
+          }
+        },
+        {
+          "arrangement": "independent",
+          "reversed": true,
+          "samples": 12,
+          "bytes_per_second": {
+            "min": 1090201798.6756861,
+            "median": 1254981822.9419906,
+            "max": 1301432704.87575
+          },
+          "worker_cpu_ns": {
+            "min": 31250000.0,
+            "median": 31250000.0,
+            "max": 62500000.0
+          },
+          "cpu_per_wall": {
+            "min": 1.0973691233688705,
+            "median": 1.2120530433197454,
+            "max": 2.387455354584869
+          },
+          "checksum_p99_ns": {
+            "min": 488600.0,
+            "median": 600400.0,
+            "max": 2207200.0
+          }
+        },
+        {
+          "arrangement": "pipeline",
+          "reversed": false,
+          "samples": 12,
+          "bytes_per_second": {
+            "min": 671498594.1424268,
+            "median": 770827950.1222135,
+            "max": 795189421.9466879
+          },
+          "worker_cpu_ns": {
+            "min": 62500000.0,
+            "median": 93750000.0,
+            "max": 125000000.0
+          },
+          "cpu_per_wall": {
+            "min": 1.474459993771881,
+            "median": 2.153667322147281,
+            "max": 2.501525930817799
+          },
+          "checksum_p99_ns": {
+            "min": 685900.0,
+            "median": 771900.0,
+            "max": 2156800.0
+          }
+        },
+        {
+          "arrangement": "pipeline",
+          "reversed": true,
+          "samples": 12,
+          "bytes_per_second": {
+            "min": 685183198.3909009,
+            "median": 749610700.9215302,
+            "max": 789139516.8895798
+          },
+          "worker_cpu_ns": {
+            "min": 62500000.0,
+            "median": 93750000.0,
+            "max": 125000000.0
+          },
+          "cpu_per_wall": {
+            "min": 1.3563868458688797,
+            "median": 2.094387042725496,
+            "max": 2.552505028434906
+          },
+          "checksum_p99_ns": {
+            "min": 702500.0,
+            "median": 2444800.0,
+            "max": 3709500.0
+          }
+        }
+      ],
+      "paired": [
+        {
+          "repetition": 0,
+          "reversed": false,
+          "pipeline_minus_direct_bytes_per_second": 46750899.165067434,
+          "independent_minus_pipeline_bytes_per_second": 506875886.1070534
+        },
+        {
+          "repetition": 1,
+          "reversed": false,
+          "pipeline_minus_direct_bytes_per_second": 127781479.37500048,
+          "independent_minus_pipeline_bytes_per_second": 409835047.3978002
+        },
+        {
+          "repetition": 2,
+          "reversed": false,
+          "pipeline_minus_direct_bytes_per_second": 140823835.10002267,
+          "independent_minus_pipeline_bytes_per_second": 308028360.3924234
+        },
+        {
+          "repetition": 3,
+          "reversed": false,
+          "pipeline_minus_direct_bytes_per_second": 156291963.51129973,
+          "independent_minus_pipeline_bytes_per_second": 487429596.603727
+        },
+        {
+          "repetition": 4,
+          "reversed": false,
+          "pipeline_minus_direct_bytes_per_second": 175849282.51027274,
+          "independent_minus_pipeline_bytes_per_second": 378935935.8176429
+        },
+        {
+          "repetition": 5,
+          "reversed": false,
+          "pipeline_minus_direct_bytes_per_second": 140965038.11314893,
+          "independent_minus_pipeline_bytes_per_second": 237938616.60189033
+        },
+        {
+          "repetition": 6,
+          "reversed": false,
+          "pipeline_minus_direct_bytes_per_second": 140488092.58033764,
+          "independent_minus_pipeline_bytes_per_second": 422700504.03775346
+        },
+        {
+          "repetition": 7,
+          "reversed": false,
+          "pipeline_minus_direct_bytes_per_second": 155256339.15753925,
+          "independent_minus_pipeline_bytes_per_second": 438429017.6808109
+        },
+        {
+          "repetition": 8,
+          "reversed": false,
+          "pipeline_minus_direct_bytes_per_second": 160396921.25609756,
+          "independent_minus_pipeline_bytes_per_second": 428673709.3376783
+        },
+        {
+          "repetition": 9,
+          "reversed": false,
+          "pipeline_minus_direct_bytes_per_second": 108126124.4281969,
+          "independent_minus_pipeline_bytes_per_second": 485366043.40858996
+        },
+        {
+          "repetition": 10,
+          "reversed": false,
+          "pipeline_minus_direct_bytes_per_second": 133491796.65553296,
+          "independent_minus_pipeline_bytes_per_second": 500113249.43319464
+        },
+        {
+          "repetition": 11,
+          "reversed": false,
+          "pipeline_minus_direct_bytes_per_second": 131024665.60915601,
+          "independent_minus_pipeline_bytes_per_second": 512479763.99640036
+        },
+        {
+          "repetition": 0,
+          "reversed": true,
+          "pipeline_minus_direct_bytes_per_second": 374141393.9617226,
+          "independent_minus_pipeline_bytes_per_second": 442325972.446403
+        },
+        {
+          "repetition": 1,
+          "reversed": true,
+          "pipeline_minus_direct_bytes_per_second": 100766199.1523273,
+          "independent_minus_pipeline_bytes_per_second": 336443638.7249266
+        },
+        {
+          "repetition": 2,
+          "reversed": true,
+          "pipeline_minus_direct_bytes_per_second": 119789455.63414109,
+          "independent_minus_pipeline_bytes_per_second": 474110768.3991773
+        },
+        {
+          "repetition": 3,
+          "reversed": true,
+          "pipeline_minus_direct_bytes_per_second": 122144885.22302735,
+          "independent_minus_pipeline_bytes_per_second": 478212523.678743
+        },
+        {
+          "repetition": 4,
+          "reversed": true,
+          "pipeline_minus_direct_bytes_per_second": 82228995.51670969,
+          "independent_minus_pipeline_bytes_per_second": 450086709.1925242
+        },
+        {
+          "repetition": 5,
+          "reversed": true,
+          "pipeline_minus_direct_bytes_per_second": 125698508.8861705,
+          "independent_minus_pipeline_bytes_per_second": 485238422.2307391
+        },
+        {
+          "repetition": 6,
+          "reversed": true,
+          "pipeline_minus_direct_bytes_per_second": 89358222.75070345,
+          "independent_minus_pipeline_bytes_per_second": 469781213.63358676
+        },
+        {
+          "repetition": 7,
+          "reversed": true,
+          "pipeline_minus_direct_bytes_per_second": 21016167.190075874,
+          "independent_minus_pipeline_bytes_per_second": 593383510.6984842
+        },
+        {
+          "repetition": 8,
+          "reversed": true,
+          "pipeline_minus_direct_bytes_per_second": 72489803.43217254,
+          "independent_minus_pipeline_bytes_per_second": 395465982.05551565
+        },
+        {
+          "repetition": 9,
+          "reversed": true,
+          "pipeline_minus_direct_bytes_per_second": 131131993.6747688,
+          "independent_minus_pipeline_bytes_per_second": 505371122.02046037
+        },
+        {
+          "repetition": 10,
+          "reversed": true,
+          "pipeline_minus_direct_bytes_per_second": 51789983.59581351,
+          "independent_minus_pipeline_bytes_per_second": 573823003.2537533
+        },
+        {
+          "repetition": 11,
+          "reversed": true,
+          "pipeline_minus_direct_bytes_per_second": 117889436.87037516,
+          "independent_minus_pipeline_bytes_per_second": 492616466.0735388
+        }
+      ]
+    },
+    {
+      "artifact": "compute-heavy.json",
+      "groups": [
+        {
+          "arrangement": "direct",
+          "reversed": false,
+          "samples": 12,
+          "bytes_per_second": {
+            "min": 43635054.10809551,
+            "median": 48410330.419095635,
+            "max": 48586943.09623297
+          },
+          "worker_cpu_ns": {
+            "min": 671875000.0,
+            "median": 687500000.0,
+            "max": 734375000.0
+          },
+          "cpu_per_wall": {
+            "min": 0.9143615327956855,
+            "median": 0.9933617427567313,
+            "max": 1.0146423076512363
+          },
+          "checksum_p99_ns": {
+            "min": 11726200.0,
+            "median": 11839300.0,
+            "max": 33517400.0
+          }
+        },
+        {
+          "arrangement": "direct",
+          "reversed": true,
+          "samples": 12,
+          "bytes_per_second": {
+            "min": 48714547.80673502,
+            "median": 49066491.56175555,
+            "max": 49173956.29476545
+          },
+          "worker_cpu_ns": {
+            "min": 656250000.0,
+            "median": 671875000.0,
+            "max": 687500000.0
+          },
+          "cpu_per_wall": {
+            "min": 0.9527476370769746,
+            "median": 0.9837533365252698,
+            "max": 1.006424869980886
+          },
+          "checksum_p99_ns": {
+            "min": 10876500.0,
+            "median": 11101800.0,
+            "max": 11691500.0
+          }
+        },
+        {
+          "arrangement": "independent",
+          "reversed": false,
+          "samples": 12,
+          "bytes_per_second": {
+            "min": 60193819.92791692,
+            "median": 97199938.24059863,
+            "max": 97771994.47071426
+          },
+          "worker_cpu_ns": {
+            "min": 656250000.0,
+            "median": 687500000.0,
+            "max": 765625000.0
+          },
+          "cpu_per_wall": {
+            "min": 1.3734659562525193,
+            "median": 1.9850544886629569,
+            "max": 2.0032588286166177
+          },
+          "checksum_p99_ns": {
+            "min": 5574600.0,
+            "median": 5870200.0,
+            "max": 40784700.0
+          }
+        },
+        {
+          "arrangement": "independent",
+          "reversed": true,
+          "samples": 12,
+          "bytes_per_second": {
+            "min": 96801387.86995657,
+            "median": 97222863.20601097,
+            "max": 97717069.85509214
+          },
+          "worker_cpu_ns": {
+            "min": 656250000.0,
+            "median": 687500000.0,
+            "max": 703125000.0
+          },
+          "cpu_per_wall": {
+            "min": 1.902759632095445,
+            "median": 1.9920076307655221,
+            "max": 2.036659140381393
+          },
+          "checksum_p99_ns": {
+            "min": 5645400.0,
+            "median": 5773200.0,
+            "max": 6269700.0
+          }
+        },
+        {
+          "arrangement": "pipeline",
+          "reversed": false,
+          "samples": 12,
+          "bytes_per_second": {
+            "min": 38254290.83839437,
+            "median": 49900745.630954765,
+            "max": 49963792.593324974
+          },
+          "worker_cpu_ns": {
+            "min": 1328125000.0,
+            "median": 1343750000.0,
+            "max": 1375000000.0
+          },
+          "cpu_per_wall": {
+            "min": 1.567590929679467,
+            "median": 1.9896211117406344,
+            "max": 2.0349936019801156
+          },
+          "checksum_p99_ns": {
+            "min": 10692200.0,
+            "median": 10756900.0,
+            "max": 55508600.0
+          }
+        },
+        {
+          "arrangement": "pipeline",
+          "reversed": true,
+          "samples": 12,
+          "bytes_per_second": {
+            "min": 48472984.19210149,
+            "median": 49389591.73249846,
+            "max": 49522008.47031376
+          },
+          "worker_cpu_ns": {
+            "min": 1328125000.0,
+            "median": 1359375000.0,
+            "max": 1375000000.0
+          },
+          "cpu_per_wall": {
+            "min": 1.95711117496666,
+            "median": 2.003983481929316,
+            "max": 2.029105788573965
+          },
+          "checksum_p99_ns": {
+            "min": 11353300.0,
+            "median": 11579200.0,
+            "max": 11778900.0
+          }
+        }
+      ],
+      "paired": [
+        {
+          "repetition": 0,
+          "reversed": false,
+          "pipeline_minus_direct_bytes_per_second": 4507939.916864924,
+          "independent_minus_pipeline_bytes_per_second": 46958280.11925309
+        },
+        {
+          "repetition": 1,
+          "reversed": false,
+          "pipeline_minus_direct_bytes_per_second": 690633.9778167829,
+          "independent_minus_pipeline_bytes_per_second": 48196876.68900441
+        },
+        {
+          "repetition": 2,
+          "reversed": false,
+          "pipeline_minus_direct_bytes_per_second": 1539471.8475952893,
+          "independent_minus_pipeline_bytes_per_second": 47526432.51792097
+        },
+        {
+          "repetition": 3,
+          "reversed": false,
+          "pipeline_minus_direct_bytes_per_second": 1543275.8052428737,
+          "independent_minus_pipeline_bytes_per_second": 47828310.97314926
+        },
+        {
+          "repetition": 4,
+          "reversed": false,
+          "pipeline_minus_direct_bytes_per_second": -5380763.269701138,
+          "independent_minus_pipeline_bytes_per_second": 21939529.089522548
+        },
+        {
+          "repetition": 5,
+          "reversed": false,
+          "pipeline_minus_direct_bytes_per_second": 1339785.1616795063,
+          "independent_minus_pipeline_bytes_per_second": 47766305.09922074
+        },
+        {
+          "repetition": 6,
+          "reversed": false,
+          "pipeline_minus_direct_bytes_per_second": 1371523.1752558127,
+          "independent_minus_pipeline_bytes_per_second": 47167532.43058205
+        },
+        {
+          "repetition": 7,
+          "reversed": false,
+          "pipeline_minus_direct_bytes_per_second": 1418264.2696720585,
+          "independent_minus_pipeline_bytes_per_second": 47364644.68489989
+        },
+        {
+          "repetition": 8,
+          "reversed": false,
+          "pipeline_minus_direct_bytes_per_second": 1400069.2989267185,
+          "independent_minus_pipeline_bytes_per_second": 46757318.00405839
+        },
+        {
+          "repetition": 9,
+          "reversed": false,
+          "pipeline_minus_direct_bytes_per_second": 1293132.497852251,
+          "independent_minus_pipeline_bytes_per_second": 47101731.028891295
+        },
+        {
+          "repetition": 10,
+          "reversed": false,
+          "pipeline_minus_direct_bytes_per_second": 1358387.4519854262,
+          "independent_minus_pipeline_bytes_per_second": 47526797.63535696
+        },
+        {
+          "repetition": 11,
+          "reversed": false,
+          "pipeline_minus_direct_bytes_per_second": 1316697.9812116623,
+          "independent_minus_pipeline_bytes_per_second": 47516899.172993794
+        },
+        {
+          "repetition": 0,
+          "reversed": true,
+          "pipeline_minus_direct_bytes_per_second": 348052.1755483076,
+          "independent_minus_pipeline_bytes_per_second": 47417504.09403919
+        },
+        {
+          "repetition": 1,
+          "reversed": true,
+          "pipeline_minus_direct_bytes_per_second": 305694.52712433785,
+          "independent_minus_pipeline_bytes_per_second": 48175214.792591736
+        },
+        {
+          "repetition": 2,
+          "reversed": true,
+          "pipeline_minus_direct_bytes_per_second": 384624.24271216244,
+          "independent_minus_pipeline_bytes_per_second": 48053412.22713031
+        },
+        {
+          "repetition": 3,
+          "reversed": true,
+          "pipeline_minus_direct_bytes_per_second": 463098.3283014223,
+          "independent_minus_pipeline_bytes_per_second": 47803079.69922922
+        },
+        {
+          "repetition": 4,
+          "reversed": true,
+          "pipeline_minus_direct_bytes_per_second": -553718.5951243788,
+          "independent_minus_pipeline_bytes_per_second": 48749879.013909474
+        },
+        {
+          "repetition": 5,
+          "reversed": true,
+          "pipeline_minus_direct_bytes_per_second": -226441.53437955678,
+          "independent_minus_pipeline_bytes_per_second": 47897706.749055006
+        },
+        {
+          "repetition": 6,
+          "reversed": true,
+          "pipeline_minus_direct_bytes_per_second": 593184.0752965584,
+          "independent_minus_pipeline_bytes_per_second": 48011878.740322396
+        },
+        {
+          "repetition": 7,
+          "reversed": true,
+          "pipeline_minus_direct_bytes_per_second": 417086.2070719823,
+          "independent_minus_pipeline_bytes_per_second": 47633191.22048918
+        },
+        {
+          "repetition": 8,
+          "reversed": true,
+          "pipeline_minus_direct_bytes_per_second": 323100.17074290663,
+          "independent_minus_pipeline_bytes_per_second": 48085142.27374258
+        },
+        {
+          "repetition": 9,
+          "reversed": true,
+          "pipeline_minus_direct_bytes_per_second": 590004.5890981257,
+          "independent_minus_pipeline_bytes_per_second": 48200323.16541222
+        },
+        {
+          "repetition": 10,
+          "reversed": true,
+          "pipeline_minus_direct_bytes_per_second": 105792.09317232668,
+          "independent_minus_pipeline_bytes_per_second": 47868918.667188615
+        },
+        {
+          "repetition": 11,
+          "reversed": true,
+          "pipeline_minus_direct_bytes_per_second": 292918.7242274806,
+          "independent_minus_pipeline_bytes_per_second": 47813277.157644674
+        }
+      ]
+    },
+    {
+      "artifact": "control-after.json",
+      "groups": [
+        {
+          "arrangement": "direct",
+          "reversed": false,
+          "samples": 12,
+          "bytes_per_second": {
+            "min": 602461397.3096617,
+            "median": 654258825.9609797,
+            "max": 666144852.9017631
+          },
+          "worker_cpu_ns": {
+            "min": 46875000.0,
+            "median": 46875000.0,
+            "max": 62500000.0
+          },
+          "cpu_per_wall": {
+            "min": 0.9053947038031407,
+            "median": 0.929506246281975,
+            "max": 1.2175047969689001
+          },
+          "checksum_p99_ns": {
+            "min": 932200.0,
+            "median": 1050100.0,
+            "max": 1953300.0
+          }
+        },
+        {
+          "arrangement": "direct",
+          "reversed": true,
+          "samples": 12,
+          "bytes_per_second": {
+            "min": 638407617.2573612,
+            "median": 661917451.7880251,
+            "max": 671680058.4514372
+          },
+          "worker_cpu_ns": {
+            "min": 46875000.0,
+            "median": 46875000.0,
+            "max": 62500000.0
+          },
+          "cpu_per_wall": {
+            "min": 0.891844686793659,
+            "median": 0.9293477614366774,
+            "max": 1.244266420335096
+          },
+          "checksum_p99_ns": {
+            "min": 859100.0,
+            "median": 965200.0,
+            "max": 1162400.0
+          }
+        },
+        {
+          "arrangement": "independent",
+          "reversed": false,
+          "samples": 12,
+          "bytes_per_second": {
+            "min": 1173355561.772214,
+            "median": 1265241174.651775,
+            "max": 1278790854.9041128
+          },
+          "worker_cpu_ns": {
+            "min": 31250000.0,
+            "median": 62500000.0,
+            "max": 62500000.0
+          },
+          "cpu_per_wall": {
+            "min": 1.1811574208813513,
+            "median": 2.314797668165421,
+            "max": 2.381932375987073
+          },
+          "checksum_p99_ns": {
+            "min": 498100.0,
+            "median": 521300.0,
+            "max": 864000.0
+          }
+        },
+        {
+          "arrangement": "independent",
+          "reversed": true,
+          "samples": 12,
+          "bytes_per_second": {
+            "min": 1219470009.7399294,
+            "median": 1268397796.9471767,
+            "max": 1303176493.890835
+          },
+          "worker_cpu_ns": {
+            "min": 31250000.0,
+            "median": 46875000.0,
+            "max": 62500000.0
+          },
+          "cpu_per_wall": {
+            "min": 1.13571937373708,
+            "median": 1.7820890075047333,
+            "max": 2.4034486604138547
+          },
+          "checksum_p99_ns": {
+            "min": 475100.0,
+            "median": 563800.0,
+            "max": 769700.0
+          }
+        },
+        {
+          "arrangement": "pipeline",
+          "reversed": false,
+          "samples": 12,
+          "bytes_per_second": {
+            "min": 778628472.9070898,
+            "median": 790999804.3389604,
+            "max": 795938264.2544198
+          },
+          "worker_cpu_ns": {
+            "min": 62500000.0,
+            "median": 78125000.0,
+            "max": 93750000.0
+          },
+          "cpu_per_wall": {
+            "min": 1.4503078133303011,
+            "median": 1.8344369305907768,
+            "max": 2.2213323729279413
+          },
+          "checksum_p99_ns": {
+            "min": 676900.0,
+            "median": 730700.0,
+            "max": 895300.0
+          }
+        },
+        {
+          "arrangement": "pipeline",
+          "reversed": true,
+          "samples": 12,
+          "bytes_per_second": {
+            "min": 760535568.1728034,
+            "median": 787348921.7917732,
+            "max": 793155631.7220187
+          },
+          "worker_cpu_ns": {
+            "min": 62500000.0,
+            "median": 93750000.0,
+            "max": 93750000.0
+          },
+          "cpu_per_wall": {
+            "min": 1.4426616992939036,
+            "median": 2.18393508995483,
+            "max": 2.216050112279872
+          },
+          "checksum_p99_ns": {
+            "min": 720800.0,
+            "median": 879000.0,
+            "max": 1446100.0
+          }
+        }
+      ],
+      "paired": [
+        {
+          "repetition": 0,
+          "reversed": false,
+          "pipeline_minus_direct_bytes_per_second": 130203282.40357888,
+          "independent_minus_pipeline_bytes_per_second": 474630390.3523909
+        },
+        {
+          "repetition": 1,
+          "reversed": false,
+          "pipeline_minus_direct_bytes_per_second": 126297662.34602702,
+          "independent_minus_pipeline_bytes_per_second": 467500501.5575557
+        },
+        {
+          "repetition": 2,
+          "reversed": false,
+          "pipeline_minus_direct_bytes_per_second": 128607084.69584954,
+          "independent_minus_pipeline_bytes_per_second": 475556444.9690994
+        },
+        {
+          "repetition": 3,
+          "reversed": false,
+          "pipeline_minus_direct_bytes_per_second": 155998190.0463605,
+          "independent_minus_pipeline_bytes_per_second": 494789175.3104274
+        },
+        {
+          "repetition": 4,
+          "reversed": false,
+          "pipeline_minus_direct_bytes_per_second": 129008765.5746355,
+          "independent_minus_pipeline_bytes_per_second": 476802204.45140326
+        },
+        {
+          "repetition": 5,
+          "reversed": false,
+          "pipeline_minus_direct_bytes_per_second": 131959379.4882592,
+          "independent_minus_pipeline_bytes_per_second": 447701937.4208398
+        },
+        {
+          "repetition": 6,
+          "reversed": false,
+          "pipeline_minus_direct_bytes_per_second": 133626235.55869722,
+          "independent_minus_pipeline_bytes_per_second": 490905793.3844359
+        },
+        {
+          "repetition": 7,
+          "reversed": false,
+          "pipeline_minus_direct_bytes_per_second": 188538407.02929866,
+          "independent_minus_pipeline_bytes_per_second": 431402307.1672182
+        },
+        {
+          "repetition": 8,
+          "reversed": false,
+          "pipeline_minus_direct_bytes_per_second": 142365351.58656228,
+          "independent_minus_pipeline_bytes_per_second": 382883108.0281564
+        },
+        {
+          "repetition": 9,
+          "reversed": false,
+          "pipeline_minus_direct_bytes_per_second": 124985231.03271687,
+          "independent_minus_pipeline_bytes_per_second": 496493379.1375848
+        },
+        {
+          "repetition": 10,
+          "reversed": false,
+          "pipeline_minus_direct_bytes_per_second": 137501799.3637588,
+          "independent_minus_pipeline_bytes_per_second": 469302910.3973551
+        },
+        {
+          "repetition": 11,
+          "reversed": false,
+          "pipeline_minus_direct_bytes_per_second": 143318660.3118664,
+          "independent_minus_pipeline_bytes_per_second": 447861215.301424
+        },
+        {
+          "repetition": 0,
+          "reversed": true,
+          "pipeline_minus_direct_bytes_per_second": 130692132.39702976,
+          "independent_minus_pipeline_bytes_per_second": 473845015.3296784
+        },
+        {
+          "repetition": 1,
+          "reversed": true,
+          "pipeline_minus_direct_bytes_per_second": 116107056.6940273,
+          "independent_minus_pipeline_bytes_per_second": 492229843.4777254
+        },
+        {
+          "repetition": 2,
+          "reversed": true,
+          "pipeline_minus_direct_bytes_per_second": 115668863.34033597,
+          "independent_minus_pipeline_bytes_per_second": 481048875.1554035
+        },
+        {
+          "repetition": 3,
+          "reversed": true,
+          "pipeline_minus_direct_bytes_per_second": 138915940.7239821,
+          "independent_minus_pipeline_bytes_per_second": 426314378.0179107
+        },
+        {
+          "repetition": 4,
+          "reversed": true,
+          "pipeline_minus_direct_bytes_per_second": 123587288.31491339,
+          "independent_minus_pipeline_bytes_per_second": 475139819.6159363
+        },
+        {
+          "repetition": 5,
+          "reversed": true,
+          "pipeline_minus_direct_bytes_per_second": 122681505.92842245,
+          "independent_minus_pipeline_bytes_per_second": 502472066.33456147
+        },
+        {
+          "repetition": 6,
+          "reversed": true,
+          "pipeline_minus_direct_bytes_per_second": 121045223.37290704,
+          "independent_minus_pipeline_bytes_per_second": 480512772.53831065
+        },
+        {
+          "repetition": 7,
+          "reversed": true,
+          "pipeline_minus_direct_bytes_per_second": 125750173.08842409,
+          "independent_minus_pipeline_bytes_per_second": 453349407.73454547
+        },
+        {
+          "repetition": 8,
+          "reversed": true,
+          "pipeline_minus_direct_bytes_per_second": 150791293.2986269,
+          "independent_minus_pipeline_bytes_per_second": 486887958.3306358
+        },
+        {
+          "repetition": 9,
+          "reversed": true,
+          "pipeline_minus_direct_bytes_per_second": 116407834.30845273,
+          "independent_minus_pipeline_bytes_per_second": 494008435.58780384
+        },
+        {
+          "repetition": 10,
+          "reversed": true,
+          "pipeline_minus_direct_bytes_per_second": 98618116.38477826,
+          "independent_minus_pipeline_bytes_per_second": 504128595.883837
+        },
+        {
+          "repetition": 11,
+          "reversed": true,
+          "pipeline_minus_direct_bytes_per_second": 122570634.9482032,
+          "independent_minus_pipeline_bytes_per_second": 528652999.2794651
+        }
+      ]
+    }
+  ]
+}

@@ -3,6 +3,22 @@
   "description": "Read identity, payload-credit measurement and checksum guards, plus an equivalent chunking control.",
   "sabotages": [
     {
+      "name": "role reversal never reaches worker bindings",
+      "file": "src/lib.rs",
+      "expect": "caught",
+      "why": "Both pure mapping and live worker observations must change when the processor orientation changes.",
+      "find": "if self.reversed {",
+      "replace": "if false {"
+    },
+    {
+      "name": "execution repeats the first schedule row",
+      "file": "src/experiment.rs",
+      "expect": "caught",
+      "why": "The live capture must follow the balanced schedule, not merely test an unused order helper.",
+      "find": "comparison_order(repetition).into_iter().enumerate()",
+      "replace": "comparison_order(0).into_iter().enumerate()"
+    },
+    {
       "name": "every read targets the first block",
       "file": "src/reader.rs",
       "expect": "caught",

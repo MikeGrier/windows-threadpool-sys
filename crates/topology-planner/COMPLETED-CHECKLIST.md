@@ -140,3 +140,22 @@ relation order is partial rather than total, and the relation collection is prim
 proximity is derived. [EP-D-9](DESIGN-NOTES.md#ep-d-9) records which requirements are available as
 policy-free Windows facts, which the inward component translates into the client-shaped neutral
 model, and which require planner-owned runtime measurement.
+
+## Moved 2026-09-18 21:57:21 -07:00 -- Controlled read/checksum comparisons
+
+### <a id="ep-x11"></a>EP-X1.1 -- Separate repeatability, stage separation and processing parallelism. *(completed 2026-09-18 21:57:21 -07:00)*
+
+Implemented balanced role-swapped trials, explicit CPU/read/buffer budgets and
+per-worker checksum counts without changing the separate schedulers. The bounded
+protocol and disposition are in
+[DESIGN-NOTES.md](experiments/read-checksum/DESIGN-NOTES.md) -> `RC-D7` and `RC-D8`;
+the [capture record](experiments/read-checksum/captures/2026-09-19-ep-x1-1/README.md)
+retains the measurements and verification. The working proposal now links the
+evidence requirements; `EP-X1.2` carries the repeat and role controls forward.
+
+> **CROSS-COMPONENT PREREQUISITE:** parent `topology-planner` -> `EP-R1.7` selected
+> this comparison using completed `read-checksum` -> `RC-1`; see
+> [COMPLETED-CHECKLIST.md](experiments/read-checksum/COMPLETED-CHECKLIST.md#rc-1).
+> **-> CROSS-COMPONENT HANDOFF:** return from `experiments/read-checksum` -> `MX1` ->
+> `EP-X1.1` to `topology-planner` -> `MR1` -> `EP-R1.7` for the recorded result
+> discussion before advancing to `EP-X1.2` in [CHECKLIST.md](CHECKLIST.md).

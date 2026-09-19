@@ -324,6 +324,14 @@ achieved placement, not just a mean. Cache state, endpoint configuration, and co
 load are part of the record; if they cannot be controlled, report the limitation.
 No percentile acceptance is reported from a sample too small for its declared protocol.
 
+The EP-X1.1 comparison-descriptor requirements are now recorded in the experiment's
+[DESIGN-NOTES.md](experiments/read-checksum/DESIGN-NOTES.md) -> `RC-D8`.
+Apply that distinction between resource ceilings, role/concurrency assignments and
+observations when materializing the evidence vocabulary; the production types and
+selection policy remain open. The
+[capture record](experiments/read-checksum/captures/2026-09-19-ep-x1-1/README.md)
+supplies the experiment evidence, not acceptance of this whole proposal.
+
 ### Permissions and budgets
 
 The grant names allowed endpoints and operations, scratch storage, read ranges,

@@ -179,6 +179,69 @@ fn result_guard_accepts_reordering_but_rejects_corruption_and_census_errors() {
 }
 
 #[test]
+fn comparisons_balance_positions_and_predecessors_for_ten_cycles() {
+    let treatments = comparison_order(0);
+    for cycle in 0..10 {
+        let orders: Vec<_> = (0..6)
+            .map(|row| comparison_order(cycle * 6 + row))
+            .collect();
+        for treatment in treatments {
+            for order in &orders {
+                assert_eq!(order.iter().filter(|&&case| case == treatment).count(), 1);
+            }
+            for position in 0..6 {
+                assert_eq!(
+                    orders
+                        .iter()
+                        .filter(|order| order[position] == treatment)
+                        .count(),
+                    1
+                );
+            }
+            for successor in treatments {
+                let adjacent = orders
+                    .iter()
+                    .flat_map(|order| order.windows(2))
+                    .filter(|pair| pair[0] == treatment && pair[1] == successor)
+                    .count();
+                assert_eq!(adjacent, usize::from(treatment != successor));
+            }
+        }
+    }
+    assert_eq!(
+        comparison_order(usize::MAX),
+        comparison_order(usize::MAX % 6)
+    );
+}
+
+#[test]
+fn comparisons_keep_both_orientations_of_each_arrangement() {
+    let pair = [
+        ProcessorId {
+            group: 1,
+            number: 3,
+        },
+        ProcessorId {
+            group: 2,
+            number: 7,
+        },
+    ];
+    for arrangement in trial_order(0) {
+        for reversed in [false, true] {
+            let comparison = Comparison {
+                arrangement,
+                reversed,
+            };
+            assert!(comparison_order(0).contains(&comparison));
+            assert_eq!(
+                comparison.processors(pair),
+                if reversed { [pair[1], pair[0]] } else { pair }
+            );
+        }
+    }
+}
+
+#[test]
 fn percentiles_use_nearest_rank() {
     let empty = Distribution::from_values(Vec::new());
     assert_eq!(

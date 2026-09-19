@@ -75,10 +75,47 @@ fn all_arrangements_process_ten_shapes_with_equal_payload_budgets() {
         let mut config = fixture.config(block, depth, queue);
         config.checksum_passes = passes;
         let capture = run(config).unwrap();
-        assert_eq!(capture.trials.len(), 3);
+        assert_eq!(capture.trials.len(), 6);
+        assert_eq!(capture.schema, "read-checksum-v2");
         assert_eq!(capture.file_bytes, bytes);
         assert_eq!(capture.payload_pool_bytes, block * depth);
         for trial in &capture.trials {
+            let (workers, checksum_workers) = match trial.arrangement {
+                Arrangement::Direct => (1, 1),
+                Arrangement::Pipeline => (2, 1),
+                Arrangement::Independent => (2, 2),
+            };
+            assert_eq!(trial.workers.len(), workers);
+            assert_eq!(trial.resources.worker_threads, workers);
+            assert_eq!(trial.resources.participating_processors, workers);
+            assert_eq!(trial.resources.checksum_workers, checksum_workers);
+            assert_eq!(trial.resources.unequal_cpu_reference, workers == 1);
+            assert_eq!(trial.resources.max_pending_reads, depth);
+            assert_eq!(trial.resources.payload_pool_bytes, block * depth);
+            assert_eq!(
+                trial
+                    .workers
+                    .iter()
+                    .map(|worker| worker.buffer_capacity)
+                    .sum::<usize>(),
+                depth
+            );
+            assert_eq!(
+                trial
+                    .workers
+                    .iter()
+                    .map(|worker| worker.checksummed_blocks)
+                    .sum::<usize>(),
+                trial.completed_blocks
+            );
+            assert_eq!(
+                trial
+                    .workers
+                    .iter()
+                    .filter(|worker| worker.checksummed_blocks > 0)
+                    .count(),
+                checksum_workers
+            );
             assert_eq!(trial.completed_blocks, blocks + usize::from(tail != 0));
             assert_eq!(trial.checksum_latency.count, trial.completed_blocks);
             assert!(trial.work_wall_ns > 0);
@@ -96,7 +133,12 @@ fn all_arrangements_process_ten_shapes_with_equal_payload_budgets() {
                     .sum::<usize>()
                     <= depth
             );
-            for worker in &trial.workers {
+            for (index, worker) in trial.workers.iter().enumerate() {
+                let expected_index = if trial.reversed { 1 - index } else { index };
+                assert_eq!(
+                    worker.requested_processor,
+                    capture.processors[expected_index]
+                );
                 assert_eq!(worker.processor_at_start, worker.requested_processor);
                 assert_eq!(worker.processor_at_end, worker.requested_processor);
                 if worker.role != "processor" {
@@ -111,6 +153,24 @@ fn all_arrangements_process_ten_shapes_with_equal_payload_budgets() {
                 trial.handoff_latency.is_some(),
                 trial.arrangement == Arrangement::Pipeline
             );
+        }
+        for arrangement in [
+            Arrangement::Direct,
+            Arrangement::Pipeline,
+            Arrangement::Independent,
+        ] {
+            for reversed in [false, true] {
+                assert_eq!(
+                    capture
+                        .trials
+                        .iter()
+                        .filter(
+                            |trial| trial.arrangement == arrangement && trial.reversed == reversed
+                        )
+                        .count(),
+                    1
+                );
+            }
         }
     }
 }
@@ -145,6 +205,24 @@ fn invalid_inputs_are_errors_not_empty_captures() {
         }; 2],
     );
     assert!(run(config).is_err());
+}
+
+#[test]
+fn recorded_schedule_uses_each_balanced_row() {
+    let fixture = Fixture::new(8193);
+    let mut config = fixture.config(1024, 8, 4);
+    config.repetitions = 6;
+    let capture = run(config).unwrap();
+    assert_eq!(capture.trials.len(), 36);
+    for (repetition, row) in capture.trials.as_chunks::<6>().0.iter().enumerate() {
+        let expected = windows_read_checksum_experiment::comparison_order(repetition);
+        for (position, (trial, comparison)) in row.iter().zip(expected).enumerate() {
+            assert_eq!(trial.repetition, repetition);
+            assert_eq!(trial.position, position);
+            assert_eq!(trial.arrangement, comparison.arrangement);
+            assert_eq!(trial.reversed, comparison.reversed);
+        }
+    }
 }
 
 #[test]

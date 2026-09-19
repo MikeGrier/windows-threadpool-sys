@@ -147,6 +147,34 @@ pub fn trial_order(repetition: usize) -> [Arrangement; 3] {
     ORDERS[repetition % ORDERS.len()]
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+pub struct Comparison {
+    pub arrangement: Arrangement,
+    pub reversed: bool,
+}
+
+impl Comparison {
+    pub fn processors(self, pair: [ProcessorId; 2]) -> [ProcessorId; 2] {
+        if self.reversed {
+            [pair[1], pair[0]]
+        } else {
+            pair
+        }
+    }
+}
+
+pub fn comparison_order(repetition: usize) -> [Comparison; 6] {
+    let arrangements = trial_order(0);
+    let first_row = [0, 1, 5, 2, 4, 3];
+    first_row.map(|offset| {
+        let treatment = (offset + repetition % first_row.len()) % first_row.len();
+        Comparison {
+            arrangement: arrangements[treatment % arrangements.len()],
+            reversed: treatment >= arrangements.len(),
+        }
+    })
+}
+
 #[derive(Clone, Debug)]
 pub(crate) struct BlockResult {
     id: usize,

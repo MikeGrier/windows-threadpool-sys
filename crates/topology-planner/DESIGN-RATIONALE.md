@@ -213,3 +213,18 @@ including mixed network-to-storage and storage-to-network flows. I/O endpoints a
 partitions are therefore first-class inputs to the same flow-planning problem as processors,
 buffers, queues, and intentional cross-domain transfers. The exact executable stage and ownership
 contract remains part of [CHECKLIST.md](CHECKLIST.md) `EP-R1.7`.
+
+## EP-X1.1: comparison evidence
+
+The first read/checksum capture kept processor roles fixed and put extra checksum
+capacity and stage separation in adjacent comparisons. EP-X1.1 exercised both
+orientations without modifying any scheduler, using a balanced treatment sequence
+and a same-code control before and after the compute-heavy workload.
+The [capture record](experiments/read-checksum/captures/2026-09-19-ep-x1-1/README.md)
+retains the observations and their limits. Its heavy-work direct/pipeline overlap
+and low samples were not removed to produce a cleaner ranking.
+
+The resulting experiment decision is
+[DESIGN-NOTES.md](experiments/read-checksum/DESIGN-NOTES.md) -> `RC-D8`.
+The working proposal links that decision at its evidence boundary; production
+component names, contracts and selection policy remain under `EP-R1.7`.

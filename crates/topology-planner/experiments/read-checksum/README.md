@@ -5,6 +5,8 @@ planner or measurement-foundation API. See [DESIGN-NOTES.md](DESIGN-NOTES.md) fo
 the measurement contract and the parent [CHECKLIST.md](../../CHECKLIST.md), `MX1`
 and `EP-X2.1`, for remaining work.
 The first observations are in the [capture record](captures/2026-09-19/README.md).
+The role-swapped repeats are in the
+[EP-X1.1 capture record](captures/2026-09-19-ep-x1-1/README.md).
 
 From the workspace root, build the `windows-read-checksum-experiment` package in
 release mode, then run:
@@ -37,10 +39,29 @@ Selection is not a permission oracle; an actual binding refusal fails the run.
 The capture retains requested and observed bindings and sampled payload-page nodes.
 
 Each repetition runs direct-owner, bounded reader/processor handoff, and independent
-direct workers. Order cycles through all permutations; choose a multiple of six
-repetitions for balanced positions. Warm-up runs are not recorded. Total payload
+direct workers in both processor orientations. The `read-checksum-v2` report labels
+each trial with `reversed` relative to the capture's selected pair. Choose a multiple
+of six repetitions for balanced treatment positions and within-repetition predecessor
+pairs; see [DESIGN-NOTES.md](DESIGN-NOTES.md) -> `RC-D7`. Warm-up runs are not recorded. Total payload
 buffer capacity and maximum aggregate pending reads are the same across arrangements.
 Queue, result and thread metadata are additional allocations.
+
+Each trial's `resources` records participating CPUs, worker threads, checksum workers,
+pending-read ceiling and payload capacity. `checksummed_blocks` and `buffer_capacity`
+are recorded per worker. The direct path is labelled `unequal_cpu_reference`:
+pipeline and independent paths both use two CPUs, but only independent workers
+checksum on both. These contrasts do not isolate stage overlap from ownership and
+handoff overhead.
+
+After building release, run the bounded EP-X1.1 sequence from the workspace root:
+
+```powershell
+.\crates\topology-planner\experiments\read-checksum\capture-ep-x1-1.ps1 -OutputDirectory .scratch\ep-x1-1-retake
+```
+
+The directory must not exist. The script retains configs, reports and a derived
+summary beside its fixture. It uses one executable and reuses the first capture's
+processor pair for the remaining cases. It stops on a failed command.
 
 The fixture is read synchronously for per-block reference checksums before timing.
 Trials use buffered asynchronous reads. This does not isolate storage-device service:
