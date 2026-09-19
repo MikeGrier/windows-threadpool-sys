@@ -345,3 +345,13 @@ and independent verifier fixtures establish these behavioral distinctions; no
 timing winner is selected. The completed item is in
 [COMPLETED-CHECKLIST.md](COMPLETED-CHECKLIST.md#ep-x22), and the experiment's `RR-D4`
 is the current disposition. EP-R1.7.1 and the remaining workload queue are unchanged.
+
+## EP-X2.3: state ownership without changing per-key semantics
+
+The engineer authorized the next offline experiment with the stateless paths kept
+intact. A stateful path cannot inherit RR-D1's unordered independent-request semantics:
+lookups must see the same trace-ordered adds for their key in both candidates. Shared
+workers therefore serialize commits by per-key sequence while key-owned workers keep
+private partitions. Cancellation is an outcome with a defined state effect, not just
+a missing result. The protocol is experiment [DESIGN-NOTES.md](experiments/request-reply/DESIGN-NOTES.md)
+-> `RR-D5`; EP-X2.3 remains the only newly authorized item.

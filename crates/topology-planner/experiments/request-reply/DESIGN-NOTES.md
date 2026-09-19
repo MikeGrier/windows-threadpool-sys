@@ -100,3 +100,56 @@ scheduling without breaking that census. Evidence must carry its response-time o
 and distinguish service-active wall time from CPU use. Preserve these requirements
 when materializing the future planner/runtime contracts; no production API is created
 by this experiment. The next workload remains subject to EP-R1.7.1 scope reconciliation.
+
+## RR-D5: stateful shared-state and key-owned comparison
+
+The engineer authorized EP-X2.3 as standalone offline behavioral work. Keep RR-D1's
+stateless paths unchanged. Add separate stateful schedulers over the same bounded
+crossbeam-channel backend: shared competing workers with one synchronized table,
+and key-owned workers with private partitions and one queue per owner. Owner is
+`key % workers`, fixed for the run, never a CPU or memory-domain identity. Record
+placement as unpinned host scheduling; this experiment makes no locality claim and
+introduces no second NUMA model or production startup workload.
+
+Every request names a unique ID, key, absolute arrival offset, bounded service work,
+and either lookup or wrapping-u64 add. Keys range over a bounded table initialized
+to zero. The specified per-key order is the trace order, including lookups. Replies
+may reorder across keys and retain the observed post-operation value. Shared workers
+may prepare work concurrently but wait for each key's next sequence before commit;
+key owners receive their partitions in trace order and need no shared state lock.
+Shared locking is part of that candidate, not a lock added to the owned candidate.
+
+Cancellation stops admission and resolves all admitted identities. A request cancelled
+before its commit leaves the value unchanged but advances that key's sequence so
+later admitted work can drain. Commit linearizes under the shared lock or exclusive
+owner; cancellation racing after that point cannot undo the effect or erase its
+completed reply. A cancelled suffix per key must never resume committing. Final
+state and every reply value are verified by an independent serial replay over the
+trace and reported outcomes; final equality alone is insufficient to verify lookups.
+
+Both candidates use RR-D3's worker, trace, service-work and deadline ceilings. Add
+1..=4096 keys. Match the total request slots, reply slots, admitted-credit ceiling,
+table entries, service work and fixed idle policy within a pair. Table value/sequence
+storage is equal; mutex, condition-variable, queue and report metadata are additional
+and labelled. Credits last until verified collection; never release them at dequeue
+or commit. Track requests from scheduled arrival and distinguish offer/admission,
+queue/service, terminal and collection timestamps. Report aggregate, per-key and
+per-owner-lane response distributions, outstanding peaks and admission-full attempts.
+
+Use deterministic steady/burst arrivals, uniform/hot/all-hot key traces, lookup-only,
+add-only and mixed operations, cheap/uneven service, pressure and cancellation. No
+random input, speed threshold or hardware requirement. Empty input and short traces
+are legal. Include non-power-of-two key/worker counts and wrapping arithmetic.
+Bound all state by the declared keys, credits and trace size; abort/error paths join
+workers and release queued payloads. Waiting for per-key order must observe peer
+failure and cancellation, never strand a worker behind an abandoned sequence.
+
+Use service-active wall time plus actual per-worker Windows kernel/user CPU time as
+observations; accounting granularity can make short runs noisy. CPU time is not a
+credit budget or physical-locality observation. No performance baseline is selected.
+The CLI will execute a small fixed matrix with shared/owned/owned/shared retakes,
+one executable, full configuration/provenance and raw outcomes. Do not overwrite
+earlier captures. Retain both speculative paths until an explicit disposition review.
+Test at least ten normal shapes and all new error edges; sabotage actual routing,
+commit order, lookup/state updates, cancellation effects and verifier binding,
+with a non-defect control. OS resource exhaustion is propagated but not manufactured.

@@ -653,6 +653,8 @@ with its generated-buffer prerequisite and local captures while `EP-R1.7.1` rema
 The subsequent `EP-X2.2` request/reply experiment is also explicitly authorized offline,
 including its deterministic steady/burst traces, under its
 [DESIGN-NOTES.md](experiments/request-reply/DESIGN-NOTES.md). Other work stays paused.
+The engineer subsequently authorized `EP-X2.3` as a separate stateful comparison in
+that component under `RR-D5`, preserving the stateless paths and all startup constraints.
 Physical NUMA fidelity is tracked once under [EP-D-11](#ep-d-11), not as a completion
 gate on that item. This does not change the startup constraint.
 

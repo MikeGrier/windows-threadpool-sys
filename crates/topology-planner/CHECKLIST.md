@@ -120,7 +120,7 @@ item; do not start `EP-R1.8` merely because one experiment has finished.
 
 ## Experiment execution rules for MX1 through MX3
 
-**EP-X2.2 is complete; further experiment execution remains paused pending `EP-R1.7.1`.**
+**EP-X2.3 is authorized as an offline behavioral experiment; other execution remains paused pending `EP-R1.7.1`.**
 [EP-D-10](DESIGN-NOTES.md#ep-d-10) remains the startup constraint. The shared NUMA
 validation policy is [EP-D-11](DESIGN-NOTES.md#ep-d-11); physical hardware is not an item
 or milestone gate. Other items retain their work and remain
@@ -227,6 +227,10 @@ same item ID; do not create an unowned implementation queue.
 - [x] **EP-X2.2** -- Compare shared completion service with assigned request lanes. -> [completed 2026-09-19](COMPLETED-CHECKLIST.md#ep-x22)
 
 - [ ] **EP-X2.3** -- **Compare shared state with key-owned processing.**
+  **Authorized standalone scope:** implement a separate stateful path in
+  `experiments/request-reply`, preserving its stateless experiment. Follow
+  [DESIGN-NOTES.md](experiments/request-reply/DESIGN-NOTES.md) -> `RR-D5`.
+  No startup benchmarking, hardware gate or performance threshold is introduced.
   **Question:** when do routing and ownership change the cost of a stateful workload?
   **Controls:** use a small counter/lookup service with shared synchronized state versus
   key-owned workers, identical per-key ordering/results and total resource bounds; vary
@@ -234,6 +238,9 @@ same item ID; do not create an unowned implementation queue.
   **Evidence:** reference state, reply identities, hot-key/lane latency, queue pressure,
   CPU use and cancellation outcomes. **Review:** specify the state-ownership and partitioning
   constraints that distinguish legal candidates, rather than treating skew as a machine fact.
+  > **CROSS-COMPONENT HANDOFF:** work moves to `experiments/request-reply` -> `MX2`
+  > -> `EP-X2.3`; return to parent `topology-planner` -> `EP-R1.7` after verification
+  > and disposition. Other paused items are not resumed.
 
 - [ ] **EP-X2.4** -- **Compare serial and staged ordered ingestion.**
   **Question:** what overlap is legal and useful when operations have dependencies?
