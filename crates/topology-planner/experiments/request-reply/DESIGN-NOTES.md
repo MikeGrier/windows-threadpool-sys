@@ -153,3 +153,28 @@ earlier captures. Retain both speculative paths until an explicit disposition re
 Test at least ten normal shapes and all new error edges; sabotage actual routing,
 commit order, lookup/state updates, cancellation effects and verifier binding,
 with a non-defect control. OS resource exhaustion is propagated but not manufactured.
+
+## RR-D6: state-ownership findings and disposition
+
+Retain the shared synchronized table and private key-owned partitions as separate
+stateful candidates. Keep the stateless request/reply paths unchanged. Neither
+stateful candidate becomes a planner default, and neither is merged or deleted
+from a timing observation. Eventual production disposition stays queued under
+parent [CHECKLIST.md](../../CHECKLIST.md) -> `EP-X3.3`.
+The [stateful demonstration](captures/2026-09-19-stateful/README.md) retains the
+observations supporting this review.
+
+Candidate contracts must state key identity, partition function, ownership, commit
+ordering and cancellation effect semantics. Shared eligibility is not concurrent
+unordered mutation: this candidate coordinates each key's commit sequence.
+Key ownership removes that shared lock from its path but retains serialization
+within the owner and pressure when keys concentrate there. Key skew is workload
+input, not a machine-topology fact; an unpinned logical owner is not a NUMA domain.
+
+Final state alone does not verify a stateful service. Replay each key's intermediate
+lookup/update outcomes in declared order, with cancellation leaving no value change
+before commit and no rollback after it. Cross-key reply order may differ. Aggregate
+credits include terminal replies not yet collected, independent of state ownership.
+Record queue/admission pressure and per-key/owner-lane observations rather than
+discarding hot-key waiting. Carry these requirements into the future plan/runtime
+contract; this experiment does not create that production API or a hardware gate.

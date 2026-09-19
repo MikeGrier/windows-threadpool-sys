@@ -1,6 +1,8 @@
 # Request/reply experiment
 
 Unpublished offline experiment for parent [CHECKLIST.md](../../CHECKLIST.md) -> `EP-X2.2`.
+The separate EP-X2.3 stateful path is described under [Stateful Comparison](#stateful-comparison)
+below; the original `capture` command and stateless contracts remain unchanged.
 The contract is [DESIGN-NOTES.md](DESIGN-NOTES.md); the
 [recorded demonstration](captures/2026-09-19/README.md) is behavioral evidence,
 not a performance baseline or a production startup operation.
@@ -96,3 +98,62 @@ ranking or samples random inputs at runtime.
 origin, global credit enforcement and the runner's binding to its verifier, with
 an equivalent compute-chunk control. Use
 [run-sabotage.ps1](../../../../tools/run-sabotage.ps1) for that manifest.
+
+## Stateful Comparison
+
+EP-X2.3 uses [stateful.rs](src/stateful.rs) and its separate
+[engine.rs](src/stateful/engine.rs). Both candidates run the same zero-initialized
+counter/lookup contract: `lookup` returns the current value, and `add` wraps modulo
+the u64 range and returns the new value. Every key follows trace order, independent
+of request ID sorting or worker completion order. A serial replay checks each
+intermediate reply and final table, including read-only, mixed and wrapping cases.
+
+`shared_state` uses competing receivers and one mutex-protected table with a
+condition variable. Workers prepare bounded service work outside the lock, then
+wait for that key's next sequence to commit. The table lock also serializes the
+short commit sections across different keys. `key_owned` routes to `key % workers`
+and keeps the corresponding table partition private in that worker. It does not
+acquire the shared table lock or steal keys. This is one pair of concrete designs,
+not a claim that all shared-state designs have one global lock.
+
+Cancellation before commit leaves the key's value unchanged and advances its
+sequence; later admitted requests for that key drain as cancelled. Commit is the
+state-change boundary. Cancellation after it cannot erase a completed effect or
+its reply. Consequently different candidates may have different final states on
+cancelled runs, but each must equal its own serial replay of completed operations.
+All non-cancelled paired runs must agree. An error/panic aborts the experiment,
+cancels peers and joins them; poisoned-state or missing-owner errors cannot produce
+a successful report. Tests inject these failures; OS thread/resource exhaustion
+is propagated but not manufactured on the developer host.
+
+The worker count, global credit ceiling, total channel slots, state-entry count,
+trace, service work and idle choices match within each comparison. Mutex/condition
+variable, partition-index, thread and queue metadata are extra allocations. A
+credit covers queued, executing and terminal-but-uncollected work. Admission walks
+the trace without skipping a full key-owned lane. Hot-key serialization and hot-lane
+admission pressure are therefore visible, not hidden by rerouting. Both candidates
+are unpinned and report that explicitly; ownership implies no NUMA locality.
+
+The stateful report adds `sequence`, `committed_ns`, `final_state`, key/owner-lane
+peaks, and per-worker `cpu_ns`. CPU values come from Windows thread kernel/user
+accounting; zero values and coarse granularity are retained. `active_ns` includes
+preparation, ordering waits and commit wall time, so it is not interchangeable with
+CPU time. Aggregate, per-key and logical-owner-lane summaries retain scheduled
+arrival as response origin; cancelled distributions remain separate. No response
+time is invented for unadmitted requests. `service_and_order_wait` ends at commit
+and does not isolate mutex cost from service or OS scheduling.
+
+The bounded demonstration varies uniform/hot/all-hot keys, lookup/add mix, cheap
+and uneven service, steady/burst arrivals, pressure and cancellation. Each point
+runs shared/owned/owned/shared without selecting a fastest default:
+
+```powershell
+.\target\release\windows-request-reply-experiment.exe capture-stateful .scratch\stateful-retake.json
+```
+
+Build the same package in release mode first. The destination must not exist.
+The CLI retains full trace/configuration and build provenance using the existing
+output writer. [The stateful record](captures/2026-09-19-stateful/README.md) holds
+the saved observations. The protocol and disposition are
+[DESIGN-NOTES.md](DESIGN-NOTES.md) -> `RR-D5` and `RR-D6`. Neither is a startup
+benchmark, physical-NUMA measurement or a performance acceptance criterion.

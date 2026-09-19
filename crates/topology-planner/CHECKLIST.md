@@ -37,7 +37,7 @@ prerequisites rather than on someone else's decision.
 |---|---|---|
 | MR1 design-review reconciliation | active | EP-R1.7.1 reconciles the EP-D-10 startup-cost boundary before further MX work |
 | MX1 controlled read/checksum comparisons | paused for scope reconciliation | EP-X1.2 evidence retained; EP-R1.7.1 precedes closure or further execution |
-| MX2 locality and ownership patterns | EP-X2.1 and EP-X2.2 complete | Placement and request ownership behavior validated; later work remains paused by EP-R1.7.1 |
+| MX2 locality and ownership patterns | EP-X2.1 through EP-X2.3 complete | Placement, request and state ownership behavior validated; later work remains paused by EP-R1.7.1 |
 | MX3 real endpoints, composition and synthesis | not started | MX2 ownership/ordering evidence and the permissions/hardware named by each experiment |
 | M1 the input contract | 4 done, 1 open | `EP-1.4` waits on EP-R1.7 |
 | M1+ scenario and naming | 2 done, 3 open | EP-R1.7 owns the topology specification and callbacks; `EP-1+.5` then settles remaining names |
@@ -120,7 +120,7 @@ item; do not start `EP-R1.8` merely because one experiment has finished.
 
 ## Experiment execution rules for MX1 through MX3
 
-**EP-X2.3 is authorized as an offline behavioral experiment; other execution remains paused pending `EP-R1.7.1`.**
+**EP-X2.3 is complete; further experiment execution remains paused pending `EP-R1.7.1`.**
 [EP-D-10](DESIGN-NOTES.md#ep-d-10) remains the startup constraint. The shared NUMA
 validation policy is [EP-D-11](DESIGN-NOTES.md#ep-d-11); physical hardware is not an item
 or milestone gate. Other items retain their work and remain
@@ -226,21 +226,7 @@ same item ID; do not create an unowned implementation queue.
 
 - [x] **EP-X2.2** -- Compare shared completion service with assigned request lanes. -> [completed 2026-09-19](COMPLETED-CHECKLIST.md#ep-x22)
 
-- [ ] **EP-X2.3** -- **Compare shared state with key-owned processing.**
-  **Authorized standalone scope:** implement a separate stateful path in
-  `experiments/request-reply`, preserving its stateless experiment. Follow
-  [DESIGN-NOTES.md](experiments/request-reply/DESIGN-NOTES.md) -> `RR-D5`.
-  No startup benchmarking, hardware gate or performance threshold is introduced.
-  **Question:** when do routing and ownership change the cost of a stateful workload?
-  **Controls:** use a small counter/lookup service with shared synchronized state versus
-  key-owned workers, identical per-key ordering/results and total resource bounds; vary
-  deterministic key skew, read/write mix and service cost while holding placement explicit.
-  **Evidence:** reference state, reply identities, hot-key/lane latency, queue pressure,
-  CPU use and cancellation outcomes. **Review:** specify the state-ownership and partitioning
-  constraints that distinguish legal candidates, rather than treating skew as a machine fact.
-  > **CROSS-COMPONENT HANDOFF:** work moves to `experiments/request-reply` -> `MX2`
-  > -> `EP-X2.3`; return to parent `topology-planner` -> `EP-R1.7` after verification
-  > and disposition. Other paused items are not resumed.
+- [x] **EP-X2.3** -- Compare shared state with key-owned processing. -> [completed 2026-09-19](COMPLETED-CHECKLIST.md#ep-x23)
 
 - [ ] **EP-X2.4** -- **Compare serial and staged ordered ingestion.**
   **Question:** what overlap is legal and useful when operations have dependencies?

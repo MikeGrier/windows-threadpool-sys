@@ -358,6 +358,14 @@ Carry its distinction between logical lanes, worker eligibility, admitted-work c
 queue capacities and terminal outcomes into future plan/runtime contracts. The in-memory
 experiment supplies no physical placement or kernel-completion scheduling claim.
 
+EP-X2.3's stateful acceptance and disposition are in the same experiment's
+[DESIGN-NOTES.md](experiments/request-reply/DESIGN-NOTES.md) -> `RR-D6`, with its
+[stateful record](experiments/request-reply/captures/2026-09-19-stateful/README.md).
+Carry key identity, partition/owner mapping, per-key commit order and cancellation
+effect boundaries into the future plan/runtime contract. Intermediate lookup results
+need verification as well as final state; neither key skew nor worker ownership is
+a discovered machine-locality fact. No stateful candidate is chosen as a default.
+
 ### Permissions and budgets
 
 The grant names allowed endpoints and operations, scratch storage, read ranges,

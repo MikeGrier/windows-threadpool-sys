@@ -3,6 +3,62 @@
   "description": "Actual request routing, reply correlation, evidence origin and oracle binding, with an equivalent compute-chunk control.",
   "sabotages": [
     {
+      "name": "keyed updates disappear",
+      "file": "src/stateful/engine.rs",
+      "expect": "caught",
+      "why": "Independent serial replay must reject an incorrect state transition even when both candidates share it.",
+      "find": "slot.value = slot.value.wrapping_add(value)",
+      "replace": "slot.value = slot.value.wrapping_add(value.wrapping_add(1))"
+    },
+    {
+      "name": "keyed lookup mutates state",
+      "file": "src/stateful/engine.rs",
+      "expect": "caught",
+      "why": "Lookups must preserve the state and report the trace-ordered intermediate value.",
+      "find": "Operation::Lookup => {}",
+      "replace": "Operation::Lookup => { slot.value = slot.value.wrapping_add(1); }"
+    },
+    {
+      "name": "keyed cancellation commits an effect",
+      "file": "src/stateful/engine.rs",
+      "expect": "caught",
+      "why": "Forced pre-commit cancellation must leave final state untouched, not merely report Cancelled.",
+      "find": "slot.cancelled = true;",
+      "replace": "slot.cancelled = true; slot.value = slot.value.wrapping_add(1);"
+    },
+    {
+      "name": "keyed owner routing collapses to zero",
+      "file": "src/stateful/engine.rs",
+      "expect": "caught",
+      "why": "Private partitions and correlated reply ownership must use the declared key mapping.",
+      "find": "Arrangement::KeyOwned => lane",
+      "replace": "Arrangement::KeyOwned => 0"
+    },
+    {
+      "name": "keyed runner bypasses verification",
+      "file": "src/stateful/engine.rs",
+      "expect": "caught",
+      "why": "A controlled service returning cancellation without a stop condition must be rejected by the real runner.",
+      "find": "verify(&report)?;",
+      "replace": "let _ = &report;"
+    },
+    {
+      "name": "keyed verifier ignores sequence",
+      "file": "src/stateful.rs",
+      "expect": "caught",
+      "why": "A final-state match cannot substitute for checking the per-key commit sequence.",
+      "find": "reply.sequence != sequences[request.key]",
+      "replace": "false"
+    },
+    {
+      "name": "equivalent keyed service chunk",
+      "file": "src/stateful/engine.rs",
+      "expect": "survives",
+      "why": "Service chunk size is not an ownership, state or cancellation-effect contract.",
+      "find": "const SERVICE_CHUNK: u32 = 256;",
+      "replace": "const SERVICE_CHUNK: u32 = 128;"
+    },
+    {
       "name": "assigned requests all enter worker zero",
       "file": "src/engine.rs",
       "expect": "caught",

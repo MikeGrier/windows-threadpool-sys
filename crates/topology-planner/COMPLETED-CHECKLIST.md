@@ -225,3 +225,35 @@ remaining workload-specific comparisons are not marked complete by that work.
 > **-> CROSS-COMPONENT HANDOFF:** return from `experiments/request-reply` -> `MX2`
 > -> `EP-X2.2` to parent `topology-planner` -> `MR1` -> `EP-R1.7.1` in
 > [CHECKLIST.md](CHECKLIST.md). Later experiments remain paused for scope reconciliation.
+
+## Moved 2026-09-19 14:05:00 -07:00 -- Keyed state ownership
+
+### <a id="ep-x23"></a>EP-X2.3 -- Compare shared state with key-owned processing. *(completed 2026-09-19 14:05:00 -07:00)*
+
+Added separate shared synchronized-table and private key-owned partition paths to
+the request/reply experiment without changing its stateless engine. Both candidates
+preserve trace order per key, wrapping add/lookup results, global admitted credits
+and cancellation-before-commit semantics. The common serial verifier checks every
+intermediate result, final state, sequence, identity, owner and credit history.
+
+Deterministic tests cover normal shapes, forced preparation reordering, hot keys,
+non-power-of-two partitions, wrapping, unknown owners, no-effect cancellation,
+deadline expiry, poisoned state and joined cleanup after service/worker/CPU errors.
+CLI tests validate paired configurations, final states and per-key distributions.
+Persistent sabotage detects wrong updates, mutating lookups, cancelled effects,
+wrong routing, sequence-check removal and bypassed verification; the equivalent
+service-chunk control survives. Original stateless tests remain green.
+
+The [stateful demonstration](experiments/request-reply/captures/2026-09-19-stateful/README.md)
+retains raw outcomes, state and CPU/latency/pressure observations with source identity.
+Placement is explicitly unpinned; no NUMA, timing threshold or performance ranking
+is inferred. Both candidates are retained under
+[DESIGN-NOTES.md](experiments/request-reply/DESIGN-NOTES.md) -> `RR-D6`. The working
+proposal links the resulting key/owner/commit/cancellation requirements.
+
+> **CROSS-COMPONENT PREREQUISITE:** parent `topology-planner` explicitly authorized
+> `experiments/request-reply` -> `MX2` -> `EP-X2.3` as an offline exception following
+> completed EP-X2.2, preserving the stateless paths.
+> **-> CROSS-COMPONENT HANDOFF:** return to parent `topology-planner` -> `MR1` ->
+> `EP-R1.7.1` in [CHECKLIST.md](CHECKLIST.md). EP-X2.4 and other paused work are not
+> started by this completion; EP-HW.1 remains the sole non-blocking physical follow-up.

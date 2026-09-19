@@ -1,6 +1,8 @@
 // Copyright (c) Mike Grier.
 #![cfg(windows)]
 
+mod keyed_capture;
+
 use std::fs::OpenOptions;
 use std::io::{self, BufWriter, Write};
 use std::path::Path;
@@ -73,20 +75,27 @@ fn execute(args: &[String], output: &mut impl Write) -> io::Result<()> {
     let [command, path] = args else {
         return Err(io::Error::new(
             io::ErrorKind::InvalidInput,
-            "usage: windows-request-reply-experiment capture <new-report.json>",
+            "usage: windows-request-reply-experiment capture|capture-stateful <new-report.json>",
         ));
     };
-    if command != "capture" {
+    if command != "capture" && command != "capture-stateful" {
         return Err(io::Error::new(
             io::ErrorKind::InvalidInput,
             "unknown command",
         ));
     }
     let mut report = BufWriter::new(OpenOptions::new().write(true).create_new(true).open(path)?);
-    let result = capture();
+    let (schema, result) = if command == "capture-stateful" {
+        ("stateful-capture-v1", keyed_capture::capture())
+    } else {
+        (
+            "request-reply-capture-v1",
+            capture().and_then(|trials| serde_json::to_value(trials).map_err(io::Error::other)),
+        )
+    };
     match result {
         Ok(trials) => {
-            let record = serde_json::json!({"schema": "request-reply-capture-v1", "status": "success",
+            let record = serde_json::json!({"schema": schema, "status": "success",
                 "evidence_class": "offline_unpinned_behavioral_experiment", "debug_assertions": cfg!(debug_assertions),
                 "recorded_unix_seconds": std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_err(io::Error::other)?.as_secs(),
                 "build": {"git_revision": env!("RR_REVISION"), "worktree": env!("RR_WORKTREE"),

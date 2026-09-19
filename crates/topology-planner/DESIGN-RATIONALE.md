@@ -355,3 +355,18 @@ workers therefore serialize commits by per-key sequence while key-owned workers 
 private partitions. Cancellation is an outcome with a defined state effect, not just
 a missing result. The protocol is experiment [DESIGN-NOTES.md](experiments/request-reply/DESIGN-NOTES.md)
 -> `RR-D5`; EP-X2.3 remains the only newly authorized item.
+
+The implementation gives the shared candidate per-key sequence waiting at commit,
+not a second key-affined scheduler. The owned candidate holds actual private
+partitions and does not acquire that shared-state lock. Preparation can finish out
+of order in the shared path while commit remains in trace order; independent serial
+replay checks the effect, not the processing helper's own answer. A deterministic
+test exposed that an all-hot assigned lane cannot always admit the full aggregate
+credit budget before processing, so forced-cancellation tests use a reachable
+admission boundary rather than waiting for an unrelated deadline.
+
+The [stateful record](experiments/request-reply/captures/2026-09-19-stateful/README.md)
+retains observations without a timing ranking. Both stateful paths and the original
+stateless paths remain isolated; the current disposition is `RR-D6` in the experiment's
+[DESIGN-NOTES.md](experiments/request-reply/DESIGN-NOTES.md). Completion is recorded in
+[COMPLETED-CHECKLIST.md](COMPLETED-CHECKLIST.md#ep-x23), with later work still paused.

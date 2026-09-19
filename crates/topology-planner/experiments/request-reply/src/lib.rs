@@ -3,6 +3,7 @@
 
 mod engine;
 pub use engine::run;
+pub mod stateful;
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::io;
@@ -342,7 +343,7 @@ pub struct Distribution {
 }
 
 impl Distribution {
-    fn new(mut values: Vec<u64>) -> Self {
+    pub(crate) fn new(mut values: Vec<u64>) -> Self {
         values.sort_unstable();
         let count = values.len();
         let percentile = |percent: usize| {
