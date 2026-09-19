@@ -1,0 +1,2861 @@
+{
+  "schema": "ep-x2-1-summary-v1",
+  "status": "available_placements_captured",
+  "executable_sha256": "2A0533510375BA86FCE44BF9814701DFF3753B5E92EAAAB1AD64A7301F7A71C1",
+  "script_sha256": "3C235612F5DAD1BB5012491DD16D3095ACCD352130F5156E60279C24A4FF8B95",
+  "generated_utc": "2026-09-19T07:08:06.1887079+00:00",
+  "unavailable": [
+    "cross-NUMA pair with Windows node labels unavailable; cross-node timing unrun"
+  ],
+  "unrun_cases": [],
+  "captures": [
+    {
+      "name": "buffered_file-pair-00-00-heap-control",
+      "pair_index": 0,
+      "payload_node": null,
+      "status": "success",
+      "groups": [
+        {
+          "arrangement": "direct",
+          "reversed": false,
+          "samples": 6,
+          "placement": "unrequested",
+          "bytes_per_second": {
+            "min": 576172609.0719271,
+            "median": 619244584.8658605,
+            "max": 671125220.7619212
+          },
+          "worker_cpu_ns": {
+            "min": 46875000.0,
+            "median": 62500000.0,
+            "max": 62500000.0
+          },
+          "checksum_p99_ns": {
+            "min": 1080700.0,
+            "median": 1189200.0,
+            "max": 4049400.0
+          },
+          "source_p99_ns": {
+            "min": 997800.0,
+            "median": 1107000.0,
+            "max": 3967600.0
+          },
+          "handoff_p99_ns": null
+        },
+        {
+          "arrangement": "direct",
+          "reversed": true,
+          "samples": 6,
+          "placement": "unrequested",
+          "bytes_per_second": {
+            "min": 658269833.2669592,
+            "median": 665303500.7574135,
+            "max": 685089468.3757263
+          },
+          "worker_cpu_ns": {
+            "min": 46875000.0,
+            "median": 46875000.0,
+            "max": 62500000.0
+          },
+          "checksum_p99_ns": {
+            "min": 888300.0,
+            "median": 1024700.0,
+            "max": 1117100.0
+          },
+          "source_p99_ns": {
+            "min": 806100.0,
+            "median": 942500.0,
+            "max": 1036100.0
+          },
+          "handoff_p99_ns": null
+        },
+        {
+          "arrangement": "independent",
+          "reversed": false,
+          "samples": 6,
+          "placement": "unrequested",
+          "bytes_per_second": {
+            "min": 1049133883.6256762,
+            "median": 1069870293.4340037,
+            "max": 1219177573.0137851
+          },
+          "worker_cpu_ns": {
+            "min": 31250000.0,
+            "median": 46875000.0,
+            "max": 62500000.0
+          },
+          "checksum_p99_ns": {
+            "min": 491500.0,
+            "median": 563800.0,
+            "max": 678500.0
+          },
+          "source_p99_ns": {
+            "min": 404500.0,
+            "median": 472400.0,
+            "max": 595300.0
+          },
+          "handoff_p99_ns": null
+        },
+        {
+          "arrangement": "independent",
+          "reversed": true,
+          "samples": 6,
+          "placement": "unrequested",
+          "bytes_per_second": {
+            "min": 1062646636.8763915,
+            "median": 1167005731.655572,
+            "max": 1224123490.5694795
+          },
+          "worker_cpu_ns": {
+            "min": 31250000.0,
+            "median": 31250000.0,
+            "max": 62500000.0
+          },
+          "checksum_p99_ns": {
+            "min": 490500.0,
+            "median": 568600.0,
+            "max": 1002900.0
+          },
+          "source_p99_ns": {
+            "min": 407500.0,
+            "median": 465800.0,
+            "max": 861800.0
+          },
+          "handoff_p99_ns": null
+        },
+        {
+          "arrangement": "pipeline",
+          "reversed": false,
+          "samples": 6,
+          "placement": "unrequested",
+          "bytes_per_second": {
+            "min": 625650487.6816337,
+            "median": 727087830.5319064,
+            "max": 782779021.9708952
+          },
+          "worker_cpu_ns": {
+            "min": 46875000.0,
+            "median": 78125000.0,
+            "max": 93750000.0
+          },
+          "checksum_p99_ns": {
+            "min": 1212200.0,
+            "median": 3629900.0,
+            "max": 5142300.0
+          },
+          "source_p99_ns": {
+            "min": 726900.0,
+            "median": 3154600.0,
+            "max": 4743700.0
+          },
+          "handoff_p99_ns": {
+            "min": 449800.0,
+            "median": 462300.0,
+            "max": 670100.0
+          }
+        },
+        {
+          "arrangement": "pipeline",
+          "reversed": true,
+          "samples": 6,
+          "placement": "unrequested",
+          "bytes_per_second": {
+            "min": 549315599.3130782,
+            "median": 770886390.317756,
+            "max": 773220595.5889639
+          },
+          "worker_cpu_ns": {
+            "min": 62500000.0,
+            "median": 78125000.0,
+            "max": 109375000.0
+          },
+          "checksum_p99_ns": {
+            "min": 1333600.0,
+            "median": 1458200.0,
+            "max": 12450300.0
+          },
+          "source_p99_ns": {
+            "min": 823400.0,
+            "median": 962800.0,
+            "max": 11939200.0
+          },
+          "handoff_p99_ns": {
+            "min": 508500.0,
+            "median": 533400.0,
+            "max": 6521900.0
+          }
+        }
+      ]
+    },
+    {
+      "name": "buffered_file-pair-00-01-node-0",
+      "pair_index": 0,
+      "payload_node": 0,
+      "status": "success",
+      "groups": [
+        {
+          "arrangement": "direct",
+          "reversed": false,
+          "samples": 6,
+          "placement": "observed_on_requested_node",
+          "bytes_per_second": {
+            "min": 594003905.2127331,
+            "median": 661709903.8232099,
+            "max": 689106354.7513282
+          },
+          "worker_cpu_ns": {
+            "min": 46875000.0,
+            "median": 46875000.0,
+            "max": 62500000.0
+          },
+          "checksum_p99_ns": {
+            "min": 894300.0,
+            "median": 1099700.0,
+            "max": 4111600.0
+          },
+          "source_p99_ns": {
+            "min": 807800.0,
+            "median": 1018700.0,
+            "max": 4030600.0
+          },
+          "handoff_p99_ns": null
+        },
+        {
+          "arrangement": "direct",
+          "reversed": true,
+          "samples": 6,
+          "placement": "observed_on_requested_node",
+          "bytes_per_second": {
+            "min": 663284771.3799436,
+            "median": 671678713.9108137,
+            "max": 689373934.2315578
+          },
+          "worker_cpu_ns": {
+            "min": 31250000.0,
+            "median": 46875000.0,
+            "max": 46875000.0
+          },
+          "checksum_p99_ns": {
+            "min": 872200.0,
+            "median": 954200.0,
+            "max": 1155900.0
+          },
+          "source_p99_ns": {
+            "min": 787600.0,
+            "median": 870000.0,
+            "max": 1074300.0
+          },
+          "handoff_p99_ns": null
+        },
+        {
+          "arrangement": "independent",
+          "reversed": false,
+          "samples": 6,
+          "placement": "observed_on_requested_node",
+          "bytes_per_second": {
+            "min": 1091020643.7306333,
+            "median": 1206235247.5959377,
+            "max": 1235245249.2618961
+          },
+          "worker_cpu_ns": {
+            "min": 31250000.0,
+            "median": 46875000.0,
+            "max": 46875000.0
+          },
+          "checksum_p99_ns": {
+            "min": 487700.0,
+            "median": 586200.0,
+            "max": 915100.0
+          },
+          "source_p99_ns": {
+            "min": 405200.0,
+            "median": 499500.0,
+            "max": 810100.0
+          },
+          "handoff_p99_ns": null
+        },
+        {
+          "arrangement": "independent",
+          "reversed": true,
+          "samples": 6,
+          "placement": "observed_on_requested_node",
+          "bytes_per_second": {
+            "min": 1099846566.3442407,
+            "median": 1223222061.01082,
+            "max": 1239333138.8090682
+          },
+          "worker_cpu_ns": {
+            "min": 46875000.0,
+            "median": 62500000.0,
+            "max": 62500000.0
+          },
+          "checksum_p99_ns": {
+            "min": 501500.0,
+            "median": 514700.0,
+            "max": 621100.0
+          },
+          "source_p99_ns": {
+            "min": 412400.0,
+            "median": 419200.0,
+            "max": 526000.0
+          },
+          "handoff_p99_ns": null
+        },
+        {
+          "arrangement": "pipeline",
+          "reversed": false,
+          "samples": 6,
+          "placement": "observed_on_requested_node",
+          "bytes_per_second": {
+            "min": 732570709.3531746,
+            "median": 783032934.3623036,
+            "max": 785239202.9299229
+          },
+          "worker_cpu_ns": {
+            "min": 93750000.0,
+            "median": 93750000.0,
+            "max": 93750000.0
+          },
+          "checksum_p99_ns": {
+            "min": 1191100.0,
+            "median": 1205700.0,
+            "max": 4150400.0
+          },
+          "source_p99_ns": {
+            "min": 695000.0,
+            "median": 701200.0,
+            "max": 3660200.0
+          },
+          "handoff_p99_ns": {
+            "min": 433700.0,
+            "median": 437100.0,
+            "max": 453500.0
+          }
+        },
+        {
+          "arrangement": "pipeline",
+          "reversed": true,
+          "samples": 6,
+          "placement": "observed_on_requested_node",
+          "bytes_per_second": {
+            "min": 679303113.2453629,
+            "median": 776004833.4875115,
+            "max": 780288843.0001907
+          },
+          "worker_cpu_ns": {
+            "min": 93750000.0,
+            "median": 93750000.0,
+            "max": 125000000.0
+          },
+          "checksum_p99_ns": {
+            "min": 1243200.0,
+            "median": 1270400.0,
+            "max": 4463100.0
+          },
+          "source_p99_ns": {
+            "min": 751400.0,
+            "median": 777200.0,
+            "max": 3884100.0
+          },
+          "handoff_p99_ns": {
+            "min": 483100.0,
+            "median": 490300.0,
+            "max": 2894100.0
+          }
+        }
+      ]
+    },
+    {
+      "name": "buffered_file-pair-00-02-node-0",
+      "pair_index": 0,
+      "payload_node": 0,
+      "status": "success",
+      "groups": [
+        {
+          "arrangement": "direct",
+          "reversed": false,
+          "samples": 6,
+          "placement": "observed_on_requested_node",
+          "bytes_per_second": {
+            "min": 663537918.4876109,
+            "median": 670260537.9750628,
+            "max": 688925254.8480151
+          },
+          "worker_cpu_ns": {
+            "min": 46875000.0,
+            "median": 46875000.0,
+            "max": 62500000.0
+          },
+          "checksum_p99_ns": {
+            "min": 845200.0,
+            "median": 1061400.0,
+            "max": 1213000.0
+          },
+          "source_p99_ns": {
+            "min": 764200.0,
+            "median": 979800.0,
+            "max": 1131200.0
+          },
+          "handoff_p99_ns": null
+        },
+        {
+          "arrangement": "direct",
+          "reversed": true,
+          "samples": 6,
+          "placement": "observed_on_requested_node",
+          "bytes_per_second": {
+            "min": 675203671.172123,
+            "median": 686436323.3167151,
+            "max": 690875658.8700379
+          },
+          "worker_cpu_ns": {
+            "min": 46875000.0,
+            "median": 46875000.0,
+            "max": 62500000.0
+          },
+          "checksum_p99_ns": {
+            "min": 813900.0,
+            "median": 835300.0,
+            "max": 1009500.0
+          },
+          "source_p99_ns": {
+            "min": 732900.0,
+            "median": 754300.0,
+            "max": 925600.0
+          },
+          "handoff_p99_ns": null
+        },
+        {
+          "arrangement": "independent",
+          "reversed": false,
+          "samples": 6,
+          "placement": "observed_on_requested_node",
+          "bytes_per_second": {
+            "min": 1225133596.7051744,
+            "median": 1230353583.5026145,
+            "max": 1238889282.720986
+          },
+          "worker_cpu_ns": {
+            "min": 31250000.0,
+            "median": 62500000.0,
+            "max": 62500000.0
+          },
+          "checksum_p99_ns": {
+            "min": 482800.0,
+            "median": 510300.0,
+            "max": 602600.0
+          },
+          "source_p99_ns": {
+            "min": 401500.0,
+            "median": 424300.0,
+            "max": 515100.0
+          },
+          "handoff_p99_ns": null
+        },
+        {
+          "arrangement": "independent",
+          "reversed": true,
+          "samples": 6,
+          "placement": "observed_on_requested_node",
+          "bytes_per_second": {
+            "min": 1208154918.5728738,
+            "median": 1222237363.0856764,
+            "max": 1237760485.4476373
+          },
+          "worker_cpu_ns": {
+            "min": 31250000.0,
+            "median": 31250000.0,
+            "max": 62500000.0
+          },
+          "checksum_p99_ns": {
+            "min": 513600.0,
+            "median": 519600.0,
+            "max": 589500.0
+          },
+          "source_p99_ns": {
+            "min": 406200.0,
+            "median": 433200.0,
+            "max": 507000.0
+          },
+          "handoff_p99_ns": null
+        },
+        {
+          "arrangement": "pipeline",
+          "reversed": false,
+          "samples": 6,
+          "placement": "observed_on_requested_node",
+          "bytes_per_second": {
+            "min": 777861338.810482,
+            "median": 781861562.4439313,
+            "max": 786278828.3538371
+          },
+          "worker_cpu_ns": {
+            "min": 62500000.0,
+            "median": 62500000.0,
+            "max": 93750000.0
+          },
+          "checksum_p99_ns": {
+            "min": 1188700.0,
+            "median": 1310200.0,
+            "max": 1404500.0
+          },
+          "source_p99_ns": {
+            "min": 697500.0,
+            "median": 819800.0,
+            "max": 913000.0
+          },
+          "handoff_p99_ns": {
+            "min": 433300.0,
+            "median": 449200.0,
+            "max": 518000.0
+          }
+        },
+        {
+          "arrangement": "pipeline",
+          "reversed": true,
+          "samples": 6,
+          "placement": "observed_on_requested_node",
+          "bytes_per_second": {
+            "min": 759598971.3382789,
+            "median": 771058220.3900049,
+            "max": 775176592.0778446
+          },
+          "worker_cpu_ns": {
+            "min": 62500000.0,
+            "median": 93750000.0,
+            "max": 93750000.0
+          },
+          "checksum_p99_ns": {
+            "min": 1478900.0,
+            "median": 1570000.0,
+            "max": 2022800.0
+          },
+          "source_p99_ns": {
+            "min": 894100.0,
+            "median": 1066600.0,
+            "max": 1250500.0
+          },
+          "handoff_p99_ns": {
+            "min": 494000.0,
+            "median": 511700.0,
+            "max": 798700.0
+          }
+        }
+      ]
+    },
+    {
+      "name": "buffered_file-pair-00-03-heap-control",
+      "pair_index": 0,
+      "payload_node": null,
+      "status": "success",
+      "groups": [
+        {
+          "arrangement": "direct",
+          "reversed": false,
+          "samples": 6,
+          "placement": "unrequested",
+          "bytes_per_second": {
+            "min": 661405996.2154064,
+            "median": 666290356.8499665,
+            "max": 687844881.3086795
+          },
+          "worker_cpu_ns": {
+            "min": 46875000.0,
+            "median": 46875000.0,
+            "max": 62500000.0
+          },
+          "checksum_p99_ns": {
+            "min": 853600.0,
+            "median": 1006300.0,
+            "max": 1638300.0
+          },
+          "source_p99_ns": {
+            "min": 772600.0,
+            "median": 925400.0,
+            "max": 1555600.0
+          },
+          "handoff_p99_ns": null
+        },
+        {
+          "arrangement": "direct",
+          "reversed": true,
+          "samples": 6,
+          "placement": "unrequested",
+          "bytes_per_second": {
+            "min": 644934313.8366678,
+            "median": 670716061.8696005,
+            "max": 684832192.4378426
+          },
+          "worker_cpu_ns": {
+            "min": 46875000.0,
+            "median": 46875000.0,
+            "max": 46875000.0
+          },
+          "checksum_p99_ns": {
+            "min": 846000.0,
+            "median": 871000.0,
+            "max": 1072400.0
+          },
+          "source_p99_ns": {
+            "min": 765000.0,
+            "median": 789900.0,
+            "max": 990800.0
+          },
+          "handoff_p99_ns": null
+        },
+        {
+          "arrangement": "independent",
+          "reversed": false,
+          "samples": 6,
+          "placement": "unrequested",
+          "bytes_per_second": {
+            "min": 1187431842.3101423,
+            "median": 1209661916.383969,
+            "max": 1223079382.0896392
+          },
+          "worker_cpu_ns": {
+            "min": 46875000.0,
+            "median": 62500000.0,
+            "max": 62500000.0
+          },
+          "checksum_p99_ns": {
+            "min": 522600.0,
+            "median": 537700.0,
+            "max": 699900.0
+          },
+          "source_p99_ns": {
+            "min": 435500.0,
+            "median": 444800.0,
+            "max": 618500.0
+          },
+          "handoff_p99_ns": null
+        },
+        {
+          "arrangement": "independent",
+          "reversed": true,
+          "samples": 6,
+          "placement": "unrequested",
+          "bytes_per_second": {
+            "min": 1194503839.3489661,
+            "median": 1206044482.9432929,
+            "max": 1227603289.7601094
+          },
+          "worker_cpu_ns": {
+            "min": 31250000.0,
+            "median": 46875000.0,
+            "max": 62500000.0
+          },
+          "checksum_p99_ns": {
+            "min": 502100.0,
+            "median": 549300.0,
+            "max": 664200.0
+          },
+          "source_p99_ns": {
+            "min": 410300.0,
+            "median": 449000.0,
+            "max": 583100.0
+          },
+          "handoff_p99_ns": null
+        },
+        {
+          "arrangement": "pipeline",
+          "reversed": false,
+          "samples": 6,
+          "placement": "unrequested",
+          "bytes_per_second": {
+            "min": 742243401.4351823,
+            "median": 781193519.398037,
+            "max": 784030081.266619
+          },
+          "worker_cpu_ns": {
+            "min": 31250000.0,
+            "median": 93750000.0,
+            "max": 93750000.0
+          },
+          "checksum_p99_ns": {
+            "min": 1197900.0,
+            "median": 1317700.0,
+            "max": 3596200.0
+          },
+          "source_p99_ns": {
+            "min": 688600.0,
+            "median": 809000.0,
+            "max": 3105700.0
+          },
+          "handoff_p99_ns": {
+            "min": 436600.0,
+            "median": 446600.0,
+            "max": 479900.0
+          }
+        },
+        {
+          "arrangement": "pipeline",
+          "reversed": true,
+          "samples": 6,
+          "placement": "unrequested",
+          "bytes_per_second": {
+            "min": 765473378.5180302,
+            "median": 768645462.0424246,
+            "max": 778453252.5983667
+          },
+          "worker_cpu_ns": {
+            "min": 62500000.0,
+            "median": 62500000.0,
+            "max": 93750000.0
+          },
+          "checksum_p99_ns": {
+            "min": 1346600.0,
+            "median": 1606700.0,
+            "max": 1681200.0
+          },
+          "source_p99_ns": {
+            "min": 789300.0,
+            "median": 1115900.0,
+            "max": 1189500.0
+          },
+          "handoff_p99_ns": {
+            "min": 489700.0,
+            "median": 536700.0,
+            "max": 626100.0
+          }
+        }
+      ]
+    },
+    {
+      "name": "generated-pair-00-00-heap-control",
+      "pair_index": 0,
+      "payload_node": null,
+      "status": "success",
+      "groups": [
+        {
+          "arrangement": "direct",
+          "reversed": false,
+          "samples": 6,
+          "placement": "unrequested",
+          "bytes_per_second": {
+            "min": 556535128.3841723,
+            "median": 584559043.0878743,
+            "max": 589343500.4294348
+          },
+          "worker_cpu_ns": {
+            "min": 62500000.0,
+            "median": 62500000.0,
+            "max": 62500000.0
+          },
+          "checksum_p99_ns": {
+            "min": 977100.0,
+            "median": 1017800.0,
+            "max": 1378100.0
+          },
+          "source_p99_ns": {
+            "min": 41200.0,
+            "median": 42500.0,
+            "max": 54800.0
+          },
+          "handoff_p99_ns": null
+        },
+        {
+          "arrangement": "direct",
+          "reversed": true,
+          "samples": 6,
+          "placement": "unrequested",
+          "bytes_per_second": {
+            "min": 582993932.802135,
+            "median": 585945272.4589849,
+            "max": 590789986.6011455
+          },
+          "worker_cpu_ns": {
+            "min": 46875000.0,
+            "median": 46875000.0,
+            "max": 62500000.0
+          },
+          "checksum_p99_ns": {
+            "min": 970800.0,
+            "median": 1093800.0,
+            "max": 1456600.0
+          },
+          "source_p99_ns": {
+            "min": 42900.0,
+            "median": 43900.0,
+            "max": 47700.0
+          },
+          "handoff_p99_ns": null
+        },
+        {
+          "arrangement": "independent",
+          "reversed": false,
+          "samples": 6,
+          "placement": "unrequested",
+          "bytes_per_second": {
+            "min": 1021637234.424762,
+            "median": 1057282592.5984277,
+            "max": 1116018951.51366
+          },
+          "worker_cpu_ns": {
+            "min": 62500000.0,
+            "median": 62500000.0,
+            "max": 62500000.0
+          },
+          "checksum_p99_ns": {
+            "min": 554200.0,
+            "median": 577800.0,
+            "max": 754700.0
+          },
+          "source_p99_ns": {
+            "min": 54600.0,
+            "median": 55500.0,
+            "max": 69400.0
+          },
+          "handoff_p99_ns": null
+        },
+        {
+          "arrangement": "independent",
+          "reversed": true,
+          "samples": 6,
+          "placement": "unrequested",
+          "bytes_per_second": {
+            "min": 1053154462.0522333,
+            "median": 1074825792.398738,
+            "max": 1091176753.699916
+          },
+          "worker_cpu_ns": {
+            "min": 46875000.0,
+            "median": 62500000.0,
+            "max": 62500000.0
+          },
+          "checksum_p99_ns": {
+            "min": 554400.0,
+            "median": 558000.0,
+            "max": 707800.0
+          },
+          "source_p99_ns": {
+            "min": 55000.0,
+            "median": 57000.0,
+            "max": 64100.0
+          },
+          "handoff_p99_ns": null
+        },
+        {
+          "arrangement": "pipeline",
+          "reversed": false,
+          "samples": 6,
+          "placement": "unrequested",
+          "bytes_per_second": {
+            "min": 778894163.3627053,
+            "median": 780475782.872747,
+            "max": 784660781.5167317
+          },
+          "worker_cpu_ns": {
+            "min": 62500000.0,
+            "median": 93750000.0,
+            "max": 93750000.0
+          },
+          "checksum_p99_ns": {
+            "min": 1184400.0,
+            "median": 1190000.0,
+            "max": 1360600.0
+          },
+          "source_p99_ns": {
+            "min": 50200.0,
+            "median": 50800.0,
+            "max": 76000.0
+          },
+          "handoff_p99_ns": {
+            "min": 1071100.0,
+            "median": 1076700.0,
+            "max": 1243200.0
+          }
+        },
+        {
+          "arrangement": "pipeline",
+          "reversed": true,
+          "samples": 6,
+          "placement": "unrequested",
+          "bytes_per_second": {
+            "min": 752799324.2530775,
+            "median": 767917194.9450057,
+            "max": 780368689.8521334
+          },
+          "worker_cpu_ns": {
+            "min": 62500000.0,
+            "median": 93750000.0,
+            "max": 93750000.0
+          },
+          "checksum_p99_ns": {
+            "min": 1222700.0,
+            "median": 1375700.0,
+            "max": 1747100.0
+          },
+          "source_p99_ns": {
+            "min": 48900.0,
+            "median": 49000.0,
+            "max": 50900.0
+          },
+          "handoff_p99_ns": {
+            "min": 1109300.0,
+            "median": 1256100.0,
+            "max": 1633700.0
+          }
+        }
+      ]
+    },
+    {
+      "name": "generated-pair-00-01-node-0",
+      "pair_index": 0,
+      "payload_node": 0,
+      "status": "success",
+      "groups": [
+        {
+          "arrangement": "direct",
+          "reversed": false,
+          "samples": 6,
+          "placement": "observed_on_requested_node",
+          "bytes_per_second": {
+            "min": 581686146.090478,
+            "median": 588312267.3581706,
+            "max": 589724667.6098667
+          },
+          "worker_cpu_ns": {
+            "min": 46875000.0,
+            "median": 46875000.0,
+            "max": 62500000.0
+          },
+          "checksum_p99_ns": {
+            "min": 960100.0,
+            "median": 1048300.0,
+            "max": 1257300.0
+          },
+          "source_p99_ns": {
+            "min": 42700.0,
+            "median": 43100.0,
+            "max": 47000.0
+          },
+          "handoff_p99_ns": null
+        },
+        {
+          "arrangement": "direct",
+          "reversed": true,
+          "samples": 6,
+          "placement": "observed_on_requested_node",
+          "bytes_per_second": {
+            "min": 587867000.2435251,
+            "median": 589196551.3305649,
+            "max": 591416850.4134082
+          },
+          "worker_cpu_ns": {
+            "min": 46875000.0,
+            "median": 62500000.0,
+            "max": 62500000.0
+          },
+          "checksum_p99_ns": {
+            "min": 951300.0,
+            "median": 980600.0,
+            "max": 1085500.0
+          },
+          "source_p99_ns": {
+            "min": 39800.0,
+            "median": 41800.0,
+            "max": 46900.0
+          },
+          "handoff_p99_ns": null
+        },
+        {
+          "arrangement": "independent",
+          "reversed": false,
+          "samples": 6,
+          "placement": "observed_on_requested_node",
+          "bytes_per_second": {
+            "min": 1011282334.8935055,
+            "median": 1056403823.3284744,
+            "max": 1087555188.9437366
+          },
+          "worker_cpu_ns": {
+            "min": 62500000.0,
+            "median": 62500000.0,
+            "max": 78125000.0
+          },
+          "checksum_p99_ns": {
+            "min": 584700.0,
+            "median": 670300.0,
+            "max": 736100.0
+          },
+          "source_p99_ns": {
+            "min": 57700.0,
+            "median": 62800.0,
+            "max": 74000.0
+          },
+          "handoff_p99_ns": null
+        },
+        {
+          "arrangement": "independent",
+          "reversed": true,
+          "samples": 6,
+          "placement": "observed_on_requested_node",
+          "bytes_per_second": {
+            "min": 999364095.5688323,
+            "median": 1053991412.1298169,
+            "max": 1109641489.4672444
+          },
+          "worker_cpu_ns": {
+            "min": 62500000.0,
+            "median": 62500000.0,
+            "max": 62500000.0
+          },
+          "checksum_p99_ns": {
+            "min": 536200.0,
+            "median": 565600.0,
+            "max": 690000.0
+          },
+          "source_p99_ns": {
+            "min": 54800.0,
+            "median": 57400.0,
+            "max": 66000.0
+          },
+          "handoff_p99_ns": null
+        },
+        {
+          "arrangement": "pipeline",
+          "reversed": false,
+          "samples": 6,
+          "placement": "observed_on_requested_node",
+          "bytes_per_second": {
+            "min": 772686427.6223527,
+            "median": 781097138.8399394,
+            "max": 784525021.9778165
+          },
+          "worker_cpu_ns": {
+            "min": 62500000.0,
+            "median": 78125000.0,
+            "max": 93750000.0
+          },
+          "checksum_p99_ns": {
+            "min": 1184600.0,
+            "median": 1238200.0,
+            "max": 1402400.0
+          },
+          "source_p99_ns": {
+            "min": 50000.0,
+            "median": 51100.0,
+            "max": 52100.0
+          },
+          "handoff_p99_ns": {
+            "min": 1071200.0,
+            "median": 1124800.0,
+            "max": 1288800.0
+          }
+        },
+        {
+          "arrangement": "pipeline",
+          "reversed": true,
+          "samples": 6,
+          "placement": "observed_on_requested_node",
+          "bytes_per_second": {
+            "min": 758961548.031033,
+            "median": 775875640.5038939,
+            "max": 781728590.9317528
+          },
+          "worker_cpu_ns": {
+            "min": 62500000.0,
+            "median": 93750000.0,
+            "max": 93750000.0
+          },
+          "checksum_p99_ns": {
+            "min": 1203500.0,
+            "median": 1352200.0,
+            "max": 1749500.0
+          },
+          "source_p99_ns": {
+            "min": 48500.0,
+            "median": 49000.0,
+            "max": 52000.0
+          },
+          "handoff_p99_ns": {
+            "min": 1090000.0,
+            "median": 1238400.0,
+            "max": 1636000.0
+          }
+        }
+      ]
+    },
+    {
+      "name": "generated-pair-00-02-node-0",
+      "pair_index": 0,
+      "payload_node": 0,
+      "status": "success",
+      "groups": [
+        {
+          "arrangement": "direct",
+          "reversed": false,
+          "samples": 6,
+          "placement": "observed_on_requested_node",
+          "bytes_per_second": {
+            "min": 582757004.3140879,
+            "median": 586388656.8499638,
+            "max": 591679653.6796536
+          },
+          "worker_cpu_ns": {
+            "min": 46875000.0,
+            "median": 46875000.0,
+            "max": 62500000.0
+          },
+          "checksum_p99_ns": {
+            "min": 920900.0,
+            "median": 1133800.0,
+            "max": 1293100.0
+          },
+          "source_p99_ns": {
+            "min": 41800.0,
+            "median": 42500.0,
+            "max": 49300.0
+          },
+          "handoff_p99_ns": null
+        },
+        {
+          "arrangement": "direct",
+          "reversed": true,
+          "samples": 6,
+          "placement": "observed_on_requested_node",
+          "bytes_per_second": {
+            "min": 588740648.0727661,
+            "median": 589498807.9823895,
+            "max": 591983419.6050203
+          },
+          "worker_cpu_ns": {
+            "min": 46875000.0,
+            "median": 62500000.0,
+            "max": 62500000.0
+          },
+          "checksum_p99_ns": {
+            "min": 923800.0,
+            "median": 963800.0,
+            "max": 1101900.0
+          },
+          "source_p99_ns": {
+            "min": 41900.0,
+            "median": 42500.0,
+            "max": 45000.0
+          },
+          "handoff_p99_ns": null
+        },
+        {
+          "arrangement": "independent",
+          "reversed": false,
+          "samples": 6,
+          "placement": "observed_on_requested_node",
+          "bytes_per_second": {
+            "min": 1011556716.5393972,
+            "median": 1061859732.845565,
+            "max": 1108680894.2283547
+          },
+          "worker_cpu_ns": {
+            "min": 46875000.0,
+            "median": 62500000.0,
+            "max": 62500000.0
+          },
+          "checksum_p99_ns": {
+            "min": 533100.0,
+            "median": 577000.0,
+            "max": 624100.0
+          },
+          "source_p99_ns": {
+            "min": 54800.0,
+            "median": 58200.0,
+            "max": 64600.0
+          },
+          "handoff_p99_ns": null
+        },
+        {
+          "arrangement": "independent",
+          "reversed": true,
+          "samples": 6,
+          "placement": "observed_on_requested_node",
+          "bytes_per_second": {
+            "min": 1017051124.6699947,
+            "median": 1071298094.2681179,
+            "max": 1092263664.5063004
+          },
+          "worker_cpu_ns": {
+            "min": 62500000.0,
+            "median": 62500000.0,
+            "max": 62500000.0
+          },
+          "checksum_p99_ns": {
+            "min": 558500.0,
+            "median": 566200.0,
+            "max": 817100.0
+          },
+          "source_p99_ns": {
+            "min": 54800.0,
+            "median": 57600.0,
+            "max": 66700.0
+          },
+          "handoff_p99_ns": null
+        },
+        {
+          "arrangement": "pipeline",
+          "reversed": false,
+          "samples": 6,
+          "placement": "observed_on_requested_node",
+          "bytes_per_second": {
+            "min": 779261367.4630103,
+            "median": 780679158.9791793,
+            "max": 785075689.5115628
+          },
+          "worker_cpu_ns": {
+            "min": 62500000.0,
+            "median": 62500000.0,
+            "max": 93750000.0
+          },
+          "checksum_p99_ns": {
+            "min": 1183000.0,
+            "median": 1293700.0,
+            "max": 1451100.0
+          },
+          "source_p99_ns": {
+            "min": 49000.0,
+            "median": 49900.0,
+            "max": 51400.0
+          },
+          "handoff_p99_ns": {
+            "min": 1069600.0,
+            "median": 1180200.0,
+            "max": 1337700.0
+          }
+        },
+        {
+          "arrangement": "pipeline",
+          "reversed": true,
+          "samples": 6,
+          "placement": "observed_on_requested_node",
+          "bytes_per_second": {
+            "min": 774507404.7401416,
+            "median": 775348548.6382941,
+            "max": 779160035.2026825
+          },
+          "worker_cpu_ns": {
+            "min": 62500000.0,
+            "median": 93750000.0,
+            "max": 93750000.0
+          },
+          "checksum_p99_ns": {
+            "min": 1249500.0,
+            "median": 1255100.0,
+            "max": 1553400.0
+          },
+          "source_p99_ns": {
+            "min": 48500.0,
+            "median": 49000.0,
+            "max": 49600.0
+          },
+          "handoff_p99_ns": {
+            "min": 1136100.0,
+            "median": 1141000.0,
+            "max": 1439700.0
+          }
+        }
+      ]
+    },
+    {
+      "name": "generated-pair-00-03-heap-control",
+      "pair_index": 0,
+      "payload_node": null,
+      "status": "success",
+      "groups": [
+        {
+          "arrangement": "direct",
+          "reversed": false,
+          "samples": 6,
+          "placement": "unrequested",
+          "bytes_per_second": {
+            "min": 579225046.1333439,
+            "median": 586590603.5575368,
+            "max": 589657306.0363765
+          },
+          "worker_cpu_ns": {
+            "min": 46875000.0,
+            "median": 46875000.0,
+            "max": 62500000.0
+          },
+          "checksum_p99_ns": {
+            "min": 1045000.0,
+            "median": 1225200.0,
+            "max": 1631700.0
+          },
+          "source_p99_ns": {
+            "min": 42600.0,
+            "median": 43100.0,
+            "max": 50900.0
+          },
+          "handoff_p99_ns": null
+        },
+        {
+          "arrangement": "direct",
+          "reversed": true,
+          "samples": 6,
+          "placement": "unrequested",
+          "bytes_per_second": {
+            "min": 585646647.9447488,
+            "median": 589118966.9399723,
+            "max": 592374285.0081209
+          },
+          "worker_cpu_ns": {
+            "min": 46875000.0,
+            "median": 46875000.0,
+            "max": 62500000.0
+          },
+          "checksum_p99_ns": {
+            "min": 911300.0,
+            "median": 938800.0,
+            "max": 1134200.0
+          },
+          "source_p99_ns": {
+            "min": 41200.0,
+            "median": 42400.0,
+            "max": 55500.0
+          },
+          "handoff_p99_ns": null
+        },
+        {
+          "arrangement": "independent",
+          "reversed": false,
+          "samples": 6,
+          "placement": "unrequested",
+          "bytes_per_second": {
+            "min": 1015075855.893466,
+            "median": 1073347376.1655711,
+            "max": 1088465386.1998942
+          },
+          "worker_cpu_ns": {
+            "min": 31250000.0,
+            "median": 62500000.0,
+            "max": 62500000.0
+          },
+          "checksum_p99_ns": {
+            "min": 561200.0,
+            "median": 582800.0,
+            "max": 679100.0
+          },
+          "source_p99_ns": {
+            "min": 54900.0,
+            "median": 60000.0,
+            "max": 69000.0
+          },
+          "handoff_p99_ns": null
+        },
+        {
+          "arrangement": "independent",
+          "reversed": true,
+          "samples": 6,
+          "placement": "unrequested",
+          "bytes_per_second": {
+            "min": 1042490990.0953186,
+            "median": 1067019292.8396758,
+            "max": 1107828020.535847
+          },
+          "worker_cpu_ns": {
+            "min": 31250000.0,
+            "median": 62500000.0,
+            "max": 78125000.0
+          },
+          "checksum_p99_ns": {
+            "min": 547000.0,
+            "median": 577600.0,
+            "max": 941700.0
+          },
+          "source_p99_ns": {
+            "min": 57500.0,
+            "median": 62100.0,
+            "max": 65800.0
+          },
+          "handoff_p99_ns": null
+        },
+        {
+          "arrangement": "pipeline",
+          "reversed": false,
+          "samples": 6,
+          "placement": "unrequested",
+          "bytes_per_second": {
+            "min": 777365762.9105535,
+            "median": 779431520.1661328,
+            "max": 784952640.0621328
+          },
+          "worker_cpu_ns": {
+            "min": 62500000.0,
+            "median": 62500000.0,
+            "max": 93750000.0
+          },
+          "checksum_p99_ns": {
+            "min": 1182400.0,
+            "median": 1245800.0,
+            "max": 1563400.0
+          },
+          "source_p99_ns": {
+            "min": 49600.0,
+            "median": 49600.0,
+            "max": 83100.0
+          },
+          "handoff_p99_ns": {
+            "min": 1064900.0,
+            "median": 1129600.0,
+            "max": 1449900.0
+          }
+        },
+        {
+          "arrangement": "pipeline",
+          "reversed": true,
+          "samples": 6,
+          "placement": "unrequested",
+          "bytes_per_second": {
+            "min": 770704015.3982553,
+            "median": 773539667.7563177,
+            "max": 778440610.8846599
+          },
+          "worker_cpu_ns": {
+            "min": 62500000.0,
+            "median": 93750000.0,
+            "max": 93750000.0
+          },
+          "checksum_p99_ns": {
+            "min": 1249600.0,
+            "median": 1490300.0,
+            "max": 1565300.0
+          },
+          "source_p99_ns": {
+            "min": 49100.0,
+            "median": 49100.0,
+            "max": 52700.0
+          },
+          "handoff_p99_ns": {
+            "min": 1135800.0,
+            "median": 1376800.0,
+            "max": 1451300.0
+          }
+        }
+      ]
+    },
+    {
+      "name": "buffered_file-pair-01-00-heap-control",
+      "pair_index": 1,
+      "payload_node": null,
+      "status": "success",
+      "groups": [
+        {
+          "arrangement": "direct",
+          "reversed": false,
+          "samples": 6,
+          "placement": "unrequested",
+          "bytes_per_second": {
+            "min": 659672684.521668,
+            "median": 667669178.4678875,
+            "max": 678695802.5550369
+          },
+          "worker_cpu_ns": {
+            "min": 46875000.0,
+            "median": 62500000.0,
+            "max": 62500000.0
+          },
+          "checksum_p99_ns": {
+            "min": 880900.0,
+            "median": 1125300.0,
+            "max": 1309800.0
+          },
+          "source_p99_ns": {
+            "min": 800000.0,
+            "median": 1044300.0,
+            "max": 1228800.0
+          },
+          "handoff_p99_ns": null
+        },
+        {
+          "arrangement": "direct",
+          "reversed": true,
+          "samples": 6,
+          "placement": "unrequested",
+          "bytes_per_second": {
+            "min": 662569659.3204576,
+            "median": 672241201.4192326,
+            "max": 692894365.6882079
+          },
+          "worker_cpu_ns": {
+            "min": 46875000.0,
+            "median": 46875000.0,
+            "max": 62500000.0
+          },
+          "checksum_p99_ns": {
+            "min": 807500.0,
+            "median": 906200.0,
+            "max": 1480800.0
+          },
+          "source_p99_ns": {
+            "min": 718200.0,
+            "median": 825200.0,
+            "max": 1396800.0
+          },
+          "handoff_p99_ns": null
+        },
+        {
+          "arrangement": "independent",
+          "reversed": false,
+          "samples": 6,
+          "placement": "unrequested",
+          "bytes_per_second": {
+            "min": 1238080178.5846064,
+            "median": 1300262691.8650386,
+            "max": 1323678233.015377
+          },
+          "worker_cpu_ns": {
+            "min": 15625000.0,
+            "median": 31250000.0,
+            "max": 62500000.0
+          },
+          "checksum_p99_ns": {
+            "min": 459500.0,
+            "median": 497600.0,
+            "max": 761300.0
+          },
+          "source_p99_ns": {
+            "min": 363600.0,
+            "median": 410900.0,
+            "max": 597300.0
+          },
+          "handoff_p99_ns": null
+        },
+        {
+          "arrangement": "independent",
+          "reversed": true,
+          "samples": 6,
+          "placement": "unrequested",
+          "bytes_per_second": {
+            "min": 1287436173.8863523,
+            "median": 1296795311.2862272,
+            "max": 1321587624.8055298
+          },
+          "worker_cpu_ns": {
+            "min": 31250000.0,
+            "median": 31250000.0,
+            "max": 62500000.0
+          },
+          "checksum_p99_ns": {
+            "min": 457400.0,
+            "median": 468100.0,
+            "max": 513000.0
+          },
+          "source_p99_ns": {
+            "min": 371700.0,
+            "median": 379100.0,
+            "max": 432000.0
+          },
+          "handoff_p99_ns": null
+        },
+        {
+          "arrangement": "pipeline",
+          "reversed": false,
+          "samples": 6,
+          "placement": "unrequested",
+          "bytes_per_second": {
+            "min": 790278833.6983914,
+            "median": 792823921.9142447,
+            "max": 794517231.9895815
+          },
+          "worker_cpu_ns": {
+            "min": 62500000.0,
+            "median": 62500000.0,
+            "max": 93750000.0
+          },
+          "checksum_p99_ns": {
+            "min": 1199300.0,
+            "median": 1297600.0,
+            "max": 1360300.0
+          },
+          "source_p99_ns": {
+            "min": 769100.0,
+            "median": 814800.0,
+            "max": 874600.0
+          },
+          "handoff_p99_ns": {
+            "min": 424600.0,
+            "median": 429600.0,
+            "max": 479000.0
+          }
+        },
+        {
+          "arrangement": "pipeline",
+          "reversed": true,
+          "samples": 6,
+          "placement": "unrequested",
+          "bytes_per_second": {
+            "min": 725612991.3997608,
+            "median": 778243814.3038714,
+            "max": 788049747.4112886
+          },
+          "worker_cpu_ns": {
+            "min": 62500000.0,
+            "median": 62500000.0,
+            "max": 93750000.0
+          },
+          "checksum_p99_ns": {
+            "min": 1292700.0,
+            "median": 1488000.0,
+            "max": 1838200.0
+          },
+          "source_p99_ns": {
+            "min": 774100.0,
+            "median": 1001800.0,
+            "max": 1261200.0
+          },
+          "handoff_p99_ns": {
+            "min": 504200.0,
+            "median": 527200.0,
+            "max": 826400.0
+          }
+        }
+      ]
+    },
+    {
+      "name": "buffered_file-pair-01-01-node-0",
+      "pair_index": 1,
+      "payload_node": 0,
+      "status": "success",
+      "groups": [
+        {
+          "arrangement": "direct",
+          "reversed": false,
+          "samples": 6,
+          "placement": "observed_on_requested_node",
+          "bytes_per_second": {
+            "min": 662068952.589915,
+            "median": 670107941.9729517,
+            "max": 683108965.3543756
+          },
+          "worker_cpu_ns": {
+            "min": 46875000.0,
+            "median": 46875000.0,
+            "max": 62500000.0
+          },
+          "checksum_p99_ns": {
+            "min": 1041500.0,
+            "median": 1113100.0,
+            "max": 2046600.0
+          },
+          "source_p99_ns": {
+            "min": 960500.0,
+            "median": 1031500.0,
+            "max": 1965500.0
+          },
+          "handoff_p99_ns": null
+        },
+        {
+          "arrangement": "direct",
+          "reversed": true,
+          "samples": 6,
+          "placement": "observed_on_requested_node",
+          "bytes_per_second": {
+            "min": 676813468.3150083,
+            "median": 682238115.2799042,
+            "max": 688012716.8080443
+          },
+          "worker_cpu_ns": {
+            "min": 46875000.0,
+            "median": 46875000.0,
+            "max": 62500000.0
+          },
+          "checksum_p99_ns": {
+            "min": 840500.0,
+            "median": 851200.0,
+            "max": 1003200.0
+          },
+          "source_p99_ns": {
+            "min": 743400.0,
+            "median": 756000.0,
+            "max": 922200.0
+          },
+          "handoff_p99_ns": null
+        },
+        {
+          "arrangement": "independent",
+          "reversed": false,
+          "samples": 6,
+          "placement": "observed_on_requested_node",
+          "bytes_per_second": {
+            "min": 1289281325.766454,
+            "median": 1309876407.7840455,
+            "max": 1327180816.7704935
+          },
+          "worker_cpu_ns": {
+            "min": 31250000.0,
+            "median": 46875000.0,
+            "max": 62500000.0
+          },
+          "checksum_p99_ns": {
+            "min": 437200.0,
+            "median": 469200.0,
+            "max": 633500.0
+          },
+          "source_p99_ns": {
+            "min": 355500.0,
+            "median": 378500.0,
+            "max": 529100.0
+          },
+          "handoff_p99_ns": null
+        },
+        {
+          "arrangement": "independent",
+          "reversed": true,
+          "samples": 6,
+          "placement": "observed_on_requested_node",
+          "bytes_per_second": {
+            "min": 1279044331.7831821,
+            "median": 1296354423.8265781,
+            "max": 1329173328.1573088
+          },
+          "worker_cpu_ns": {
+            "min": 31250000.0,
+            "median": 31250000.0,
+            "max": 62500000.0
+          },
+          "checksum_p99_ns": {
+            "min": 461500.0,
+            "median": 485400.0,
+            "max": 672200.0
+          },
+          "source_p99_ns": {
+            "min": 380500.0,
+            "median": 404400.0,
+            "max": 589300.0
+          },
+          "handoff_p99_ns": null
+        },
+        {
+          "arrangement": "pipeline",
+          "reversed": false,
+          "samples": 6,
+          "placement": "observed_on_requested_node",
+          "bytes_per_second": {
+            "min": 790236026.687831,
+            "median": 792857642.4414414,
+            "max": 796274475.370972
+          },
+          "worker_cpu_ns": {
+            "min": 31250000.0,
+            "median": 62500000.0,
+            "max": 93750000.0
+          },
+          "checksum_p99_ns": {
+            "min": 1168900.0,
+            "median": 1190700.0,
+            "max": 1402900.0
+          },
+          "source_p99_ns": {
+            "min": 690600.0,
+            "median": 692600.0,
+            "max": 903300.0
+          },
+          "handoff_p99_ns": {
+            "min": 423700.0,
+            "median": 432700.0,
+            "max": 441400.0
+          }
+        },
+        {
+          "arrangement": "pipeline",
+          "reversed": true,
+          "samples": 6,
+          "placement": "observed_on_requested_node",
+          "bytes_per_second": {
+            "min": 779391690.5330982,
+            "median": 784304971.2031115,
+            "max": 791710883.3425353
+          },
+          "worker_cpu_ns": {
+            "min": 62500000.0,
+            "median": 93750000.0,
+            "max": 93750000.0
+          },
+          "checksum_p99_ns": {
+            "min": 1204600.0,
+            "median": 1536000.0,
+            "max": 1699300.0
+          },
+          "source_p99_ns": {
+            "min": 716300.0,
+            "median": 1050000.0,
+            "max": 1213200.0
+          },
+          "handoff_p99_ns": {
+            "min": 466100.0,
+            "median": 541900.0,
+            "max": 660900.0
+          }
+        }
+      ]
+    },
+    {
+      "name": "buffered_file-pair-01-02-node-0",
+      "pair_index": 1,
+      "payload_node": 0,
+      "status": "success",
+      "groups": [
+        {
+          "arrangement": "direct",
+          "reversed": false,
+          "samples": 6,
+          "placement": "observed_on_requested_node",
+          "bytes_per_second": {
+            "min": 661117998.3489019,
+            "median": 676922699.82711,
+            "max": 681960799.0585921
+          },
+          "worker_cpu_ns": {
+            "min": 46875000.0,
+            "median": 46875000.0,
+            "max": 62500000.0
+          },
+          "checksum_p99_ns": {
+            "min": 884200.0,
+            "median": 1064000.0,
+            "max": 1243000.0
+          },
+          "source_p99_ns": {
+            "min": 803200.0,
+            "median": 981500.0,
+            "max": 1153200.0
+          },
+          "handoff_p99_ns": null
+        },
+        {
+          "arrangement": "direct",
+          "reversed": true,
+          "samples": 6,
+          "placement": "observed_on_requested_node",
+          "bytes_per_second": {
+            "min": 674253927.9377397,
+            "median": 677082514.4176248,
+            "max": 690564273.645346
+          },
+          "worker_cpu_ns": {
+            "min": 46875000.0,
+            "median": 46875000.0,
+            "max": 46875000.0
+          },
+          "checksum_p99_ns": {
+            "min": 804700.0,
+            "median": 828700.0,
+            "max": 1051600.0
+          },
+          "source_p99_ns": {
+            "min": 721600.0,
+            "median": 745300.0,
+            "max": 970600.0
+          },
+          "handoff_p99_ns": null
+        },
+        {
+          "arrangement": "independent",
+          "reversed": false,
+          "samples": 6,
+          "placement": "observed_on_requested_node",
+          "bytes_per_second": {
+            "min": 1230335538.2325118,
+            "median": 1272471946.7566695,
+            "max": 1323025837.9695528
+          },
+          "worker_cpu_ns": {
+            "min": 31250000.0,
+            "median": 62500000.0,
+            "max": 62500000.0
+          },
+          "checksum_p99_ns": {
+            "min": 443600.0,
+            "median": 502400.0,
+            "max": 794300.0
+          },
+          "source_p99_ns": {
+            "min": 362200.0,
+            "median": 414200.0,
+            "max": 702900.0
+          },
+          "handoff_p99_ns": null
+        },
+        {
+          "arrangement": "independent",
+          "reversed": true,
+          "samples": 6,
+          "placement": "observed_on_requested_node",
+          "bytes_per_second": {
+            "min": 1192695097.9799738,
+            "median": 1309482793.6091664,
+            "max": 1322030219.4554982
+          },
+          "worker_cpu_ns": {
+            "min": 31250000.0,
+            "median": 46875000.0,
+            "max": 62500000.0
+          },
+          "checksum_p99_ns": {
+            "min": 453900.0,
+            "median": 542900.0,
+            "max": 1442200.0
+          },
+          "source_p99_ns": {
+            "min": 372900.0,
+            "median": 461900.0,
+            "max": 1361200.0
+          },
+          "handoff_p99_ns": null
+        },
+        {
+          "arrangement": "pipeline",
+          "reversed": false,
+          "samples": 6,
+          "placement": "observed_on_requested_node",
+          "bytes_per_second": {
+            "min": 781817840.7912672,
+            "median": 790312338.0722233,
+            "max": 793348788.3824687
+          },
+          "worker_cpu_ns": {
+            "min": 62500000.0,
+            "median": 93750000.0,
+            "max": 93750000.0
+          },
+          "checksum_p99_ns": {
+            "min": 1279200.0,
+            "median": 1316100.0,
+            "max": 1399800.0
+          },
+          "source_p99_ns": {
+            "min": 793100.0,
+            "median": 830000.0,
+            "max": 913600.0
+          },
+          "handoff_p99_ns": {
+            "min": 428400.0,
+            "median": 444300.0,
+            "max": 546000.0
+          }
+        },
+        {
+          "arrangement": "pipeline",
+          "reversed": true,
+          "samples": 6,
+          "placement": "observed_on_requested_node",
+          "bytes_per_second": {
+            "min": 772761166.703131,
+            "median": 780363245.2294848,
+            "max": 790470591.5611079
+          },
+          "worker_cpu_ns": {
+            "min": 46875000.0,
+            "median": 93750000.0,
+            "max": 93750000.0
+          },
+          "checksum_p99_ns": {
+            "min": 1230300.0,
+            "median": 1343100.0,
+            "max": 1690400.0
+          },
+          "source_p99_ns": {
+            "min": 738900.0,
+            "median": 809600.0,
+            "max": 1201600.0
+          },
+          "handoff_p99_ns": {
+            "min": 483800.0,
+            "median": 510600.0,
+            "max": 807900.0
+          }
+        }
+      ]
+    },
+    {
+      "name": "buffered_file-pair-01-03-heap-control",
+      "pair_index": 1,
+      "payload_node": null,
+      "status": "success",
+      "groups": [
+        {
+          "arrangement": "direct",
+          "reversed": false,
+          "samples": 6,
+          "placement": "unrequested",
+          "bytes_per_second": {
+            "min": 629937671.661069,
+            "median": 645469023.5185035,
+            "max": 683284237.0631022
+          },
+          "worker_cpu_ns": {
+            "min": 31250000.0,
+            "median": 46875000.0,
+            "max": 46875000.0
+          },
+          "checksum_p99_ns": {
+            "min": 901600.0,
+            "median": 1022800.0,
+            "max": 1763900.0
+          },
+          "source_p99_ns": {
+            "min": 820600.0,
+            "median": 937500.0,
+            "max": 1659200.0
+          },
+          "handoff_p99_ns": null
+        },
+        {
+          "arrangement": "direct",
+          "reversed": true,
+          "samples": 6,
+          "placement": "unrequested",
+          "bytes_per_second": {
+            "min": 666589500.8691334,
+            "median": 679406271.5766412,
+            "max": 686848020.9936789
+          },
+          "worker_cpu_ns": {
+            "min": 46875000.0,
+            "median": 46875000.0,
+            "max": 46875000.0
+          },
+          "checksum_p99_ns": {
+            "min": 806500.0,
+            "median": 928200.0,
+            "max": 1084900.0
+          },
+          "source_p99_ns": {
+            "min": 725500.0,
+            "median": 846500.0,
+            "max": 1002500.0
+          },
+          "handoff_p99_ns": null
+        },
+        {
+          "arrangement": "independent",
+          "reversed": false,
+          "samples": 6,
+          "placement": "unrequested",
+          "bytes_per_second": {
+            "min": 1241745577.677448,
+            "median": 1302761604.88267,
+            "max": 1316201408.9921312
+          },
+          "worker_cpu_ns": {
+            "min": 31250000.0,
+            "median": 31250000.0,
+            "max": 62500000.0
+          },
+          "checksum_p99_ns": {
+            "min": 463800.0,
+            "median": 582200.0,
+            "max": 623600.0
+          },
+          "source_p99_ns": {
+            "min": 379300.0,
+            "median": 463300.0,
+            "max": 536000.0
+          },
+          "handoff_p99_ns": null
+        },
+        {
+          "arrangement": "independent",
+          "reversed": true,
+          "samples": 6,
+          "placement": "unrequested",
+          "bytes_per_second": {
+            "min": 1212200927.7255552,
+            "median": 1289340775.0389056,
+            "max": 1330670323.0462956
+          },
+          "worker_cpu_ns": {
+            "min": 31250000.0,
+            "median": 62500000.0,
+            "max": 62500000.0
+          },
+          "checksum_p99_ns": {
+            "min": 455400.0,
+            "median": 499700.0,
+            "max": 822000.0
+          },
+          "source_p99_ns": {
+            "min": 360700.0,
+            "median": 392300.0,
+            "max": 666000.0
+          },
+          "handoff_p99_ns": null
+        },
+        {
+          "arrangement": "pipeline",
+          "reversed": false,
+          "samples": 6,
+          "placement": "unrequested",
+          "bytes_per_second": {
+            "min": 788173769.860285,
+            "median": 794120477.3084424,
+            "max": 794925682.5267467
+          },
+          "worker_cpu_ns": {
+            "min": 78125000.0,
+            "median": 93750000.0,
+            "max": 93750000.0
+          },
+          "checksum_p99_ns": {
+            "min": 1179900.0,
+            "median": 1201100.0,
+            "max": 1325000.0
+          },
+          "source_p99_ns": {
+            "min": 681700.0,
+            "median": 714800.0,
+            "max": 921600.0
+          },
+          "handoff_p99_ns": {
+            "min": 432000.0,
+            "median": 434000.0,
+            "max": 528600.0
+          }
+        },
+        {
+          "arrangement": "pipeline",
+          "reversed": true,
+          "samples": 6,
+          "placement": "unrequested",
+          "bytes_per_second": {
+            "min": 768217833.5695299,
+            "median": 787899861.9303453,
+            "max": 794030275.6375064
+          },
+          "worker_cpu_ns": {
+            "min": 46875000.0,
+            "median": 93750000.0,
+            "max": 93750000.0
+          },
+          "checksum_p99_ns": {
+            "min": 1188600.0,
+            "median": 1285700.0,
+            "max": 2011600.0
+          },
+          "source_p99_ns": {
+            "min": 701600.0,
+            "median": 799000.0,
+            "max": 1561600.0
+          },
+          "handoff_p99_ns": {
+            "min": 454000.0,
+            "median": 484200.0,
+            "max": 873200.0
+          }
+        }
+      ]
+    },
+    {
+      "name": "generated-pair-01-00-heap-control",
+      "pair_index": 1,
+      "payload_node": null,
+      "status": "success",
+      "groups": [
+        {
+          "arrangement": "direct",
+          "reversed": false,
+          "samples": 6,
+          "placement": "unrequested",
+          "bytes_per_second": {
+            "min": 582125125.5610126,
+            "median": 584644598.8963791,
+            "max": 586672652.0906731
+          },
+          "worker_cpu_ns": {
+            "min": 46875000.0,
+            "median": 46875000.0,
+            "max": 62500000.0
+          },
+          "checksum_p99_ns": {
+            "min": 963300.0,
+            "median": 1070600.0,
+            "max": 1341600.0
+          },
+          "source_p99_ns": {
+            "min": 38800.0,
+            "median": 42500.0,
+            "max": 48400.0
+          },
+          "handoff_p99_ns": null
+        },
+        {
+          "arrangement": "direct",
+          "reversed": true,
+          "samples": 6,
+          "placement": "unrequested",
+          "bytes_per_second": {
+            "min": 571924188.7593874,
+            "median": 586668549.1188899,
+            "max": 590351348.8311538
+          },
+          "worker_cpu_ns": {
+            "min": 46875000.0,
+            "median": 62500000.0,
+            "max": 62500000.0
+          },
+          "checksum_p99_ns": {
+            "min": 928900.0,
+            "median": 1048700.0,
+            "max": 1204900.0
+          },
+          "source_p99_ns": {
+            "min": 41700.0,
+            "median": 45700.0,
+            "max": 53400.0
+          },
+          "handoff_p99_ns": null
+        },
+        {
+          "arrangement": "independent",
+          "reversed": false,
+          "samples": 6,
+          "placement": "unrequested",
+          "bytes_per_second": {
+            "min": 1161419305.0406876,
+            "median": 1170723205.158175,
+            "max": 1176552334.7347236
+          },
+          "worker_cpu_ns": {
+            "min": 31250000.0,
+            "median": 46875000.0,
+            "max": 62500000.0
+          },
+          "checksum_p99_ns": {
+            "min": 490600.0,
+            "median": 516500.0,
+            "max": 600100.0
+          },
+          "source_p99_ns": {
+            "min": 41800.0,
+            "median": 44400.0,
+            "max": 48100.0
+          },
+          "handoff_p99_ns": null
+        },
+        {
+          "arrangement": "independent",
+          "reversed": true,
+          "samples": 6,
+          "placement": "unrequested",
+          "bytes_per_second": {
+            "min": 1168603016.7204745,
+            "median": 1173314532.4847891,
+            "max": 1180119262.408953
+          },
+          "worker_cpu_ns": {
+            "min": 31250000.0,
+            "median": 62500000.0,
+            "max": 62500000.0
+          },
+          "checksum_p99_ns": {
+            "min": 497700.0,
+            "median": 505800.0,
+            "max": 523300.0
+          },
+          "source_p99_ns": {
+            "min": 41500.0,
+            "median": 43000.0,
+            "max": 48900.0
+          },
+          "handoff_p99_ns": null
+        },
+        {
+          "arrangement": "pipeline",
+          "reversed": false,
+          "samples": 6,
+          "placement": "unrequested",
+          "bytes_per_second": {
+            "min": 788081212.0984372,
+            "median": 788785196.7822771,
+            "max": 793761671.244089
+          },
+          "worker_cpu_ns": {
+            "min": 62500000.0,
+            "median": 62500000.0,
+            "max": 93750000.0
+          },
+          "checksum_p99_ns": {
+            "min": 1167500.0,
+            "median": 1270100.0,
+            "max": 1343600.0
+          },
+          "source_p99_ns": {
+            "min": 43800.0,
+            "median": 46900.0,
+            "max": 56400.0
+          },
+          "handoff_p99_ns": {
+            "min": 1056400.0,
+            "median": 1160200.0,
+            "max": 1234400.0
+          }
+        },
+        {
+          "arrangement": "pipeline",
+          "reversed": true,
+          "samples": 6,
+          "placement": "unrequested",
+          "bytes_per_second": {
+            "min": 779750303.841533,
+            "median": 784903063.873983,
+            "max": 792266076.3827401
+          },
+          "worker_cpu_ns": {
+            "min": 62500000.0,
+            "median": 93750000.0,
+            "max": 93750000.0
+          },
+          "checksum_p99_ns": {
+            "min": 1184800.0,
+            "median": 1213200.0,
+            "max": 1564500.0
+          },
+          "source_p99_ns": {
+            "min": 38900.0,
+            "median": 45400.0,
+            "max": 53800.0
+          },
+          "handoff_p99_ns": {
+            "min": 1075700.0,
+            "median": 1104200.0,
+            "max": 1411000.0
+          }
+        }
+      ]
+    },
+    {
+      "name": "generated-pair-01-01-node-0",
+      "pair_index": 1,
+      "payload_node": 0,
+      "status": "success",
+      "groups": [
+        {
+          "arrangement": "direct",
+          "reversed": false,
+          "samples": 6,
+          "placement": "observed_on_requested_node",
+          "bytes_per_second": {
+            "min": 556915693.6456959,
+            "median": 587807270.3257124,
+            "max": 589347640.9021531
+          },
+          "worker_cpu_ns": {
+            "min": 46875000.0,
+            "median": 46875000.0,
+            "max": 62500000.0
+          },
+          "checksum_p99_ns": {
+            "min": 1034700.0,
+            "median": 1085200.0,
+            "max": 1713600.0
+          },
+          "source_p99_ns": {
+            "min": 42300.0,
+            "median": 42700.0,
+            "max": 73200.0
+          },
+          "handoff_p99_ns": null
+        },
+        {
+          "arrangement": "direct",
+          "reversed": true,
+          "samples": 6,
+          "placement": "observed_on_requested_node",
+          "bytes_per_second": {
+            "min": 587616833.5592425,
+            "median": 588862566.6440864,
+            "max": 590126046.8731863
+          },
+          "worker_cpu_ns": {
+            "min": 31250000.0,
+            "median": 62500000.0,
+            "max": 62500000.0
+          },
+          "checksum_p99_ns": {
+            "min": 965700.0,
+            "median": 1061400.0,
+            "max": 1129000.0
+          },
+          "source_p99_ns": {
+            "min": 41500.0,
+            "median": 42300.0,
+            "max": 51900.0
+          },
+          "handoff_p99_ns": null
+        },
+        {
+          "arrangement": "independent",
+          "reversed": false,
+          "samples": 6,
+          "placement": "observed_on_requested_node",
+          "bytes_per_second": {
+            "min": 1118929205.0153394,
+            "median": 1162860256.9389813,
+            "max": 1179982311.403694
+          },
+          "worker_cpu_ns": {
+            "min": 46875000.0,
+            "median": 62500000.0,
+            "max": 62500000.0
+          },
+          "checksum_p99_ns": {
+            "min": 493500.0,
+            "median": 530300.0,
+            "max": 585300.0
+          },
+          "source_p99_ns": {
+            "min": 43000.0,
+            "median": 44400.0,
+            "max": 49200.0
+          },
+          "handoff_p99_ns": null
+        },
+        {
+          "arrangement": "independent",
+          "reversed": true,
+          "samples": 6,
+          "placement": "observed_on_requested_node",
+          "bytes_per_second": {
+            "min": 1124825649.9993296,
+            "median": 1172433096.3154492,
+            "max": 1180409869.8027518
+          },
+          "worker_cpu_ns": {
+            "min": 31250000.0,
+            "median": 62500000.0,
+            "max": 62500000.0
+          },
+          "checksum_p99_ns": {
+            "min": 464500.0,
+            "median": 500700.0,
+            "max": 613600.0
+          },
+          "source_p99_ns": {
+            "min": 42800.0,
+            "median": 44500.0,
+            "max": 79400.0
+          },
+          "handoff_p99_ns": null
+        },
+        {
+          "arrangement": "pipeline",
+          "reversed": false,
+          "samples": 6,
+          "placement": "observed_on_requested_node",
+          "bytes_per_second": {
+            "min": 784354471.8639916,
+            "median": 787236240.4423892,
+            "max": 789850972.1764512
+          },
+          "worker_cpu_ns": {
+            "min": 62500000.0,
+            "median": 62500000.0,
+            "max": 93750000.0
+          },
+          "checksum_p99_ns": {
+            "min": 1221100.0,
+            "median": 1248800.0,
+            "max": 1378700.0
+          },
+          "source_p99_ns": {
+            "min": 43100.0,
+            "median": 49600.0,
+            "max": 71900.0
+          },
+          "handoff_p99_ns": {
+            "min": 1111900.0,
+            "median": 1137300.0,
+            "max": 1269000.0
+          }
+        },
+        {
+          "arrangement": "pipeline",
+          "reversed": true,
+          "samples": 6,
+          "placement": "observed_on_requested_node",
+          "bytes_per_second": {
+            "min": 581736569.8216707,
+            "median": 784844315.0188291,
+            "max": 791326256.7566292
+          },
+          "worker_cpu_ns": {
+            "min": 62500000.0,
+            "median": 93750000.0,
+            "max": 109375000.0
+          },
+          "checksum_p99_ns": {
+            "min": 1186400.0,
+            "median": 1245400.0,
+            "max": 15743000.0
+          },
+          "source_p99_ns": {
+            "min": 38400.0,
+            "median": 45100.0,
+            "max": 58800.0
+          },
+          "handoff_p99_ns": {
+            "min": 1077200.0,
+            "median": 1136300.0,
+            "max": 15633800.0
+          }
+        }
+      ]
+    },
+    {
+      "name": "generated-pair-01-02-node-0",
+      "pair_index": 1,
+      "payload_node": 0,
+      "status": "success",
+      "groups": [
+        {
+          "arrangement": "direct",
+          "reversed": false,
+          "samples": 6,
+          "placement": "observed_on_requested_node",
+          "bytes_per_second": {
+            "min": 577915182.6004285,
+            "median": 585851152.4285592,
+            "max": 591484614.6252724
+          },
+          "worker_cpu_ns": {
+            "min": 46875000.0,
+            "median": 46875000.0,
+            "max": 62500000.0
+          },
+          "checksum_p99_ns": {
+            "min": 928300.0,
+            "median": 1222000.0,
+            "max": 1342500.0
+          },
+          "source_p99_ns": {
+            "min": 39400.0,
+            "median": 42600.0,
+            "max": 67600.0
+          },
+          "handoff_p99_ns": null
+        },
+        {
+          "arrangement": "direct",
+          "reversed": true,
+          "samples": 6,
+          "placement": "observed_on_requested_node",
+          "bytes_per_second": {
+            "min": 585404494.8916928,
+            "median": 591038698.6542662,
+            "max": 592947929.9937091
+          },
+          "worker_cpu_ns": {
+            "min": 46875000.0,
+            "median": 62500000.0,
+            "max": 62500000.0
+          },
+          "checksum_p99_ns": {
+            "min": 906500.0,
+            "median": 936400.0,
+            "max": 1332600.0
+          },
+          "source_p99_ns": {
+            "min": 39900.0,
+            "median": 42000.0,
+            "max": 51200.0
+          },
+          "handoff_p99_ns": null
+        },
+        {
+          "arrangement": "independent",
+          "reversed": false,
+          "samples": 6,
+          "placement": "observed_on_requested_node",
+          "bytes_per_second": {
+            "min": 1161889837.6686335,
+            "median": 1167988784.6173124,
+            "max": 1178519336.744908
+          },
+          "worker_cpu_ns": {
+            "min": 46875000.0,
+            "median": 62500000.0,
+            "max": 62500000.0
+          },
+          "checksum_p99_ns": {
+            "min": 489300.0,
+            "median": 507800.0,
+            "max": 646000.0
+          },
+          "source_p99_ns": {
+            "min": 41800.0,
+            "median": 43900.0,
+            "max": 51300.0
+          },
+          "handoff_p99_ns": null
+        },
+        {
+          "arrangement": "independent",
+          "reversed": true,
+          "samples": 6,
+          "placement": "observed_on_requested_node",
+          "bytes_per_second": {
+            "min": 1133025909.2551384,
+            "median": 1170172032.5861034,
+            "max": 1179828798.0703304
+          },
+          "worker_cpu_ns": {
+            "min": 46875000.0,
+            "median": 62500000.0,
+            "max": 62500000.0
+          },
+          "checksum_p99_ns": {
+            "min": 480300.0,
+            "median": 525000.0,
+            "max": 616200.0
+          },
+          "source_p99_ns": {
+            "min": 41300.0,
+            "median": 41700.0,
+            "max": 47500.0
+          },
+          "handoff_p99_ns": null
+        },
+        {
+          "arrangement": "pipeline",
+          "reversed": false,
+          "samples": 6,
+          "placement": "observed_on_requested_node",
+          "bytes_per_second": {
+            "min": 624532574.6873564,
+            "median": 790174616.0331193,
+            "max": 792979434.8968673
+          },
+          "worker_cpu_ns": {
+            "min": 62500000.0,
+            "median": 62500000.0,
+            "max": 109375000.0
+          },
+          "checksum_p99_ns": {
+            "min": 1190100.0,
+            "median": 1245300.0,
+            "max": 12043900.0
+          },
+          "source_p99_ns": {
+            "min": 44300.0,
+            "median": 45700.0,
+            "max": 60600.0
+          },
+          "handoff_p99_ns": {
+            "min": 1078300.0,
+            "median": 1134100.0,
+            "max": 11919200.0
+          }
+        },
+        {
+          "arrangement": "pipeline",
+          "reversed": true,
+          "samples": 6,
+          "placement": "observed_on_requested_node",
+          "bytes_per_second": {
+            "min": 781808732.7290944,
+            "median": 785026097.7795247,
+            "max": 791458780.0177848
+          },
+          "worker_cpu_ns": {
+            "min": 93750000.0,
+            "median": 93750000.0,
+            "max": 93750000.0
+          },
+          "checksum_p99_ns": {
+            "min": 1199200.0,
+            "median": 1211900.0,
+            "max": 1574900.0
+          },
+          "source_p99_ns": {
+            "min": 43400.0,
+            "median": 44600.0,
+            "max": 49900.0
+          },
+          "handoff_p99_ns": {
+            "min": 1089200.0,
+            "median": 1102400.0,
+            "max": 1447100.0
+          }
+        }
+      ]
+    },
+    {
+      "name": "generated-pair-01-03-heap-control",
+      "pair_index": 1,
+      "payload_node": null,
+      "status": "success",
+      "groups": [
+        {
+          "arrangement": "direct",
+          "reversed": false,
+          "samples": 6,
+          "placement": "unrequested",
+          "bytes_per_second": {
+            "min": 582189766.9641137,
+            "median": 587607572.2153634,
+            "max": 590383548.8695346
+          },
+          "worker_cpu_ns": {
+            "min": 46875000.0,
+            "median": 46875000.0,
+            "max": 62500000.0
+          },
+          "checksum_p99_ns": {
+            "min": 956900.0,
+            "median": 1034200.0,
+            "max": 1217200.0
+          },
+          "source_p99_ns": {
+            "min": 40500.0,
+            "median": 42200.0,
+            "max": 64300.0
+          },
+          "handoff_p99_ns": null
+        },
+        {
+          "arrangement": "direct",
+          "reversed": true,
+          "samples": 6,
+          "placement": "unrequested",
+          "bytes_per_second": {
+            "min": 585889001.4143283,
+            "median": 588748912.1432883,
+            "max": 592670390.0154904
+          },
+          "worker_cpu_ns": {
+            "min": 46875000.0,
+            "median": 62500000.0,
+            "max": 62500000.0
+          },
+          "checksum_p99_ns": {
+            "min": 910200.0,
+            "median": 1003900.0,
+            "max": 1220500.0
+          },
+          "source_p99_ns": {
+            "min": 41600.0,
+            "median": 43900.0,
+            "max": 52400.0
+          },
+          "handoff_p99_ns": null
+        },
+        {
+          "arrangement": "independent",
+          "reversed": false,
+          "samples": 6,
+          "placement": "unrequested",
+          "bytes_per_second": {
+            "min": 1130624540.9026275,
+            "median": 1159769424.8582883,
+            "max": 1181736023.5541062
+          },
+          "worker_cpu_ns": {
+            "min": 62500000.0,
+            "median": 62500000.0,
+            "max": 62500000.0
+          },
+          "checksum_p99_ns": {
+            "min": 477000.0,
+            "median": 518300.0,
+            "max": 761400.0
+          },
+          "source_p99_ns": {
+            "min": 41000.0,
+            "median": 44200.0,
+            "max": 47100.0
+          },
+          "handoff_p99_ns": null
+        },
+        {
+          "arrangement": "independent",
+          "reversed": true,
+          "samples": 6,
+          "placement": "unrequested",
+          "bytes_per_second": {
+            "min": 1160808583.655353,
+            "median": 1172015389.6128845,
+            "max": 1182256489.216643
+          },
+          "worker_cpu_ns": {
+            "min": 31250000.0,
+            "median": 46875000.0,
+            "max": 62500000.0
+          },
+          "checksum_p99_ns": {
+            "min": 481600.0,
+            "median": 497100.0,
+            "max": 578500.0
+          },
+          "source_p99_ns": {
+            "min": 41800.0,
+            "median": 42400.0,
+            "max": 51600.0
+          },
+          "handoff_p99_ns": null
+        },
+        {
+          "arrangement": "pipeline",
+          "reversed": false,
+          "samples": 6,
+          "placement": "unrequested",
+          "bytes_per_second": {
+            "min": 768805725.2966555,
+            "median": 787166061.8060427,
+            "max": 790703432.4468261
+          },
+          "worker_cpu_ns": {
+            "min": 62500000.0,
+            "median": 93750000.0,
+            "max": 93750000.0
+          },
+          "checksum_p99_ns": {
+            "min": 1273400.0,
+            "median": 1310700.0,
+            "max": 1949500.0
+          },
+          "source_p99_ns": {
+            "min": 44600.0,
+            "median": 46400.0,
+            "max": 62300.0
+          },
+          "handoff_p99_ns": {
+            "min": 1139500.0,
+            "median": 1199800.0,
+            "max": 1840400.0
+          }
+        },
+        {
+          "arrangement": "pipeline",
+          "reversed": true,
+          "samples": 6,
+          "placement": "unrequested",
+          "bytes_per_second": {
+            "min": 778968299.8456199,
+            "median": 786254876.828591,
+            "max": 790660579.4266998
+          },
+          "worker_cpu_ns": {
+            "min": 62500000.0,
+            "median": 93750000.0,
+            "max": 93750000.0
+          },
+          "checksum_p99_ns": {
+            "min": 1195200.0,
+            "median": 1315500.0,
+            "max": 1524600.0
+          },
+          "source_p99_ns": {
+            "min": 43900.0,
+            "median": 45400.0,
+            "max": 55100.0
+          },
+          "handoff_p99_ns": {
+            "min": 1085900.0,
+            "median": 1206300.0,
+            "max": 1415400.0
+          }
+        }
+      ]
+    }
+  ]
+}

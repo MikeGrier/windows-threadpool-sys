@@ -280,3 +280,15 @@ synthetic selection tests and real local placements proceed while cross-NUMA tim
 remains unrun. This is an explicit sequence exception, not acceptance of startup
 benchmarking or completion of EP-R1.7.1. The authorized work and remaining hardware
 obligation are in [CHECKLIST.md](CHECKLIST.md) -> `EP-X2.1`.
+
+The generated and buffered companions now share byte identity and owned payload
+primitives while retaining their separate source-service paths. The heap baseline
+remains available alongside explicit NUMA-backed allocation. Selection reports core,
+memory and each data/unified cache relationship independently rather than assigning
+a proximity rank; Windows node labels are never replaced by relation positions.
+
+The [local capture](experiments/read-checksum/captures/2026-09-19-ep-x2-1/README.md)
+records available core/cache placements and the missing cross-NUMA evidence.
+The shared-memory-node host can exercise allocation preference and observation, but
+cannot supply a remote-memory comparison. That remaining hardware obligation and
+the review stay in EP-X2.1; its implementation does not relax the startup boundary.

@@ -1,0 +1,6021 @@
+{
+  "schema": "read-checksum-v4",
+  "status": "success",
+  "build": {
+    "git_revision": "741b759b9f34c6f6e0aeda863c963099ab2329ce",
+    "worktree_at_build": "dirty",
+    "tracked_diff_fnv64": "b564f87a06bb9976",
+    "harness_and_manifests_fnv64": "6f906669a0a4b310",
+    "compiler": "rustc 1.98.0 (88d9e12ae 2026-08-18) | binary: rustc | commit-hash: 88d9e12ae178fab0fb5cc050a94da85685d449ea | commit-date: 2026-08-18 | host: x86_64-pc-windows-msvc | release: 1.98.0 | LLVM version: 22.1.8",
+    "target": "x86_64-pc-windows-msvc",
+    "opt_level": "3",
+    "rustflags": ""
+  },
+  "config": {
+    "file": "Q:\\github\\windows-threadpool-sys\\.scratch\\ep-x2-1-capture\\fixture.dat",
+    "input": "buffered_file",
+    "generated_bytes": null,
+    "payload_node": 0,
+    "block_bytes": 65536,
+    "depth": 8,
+    "buffer_count": 32,
+    "batch_size": 1,
+    "queue_capacity": 4,
+    "checksum_passes": 1,
+    "repetitions": 6,
+    "timeout_ms": 30000,
+    "processors": [
+      {
+        "group": 0,
+        "number": 0
+      },
+      {
+        "group": 0,
+        "number": 2
+      }
+    ]
+  },
+  "topology": {
+    "processors": [
+      {
+        "id": {
+          "group": 0,
+          "number": 0
+        },
+        "online": true,
+        "capacity": 0
+      },
+      {
+        "id": {
+          "group": 0,
+          "number": 1
+        },
+        "online": true,
+        "capacity": 0
+      },
+      {
+        "id": {
+          "group": 0,
+          "number": 2
+        },
+        "online": true,
+        "capacity": 0
+      },
+      {
+        "id": {
+          "group": 0,
+          "number": 3
+        },
+        "online": true,
+        "capacity": 0
+      },
+      {
+        "id": {
+          "group": 0,
+          "number": 4
+        },
+        "online": true,
+        "capacity": 0
+      },
+      {
+        "id": {
+          "group": 0,
+          "number": 5
+        },
+        "online": true,
+        "capacity": 0
+      },
+      {
+        "id": {
+          "group": 0,
+          "number": 6
+        },
+        "online": true,
+        "capacity": 0
+      },
+      {
+        "id": {
+          "group": 0,
+          "number": 7
+        },
+        "online": true,
+        "capacity": 0
+      },
+      {
+        "id": {
+          "group": 0,
+          "number": 8
+        },
+        "online": true,
+        "capacity": 0
+      },
+      {
+        "id": {
+          "group": 0,
+          "number": 9
+        },
+        "online": true,
+        "capacity": 0
+      },
+      {
+        "id": {
+          "group": 0,
+          "number": 10
+        },
+        "online": true,
+        "capacity": 0
+      },
+      {
+        "id": {
+          "group": 0,
+          "number": 11
+        },
+        "online": true,
+        "capacity": 0
+      },
+      {
+        "id": {
+          "group": 0,
+          "number": 12
+        },
+        "online": true,
+        "capacity": 0
+      },
+      {
+        "id": {
+          "group": 0,
+          "number": 13
+        },
+        "online": true,
+        "capacity": 0
+      },
+      {
+        "id": {
+          "group": 0,
+          "number": 14
+        },
+        "online": true,
+        "capacity": 0
+      },
+      {
+        "id": {
+          "group": 0,
+          "number": 15
+        },
+        "online": true,
+        "capacity": 0
+      }
+    ],
+    "domains": [
+      {
+        "kind": "group",
+        "id": 0,
+        "processors": [
+          {
+            "group": 0,
+            "number": 0
+          },
+          {
+            "group": 0,
+            "number": 1
+          },
+          {
+            "group": 0,
+            "number": 2
+          },
+          {
+            "group": 0,
+            "number": 3
+          },
+          {
+            "group": 0,
+            "number": 4
+          },
+          {
+            "group": 0,
+            "number": 5
+          },
+          {
+            "group": 0,
+            "number": 6
+          },
+          {
+            "group": 0,
+            "number": 7
+          },
+          {
+            "group": 0,
+            "number": 8
+          },
+          {
+            "group": 0,
+            "number": 9
+          },
+          {
+            "group": 0,
+            "number": 10
+          },
+          {
+            "group": 0,
+            "number": 11
+          },
+          {
+            "group": 0,
+            "number": 12
+          },
+          {
+            "group": 0,
+            "number": 13
+          },
+          {
+            "group": 0,
+            "number": 14
+          },
+          {
+            "group": 0,
+            "number": 15
+          }
+        ]
+      },
+      {
+        "kind": "package",
+        "id": 0,
+        "processors": [
+          {
+            "group": 0,
+            "number": 0
+          },
+          {
+            "group": 0,
+            "number": 1
+          },
+          {
+            "group": 0,
+            "number": 2
+          },
+          {
+            "group": 0,
+            "number": 3
+          },
+          {
+            "group": 0,
+            "number": 4
+          },
+          {
+            "group": 0,
+            "number": 5
+          },
+          {
+            "group": 0,
+            "number": 6
+          },
+          {
+            "group": 0,
+            "number": 7
+          },
+          {
+            "group": 0,
+            "number": 8
+          },
+          {
+            "group": 0,
+            "number": 9
+          },
+          {
+            "group": 0,
+            "number": 10
+          },
+          {
+            "group": 0,
+            "number": 11
+          },
+          {
+            "group": 0,
+            "number": 12
+          },
+          {
+            "group": 0,
+            "number": 13
+          },
+          {
+            "group": 0,
+            "number": 14
+          },
+          {
+            "group": 0,
+            "number": 15
+          }
+        ]
+      },
+      {
+        "kind": "module",
+        "id": 0,
+        "processors": [
+          {
+            "group": 0,
+            "number": 0
+          },
+          {
+            "group": 0,
+            "number": 1
+          }
+        ]
+      },
+      {
+        "kind": "module",
+        "id": 1,
+        "processors": [
+          {
+            "group": 0,
+            "number": 2
+          },
+          {
+            "group": 0,
+            "number": 3
+          }
+        ]
+      },
+      {
+        "kind": "module",
+        "id": 2,
+        "processors": [
+          {
+            "group": 0,
+            "number": 4
+          },
+          {
+            "group": 0,
+            "number": 5
+          }
+        ]
+      },
+      {
+        "kind": "module",
+        "id": 3,
+        "processors": [
+          {
+            "group": 0,
+            "number": 6
+          },
+          {
+            "group": 0,
+            "number": 7
+          }
+        ]
+      },
+      {
+        "kind": "module",
+        "id": 4,
+        "processors": [
+          {
+            "group": 0,
+            "number": 8
+          },
+          {
+            "group": 0,
+            "number": 9
+          }
+        ]
+      },
+      {
+        "kind": "module",
+        "id": 5,
+        "processors": [
+          {
+            "group": 0,
+            "number": 10
+          },
+          {
+            "group": 0,
+            "number": 11
+          }
+        ]
+      },
+      {
+        "kind": "module",
+        "id": 6,
+        "processors": [
+          {
+            "group": 0,
+            "number": 12
+          },
+          {
+            "group": 0,
+            "number": 13
+          }
+        ]
+      },
+      {
+        "kind": "module",
+        "id": 7,
+        "processors": [
+          {
+            "group": 0,
+            "number": 14
+          },
+          {
+            "group": 0,
+            "number": 15
+          }
+        ]
+      },
+      {
+        "kind": "core",
+        "id": 0,
+        "processors": [
+          {
+            "group": 0,
+            "number": 0
+          },
+          {
+            "group": 0,
+            "number": 1
+          }
+        ],
+        "simultaneous_multithreading": true,
+        "efficiency_class": 0
+      },
+      {
+        "kind": "core",
+        "id": 1,
+        "processors": [
+          {
+            "group": 0,
+            "number": 2
+          },
+          {
+            "group": 0,
+            "number": 3
+          }
+        ],
+        "simultaneous_multithreading": true,
+        "efficiency_class": 0
+      },
+      {
+        "kind": "core",
+        "id": 2,
+        "processors": [
+          {
+            "group": 0,
+            "number": 4
+          },
+          {
+            "group": 0,
+            "number": 5
+          }
+        ],
+        "simultaneous_multithreading": true,
+        "efficiency_class": 0
+      },
+      {
+        "kind": "core",
+        "id": 3,
+        "processors": [
+          {
+            "group": 0,
+            "number": 6
+          },
+          {
+            "group": 0,
+            "number": 7
+          }
+        ],
+        "simultaneous_multithreading": true,
+        "efficiency_class": 0
+      },
+      {
+        "kind": "core",
+        "id": 4,
+        "processors": [
+          {
+            "group": 0,
+            "number": 8
+          },
+          {
+            "group": 0,
+            "number": 9
+          }
+        ],
+        "simultaneous_multithreading": true,
+        "efficiency_class": 0
+      },
+      {
+        "kind": "core",
+        "id": 5,
+        "processors": [
+          {
+            "group": 0,
+            "number": 10
+          },
+          {
+            "group": 0,
+            "number": 11
+          }
+        ],
+        "simultaneous_multithreading": true,
+        "efficiency_class": 0
+      },
+      {
+        "kind": "core",
+        "id": 6,
+        "processors": [
+          {
+            "group": 0,
+            "number": 12
+          },
+          {
+            "group": 0,
+            "number": 13
+          }
+        ],
+        "simultaneous_multithreading": true,
+        "efficiency_class": 0
+      },
+      {
+        "kind": "core",
+        "id": 7,
+        "processors": [
+          {
+            "group": 0,
+            "number": 14
+          },
+          {
+            "group": 0,
+            "number": 15
+          }
+        ],
+        "simultaneous_multithreading": true,
+        "efficiency_class": 0
+      },
+      {
+        "kind": "cache",
+        "id": 0,
+        "processors": [
+          {
+            "group": 0,
+            "number": 0
+          },
+          {
+            "group": 0,
+            "number": 1
+          }
+        ],
+        "level": 1,
+        "associativity": 8,
+        "line_size": 64,
+        "size_bytes": 32768,
+        "cache_type": "data"
+      },
+      {
+        "kind": "cache",
+        "id": 1,
+        "processors": [
+          {
+            "group": 0,
+            "number": 0
+          },
+          {
+            "group": 0,
+            "number": 1
+          }
+        ],
+        "level": 1,
+        "associativity": 8,
+        "line_size": 64,
+        "size_bytes": 32768,
+        "cache_type": "instruction"
+      },
+      {
+        "kind": "cache",
+        "id": 2,
+        "processors": [
+          {
+            "group": 0,
+            "number": 0
+          },
+          {
+            "group": 0,
+            "number": 1
+          }
+        ],
+        "level": 2,
+        "associativity": 8,
+        "line_size": 64,
+        "size_bytes": 524288,
+        "cache_type": "unified"
+      },
+      {
+        "kind": "cache",
+        "id": 3,
+        "processors": [
+          {
+            "group": 0,
+            "number": 0
+          },
+          {
+            "group": 0,
+            "number": 1
+          },
+          {
+            "group": 0,
+            "number": 2
+          },
+          {
+            "group": 0,
+            "number": 3
+          },
+          {
+            "group": 0,
+            "number": 4
+          },
+          {
+            "group": 0,
+            "number": 5
+          },
+          {
+            "group": 0,
+            "number": 6
+          },
+          {
+            "group": 0,
+            "number": 7
+          },
+          {
+            "group": 0,
+            "number": 8
+          },
+          {
+            "group": 0,
+            "number": 9
+          },
+          {
+            "group": 0,
+            "number": 10
+          },
+          {
+            "group": 0,
+            "number": 11
+          },
+          {
+            "group": 0,
+            "number": 12
+          },
+          {
+            "group": 0,
+            "number": 13
+          },
+          {
+            "group": 0,
+            "number": 14
+          },
+          {
+            "group": 0,
+            "number": 15
+          }
+        ],
+        "level": 3,
+        "associativity": 16,
+        "line_size": 64,
+        "size_bytes": 33554432,
+        "cache_type": "unified"
+      },
+      {
+        "kind": "cache",
+        "id": 4,
+        "processors": [
+          {
+            "group": 0,
+            "number": 2
+          },
+          {
+            "group": 0,
+            "number": 3
+          }
+        ],
+        "level": 1,
+        "associativity": 8,
+        "line_size": 64,
+        "size_bytes": 32768,
+        "cache_type": "data"
+      },
+      {
+        "kind": "cache",
+        "id": 5,
+        "processors": [
+          {
+            "group": 0,
+            "number": 2
+          },
+          {
+            "group": 0,
+            "number": 3
+          }
+        ],
+        "level": 1,
+        "associativity": 8,
+        "line_size": 64,
+        "size_bytes": 32768,
+        "cache_type": "instruction"
+      },
+      {
+        "kind": "cache",
+        "id": 6,
+        "processors": [
+          {
+            "group": 0,
+            "number": 2
+          },
+          {
+            "group": 0,
+            "number": 3
+          }
+        ],
+        "level": 2,
+        "associativity": 8,
+        "line_size": 64,
+        "size_bytes": 524288,
+        "cache_type": "unified"
+      },
+      {
+        "kind": "cache",
+        "id": 7,
+        "processors": [
+          {
+            "group": 0,
+            "number": 4
+          },
+          {
+            "group": 0,
+            "number": 5
+          }
+        ],
+        "level": 1,
+        "associativity": 8,
+        "line_size": 64,
+        "size_bytes": 32768,
+        "cache_type": "data"
+      },
+      {
+        "kind": "cache",
+        "id": 8,
+        "processors": [
+          {
+            "group": 0,
+            "number": 4
+          },
+          {
+            "group": 0,
+            "number": 5
+          }
+        ],
+        "level": 1,
+        "associativity": 8,
+        "line_size": 64,
+        "size_bytes": 32768,
+        "cache_type": "instruction"
+      },
+      {
+        "kind": "cache",
+        "id": 9,
+        "processors": [
+          {
+            "group": 0,
+            "number": 4
+          },
+          {
+            "group": 0,
+            "number": 5
+          }
+        ],
+        "level": 2,
+        "associativity": 8,
+        "line_size": 64,
+        "size_bytes": 524288,
+        "cache_type": "unified"
+      },
+      {
+        "kind": "cache",
+        "id": 10,
+        "processors": [
+          {
+            "group": 0,
+            "number": 6
+          },
+          {
+            "group": 0,
+            "number": 7
+          }
+        ],
+        "level": 1,
+        "associativity": 8,
+        "line_size": 64,
+        "size_bytes": 32768,
+        "cache_type": "data"
+      },
+      {
+        "kind": "cache",
+        "id": 11,
+        "processors": [
+          {
+            "group": 0,
+            "number": 6
+          },
+          {
+            "group": 0,
+            "number": 7
+          }
+        ],
+        "level": 1,
+        "associativity": 8,
+        "line_size": 64,
+        "size_bytes": 32768,
+        "cache_type": "instruction"
+      },
+      {
+        "kind": "cache",
+        "id": 12,
+        "processors": [
+          {
+            "group": 0,
+            "number": 6
+          },
+          {
+            "group": 0,
+            "number": 7
+          }
+        ],
+        "level": 2,
+        "associativity": 8,
+        "line_size": 64,
+        "size_bytes": 524288,
+        "cache_type": "unified"
+      },
+      {
+        "kind": "cache",
+        "id": 13,
+        "processors": [
+          {
+            "group": 0,
+            "number": 8
+          },
+          {
+            "group": 0,
+            "number": 9
+          }
+        ],
+        "level": 1,
+        "associativity": 8,
+        "line_size": 64,
+        "size_bytes": 32768,
+        "cache_type": "data"
+      },
+      {
+        "kind": "cache",
+        "id": 14,
+        "processors": [
+          {
+            "group": 0,
+            "number": 8
+          },
+          {
+            "group": 0,
+            "number": 9
+          }
+        ],
+        "level": 1,
+        "associativity": 8,
+        "line_size": 64,
+        "size_bytes": 32768,
+        "cache_type": "instruction"
+      },
+      {
+        "kind": "cache",
+        "id": 15,
+        "processors": [
+          {
+            "group": 0,
+            "number": 8
+          },
+          {
+            "group": 0,
+            "number": 9
+          }
+        ],
+        "level": 2,
+        "associativity": 8,
+        "line_size": 64,
+        "size_bytes": 524288,
+        "cache_type": "unified"
+      },
+      {
+        "kind": "cache",
+        "id": 16,
+        "processors": [
+          {
+            "group": 0,
+            "number": 10
+          },
+          {
+            "group": 0,
+            "number": 11
+          }
+        ],
+        "level": 1,
+        "associativity": 8,
+        "line_size": 64,
+        "size_bytes": 32768,
+        "cache_type": "data"
+      },
+      {
+        "kind": "cache",
+        "id": 17,
+        "processors": [
+          {
+            "group": 0,
+            "number": 10
+          },
+          {
+            "group": 0,
+            "number": 11
+          }
+        ],
+        "level": 1,
+        "associativity": 8,
+        "line_size": 64,
+        "size_bytes": 32768,
+        "cache_type": "instruction"
+      },
+      {
+        "kind": "cache",
+        "id": 18,
+        "processors": [
+          {
+            "group": 0,
+            "number": 10
+          },
+          {
+            "group": 0,
+            "number": 11
+          }
+        ],
+        "level": 2,
+        "associativity": 8,
+        "line_size": 64,
+        "size_bytes": 524288,
+        "cache_type": "unified"
+      },
+      {
+        "kind": "cache",
+        "id": 19,
+        "processors": [
+          {
+            "group": 0,
+            "number": 12
+          },
+          {
+            "group": 0,
+            "number": 13
+          }
+        ],
+        "level": 1,
+        "associativity": 8,
+        "line_size": 64,
+        "size_bytes": 32768,
+        "cache_type": "data"
+      },
+      {
+        "kind": "cache",
+        "id": 20,
+        "processors": [
+          {
+            "group": 0,
+            "number": 12
+          },
+          {
+            "group": 0,
+            "number": 13
+          }
+        ],
+        "level": 1,
+        "associativity": 8,
+        "line_size": 64,
+        "size_bytes": 32768,
+        "cache_type": "instruction"
+      },
+      {
+        "kind": "cache",
+        "id": 21,
+        "processors": [
+          {
+            "group": 0,
+            "number": 12
+          },
+          {
+            "group": 0,
+            "number": 13
+          }
+        ],
+        "level": 2,
+        "associativity": 8,
+        "line_size": 64,
+        "size_bytes": 524288,
+        "cache_type": "unified"
+      },
+      {
+        "kind": "cache",
+        "id": 22,
+        "processors": [
+          {
+            "group": 0,
+            "number": 14
+          },
+          {
+            "group": 0,
+            "number": 15
+          }
+        ],
+        "level": 1,
+        "associativity": 8,
+        "line_size": 64,
+        "size_bytes": 32768,
+        "cache_type": "data"
+      },
+      {
+        "kind": "cache",
+        "id": 23,
+        "processors": [
+          {
+            "group": 0,
+            "number": 14
+          },
+          {
+            "group": 0,
+            "number": 15
+          }
+        ],
+        "level": 1,
+        "associativity": 8,
+        "line_size": 64,
+        "size_bytes": 32768,
+        "cache_type": "instruction"
+      },
+      {
+        "kind": "cache",
+        "id": 24,
+        "processors": [
+          {
+            "group": 0,
+            "number": 14
+          },
+          {
+            "group": 0,
+            "number": 15
+          }
+        ],
+        "level": 2,
+        "associativity": 8,
+        "line_size": 64,
+        "size_bytes": 524288,
+        "cache_type": "unified"
+      },
+      {
+        "kind": "memory",
+        "id": 0,
+        "processors": [
+          {
+            "group": 0,
+            "number": 0
+          },
+          {
+            "group": 0,
+            "number": 1
+          },
+          {
+            "group": 0,
+            "number": 2
+          },
+          {
+            "group": 0,
+            "number": 3
+          },
+          {
+            "group": 0,
+            "number": 4
+          },
+          {
+            "group": 0,
+            "number": 5
+          },
+          {
+            "group": 0,
+            "number": 6
+          },
+          {
+            "group": 0,
+            "number": 7
+          },
+          {
+            "group": 0,
+            "number": 8
+          },
+          {
+            "group": 0,
+            "number": 9
+          },
+          {
+            "group": 0,
+            "number": 10
+          },
+          {
+            "group": 0,
+            "number": 11
+          },
+          {
+            "group": 0,
+            "number": 12
+          },
+          {
+            "group": 0,
+            "number": 13
+          },
+          {
+            "group": 0,
+            "number": 14
+          },
+          {
+            "group": 0,
+            "number": 15
+          }
+        ]
+      }
+    ],
+    "cpu_sets": [
+      {
+        "id": 256,
+        "group": 0,
+        "logical_processor_index": 0,
+        "core_index": 0,
+        "last_level_cache_index": 0,
+        "numa_node_index": 0,
+        "efficiency_class": 0,
+        "parked": false,
+        "allocated": false,
+        "allocated_to_target_process": false,
+        "real_time": false,
+        "scheduling_class": 0,
+        "allocation_tag": 0
+      },
+      {
+        "id": 257,
+        "group": 0,
+        "logical_processor_index": 1,
+        "core_index": 0,
+        "last_level_cache_index": 0,
+        "numa_node_index": 0,
+        "efficiency_class": 0,
+        "parked": false,
+        "allocated": false,
+        "allocated_to_target_process": false,
+        "real_time": false,
+        "scheduling_class": 0,
+        "allocation_tag": 0
+      },
+      {
+        "id": 258,
+        "group": 0,
+        "logical_processor_index": 2,
+        "core_index": 2,
+        "last_level_cache_index": 0,
+        "numa_node_index": 0,
+        "efficiency_class": 0,
+        "parked": false,
+        "allocated": false,
+        "allocated_to_target_process": false,
+        "real_time": false,
+        "scheduling_class": 0,
+        "allocation_tag": 0
+      },
+      {
+        "id": 259,
+        "group": 0,
+        "logical_processor_index": 3,
+        "core_index": 2,
+        "last_level_cache_index": 0,
+        "numa_node_index": 0,
+        "efficiency_class": 0,
+        "parked": false,
+        "allocated": false,
+        "allocated_to_target_process": false,
+        "real_time": false,
+        "scheduling_class": 0,
+        "allocation_tag": 0
+      },
+      {
+        "id": 260,
+        "group": 0,
+        "logical_processor_index": 4,
+        "core_index": 4,
+        "last_level_cache_index": 0,
+        "numa_node_index": 0,
+        "efficiency_class": 0,
+        "parked": false,
+        "allocated": false,
+        "allocated_to_target_process": false,
+        "real_time": false,
+        "scheduling_class": 0,
+        "allocation_tag": 0
+      },
+      {
+        "id": 261,
+        "group": 0,
+        "logical_processor_index": 5,
+        "core_index": 4,
+        "last_level_cache_index": 0,
+        "numa_node_index": 0,
+        "efficiency_class": 0,
+        "parked": false,
+        "allocated": false,
+        "allocated_to_target_process": false,
+        "real_time": false,
+        "scheduling_class": 0,
+        "allocation_tag": 0
+      },
+      {
+        "id": 262,
+        "group": 0,
+        "logical_processor_index": 6,
+        "core_index": 6,
+        "last_level_cache_index": 0,
+        "numa_node_index": 0,
+        "efficiency_class": 0,
+        "parked": false,
+        "allocated": false,
+        "allocated_to_target_process": false,
+        "real_time": false,
+        "scheduling_class": 0,
+        "allocation_tag": 0
+      },
+      {
+        "id": 263,
+        "group": 0,
+        "logical_processor_index": 7,
+        "core_index": 6,
+        "last_level_cache_index": 0,
+        "numa_node_index": 0,
+        "efficiency_class": 0,
+        "parked": false,
+        "allocated": false,
+        "allocated_to_target_process": false,
+        "real_time": false,
+        "scheduling_class": 0,
+        "allocation_tag": 0
+      },
+      {
+        "id": 264,
+        "group": 0,
+        "logical_processor_index": 8,
+        "core_index": 8,
+        "last_level_cache_index": 0,
+        "numa_node_index": 0,
+        "efficiency_class": 0,
+        "parked": false,
+        "allocated": false,
+        "allocated_to_target_process": false,
+        "real_time": false,
+        "scheduling_class": 0,
+        "allocation_tag": 0
+      },
+      {
+        "id": 265,
+        "group": 0,
+        "logical_processor_index": 9,
+        "core_index": 8,
+        "last_level_cache_index": 0,
+        "numa_node_index": 0,
+        "efficiency_class": 0,
+        "parked": false,
+        "allocated": false,
+        "allocated_to_target_process": false,
+        "real_time": false,
+        "scheduling_class": 0,
+        "allocation_tag": 0
+      },
+      {
+        "id": 266,
+        "group": 0,
+        "logical_processor_index": 10,
+        "core_index": 10,
+        "last_level_cache_index": 0,
+        "numa_node_index": 0,
+        "efficiency_class": 0,
+        "parked": false,
+        "allocated": false,
+        "allocated_to_target_process": false,
+        "real_time": false,
+        "scheduling_class": 0,
+        "allocation_tag": 0
+      },
+      {
+        "id": 267,
+        "group": 0,
+        "logical_processor_index": 11,
+        "core_index": 10,
+        "last_level_cache_index": 0,
+        "numa_node_index": 0,
+        "efficiency_class": 0,
+        "parked": false,
+        "allocated": false,
+        "allocated_to_target_process": false,
+        "real_time": false,
+        "scheduling_class": 0,
+        "allocation_tag": 0
+      },
+      {
+        "id": 268,
+        "group": 0,
+        "logical_processor_index": 12,
+        "core_index": 12,
+        "last_level_cache_index": 0,
+        "numa_node_index": 0,
+        "efficiency_class": 0,
+        "parked": false,
+        "allocated": false,
+        "allocated_to_target_process": false,
+        "real_time": false,
+        "scheduling_class": 0,
+        "allocation_tag": 0
+      },
+      {
+        "id": 269,
+        "group": 0,
+        "logical_processor_index": 13,
+        "core_index": 12,
+        "last_level_cache_index": 0,
+        "numa_node_index": 0,
+        "efficiency_class": 0,
+        "parked": false,
+        "allocated": false,
+        "allocated_to_target_process": false,
+        "real_time": false,
+        "scheduling_class": 0,
+        "allocation_tag": 0
+      },
+      {
+        "id": 270,
+        "group": 0,
+        "logical_processor_index": 14,
+        "core_index": 14,
+        "last_level_cache_index": 0,
+        "numa_node_index": 0,
+        "efficiency_class": 0,
+        "parked": false,
+        "allocated": false,
+        "allocated_to_target_process": false,
+        "real_time": false,
+        "scheduling_class": 0,
+        "allocation_tag": 0
+      },
+      {
+        "id": 271,
+        "group": 0,
+        "logical_processor_index": 15,
+        "core_index": 14,
+        "last_level_cache_index": 0,
+        "numa_node_index": 0,
+        "efficiency_class": 0,
+        "parked": false,
+        "allocated": false,
+        "allocated_to_target_process": false,
+        "real_time": false,
+        "scheduling_class": 0,
+        "allocation_tag": 0
+      }
+    ],
+    "provenance": "measured",
+    "enumeration_anomalies": [],
+    "coherence": "agreed"
+  },
+  "processors": [
+    {
+      "group": 0,
+      "number": 0
+    },
+    {
+      "group": 0,
+      "number": 2
+    }
+  ],
+  "file_bytes": 33554449,
+  "blocks": 513,
+  "payload_pool_bytes": 2097152,
+  "recorded_unix_seconds": 1789801674,
+  "debug_assertions": false,
+  "evidence_class": "buffered_file_closed_loop_after_reference_read",
+  "caveats": [
+    "Buffered-file reference reads warm cache without guaranteeing residency; generated input fills payloads on the producer inside timing. Neither is raw device bandwidth.",
+    "Latency begins at admission, not offered arrival; no saturation responsiveness claim.",
+    "Payload pool is bounded equally; queue, token, result, thread and allocator metadata are extra.",
+    "Worker CPU excludes setup and residency sampling; work wall ends when every worker finishes its measured loop.",
+    "Joined wall additionally includes post-run residency sampling and thread teardown; CPU timer has OS accounting granularity.",
+    "Only payload-buffer pages are sampled, including partial heap boundary pages; heap/queue/stack placement is not controlled.",
+    "NUMA allocation is a preference, not proof of placement. Residency labels are incomplete when node_ids_truncated is true; unresident pages are unknown."
+  ],
+  "trials": [
+    {
+      "repetition": 0,
+      "position": 0,
+      "arrangement": "direct",
+      "reversed": false,
+      "resources": {
+        "worker_threads": 1,
+        "participating_processors": 1,
+        "checksum_workers": 1,
+        "unequal_cpu_reference": true,
+        "max_pending_reads": 8,
+        "payload_pool_bytes": 2097152
+      },
+      "work_wall_ns": 50073200,
+      "joined_wall_ns": 50720900,
+      "worker_cpu_ns": 46875000,
+      "completed_blocks": 513,
+      "bytes_per_second": 670107941.9729517,
+      "checksum_latency": {
+        "count": 513,
+        "p50_ns": 773300,
+        "p99_ns": 1150100,
+        "max_ns": 1192300
+      },
+      "observed_read_latency": {
+        "count": 513,
+        "p50_ns": 690900,
+        "p99_ns": 1069000,
+        "max_ns": 1111300
+      },
+      "compute_time": {
+        "count": 513,
+        "p50_ns": 80900,
+        "p99_ns": 130600,
+        "max_ns": 466100
+      },
+      "handoff_latency": null,
+      "workers": [
+        {
+          "role": "direct",
+          "requested_processor": {
+            "group": 0,
+            "number": 0
+          },
+          "processor_at_start": {
+            "group": 0,
+            "number": 0
+          },
+          "processor_at_end": {
+            "group": 0,
+            "number": 0
+          },
+          "cpu_ns": 46875000,
+          "submitted": 513,
+          "completed": 513,
+          "checksummed_blocks": 513,
+          "buffer_capacity": 32,
+          "numa_backed_buffers": 32,
+          "read_capacity": 8,
+          "buffer_pressure_observations": 0,
+          "batches": {
+            "count": 513,
+            "jobs": 513,
+            "max_jobs": 1,
+            "partial": 0
+          },
+          "return_batches": {
+            "count": 0,
+            "jobs": 0,
+            "max_jobs": 0,
+            "partial": 0
+          },
+          "peak_outstanding_reads": 8,
+          "peak_leased_buffers": 8,
+          "handoff_full_observations": 0,
+          "handoff_high_water": null,
+          "return_high_water": null,
+          "pages_before": {
+            "pages_by_node": {
+              "0": 512
+            },
+            "unresident_pages": 0,
+            "node_ids_truncated": false
+          },
+          "pages_after": {
+            "pages_by_node": {
+              "0": 512
+            },
+            "unresident_pages": 0,
+            "node_ids_truncated": false
+          }
+        }
+      ]
+    },
+    {
+      "repetition": 0,
+      "position": 1,
+      "arrangement": "pipeline",
+      "reversed": false,
+      "resources": {
+        "worker_threads": 2,
+        "participating_processors": 2,
+        "checksum_workers": 1,
+        "unequal_cpu_reference": false,
+        "max_pending_reads": 8,
+        "payload_pool_bytes": 2097152
+      },
+      "work_wall_ns": 42434000,
+      "joined_wall_ns": 43109800,
+      "worker_cpu_ns": 93750000,
+      "completed_blocks": 513,
+      "bytes_per_second": 790744426.6390159,
+      "checksum_latency": {
+        "count": 513,
+        "p50_ns": 1154100,
+        "p99_ns": 1387200,
+        "max_ns": 1390800
+      },
+      "observed_read_latency": {
+        "count": 513,
+        "p50_ns": 650100,
+        "p99_ns": 901200,
+        "max_ns": 927200
+      },
+      "compute_time": {
+        "count": 513,
+        "p50_ns": 80900,
+        "p99_ns": 102200,
+        "max_ns": 327900
+      },
+      "handoff_latency": {
+        "count": 513,
+        "p50_ns": 405100,
+        "p99_ns": 441400,
+        "max_ns": 657200
+      },
+      "workers": [
+        {
+          "role": "reader",
+          "requested_processor": {
+            "group": 0,
+            "number": 0
+          },
+          "processor_at_start": {
+            "group": 0,
+            "number": 0
+          },
+          "processor_at_end": {
+            "group": 0,
+            "number": 0
+          },
+          "cpu_ns": 46875000,
+          "submitted": 513,
+          "completed": 513,
+          "checksummed_blocks": 0,
+          "buffer_capacity": 32,
+          "numa_backed_buffers": 32,
+          "read_capacity": 8,
+          "buffer_pressure_observations": 0,
+          "batches": {
+            "count": 513,
+            "jobs": 513,
+            "max_jobs": 1,
+            "partial": 0
+          },
+          "return_batches": {
+            "count": 513,
+            "jobs": 513,
+            "max_jobs": 1,
+            "partial": 0
+          },
+          "peak_outstanding_reads": 8,
+          "peak_leased_buffers": 14,
+          "handoff_full_observations": 103831,
+          "handoff_high_water": 4,
+          "return_high_water": null,
+          "pages_before": {
+            "pages_by_node": {
+              "0": 512
+            },
+            "unresident_pages": 0,
+            "node_ids_truncated": false
+          },
+          "pages_after": {
+            "pages_by_node": {
+              "0": 512
+            },
+            "unresident_pages": 0,
+            "node_ids_truncated": false
+          }
+        },
+        {
+          "role": "processor",
+          "requested_processor": {
+            "group": 0,
+            "number": 2
+          },
+          "processor_at_start": {
+            "group": 0,
+            "number": 2
+          },
+          "processor_at_end": {
+            "group": 0,
+            "number": 2
+          },
+          "cpu_ns": 46875000,
+          "submitted": 0,
+          "completed": 513,
+          "checksummed_blocks": 513,
+          "buffer_capacity": 0,
+          "numa_backed_buffers": 0,
+          "read_capacity": 0,
+          "buffer_pressure_observations": 0,
+          "batches": {
+            "count": 513,
+            "jobs": 513,
+            "max_jobs": 1,
+            "partial": 0
+          },
+          "return_batches": {
+            "count": 0,
+            "jobs": 0,
+            "max_jobs": 0,
+            "partial": 0
+          },
+          "peak_outstanding_reads": 0,
+          "peak_leased_buffers": 0,
+          "handoff_full_observations": 0,
+          "handoff_high_water": null,
+          "return_high_water": 4,
+          "pages_before": null,
+          "pages_after": null
+        }
+      ]
+    },
+    {
+      "repetition": 0,
+      "position": 2,
+      "arrangement": "independent",
+      "reversed": true,
+      "resources": {
+        "worker_threads": 2,
+        "participating_processors": 2,
+        "checksum_workers": 2,
+        "unequal_cpu_reference": false,
+        "max_pending_reads": 8,
+        "payload_pool_bytes": 2097152
+      },
+      "work_wall_ns": 25528700,
+      "joined_wall_ns": 26088600,
+      "worker_cpu_ns": 31250000,
+      "completed_blocks": 513,
+      "bytes_per_second": 1314381421.694015,
+      "checksum_latency": {
+        "count": 513,
+        "p50_ns": 393500,
+        "p99_ns": 461500,
+        "max_ns": 465800
+      },
+      "observed_read_latency": {
+        "count": 513,
+        "p50_ns": 311300,
+        "p99_ns": 380500,
+        "max_ns": 384800
+      },
+      "compute_time": {
+        "count": 513,
+        "p50_ns": 80900,
+        "p99_ns": 105500,
+        "max_ns": 128100
+      },
+      "handoff_latency": null,
+      "workers": [
+        {
+          "role": "direct",
+          "requested_processor": {
+            "group": 0,
+            "number": 2
+          },
+          "processor_at_start": {
+            "group": 0,
+            "number": 2
+          },
+          "processor_at_end": {
+            "group": 0,
+            "number": 2
+          },
+          "cpu_ns": 15625000,
+          "submitted": 257,
+          "completed": 257,
+          "checksummed_blocks": 257,
+          "buffer_capacity": 16,
+          "numa_backed_buffers": 16,
+          "read_capacity": 4,
+          "buffer_pressure_observations": 0,
+          "batches": {
+            "count": 257,
+            "jobs": 257,
+            "max_jobs": 1,
+            "partial": 0
+          },
+          "return_batches": {
+            "count": 0,
+            "jobs": 0,
+            "max_jobs": 0,
+            "partial": 0
+          },
+          "peak_outstanding_reads": 4,
+          "peak_leased_buffers": 4,
+          "handoff_full_observations": 0,
+          "handoff_high_water": null,
+          "return_high_water": null,
+          "pages_before": {
+            "pages_by_node": {
+              "0": 256
+            },
+            "unresident_pages": 0,
+            "node_ids_truncated": false
+          },
+          "pages_after": {
+            "pages_by_node": {
+              "0": 256
+            },
+            "unresident_pages": 0,
+            "node_ids_truncated": false
+          }
+        },
+        {
+          "role": "direct",
+          "requested_processor": {
+            "group": 0,
+            "number": 0
+          },
+          "processor_at_start": {
+            "group": 0,
+            "number": 0
+          },
+          "processor_at_end": {
+            "group": 0,
+            "number": 0
+          },
+          "cpu_ns": 15625000,
+          "submitted": 256,
+          "completed": 256,
+          "checksummed_blocks": 256,
+          "buffer_capacity": 16,
+          "numa_backed_buffers": 16,
+          "read_capacity": 4,
+          "buffer_pressure_observations": 0,
+          "batches": {
+            "count": 256,
+            "jobs": 256,
+            "max_jobs": 1,
+            "partial": 0
+          },
+          "return_batches": {
+            "count": 0,
+            "jobs": 0,
+            "max_jobs": 0,
+            "partial": 0
+          },
+          "peak_outstanding_reads": 4,
+          "peak_leased_buffers": 4,
+          "handoff_full_observations": 0,
+          "handoff_high_water": null,
+          "return_high_water": null,
+          "pages_before": {
+            "pages_by_node": {
+              "0": 256
+            },
+            "unresident_pages": 0,
+            "node_ids_truncated": false
+          },
+          "pages_after": {
+            "pages_by_node": {
+              "0": 256
+            },
+            "unresident_pages": 0,
+            "node_ids_truncated": false
+          }
+        }
+      ]
+    },
+    {
+      "repetition": 0,
+      "position": 3,
+      "arrangement": "independent",
+      "reversed": false,
+      "resources": {
+        "worker_threads": 2,
+        "participating_processors": 2,
+        "checksum_workers": 2,
+        "unequal_cpu_reference": false,
+        "max_pending_reads": 8,
+        "payload_pool_bytes": 2097152
+      },
+      "work_wall_ns": 25616500,
+      "joined_wall_ns": 26044700,
+      "worker_cpu_ns": 31250000,
+      "completed_blocks": 513,
+      "bytes_per_second": 1309876407.7840455,
+      "checksum_latency": {
+        "count": 513,
+        "p50_ns": 392500,
+        "p99_ns": 553800,
+        "max_ns": 908500
+      },
+      "observed_read_latency": {
+        "count": 513,
+        "p50_ns": 308000,
+        "p99_ns": 457700,
+        "max_ns": 827000
+      },
+      "compute_time": {
+        "count": 513,
+        "p50_ns": 81000,
+        "p99_ns": 119700,
+        "max_ns": 545800
+      },
+      "handoff_latency": null,
+      "workers": [
+        {
+          "role": "direct",
+          "requested_processor": {
+            "group": 0,
+            "number": 0
+          },
+          "processor_at_start": {
+            "group": 0,
+            "number": 0
+          },
+          "processor_at_end": {
+            "group": 0,
+            "number": 0
+          },
+          "cpu_ns": 15625000,
+          "submitted": 257,
+          "completed": 257,
+          "checksummed_blocks": 257,
+          "buffer_capacity": 16,
+          "numa_backed_buffers": 16,
+          "read_capacity": 4,
+          "buffer_pressure_observations": 0,
+          "batches": {
+            "count": 257,
+            "jobs": 257,
+            "max_jobs": 1,
+            "partial": 0
+          },
+          "return_batches": {
+            "count": 0,
+            "jobs": 0,
+            "max_jobs": 0,
+            "partial": 0
+          },
+          "peak_outstanding_reads": 4,
+          "peak_leased_buffers": 4,
+          "handoff_full_observations": 0,
+          "handoff_high_water": null,
+          "return_high_water": null,
+          "pages_before": {
+            "pages_by_node": {
+              "0": 256
+            },
+            "unresident_pages": 0,
+            "node_ids_truncated": false
+          },
+          "pages_after": {
+            "pages_by_node": {
+              "0": 256
+            },
+            "unresident_pages": 0,
+            "node_ids_truncated": false
+          }
+        },
+        {
+          "role": "direct",
+          "requested_processor": {
+            "group": 0,
+            "number": 2
+          },
+          "processor_at_start": {
+            "group": 0,
+            "number": 2
+          },
+          "processor_at_end": {
+            "group": 0,
+            "number": 2
+          },
+          "cpu_ns": 15625000,
+          "submitted": 256,
+          "completed": 256,
+          "checksummed_blocks": 256,
+          "buffer_capacity": 16,
+          "numa_backed_buffers": 16,
+          "read_capacity": 4,
+          "buffer_pressure_observations": 0,
+          "batches": {
+            "count": 256,
+            "jobs": 256,
+            "max_jobs": 1,
+            "partial": 0
+          },
+          "return_batches": {
+            "count": 0,
+            "jobs": 0,
+            "max_jobs": 0,
+            "partial": 0
+          },
+          "peak_outstanding_reads": 4,
+          "peak_leased_buffers": 4,
+          "handoff_full_observations": 0,
+          "handoff_high_water": null,
+          "return_high_water": null,
+          "pages_before": {
+            "pages_by_node": {
+              "0": 256
+            },
+            "unresident_pages": 0,
+            "node_ids_truncated": false
+          },
+          "pages_after": {
+            "pages_by_node": {
+              "0": 256
+            },
+            "unresident_pages": 0,
+            "node_ids_truncated": false
+          }
+        }
+      ]
+    },
+    {
+      "repetition": 0,
+      "position": 4,
+      "arrangement": "pipeline",
+      "reversed": true,
+      "resources": {
+        "worker_threads": 2,
+        "participating_processors": 2,
+        "checksum_workers": 1,
+        "unequal_cpu_reference": false,
+        "max_pending_reads": 8,
+        "payload_pool_bytes": 2097152
+      },
+      "work_wall_ns": 42600900,
+      "joined_wall_ns": 43198800,
+      "worker_cpu_ns": 93750000,
+      "completed_blocks": 513,
+      "bytes_per_second": 787646481.6471014,
+      "checksum_latency": {
+        "count": 513,
+        "p50_ns": 1149000,
+        "p99_ns": 1353100,
+        "max_ns": 1354000
+      },
+      "observed_read_latency": {
+        "count": 513,
+        "p50_ns": 651100,
+        "p99_ns": 865900,
+        "max_ns": 869800
+      },
+      "compute_time": {
+        "count": 513,
+        "p50_ns": 80900,
+        "p99_ns": 101200,
+        "max_ns": 296800
+      },
+      "handoff_latency": {
+        "count": 513,
+        "p50_ns": 405100,
+        "p99_ns": 570700,
+        "max_ns": 621600
+      },
+      "workers": [
+        {
+          "role": "reader",
+          "requested_processor": {
+            "group": 0,
+            "number": 2
+          },
+          "processor_at_start": {
+            "group": 0,
+            "number": 2
+          },
+          "processor_at_end": {
+            "group": 0,
+            "number": 2
+          },
+          "cpu_ns": 46875000,
+          "submitted": 513,
+          "completed": 513,
+          "checksummed_blocks": 0,
+          "buffer_capacity": 32,
+          "numa_backed_buffers": 32,
+          "read_capacity": 8,
+          "buffer_pressure_observations": 0,
+          "batches": {
+            "count": 513,
+            "jobs": 513,
+            "max_jobs": 1,
+            "partial": 0
+          },
+          "return_batches": {
+            "count": 513,
+            "jobs": 513,
+            "max_jobs": 1,
+            "partial": 0
+          },
+          "peak_outstanding_reads": 8,
+          "peak_leased_buffers": 14,
+          "handoff_full_observations": 107794,
+          "handoff_high_water": 4,
+          "return_high_water": null,
+          "pages_before": {
+            "pages_by_node": {
+              "0": 512
+            },
+            "unresident_pages": 0,
+            "node_ids_truncated": false
+          },
+          "pages_after": {
+            "pages_by_node": {
+              "0": 512
+            },
+            "unresident_pages": 0,
+            "node_ids_truncated": false
+          }
+        },
+        {
+          "role": "processor",
+          "requested_processor": {
+            "group": 0,
+            "number": 0
+          },
+          "processor_at_start": {
+            "group": 0,
+            "number": 0
+          },
+          "processor_at_end": {
+            "group": 0,
+            "number": 0
+          },
+          "cpu_ns": 46875000,
+          "submitted": 0,
+          "completed": 513,
+          "checksummed_blocks": 513,
+          "buffer_capacity": 0,
+          "numa_backed_buffers": 0,
+          "read_capacity": 0,
+          "buffer_pressure_observations": 0,
+          "batches": {
+            "count": 513,
+            "jobs": 513,
+            "max_jobs": 1,
+            "partial": 0
+          },
+          "return_batches": {
+            "count": 0,
+            "jobs": 0,
+            "max_jobs": 0,
+            "partial": 0
+          },
+          "peak_outstanding_reads": 0,
+          "peak_leased_buffers": 0,
+          "handoff_full_observations": 0,
+          "handoff_high_water": null,
+          "return_high_water": 1,
+          "pages_before": null,
+          "pages_after": null
+        }
+      ]
+    },
+    {
+      "repetition": 0,
+      "position": 5,
+      "arrangement": "direct",
+      "reversed": true,
+      "resources": {
+        "worker_threads": 1,
+        "participating_processors": 1,
+        "checksum_workers": 1,
+        "unequal_cpu_reference": true,
+        "max_pending_reads": 8,
+        "payload_pool_bytes": 2097152
+      },
+      "work_wall_ns": 49044500,
+      "joined_wall_ns": 49676300,
+      "worker_cpu_ns": 46875000,
+      "completed_blocks": 513,
+      "bytes_per_second": 684163341.455209,
+      "checksum_latency": {
+        "count": 513,
+        "p50_ns": 757800,
+        "p99_ns": 1003200,
+        "max_ns": 1034900
+      },
+      "observed_read_latency": {
+        "count": 513,
+        "p50_ns": 676600,
+        "p99_ns": 922200,
+        "max_ns": 951900
+      },
+      "compute_time": {
+        "count": 513,
+        "p50_ns": 80900,
+        "p99_ns": 105900,
+        "max_ns": 163700
+      },
+      "handoff_latency": null,
+      "workers": [
+        {
+          "role": "direct",
+          "requested_processor": {
+            "group": 0,
+            "number": 2
+          },
+          "processor_at_start": {
+            "group": 0,
+            "number": 2
+          },
+          "processor_at_end": {
+            "group": 0,
+            "number": 2
+          },
+          "cpu_ns": 46875000,
+          "submitted": 513,
+          "completed": 513,
+          "checksummed_blocks": 513,
+          "buffer_capacity": 32,
+          "numa_backed_buffers": 32,
+          "read_capacity": 8,
+          "buffer_pressure_observations": 0,
+          "batches": {
+            "count": 513,
+            "jobs": 513,
+            "max_jobs": 1,
+            "partial": 0
+          },
+          "return_batches": {
+            "count": 0,
+            "jobs": 0,
+            "max_jobs": 0,
+            "partial": 0
+          },
+          "peak_outstanding_reads": 8,
+          "peak_leased_buffers": 8,
+          "handoff_full_observations": 0,
+          "handoff_high_water": null,
+          "return_high_water": null,
+          "pages_before": {
+            "pages_by_node": {
+              "0": 512
+            },
+            "unresident_pages": 0,
+            "node_ids_truncated": false
+          },
+          "pages_after": {
+            "pages_by_node": {
+              "0": 512
+            },
+            "unresident_pages": 0,
+            "node_ids_truncated": false
+          }
+        }
+      ]
+    },
+    {
+      "repetition": 1,
+      "position": 0,
+      "arrangement": "pipeline",
+      "reversed": false,
+      "resources": {
+        "worker_threads": 2,
+        "participating_processors": 2,
+        "checksum_workers": 1,
+        "unequal_cpu_reference": false,
+        "max_pending_reads": 8,
+        "payload_pool_bytes": 2097152
+      },
+      "work_wall_ns": 42207400,
+      "joined_wall_ns": 42845700,
+      "worker_cpu_ns": 93750000,
+      "completed_blocks": 513,
+      "bytes_per_second": 794989717.4429128,
+      "checksum_latency": {
+        "count": 513,
+        "p50_ns": 1150200,
+        "p99_ns": 1190700,
+        "max_ns": 1199300
+      },
+      "observed_read_latency": {
+        "count": 513,
+        "p50_ns": 651600,
+        "p99_ns": 690600,
+        "max_ns": 711500
+      },
+      "compute_time": {
+        "count": 513,
+        "p50_ns": 80900,
+        "p99_ns": 101900,
+        "max_ns": 111700
+      },
+      "handoff_latency": {
+        "count": 513,
+        "p50_ns": 405700,
+        "p99_ns": 432700,
+        "max_ns": 444200
+      },
+      "workers": [
+        {
+          "role": "reader",
+          "requested_processor": {
+            "group": 0,
+            "number": 0
+          },
+          "processor_at_start": {
+            "group": 0,
+            "number": 0
+          },
+          "processor_at_end": {
+            "group": 0,
+            "number": 0
+          },
+          "cpu_ns": 46875000,
+          "submitted": 513,
+          "completed": 513,
+          "checksummed_blocks": 0,
+          "buffer_capacity": 32,
+          "numa_backed_buffers": 32,
+          "read_capacity": 8,
+          "buffer_pressure_observations": 0,
+          "batches": {
+            "count": 513,
+            "jobs": 513,
+            "max_jobs": 1,
+            "partial": 0
+          },
+          "return_batches": {
+            "count": 513,
+            "jobs": 513,
+            "max_jobs": 1,
+            "partial": 0
+          },
+          "peak_outstanding_reads": 8,
+          "peak_leased_buffers": 14,
+          "handoff_full_observations": 104934,
+          "handoff_high_water": 4,
+          "return_high_water": null,
+          "pages_before": {
+            "pages_by_node": {
+              "0": 512
+            },
+            "unresident_pages": 0,
+            "node_ids_truncated": false
+          },
+          "pages_after": {
+            "pages_by_node": {
+              "0": 512
+            },
+            "unresident_pages": 0,
+            "node_ids_truncated": false
+          }
+        },
+        {
+          "role": "processor",
+          "requested_processor": {
+            "group": 0,
+            "number": 2
+          },
+          "processor_at_start": {
+            "group": 0,
+            "number": 2
+          },
+          "processor_at_end": {
+            "group": 0,
+            "number": 2
+          },
+          "cpu_ns": 46875000,
+          "submitted": 0,
+          "completed": 513,
+          "checksummed_blocks": 513,
+          "buffer_capacity": 0,
+          "numa_backed_buffers": 0,
+          "read_capacity": 0,
+          "buffer_pressure_observations": 0,
+          "batches": {
+            "count": 513,
+            "jobs": 513,
+            "max_jobs": 1,
+            "partial": 0
+          },
+          "return_batches": {
+            "count": 0,
+            "jobs": 0,
+            "max_jobs": 0,
+            "partial": 0
+          },
+          "peak_outstanding_reads": 0,
+          "peak_leased_buffers": 0,
+          "handoff_full_observations": 0,
+          "handoff_high_water": null,
+          "return_high_water": 1,
+          "pages_before": null,
+          "pages_after": null
+        }
+      ]
+    },
+    {
+      "repetition": 1,
+      "position": 1,
+      "arrangement": "independent",
+      "reversed": false,
+      "resources": {
+        "worker_threads": 2,
+        "participating_processors": 2,
+        "checksum_workers": 2,
+        "unequal_cpu_reference": false,
+        "max_pending_reads": 8,
+        "payload_pool_bytes": 2097152
+      },
+      "work_wall_ns": 25540500,
+      "joined_wall_ns": 26073100,
+      "worker_cpu_ns": 62500000,
+      "completed_blocks": 513,
+      "bytes_per_second": 1313774162.604491,
+      "checksum_latency": {
+        "count": 513,
+        "p50_ns": 401000,
+        "p99_ns": 469200,
+        "max_ns": 477200
+      },
+      "observed_read_latency": {
+        "count": 513,
+        "p50_ns": 310200,
+        "p99_ns": 370700,
+        "max_ns": 396200
+      },
+      "compute_time": {
+        "count": 513,
+        "p50_ns": 81000,
+        "p99_ns": 99000,
+        "max_ns": 143300
+      },
+      "handoff_latency": null,
+      "workers": [
+        {
+          "role": "direct",
+          "requested_processor": {
+            "group": 0,
+            "number": 0
+          },
+          "processor_at_start": {
+            "group": 0,
+            "number": 0
+          },
+          "processor_at_end": {
+            "group": 0,
+            "number": 0
+          },
+          "cpu_ns": 31250000,
+          "submitted": 257,
+          "completed": 257,
+          "checksummed_blocks": 257,
+          "buffer_capacity": 16,
+          "numa_backed_buffers": 16,
+          "read_capacity": 4,
+          "buffer_pressure_observations": 0,
+          "batches": {
+            "count": 257,
+            "jobs": 257,
+            "max_jobs": 1,
+            "partial": 0
+          },
+          "return_batches": {
+            "count": 0,
+            "jobs": 0,
+            "max_jobs": 0,
+            "partial": 0
+          },
+          "peak_outstanding_reads": 4,
+          "peak_leased_buffers": 4,
+          "handoff_full_observations": 0,
+          "handoff_high_water": null,
+          "return_high_water": null,
+          "pages_before": {
+            "pages_by_node": {
+              "0": 256
+            },
+            "unresident_pages": 0,
+            "node_ids_truncated": false
+          },
+          "pages_after": {
+            "pages_by_node": {
+              "0": 256
+            },
+            "unresident_pages": 0,
+            "node_ids_truncated": false
+          }
+        },
+        {
+          "role": "direct",
+          "requested_processor": {
+            "group": 0,
+            "number": 2
+          },
+          "processor_at_start": {
+            "group": 0,
+            "number": 2
+          },
+          "processor_at_end": {
+            "group": 0,
+            "number": 2
+          },
+          "cpu_ns": 31250000,
+          "submitted": 256,
+          "completed": 256,
+          "checksummed_blocks": 256,
+          "buffer_capacity": 16,
+          "numa_backed_buffers": 16,
+          "read_capacity": 4,
+          "buffer_pressure_observations": 0,
+          "batches": {
+            "count": 256,
+            "jobs": 256,
+            "max_jobs": 1,
+            "partial": 0
+          },
+          "return_batches": {
+            "count": 0,
+            "jobs": 0,
+            "max_jobs": 0,
+            "partial": 0
+          },
+          "peak_outstanding_reads": 4,
+          "peak_leased_buffers": 4,
+          "handoff_full_observations": 0,
+          "handoff_high_water": null,
+          "return_high_water": null,
+          "pages_before": {
+            "pages_by_node": {
+              "0": 256
+            },
+            "unresident_pages": 0,
+            "node_ids_truncated": false
+          },
+          "pages_after": {
+            "pages_by_node": {
+              "0": 256
+            },
+            "unresident_pages": 0,
+            "node_ids_truncated": false
+          }
+        }
+      ]
+    },
+    {
+      "repetition": 1,
+      "position": 2,
+      "arrangement": "direct",
+      "reversed": false,
+      "resources": {
+        "worker_threads": 1,
+        "participating_processors": 1,
+        "checksum_workers": 1,
+        "unequal_cpu_reference": true,
+        "max_pending_reads": 8,
+        "payload_pool_bytes": 2097152
+      },
+      "work_wall_ns": 49120200,
+      "joined_wall_ns": 49774100,
+      "worker_cpu_ns": 46875000,
+      "completed_blocks": 513,
+      "bytes_per_second": 683108965.3543756,
+      "checksum_latency": {
+        "count": 513,
+        "p50_ns": 760600,
+        "p99_ns": 1113100,
+        "max_ns": 1138300
+      },
+      "observed_read_latency": {
+        "count": 513,
+        "p50_ns": 678600,
+        "p99_ns": 1031500,
+        "max_ns": 1057300
+      },
+      "compute_time": {
+        "count": 513,
+        "p50_ns": 80900,
+        "p99_ns": 104600,
+        "max_ns": 130200
+      },
+      "handoff_latency": null,
+      "workers": [
+        {
+          "role": "direct",
+          "requested_processor": {
+            "group": 0,
+            "number": 0
+          },
+          "processor_at_start": {
+            "group": 0,
+            "number": 0
+          },
+          "processor_at_end": {
+            "group": 0,
+            "number": 0
+          },
+          "cpu_ns": 46875000,
+          "submitted": 513,
+          "completed": 513,
+          "checksummed_blocks": 513,
+          "buffer_capacity": 32,
+          "numa_backed_buffers": 32,
+          "read_capacity": 8,
+          "buffer_pressure_observations": 0,
+          "batches": {
+            "count": 513,
+            "jobs": 513,
+            "max_jobs": 1,
+            "partial": 0
+          },
+          "return_batches": {
+            "count": 0,
+            "jobs": 0,
+            "max_jobs": 0,
+            "partial": 0
+          },
+          "peak_outstanding_reads": 8,
+          "peak_leased_buffers": 8,
+          "handoff_full_observations": 0,
+          "handoff_high_water": null,
+          "return_high_water": null,
+          "pages_before": {
+            "pages_by_node": {
+              "0": 512
+            },
+            "unresident_pages": 0,
+            "node_ids_truncated": false
+          },
+          "pages_after": {
+            "pages_by_node": {
+              "0": 512
+            },
+            "unresident_pages": 0,
+            "node_ids_truncated": false
+          }
+        }
+      ]
+    },
+    {
+      "repetition": 1,
+      "position": 3,
+      "arrangement": "direct",
+      "reversed": true,
+      "resources": {
+        "worker_threads": 1,
+        "participating_processors": 1,
+        "checksum_workers": 1,
+        "unequal_cpu_reference": true,
+        "max_pending_reads": 8,
+        "payload_pool_bytes": 2097152
+      },
+      "work_wall_ns": 49182900,
+      "joined_wall_ns": 49850100,
+      "worker_cpu_ns": 46875000,
+      "completed_blocks": 513,
+      "bytes_per_second": 682238115.2799042,
+      "checksum_latency": {
+        "count": 513,
+        "p50_ns": 765600,
+        "p99_ns": 840500,
+        "max_ns": 876800
+      },
+      "observed_read_latency": {
+        "count": 513,
+        "p50_ns": 684600,
+        "p99_ns": 756000,
+        "max_ns": 795700
+      },
+      "compute_time": {
+        "count": 513,
+        "p50_ns": 80900,
+        "p99_ns": 99400,
+        "max_ns": 137500
+      },
+      "handoff_latency": null,
+      "workers": [
+        {
+          "role": "direct",
+          "requested_processor": {
+            "group": 0,
+            "number": 2
+          },
+          "processor_at_start": {
+            "group": 0,
+            "number": 2
+          },
+          "processor_at_end": {
+            "group": 0,
+            "number": 2
+          },
+          "cpu_ns": 46875000,
+          "submitted": 513,
+          "completed": 513,
+          "checksummed_blocks": 513,
+          "buffer_capacity": 32,
+          "numa_backed_buffers": 32,
+          "read_capacity": 8,
+          "buffer_pressure_observations": 0,
+          "batches": {
+            "count": 513,
+            "jobs": 513,
+            "max_jobs": 1,
+            "partial": 0
+          },
+          "return_batches": {
+            "count": 0,
+            "jobs": 0,
+            "max_jobs": 0,
+            "partial": 0
+          },
+          "peak_outstanding_reads": 8,
+          "peak_leased_buffers": 8,
+          "handoff_full_observations": 0,
+          "handoff_high_water": null,
+          "return_high_water": null,
+          "pages_before": {
+            "pages_by_node": {
+              "0": 512
+            },
+            "unresident_pages": 0,
+            "node_ids_truncated": false
+          },
+          "pages_after": {
+            "pages_by_node": {
+              "0": 512
+            },
+            "unresident_pages": 0,
+            "node_ids_truncated": false
+          }
+        }
+      ]
+    },
+    {
+      "repetition": 1,
+      "position": 4,
+      "arrangement": "independent",
+      "reversed": true,
+      "resources": {
+        "worker_threads": 2,
+        "participating_processors": 2,
+        "checksum_workers": 2,
+        "unequal_cpu_reference": false,
+        "max_pending_reads": 8,
+        "payload_pool_bytes": 2097152
+      },
+      "work_wall_ns": 25761700,
+      "joined_wall_ns": 26303100,
+      "worker_cpu_ns": 62500000,
+      "completed_blocks": 513,
+      "bytes_per_second": 1302493585.4388492,
+      "checksum_latency": {
+        "count": 513,
+        "p50_ns": 397400,
+        "p99_ns": 470400,
+        "max_ns": 484900
+      },
+      "observed_read_latency": {
+        "count": 513,
+        "p50_ns": 313900,
+        "p99_ns": 388100,
+        "max_ns": 403900
+      },
+      "compute_time": {
+        "count": 513,
+        "p50_ns": 81000,
+        "p99_ns": 102000,
+        "max_ns": 148100
+      },
+      "handoff_latency": null,
+      "workers": [
+        {
+          "role": "direct",
+          "requested_processor": {
+            "group": 0,
+            "number": 2
+          },
+          "processor_at_start": {
+            "group": 0,
+            "number": 2
+          },
+          "processor_at_end": {
+            "group": 0,
+            "number": 2
+          },
+          "cpu_ns": 31250000,
+          "submitted": 257,
+          "completed": 257,
+          "checksummed_blocks": 257,
+          "buffer_capacity": 16,
+          "numa_backed_buffers": 16,
+          "read_capacity": 4,
+          "buffer_pressure_observations": 0,
+          "batches": {
+            "count": 257,
+            "jobs": 257,
+            "max_jobs": 1,
+            "partial": 0
+          },
+          "return_batches": {
+            "count": 0,
+            "jobs": 0,
+            "max_jobs": 0,
+            "partial": 0
+          },
+          "peak_outstanding_reads": 4,
+          "peak_leased_buffers": 4,
+          "handoff_full_observations": 0,
+          "handoff_high_water": null,
+          "return_high_water": null,
+          "pages_before": {
+            "pages_by_node": {
+              "0": 256
+            },
+            "unresident_pages": 0,
+            "node_ids_truncated": false
+          },
+          "pages_after": {
+            "pages_by_node": {
+              "0": 256
+            },
+            "unresident_pages": 0,
+            "node_ids_truncated": false
+          }
+        },
+        {
+          "role": "direct",
+          "requested_processor": {
+            "group": 0,
+            "number": 0
+          },
+          "processor_at_start": {
+            "group": 0,
+            "number": 0
+          },
+          "processor_at_end": {
+            "group": 0,
+            "number": 0
+          },
+          "cpu_ns": 31250000,
+          "submitted": 256,
+          "completed": 256,
+          "checksummed_blocks": 256,
+          "buffer_capacity": 16,
+          "numa_backed_buffers": 16,
+          "read_capacity": 4,
+          "buffer_pressure_observations": 0,
+          "batches": {
+            "count": 256,
+            "jobs": 256,
+            "max_jobs": 1,
+            "partial": 0
+          },
+          "return_batches": {
+            "count": 0,
+            "jobs": 0,
+            "max_jobs": 0,
+            "partial": 0
+          },
+          "peak_outstanding_reads": 4,
+          "peak_leased_buffers": 4,
+          "handoff_full_observations": 0,
+          "handoff_high_water": null,
+          "return_high_water": null,
+          "pages_before": {
+            "pages_by_node": {
+              "0": 256
+            },
+            "unresident_pages": 0,
+            "node_ids_truncated": false
+          },
+          "pages_after": {
+            "pages_by_node": {
+              "0": 256
+            },
+            "unresident_pages": 0,
+            "node_ids_truncated": false
+          }
+        }
+      ]
+    },
+    {
+      "repetition": 1,
+      "position": 5,
+      "arrangement": "pipeline",
+      "reversed": true,
+      "resources": {
+        "worker_threads": 2,
+        "participating_processors": 2,
+        "checksum_workers": 1,
+        "unequal_cpu_reference": false,
+        "max_pending_reads": 8,
+        "payload_pool_bytes": 2097152
+      },
+      "work_wall_ns": 42782400,
+      "joined_wall_ns": 43448300,
+      "worker_cpu_ns": 93750000,
+      "completed_blocks": 513,
+      "bytes_per_second": 784304971.2031115,
+      "checksum_latency": {
+        "count": 513,
+        "p50_ns": 1150300,
+        "p99_ns": 1571600,
+        "max_ns": 1572600
+      },
+      "observed_read_latency": {
+        "count": 513,
+        "p50_ns": 651200,
+        "p99_ns": 1085700,
+        "max_ns": 1089900
+      },
+      "compute_time": {
+        "count": 513,
+        "p50_ns": 80900,
+        "p99_ns": 100500,
+        "max_ns": 508000
+      },
+      "handoff_latency": {
+        "count": 513,
+        "p50_ns": 405600,
+        "p99_ns": 660900,
+        "max_ns": 841300
+      },
+      "workers": [
+        {
+          "role": "reader",
+          "requested_processor": {
+            "group": 0,
+            "number": 2
+          },
+          "processor_at_start": {
+            "group": 0,
+            "number": 2
+          },
+          "processor_at_end": {
+            "group": 0,
+            "number": 2
+          },
+          "cpu_ns": 46875000,
+          "submitted": 513,
+          "completed": 513,
+          "checksummed_blocks": 0,
+          "buffer_capacity": 32,
+          "numa_backed_buffers": 32,
+          "read_capacity": 8,
+          "buffer_pressure_observations": 0,
+          "batches": {
+            "count": 513,
+            "jobs": 513,
+            "max_jobs": 1,
+            "partial": 0
+          },
+          "return_batches": {
+            "count": 513,
+            "jobs": 513,
+            "max_jobs": 1,
+            "partial": 0
+          },
+          "peak_outstanding_reads": 8,
+          "peak_leased_buffers": 14,
+          "handoff_full_observations": 105813,
+          "handoff_high_water": 4,
+          "return_high_water": null,
+          "pages_before": {
+            "pages_by_node": {
+              "0": 512
+            },
+            "unresident_pages": 0,
+            "node_ids_truncated": false
+          },
+          "pages_after": {
+            "pages_by_node": {
+              "0": 512
+            },
+            "unresident_pages": 0,
+            "node_ids_truncated": false
+          }
+        },
+        {
+          "role": "processor",
+          "requested_processor": {
+            "group": 0,
+            "number": 0
+          },
+          "processor_at_start": {
+            "group": 0,
+            "number": 0
+          },
+          "processor_at_end": {
+            "group": 0,
+            "number": 0
+          },
+          "cpu_ns": 46875000,
+          "submitted": 0,
+          "completed": 513,
+          "checksummed_blocks": 513,
+          "buffer_capacity": 0,
+          "numa_backed_buffers": 0,
+          "read_capacity": 0,
+          "buffer_pressure_observations": 0,
+          "batches": {
+            "count": 513,
+            "jobs": 513,
+            "max_jobs": 1,
+            "partial": 0
+          },
+          "return_batches": {
+            "count": 0,
+            "jobs": 0,
+            "max_jobs": 0,
+            "partial": 0
+          },
+          "peak_outstanding_reads": 0,
+          "peak_leased_buffers": 0,
+          "handoff_full_observations": 0,
+          "handoff_high_water": null,
+          "return_high_water": 1,
+          "pages_before": null,
+          "pages_after": null
+        }
+      ]
+    },
+    {
+      "repetition": 2,
+      "position": 0,
+      "arrangement": "independent",
+      "reversed": false,
+      "resources": {
+        "worker_threads": 2,
+        "participating_processors": 2,
+        "checksum_workers": 2,
+        "unequal_cpu_reference": false,
+        "max_pending_reads": 8,
+        "payload_pool_bytes": 2097152
+      },
+      "work_wall_ns": 25458000,
+      "joined_wall_ns": 25971100,
+      "worker_cpu_ns": 46875000,
+      "completed_blocks": 513,
+      "bytes_per_second": 1318031620.7086182,
+      "checksum_latency": {
+        "count": 513,
+        "p50_ns": 387900,
+        "p99_ns": 437200,
+        "max_ns": 517500
+      },
+      "observed_read_latency": {
+        "count": 513,
+        "p50_ns": 306100,
+        "p99_ns": 355500,
+        "max_ns": 436500
+      },
+      "compute_time": {
+        "count": 513,
+        "p50_ns": 81000,
+        "p99_ns": 99300,
+        "max_ns": 167000
+      },
+      "handoff_latency": null,
+      "workers": [
+        {
+          "role": "direct",
+          "requested_processor": {
+            "group": 0,
+            "number": 0
+          },
+          "processor_at_start": {
+            "group": 0,
+            "number": 0
+          },
+          "processor_at_end": {
+            "group": 0,
+            "number": 0
+          },
+          "cpu_ns": 15625000,
+          "submitted": 257,
+          "completed": 257,
+          "checksummed_blocks": 257,
+          "buffer_capacity": 16,
+          "numa_backed_buffers": 16,
+          "read_capacity": 4,
+          "buffer_pressure_observations": 0,
+          "batches": {
+            "count": 257,
+            "jobs": 257,
+            "max_jobs": 1,
+            "partial": 0
+          },
+          "return_batches": {
+            "count": 0,
+            "jobs": 0,
+            "max_jobs": 0,
+            "partial": 0
+          },
+          "peak_outstanding_reads": 4,
+          "peak_leased_buffers": 4,
+          "handoff_full_observations": 0,
+          "handoff_high_water": null,
+          "return_high_water": null,
+          "pages_before": {
+            "pages_by_node": {
+              "0": 256
+            },
+            "unresident_pages": 0,
+            "node_ids_truncated": false
+          },
+          "pages_after": {
+            "pages_by_node": {
+              "0": 256
+            },
+            "unresident_pages": 0,
+            "node_ids_truncated": false
+          }
+        },
+        {
+          "role": "direct",
+          "requested_processor": {
+            "group": 0,
+            "number": 2
+          },
+          "processor_at_start": {
+            "group": 0,
+            "number": 2
+          },
+          "processor_at_end": {
+            "group": 0,
+            "number": 2
+          },
+          "cpu_ns": 31250000,
+          "submitted": 256,
+          "completed": 256,
+          "checksummed_blocks": 256,
+          "buffer_capacity": 16,
+          "numa_backed_buffers": 16,
+          "read_capacity": 4,
+          "buffer_pressure_observations": 0,
+          "batches": {
+            "count": 256,
+            "jobs": 256,
+            "max_jobs": 1,
+            "partial": 0
+          },
+          "return_batches": {
+            "count": 0,
+            "jobs": 0,
+            "max_jobs": 0,
+            "partial": 0
+          },
+          "peak_outstanding_reads": 4,
+          "peak_leased_buffers": 4,
+          "handoff_full_observations": 0,
+          "handoff_high_water": null,
+          "return_high_water": null,
+          "pages_before": {
+            "pages_by_node": {
+              "0": 256
+            },
+            "unresident_pages": 0,
+            "node_ids_truncated": false
+          },
+          "pages_after": {
+            "pages_by_node": {
+              "0": 256
+            },
+            "unresident_pages": 0,
+            "node_ids_truncated": false
+          }
+        }
+      ]
+    },
+    {
+      "repetition": 2,
+      "position": 1,
+      "arrangement": "direct",
+      "reversed": true,
+      "resources": {
+        "worker_threads": 1,
+        "participating_processors": 1,
+        "checksum_workers": 1,
+        "unequal_cpu_reference": true,
+        "max_pending_reads": 8,
+        "payload_pool_bytes": 2097152
+      },
+      "work_wall_ns": 48770100,
+      "joined_wall_ns": 49361200,
+      "worker_cpu_ns": 46875000,
+      "completed_blocks": 513,
+      "bytes_per_second": 688012716.8080443,
+      "checksum_latency": {
+        "count": 513,
+        "p50_ns": 757400,
+        "p99_ns": 911300,
+        "max_ns": 942600
+      },
+      "observed_read_latency": {
+        "count": 513,
+        "p50_ns": 676000,
+        "p99_ns": 817600,
+        "max_ns": 848800
+      },
+      "compute_time": {
+        "count": 513,
+        "p50_ns": 80900,
+        "p99_ns": 102700,
+        "max_ns": 122300
+      },
+      "handoff_latency": null,
+      "workers": [
+        {
+          "role": "direct",
+          "requested_processor": {
+            "group": 0,
+            "number": 2
+          },
+          "processor_at_start": {
+            "group": 0,
+            "number": 2
+          },
+          "processor_at_end": {
+            "group": 0,
+            "number": 2
+          },
+          "cpu_ns": 46875000,
+          "submitted": 513,
+          "completed": 513,
+          "checksummed_blocks": 513,
+          "buffer_capacity": 32,
+          "numa_backed_buffers": 32,
+          "read_capacity": 8,
+          "buffer_pressure_observations": 0,
+          "batches": {
+            "count": 513,
+            "jobs": 513,
+            "max_jobs": 1,
+            "partial": 0
+          },
+          "return_batches": {
+            "count": 0,
+            "jobs": 0,
+            "max_jobs": 0,
+            "partial": 0
+          },
+          "peak_outstanding_reads": 8,
+          "peak_leased_buffers": 8,
+          "handoff_full_observations": 0,
+          "handoff_high_water": null,
+          "return_high_water": null,
+          "pages_before": {
+            "pages_by_node": {
+              "0": 512
+            },
+            "unresident_pages": 0,
+            "node_ids_truncated": false
+          },
+          "pages_after": {
+            "pages_by_node": {
+              "0": 512
+            },
+            "unresident_pages": 0,
+            "node_ids_truncated": false
+          }
+        }
+      ]
+    },
+    {
+      "repetition": 2,
+      "position": 2,
+      "arrangement": "pipeline",
+      "reversed": false,
+      "resources": {
+        "worker_threads": 2,
+        "participating_processors": 2,
+        "checksum_workers": 1,
+        "unequal_cpu_reference": false,
+        "max_pending_reads": 8,
+        "payload_pool_bytes": 2097152
+      },
+      "work_wall_ns": 42316900,
+      "joined_wall_ns": 43019500,
+      "worker_cpu_ns": 93750000,
+      "completed_blocks": 513,
+      "bytes_per_second": 792932587.2169275,
+      "checksum_latency": {
+        "count": 513,
+        "p50_ns": 1149500,
+        "p99_ns": 1175400,
+        "max_ns": 1298100
+      },
+      "observed_read_latency": {
+        "count": 513,
+        "p50_ns": 652100,
+        "p99_ns": 692600,
+        "max_ns": 809100
+      },
+      "compute_time": {
+        "count": 513,
+        "p50_ns": 80900,
+        "p99_ns": 98200,
+        "max_ns": 180400
+      },
+      "handoff_latency": {
+        "count": 513,
+        "p50_ns": 405800,
+        "p99_ns": 428000,
+        "max_ns": 564500
+      },
+      "workers": [
+        {
+          "role": "reader",
+          "requested_processor": {
+            "group": 0,
+            "number": 0
+          },
+          "processor_at_start": {
+            "group": 0,
+            "number": 0
+          },
+          "processor_at_end": {
+            "group": 0,
+            "number": 0
+          },
+          "cpu_ns": 46875000,
+          "submitted": 513,
+          "completed": 513,
+          "checksummed_blocks": 0,
+          "buffer_capacity": 32,
+          "numa_backed_buffers": 32,
+          "read_capacity": 8,
+          "buffer_pressure_observations": 0,
+          "batches": {
+            "count": 513,
+            "jobs": 513,
+            "max_jobs": 1,
+            "partial": 0
+          },
+          "return_batches": {
+            "count": 513,
+            "jobs": 513,
+            "max_jobs": 1,
+            "partial": 0
+          },
+          "peak_outstanding_reads": 8,
+          "peak_leased_buffers": 14,
+          "handoff_full_observations": 103824,
+          "handoff_high_water": 4,
+          "return_high_water": null,
+          "pages_before": {
+            "pages_by_node": {
+              "0": 512
+            },
+            "unresident_pages": 0,
+            "node_ids_truncated": false
+          },
+          "pages_after": {
+            "pages_by_node": {
+              "0": 512
+            },
+            "unresident_pages": 0,
+            "node_ids_truncated": false
+          }
+        },
+        {
+          "role": "processor",
+          "requested_processor": {
+            "group": 0,
+            "number": 2
+          },
+          "processor_at_start": {
+            "group": 0,
+            "number": 2
+          },
+          "processor_at_end": {
+            "group": 0,
+            "number": 2
+          },
+          "cpu_ns": 46875000,
+          "submitted": 0,
+          "completed": 513,
+          "checksummed_blocks": 513,
+          "buffer_capacity": 0,
+          "numa_backed_buffers": 0,
+          "read_capacity": 0,
+          "buffer_pressure_observations": 0,
+          "batches": {
+            "count": 513,
+            "jobs": 513,
+            "max_jobs": 1,
+            "partial": 0
+          },
+          "return_batches": {
+            "count": 0,
+            "jobs": 0,
+            "max_jobs": 0,
+            "partial": 0
+          },
+          "peak_outstanding_reads": 0,
+          "peak_leased_buffers": 0,
+          "handoff_full_observations": 0,
+          "handoff_high_water": null,
+          "return_high_water": 3,
+          "pages_before": null,
+          "pages_after": null
+        }
+      ]
+    },
+    {
+      "repetition": 2,
+      "position": 3,
+      "arrangement": "pipeline",
+      "reversed": true,
+      "resources": {
+        "worker_threads": 2,
+        "participating_processors": 2,
+        "checksum_workers": 1,
+        "unequal_cpu_reference": false,
+        "max_pending_reads": 8,
+        "payload_pool_bytes": 2097152
+      },
+      "work_wall_ns": 42382200,
+      "joined_wall_ns": 43013400,
+      "worker_cpu_ns": 93750000,
+      "completed_blocks": 513,
+      "bytes_per_second": 791710883.3425353,
+      "checksum_latency": {
+        "count": 513,
+        "p50_ns": 1149700,
+        "p99_ns": 1204600,
+        "max_ns": 1207200
+      },
+      "observed_read_latency": {
+        "count": 513,
+        "p50_ns": 651600,
+        "p99_ns": 716300,
+        "max_ns": 725200
+      },
+      "compute_time": {
+        "count": 513,
+        "p50_ns": 80900,
+        "p99_ns": 126800,
+        "max_ns": 145700
+      },
+      "handoff_latency": {
+        "count": 513,
+        "p50_ns": 405900,
+        "p99_ns": 466100,
+        "max_ns": 472100
+      },
+      "workers": [
+        {
+          "role": "reader",
+          "requested_processor": {
+            "group": 0,
+            "number": 2
+          },
+          "processor_at_start": {
+            "group": 0,
+            "number": 2
+          },
+          "processor_at_end": {
+            "group": 0,
+            "number": 2
+          },
+          "cpu_ns": 46875000,
+          "submitted": 513,
+          "completed": 513,
+          "checksummed_blocks": 0,
+          "buffer_capacity": 32,
+          "numa_backed_buffers": 32,
+          "read_capacity": 8,
+          "buffer_pressure_observations": 0,
+          "batches": {
+            "count": 513,
+            "jobs": 513,
+            "max_jobs": 1,
+            "partial": 0
+          },
+          "return_batches": {
+            "count": 513,
+            "jobs": 513,
+            "max_jobs": 1,
+            "partial": 0
+          },
+          "peak_outstanding_reads": 8,
+          "peak_leased_buffers": 14,
+          "handoff_full_observations": 105445,
+          "handoff_high_water": 4,
+          "return_high_water": null,
+          "pages_before": {
+            "pages_by_node": {
+              "0": 512
+            },
+            "unresident_pages": 0,
+            "node_ids_truncated": false
+          },
+          "pages_after": {
+            "pages_by_node": {
+              "0": 512
+            },
+            "unresident_pages": 0,
+            "node_ids_truncated": false
+          }
+        },
+        {
+          "role": "processor",
+          "requested_processor": {
+            "group": 0,
+            "number": 0
+          },
+          "processor_at_start": {
+            "group": 0,
+            "number": 0
+          },
+          "processor_at_end": {
+            "group": 0,
+            "number": 0
+          },
+          "cpu_ns": 46875000,
+          "submitted": 0,
+          "completed": 513,
+          "checksummed_blocks": 513,
+          "buffer_capacity": 0,
+          "numa_backed_buffers": 0,
+          "read_capacity": 0,
+          "buffer_pressure_observations": 0,
+          "batches": {
+            "count": 513,
+            "jobs": 513,
+            "max_jobs": 1,
+            "partial": 0
+          },
+          "return_batches": {
+            "count": 0,
+            "jobs": 0,
+            "max_jobs": 0,
+            "partial": 0
+          },
+          "peak_outstanding_reads": 0,
+          "peak_leased_buffers": 0,
+          "handoff_full_observations": 0,
+          "handoff_high_water": null,
+          "return_high_water": 2,
+          "pages_before": null,
+          "pages_after": null
+        }
+      ]
+    },
+    {
+      "repetition": 2,
+      "position": 4,
+      "arrangement": "direct",
+      "reversed": false,
+      "resources": {
+        "worker_threads": 1,
+        "participating_processors": 1,
+        "checksum_workers": 1,
+        "unequal_cpu_reference": true,
+        "max_pending_reads": 8,
+        "payload_pool_bytes": 2097152
+      },
+      "work_wall_ns": 50681200,
+      "joined_wall_ns": 51296000,
+      "worker_cpu_ns": 46875000,
+      "completed_blocks": 513,
+      "bytes_per_second": 662068952.589915,
+      "checksum_latency": {
+        "count": 513,
+        "p50_ns": 767700,
+        "p99_ns": 2046600,
+        "max_ns": 2075400
+      },
+      "observed_read_latency": {
+        "count": 513,
+        "p50_ns": 686100,
+        "p99_ns": 1965500,
+        "max_ns": 1969700
+      },
+      "compute_time": {
+        "count": 513,
+        "p50_ns": 80900,
+        "p99_ns": 105700,
+        "max_ns": 159200
+      },
+      "handoff_latency": null,
+      "workers": [
+        {
+          "role": "direct",
+          "requested_processor": {
+            "group": 0,
+            "number": 0
+          },
+          "processor_at_start": {
+            "group": 0,
+            "number": 0
+          },
+          "processor_at_end": {
+            "group": 0,
+            "number": 0
+          },
+          "cpu_ns": 46875000,
+          "submitted": 513,
+          "completed": 513,
+          "checksummed_blocks": 513,
+          "buffer_capacity": 32,
+          "numa_backed_buffers": 32,
+          "read_capacity": 8,
+          "buffer_pressure_observations": 0,
+          "batches": {
+            "count": 513,
+            "jobs": 513,
+            "max_jobs": 1,
+            "partial": 0
+          },
+          "return_batches": {
+            "count": 0,
+            "jobs": 0,
+            "max_jobs": 0,
+            "partial": 0
+          },
+          "peak_outstanding_reads": 8,
+          "peak_leased_buffers": 8,
+          "handoff_full_observations": 0,
+          "handoff_high_water": null,
+          "return_high_water": null,
+          "pages_before": {
+            "pages_by_node": {
+              "0": 512
+            },
+            "unresident_pages": 0,
+            "node_ids_truncated": false
+          },
+          "pages_after": {
+            "pages_by_node": {
+              "0": 512
+            },
+            "unresident_pages": 0,
+            "node_ids_truncated": false
+          }
+        }
+      ]
+    },
+    {
+      "repetition": 2,
+      "position": 5,
+      "arrangement": "independent",
+      "reversed": true,
+      "resources": {
+        "worker_threads": 2,
+        "participating_processors": 2,
+        "checksum_workers": 2,
+        "unequal_cpu_reference": false,
+        "max_pending_reads": 8,
+        "payload_pool_bytes": 2097152
+      },
+      "work_wall_ns": 25883700,
+      "joined_wall_ns": 26613800,
+      "worker_cpu_ns": 62500000,
+      "completed_blocks": 513,
+      "bytes_per_second": 1296354423.8265781,
+      "checksum_latency": {
+        "count": 513,
+        "p50_ns": 391100,
+        "p99_ns": 597100,
+        "max_ns": 734600
+      },
+      "observed_read_latency": {
+        "count": 513,
+        "p50_ns": 307700,
+        "p99_ns": 513900,
+        "max_ns": 634800
+      },
+      "compute_time": {
+        "count": 513,
+        "p50_ns": 81000,
+        "p99_ns": 108500,
+        "max_ns": 185000
+      },
+      "handoff_latency": null,
+      "workers": [
+        {
+          "role": "direct",
+          "requested_processor": {
+            "group": 0,
+            "number": 2
+          },
+          "processor_at_start": {
+            "group": 0,
+            "number": 2
+          },
+          "processor_at_end": {
+            "group": 0,
+            "number": 2
+          },
+          "cpu_ns": 31250000,
+          "submitted": 257,
+          "completed": 257,
+          "checksummed_blocks": 257,
+          "buffer_capacity": 16,
+          "numa_backed_buffers": 16,
+          "read_capacity": 4,
+          "buffer_pressure_observations": 0,
+          "batches": {
+            "count": 257,
+            "jobs": 257,
+            "max_jobs": 1,
+            "partial": 0
+          },
+          "return_batches": {
+            "count": 0,
+            "jobs": 0,
+            "max_jobs": 0,
+            "partial": 0
+          },
+          "peak_outstanding_reads": 4,
+          "peak_leased_buffers": 4,
+          "handoff_full_observations": 0,
+          "handoff_high_water": null,
+          "return_high_water": null,
+          "pages_before": {
+            "pages_by_node": {
+              "0": 256
+            },
+            "unresident_pages": 0,
+            "node_ids_truncated": false
+          },
+          "pages_after": {
+            "pages_by_node": {
+              "0": 256
+            },
+            "unresident_pages": 0,
+            "node_ids_truncated": false
+          }
+        },
+        {
+          "role": "direct",
+          "requested_processor": {
+            "group": 0,
+            "number": 0
+          },
+          "processor_at_start": {
+            "group": 0,
+            "number": 0
+          },
+          "processor_at_end": {
+            "group": 0,
+            "number": 0
+          },
+          "cpu_ns": 31250000,
+          "submitted": 256,
+          "completed": 256,
+          "checksummed_blocks": 256,
+          "buffer_capacity": 16,
+          "numa_backed_buffers": 16,
+          "read_capacity": 4,
+          "buffer_pressure_observations": 0,
+          "batches": {
+            "count": 256,
+            "jobs": 256,
+            "max_jobs": 1,
+            "partial": 0
+          },
+          "return_batches": {
+            "count": 0,
+            "jobs": 0,
+            "max_jobs": 0,
+            "partial": 0
+          },
+          "peak_outstanding_reads": 4,
+          "peak_leased_buffers": 4,
+          "handoff_full_observations": 0,
+          "handoff_high_water": null,
+          "return_high_water": null,
+          "pages_before": {
+            "pages_by_node": {
+              "0": 256
+            },
+            "unresident_pages": 0,
+            "node_ids_truncated": false
+          },
+          "pages_after": {
+            "pages_by_node": {
+              "0": 256
+            },
+            "unresident_pages": 0,
+            "node_ids_truncated": false
+          }
+        }
+      ]
+    },
+    {
+      "repetition": 3,
+      "position": 0,
+      "arrangement": "direct",
+      "reversed": true,
+      "resources": {
+        "worker_threads": 1,
+        "participating_processors": 1,
+        "checksum_workers": 1,
+        "unequal_cpu_reference": true,
+        "max_pending_reads": 8,
+        "payload_pool_bytes": 2097152
+      },
+      "work_wall_ns": 48816600,
+      "joined_wall_ns": 49416800,
+      "worker_cpu_ns": 46875000,
+      "completed_blocks": 513,
+      "bytes_per_second": 687357353.8509442,
+      "checksum_latency": {
+        "count": 513,
+        "p50_ns": 760900,
+        "p99_ns": 869700,
+        "max_ns": 880400
+      },
+      "observed_read_latency": {
+        "count": 513,
+        "p50_ns": 679500,
+        "p99_ns": 769800,
+        "max_ns": 799400
+      },
+      "compute_time": {
+        "count": 513,
+        "p50_ns": 80900,
+        "p99_ns": 99200,
+        "max_ns": 120900
+      },
+      "handoff_latency": null,
+      "workers": [
+        {
+          "role": "direct",
+          "requested_processor": {
+            "group": 0,
+            "number": 2
+          },
+          "processor_at_start": {
+            "group": 0,
+            "number": 2
+          },
+          "processor_at_end": {
+            "group": 0,
+            "number": 2
+          },
+          "cpu_ns": 46875000,
+          "submitted": 513,
+          "completed": 513,
+          "checksummed_blocks": 513,
+          "buffer_capacity": 32,
+          "numa_backed_buffers": 32,
+          "read_capacity": 8,
+          "buffer_pressure_observations": 0,
+          "batches": {
+            "count": 513,
+            "jobs": 513,
+            "max_jobs": 1,
+            "partial": 0
+          },
+          "return_batches": {
+            "count": 0,
+            "jobs": 0,
+            "max_jobs": 0,
+            "partial": 0
+          },
+          "peak_outstanding_reads": 8,
+          "peak_leased_buffers": 8,
+          "handoff_full_observations": 0,
+          "handoff_high_water": null,
+          "return_high_water": null,
+          "pages_before": {
+            "pages_by_node": {
+              "0": 512
+            },
+            "unresident_pages": 0,
+            "node_ids_truncated": false
+          },
+          "pages_after": {
+            "pages_by_node": {
+              "0": 512
+            },
+            "unresident_pages": 0,
+            "node_ids_truncated": false
+          }
+        }
+      ]
+    },
+    {
+      "repetition": 3,
+      "position": 1,
+      "arrangement": "pipeline",
+      "reversed": true,
+      "resources": {
+        "worker_threads": 2,
+        "participating_processors": 2,
+        "checksum_workers": 1,
+        "unequal_cpu_reference": false,
+        "max_pending_reads": 8,
+        "payload_pool_bytes": 2097152
+      },
+      "work_wall_ns": 42696400,
+      "joined_wall_ns": 43321300,
+      "worker_cpu_ns": 93750000,
+      "completed_blocks": 513,
+      "bytes_per_second": 785884735.0127879,
+      "checksum_latency": {
+        "count": 513,
+        "p50_ns": 1149000,
+        "p99_ns": 1536000,
+        "max_ns": 1536500
+      },
+      "observed_read_latency": {
+        "count": 513,
+        "p50_ns": 651400,
+        "p99_ns": 1050000,
+        "max_ns": 1064300
+      },
+      "compute_time": {
+        "count": 513,
+        "p50_ns": 80900,
+        "p99_ns": 119900,
+        "max_ns": 479300
+      },
+      "handoff_latency": {
+        "count": 513,
+        "p50_ns": 405700,
+        "p99_ns": 522700,
+        "max_ns": 805800
+      },
+      "workers": [
+        {
+          "role": "reader",
+          "requested_processor": {
+            "group": 0,
+            "number": 2
+          },
+          "processor_at_start": {
+            "group": 0,
+            "number": 2
+          },
+          "processor_at_end": {
+            "group": 0,
+            "number": 2
+          },
+          "cpu_ns": 46875000,
+          "submitted": 513,
+          "completed": 513,
+          "checksummed_blocks": 0,
+          "buffer_capacity": 32,
+          "numa_backed_buffers": 32,
+          "read_capacity": 8,
+          "buffer_pressure_observations": 0,
+          "batches": {
+            "count": 513,
+            "jobs": 513,
+            "max_jobs": 1,
+            "partial": 0
+          },
+          "return_batches": {
+            "count": 513,
+            "jobs": 513,
+            "max_jobs": 1,
+            "partial": 0
+          },
+          "peak_outstanding_reads": 8,
+          "peak_leased_buffers": 14,
+          "handoff_full_observations": 107796,
+          "handoff_high_water": 4,
+          "return_high_water": null,
+          "pages_before": {
+            "pages_by_node": {
+              "0": 512
+            },
+            "unresident_pages": 0,
+            "node_ids_truncated": false
+          },
+          "pages_after": {
+            "pages_by_node": {
+              "0": 512
+            },
+            "unresident_pages": 0,
+            "node_ids_truncated": false
+          }
+        },
+        {
+          "role": "processor",
+          "requested_processor": {
+            "group": 0,
+            "number": 0
+          },
+          "processor_at_start": {
+            "group": 0,
+            "number": 0
+          },
+          "processor_at_end": {
+            "group": 0,
+            "number": 0
+          },
+          "cpu_ns": 46875000,
+          "submitted": 0,
+          "completed": 513,
+          "checksummed_blocks": 513,
+          "buffer_capacity": 0,
+          "numa_backed_buffers": 0,
+          "read_capacity": 0,
+          "buffer_pressure_observations": 0,
+          "batches": {
+            "count": 513,
+            "jobs": 513,
+            "max_jobs": 1,
+            "partial": 0
+          },
+          "return_batches": {
+            "count": 0,
+            "jobs": 0,
+            "max_jobs": 0,
+            "partial": 0
+          },
+          "peak_outstanding_reads": 0,
+          "peak_leased_buffers": 0,
+          "handoff_full_observations": 0,
+          "handoff_high_water": null,
+          "return_high_water": 1,
+          "pages_before": null,
+          "pages_after": null
+        }
+      ]
+    },
+    {
+      "repetition": 3,
+      "position": 2,
+      "arrangement": "independent",
+      "reversed": false,
+      "resources": {
+        "worker_threads": 2,
+        "participating_processors": 2,
+        "checksum_workers": 2,
+        "unequal_cpu_reference": false,
+        "max_pending_reads": 8,
+        "payload_pool_bytes": 2097152
+      },
+      "work_wall_ns": 25282500,
+      "joined_wall_ns": 25812800,
+      "worker_cpu_ns": 62500000,
+      "completed_blocks": 513,
+      "bytes_per_second": 1327180816.7704935,
+      "checksum_latency": {
+        "count": 513,
+        "p50_ns": 385600,
+        "p99_ns": 467700,
+        "max_ns": 487200
+      },
+      "observed_read_latency": {
+        "count": 513,
+        "p50_ns": 304300,
+        "p99_ns": 378500,
+        "max_ns": 397500
+      },
+      "compute_time": {
+        "count": 513,
+        "p50_ns": 80900,
+        "p99_ns": 101400,
+        "max_ns": 159400
+      },
+      "handoff_latency": null,
+      "workers": [
+        {
+          "role": "direct",
+          "requested_processor": {
+            "group": 0,
+            "number": 0
+          },
+          "processor_at_start": {
+            "group": 0,
+            "number": 0
+          },
+          "processor_at_end": {
+            "group": 0,
+            "number": 0
+          },
+          "cpu_ns": 31250000,
+          "submitted": 257,
+          "completed": 257,
+          "checksummed_blocks": 257,
+          "buffer_capacity": 16,
+          "numa_backed_buffers": 16,
+          "read_capacity": 4,
+          "buffer_pressure_observations": 0,
+          "batches": {
+            "count": 257,
+            "jobs": 257,
+            "max_jobs": 1,
+            "partial": 0
+          },
+          "return_batches": {
+            "count": 0,
+            "jobs": 0,
+            "max_jobs": 0,
+            "partial": 0
+          },
+          "peak_outstanding_reads": 4,
+          "peak_leased_buffers": 4,
+          "handoff_full_observations": 0,
+          "handoff_high_water": null,
+          "return_high_water": null,
+          "pages_before": {
+            "pages_by_node": {
+              "0": 256
+            },
+            "unresident_pages": 0,
+            "node_ids_truncated": false
+          },
+          "pages_after": {
+            "pages_by_node": {
+              "0": 256
+            },
+            "unresident_pages": 0,
+            "node_ids_truncated": false
+          }
+        },
+        {
+          "role": "direct",
+          "requested_processor": {
+            "group": 0,
+            "number": 2
+          },
+          "processor_at_start": {
+            "group": 0,
+            "number": 2
+          },
+          "processor_at_end": {
+            "group": 0,
+            "number": 2
+          },
+          "cpu_ns": 31250000,
+          "submitted": 256,
+          "completed": 256,
+          "checksummed_blocks": 256,
+          "buffer_capacity": 16,
+          "numa_backed_buffers": 16,
+          "read_capacity": 4,
+          "buffer_pressure_observations": 0,
+          "batches": {
+            "count": 256,
+            "jobs": 256,
+            "max_jobs": 1,
+            "partial": 0
+          },
+          "return_batches": {
+            "count": 0,
+            "jobs": 0,
+            "max_jobs": 0,
+            "partial": 0
+          },
+          "peak_outstanding_reads": 4,
+          "peak_leased_buffers": 4,
+          "handoff_full_observations": 0,
+          "handoff_high_water": null,
+          "return_high_water": null,
+          "pages_before": {
+            "pages_by_node": {
+              "0": 256
+            },
+            "unresident_pages": 0,
+            "node_ids_truncated": false
+          },
+          "pages_after": {
+            "pages_by_node": {
+              "0": 256
+            },
+            "unresident_pages": 0,
+            "node_ids_truncated": false
+          }
+        }
+      ]
+    },
+    {
+      "repetition": 3,
+      "position": 3,
+      "arrangement": "independent",
+      "reversed": true,
+      "resources": {
+        "worker_threads": 2,
+        "participating_processors": 2,
+        "checksum_workers": 2,
+        "unequal_cpu_reference": false,
+        "max_pending_reads": 8,
+        "payload_pool_bytes": 2097152
+      },
+      "work_wall_ns": 25244600,
+      "joined_wall_ns": 25785400,
+      "worker_cpu_ns": 31250000,
+      "completed_blocks": 513,
+      "bytes_per_second": 1329173328.1573088,
+      "checksum_latency": {
+        "count": 513,
+        "p50_ns": 387200,
+        "p99_ns": 485400,
+        "max_ns": 508900
+      },
+      "observed_read_latency": {
+        "count": 513,
+        "p50_ns": 305300,
+        "p99_ns": 404400,
+        "max_ns": 427900
+      },
+      "compute_time": {
+        "count": 513,
+        "p50_ns": 80900,
+        "p99_ns": 99100,
+        "max_ns": 136900
+      },
+      "handoff_latency": null,
+      "workers": [
+        {
+          "role": "direct",
+          "requested_processor": {
+            "group": 0,
+            "number": 2
+          },
+          "processor_at_start": {
+            "group": 0,
+            "number": 2
+          },
+          "processor_at_end": {
+            "group": 0,
+            "number": 2
+          },
+          "cpu_ns": 15625000,
+          "submitted": 257,
+          "completed": 257,
+          "checksummed_blocks": 257,
+          "buffer_capacity": 16,
+          "numa_backed_buffers": 16,
+          "read_capacity": 4,
+          "buffer_pressure_observations": 0,
+          "batches": {
+            "count": 257,
+            "jobs": 257,
+            "max_jobs": 1,
+            "partial": 0
+          },
+          "return_batches": {
+            "count": 0,
+            "jobs": 0,
+            "max_jobs": 0,
+            "partial": 0
+          },
+          "peak_outstanding_reads": 4,
+          "peak_leased_buffers": 4,
+          "handoff_full_observations": 0,
+          "handoff_high_water": null,
+          "return_high_water": null,
+          "pages_before": {
+            "pages_by_node": {
+              "0": 256
+            },
+            "unresident_pages": 0,
+            "node_ids_truncated": false
+          },
+          "pages_after": {
+            "pages_by_node": {
+              "0": 256
+            },
+            "unresident_pages": 0,
+            "node_ids_truncated": false
+          }
+        },
+        {
+          "role": "direct",
+          "requested_processor": {
+            "group": 0,
+            "number": 0
+          },
+          "processor_at_start": {
+            "group": 0,
+            "number": 0
+          },
+          "processor_at_end": {
+            "group": 0,
+            "number": 0
+          },
+          "cpu_ns": 15625000,
+          "submitted": 256,
+          "completed": 256,
+          "checksummed_blocks": 256,
+          "buffer_capacity": 16,
+          "numa_backed_buffers": 16,
+          "read_capacity": 4,
+          "buffer_pressure_observations": 0,
+          "batches": {
+            "count": 256,
+            "jobs": 256,
+            "max_jobs": 1,
+            "partial": 0
+          },
+          "return_batches": {
+            "count": 0,
+            "jobs": 0,
+            "max_jobs": 0,
+            "partial": 0
+          },
+          "peak_outstanding_reads": 4,
+          "peak_leased_buffers": 4,
+          "handoff_full_observations": 0,
+          "handoff_high_water": null,
+          "return_high_water": null,
+          "pages_before": {
+            "pages_by_node": {
+              "0": 256
+            },
+            "unresident_pages": 0,
+            "node_ids_truncated": false
+          },
+          "pages_after": {
+            "pages_by_node": {
+              "0": 256
+            },
+            "unresident_pages": 0,
+            "node_ids_truncated": false
+          }
+        }
+      ]
+    },
+    {
+      "repetition": 3,
+      "position": 4,
+      "arrangement": "pipeline",
+      "reversed": false,
+      "resources": {
+        "worker_threads": 2,
+        "participating_processors": 2,
+        "checksum_workers": 1,
+        "unequal_cpu_reference": false,
+        "max_pending_reads": 8,
+        "payload_pool_bytes": 2097152
+      },
+      "work_wall_ns": 42461300,
+      "joined_wall_ns": 43141400,
+      "worker_cpu_ns": 31250000,
+      "completed_blocks": 513,
+      "bytes_per_second": 790236026.687831,
+      "checksum_latency": {
+        "count": 513,
+        "p50_ns": 1150300,
+        "p99_ns": 1402900,
+        "max_ns": 1422600
+      },
+      "observed_read_latency": {
+        "count": 513,
+        "p50_ns": 651900,
+        "p99_ns": 903300,
+        "max_ns": 1082100
+      },
+      "compute_time": {
+        "count": 513,
+        "p50_ns": 80900,
+        "p99_ns": 99300,
+        "max_ns": 226100
+      },
+      "handoff_latency": {
+        "count": 513,
+        "p50_ns": 405800,
+        "p99_ns": 434500,
+        "max_ns": 614600
+      },
+      "workers": [
+        {
+          "role": "reader",
+          "requested_processor": {
+            "group": 0,
+            "number": 0
+          },
+          "processor_at_start": {
+            "group": 0,
+            "number": 0
+          },
+          "processor_at_end": {
+            "group": 0,
+            "number": 0
+          },
+          "cpu_ns": 15625000,
+          "submitted": 513,
+          "completed": 513,
+          "checksummed_blocks": 0,
+          "buffer_capacity": 32,
+          "numa_backed_buffers": 32,
+          "read_capacity": 8,
+          "buffer_pressure_observations": 0,
+          "batches": {
+            "count": 513,
+            "jobs": 513,
+            "max_jobs": 1,
+            "partial": 0
+          },
+          "return_batches": {
+            "count": 513,
+            "jobs": 513,
+            "max_jobs": 1,
+            "partial": 0
+          },
+          "peak_outstanding_reads": 8,
+          "peak_leased_buffers": 14,
+          "handoff_full_observations": 102897,
+          "handoff_high_water": 4,
+          "return_high_water": null,
+          "pages_before": {
+            "pages_by_node": {
+              "0": 512
+            },
+            "unresident_pages": 0,
+            "node_ids_truncated": false
+          },
+          "pages_after": {
+            "pages_by_node": {
+              "0": 512
+            },
+            "unresident_pages": 0,
+            "node_ids_truncated": false
+          }
+        },
+        {
+          "role": "processor",
+          "requested_processor": {
+            "group": 0,
+            "number": 2
+          },
+          "processor_at_start": {
+            "group": 0,
+            "number": 2
+          },
+          "processor_at_end": {
+            "group": 0,
+            "number": 2
+          },
+          "cpu_ns": 15625000,
+          "submitted": 0,
+          "completed": 513,
+          "checksummed_blocks": 513,
+          "buffer_capacity": 0,
+          "numa_backed_buffers": 0,
+          "read_capacity": 0,
+          "buffer_pressure_observations": 0,
+          "batches": {
+            "count": 513,
+            "jobs": 513,
+            "max_jobs": 1,
+            "partial": 0
+          },
+          "return_batches": {
+            "count": 0,
+            "jobs": 0,
+            "max_jobs": 0,
+            "partial": 0
+          },
+          "peak_outstanding_reads": 0,
+          "peak_leased_buffers": 0,
+          "handoff_full_observations": 0,
+          "handoff_high_water": null,
+          "return_high_water": 3,
+          "pages_before": null,
+          "pages_after": null
+        }
+      ]
+    },
+    {
+      "repetition": 3,
+      "position": 5,
+      "arrangement": "direct",
+      "reversed": false,
+      "resources": {
+        "worker_threads": 1,
+        "participating_processors": 1,
+        "checksum_workers": 1,
+        "unequal_cpu_reference": true,
+        "max_pending_reads": 8,
+        "payload_pool_bytes": 2097152
+      },
+      "work_wall_ns": 50650400,
+      "joined_wall_ns": 51324800,
+      "worker_cpu_ns": 62500000,
+      "completed_blocks": 513,
+      "bytes_per_second": 662471550.0766035,
+      "checksum_latency": {
+        "count": 513,
+        "p50_ns": 780000,
+        "p99_ns": 1081400,
+        "max_ns": 1126100
+      },
+      "observed_read_latency": {
+        "count": 513,
+        "p50_ns": 697500,
+        "p99_ns": 1000300,
+        "max_ns": 1042600
+      },
+      "compute_time": {
+        "count": 513,
+        "p50_ns": 80900,
+        "p99_ns": 135300,
+        "max_ns": 208700
+      },
+      "handoff_latency": null,
+      "workers": [
+        {
+          "role": "direct",
+          "requested_processor": {
+            "group": 0,
+            "number": 0
+          },
+          "processor_at_start": {
+            "group": 0,
+            "number": 0
+          },
+          "processor_at_end": {
+            "group": 0,
+            "number": 0
+          },
+          "cpu_ns": 62500000,
+          "submitted": 513,
+          "completed": 513,
+          "checksummed_blocks": 513,
+          "buffer_capacity": 32,
+          "numa_backed_buffers": 32,
+          "read_capacity": 8,
+          "buffer_pressure_observations": 0,
+          "batches": {
+            "count": 513,
+            "jobs": 513,
+            "max_jobs": 1,
+            "partial": 0
+          },
+          "return_batches": {
+            "count": 0,
+            "jobs": 0,
+            "max_jobs": 0,
+            "partial": 0
+          },
+          "peak_outstanding_reads": 8,
+          "peak_leased_buffers": 8,
+          "handoff_full_observations": 0,
+          "handoff_high_water": null,
+          "return_high_water": null,
+          "pages_before": {
+            "pages_by_node": {
+              "0": 512
+            },
+            "unresident_pages": 0,
+            "node_ids_truncated": false
+          },
+          "pages_after": {
+            "pages_by_node": {
+              "0": 512
+            },
+            "unresident_pages": 0,
+            "node_ids_truncated": false
+          }
+        }
+      ]
+    },
+    {
+      "repetition": 4,
+      "position": 0,
+      "arrangement": "pipeline",
+      "reversed": true,
+      "resources": {
+        "worker_threads": 2,
+        "participating_processors": 2,
+        "checksum_workers": 1,
+        "unequal_cpu_reference": false,
+        "max_pending_reads": 8,
+        "payload_pool_bytes": 2097152
+      },
+      "work_wall_ns": 43052100,
+      "joined_wall_ns": 43689900,
+      "worker_cpu_ns": 62500000,
+      "completed_blocks": 513,
+      "bytes_per_second": 779391690.5330982,
+      "checksum_latency": {
+        "count": 513,
+        "p50_ns": 1150600,
+        "p99_ns": 1699300,
+        "max_ns": 1699700
+      },
+      "observed_read_latency": {
+        "count": 513,
+        "p50_ns": 651500,
+        "p99_ns": 1213200,
+        "max_ns": 1227700
+      },
+      "compute_time": {
+        "count": 513,
+        "p50_ns": 80900,
+        "p99_ns": 122800,
+        "max_ns": 642400
+      },
+      "handoff_latency": {
+        "count": 513,
+        "p50_ns": 405700,
+        "p99_ns": 541900,
+        "max_ns": 969000
+      },
+      "workers": [
+        {
+          "role": "reader",
+          "requested_processor": {
+            "group": 0,
+            "number": 2
+          },
+          "processor_at_start": {
+            "group": 0,
+            "number": 2
+          },
+          "processor_at_end": {
+            "group": 0,
+            "number": 2
+          },
+          "cpu_ns": 31250000,
+          "submitted": 513,
+          "completed": 513,
+          "checksummed_blocks": 0,
+          "buffer_capacity": 32,
+          "numa_backed_buffers": 32,
+          "read_capacity": 8,
+          "buffer_pressure_observations": 0,
+          "batches": {
+            "count": 513,
+            "jobs": 513,
+            "max_jobs": 1,
+            "partial": 0
+          },
+          "return_batches": {
+            "count": 513,
+            "jobs": 513,
+            "max_jobs": 1,
+            "partial": 0
+          },
+          "peak_outstanding_reads": 8,
+          "peak_leased_buffers": 14,
+          "handoff_full_observations": 108101,
+          "handoff_high_water": 4,
+          "return_high_water": null,
+          "pages_before": {
+            "pages_by_node": {
+              "0": 512
+            },
+            "unresident_pages": 0,
+            "node_ids_truncated": false
+          },
+          "pages_after": {
+            "pages_by_node": {
+              "0": 512
+            },
+            "unresident_pages": 0,
+            "node_ids_truncated": false
+          }
+        },
+        {
+          "role": "processor",
+          "requested_processor": {
+            "group": 0,
+            "number": 0
+          },
+          "processor_at_start": {
+            "group": 0,
+            "number": 0
+          },
+          "processor_at_end": {
+            "group": 0,
+            "number": 0
+          },
+          "cpu_ns": 31250000,
+          "submitted": 0,
+          "completed": 513,
+          "checksummed_blocks": 513,
+          "buffer_capacity": 0,
+          "numa_backed_buffers": 0,
+          "read_capacity": 0,
+          "buffer_pressure_observations": 0,
+          "batches": {
+            "count": 513,
+            "jobs": 513,
+            "max_jobs": 1,
+            "partial": 0
+          },
+          "return_batches": {
+            "count": 0,
+            "jobs": 0,
+            "max_jobs": 0,
+            "partial": 0
+          },
+          "peak_outstanding_reads": 0,
+          "peak_leased_buffers": 0,
+          "handoff_full_observations": 0,
+          "handoff_high_water": null,
+          "return_high_water": 1,
+          "pages_before": null,
+          "pages_after": null
+        }
+      ]
+    },
+    {
+      "repetition": 4,
+      "position": 1,
+      "arrangement": "independent",
+      "reversed": true,
+      "resources": {
+        "worker_threads": 2,
+        "participating_processors": 2,
+        "checksum_workers": 2,
+        "unequal_cpu_reference": false,
+        "max_pending_reads": 8,
+        "payload_pool_bytes": 2097152
+      },
+      "work_wall_ns": 26165100,
+      "joined_wall_ns": 26818800,
+      "worker_cpu_ns": 31250000,
+      "completed_blocks": 513,
+      "bytes_per_second": 1282412411.9533272,
+      "checksum_latency": {
+        "count": 513,
+        "p50_ns": 401400,
+        "p99_ns": 500800,
+        "max_ns": 591600
+      },
+      "observed_read_latency": {
+        "count": 513,
+        "p50_ns": 319200,
+        "p99_ns": 418900,
+        "max_ns": 510600
+      },
+      "compute_time": {
+        "count": 513,
+        "p50_ns": 81000,
+        "p99_ns": 105600,
+        "max_ns": 139100
+      },
+      "handoff_latency": null,
+      "workers": [
+        {
+          "role": "direct",
+          "requested_processor": {
+            "group": 0,
+            "number": 2
+          },
+          "processor_at_start": {
+            "group": 0,
+            "number": 2
+          },
+          "processor_at_end": {
+            "group": 0,
+            "number": 2
+          },
+          "cpu_ns": 15625000,
+          "submitted": 257,
+          "completed": 257,
+          "checksummed_blocks": 257,
+          "buffer_capacity": 16,
+          "numa_backed_buffers": 16,
+          "read_capacity": 4,
+          "buffer_pressure_observations": 0,
+          "batches": {
+            "count": 257,
+            "jobs": 257,
+            "max_jobs": 1,
+            "partial": 0
+          },
+          "return_batches": {
+            "count": 0,
+            "jobs": 0,
+            "max_jobs": 0,
+            "partial": 0
+          },
+          "peak_outstanding_reads": 4,
+          "peak_leased_buffers": 4,
+          "handoff_full_observations": 0,
+          "handoff_high_water": null,
+          "return_high_water": null,
+          "pages_before": {
+            "pages_by_node": {
+              "0": 256
+            },
+            "unresident_pages": 0,
+            "node_ids_truncated": false
+          },
+          "pages_after": {
+            "pages_by_node": {
+              "0": 256
+            },
+            "unresident_pages": 0,
+            "node_ids_truncated": false
+          }
+        },
+        {
+          "role": "direct",
+          "requested_processor": {
+            "group": 0,
+            "number": 0
+          },
+          "processor_at_start": {
+            "group": 0,
+            "number": 0
+          },
+          "processor_at_end": {
+            "group": 0,
+            "number": 0
+          },
+          "cpu_ns": 15625000,
+          "submitted": 256,
+          "completed": 256,
+          "checksummed_blocks": 256,
+          "buffer_capacity": 16,
+          "numa_backed_buffers": 16,
+          "read_capacity": 4,
+          "buffer_pressure_observations": 0,
+          "batches": {
+            "count": 256,
+            "jobs": 256,
+            "max_jobs": 1,
+            "partial": 0
+          },
+          "return_batches": {
+            "count": 0,
+            "jobs": 0,
+            "max_jobs": 0,
+            "partial": 0
+          },
+          "peak_outstanding_reads": 4,
+          "peak_leased_buffers": 4,
+          "handoff_full_observations": 0,
+          "handoff_high_water": null,
+          "return_high_water": null,
+          "pages_before": {
+            "pages_by_node": {
+              "0": 256
+            },
+            "unresident_pages": 0,
+            "node_ids_truncated": false
+          },
+          "pages_after": {
+            "pages_by_node": {
+              "0": 256
+            },
+            "unresident_pages": 0,
+            "node_ids_truncated": false
+          }
+        }
+      ]
+    },
+    {
+      "repetition": 4,
+      "position": 2,
+      "arrangement": "direct",
+      "reversed": true,
+      "resources": {
+        "worker_threads": 1,
+        "participating_processors": 1,
+        "checksum_workers": 1,
+        "unequal_cpu_reference": true,
+        "max_pending_reads": 8,
+        "payload_pool_bytes": 2097152
+      },
+      "work_wall_ns": 49376800,
+      "joined_wall_ns": 50027800,
+      "worker_cpu_ns": 62500000,
+      "completed_blocks": 513,
+      "bytes_per_second": 679559003.4186095,
+      "checksum_latency": {
+        "count": 513,
+        "p50_ns": 771200,
+        "p99_ns": 851200,
+        "max_ns": 885200
+      },
+      "observed_read_latency": {
+        "count": 513,
+        "p50_ns": 689700,
+        "p99_ns": 743400,
+        "max_ns": 802100
+      },
+      "compute_time": {
+        "count": 513,
+        "p50_ns": 80900,
+        "p99_ns": 99800,
+        "max_ns": 122900
+      },
+      "handoff_latency": null,
+      "workers": [
+        {
+          "role": "direct",
+          "requested_processor": {
+            "group": 0,
+            "number": 2
+          },
+          "processor_at_start": {
+            "group": 0,
+            "number": 2
+          },
+          "processor_at_end": {
+            "group": 0,
+            "number": 2
+          },
+          "cpu_ns": 62500000,
+          "submitted": 513,
+          "completed": 513,
+          "checksummed_blocks": 513,
+          "buffer_capacity": 32,
+          "numa_backed_buffers": 32,
+          "read_capacity": 8,
+          "buffer_pressure_observations": 0,
+          "batches": {
+            "count": 513,
+            "jobs": 513,
+            "max_jobs": 1,
+            "partial": 0
+          },
+          "return_batches": {
+            "count": 0,
+            "jobs": 0,
+            "max_jobs": 0,
+            "partial": 0
+          },
+          "peak_outstanding_reads": 8,
+          "peak_leased_buffers": 8,
+          "handoff_full_observations": 0,
+          "handoff_high_water": null,
+          "return_high_water": null,
+          "pages_before": {
+            "pages_by_node": {
+              "0": 512
+            },
+            "unresident_pages": 0,
+            "node_ids_truncated": false
+          },
+          "pages_after": {
+            "pages_by_node": {
+              "0": 512
+            },
+            "unresident_pages": 0,
+            "node_ids_truncated": false
+          }
+        }
+      ]
+    },
+    {
+      "repetition": 4,
+      "position": 3,
+      "arrangement": "direct",
+      "reversed": false,
+      "resources": {
+        "worker_threads": 1,
+        "participating_processors": 1,
+        "checksum_workers": 1,
+        "unequal_cpu_reference": true,
+        "max_pending_reads": 8,
+        "payload_pool_bytes": 2097152
+      },
+      "work_wall_ns": 49597100,
+      "joined_wall_ns": 50236500,
+      "worker_cpu_ns": 46875000,
+      "completed_blocks": 513,
+      "bytes_per_second": 676540543.7011439,
+      "checksum_latency": {
+        "count": 513,
+        "p50_ns": 767900,
+        "p99_ns": 1186400,
+        "max_ns": 1230000
+      },
+      "observed_read_latency": {
+        "count": 513,
+        "p50_ns": 686500,
+        "p99_ns": 1103600,
+        "max_ns": 1149000
+      },
+      "compute_time": {
+        "count": 513,
+        "p50_ns": 80900,
+        "p99_ns": 124700,
+        "max_ns": 515100
+      },
+      "handoff_latency": null,
+      "workers": [
+        {
+          "role": "direct",
+          "requested_processor": {
+            "group": 0,
+            "number": 0
+          },
+          "processor_at_start": {
+            "group": 0,
+            "number": 0
+          },
+          "processor_at_end": {
+            "group": 0,
+            "number": 0
+          },
+          "cpu_ns": 46875000,
+          "submitted": 513,
+          "completed": 513,
+          "checksummed_blocks": 513,
+          "buffer_capacity": 32,
+          "numa_backed_buffers": 32,
+          "read_capacity": 8,
+          "buffer_pressure_observations": 0,
+          "batches": {
+            "count": 513,
+            "jobs": 513,
+            "max_jobs": 1,
+            "partial": 0
+          },
+          "return_batches": {
+            "count": 0,
+            "jobs": 0,
+            "max_jobs": 0,
+            "partial": 0
+          },
+          "peak_outstanding_reads": 8,
+          "peak_leased_buffers": 8,
+          "handoff_full_observations": 0,
+          "handoff_high_water": null,
+          "return_high_water": null,
+          "pages_before": {
+            "pages_by_node": {
+              "0": 512
+            },
+            "unresident_pages": 0,
+            "node_ids_truncated": false
+          },
+          "pages_after": {
+            "pages_by_node": {
+              "0": 512
+            },
+            "unresident_pages": 0,
+            "node_ids_truncated": false
+          }
+        }
+      ]
+    },
+    {
+      "repetition": 4,
+      "position": 4,
+      "arrangement": "independent",
+      "reversed": false,
+      "resources": {
+        "worker_threads": 2,
+        "participating_processors": 2,
+        "checksum_workers": 2,
+        "unequal_cpu_reference": false,
+        "max_pending_reads": 8,
+        "payload_pool_bytes": 2097152
+      },
+      "work_wall_ns": 25915700,
+      "joined_wall_ns": 26493500,
+      "worker_cpu_ns": 62500000,
+      "completed_blocks": 513,
+      "bytes_per_second": 1294753720.7175572,
+      "checksum_latency": {
+        "count": 513,
+        "p50_ns": 398700,
+        "p99_ns": 490700,
+        "max_ns": 543000
+      },
+      "observed_read_latency": {
+        "count": 513,
+        "p50_ns": 315100,
+        "p99_ns": 401300,
+        "max_ns": 442400
+      },
+      "compute_time": {
+        "count": 513,
+        "p50_ns": 81000,
+        "p99_ns": 107900,
+        "max_ns": 155200
+      },
+      "handoff_latency": null,
+      "workers": [
+        {
+          "role": "direct",
+          "requested_processor": {
+            "group": 0,
+            "number": 0
+          },
+          "processor_at_start": {
+            "group": 0,
+            "number": 0
+          },
+          "processor_at_end": {
+            "group": 0,
+            "number": 0
+          },
+          "cpu_ns": 31250000,
+          "submitted": 257,
+          "completed": 257,
+          "checksummed_blocks": 257,
+          "buffer_capacity": 16,
+          "numa_backed_buffers": 16,
+          "read_capacity": 4,
+          "buffer_pressure_observations": 0,
+          "batches": {
+            "count": 257,
+            "jobs": 257,
+            "max_jobs": 1,
+            "partial": 0
+          },
+          "return_batches": {
+            "count": 0,
+            "jobs": 0,
+            "max_jobs": 0,
+            "partial": 0
+          },
+          "peak_outstanding_reads": 4,
+          "peak_leased_buffers": 4,
+          "handoff_full_observations": 0,
+          "handoff_high_water": null,
+          "return_high_water": null,
+          "pages_before": {
+            "pages_by_node": {
+              "0": 256
+            },
+            "unresident_pages": 0,
+            "node_ids_truncated": false
+          },
+          "pages_after": {
+            "pages_by_node": {
+              "0": 256
+            },
+            "unresident_pages": 0,
+            "node_ids_truncated": false
+          }
+        },
+        {
+          "role": "direct",
+          "requested_processor": {
+            "group": 0,
+            "number": 2
+          },
+          "processor_at_start": {
+            "group": 0,
+            "number": 2
+          },
+          "processor_at_end": {
+            "group": 0,
+            "number": 2
+          },
+          "cpu_ns": 31250000,
+          "submitted": 256,
+          "completed": 256,
+          "checksummed_blocks": 256,
+          "buffer_capacity": 16,
+          "numa_backed_buffers": 16,
+          "read_capacity": 4,
+          "buffer_pressure_observations": 0,
+          "batches": {
+            "count": 256,
+            "jobs": 256,
+            "max_jobs": 1,
+            "partial": 0
+          },
+          "return_batches": {
+            "count": 0,
+            "jobs": 0,
+            "max_jobs": 0,
+            "partial": 0
+          },
+          "peak_outstanding_reads": 4,
+          "peak_leased_buffers": 4,
+          "handoff_full_observations": 0,
+          "handoff_high_water": null,
+          "return_high_water": null,
+          "pages_before": {
+            "pages_by_node": {
+              "0": 256
+            },
+            "unresident_pages": 0,
+            "node_ids_truncated": false
+          },
+          "pages_after": {
+            "pages_by_node": {
+              "0": 256
+            },
+            "unresident_pages": 0,
+            "node_ids_truncated": false
+          }
+        }
+      ]
+    },
+    {
+      "repetition": 4,
+      "position": 5,
+      "arrangement": "pipeline",
+      "reversed": false,
+      "resources": {
+        "worker_threads": 2,
+        "participating_processors": 2,
+        "checksum_workers": 1,
+        "unequal_cpu_reference": false,
+        "max_pending_reads": 8,
+        "payload_pool_bytes": 2097152
+      },
+      "work_wall_ns": 42139300,
+      "joined_wall_ns": 42856200,
+      "worker_cpu_ns": 62500000,
+      "completed_blocks": 513,
+      "bytes_per_second": 796274475.370972,
+      "checksum_latency": {
+        "count": 513,
+        "p50_ns": 1148900,
+        "p99_ns": 1168900,
+        "max_ns": 1170200
+      },
+      "observed_read_latency": {
+        "count": 513,
+        "p50_ns": 651500,
+        "p99_ns": 701400,
+        "max_ns": 767500
+      },
+      "compute_time": {
+        "count": 513,
+        "p50_ns": 80900,
+        "p99_ns": 97700,
+        "max_ns": 99600
+      },
+      "handoff_latency": {
+        "count": 513,
+        "p50_ns": 405200,
+        "p99_ns": 423700,
+        "max_ns": 424800
+      },
+      "workers": [
+        {
+          "role": "reader",
+          "requested_processor": {
+            "group": 0,
+            "number": 0
+          },
+          "processor_at_start": {
+            "group": 0,
+            "number": 0
+          },
+          "processor_at_end": {
+            "group": 0,
+            "number": 0
+          },
+          "cpu_ns": 31250000,
+          "submitted": 513,
+          "completed": 513,
+          "checksummed_blocks": 0,
+          "buffer_capacity": 32,
+          "numa_backed_buffers": 32,
+          "read_capacity": 8,
+          "buffer_pressure_observations": 0,
+          "batches": {
+            "count": 513,
+            "jobs": 513,
+            "max_jobs": 1,
+            "partial": 0
+          },
+          "return_batches": {
+            "count": 513,
+            "jobs": 513,
+            "max_jobs": 1,
+            "partial": 0
+          },
+          "peak_outstanding_reads": 8,
+          "peak_leased_buffers": 14,
+          "handoff_full_observations": 102372,
+          "handoff_high_water": 4,
+          "return_high_water": null,
+          "pages_before": {
+            "pages_by_node": {
+              "0": 512
+            },
+            "unresident_pages": 0,
+            "node_ids_truncated": false
+          },
+          "pages_after": {
+            "pages_by_node": {
+              "0": 512
+            },
+            "unresident_pages": 0,
+            "node_ids_truncated": false
+          }
+        },
+        {
+          "role": "processor",
+          "requested_processor": {
+            "group": 0,
+            "number": 2
+          },
+          "processor_at_start": {
+            "group": 0,
+            "number": 2
+          },
+          "processor_at_end": {
+            "group": 0,
+            "number": 2
+          },
+          "cpu_ns": 31250000,
+          "submitted": 0,
+          "completed": 513,
+          "checksummed_blocks": 513,
+          "buffer_capacity": 0,
+          "numa_backed_buffers": 0,
+          "read_capacity": 0,
+          "buffer_pressure_observations": 0,
+          "batches": {
+            "count": 513,
+            "jobs": 513,
+            "max_jobs": 1,
+            "partial": 0
+          },
+          "return_batches": {
+            "count": 0,
+            "jobs": 0,
+            "max_jobs": 0,
+            "partial": 0
+          },
+          "peak_outstanding_reads": 0,
+          "peak_leased_buffers": 0,
+          "handoff_full_observations": 0,
+          "handoff_high_water": null,
+          "return_high_water": 2,
+          "pages_before": null,
+          "pages_after": null
+        }
+      ]
+    },
+    {
+      "repetition": 5,
+      "position": 0,
+      "arrangement": "independent",
+      "reversed": true,
+      "resources": {
+        "worker_threads": 2,
+        "participating_processors": 2,
+        "checksum_workers": 2,
+        "unequal_cpu_reference": false,
+        "max_pending_reads": 8,
+        "payload_pool_bytes": 2097152
+      },
+      "work_wall_ns": 26234000,
+      "joined_wall_ns": 26790200,
+      "worker_cpu_ns": 31250000,
+      "completed_blocks": 513,
+      "bytes_per_second": 1279044331.7831821,
+      "checksum_latency": {
+        "count": 513,
+        "p50_ns": 397600,
+        "p99_ns": 672200,
+        "max_ns": 931800
+      },
+      "observed_read_latency": {
+        "count": 513,
+        "p50_ns": 313400,
+        "p99_ns": 589300,
+        "max_ns": 849000
+      },
+      "compute_time": {
+        "count": 513,
+        "p50_ns": 81000,
+        "p99_ns": 108800,
+        "max_ns": 161400
+      },
+      "handoff_latency": null,
+      "workers": [
+        {
+          "role": "direct",
+          "requested_processor": {
+            "group": 0,
+            "number": 2
+          },
+          "processor_at_start": {
+            "group": 0,
+            "number": 2
+          },
+          "processor_at_end": {
+            "group": 0,
+            "number": 2
+          },
+          "cpu_ns": 15625000,
+          "submitted": 257,
+          "completed": 257,
+          "checksummed_blocks": 257,
+          "buffer_capacity": 16,
+          "numa_backed_buffers": 16,
+          "read_capacity": 4,
+          "buffer_pressure_observations": 0,
+          "batches": {
+            "count": 257,
+            "jobs": 257,
+            "max_jobs": 1,
+            "partial": 0
+          },
+          "return_batches": {
+            "count": 0,
+            "jobs": 0,
+            "max_jobs": 0,
+            "partial": 0
+          },
+          "peak_outstanding_reads": 4,
+          "peak_leased_buffers": 4,
+          "handoff_full_observations": 0,
+          "handoff_high_water": null,
+          "return_high_water": null,
+          "pages_before": {
+            "pages_by_node": {
+              "0": 256
+            },
+            "unresident_pages": 0,
+            "node_ids_truncated": false
+          },
+          "pages_after": {
+            "pages_by_node": {
+              "0": 256
+            },
+            "unresident_pages": 0,
+            "node_ids_truncated": false
+          }
+        },
+        {
+          "role": "direct",
+          "requested_processor": {
+            "group": 0,
+            "number": 0
+          },
+          "processor_at_start": {
+            "group": 0,
+            "number": 0
+          },
+          "processor_at_end": {
+            "group": 0,
+            "number": 0
+          },
+          "cpu_ns": 15625000,
+          "submitted": 256,
+          "completed": 256,
+          "checksummed_blocks": 256,
+          "buffer_capacity": 16,
+          "numa_backed_buffers": 16,
+          "read_capacity": 4,
+          "buffer_pressure_observations": 0,
+          "batches": {
+            "count": 256,
+            "jobs": 256,
+            "max_jobs": 1,
+            "partial": 0
+          },
+          "return_batches": {
+            "count": 0,
+            "jobs": 0,
+            "max_jobs": 0,
+            "partial": 0
+          },
+          "peak_outstanding_reads": 4,
+          "peak_leased_buffers": 4,
+          "handoff_full_observations": 0,
+          "handoff_high_water": null,
+          "return_high_water": null,
+          "pages_before": {
+            "pages_by_node": {
+              "0": 256
+            },
+            "unresident_pages": 0,
+            "node_ids_truncated": false
+          },
+          "pages_after": {
+            "pages_by_node": {
+              "0": 256
+            },
+            "unresident_pages": 0,
+            "node_ids_truncated": false
+          }
+        }
+      ]
+    },
+    {
+      "repetition": 5,
+      "position": 1,
+      "arrangement": "direct",
+      "reversed": false,
+      "resources": {
+        "worker_threads": 1,
+        "participating_processors": 1,
+        "checksum_workers": 1,
+        "unequal_cpu_reference": true,
+        "max_pending_reads": 8,
+        "payload_pool_bytes": 2097152
+      },
+      "work_wall_ns": 49432100,
+      "joined_wall_ns": 50044200,
+      "worker_cpu_ns": 62500000,
+      "completed_blocks": 513,
+      "bytes_per_second": 678798776.503527,
+      "checksum_latency": {
+        "count": 513,
+        "p50_ns": 764100,
+        "p99_ns": 1041500,
+        "max_ns": 1043100
+      },
+      "observed_read_latency": {
+        "count": 513,
+        "p50_ns": 682800,
+        "p99_ns": 960500,
+        "max_ns": 962100
+      },
+      "compute_time": {
+        "count": 513,
+        "p50_ns": 80900,
+        "p99_ns": 107400,
+        "max_ns": 352300
+      },
+      "handoff_latency": null,
+      "workers": [
+        {
+          "role": "direct",
+          "requested_processor": {
+            "group": 0,
+            "number": 0
+          },
+          "processor_at_start": {
+            "group": 0,
+            "number": 0
+          },
+          "processor_at_end": {
+            "group": 0,
+            "number": 0
+          },
+          "cpu_ns": 62500000,
+          "submitted": 513,
+          "completed": 513,
+          "checksummed_blocks": 513,
+          "buffer_capacity": 32,
+          "numa_backed_buffers": 32,
+          "read_capacity": 8,
+          "buffer_pressure_observations": 0,
+          "batches": {
+            "count": 513,
+            "jobs": 513,
+            "max_jobs": 1,
+            "partial": 0
+          },
+          "return_batches": {
+            "count": 0,
+            "jobs": 0,
+            "max_jobs": 0,
+            "partial": 0
+          },
+          "peak_outstanding_reads": 8,
+          "peak_leased_buffers": 8,
+          "handoff_full_observations": 0,
+          "handoff_high_water": null,
+          "return_high_water": null,
+          "pages_before": {
+            "pages_by_node": {
+              "0": 512
+            },
+            "unresident_pages": 0,
+            "node_ids_truncated": false
+          },
+          "pages_after": {
+            "pages_by_node": {
+              "0": 512
+            },
+            "unresident_pages": 0,
+            "node_ids_truncated": false
+          }
+        }
+      ]
+    },
+    {
+      "repetition": 5,
+      "position": 2,
+      "arrangement": "pipeline",
+      "reversed": true,
+      "resources": {
+        "worker_threads": 2,
+        "participating_processors": 2,
+        "checksum_workers": 1,
+        "unequal_cpu_reference": false,
+        "max_pending_reads": 8,
+        "payload_pool_bytes": 2097152
+      },
+      "work_wall_ns": 42991800,
+      "joined_wall_ns": 43671800,
+      "worker_cpu_ns": 62500000,
+      "completed_blocks": 513,
+      "bytes_per_second": 780484859.9035165,
+      "checksum_latency": {
+        "count": 513,
+        "p50_ns": 1149600,
+        "p99_ns": 1574900,
+        "max_ns": 1575800
+      },
+      "observed_read_latency": {
+        "count": 513,
+        "p50_ns": 652200,
+        "p99_ns": 1086700,
+        "max_ns": 1089600
+      },
+      "compute_time": {
+        "count": 513,
+        "p50_ns": 81000,
+        "p99_ns": 109900,
+        "max_ns": 517200
+      },
+      "handoff_latency": {
+        "count": 513,
+        "p50_ns": 405800,
+        "p99_ns": 594600,
+        "max_ns": 842200
+      },
+      "workers": [
+        {
+          "role": "reader",
+          "requested_processor": {
+            "group": 0,
+            "number": 2
+          },
+          "processor_at_start": {
+            "group": 0,
+            "number": 2
+          },
+          "processor_at_end": {
+            "group": 0,
+            "number": 2
+          },
+          "cpu_ns": 31250000,
+          "submitted": 513,
+          "completed": 513,
+          "checksummed_blocks": 0,
+          "buffer_capacity": 32,
+          "numa_backed_buffers": 32,
+          "read_capacity": 8,
+          "buffer_pressure_observations": 0,
+          "batches": {
+            "count": 513,
+            "jobs": 513,
+            "max_jobs": 1,
+            "partial": 0
+          },
+          "return_batches": {
+            "count": 513,
+            "jobs": 513,
+            "max_jobs": 1,
+            "partial": 0
+          },
+          "peak_outstanding_reads": 8,
+          "peak_leased_buffers": 14,
+          "handoff_full_observations": 101225,
+          "handoff_high_water": 4,
+          "return_high_water": null,
+          "pages_before": {
+            "pages_by_node": {
+              "0": 512
+            },
+            "unresident_pages": 0,
+            "node_ids_truncated": false
+          },
+          "pages_after": {
+            "pages_by_node": {
+              "0": 512
+            },
+            "unresident_pages": 0,
+            "node_ids_truncated": false
+          }
+        },
+        {
+          "role": "processor",
+          "requested_processor": {
+            "group": 0,
+            "number": 0
+          },
+          "processor_at_start": {
+            "group": 0,
+            "number": 0
+          },
+          "processor_at_end": {
+            "group": 0,
+            "number": 0
+          },
+          "cpu_ns": 31250000,
+          "submitted": 0,
+          "completed": 513,
+          "checksummed_blocks": 513,
+          "buffer_capacity": 0,
+          "numa_backed_buffers": 0,
+          "read_capacity": 0,
+          "buffer_pressure_observations": 0,
+          "batches": {
+            "count": 513,
+            "jobs": 513,
+            "max_jobs": 1,
+            "partial": 0
+          },
+          "return_batches": {
+            "count": 0,
+            "jobs": 0,
+            "max_jobs": 0,
+            "partial": 0
+          },
+          "peak_outstanding_reads": 0,
+          "peak_leased_buffers": 0,
+          "handoff_full_observations": 0,
+          "handoff_high_water": null,
+          "return_high_water": 2,
+          "pages_before": null,
+          "pages_after": null
+        }
+      ]
+    },
+    {
+      "repetition": 5,
+      "position": 3,
+      "arrangement": "pipeline",
+      "reversed": false,
+      "resources": {
+        "worker_threads": 2,
+        "participating_processors": 2,
+        "checksum_workers": 1,
+        "unequal_cpu_reference": false,
+        "max_pending_reads": 8,
+        "payload_pool_bytes": 2097152
+      },
+      "work_wall_ns": 42320900,
+      "joined_wall_ns": 42990900,
+      "worker_cpu_ns": 62500000,
+      "completed_blocks": 513,
+      "bytes_per_second": 792857642.4414414,
+      "checksum_latency": {
+        "count": 513,
+        "p50_ns": 1150600,
+        "p99_ns": 1191400,
+        "max_ns": 1194200
+      },
+      "observed_read_latency": {
+        "count": 513,
+        "p50_ns": 652400,
+        "p99_ns": 692200,
+        "max_ns": 703500
+      },
+      "compute_time": {
+        "count": 513,
+        "p50_ns": 80900,
+        "p99_ns": 99400,
+        "max_ns": 105400
+      },
+      "handoff_latency": {
+        "count": 513,
+        "p50_ns": 407000,
+        "p99_ns": 439200,
+        "max_ns": 448100
+      },
+      "workers": [
+        {
+          "role": "reader",
+          "requested_processor": {
+            "group": 0,
+            "number": 0
+          },
+          "processor_at_start": {
+            "group": 0,
+            "number": 0
+          },
+          "processor_at_end": {
+            "group": 0,
+            "number": 0
+          },
+          "cpu_ns": 31250000,
+          "submitted": 513,
+          "completed": 513,
+          "checksummed_blocks": 0,
+          "buffer_capacity": 32,
+          "numa_backed_buffers": 32,
+          "read_capacity": 8,
+          "buffer_pressure_observations": 0,
+          "batches": {
+            "count": 513,
+            "jobs": 513,
+            "max_jobs": 1,
+            "partial": 0
+          },
+          "return_batches": {
+            "count": 513,
+            "jobs": 513,
+            "max_jobs": 1,
+            "partial": 0
+          },
+          "peak_outstanding_reads": 8,
+          "peak_leased_buffers": 14,
+          "handoff_full_observations": 103251,
+          "handoff_high_water": 4,
+          "return_high_water": null,
+          "pages_before": {
+            "pages_by_node": {
+              "0": 512
+            },
+            "unresident_pages": 0,
+            "node_ids_truncated": false
+          },
+          "pages_after": {
+            "pages_by_node": {
+              "0": 512
+            },
+            "unresident_pages": 0,
+            "node_ids_truncated": false
+          }
+        },
+        {
+          "role": "processor",
+          "requested_processor": {
+            "group": 0,
+            "number": 2
+          },
+          "processor_at_start": {
+            "group": 0,
+            "number": 2
+          },
+          "processor_at_end": {
+            "group": 0,
+            "number": 2
+          },
+          "cpu_ns": 31250000,
+          "submitted": 0,
+          "completed": 513,
+          "checksummed_blocks": 513,
+          "buffer_capacity": 0,
+          "numa_backed_buffers": 0,
+          "read_capacity": 0,
+          "buffer_pressure_observations": 0,
+          "batches": {
+            "count": 513,
+            "jobs": 513,
+            "max_jobs": 1,
+            "partial": 0
+          },
+          "return_batches": {
+            "count": 0,
+            "jobs": 0,
+            "max_jobs": 0,
+            "partial": 0
+          },
+          "peak_outstanding_reads": 0,
+          "peak_leased_buffers": 0,
+          "handoff_full_observations": 0,
+          "handoff_high_water": null,
+          "return_high_water": 1,
+          "pages_before": null,
+          "pages_after": null
+        }
+      ]
+    },
+    {
+      "repetition": 5,
+      "position": 4,
+      "arrangement": "direct",
+      "reversed": true,
+      "resources": {
+        "worker_threads": 1,
+        "participating_processors": 1,
+        "checksum_workers": 1,
+        "unequal_cpu_reference": true,
+        "max_pending_reads": 8,
+        "payload_pool_bytes": 2097152
+      },
+      "work_wall_ns": 49577100,
+      "joined_wall_ns": 50280100,
+      "worker_cpu_ns": 62500000,
+      "completed_blocks": 513,
+      "bytes_per_second": 676813468.3150083,
+      "checksum_latency": {
+        "count": 513,
+        "p50_ns": 774800,
+        "p99_ns": 846900,
+        "max_ns": 860900
+      },
+      "observed_read_latency": {
+        "count": 513,
+        "p50_ns": 693400,
+        "p99_ns": 748500,
+        "max_ns": 779900
+      },
+      "compute_time": {
+        "count": 513,
+        "p50_ns": 80900,
+        "p99_ns": 99700,
+        "max_ns": 108200
+      },
+      "handoff_latency": null,
+      "workers": [
+        {
+          "role": "direct",
+          "requested_processor": {
+            "group": 0,
+            "number": 2
+          },
+          "processor_at_start": {
+            "group": 0,
+            "number": 2
+          },
+          "processor_at_end": {
+            "group": 0,
+            "number": 2
+          },
+          "cpu_ns": 62500000,
+          "submitted": 513,
+          "completed": 513,
+          "checksummed_blocks": 513,
+          "buffer_capacity": 32,
+          "numa_backed_buffers": 32,
+          "read_capacity": 8,
+          "buffer_pressure_observations": 0,
+          "batches": {
+            "count": 513,
+            "jobs": 513,
+            "max_jobs": 1,
+            "partial": 0
+          },
+          "return_batches": {
+            "count": 0,
+            "jobs": 0,
+            "max_jobs": 0,
+            "partial": 0
+          },
+          "peak_outstanding_reads": 8,
+          "peak_leased_buffers": 8,
+          "handoff_full_observations": 0,
+          "handoff_high_water": null,
+          "return_high_water": null,
+          "pages_before": {
+            "pages_by_node": {
+              "0": 512
+            },
+            "unresident_pages": 0,
+            "node_ids_truncated": false
+          },
+          "pages_after": {
+            "pages_by_node": {
+              "0": 512
+            },
+            "unresident_pages": 0,
+            "node_ids_truncated": false
+          }
+        }
+      ]
+    },
+    {
+      "repetition": 5,
+      "position": 5,
+      "arrangement": "independent",
+      "reversed": false,
+      "resources": {
+        "worker_threads": 2,
+        "participating_processors": 2,
+        "checksum_workers": 2,
+        "unequal_cpu_reference": false,
+        "max_pending_reads": 8,
+        "payload_pool_bytes": 2097152
+      },
+      "work_wall_ns": 26025700,
+      "joined_wall_ns": 26630000,
+      "worker_cpu_ns": 31250000,
+      "completed_blocks": 513,
+      "bytes_per_second": 1289281325.766454,
+      "checksum_latency": {
+        "count": 513,
+        "p50_ns": 392500,
+        "p99_ns": 633500,
+        "max_ns": 906600
+      },
+      "observed_read_latency": {
+        "count": 513,
+        "p50_ns": 310700,
+        "p99_ns": 529100,
+        "max_ns": 825500
+      },
+      "compute_time": {
+        "count": 513,
+        "p50_ns": 81000,
+        "p99_ns": 128100,
+        "max_ns": 528700
+      },
+      "handoff_latency": null,
+      "workers": [
+        {
+          "role": "direct",
+          "requested_processor": {
+            "group": 0,
+            "number": 0
+          },
+          "processor_at_start": {
+            "group": 0,
+            "number": 0
+          },
+          "processor_at_end": {
+            "group": 0,
+            "number": 0
+          },
+          "cpu_ns": 15625000,
+          "submitted": 257,
+          "completed": 257,
+          "checksummed_blocks": 257,
+          "buffer_capacity": 16,
+          "numa_backed_buffers": 16,
+          "read_capacity": 4,
+          "buffer_pressure_observations": 0,
+          "batches": {
+            "count": 257,
+            "jobs": 257,
+            "max_jobs": 1,
+            "partial": 0
+          },
+          "return_batches": {
+            "count": 0,
+            "jobs": 0,
+            "max_jobs": 0,
+            "partial": 0
+          },
+          "peak_outstanding_reads": 4,
+          "peak_leased_buffers": 4,
+          "handoff_full_observations": 0,
+          "handoff_high_water": null,
+          "return_high_water": null,
+          "pages_before": {
+            "pages_by_node": {
+              "0": 256
+            },
+            "unresident_pages": 0,
+            "node_ids_truncated": false
+          },
+          "pages_after": {
+            "pages_by_node": {
+              "0": 256
+            },
+            "unresident_pages": 0,
+            "node_ids_truncated": false
+          }
+        },
+        {
+          "role": "direct",
+          "requested_processor": {
+            "group": 0,
+            "number": 2
+          },
+          "processor_at_start": {
+            "group": 0,
+            "number": 2
+          },
+          "processor_at_end": {
+            "group": 0,
+            "number": 2
+          },
+          "cpu_ns": 15625000,
+          "submitted": 256,
+          "completed": 256,
+          "checksummed_blocks": 256,
+          "buffer_capacity": 16,
+          "numa_backed_buffers": 16,
+          "read_capacity": 4,
+          "buffer_pressure_observations": 0,
+          "batches": {
+            "count": 256,
+            "jobs": 256,
+            "max_jobs": 1,
+            "partial": 0
+          },
+          "return_batches": {
+            "count": 0,
+            "jobs": 0,
+            "max_jobs": 0,
+            "partial": 0
+          },
+          "peak_outstanding_reads": 4,
+          "peak_leased_buffers": 4,
+          "handoff_full_observations": 0,
+          "handoff_high_water": null,
+          "return_high_water": null,
+          "pages_before": {
+            "pages_by_node": {
+              "0": 256
+            },
+            "unresident_pages": 0,
+            "node_ids_truncated": false
+          },
+          "pages_after": {
+            "pages_by_node": {
+              "0": 256
+            },
+            "unresident_pages": 0,
+            "node_ids_truncated": false
+          }
+        }
+      ]
+    }
+  ]
+}

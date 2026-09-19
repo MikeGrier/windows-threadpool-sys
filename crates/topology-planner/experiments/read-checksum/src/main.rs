@@ -10,6 +10,14 @@ use windows_read_checksum_experiment::{Config, run, write_fixture};
 
 fn execute(args: &[String], output: &mut impl Write) -> io::Result<()> {
     match args {
+        [command] if command == "placements" => {
+            let topology = windows_topology_sys::MachineMemoryTopology::discover()?;
+            serde_json::to_writer(
+                &mut *output,
+                &windows_read_checksum_experiment::placement_plan(&topology),
+            )?;
+            writeln!(output)
+        }
         [command, path, bytes] if command == "fixture" => {
             let bytes = bytes.parse::<u64>().map_err(io::Error::other)?;
             if bytes == 0 || bytes > 1024 * 1024 * 1024 {
@@ -59,7 +67,7 @@ fn execute(args: &[String], output: &mut impl Write) -> io::Result<()> {
         }
         _ => Err(io::Error::new(
             io::ErrorKind::InvalidInput,
-            "usage: windows-read-checksum-experiment fixture <new-file> <bytes> | run <config.json> <new-report.json>",
+            "usage: windows-read-checksum-experiment placements | fixture <new-file> <bytes> | run <config.json> <new-report.json>",
         )),
     }
 }

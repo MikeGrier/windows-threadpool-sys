@@ -3,6 +3,30 @@
   "description": "Read identity, payload-credit measurement and checksum guards, plus an equivalent chunking control.",
   "sabotages": [
     {
+      "name": "NUMA request falls back silently to heap buffers",
+      "file": "src/payload.rs",
+      "expect": "caught",
+      "why": "Live tests observe allocation backing rather than inferring it from config or node-zero residency on a single-node host.",
+      "find": "let Some(node) = node else",
+      "replace": "let Some(node) = node.filter(|_| false) else"
+    },
+    {
+      "name": "generated source uses the wrong logical offset",
+      "file": "src/reader.rs",
+      "expect": "caught",
+      "why": "Generated input must agree with the reference block identities, not simply checksum whatever bytes arrived.",
+      "find": "fill_fixture(chunk, offset + (index * crate::CHECKSUM_POLL_BYTES) as u64);",
+      "replace": "fill_fixture(chunk, 0); let _ = index;"
+    },
+    {
+      "name": "missing Windows node labels become zero",
+      "file": "src/placement.rs",
+      "expect": "caught",
+      "why": "Synthetic selection must preserve missing labels rather than manufacture usable node-zero placements.",
+      "find": ".label_from(Source::RelationshipWalk)",
+      "replace": ".label_from(Source::RelationshipWalk).or(Some(0))"
+    },
+    {
       "name": "summary merges all ordered-dictionary sweeps",
       "file": "capture-ep-x1-1.ps1",
       "expect": "caught",

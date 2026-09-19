@@ -39,6 +39,9 @@ impl Fixture {
     fn config(&self, block_bytes: usize, depth: usize, queue_capacity: usize) -> Config {
         Config {
             file: self.0.clone(),
+            input: windows_read_checksum_experiment::InputKind::BufferedFile,
+            generated_bytes: None,
+            payload_node: None,
             block_bytes,
             depth,
             buffer_count: None,
@@ -78,7 +81,7 @@ fn all_arrangements_process_ten_shapes_with_equal_payload_budgets() {
         config.checksum_passes = passes;
         let capture = run(config).unwrap();
         assert_eq!(capture.trials.len(), 6);
-        assert_eq!(capture.schema, "read-checksum-v3");
+        assert_eq!(capture.schema, "read-checksum-v4");
         assert_eq!(capture.file_bytes, bytes);
         assert_eq!(capture.payload_pool_bytes, block * depth);
         for trial in &capture.trials {
@@ -185,6 +188,14 @@ fn invalid_inputs_are_errors_not_empty_captures() {
     }
     let fixture = Fixture::new(8192);
     let mut config = fixture.config(4096, 2, 1);
+    config.payload_node = Some(u32::MAX);
+    assert!(
+        run(config)
+            .unwrap_err()
+            .to_string()
+            .contains("payload_node")
+    );
+    let mut config = fixture.config(4096, 2, 1);
     config.file = fixture.0.with_extension("missing");
     assert_eq!(run(config).unwrap_err().kind(), io::ErrorKind::NotFound);
     let mut config = fixture.config(4096, 2, 1);
@@ -207,6 +218,137 @@ fn invalid_inputs_are_errors_not_empty_captures() {
         }; 2],
     );
     assert!(run(config).is_err());
+}
+
+#[test]
+fn generated_and_file_inputs_use_heap_and_explicit_numa_payloads() {
+    use windows_read_checksum_experiment::InputKind;
+    use windows_topology_sys::{MachineMemoryTopology, Source};
+    let topology = MachineMemoryTopology::discover().unwrap();
+    let node = topology
+        .memory_domains()
+        .find_map(|domain| domain.label_from(Source::RelationshipWalk))
+        .unwrap();
+    for (block, blocks, tail) in [
+        (1, 2, 0),
+        (7, 3, 1),
+        (128, 7, 17),
+        (4096, 9, 3),
+        (65536, 4, 11),
+    ] {
+        let bytes = (block * blocks + tail) as u64;
+        let fixture = Fixture::new(bytes);
+        for input in [InputKind::BufferedFile, InputKind::Generated] {
+            for payload_node in [None, Some(node)] {
+                let mut config = fixture.config(block, 2, 1);
+                config.buffer_count = Some(8);
+                config.batch_size = 3;
+                config.input = input;
+                config.payload_node = payload_node;
+                config.generated_bytes = (input == InputKind::Generated).then_some(bytes);
+                if input == InputKind::Generated {
+                    config.file = fixture.0.with_extension("must-not-open");
+                }
+                let capture = run(config).unwrap();
+                assert_eq!(capture.file_bytes, bytes);
+                assert_eq!(capture.blocks, blocks + usize::from(tail != 0));
+                assert_eq!(
+                    capture.evidence_class.starts_with("generated_"),
+                    input == InputKind::Generated
+                );
+                for trial in capture.trials {
+                    assert_eq!(trial.completed_blocks, capture.blocks);
+                    assert_eq!(trial.resources.payload_pool_bytes, block * 8);
+                    for worker in trial.workers {
+                        if input == InputKind::Generated {
+                            assert_eq!(worker.peak_outstanding_reads, 0);
+                        }
+                        if worker.buffer_capacity > 0 {
+                            assert_eq!(
+                                worker.numa_backed_buffers,
+                                if payload_node.is_some() {
+                                    worker.buffer_capacity
+                                } else {
+                                    0
+                                }
+                            );
+                            let pages = worker.pages_before.unwrap();
+                            assert!(
+                                pages.pages_by_node.values().sum::<usize>()
+                                    + pages.unresident_pages
+                                    > 0
+                            );
+                            assert!(worker.pages_after.is_some());
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn placement_driver_keeps_workloads_nodes_and_role_controls_explicit() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let destination = root
+        .ancestors()
+        .nth(4)
+        .unwrap()
+        .join(".scratch")
+        .join(format!("placement-plan-only-{}", std::process::id()));
+    let output = std::process::Command::new("pwsh")
+        .args(["-NoProfile", "-File"])
+        .arg(root.join("capture-ep-x2-1.ps1"))
+        .args([
+            "-PlanOnly",
+            "-Binary",
+            env!("CARGO_BIN_EXE_windows-read-checksum-experiment"),
+            "-OutputDirectory",
+        ])
+        .arg(&destination)
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(!destination.exists());
+    let plan: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    let pairs = plan["discovery"]["pairs"].as_array().unwrap();
+    assert!(!pairs.is_empty());
+    let cases = plan["cases"].as_array().unwrap();
+    for (index, pair) in pairs.iter().enumerate() {
+        for input in ["generated", "buffered_file"] {
+            let rows: Vec<_> = cases
+                .iter()
+                .filter(|case| case["pair_index"] == index && case["config"]["input"] == input)
+                .collect();
+            assert!(rows.len() >= 2);
+            assert!(rows.first().unwrap()["payload_node"].is_null());
+            assert!(rows.last().unwrap()["payload_node"].is_null());
+            for (forward, backward) in rows.iter().zip(rows.iter().rev()) {
+                assert_eq!(forward["config"], backward["config"]);
+                assert_eq!(forward["config"]["processors"], pair["processors"]);
+                let config: Config = serde_json::from_value(forward["config"].clone()).unwrap();
+                assert!(config.validate(33554449).is_ok());
+                assert_eq!(config.buffers() * config.block_bytes, 2 * 1024 * 1024);
+            }
+            for node in pair["memory_nodes"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .filter(|node| !node.is_null())
+            {
+                assert_eq!(
+                    rows.iter()
+                        .filter(|case| case["payload_node"] == *node)
+                        .count(),
+                    2
+                );
+            }
+        }
+    }
 }
 
 #[test]

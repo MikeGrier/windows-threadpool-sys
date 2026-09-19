@@ -267,3 +267,14 @@ placements separately from execution failures and make the campaign report name 
 The current host exposes only Windows NUMA node 0. The engineer authorized implementation
 and local capture now, leaving cross-NUMA timing unrun for a multi-node host. EP-X2.1
 remains open for that evidence and result review. No other MX item is implicitly resumed.
+
+### Local implementation disposition
+
+Retain the heap baseline, explicit NUMA-backed payloads and generated companion with
+the existing isolated schedulers. These remain experimental, not a production
+planner dependency or default. Revisit retain/merge/delete under the parent's
+[CHECKLIST.md](../../CHECKLIST.md) -> `EP-X3.3`, or earlier on a changed question.
+The [local capture](captures/2026-09-19-ep-x2-1/README.md) records what was observed.
+Cross-NUMA evidence and result review remain actions of EP-X2.1, not discharged by
+synthetic selection or same-node allocation checks. The generated-buffer companion
+is now available to EP-X1.5 without closing its working-set/device-path obligations.

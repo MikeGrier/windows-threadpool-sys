@@ -62,6 +62,9 @@ fn checksum_budget_failure_propagates() {
 fn batch_config(batch_size: usize) -> Config {
     Config {
         file: "unused".into(),
+        input: crate::InputKind::BufferedFile,
+        generated_bytes: None,
+        payload_node: None,
         block_bytes: 64,
         depth: 2,
         buffer_count: Some(64),
@@ -78,7 +81,7 @@ fn batch_job(id: usize) -> Job {
     let submitted = Instant::now();
     Job {
         id,
-        buffer: vec![id as u8; id + 1],
+        buffer: crate::payload::Payload::Heap(vec![id as u8; id + 1]),
         submitted,
         read_done: submitted,
     }

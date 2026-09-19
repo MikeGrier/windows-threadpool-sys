@@ -2,6 +2,8 @@
 #![cfg(windows)]
 
 mod experiment;
+mod payload;
+mod placement;
 mod platform;
 mod reader;
 
@@ -12,6 +14,7 @@ use serde::{Deserialize, Serialize};
 use windows_topology_sys::ProcessorId;
 
 pub use experiment::{Capture, run};
+pub use placement::{PlacementPlan, placement_plan};
 
 const MAX_BUFFERS: usize = 1024;
 const MAX_POOL_BYTES: usize = 256 * 1024 * 1024;
@@ -25,7 +28,14 @@ const CHECKSUM_POLL_BYTES: usize = 64 * 1024;
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct Config {
+    #[serde(default)]
     pub file: PathBuf,
+    #[serde(default)]
+    pub input: InputKind,
+    #[serde(default)]
+    pub generated_bytes: Option<u64>,
+    #[serde(default)]
+    pub payload_node: Option<u32>,
     pub block_bytes: usize,
     pub depth: usize,
     #[serde(default)]
@@ -45,6 +55,17 @@ impl Config {
     }
 
     pub fn validate(&self, file_bytes: u64) -> io::Result<usize> {
+        match self.input {
+            InputKind::BufferedFile if self.generated_bytes.is_some() => {
+                return Err(invalid("generated_bytes is only valid for generated input"));
+            }
+            InputKind::Generated if self.generated_bytes != Some(file_bytes) => {
+                return Err(invalid(
+                    "generated input requires its explicit logical byte count",
+                ));
+            }
+            _ => {}
+        }
         if file_bytes > MAX_FILE_BYTES {
             return Err(invalid("fixture exceeds the experiment's 1 GiB limit"));
         }
@@ -98,6 +119,14 @@ fn default_batch_size() -> usize {
     1
 }
 
+#[derive(Clone, Copy, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum InputKind {
+    #[default]
+    BufferedFile,
+    Generated,
+}
+
 pub(crate) fn invalid(message: impl Into<String>) -> io::Error {
     io::Error::new(io::ErrorKind::InvalidInput, message.into())
 }
@@ -137,14 +166,18 @@ pub fn write_fixture(out: &mut impl Write, bytes: u64) -> io::Result<()> {
     let mut offset = 0_u64;
     while offset < bytes {
         let count = (bytes - offset).min(chunk.len() as u64) as usize;
-        for (i, value) in chunk[..count].iter_mut().enumerate() {
-            let position = offset + i as u64;
-            *value = (position.wrapping_mul(31) ^ (position >> 8) ^ (position >> 17)) as u8;
-        }
+        fill_fixture(&mut chunk[..count], offset);
         out.write_all(&chunk[..count])?;
         offset += count as u64;
     }
     out.flush()
+}
+
+pub(crate) fn fill_fixture(bytes: &mut [u8], offset: u64) {
+    for (index, value) in bytes.iter_mut().enumerate() {
+        let position = offset + index as u64;
+        *value = (position.wrapping_mul(31) ^ (position >> 8) ^ (position >> 17)) as u8;
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]

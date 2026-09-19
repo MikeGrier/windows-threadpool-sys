@@ -7,19 +7,20 @@ use windows_overlapped_io_sys::{
     AssociatedEndpoint, CompletionPort, FileIo, OperationId, Started, UnassociatedEndpoint,
 };
 
-use crate::{BlockResult, Config, checksum_checked, failed};
+use crate::payload::Payload;
+use crate::{BlockResult, Config, InputKind, checksum_checked, failed, fill_fixture};
 
 const FILE_COMPLETION_KEY: usize = 1;
 
 pub(crate) struct Job {
     pub id: usize,
-    pub buffer: Vec<u8>,
+    pub buffer: Payload,
     pub submitted: Instant,
     pub read_done: Instant,
 }
 
 pub(crate) struct Finished {
-    pub buffer: Vec<u8>,
+    pub buffer: Payload,
     pub result: BlockResult,
 }
 
@@ -52,16 +53,16 @@ impl Job {
 }
 
 struct Pending {
-    token: FileIo<Vec<u8>>,
+    token: FileIo<Payload>,
     id: usize,
     bytes: usize,
     submitted: Instant,
 }
 
 pub(crate) struct Reader<'a> {
-    endpoint: AssociatedEndpoint<'a>,
+    endpoint: Option<AssociatedEndpoint<'a>>,
     port: &'a CompletionPort,
-    pub free: Vec<Vec<u8>>,
+    pub free: Vec<Payload>,
     pending: HashMap<OperationId, Pending>,
     ready: VecDeque<Job>,
     next: usize,
@@ -88,16 +89,20 @@ impl<'a> Reader<'a> {
         lane: usize,
         lanes: usize,
     ) -> io::Result<Self> {
-        let source = UnassociatedEndpoint::open(&config.file, true, false, 0)?;
-        let endpoint = port.associate(source, FILE_COMPLETION_KEY)?;
+        let endpoint = if config.input == InputKind::BufferedFile {
+            let source = UnassociatedEndpoint::open(&config.file, true, false, 0)?;
+            Some(port.associate(source, FILE_COMPLETION_KEY)?)
+        } else {
+            None
+        };
         let expected = (blocks - lane).div_ceil(lanes);
         let pool_size = config.buffers() / lanes;
         Ok(Self {
             endpoint,
             port,
             free: (0..pool_size)
-                .map(|_| vec![0; config.block_bytes])
-                .collect(),
+                .map(|_| Payload::new(config.block_bytes, config.payload_node))
+                .collect::<io::Result<_>>()?,
             pending: HashMap::with_capacity(pool_size),
             ready: VecDeque::with_capacity(pool_size),
             next: lane,
@@ -116,19 +121,36 @@ impl<'a> Reader<'a> {
         })
     }
 
-    pub fn submit_available(&mut self) -> io::Result<bool> {
+    pub fn submit_available(
+        &mut self,
+        mut check: impl FnMut() -> io::Result<()>,
+    ) -> io::Result<bool> {
         let mut progress = false;
         while self.next < self.blocks
             && !self.free.is_empty()
             && self.pending.len() < self.read_limit
+            && (self.endpoint.is_some() || self.ready.len() < self.read_limit)
         {
+            check()?;
             let id = self.next;
             let offset = id as u64 * self.block_bytes as u64;
             let bytes = (self.file_bytes - offset).min(self.block_bytes as u64) as usize;
             let mut buffer = self.free.pop().expect("checked nonempty");
             buffer.truncate(bytes);
             let submitted = Instant::now();
-            match self.endpoint.read(buffer, offset)? {
+            let started = if let Some(endpoint) = &self.endpoint {
+                endpoint.read(buffer, offset)?
+            } else {
+                for (index, chunk) in buffer.chunks_mut(crate::CHECKSUM_POLL_BYTES).enumerate() {
+                    check()?;
+                    fill_fixture(chunk, offset + (index * crate::CHECKSUM_POLL_BYTES) as u64);
+                }
+                Started::Completed {
+                    payload: buffer,
+                    bytes_transferred: bytes,
+                }
+            };
+            match started {
                 Started::Pending(token) => {
                     self.pending.insert(
                         token.id(),

@@ -16,8 +16,8 @@ use windows_waitable_queues::{Options, PushError, TryRecvError, spsc};
 use crate::platform::{self, Residency};
 use crate::reader::{Finished, Job, Reader};
 use crate::{
-    Arrangement, BlockResult, Comparison, Config, Distribution, checksum_checked, comparison_order,
-    failed, invalid, verify,
+    Arrangement, BlockResult, Comparison, Config, Distribution, InputKind, checksum_checked,
+    comparison_order, failed, fill_fixture, invalid, verify,
 };
 
 #[derive(Debug, Serialize)]
@@ -34,7 +34,7 @@ pub struct Capture {
     pub recorded_unix_seconds: u64,
     pub debug_assertions: bool,
     pub evidence_class: &'static str,
-    pub caveats: [&'static str; 6],
+    pub caveats: [&'static str; 7],
     pub trials: Vec<Trial>,
 }
 
@@ -90,6 +90,7 @@ pub struct WorkerReport {
     pub completed: usize,
     pub checksummed_blocks: usize,
     pub buffer_capacity: usize,
+    pub numa_backed_buffers: usize,
     pub read_capacity: usize,
     pub buffer_pressure_observations: usize,
     pub batches: BatchStats,
@@ -226,7 +227,7 @@ fn direct_loop(
 ) -> io::Result<()> {
     while !reader.done() {
         budget.check()?;
-        let mut progress = reader.submit_available()?;
+        let mut progress = reader.submit_available(|| budget.check())?;
         let mut processed = 0;
         for _ in 0..config.batch_size {
             budget.check()?;
@@ -276,7 +277,7 @@ fn pipeline_loop(
             }
         }
         report.return_batches.record(returned, config.batch_size);
-        progress |= reader.submit_available()?;
+        progress |= reader.submit_available(|| budget.check())?;
         let mut forwarded = 0;
         for _ in 0..config.batch_size {
             budget.check()?;
@@ -377,6 +378,7 @@ fn worker(
         completed: 0,
         checksummed_blocks: 0,
         buffer_capacity: 0,
+        numa_backed_buffers: 0,
         read_capacity: 0,
         buffer_pressure_observations: 0,
         batches: BatchStats::default(),
@@ -431,6 +433,7 @@ fn worker(
         lanes,
     )?;
     report.buffer_capacity = reader.free.len();
+    report.numa_backed_buffers = reader.free.iter().filter(|buffer| buffer.is_numa()).count();
     report.read_capacity = reader.read_limit;
     report.pages_before = Some(platform::residency(&reader.free)?);
     let start = gate.wait()?;
@@ -617,17 +620,37 @@ fn run_trial(
 }
 
 pub fn run(config: Config) -> io::Result<Capture> {
-    let mut fixture = OpenOptions::new()
-        .read(true)
-        .share_mode(FILE_SHARE_READ)
-        .open(&config.file)?;
-    let metadata = fixture.metadata()?;
-    if !metadata.is_file() {
-        return Err(invalid("fixture must be a regular file"));
-    }
-    let file_bytes = metadata.len();
+    let mut fixture = if config.input == InputKind::BufferedFile {
+        Some(
+            OpenOptions::new()
+                .read(true)
+                .share_mode(FILE_SHARE_READ)
+                .open(&config.file)?,
+        )
+    } else {
+        None
+    };
+    let file_bytes = if let Some(fixture) = &fixture {
+        let metadata = fixture.metadata()?;
+        if !metadata.is_file() {
+            return Err(invalid("fixture must be a regular file"));
+        }
+        metadata.len()
+    } else {
+        config
+            .generated_bytes
+            .ok_or_else(|| invalid("generated_bytes is required"))?
+    };
     let blocks = config.validate(file_bytes)?;
     let topology = MachineMemoryTopology::discover()?;
+    if config
+        .payload_node
+        .is_some_and(|node| !platform::memory_nodes(&topology).contains(&node))
+    {
+        return Err(invalid(
+            "payload_node is not an observed Windows memory node",
+        ));
+    }
     let pair = platform::select_processors(&topology, config.processors)?;
     let mut expected = Vec::with_capacity(blocks);
     let mut buffer = vec![0; config.block_bytes];
@@ -639,7 +662,11 @@ pub fn run(config: Config) -> io::Result<Capture> {
     for id in 0..blocks {
         let bytes = (file_bytes - id as u64 * config.block_bytes as u64)
             .min(config.block_bytes as u64) as usize;
-        fixture.read_exact(&mut buffer[..bytes])?;
+        if let Some(fixture) = &mut fixture {
+            fixture.read_exact(&mut buffer[..bytes])?;
+        } else {
+            fill_fixture(&mut buffer[..bytes], id as u64 * config.block_bytes as u64);
+        }
         expected.push(checksum_checked(
             &buffer[..bytes],
             config.checksum_passes,
@@ -661,8 +688,12 @@ pub fn run(config: Config) -> io::Result<Capture> {
     }
     // The handle denying writes/deletion stays alive through reference validation and all trials.
     drop(fixture);
+    let evidence_class = match config.input {
+        InputKind::BufferedFile => "buffered_file_closed_loop_after_reference_read",
+        InputKind::Generated => "generated_buffers_closed_loop_including_producer_fill",
+    };
     Ok(Capture {
-        schema: "read-checksum-v3",
+        schema: "read-checksum-v4",
         status: "success",
         build: BuildProvenance {
             git_revision: env!("RC_GIT_REVISION"),
@@ -685,14 +716,15 @@ pub fn run(config: Config) -> io::Result<Capture> {
             .map_err(io::Error::other)?
             .as_secs(),
         debug_assertions: cfg!(debug_assertions),
-        evidence_class: "buffered_file_closed_loop_after_reference_read",
+        evidence_class,
         caveats: [
-            "Reference read warms cache; cache residency is not guaranteed. This is not raw device bandwidth.",
+            "Buffered-file reference reads warm cache without guaranteeing residency; generated input fills payloads on the producer inside timing. Neither is raw device bandwidth.",
             "Latency begins at admission, not offered arrival; no saturation responsiveness claim.",
             "Payload pool is bounded equally; queue, token, result, thread and allocator metadata are extra.",
             "Worker CPU excludes setup and residency sampling; work wall ends when every worker finishes its measured loop.",
             "Joined wall additionally includes post-run residency sampling and thread teardown; CPU timer has OS accounting granularity.",
             "Only payload-buffer pages are sampled, including partial heap boundary pages; heap/queue/stack placement is not controlled.",
+            "NUMA allocation is a preference, not proof of placement. Residency labels are incomplete when node_ids_truncated is true; unresident pages are unknown.",
         ],
         trials,
     })

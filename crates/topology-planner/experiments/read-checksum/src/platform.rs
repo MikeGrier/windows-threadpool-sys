@@ -4,16 +4,18 @@ use std::io;
 use std::mem::zeroed;
 
 use serde::Serialize;
+use windows_overlapped_io_sys::IoBuf;
 use windows_sys::Win32::Foundation::FILETIME;
 use windows_sys::Win32::System::ProcessStatus::{
     PSAPI_WORKING_SET_EX_INFORMATION, QueryWorkingSetEx,
 };
 use windows_sys::Win32::System::SystemInformation::{GROUP_AFFINITY, GetSystemInfo, SYSTEM_INFO};
+use windows_sys::Win32::System::Threading::GetNumaHighestNodeNumber;
 use windows_sys::Win32::System::Threading::{
     GetCurrentProcess, GetCurrentProcessorNumberEx, GetCurrentThread, GetThreadTimes,
     SetThreadGroupAffinity,
 };
-use windows_topology_sys::{MachineMemoryTopology, Observed, ProcessorId};
+use windows_topology_sys::{MachineMemoryTopology, Observed, ProcessorId, Source};
 
 use crate::{failed, invalid};
 
@@ -120,6 +122,7 @@ mod working_set {
 pub struct Residency {
     pub pages_by_node: BTreeMap<usize, usize>,
     pub unresident_pages: usize,
+    pub node_ids_truncated: bool,
 }
 
 pub(crate) fn resident_node(flags: usize) -> Option<usize> {
@@ -127,7 +130,14 @@ pub(crate) fn resident_node(flags: usize) -> Option<usize> {
         .then_some((flags >> working_set::NODE_SHIFT) & working_set::NODE_MASK)
 }
 
-pub(crate) fn residency(buffers: &[Vec<u8>]) -> io::Result<Residency> {
+pub(crate) fn memory_nodes(machine: &MachineMemoryTopology) -> BTreeSet<u32> {
+    machine
+        .memory_domains()
+        .filter_map(|domain| domain.label_from(Source::RelationshipWalk))
+        .collect()
+}
+
+pub(crate) fn residency(buffers: &[impl IoBuf]) -> io::Result<Residency> {
     // SAFETY: SYSTEM_INFO is output-only plain storage.
     let mut system: SYSTEM_INFO = unsafe { zeroed() };
     unsafe { GetSystemInfo(&mut system) };
@@ -137,16 +147,21 @@ pub(crate) fn residency(buffers: &[Vec<u8>]) -> io::Result<Residency> {
     }
     let mut pages = BTreeSet::new();
     for buffer in buffers {
-        let start = buffer.as_ptr() as usize;
+        let start = buffer.stable_ptr() as usize;
         let first_page = start & !(page_size - 1);
         let end = start
-            .checked_add(buffer.len())
+            .checked_add(buffer.bytes_len())
             .ok_or_else(|| failed("address overflow"))?;
         pages.extend((first_page..end).step_by(page_size));
+    }
+    let mut highest_node = 0;
+    if unsafe { GetNumaHighestNodeNumber(&mut highest_node) } == 0 {
+        return Err(io::Error::last_os_error());
     }
     let mut result = Residency {
         pages_by_node: BTreeMap::new(),
         unresident_pages: 0,
+        node_ids_truncated: highest_node as usize > working_set::NODE_MASK,
     };
     for address in pages {
         let mut info = PSAPI_WORKING_SET_EX_INFORMATION {

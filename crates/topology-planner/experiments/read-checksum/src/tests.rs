@@ -4,6 +4,9 @@ use super::*;
 fn config() -> Config {
     Config {
         file: "unused".into(),
+        input: InputKind::BufferedFile,
+        generated_bytes: None,
+        payload_node: None,
         block_bytes: 1024,
         depth: 8,
         buffer_count: None,
@@ -314,4 +317,27 @@ fn config_rejects_unknown_fields() {
     let mut value = serde_json::to_value(config()).unwrap();
     value["typo_depth"] = serde_json::json!(8);
     assert!(serde_json::from_value::<Config>(value).is_err());
+}
+
+#[test]
+fn generated_fixture_matches_file_bytes_at_ten_boundaries() {
+    let mut reference = Vec::new();
+    write_fixture(&mut reference, 262161).unwrap();
+    for offset in [0, 1, 7, 255, 256, 8191, 8192, 65535, 131071, 262144] {
+        let mut bytes = vec![0; 17];
+        fill_fixture(&mut bytes, offset as u64);
+        assert_eq!(bytes, reference[offset..offset + 17]);
+    }
+}
+
+#[test]
+fn input_modes_require_consistent_sizes() {
+    let mut candidate = config();
+    candidate.generated_bytes = Some(4096);
+    assert!(candidate.validate(4096).is_err());
+    candidate.input = InputKind::Generated;
+    assert!(candidate.validate(4096).is_ok());
+    assert!(candidate.validate(8192).is_err());
+    candidate.generated_bytes = None;
+    assert!(candidate.validate(4096).is_err());
 }

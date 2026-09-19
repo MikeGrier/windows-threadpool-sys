@@ -9,6 +9,8 @@ The role-swapped repeats are in the
 [EP-X1.1 capture record](captures/2026-09-19-ep-x1-1/README.md).
 The parameter sweeps and pending result review are in the
 [EP-X1.2 capture record](captures/2026-09-19-ep-x1-2/README.md).
+The offline core/cache comparison and missing cross-NUMA evidence are in the
+[EP-X2.1 capture record](captures/2026-09-19-ep-x2-1/README.md).
 
 From the workspace root, build the `windows-read-checksum-experiment` package in
 release mode, then run:
@@ -43,7 +45,7 @@ Selection is not a permission oracle; an actual binding refusal fails the run.
 The capture retains requested and observed bindings and sampled payload-page nodes.
 
 Each repetition runs direct-owner, bounded reader/processor handoff, and independent
-direct workers in both processor orientations. The `read-checksum-v3` report labels
+direct workers in both processor orientations. The `read-checksum-v4` report labels
 each trial with `reversed` relative to the capture's selected pair. Choose a multiple
 of six repetitions for balanced treatment positions and within-repetition predecessor
 pairs; see [DESIGN-NOTES.md](DESIGN-NOTES.md) -> `RC-D7`. Warm-up runs are not recorded. Total payload
@@ -110,6 +112,61 @@ the OS cache, completion observation, checksum computation and handoff all parti
 finishes. `checksum_latency` ends when processing completes; it does not include wait
 before admission. `compute_time` measures the checksum operation, including deadline
 checks. `handoff_latency` includes full-queue waiting after completion observation.
+
+## Offline placement and generated input
+
+`input` defaults to `buffered_file`. Set it to `generated` with an explicit
+`generated_bytes` to use the same deterministic logical bytes without opening the
+`file` path. Generation fills each leased buffer on its producer inside timing;
+this is not a prefilled transport-only benchmark. `observed_read_latency` then
+measures generation service to readiness, not file or device latency. The report's
+`evidence_class` distinguishes the two inputs. `file_bytes` retains its historical
+field name but is the logical byte count for generated input.
+
+`payload_node` defaults to null, retaining heap allocation on each reader. An
+explicit Windows NUMA node requests `VirtualAllocExNuma`-backed buffers on that node
+independently of worker bindings. Buffers stay owned through asynchronous completion
+and rundown. `numa_backed_buffers` records the actual allocation backing; allocation
+preference alone is not proof of page residency. Reservations and committed pages
+may be rounded by Windows; the payload budget counts usable bytes, not all virtual
+address space or allocator overhead.
+
+`pages_before` and `pages_after` record payload observations. Unknown pages stay
+unknown; `node_ids_truncated` means the working-set API's six-bit node encoding
+cannot identify every node on this host. Such observations cannot establish that
+a preference was achieved. Allocation, binding and query failures are errors.
+Resource-exhaustion and driver/API failure conditions are propagated rather than
+manufactured by the live suite.
+
+Run discovery without a workload:
+
+```powershell
+.\target\release\windows-read-checksum-experiment.exe placements
+```
+
+The plan retains the full topology and one deterministic pair per observed
+core/memory/data-cache relationship signature and endpoint-node-label availability.
+It compares each discovered data/unified cache level separately, not a total
+proximity rank; unknown and ambiguous memberships are explicit. Only online,
+representable processors with matching observed efficiency-class status are paired.
+Reported node labels come from Windows relationship observations, never from domain
+positions. Reversing trial roles preserves the physical relationship but reverses
+the pipeline's directed transfer. Synthetic selection tests are not hardware timing.
+
+After building release, run the explicitly authorized offline capture:
+
+```powershell
+.\crates\topology-planner\experiments\read-checksum\capture-ep-x2-1.ps1 -OutputDirectory .scratch\ep-x2-1-retake
+```
+
+Add `-PlanOnly` to discover and print the matrix without creating files or running
+workloads. [capture-ep-x2-1.ps1](capture-ep-x2-1.ps1) retains discovery, raw reports
+and a summary. It brackets node-preference cases with heap controls and reverses
+the node sequence. Each case has balanced arrangements and both role directions.
+It stops on execution failures, preserving error and unrun-case records; unavailable
+relationships are reported separately. The full protocol is
+[DESIGN-NOTES.md](DESIGN-NOTES.md) -> `RC-D10`. This tool is offline research, not
+part of topology planning or application startup.
 
 `work_wall_ns` covers gate release through all measured worker phases and buffer
 returns; `joined_wall_ns` additionally includes page sampling and thread teardown.
