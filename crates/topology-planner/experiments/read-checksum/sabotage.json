@@ -1,0 +1,38 @@
+{
+  "package": "windows-read-checksum-experiment",
+  "description": "Read identity, payload-credit measurement and checksum guards, plus an equivalent chunking control.",
+  "sabotages": [
+    {
+      "name": "every read targets the first block",
+      "file": "src/reader.rs",
+      "expect": "caught",
+      "why": "The real asynchronous input is wrong; live per-block reference validation must reject it.",
+      "find": "let offset = id as u64 * self.block_bytes as u64;",
+      "replace": "let offset = 0;"
+    },
+    {
+      "name": "checksum is constant",
+      "file": "src/lib.rs",
+      "expect": "caught",
+      "why": "Known checksum vectors must reject an algorithm defect even when reference and measured paths share it.",
+      "find": "value = (value ^ u64::from(byte)).wrapping_mul(HASH_PRIME);",
+      "replace": "value = HASH_OFFSET; let _ = byte;"
+    },
+    {
+      "name": "reported leased buffers exceed configured pool",
+      "file": "src/reader.rs",
+      "expect": "caught",
+      "why": "Live capture assertions check the measured resource bound, not only config validation.",
+      "find": "self.peak_leased = self.peak_leased.max(self.pool_size - self.free.len());",
+      "replace": "self.peak_leased = self.pool_size + 1;"
+    },
+    {
+      "name": "equivalent smaller checksum chunks",
+      "file": "src/lib.rs",
+      "expect": "survives",
+      "why": "Chunk boundaries affect budget-check cadence, not the checksum or the accepted result census.",
+      "find": "const CHECKSUM_POLL_BYTES: usize = 64 * 1024;",
+      "replace": "const CHECKSUM_POLL_BYTES: usize = 32 * 1024;"
+    }
+  ]
+}

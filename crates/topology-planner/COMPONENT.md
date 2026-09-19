@@ -1,8 +1,9 @@
 # topology-planner
 
-**Planned, not built.** This directory currently holds a plan and no code. It becomes a crate
-when [CHECKLIST.md](CHECKLIST.md) M2 begins; until then it exists so the work has an owner and a
-place, rather than living as an assumption inside somebody else's milestone.
+**Production planner planned, not built.** This directory owns the design and plan.
+The isolated [read/checksum experiment](experiments/read-checksum/COMPONENT.md)
+supplies evidence for `EP-R1.7`; it is not the production planner or a settled runtime.
+The production crate begins with [CHECKLIST.md](CHECKLIST.md) M2.
 
 Named without a `windows-` prefix on purpose: it plans against an abstracted idealized machine and
 emits a platform-neutral plan, so nothing in it is Windows-specific. See

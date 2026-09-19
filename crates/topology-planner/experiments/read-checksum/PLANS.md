@@ -2,4 +2,4 @@
 
 | Path to CHECKLIST.md | Status | Brief description | Design Notes |
 |---|---|---|---|
-| [CHECKLIST.md](CHECKLIST.md) | in progress | RC-1 establishes the isolated read/checksum comparison; RC-2 expands experimental dimensions after it. | [DESIGN-NOTES.md](DESIGN-NOTES.md) |
+| [CHECKLIST.md](CHECKLIST.md) | in progress | RC-1 is archived in [COMPLETED-CHECKLIST.md](COMPLETED-CHECKLIST.md); RC-2 is parked pending EP-R1.7's next experiment selection. | [DESIGN-NOTES.md](DESIGN-NOTES.md) |

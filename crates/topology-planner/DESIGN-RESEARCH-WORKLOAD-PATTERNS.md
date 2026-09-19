@@ -108,6 +108,10 @@ in the broader proposal; beginning with one source does not remove it from scope
 
 ## Recommended first experiment: read and checksum
 
+The first bounded implementation and capture are now in the isolated experiment's
+[capture record](experiments/read-checksum/captures/2026-09-19/README.md).
+This section remains the research recommendation, not the measurement report.
+
 Use one caller-authorized fixture file, independent fixed-size blocks, one
 deterministic checksum operation per block, and results indexed by block identity.
 No parser state, cross-record aggregation, output-device placement, or external

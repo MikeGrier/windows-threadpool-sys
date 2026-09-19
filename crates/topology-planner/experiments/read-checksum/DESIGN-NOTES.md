@@ -27,8 +27,9 @@ an offered-arrival latency experiment and not a measurement of raw NVMe bandwidt
 All IOCP owners poll completions and yield when no progress is available.
 
 Payload allocation and endpoint construction precede the common start gate.
-Wall timing starts at gate release and ends after all workers join; it includes
-coordination and rundown. Summed thread CPU times cover the measured worker phase.
+Work-wall timing starts at gate release and ends when the last worker finishes its
+measured loop and I/O/buffer drain. Joined-wall timing also includes post-run page
+sampling and thread teardown. Summed thread CPU times cover the measured worker phase.
 Latency starts at read submission and ends at checksum completion; pipeline waiting
 starts at read-completion observation and includes handoff backpressure. No claim
 about pre-admission latency is made.
@@ -39,7 +40,8 @@ samples rather than a winner or a ratio to an unstated baseline.
 
 ## RC-D3: placement is observed, not presumed
 
-Select two active processors in a reported memory domain, or accept an explicit pair
+Select two active processors on distinct cores with matching reported efficiency
+class in a reported memory domain, or accept an explicit pair
 from configuration. Pin each worker with group-aware affinity and check the actual
 processor at the start and end. Record the machine topology and each role's binding.
 The one-worker arrangement uses the first processor. The independent-worker control
@@ -67,3 +69,34 @@ directory. A small reviewed JSON capture may be committed here with its provenan
 The first review retains or revises each experimental path explicitly. Retention does
 not make it a production contract. The planner's evolving contract remains owned by
 [CHECKLIST.md](../../CHECKLIST.md) `EP-R1.7`.
+
+## RC-D5: capture identity and failure coverage
+
+Build provenance carries the compiler/target/optimization flags, checkout revision
+and state, a tracked-diff fingerprint and a harness-plus-manifests fingerprint.
+These FNV fingerprints are change identifiers, not cryptographic authentication.
+They are computed at build time; a dirty build is labelled dirty. The reference read
+and each trial have a cooperative deadline; checksum loops check it between chunks.
+
+The deterministic and live cases exercise data integrity, tail handling, credit
+bounds, queue pressure, invalid configuration, missing/locked files, cancellation
+signalling and deadline expiry. OS resource exhaustion, failed residency queries,
+affinity refusals on restricted hosts, and driver cancellation that never completes
+are not manufactured by this suite. Their API errors propagate; driver rundown has
+no hard completion bound. A failed run writes an error record, not partial results
+labelled successful.
+
+## RC-D6: retain the comparison paths without promoting an archetype
+
+Retain all three isolated paths: the direct owner remains the single-worker baseline,
+independent workers remain the extra-CPU control, and the handoff path remains the
+stage-separation candidate. Do not merge their schedulers or promote any one to the
+planner's preferred arrangement from this capture. No production implementation
+change is scheduled by this decision.
+
+The observations and limitations are in the
+[capture record](captures/2026-09-19/README.md). They require keeping processing
+parallelism distinct from stage separation in the next design discussion. Return
+to parent [CHECKLIST.md](../../CHECKLIST.md) `EP-R1.7` for that discussion;
+additional experimental dimensions already have `RC-2` in
+[CHECKLIST.md](CHECKLIST.md).

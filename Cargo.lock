@@ -228,6 +228,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "windows-read-checksum-experiment"
+version = "0.0.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "windows-overlapped-io-sys",
+ "windows-sys",
+ "windows-topology-sys",
+ "windows-waitable-queues",
+]
+
+[[package]]
 name = "windows-result"
 version = "0.100.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"

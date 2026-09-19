@@ -2,6 +2,7 @@
 
 [workspace]
 members = [
+	"crates/topology-planner/experiments/read-checksum",
 	"crates/windows-file-enumeration-sys",
 	"crates/windows-file-watcher",
 	"crates/windows-file-watcher-example-test-harness",

@@ -60,15 +60,14 @@ These items are in dependency order. Resolve and commit one item before beginnin
   **In progress:** use [DESIGN-PROPOSAL-EP-R1.7.md](DESIGN-PROPOSAL-EP-R1.7.md) as a working
   basis, not a frozen contract. Start from the primary-source survey and simpler workloads in
   [DESIGN-RESEARCH-WORKLOAD-PATTERNS.md](DESIGN-RESEARCH-WORKLOAD-PATTERNS.md).
-  Select and specify a small first experiment before implementing it; the research recommends
-  comparing direct, queued-handoff, and independent-worker forms of read-and-checksum. Define its
-  constraints and correctness/measurement obligations. Record outcomes and review each speculative path for retention, revision,
-  merge or deletion before generalizing the catalog. The full contract need not be settled before
-  experiments can inform it.
-  > **-> CROSS-COMPONENT HANDOFF:** next work is the isolated
-  > `experiments/read-checksum` component -> `RC` -> `RC-1`; see its
-  > [CHECKLIST.md](experiments/read-checksum/CHECKLIST.md). Return here to interpret
-  > the measurements; this item remains open.
+  Review the first read/checksum [capture record](experiments/read-checksum/captures/2026-09-19/README.md)
+  before selecting the next experiment. Keep stage separation distinct from processing parallelism,
+  and account for run-to-run variation before generalizing the catalog. Define each experiment's
+  constraints and correctness/measurement obligations; review speculative paths for retention,
+  revision, merge or deletion. The full contract need not be settled before experiments inform it.
+  > **CROSS-COMPONENT PREREQUISITE:** `experiments/read-checksum` -> `RC` -> `RC-1`
+  > supplies the first evidence and returns control here; see
+  > [COMPLETED-CHECKLIST.md](experiments/read-checksum/COMPLETED-CHECKLIST.md#rc-1).
   Plan the scenario/goal contract, plan invariants and errors, deterministic policy and tie-breaking,
   measurement permission and failure behavior, callback semantics, JSON compatibility, storage,
   network, and interconnect policy, routed-hop representation, and synthetic acceptance cases.

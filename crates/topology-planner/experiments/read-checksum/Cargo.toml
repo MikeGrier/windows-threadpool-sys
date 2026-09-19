@@ -1,0 +1,24 @@
+# Copyright (c) Mike Grier.
+[package]
+name = "windows-read-checksum-experiment"
+version = "0.0.0"
+publish = false
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+windows-overlapped-io-sys = { path = "../../../windows-overlapped-io-sys", features = ["fs"] }
+windows-topology-sys = { path = "../../../windows-topology-sys", features = ["serde"] }
+windows-waitable-queues = { path = "../../../windows-waitable-queues" }
+windows-sys = { version = "0.61.2", features = [
+    "Win32_Foundation",
+    "Win32_Storage_FileSystem",
+    "Win32_System_Kernel",
+    "Win32_System_ProcessStatus",
+    "Win32_System_SystemInformation",
+    "Win32_System_Threading",
+] }
