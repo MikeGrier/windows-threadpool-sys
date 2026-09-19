@@ -1,5 +1,10 @@
 # Experimental contract
 
+**Further execution is paused pending parent [CHECKLIST.md](../../CHECKLIST.md) -> `EP-R1.7.1`.**
+These protocols describe offline experiments, not required startup work. Parent
+[EP-D-10](../../DESIGN-NOTES.md#ep-d-10) controls the planning and realization budget;
+existing measurements and their experimental definitions remain retained.
+
 ## RC-D1: isolate candidates and hold work constant
 
 The experiment compares one direct owner, a reader and processor joined by bounded

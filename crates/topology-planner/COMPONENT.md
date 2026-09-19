@@ -25,8 +25,8 @@ produces a concrete result for the current run:
   **mockable by construction**: a description of a machine nobody has is an ordinary input, which
   is what makes this component testable without the hardware it plans for.
 
-The planner normally runs a permissioned measurement campaign against the current allocation before
-producing **a concrete plan**: which processors host domains, where each thread pins, which memory
+The planner matches discovered topology and application constraints to the current allocation,
+with zero active probes supported, producing **a concrete plan**: which processors host domains, where each thread pins, which memory
 node each allocates from, what channel connects each flow, where each channel's buffer lives, and
 where cross-domain movement is intentional. The plan **serializes to JSON**, stays abstracted from
 Windows, and retains the evidence and assumptions behind its allocation-specific choices.
@@ -35,10 +35,11 @@ Windows, and retains the evidence and assumptions behind its allocation-specific
 caller through traits for clarifying information the goal did not settle. Which questions those are
 is not yet known, and knowing them is what decides whether that is one trait or several.
 
-**It measures at runtime by default.** The planner owns which scenario-specific questions to ask and
-how their answers shape the plan. Neutral measurement contracts live in `topology-model`; Windows
-components execute them; and the probe tools use the same underlying measurement kernels. See
-[EP-D-6](DESIGN-NOTES.md#ep-d-6).
+**Startup does not validate workloads.** Discovery, planning and realization are subject to
+[EP-D-10](DESIGN-NOTES.md#ep-d-10)'s small bounded pre-execution cost. Optional probes resolve
+named ambiguities within that budget; representative runs and size-mix sweeps are not prerequisites.
+The planner still owns probe selection and interpretation under [EP-D-6](DESIGN-NOTES.md#ep-d-6).
+Neutral measurement contracts and shared platform mechanisms retain their existing owners.
 
 ## The five components, and which way the arrows point
 

@@ -35,8 +35,8 @@ prerequisites rather than on someone else's decision.
 
 | Milestone | State | What it is waiting on |
 |---|---|---|
-| MR1 design-review reconciliation | active | EP-R1.7 drives MX1 through MX3; EP-R1.8 follows the resulting contracts and names |
-| MX1 controlled read/checksum comparisons | in progress | EP-X1.2 implemented and captured; result discussion before closure or EP-X1.3 |
+| MR1 design-review reconciliation | active | EP-R1.7.1 reconciles the EP-D-10 startup-cost boundary before further MX work |
+| MX1 controlled read/checksum comparisons | paused for scope reconciliation | EP-X1.2 evidence retained; EP-R1.7.1 precedes closure or further execution |
 | MX2 locality and ownership patterns | not started | MX1 measurement controls; revise the sequence at each experiment review |
 | MX3 real endpoints, composition and synthesis | not started | MX2 ownership/ordering evidence and the permissions/hardware named by each experiment |
 | M1 the input contract | 4 done, 1 open | `EP-1.4` waits on EP-R1.7 |
@@ -65,7 +65,8 @@ item; do not start `EP-R1.8` merely because one experiment has finished.
 
 - [ ] **EP-R1.7** -- **Develop the contracts and acceptance matrix through research and bounded experiments.**
   **In progress:** use [DESIGN-PROPOSAL-EP-R1.7.md](DESIGN-PROPOSAL-EP-R1.7.md) as a working
-  basis, not a frozen contract. Start from the primary-source survey and simpler workloads in
+  basis, not a frozen contract; reconcile it under `EP-R1.7.1` before further experiments.
+  [EP-D-10](DESIGN-NOTES.md#ep-d-10) governs startup cost. Start from the primary-source survey and simpler workloads in
   [DESIGN-RESEARCH-WORKLOAD-PATTERNS.md](DESIGN-RESEARCH-WORKLOAD-PATTERNS.md).
   Review the parameter-sweep [capture record](experiments/read-checksum/captures/2026-09-19-ep-x1-2/README.md)
   before selecting the next experiment. Keep stage separation distinct from processing parallelism,
@@ -90,8 +91,20 @@ item; do not start `EP-R1.8` merely because one experiment has finished.
   Use MX1 through MX3 below as the experiment work queue, revising it as evidence changes the plan.
   > **CROSS-COMPONENT PREREQUISITE:** `crates/topology-planner/experiments/read-checksum`
   > -> `MX1` -> `EP-X1.2` has returned its capture here for result discussion.
-  > Close that review before the next handoff to `EP-X1.3`; its
+  > Reconcile scope under `EP-R1.7.1` before closing that review or selecting the next experiment; its
   > [PLANS.md](experiments/read-checksum/PLANS.md) points back here.
+
+- [ ] **EP-R1.7.1** -- **Reconcile the topology-first contract and experiment sequence with the
+  bounded startup cost in [EP-D-10](DESIGN-NOTES.md#ep-d-10).** Specify an explicit small
+  budget across discovery, matching, optional probes and realization; record its units, limits,
+  permitted operations and exhaustion behavior without requiring representative workload runs
+  or size-mix validation. Define zero-probe acceptance and handling of unknown cost versus missing
+  correctness facts. Separate offline architectural research from explicitly requested tuning,
+  revisit the five-workload progression and every remaining MX dependency, and preserve all
+  unperformed work with its agreed scope and next action. Reconcile the working proposal's
+  candidate-selection, measurement-grant and ready-plan rules; queue executable acceptance for
+  zero probes, budget exhaustion and no hidden workload validation during setup. Settle EP-X1.2's
+  disposition and the next experiment with the engineer before resuming MX execution.
 
 - [ ] **EP-R1.8** -- **Materialize executable component-local plans after names and contracts are
   settled.** Create dependency-ordered checklists and reciprocal cross-component handoffs for
@@ -101,6 +114,10 @@ item; do not start `EP-R1.8` merely because one experiment has finished.
   provisional crate name or an unstated contract prerequisite.
 
 ## Experiment execution rules for MX1 through MX3
+
+**Execution paused pending `EP-R1.7.1`, per [EP-D-10](DESIGN-NOTES.md#ep-d-10).**
+The items below retain their work; their current order is not permission to resume before
+scope reconciliation. Existing captures and completed work are unchanged.
 
 Keep this file as the experiment program's work queue; component plan indexes link to
 the owning items here rather than duplicating them in another checklist. Use the
@@ -135,7 +152,7 @@ same item ID; do not create an unowned implementation queue.
 - [ ] **EP-X1.2** -- **Isolate block size, compute work, read depth, queue capacity and batching.**
   **Result discussion pending:** review the implemented protocol and observations in the
   [capture record](experiments/read-checksum/captures/2026-09-19-ep-x1-2/README.md),
-  agree the path disposition and fixed cases for EP-X1.3, then close this item.
+  reconcile scope under EP-R1.7.1, agree the path disposition and next experiment, then close this item.
   The protocol is [DESIGN-NOTES.md](experiments/read-checksum/DESIGN-NOTES.md#rc-d9-ep-x12-parameter-isolation).
   **Question:** how does each dimension change the comparison, rather than several changing
   together? **Controls:** use `EP-X1.1`'s arrangements and a bounded one-factor-at-a-time

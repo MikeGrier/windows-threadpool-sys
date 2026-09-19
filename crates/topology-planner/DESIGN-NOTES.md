@@ -24,10 +24,11 @@ renamed to match.
 | <a id="ep-d-3"></a>EP-D-3 | **The residency query**: where a domain's pool lives, and which side of a cross-domain pair should host a shared ring. **Ordered**, with directed cost entering through the abstract model/adapter path under [D-20](../windows-topology-sys/DESIGN-NOTES.md#d-20). |
 | <a id="ep-d-4"></a>EP-D-4 | **The original four-part architecture, and the planner's name.** The planner is **`topology-planner`** (no `windows-` prefix); it takes a goal description, queries an abstracted idealized model, and emits a JSON-serializable platform-neutral plan. Its component count is superseded by [EP-D-7](#ep-d-7), which adds the active measurement foundation without changing the planner name or the two adapter boundaries. |
 | <a id="ep-d-5"></a>EP-D-5 | **The shared-vocabulary layout and dependency direction.** The abstract model, planner query traits, and plan type live in `topology-model`, which the planner and platform components depend on; non-planner components do not depend on `topology-planner`. [EP-D-7](#ep-d-7) extends this layout with neutral measurement contracts and a separate platform measurement foundation while preserving the one-way dependency rule. |
-| <a id="ep-d-6"></a>EP-D-6 | **Runtime measurement is a planner-owned campaign over shared measurement mechanisms.** Runtime planning is the normal path, not a fallback: the planner decides what the scenario and current allocation require, sequences and interprets measurements, and stops when it has enough evidence. Neutral request/result contracts live in `topology-model`; platform components execute them; probe tools and the planner use the same underlying kernels. The client repository carries constraints and permissions rather than an exact allocation, and the concrete runtime plan retains the scenario-specific evidence for its choices without promoting it into an abstract machine fact. |
+| <a id="ep-d-6"></a>EP-D-6 | **Measurement ownership remains with the planner; routine campaign scope is superseded by [EP-D-10](#ep-d-10).** Runtime matching remains primary, but active measurement is optional and constrained by the startup budget. Neutral request/result contracts live in `topology-model`; platform components execute them; probes and the planner share mechanisms. Evidence stays allocation-specific rather than becoming a machine fact. |
 | <a id="ep-d-7"></a>EP-D-7 | **Five components, with active measurement as a foundation rather than an adapter concern.** `topology-model`, `topology-planner`, the inward Windows adapter, a Windows measurement foundation, and the outward realizer have distinct dependency sets and responsibilities. Measurement contracts are neutral; measurement mechanisms are platform-specific; probes and runtime planning share those mechanisms; and exhaustive mocked platform-interaction testing is kept separate from real-hardware timing evidence. |
 | <a id="ep-d-8"></a>EP-D-8 | **Names follow settled ownership and keep facts, intent, and results distinct.** `topology-model` and `topology-planner` are settled. Platform-specific crates use `windows-`; only direct low-level API wrappers use `-sys`; role names are preferred over generic `adapter`; and public nouns must distinguish physical facts, developer constraints, and allocation-specific plans. Names whose responsibilities depend on EP-R1.7 remain explicitly open rather than being chosen by the first implementation. |
-| <a id="ep-d-9"></a>EP-D-9 | **Windows fact coverage includes processor, memory, relation, and I/O endpoint attachment observations, but not planning policy or measured cost.** The inward component scopes and translates those facts into the neutral model. Storage and network endpoints are first-class resources attached to observed NUMA domains; runtime measurement supplies directed endpoint, queue, buffer, and worker cost; and logical pipeline partitions assign responsibilities without becoming hardware facts. |
+| <a id="ep-d-9"></a>EP-D-9 | **Windows fact coverage includes processor, memory, relation, and I/O endpoint attachment observations, but not planning policy or measured cost.** The inward component scopes and translates those facts into the neutral model. Storage and network endpoints are first-class resources attached to observed NUMA domains; any measured cost remains contextual under [EP-D-10](#ep-d-10); logical pipeline partitions assign responsibilities without becoming hardware facts. |
+| <a id="ep-d-10"></a>EP-D-10 | **Topology-first planning with a small bounded startup cost, not workload validation.** Discovery and application constraints drive matching and realization; zero active probes is supported. Optional probes resolve named ambiguities within the startup budget. Offline experimental sweeps are not a deployment prerequisite. |
 
 ## EP-D-1: the shard-set query
 
@@ -223,6 +224,7 @@ Historical text claiming that the Windows model had no proximity answer is retai
 [DESIGN-RATIONALE.md](DESIGN-RATIONALE.md#ep-d-2-shipped-coverage-history).
 
 ## EP-D-3: the residency query
+**Startup measurement requirements are constrained by [EP-D-10](#ep-d-10); residency evidence ownership remains current.**
 
 *Recorded by [CHECKLIST.md](CHECKLIST.md) EP-1.3.*
 
@@ -240,8 +242,9 @@ The planner needs two distinct residency facts:
 [D-20](../windows-topology-sys/DESIGN-NOTES.md#d-20) deleted `MachineMemoryTopology::distances` and
 fixed the Win32 boundary for `windows-topology-sys`. Per [EP-D-6](#ep-d-6), directed residency cost
 is scenario-specific planning evidence rather than a fact inserted into the abstract machine
-description. The planner requests it through a neutral measurement contract, a platform component
-executes the measurement, and the result carries the context that gives the number meaning.
+description. If a permitted probe fits [EP-D-10](#ep-d-10)'s budget, the planner requests it
+through a neutral measurement contract, a platform component executes it, and the result carries
+its context. Unknown directed cost does not by itself require a startup workload experiment.
 
 ### Current status
 
@@ -394,6 +397,7 @@ Measurement ownership is no longer open; [EP-D-6](#ep-d-6) assigns the campaign 
 execution to shared platform measurement mechanisms.
 
 ## EP-D-6: runtime measurement ownership and its data boundary
+**Routine measurement-campaign scope superseded by [EP-D-10](#ep-d-10); ownership, shared mechanisms and evidence boundaries remain current.**
 
 *The engineer's decision, 2026-09-18. Recorded by [CHECKLIST.md](CHECKLIST.md) `EP-R1.1` and
 `EP-1+.4`.*
@@ -409,10 +413,11 @@ one concrete plan for that run.
 
 ### The planner owns the campaign; providers own mechanisms
 
-The planner decides what must be learned for the scenario and allocation, sequences those
-measurements, interprets their results, and decides when it has enough evidence to produce or refuse
-a plan. The caller authorizes the work through the topology specification, including constraints on
-what may be measured and the resources it may consume.
+The planner identifies unanswered questions for the scenario and allocation and interprets any
+permitted measurements. [EP-D-10](#ep-d-10) governs whether it may measure at all and bounds that
+work; permission is not an instruction to benchmark candidates. Discovery and application
+constraints can produce a plan without active measurement. Missing information remains explicit
+rather than extending startup until a workload comparison converges.
 
 The neutral measurement request, result, and evidence vocabulary lives in `topology-model`, so the
 planner, probes, and platform implementations share one contract without giving the neutral planner
@@ -423,8 +428,9 @@ they do not choose queue policy.
 
 Developer-facing probes and the autonomous planner use the same underlying measurement mechanisms.
 The probes expose those mechanisms for early dependency evaluation, architecture work, deeper client
-benchmarking, and evidence checked into this repository. The planner invokes them as part of its
-normal runtime campaign. A separate runtime implementation would let the repository demonstrate one
+benchmarking, and evidence checked into this repository. The planner may invoke a bounded subset
+under [EP-D-10](#ep-d-10); sharing mechanisms does not require sharing an experiment's duration or
+parameter matrix. A separate runtime implementation would let the repository demonstrate one
 behavior while deployed decisions depend on another.
 
 ### What persists
@@ -455,7 +461,7 @@ question is tracked by [CHECKLIST.md](CHECKLIST.md) `EP-R1.7`; EP-D-6 does not a
 | Component role | Platform | Owns | Depends on |
 |---|---|---|---|
 | `topology-model` | neutral | Abstract machine, topology specification, concrete plan, planner query traits, measurement request/result/evidence vocabulary | nothing |
-| `topology-planner` | neutral | Runtime measurement campaign, policy, interpretation, constraint resolution, concrete-plan construction | `topology-model` |
+| `topology-planner` | neutral | Runtime matching, bounded optional probe selection, policy, interpretation, constraint resolution, concrete-plan construction under [EP-D-10](#ep-d-10) | `topology-model` |
 | inward topology adapter | Windows | Discovery and translation of platform-published processor, memory, relation, and I/O endpoint attachment facts into the abstract machine | `topology-model`, `windows-topology-sys`, Windows device, volume, and network APIs |
 | measurement foundation | Windows | Active measurement kernels and the live platform backend | `topology-model`, Windows APIs, measured queue and I/O primitives |
 | outward realizer | Windows | Construction of threads, buffers, rings, affinities, and other runtime objects from a concrete plan | `topology-model`, runtime crates |
@@ -572,7 +578,7 @@ The Windows fact source provides observations, not eligibility or placement poli
 | Physical proximity | Ordered relations, incomparable minima, membership, incomplete-coverage evidence, and a whole-machine top | The inward component scopes them to the selected universe; the neutral model owns the planner-facing query contract |
 | Memory placement | Processor-to-memory-domain membership and explicit unplaced processors | The planner decides whether an unplaced processor is admissible |
 | I/O endpoint attachment | A volume or device may report a NUMA node or proximity domain; a network adapter may also report NUMA affinity and receive-steering configuration | The inward component reconciles workload-visible storage and network endpoints with those observations and preserves unknown or ambiguous attachment |
-| Directed processor, memory, storage, and network cost | No timeless fact is claimed | The planner requests contextual runtime measurement and interprets the evidence |
+| Directed processor, memory, storage, and network cost | No timeless fact is claimed | Preserve unknown cost; any runtime probe is optional and bounded by [EP-D-10](#ep-d-10) |
 | Developer partitions and intent | Not a platform fact | The topology specification constrains admissible plans |
 
 `windows-topology-sys` remains the policy-free processor and memory fact layer. The inward component
@@ -620,17 +626,57 @@ flow from NIC receive through processing to NVMe write, or from NVMe read throug
 transmit. These partitions express ownership, serialization, throughput, and transfer intent. They
 do not become evidence that two resources are physically close.
 
-The planner combines that intent with discovered attachment and measured directed cost. It may
+The planner combines that intent with discovered attachment and any available contextual cost
+evidence, without requiring a cost measurement before matching. It may
 place completion handling, buffers, parsing, workers, and output near their endpoints and make a
 cross-domain handoff explicit where the pipeline requires one. The higher-level work-item and
 buffer-flow contract that makes those stages executable remains scheduled by
 [CHECKLIST.md](CHECKLIST.md) `EP-R1.7`.
 
-### Discovery does not replace measurement
+### Discovery does not establish measured cost
 
 A reported home NUMA node establishes attachment, not the cost of every route to the endpoint.
 Queue form, queue depth, transfer direction, buffer residency, filesystem and volume layers, RSS
 indirection, flow distribution, interrupt and completion steering, offloads, current load, and
-completion processing can change the observed result. The measurement foundation therefore
-measures endpoint, queue, buffer, and worker combinations through neutral requests, and the concrete
-plan retains that contextual evidence.
+completion processing can change the observed result. This limits the performance claims discovery
+supports; it does not require startup to measure endpoint, queue, buffer and worker combinations.
+[EP-D-10](#ep-d-10) governs optional runtime probes. Offline experiments may characterize these
+combinations, with contextual evidence kept distinct from discovered attachment.
+
+## EP-D-10: topology-first planning and bounded startup cost
+
+The planner matches the application design and its constraints to the architecture available to
+the process. Processor and memory domains, endpoint attachment, ownership, ordering and permitted
+parallelism drive the arrangement. Runtime planning remains the primary path; runtime workload
+validation does not become its prerequisite.
+
+Discovery, matching and realization together must have an extremely small, explicitly bounded
+pre-execution cost. This is not a constant-time complexity claim: discovery depends on the machine
+description, matching on the application graph, and setup on the resources being constructed.
+It must not scale with running representative workloads, validating mixes of sizes, waiting for
+stable throughput/latency distributions, or sweeping candidate configurations. Moving such work
+from the planner into realization does not satisfy this constraint.
+
+A plan with no active probe is a supported outcome, not merely an unvalidated fallback. Any probe
+must answer a named ambiguity that could affect the arrangement, be permitted, and fit within
+the small startup budget. If that cannot be done, preserve the uncertainty and apply the explicit
+missing-evidence policy; do not expand the budget or start workload validation. A required fact
+for correctness or authorization is not replaced by a guessed value. An unmet demand for measured
+performance cannot be silently promoted to a guarantee.
+
+Endpoint attachment and application-owned constraints anchor placement. Buffer residency, worker
+placement, partitioning and transfers are planned around them. Unknown attachment remains unknown;
+reported proximity is not a prohibition on a deliberate remote transfer. Storage attachment and
+network receive steering remain distinct facts under [EP-D-9](#ep-d-9).
+
+Application-supplied granularity and service information are inputs, not obligations to measure
+every size mix. Offline research may test which dimensions change architectural choices; detailed
+tuning is separate, explicitly requested work, not an implicit phase before the application starts.
+Existing experimental paths and captures remain intact. The five-component architecture and shared
+measurement mechanisms remain separate; the startup restriction does not remove their capabilities.
+
+No numerical time/probe cap has been agreed. Specify and test that cap, including zero-probe
+planning, setup accounting, exhaustion and unknown-evidence outcomes, under
+[CHECKLIST.md](CHECKLIST.md) -> `EP-R1.7.1` before further MX execution. That item also reconciles
+the research queue with this boundary; no remaining experiment is silently cancelled or completed.
+Rationale is recorded in [DESIGN-RATIONALE.md](DESIGN-RATIONALE.md#ep-d-10-startup-cost-clarification).

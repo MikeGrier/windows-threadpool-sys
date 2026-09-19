@@ -1,5 +1,7 @@
 # EP-R1.7 proposal: describing flows and trying execution patterns
 
+**Runtime-campaign scope superseded by [EP-D-10](DESIGN-NOTES.md#ep-d-10); detailed reconciliation is queued as [CHECKLIST.md](CHECKLIST.md) -> `EP-R1.7.1`.**
+
 **Working basis for iteration, not a frozen contract.** Prepared 2026-09-18 19:03:36 -07:00 for discussion.
 This is a design proposal, not an implemented API or a completed checklist item.
 Current decisions remain in [DESIGN-NOTES.md](DESIGN-NOTES.md). The work is owned by
@@ -16,8 +18,10 @@ experiment without requiring the entire framework contract to be final first.
 Start with the developer's account of where data comes from, what happens to it,
 and where it goes. Make the required semantics explicit without asking the developer
 to choose a threading or queue architecture. Match that description to a small
-catalog of execution patterns, generate concrete candidates for the current
-allocation, and try candidates within the caller's measurement permissions.
+catalog of execution patterns and generate concrete candidates for the current
+allocation. Select from discovered facts and application constraints, using only
+optional probes permitted by [EP-D-10](DESIGN-NOTES.md#ep-d-10). Do not run representative
+workloads or size-mix sweeps as a prerequisite to selection or realization.
 
 The outcome is a selected plan with its evidence, alternatives, and limitations,
 not a declaration of global optimality. A trial of generated payloads establishes
@@ -39,6 +43,8 @@ This proposal applies, rather than replaces:
   fact adapter, measurement foundation, and outward realizer.
 - [DESIGN-NOTES.md](DESIGN-NOTES.md) `EP-D-9`: common I/O endpoint vocabulary with
   typed storage and network capabilities.
+- [DESIGN-NOTES.md](DESIGN-NOTES.md) `EP-D-10`: the controlling startup-cost boundary,
+  superseding this proposal's original default-campaign assumption.
 
 No application is pinned, probed, opened, transmitted to, or written to merely
 because its specification was parsed. Description, binding, permission, and
@@ -143,7 +149,8 @@ capability requirements, candidate dimensions, and rejection reasons. Unmatched
 regions remain visible. A graph with no matching composition is unsupported by the
 catalog version, not necessarily impossible to execute.
 
-Recommended trial order is deterministic: validate semantics; prefer more specific
+For offline research or separately requested tuning, trial order is deterministic:
+validate semantics; prefer more specific
 matches; generate an admissible low-resource baseline where one exists; then explore
 placement, replication, batching, queue shape, and transfer alternatives. The first
 match does not win by default. Structural priority decides what to try first, while
@@ -287,6 +294,12 @@ not silently decide the root plan's open items.
 
 ## 5. Generate experiments without inventing evidence
 
+This section specifies offline research and separately requested tuning, not a
+mandatory deployment sequence. Runtime probes are restricted by
+[EP-D-10](DESIGN-NOTES.md#ep-d-10); its reconciliation item will identify which
+mechanisms, if any, fit that budget. Sharing mechanisms does not import the
+warm-up, repetitions, workload duration or parameter matrix into startup.
+
 Every result records three independent dimensions:
 
 | Dimension | Examples |
@@ -364,13 +377,20 @@ buffers to meet a time budget or present a timed-out trial as a completed observ
 
 ### Candidate ranking
 
-First enforce structural constraints, then the specified evidence requirements and
-performance thresholds. Among eligible candidates compare the caller's ordered
-objectives using the declared units and comparison tolerance. Do not invent a weighted
-sum between latency and throughput. If an objective order is missing and changes the
-answer, request it rather than selecting a hidden business policy.
+First enforce structural constraints and required correctness facts. Topology and
+application constraints may select an arrangement without active measurement under
+[EP-D-10](DESIGN-NOTES.md#ep-d-10). Do not fabricate performance evidence or silently
+claim a measured threshold is satisfied. Missing required performance evidence is
+an explicit unresolved requirement, not authority to run startup workload sweeps.
+The precise selection and missing-evidence policy is queued as `EP-R1.7.1`.
 
-Where measurements do not distinguish candidates, report that tie. A deterministic
+Among eligible candidates, the caller's ordered objectives still govern selection.
+Use declared units and comparison tolerances for available metrics; do not invent
+a weighted sum between latency and throughput. If an objective order is missing
+and changes the answer, request it rather than selecting a hidden business policy.
+
+Where available measurements do not distinguish candidates, report that uncertainty;
+absence of measurement is not a measured tie. A deterministic
 resource-footprint and canonical-plan-ID tie-break selects one without claiming it is
 faster. The result records the tested set and search limits, and does not claim the
 selected candidate outranks untested candidates. A better later measurement can alter
@@ -414,8 +434,11 @@ clarification, measurement, and binding/execution interfaces.
 
 ```text
 validate -> bind/discover -> match -> instantiate -> validate candidates
-         -> request trials -> evaluate -> prepare selection
+         -> evaluate -> prepare selection
 ```
+
+There is no mandatory trial phase. An optional probe request must obey
+[EP-D-10](DESIGN-NOTES.md#ep-d-10), including the total planning/realization budget.
 
 Any phase can produce a typed diagnostic or a request for missing information.
 Each request has an ID, session generation, expected response contract, cancellation
@@ -451,7 +474,7 @@ assumptions are required even before automatic live migration exists.
 | Evidence insufficient | Missing fact/metric, attempted measurement, refusal/failure/uncertainty and allowed next action |
 | Candidate rejected | Constraint/threshold failed with supporting evidence; other candidates may remain |
 | Proposed plan | Valid under stated facts and assumptions but lacks required evidence/binding for activation |
-| Ready selection | Valid candidate plus satisfied activation prerequisites as of its snapshot; realization still rechecks |
+| Ready selection | Valid candidate plus satisfied activation prerequisites as of its snapshot; zero active probes is supported and realization still rechecks |
 | Cancelled/failed campaign | Partial evidence, external effects, outstanding resources and cleanup status |
 | Stale/failed realization | Changed assumption or setup failure, with acquired-resource disposition |
 
@@ -607,9 +630,9 @@ layering. These choices change the product boundary and need the engineer's judg
 | Choice | Recommendation | Consequence |
 |---|---|---|
 | How much execution machinery the project owns | Supply stage plumbing, bounded dispatch/gather, leases and rundown; clients supply processing algorithms | A plan can be tried and realized through the same machinery rather than becoming a suggestion clients reimplement |
-| How representative trials become | Support both transport/service-model trials and explicit actual-stage fixture execution, with non-interchangeable evidence classes | A short initial description can produce hypotheses; stronger application claims require more representative bindings |
+| How representative offline trials become | Retain distinct transport/service-model and actual-stage evidence classes outside startup, under [EP-D-10](DESIGN-NOTES.md#ep-d-10) | Offline evidence does not oblige deployments to replay workload validation |
 | Catalog coverage versus a universal optimizer | Start with the composable families derived above and version the catalog; unmatched regions are visible | The system explains its current coverage instead of forcing arbitrary workloads into a template |
-| Insufficient performance evidence | Return a proposal unless the caller explicitly authorizes a structurally valid unmeasured selection; never relax correctness/authority | Automated deployment is possible with an explicit risk policy, not a hidden planner fallback |
+| Insufficient performance evidence | Reconcile under `EP-R1.7.1`: support topology-first zero-probe selection without asserting unknown performance or relaxing correctness/authority | Missing measurements do not automatically force a fallback or a startup benchmark campaign |
 
 No answers are presumed by writing this table. The proposal supplies a concrete design
 to argue against; it does not turn the engineer's archetype intuition into an accepted

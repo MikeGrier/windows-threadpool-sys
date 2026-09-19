@@ -248,3 +248,25 @@ The [capture record](experiments/read-checksum/captures/2026-09-19-ep-x1-2/READM
 contains the observations, summary repair and proposed next cases. Result discussion
 remains queued in [CHECKLIST.md](CHECKLIST.md) -> `EP-X1.2`; implementation and
 capture alone do not close it.
+
+## EP-D-10: startup cost clarification
+
+The engineer expected architectural guidance from the application's design and the discovered
+system: memory domains and I/O attachment anchor buffers and their primary processing, with queues
+and transfers distributing work beyond those anchors. The expanding read/checksum sweeps raised
+the concern that deployment might need nontrivial pre-execution workload measurement.
+
+The engineer clarified that some extremely small planning and realization cost is expected, but
+not cost proportional to running workloads long enough to validate size mixes. Runtime matching
+had been conflated with routine active characterization in EP-D-6 and the component overview.
+Sharing probe mechanisms does not require a deployed planner to run the offline research program.
+
+[DESIGN-NOTES.md](DESIGN-NOTES.md) -> `EP-D-10` records the corrected boundary. The existing
+captures do not establish that workload sweeps are necessary for architectural matching; nor do
+they settle endpoint/cross-NUMA placement. They remain research evidence, without being discarded
+or promoted into universal defaults. The pending work is to reconcile the contract and queue,
+not to silently drop the measurement foundation or any experiment.
+
+[CHECKLIST.md](CHECKLIST.md) -> `EP-R1.7.1` owns that reconciliation before more MX work.
+The discussion is preserved in
+[DESIGN-SESSION-2026-09-18-topology-first-startup.md](design-sessions/DESIGN-SESSION-2026-09-18-topology-first-startup.md).

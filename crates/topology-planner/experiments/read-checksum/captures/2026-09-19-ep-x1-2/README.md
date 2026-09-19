@@ -1,6 +1,6 @@
 # EP-X1.2: controlled parameter sweeps
 
-**Implementation and capture complete; result discussion remains open under parent [CHECKLIST.md](../../../../CHECKLIST.md) -> `EP-X1.2` / `EP-R1.7`.**
+**Implementation and capture complete; closure and further experiments await [CHECKLIST.md](../../../../CHECKLIST.md) -> `EP-R1.7.1` scope reconciliation under [EP-D-10](../../../../DESIGN-NOTES.md#ep-d-10).**
 
 Captured on 2026-09-19 UTC on the development host. This is buffered-file evidence
 after reference reading, with synthetic checksum work and closed-loop saturation.
@@ -52,6 +52,7 @@ observations name the actual nonempty batches, including partial batches; they
 do not imply bulk OS or atomic queue operations.
 
 ## Proposed disposition and next cases
+**Next-case scheduling is on hold under [EP-D-10](../../../../DESIGN-NOTES.md#ep-d-10); these are retained experimental proposals, not an approved next run.**
 
 Retain all three isolated schedulers and the independent read/buffer limits and
 batch control. No path is merged or deleted, and no queue/batch value becomes a
