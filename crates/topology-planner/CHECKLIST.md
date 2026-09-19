@@ -37,7 +37,7 @@ prerequisites rather than on someone else's decision.
 |---|---|---|
 | MR1 design-review reconciliation | active | EP-R1.7.1 reconciles the EP-D-10 startup-cost boundary before further MX work |
 | MX1 controlled read/checksum comparisons | paused for scope reconciliation | EP-X1.2 evidence retained; EP-R1.7.1 precedes closure or further execution |
-| MX2 locality and ownership patterns | not started | MX1 measurement controls; revise the sequence at each experiment review |
+| MX2 locality and ownership patterns | EP-X2.1 authorized offline | Local implementation/capture now; cross-NUMA timing awaits a host exposing multiple nodes |
 | MX3 real endpoints, composition and synthesis | not started | MX2 ownership/ordering evidence and the permissions/hardware named by each experiment |
 | M1 the input contract | 4 done, 1 open | `EP-1.4` waits on EP-R1.7 |
 | M1+ scenario and naming | 2 done, 3 open | EP-R1.7 owns the topology specification and callbacks; `EP-1+.5` then settles remaining names |
@@ -115,9 +115,11 @@ item; do not start `EP-R1.8` merely because one experiment has finished.
 
 ## Experiment execution rules for MX1 through MX3
 
-**Execution paused pending `EP-R1.7.1`, per [EP-D-10](DESIGN-NOTES.md#ep-d-10).**
-The items below retain their work; their current order is not permission to resume before
-scope reconciliation. Existing captures and completed work are unchanged.
+**Execution paused pending `EP-R1.7.1`, except the explicitly authorized offline `EP-X2.1`.**
+[EP-D-10](DESIGN-NOTES.md#ep-d-10) remains the startup constraint. EP-X2.1 includes its
+generated-buffer prerequisite and captures available hardware placements; cross-NUMA timing
+remains unrun until a multi-node host is available. Other items retain their work and remain
+paused. Existing captures and completed work are unchanged.
 
 Keep this file as the experiment program's work queue; component plan indexes link to
 the owning items here rather than duplicating them in another checklist. Use the
@@ -196,6 +198,8 @@ same item ID; do not create an unowned implementation queue.
   > `topology-planner` -> `EP-R1.7` before advancing to `EP-X1.5`.
 
 - [ ] **EP-X1.5** -- **Separate generated-buffer, buffered-file and device-path evidence.**
+  Use the generated-buffer companion implemented under EP-X2.1; this item still owns the
+  buffered working-set and authorized device-path comparisons and their evidence review.
   **Question:** which differences remain when file/cache service is changed or removed?
   **Controls:** retain equal transforms, logical inputs and per-comparison budgets; compare
   a labelled generated-buffer companion, buffered working-set sweeps and an explicitly
@@ -209,6 +213,13 @@ same item ID; do not create an unowned implementation queue.
 ## MX2: locality and ownership patterns
 
 - [ ] **EP-X2.1** -- **Measure placement and directed buffer-transfer effects.**
+  **Authorized offline scope:** implement the generated-buffer companion, independent payload
+  placement and synthetic selection checks; capture the core/cache placements exposed by this
+  host. Windows discovery reports only node 0. Keep cross-NUMA timing explicitly unrun, and
+  this item unchecked, until a multi-node host supplies both directions and the result is reviewed.
+  The engineer approved this hardware-limited sequence; it does not complete EP-R1.7.1 or
+  alter the production startup budget. Use the bounded protocol in
+  [DESIGN-NOTES.md](experiments/read-checksum/DESIGN-NOTES.md#rc-d10-offline-placement-comparison).
   **Question:** how do observed processor relationships and payload residency affect the
   controlled comparisons? **Controls:** use the read/checksum and generated-buffer cases
   from MX1; vary worker bindings and buffer placement separately across available core,
@@ -218,6 +229,9 @@ same item ID; do not create an unowned implementation queue.
   obtain cross-domain timing from hardware exposing those domains.
   **Review:** record conditional placement evidence without collapsing proximity into a
   total order or turning developer-chosen transfers into errors.
+  > **CROSS-COMPONENT PREREQUISITE:** parent `topology-planner` authorizes
+  > `experiments/read-checksum` -> `MX2` -> `EP-X2.1` as the sole exception to the pause.
+  > It brings its generated-buffer prerequisite forward without closing EP-X1.5.
   > **-> CROSS-COMPONENT HANDOFF:** after work in `experiments/read-checksum`,
   > return to `topology-planner` -> `MX2` -> `EP-X2.2` to specify the request experiment.
 

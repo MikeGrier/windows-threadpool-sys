@@ -645,6 +645,10 @@ combinations, with contextual evidence kept distinct from discovered attachment.
 
 ## EP-D-10: topology-first planning and bounded startup cost
 
+**Offline exception:** the engineer has authorized [CHECKLIST.md](CHECKLIST.md) -> `EP-X2.1`
+with its generated-buffer prerequisite and local captures while `EP-R1.7.1` remains open.
+Cross-NUMA timing stays unrun for missing hardware. This does not change the startup constraint.
+
 The planner matches the application design and its constraints to the architecture available to
 the process. Processor and memory domains, endpoint attachment, ownership, ordering and permitted
 parallelism drive the arrangement. Runtime planning remains the primary path; runtime workload

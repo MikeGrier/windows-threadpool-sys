@@ -270,3 +270,13 @@ not to silently drop the measurement foundation or any experiment.
 [CHECKLIST.md](CHECKLIST.md) -> `EP-R1.7.1` owns that reconciliation before more MX work.
 The discussion is preserved in
 [DESIGN-SESSION-2026-09-18-topology-first-startup.md](design-sessions/DESIGN-SESSION-2026-09-18-topology-first-startup.md).
+
+### EP-X2.1 offline exception
+
+The engineer next requested EP-X2.1 and approved proceeding as offline research after
+being told that the host exposes only NUMA node 0 and the generated-buffer prerequisite
+was missing. Its scope now includes that companion and independent buffer placement;
+synthetic selection tests and real local placements proceed while cross-NUMA timing
+remains unrun. This is an explicit sequence exception, not acceptance of startup
+benchmarking or completion of EP-R1.7.1. The authorized work and remaining hardware
+obligation are in [CHECKLIST.md](CHECKLIST.md) -> `EP-X2.1`.

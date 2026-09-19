@@ -1,6 +1,6 @@
 # Experimental contract
 
-**Further execution is paused pending parent [CHECKLIST.md](../../CHECKLIST.md) -> `EP-R1.7.1`.**
+**Only offline EP-X2.1 is authorized while parent [CHECKLIST.md](../../CHECKLIST.md) -> `EP-R1.7.1` remains open.**
 These protocols describe offline experiments, not required startup work. Parent
 [EP-D-10](../../DESIGN-NOTES.md#ep-d-10) controls the planning and realization budget;
 existing measurements and their experimental definitions remain retained.
@@ -221,3 +221,49 @@ Review each orientation separately against the bracketing same-code spread. Reta
 raw samples and inconclusive differences; no universal queue or batch size is chosen.
 Return the result to parent [CHECKLIST.md](../../CHECKLIST.md) -> `EP-R1.7` for
 discussion before closing the item or starting `EP-X1.3`.
+
+## RC-D10: offline placement comparison
+
+EP-X2.1 is explicitly authorized offline research, not startup characterization.
+Retain the existing buffered-file backend and schedulers. Add a deterministic
+generated-buffer companion with the same logical fixture bytes, checksum work,
+block identities and credit limits. Label generation as producer-side CPU work,
+not device service. Keep the existing heap-buffer path as the default baseline;
+explicit placement uses owned, page-aligned NUMA-preferred allocations and records
+requested versus observed payload residency before and after the measured phase.
+Do not represent an allocation preference or a synthetic topology as achieved placement.
+
+Use the EP-X1.2 baseline: 33,554,449 logical bytes, 65,536-byte blocks, eight read
+credits, 32 buffers, queue capacity four, one checksum pass and scheduling quantum
+one. Every candidate uses the same payload/read ceilings; the direct reference is
+still unequal in CPU capacity. Capture all three arrangements in both orientations
+with six balanced repetitions. Select at most one deterministic pair for each
+observed core/cache/memory relationship, without ranking those relationships.
+For each pair vary payload node independently, using each endpoint's observed node;
+reverse worker roles at each placement. Deduplicate identical node choices.
+
+Selection reports absent or unknown relationships explicitly. Test selection on
+synthetic single/multiple-node, cache and group layouts, but obtain timing only on
+the live host. Pin actual workers and retain topology and requested/observed bindings.
+NUMA allocation is a preference: residency mismatches and unresident/unrepresentable
+pages remain visible, never relabelled local. An API refusal is an error, not node zero.
+No cross-node conclusion is drawn unless that pair and observed residency exist.
+
+Bracket each workload/pair's placements with same-code controls and reverse placement
+order. Preserve raw trials, per-block correctness, throughput, latency, CPU, queue
+pressure and page observations with source/configuration provenance. Keep file/cache
+evidence distinct from generation; keep direction distinct from physical relationships.
+The generator writes each leased buffer before handoff; requested residency does not
+mean that buffer was initially written by the consumer.
+
+Only an experiment-owned fixture and reports under scratch may be written. No elevation,
+device path, network traffic or machine configuration changes are authorized. Payload
+capacity is 2 MiB per trial, with the existing bounded metadata limits. Setup, reference
+and trial phases retain 30-second cooperative deadlines and the existing driver-rundown
+caveat. Stop a case on correctness, binding, allocation, residency-query or deadline
+failure; preserve its error rather than emitting successful timing. Capture unavailable
+placements separately from execution failures and make the campaign report name both.
+
+The current host exposes only Windows NUMA node 0. The engineer authorized implementation
+and local capture now, leaving cross-NUMA timing unrun for a multi-node host. EP-X2.1
+remains open for that evidence and result review. No other MX item is implicitly resumed.
