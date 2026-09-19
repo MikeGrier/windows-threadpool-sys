@@ -56,8 +56,10 @@ These items are in dependency order. Resolve and commit one item before beginnin
 
 - [x] **EP-R1.6** -- Tier 1 now distinguishes shipped Windows facts, adapter projections, I/O endpoint attachment, and planner-owned measurements. -> [completed 2026-09-18](COMPLETED-CHECKLIST.md#ep-r16)
 
-- [ ] **EP-R1.7** -- **Complete the contracts and acceptance matrix before implementation.** Plan
-  the scenario/goal contract, plan invariants and errors, deterministic policy and tie-breaking,
+- [ ] **EP-R1.7** -- **Complete the contracts and acceptance matrix before implementation.**
+  **In progress:** review and settle the proposal in
+  [DESIGN-PROPOSAL-EP-R1.7.md](DESIGN-PROPOSAL-EP-R1.7.md); it is not an accepted contract.
+  Plan the scenario/goal contract, plan invariants and errors, deterministic policy and tie-breaking,
   measurement permission and failure behavior, callback semantics, JSON compatibility, storage,
   network, and interconnect policy, routed-hop representation, and synthetic acceptance cases.
   Define the common I/O endpoint contract plus typed storage and network capabilities, including
