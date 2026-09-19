@@ -14,10 +14,9 @@
     That happened to windows-waitable-queues, and was found by review rather
     than by any check. This script is the check.
 
-    A crate may be deliberately absent from release-please -- windows-placement-
-    probe ships as a downloadable binary and is not on crates.io yet -- so the
-    comparison is one-directional: everything release-please manages must be
-    publishable. The reverse is allowed.
+    Explicit binary-only routes are checked by the Node release-tooling checker.
+    Every other managed crate must have a crates.io route. A crate may be
+    deliberately absent from release-please; the comparison is one-directional.
 #>
 [CmdletBinding()]
 param(
@@ -52,6 +51,11 @@ function Write-Report {
 $configPath = Join-Path $RepositoryRoot 'release-please-config.json'
 $workflowPath = Join-Path $RepositoryRoot '.github/workflows/publish-crate.yml'
 
+$binaryChecker = Join-Path $RepositoryRoot '.github/release/check-publication.cjs'
+node $binaryChecker $RepositoryRoot
+if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+$binaryPaths = ([IO.File]::ReadAllText((Join-Path $RepositoryRoot '.github/release/binary-packages.json')) | ConvertFrom-Json).PSObject.Properties.Name
+
 foreach ($required in @($configPath, $workflowPath)) {
     if (-not (Test-Path $required)) {
         throw "cannot check publication: $required is missing"
@@ -59,6 +63,7 @@ foreach ($required in @($configPath, $workflowPath)) {
 }
 
 $managed = (Get-Content $configPath -Raw | ConvertFrom-Json).packages.PSObject.Properties.Name |
+    Where-Object { $binaryPaths -notcontains $_ } |
     ForEach-Object { Split-Path $_ -Leaf } |
     Sort-Object
 

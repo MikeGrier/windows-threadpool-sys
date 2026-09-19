@@ -23,9 +23,14 @@ jobs:
       release_created: ${{ steps.release.outputs.release_created }}
       pr: ${{ steps.release.outputs.pr }}
     steps:
-      - uses: googleapis/release-please-action@v5
-        id: release
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v6
         with:
-          token: ${{ secrets.RELEASE_PLEASE_TOKEN }}
-          config-file: release-please-config.json
-          manifest-file: .release-please-manifest.json
+          node-version: '24'
+      - run: npm ci --prefix .github/release
+      - run: npm test --prefix .github/release
+      - name: Create releases and release PRs
+        id: release
+        env:
+          RELEASE_PLEASE_TOKEN: ${{ secrets.RELEASE_PLEASE_TOKEN }}
+        run: node .github/release/release.cjs

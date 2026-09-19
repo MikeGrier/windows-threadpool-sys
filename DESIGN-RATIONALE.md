@@ -5,6 +5,34 @@ This file records why the cross-component decisions in
 [design-sessions/DESIGN-SESSION-2026-08-27-async-file-enumeration.md](design-sessions/DESIGN-SESSION-2026-08-27-async-file-enumeration.md).
 Tier 1 remains authoritative.
 
+## Probe release automation
+
+For [DESIGN-NOTES.md](DESIGN-NOTES.md#d-probe-releases) -> `D-PB`.
+
+The placement workflow already built and attested release executables, but
+release-please did not manage its package. Platform probes had neither a managed
+release route nor binary packaging. The earlier "never distributed" decision
+would require every outside measurement to begin with a source checkout.
+
+The engineer chose calendar versions for both probes. Replacing placement's
+version with semver would change a deliberate build-identity convention. A
+pinned release-please wrapper provides that version policy while keeping the
+existing Rust release implementation. The Cargo workspace plugin has its own
+dependency-only bump path, so extending only the direct version strategy would
+leave probe versions subject to ordinary patch bumps on that path.
+
+A metadata-derived archive avoids a second list of executable names. Checking
+both the target list and emitted artifact list detects omitted builds as well
+as extra binaries; checking PE headers also observes the architecture of the
+bytes that will be attached. Packaging does not execute the platform experiments:
+some mutate process-wide state or deliberately wait indefinitely.
+
+The placement workflow's existing publication guards apply to the new route
+too. GitHub attestations authenticate the artifact bytes; environment-derived
+build labels do not. Local tests exercise real Rust release updates and ZIP
+round trips; hosted token permissions and attestation issuance are exercised
+only by the eventual release workflow.
+
 ## Why captured impersonation is its own crate
 
 The enumeration open must occur asynchronously, but directory access is determined

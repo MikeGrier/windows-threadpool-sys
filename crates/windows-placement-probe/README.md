@@ -27,13 +27,19 @@ here can.
 ## Running it
 
 Download the binary for your architecture from the
-[latest release](https://github.com/MikeGrier/windows-threadpool-sys/releases),
+[placement-probe releases](https://github.com/MikeGrier/windows-threadpool-sys/releases?q=placement-probe-v),
 then:
 
 ```text
 placement-probe --preview    see exactly what it collects, measure nothing
 placement-probe              measure, and print a result to paste
 ```
+
+Release-please manages the calendar version and CI attaches the x64 and ARM64
+executables. The downloaded filenames include their architecture; rename the
+chosen executable to `placement-probe.exe` for the commands shown here, or use
+its full filename. See the repository's
+[release process](../../DEVELOPMENT.md#release-process).
 
 By default a result carries the machine's **shape and its timings and nothing
 else**. `--include-metadata` adds the context described below, and is worth

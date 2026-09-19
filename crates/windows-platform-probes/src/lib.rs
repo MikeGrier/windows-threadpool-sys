@@ -37,10 +37,10 @@
 //! # Experiments, not components
 //!
 //! Everything here is an **experiment for discovering what Windows does**, and
-//! none of it is for production use. The crate is `publish = false` at version
-//! `0.0.0`; nothing ships it and nothing outside this workspace can depend on
-//! it. That is not modesty about maturity -- it is the boundary that lets a
-//! probe do things a component must not.
+//! none of it is for production use. The crate is `publish = false`: it is not
+//! a registry library. CI distributes standalone experiment binaries, not a
+//! production component. That distinction lets a probe do things a component
+//! must not.
 //!
 //! The clearest case is process-wide state. A probe may set it, because some
 //! questions cannot be answered without moving it and looking:

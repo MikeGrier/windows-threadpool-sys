@@ -240,10 +240,10 @@ correctness in the archive.
   both directions.
 
   **One correction to this item as written.** The blocker recorded when queuing was **wrong** --
-  `windows-placement-probe` is `publish = false` and absent from
-  [.release-please-manifest.json](../../.release-please-manifest.json), and
-  [check-commit-scope.ps1](../../tools/check-commit-scope.ps1) says in terms that such a crate
-  "cannot be poisoned, because it is never released -- so it is not a finding." The `x-probe-*` row
+  `windows-placement-probe` was absent from release-please configuration at the
+  time. It is now a managed binary release under the root
+  [DESIGN-NOTES.md](../../DESIGN-NOTES.md#d-probe-releases) -> `D-PB`; `publish = false`
+  prohibits crates.io publication, not binary releases. The `x-probe-*` row
   it called for is deferred to `M4.10`, which turned out to be a larger question than these two
   probes.
 

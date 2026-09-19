@@ -1,0 +1,12 @@
+{
+  "crates/windows-placement-probe": {
+    "package": "windows-placement-probe",
+    "component": "placement-probe",
+    "workflow": "release-placement-probe.yml"
+  },
+  "crates/windows-platform-probes": {
+    "package": "windows-platform-probes",
+    "component": "windows-platform-probes",
+    "workflow": "release-platform-probes.yml"
+  }
+}

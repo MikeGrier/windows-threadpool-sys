@@ -273,8 +273,9 @@ restores it afterwards has only narrowed the window, not acquired the right.
 This crate does it anyway, and the tension is resolved by what this crate *is*.
 It is an experiment for discovering platform behaviour, not a component: the only
 way to learn whether the thread mode is a view of the process mode is to move the
-process mode and look. `publish = false` and version `0.0.0` are the enforcement
--- nothing ships this, and nothing outside the workspace can depend on it. The
+process mode and look. `publish = false` prevents registry publication, while
+standalone binaries are distributed under the root
+[DESIGN-NOTES.md](../../DESIGN-NOTES.md#d-probe-releases) -> `D-PB`. The
 call site says the same thing in its own rustdoc, because a reader arriving at
 the function will not have read this file.
 
@@ -360,17 +361,16 @@ they agree. A probe that grew a hard-coded expectation would be back on the
 wrong side of the rule above.
 
 ## This crate is never distributed, and its dependencies carry no versions
+**Superseded in its binary-distribution rule by [D-PB](../../DESIGN-NOTES.md#d-probe-releases); path-only dependencies remain.**
 
-Not to a registry, and not as a released binary either -- unlike
-`windows-placement-probe`, which ships a CI-built binary to people running it on
-hardware this workspace does not own. These probes are a development
-instrument, run from a checkout by someone who has the checkout. `publish =
-false` is the whole story, and it is permanent rather than "not yet".
+The earlier checkout-only distribution decision is replaced by CI-built
+binary releases. The experiments remain outside the production-library surface,
+and `publish = false` still prohibits registry publication.
 
-**The consequence is that every workspace dependency here is path-only.** A
+**Every workspace dependency here remains path-only.** A
 `version` beside a `path` exists to tell a registry what to resolve when the
-depending crate is packaged. Nothing packages this crate, so those pins named a
-version no one would ever consult -- while still having to be correct, because
+depending crate is packaged. Binary builds use the workspace checkout rather
+than registry packaging. Such pins would still have to be correct, because
 cargo requires the path crate's own version to satisfy the pin **at every
 build**, not merely at publication.
 

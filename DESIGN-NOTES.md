@@ -1,5 +1,35 @@
 # Design notes
 
+## <a id="d-probe-releases"></a>D-PB: probe binary releases use release-please
+
+Both probe packages are release-managed binary distributions, not registry
+packages. `publish = false` and path-only workspace dependencies remain in place.
+The route registry is
+[binary-packages.json](.github/release/binary-packages.json); build and upload
+contracts are checked against the parsed manifests and workflows in CI.
+
+Versions use UTC `YYYY.MMDD.N` at proposal time. On the same or an earlier
+clock date, increment the previous counter; on a later date, reset it to zero.
+The platform package's legacy `0.x.y` baseline starts with today's date. The
+wrapper extends both direct and dependency-triggered probe bumps while retaining
+release-please's Rust manifest, lockfile, changelog and library-version behavior.
+The record schema remains separately versioned.
+
+Keep the placement executable assets and tag prefix. Platform probes ship one
+ZIP per Windows architecture, containing all binary targets derived from Cargo
+metadata and compiler artifacts, plus documentation and build identity. Verify
+the PE machine of each executable and reject the renderer's test-only oracle
+feature. Both paths build x64 and ARM64 with default features.
+
+Only tag-push runs upload build artifacts and attach attested assets to releases.
+PR and manual runs are build-only, including dispatches against a tag. Preserve
+the release-please changelog when attaching assets. Release-please uses the
+repository token that can trigger downstream workflows, not `GITHUB_TOKEN`.
+
+Implementation: [COMPLETED-CHECKLIST.md](COMPLETED-CHECKLIST.md#pb-1) -> `PB-1`.
+Rationale: [DESIGN-RATIONALE.md](DESIGN-RATIONALE.md#probe-release-automation).
+Operations: [DEVELOPMENT.md](DEVELOPMENT.md#release-process).
+
 ## Founding theme
 
 This repository exists to enable asynchronous Windows code in Rust that uses native

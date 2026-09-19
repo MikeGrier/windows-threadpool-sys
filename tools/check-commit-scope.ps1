@@ -58,18 +58,15 @@ Push-Location $repo
 try {
 
 # The crates release-please actually versions -- read from the CONFIG, which is
-# the authority for which packages it manages. A `publish = false` crate cannot
-# be poisoned, because it is never released, and a crate release-please is not
-# configured for is not released whatever its manifest says.
+# the authority for which packages it manages. This includes binary-only
+# `publish = false` packages; only packages absent from the config are excluded.
 #
 # **The manifest is the wrong source, and reading it made this script wrong.**
 # `.release-please-manifest.json` records the current version of each managed
 # package, but nothing prunes an entry when a package leaves the config: this
-# repository's manifest still carries `crates/windows-platform-probes`, which
-# `release-please-config.json` does not manage and whose `Cargo.toml` says
-# `publish = false`. Reading the manifest therefore treated that crate as
-# released and flagged a commit for mislabelling a changelog entry that could
-# never be written.
+# repository's manifest previously carried windows-platform-probes while the
+# config did not manage it. Reading the manifest therefore treated it as
+# released too early. Both probes are now configured binary releases.
 $configPath = Join-Path $repo 'release-please-config.json'
 if (-not (Test-Path $configPath)) { throw "No release-please-config.json at $configPath" }
 $config = Get-Content $configPath -Raw | ConvertFrom-Json

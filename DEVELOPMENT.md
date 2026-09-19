@@ -56,9 +56,57 @@ override, since it is meant to run the pinned version.
 ## Release process
 
 `release-please` owns version changes, tags, and changelog updates. Each crate
-is versioned and released independently; a `<crate>-v<version>` tag (for example
+is versioned and released independently. For registry crates, a `<crate>-v<version>` tag (for example
 `windows-overlapped-io-sys-v0.1.0`) triggers the crates.io publish workflow after
 verifying that the tag matches that crate's package version.
+
+The probes are binary-only releases, never crates.io packages. Their routes are
+declared in [.github/release/binary-packages.json](.github/release/binary-packages.json):
+
+| Package | Release tag | Assets |
+|---|---|---|
+| `windows-placement-probe` | `placement-probe-v<version>` | `placement-probe-x86_64.exe`, `placement-probe-aarch64.exe` |
+| `windows-platform-probes` | `windows-platform-probes-v<version>` | `windows-platform-probes-x86_64.zip`, `windows-platform-probes-aarch64.zip`, SHA-256 sidecars |
+
+Both use UTC calendar versions, `YYYY.MMDD.N`, assigned when release-please
+proposes an update. The date need not be the date the release PR is merged.
+Same-day updates increment `N`; a clock behind the previous release increments
+its counter rather than decreasing the version. The platform package's legacy
+`0.0.1` baseline transitions on its first automated release. Record schema
+versions remain independent of these package versions.
+
+[release.cjs](.github/release/release.cjs) extends the pinned release-please
+versioning and Cargo workspace plugin for these packages; library versioning
+continues to use semver. A release PR updates manifests, lockfile and changelogs.
+Merging it creates the releases and tags. Tag pushes then build with default
+features, verify versions, and attach attested binaries without replacing the
+release-please notes. Platform ZIPs contain every Cargo binary target plus the
+README, license and build identity. The test-only `oracle-in-renderer` feature
+is rejected by the packager.
+
+PR and `workflow_dispatch` runs validate builds only, even when a dispatch
+names a tag. They upload no binary artifacts and mint no attestations. Retry
+a failed publication by re-running its original tag-push workflow. Platform
+publication requires the release-please release to exist; it does not create
+one from a manual tag.
+
+Release-tooling checks require Node 24 and the committed npm lockfile:
+
+```text
+npm ci --prefix .github/release
+npm test --prefix .github/release
+pwsh -File tools/check-publishable.ps1
+```
+
+The two binary workflows also build both Windows architectures on relevant PRs.
+Local archive verification uses the same builder, for example:
+
+```text
+node .github/release/package-probes.cjs windows-platform-probes x86_64-pc-windows-msvc .scratch/probe-dist
+```
+
+The destination must be a new directory under `.scratch/`. Local builds do not
+publish or attest anything; the embedded `ci` stamp alone is not authentication.
 
 Some crates depend on workspace siblings by version as well as by path, so
 `cargo publish`'s build verification resolves those dependencies from crates.io
@@ -81,5 +129,7 @@ check is a no-op for a crate with no workspace-sibling dependencies
 Publishing requires these repository secrets:
 
 - `RELEASE_PLEASE_TOKEN` for release pull requests, tags, and follow-up workflow
-  runs.
+  runs. It must have repository contents and pull-request write permission;
+  the default `GITHUB_TOKEN` cannot replace it because its tag pushes do not
+  trigger the publishing workflows.
 - `CARGO_REGISTRY_TOKEN` with crates.io publish permission.

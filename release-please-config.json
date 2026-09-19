@@ -11,6 +11,16 @@
         "cargo-workspace"
     ],
     "packages": {
+        "crates/windows-placement-probe": {
+            "package-name": "windows-placement-probe",
+            "component": "placement-probe",
+            "versioning": "probe-calver"
+        },
+        "crates/windows-platform-probes": {
+            "package-name": "windows-platform-probes",
+            "component": "windows-platform-probes",
+            "versioning": "probe-calver"
+        },
         "crates/windows-file-enumeration-sys": {
             "package-name": "windows-file-enumeration-sys",
             "component": "windows-file-enumeration-sys"

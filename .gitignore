@@ -13,6 +13,7 @@ target
 
 # Scratch / diagnostic output (git-ignored per repo instructions)
 .scratch/
+.github/release/node_modules/
 
 # windows-placement-probe writes its backup record into the working directory,
 # so running the tool from inside a checkout leaves one of these behind. Ignored

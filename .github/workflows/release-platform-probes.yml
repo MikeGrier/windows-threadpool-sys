@@ -1,0 +1,88 @@
+# Copyright (c) Mike Grier.
+name: release-platform-probes
+
+on:
+  push:
+    tags:
+      - 'windows-platform-probes-v*'
+  pull_request:
+    paths:
+      - 'crates/**'
+      - '.github/release/**'
+      - '.github/workflows/release-platform-probes.yml'
+      - 'release-please-config.json'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - 'rust-toolchain.toml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: 'true'
+
+jobs:
+  build:
+    name: platform probes ${{ matrix.target }}
+    runs-on: windows-latest
+    env:
+      RUSTUP_TOOLCHAIN: stable
+    strategy:
+      fail-fast: false
+      matrix:
+        target:
+          - x86_64-pc-windows-msvc
+          - aarch64-pc-windows-msvc
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - run: npm ci --prefix .github/release
+      - name: Build and verify archive
+        shell: pwsh
+        env:
+          PROBE_TARGET: ${{ matrix.target }}
+          RELEASE_TAG: ${{ github.ref_name }}
+          IS_RELEASE: ${{ github.event_name == 'push' && startsWith(github.ref, 'refs/tags/windows-platform-probes-v') }}
+        run: |
+          $arguments = @('.github/release/package-probes.cjs', 'windows-platform-probes', $env:PROBE_TARGET, '.scratch/probe-dist')
+          if ($env:IS_RELEASE -eq 'true') { $arguments += $env:RELEASE_TAG }
+          node @arguments
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - uses: actions/upload-artifact@v7
+        if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/windows-platform-probes-v')
+        with:
+          name: platform-probes-${{ matrix.target }}
+          path: .scratch/probe-dist/*
+          if-no-files-found: error
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/windows-platform-probes-v')
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: platform-probes-*
+          path: artifacts
+          merge-multiple: true
+      - name: Attest the archives
+        uses: actions/attest-build-provenance@v4
+        with:
+          subject-path: artifacts/windows-platform-probes-*.zip
+      - name: Attach to the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release view "${GITHUB_REF_NAME}" --repo "${GITHUB_REPOSITORY}"
+          gh release upload "${GITHUB_REF_NAME}" --repo "${GITHUB_REPOSITORY}" \
+            --clobber artifacts/windows-platform-probes-*.zip artifacts/windows-platform-probes-*.sha256
