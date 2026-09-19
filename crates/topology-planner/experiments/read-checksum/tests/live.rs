@@ -41,6 +41,8 @@ impl Fixture {
             file: self.0.clone(),
             block_bytes,
             depth,
+            buffer_count: None,
+            batch_size: 1,
             queue_capacity,
             checksum_passes: 1,
             repetitions: 1,
@@ -76,7 +78,7 @@ fn all_arrangements_process_ten_shapes_with_equal_payload_budgets() {
         config.checksum_passes = passes;
         let capture = run(config).unwrap();
         assert_eq!(capture.trials.len(), 6);
-        assert_eq!(capture.schema, "read-checksum-v2");
+        assert_eq!(capture.schema, "read-checksum-v3");
         assert_eq!(capture.file_bytes, bytes);
         assert_eq!(capture.payload_pool_bytes, block * depth);
         for trial in &capture.trials {
@@ -226,6 +228,68 @@ fn recorded_schedule_uses_each_balanced_row() {
 }
 
 #[test]
+fn separate_read_credits_and_batches_preserve_tails_and_budgets() {
+    for (depth, buffers, batch, queue) in [
+        (2, 8, 1, 1),
+        (2, 8, 3, 1),
+        (2, 8, 16, 8),
+        (4, 16, 4, 1),
+        (4, 16, 16, 4),
+        (8, 32, 3, 4),
+        (8, 32, 16, 1),
+        (8, 32, 64, 32),
+        (16, 32, 16, 1),
+        (32, 32, 1024, 16),
+    ] {
+        let fixture = Fixture::new(4096 * 33 + 17);
+        let mut config = fixture.config(4096, depth, queue);
+        config.buffer_count = Some(buffers);
+        config.batch_size = batch;
+        let capture = run(config).unwrap();
+        assert_eq!(capture.blocks, 34);
+        for trial in capture.trials {
+            assert_eq!(trial.completed_blocks, capture.blocks);
+            assert_eq!(trial.resources.max_pending_reads, depth);
+            assert_eq!(trial.resources.payload_pool_bytes, buffers * 4096);
+            assert_eq!(
+                trial
+                    .workers
+                    .iter()
+                    .map(|worker| worker.read_capacity)
+                    .sum::<usize>(),
+                depth
+            );
+            assert_eq!(
+                trial
+                    .workers
+                    .iter()
+                    .map(|worker| worker.buffer_capacity)
+                    .sum::<usize>(),
+                buffers
+            );
+            for worker in trial.workers {
+                assert!(worker.peak_outstanding_reads <= worker.read_capacity);
+                assert!(worker.peak_leased_buffers <= worker.buffer_capacity);
+                assert_eq!(worker.batches.jobs, worker.completed);
+                assert!(worker.batches.max_jobs > 0 && worker.batches.max_jobs <= batch);
+                assert!(worker.batches.count <= worker.batches.jobs);
+                if worker.completed % batch != 0 {
+                    assert!(worker.batches.partial > 0);
+                }
+                if worker.role == "reader" {
+                    assert_eq!(worker.return_batches.jobs, worker.completed);
+                    assert!(worker.return_batches.max_jobs <= batch);
+                    assert!(worker.handoff_high_water.unwrap() <= queue);
+                }
+                if worker.role == "processor" {
+                    assert!(worker.return_high_water.unwrap() <= buffers);
+                }
+            }
+        }
+    }
+}
+
+#[test]
 fn incompatible_file_share_is_an_explicit_error() {
     let fixture = Fixture::new(8192);
     let _exclusive = OpenOptions::new()
@@ -237,6 +301,73 @@ fn incompatible_file_share_is_an_explicit_error() {
 }
 
 #[test]
+fn sweep_plan_is_bracketed_reversed_and_changes_only_declared_fields() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let destination = root
+        .ancestors()
+        .nth(4)
+        .unwrap()
+        .join(".scratch")
+        .join(format!("plan-only-{}", std::process::id()));
+    let output = std::process::Command::new("pwsh")
+        .args(["-NoProfile", "-File"])
+        .arg(root.join("capture-ep-x1-1.ps1"))
+        .args(["-Study", "EP-X1.2", "-PlanOnly", "-OutputDirectory"])
+        .arg(&destination)
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(!destination.exists());
+    let plan: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    let cases = plan["cases"].as_array().unwrap();
+    assert_eq!(cases.len(), 38);
+    let baseline = &cases[0]["Config"];
+    for sweep in ["block", "compute", "depth", "queue", "batch", "queue-batch"] {
+        let rows: Vec<_> = cases.iter().filter(|case| case["Sweep"] == sweep).collect();
+        assert_eq!(rows.first().unwrap()["Point"], "control");
+        assert_eq!(rows.last().unwrap()["Point"], "control");
+        assert_eq!(rows.len(), if sweep == "queue-batch" { 8 } else { 6 });
+        for (forward, backward) in rows.iter().zip(rows.iter().rev()) {
+            assert_eq!(forward["Config"], backward["Config"]);
+            let config: Config = serde_json::from_value(forward["Config"].clone()).unwrap();
+            assert!(
+                config
+                    .validate(plan["fixture_bytes"].as_u64().unwrap())
+                    .is_ok()
+            );
+            assert_eq!(config.block_bytes * config.buffers(), 2 * 1024 * 1024);
+            let changed: Vec<_> = forward["Config"]
+                .as_object()
+                .unwrap()
+                .iter()
+                .filter(|(key, value)| **value != baseline[*key])
+                .map(|(key, _)| key.as_str())
+                .collect();
+            let declared: Vec<_> = forward["ChangedFields"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|field| field.as_str().unwrap())
+                .collect();
+            assert_eq!(changed.len(), declared.len());
+            assert!(changed.iter().all(|field| declared.contains(field)));
+            assert!(
+                changed.len()
+                    <= if sweep == "block" || sweep == "queue-batch" {
+                        2
+                    } else {
+                        1
+                    }
+            );
+        }
+    }
+}
+
+#[test]
 fn reference_computation_obeys_cooperative_deadline() {
     let fixture = Fixture::new(2 * 1024 * 1024);
     let mut config = fixture.config(1024 * 1024, 2, 1);
@@ -245,6 +376,74 @@ fn reference_computation_obeys_cooperative_deadline() {
     let start = Instant::now();
     assert_eq!(run(config).unwrap_err().kind(), io::ErrorKind::TimedOut);
     assert!(start.elapsed() < Duration::from_secs(5));
+}
+
+#[test]
+fn summary_replay_keeps_sweeps_and_points_separate() {
+    let fixture = Fixture::new(8193);
+    let capture = run(fixture.config(1024, 8, 4)).unwrap();
+    let directory = fixture.0.with_extension("summary");
+    std::fs::create_dir(&directory).unwrap();
+    let mut cases = Vec::new();
+    for (sweep, base, altered) in [
+        ("first-sweep", 100.0, 200.0),
+        ("second-sweep", 1000.0, 1000.0),
+    ] {
+        for (position, point) in ["control", "changed", "control"].into_iter().enumerate() {
+            let name = format!("{sweep}-{position}");
+            let mut report = serde_json::to_value(&capture).unwrap();
+            for trial in report["trials"].as_array_mut().unwrap() {
+                trial["bytes_per_second"] =
+                    serde_json::json!(if point == "control" { base } else { altered });
+            }
+            serde_json::to_writer(
+                File::create(directory.join(format!("{name}.json"))).unwrap(),
+                &report,
+            )
+            .unwrap();
+            cases.push(serde_json::json!({"Name": name, "Sweep": sweep, "Point": point, "ChangedFields": [], "Config": capture.config}));
+        }
+    }
+    serde_json::to_writer(
+        File::create(directory.join("matrix.json")).unwrap(),
+        &serde_json::json!({"study": "EP-X1.2", "cases": cases}),
+    )
+    .unwrap();
+    let old_summary =
+        br#"{"executable_sha256":"fixture-binary","script_sha256":"fixture-capture-script"}"#;
+    std::fs::write(directory.join("summary.json"), old_summary).unwrap();
+    let output = std::process::Command::new("pwsh")
+        .args(["-NoProfile", "-File"])
+        .arg(Path::new(env!("CARGO_MANIFEST_DIR")).join("capture-ep-x1-1.ps1"))
+        .args(["-SummarizeOnly", "-OutputDirectory"])
+        .arg(&directory)
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let summary: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(summary["capture_script_sha256"], "fixture-capture-script");
+    assert_eq!(
+        std::fs::read(directory.join("summary.json")).unwrap(),
+        old_summary
+    );
+    let effects = summary["effects"].as_array().unwrap();
+    assert_eq!(effects.len(), 12);
+    for effect in effects {
+        let expected = match effect["sweep"].as_str().unwrap() {
+            "first-sweep" => (100.0, 200.0),
+            "second-sweep" => (1000.0, 1000.0),
+            other => panic!("unexpected sweep {other}"),
+        };
+        assert_eq!(effect["point"], "changed");
+        assert_eq!(effect["control_bytes_per_second"]["min"], expected.0);
+        assert_eq!(effect["point_bytes_per_second"]["max"], expected.1);
+        assert_eq!(effect["ranges_overlap"], expected.0 == expected.1);
+    }
+    std::fs::remove_dir_all(directory).unwrap();
 }
 
 #[test]

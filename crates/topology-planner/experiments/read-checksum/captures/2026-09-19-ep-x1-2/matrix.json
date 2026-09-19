@@ -1,0 +1,748 @@
+{
+  "study": "EP-X1.2",
+  "fixture_bytes": 33554449,
+  "cases": [
+    {
+      "Name": "block-00-control",
+      "Sweep": "block",
+      "Point": "control",
+      "ChangedFields": [],
+      "Config": {
+        "file": "Q:\\github\\windows-threadpool-sys\\.scratch\\ep-x1-2-capture\\fixture.dat",
+        "block_bytes": 65536,
+        "depth": 8,
+        "queue_capacity": 4,
+        "checksum_passes": 1,
+        "repetitions": 6,
+        "timeout_ms": 30000,
+        "processors": null,
+        "buffer_count": 32,
+        "batch_size": 1
+      }
+    },
+    {
+      "Name": "block-01-first",
+      "Sweep": "block",
+      "Point": "first",
+      "ChangedFields": [
+        "block_bytes",
+        "buffer_count"
+      ],
+      "Config": {
+        "file": "Q:\\github\\windows-threadpool-sys\\.scratch\\ep-x1-2-capture\\fixture.dat",
+        "block_bytes": 16384,
+        "depth": 8,
+        "queue_capacity": 4,
+        "checksum_passes": 1,
+        "repetitions": 6,
+        "timeout_ms": 30000,
+        "processors": null,
+        "buffer_count": 128,
+        "batch_size": 1
+      }
+    },
+    {
+      "Name": "block-02-second",
+      "Sweep": "block",
+      "Point": "second",
+      "ChangedFields": [
+        "block_bytes",
+        "buffer_count"
+      ],
+      "Config": {
+        "file": "Q:\\github\\windows-threadpool-sys\\.scratch\\ep-x1-2-capture\\fixture.dat",
+        "block_bytes": 262144,
+        "depth": 8,
+        "queue_capacity": 4,
+        "checksum_passes": 1,
+        "repetitions": 6,
+        "timeout_ms": 30000,
+        "processors": null,
+        "buffer_count": 8,
+        "batch_size": 1
+      }
+    },
+    {
+      "Name": "block-03-second",
+      "Sweep": "block",
+      "Point": "second",
+      "ChangedFields": [
+        "block_bytes",
+        "buffer_count"
+      ],
+      "Config": {
+        "file": "Q:\\github\\windows-threadpool-sys\\.scratch\\ep-x1-2-capture\\fixture.dat",
+        "block_bytes": 262144,
+        "depth": 8,
+        "queue_capacity": 4,
+        "checksum_passes": 1,
+        "repetitions": 6,
+        "timeout_ms": 30000,
+        "processors": null,
+        "buffer_count": 8,
+        "batch_size": 1
+      }
+    },
+    {
+      "Name": "block-04-first",
+      "Sweep": "block",
+      "Point": "first",
+      "ChangedFields": [
+        "block_bytes",
+        "buffer_count"
+      ],
+      "Config": {
+        "file": "Q:\\github\\windows-threadpool-sys\\.scratch\\ep-x1-2-capture\\fixture.dat",
+        "block_bytes": 16384,
+        "depth": 8,
+        "queue_capacity": 4,
+        "checksum_passes": 1,
+        "repetitions": 6,
+        "timeout_ms": 30000,
+        "processors": null,
+        "buffer_count": 128,
+        "batch_size": 1
+      }
+    },
+    {
+      "Name": "block-05-control",
+      "Sweep": "block",
+      "Point": "control",
+      "ChangedFields": [],
+      "Config": {
+        "file": "Q:\\github\\windows-threadpool-sys\\.scratch\\ep-x1-2-capture\\fixture.dat",
+        "block_bytes": 65536,
+        "depth": 8,
+        "queue_capacity": 4,
+        "checksum_passes": 1,
+        "repetitions": 6,
+        "timeout_ms": 30000,
+        "processors": null,
+        "buffer_count": 32,
+        "batch_size": 1
+      }
+    },
+    {
+      "Name": "compute-00-control",
+      "Sweep": "compute",
+      "Point": "control",
+      "ChangedFields": [],
+      "Config": {
+        "file": "Q:\\github\\windows-threadpool-sys\\.scratch\\ep-x1-2-capture\\fixture.dat",
+        "block_bytes": 65536,
+        "depth": 8,
+        "queue_capacity": 4,
+        "checksum_passes": 1,
+        "repetitions": 6,
+        "timeout_ms": 30000,
+        "processors": null,
+        "buffer_count": 32,
+        "batch_size": 1
+      }
+    },
+    {
+      "Name": "compute-01-first",
+      "Sweep": "compute",
+      "Point": "first",
+      "ChangedFields": [
+        "checksum_passes"
+      ],
+      "Config": {
+        "file": "Q:\\github\\windows-threadpool-sys\\.scratch\\ep-x1-2-capture\\fixture.dat",
+        "block_bytes": 65536,
+        "depth": 8,
+        "queue_capacity": 4,
+        "checksum_passes": 4,
+        "repetitions": 6,
+        "timeout_ms": 30000,
+        "processors": null,
+        "buffer_count": 32,
+        "batch_size": 1
+      }
+    },
+    {
+      "Name": "compute-02-second",
+      "Sweep": "compute",
+      "Point": "second",
+      "ChangedFields": [
+        "checksum_passes"
+      ],
+      "Config": {
+        "file": "Q:\\github\\windows-threadpool-sys\\.scratch\\ep-x1-2-capture\\fixture.dat",
+        "block_bytes": 65536,
+        "depth": 8,
+        "queue_capacity": 4,
+        "checksum_passes": 16,
+        "repetitions": 6,
+        "timeout_ms": 30000,
+        "processors": null,
+        "buffer_count": 32,
+        "batch_size": 1
+      }
+    },
+    {
+      "Name": "compute-03-second",
+      "Sweep": "compute",
+      "Point": "second",
+      "ChangedFields": [
+        "checksum_passes"
+      ],
+      "Config": {
+        "file": "Q:\\github\\windows-threadpool-sys\\.scratch\\ep-x1-2-capture\\fixture.dat",
+        "block_bytes": 65536,
+        "depth": 8,
+        "queue_capacity": 4,
+        "checksum_passes": 16,
+        "repetitions": 6,
+        "timeout_ms": 30000,
+        "processors": null,
+        "buffer_count": 32,
+        "batch_size": 1
+      }
+    },
+    {
+      "Name": "compute-04-first",
+      "Sweep": "compute",
+      "Point": "first",
+      "ChangedFields": [
+        "checksum_passes"
+      ],
+      "Config": {
+        "file": "Q:\\github\\windows-threadpool-sys\\.scratch\\ep-x1-2-capture\\fixture.dat",
+        "block_bytes": 65536,
+        "depth": 8,
+        "queue_capacity": 4,
+        "checksum_passes": 4,
+        "repetitions": 6,
+        "timeout_ms": 30000,
+        "processors": null,
+        "buffer_count": 32,
+        "batch_size": 1
+      }
+    },
+    {
+      "Name": "compute-05-control",
+      "Sweep": "compute",
+      "Point": "control",
+      "ChangedFields": [],
+      "Config": {
+        "file": "Q:\\github\\windows-threadpool-sys\\.scratch\\ep-x1-2-capture\\fixture.dat",
+        "block_bytes": 65536,
+        "depth": 8,
+        "queue_capacity": 4,
+        "checksum_passes": 1,
+        "repetitions": 6,
+        "timeout_ms": 30000,
+        "processors": null,
+        "buffer_count": 32,
+        "batch_size": 1
+      }
+    },
+    {
+      "Name": "depth-00-control",
+      "Sweep": "depth",
+      "Point": "control",
+      "ChangedFields": [],
+      "Config": {
+        "file": "Q:\\github\\windows-threadpool-sys\\.scratch\\ep-x1-2-capture\\fixture.dat",
+        "block_bytes": 65536,
+        "depth": 8,
+        "queue_capacity": 4,
+        "checksum_passes": 1,
+        "repetitions": 6,
+        "timeout_ms": 30000,
+        "processors": null,
+        "buffer_count": 32,
+        "batch_size": 1
+      }
+    },
+    {
+      "Name": "depth-01-first",
+      "Sweep": "depth",
+      "Point": "first",
+      "ChangedFields": [
+        "depth"
+      ],
+      "Config": {
+        "file": "Q:\\github\\windows-threadpool-sys\\.scratch\\ep-x1-2-capture\\fixture.dat",
+        "block_bytes": 65536,
+        "depth": 2,
+        "queue_capacity": 4,
+        "checksum_passes": 1,
+        "repetitions": 6,
+        "timeout_ms": 30000,
+        "processors": null,
+        "buffer_count": 32,
+        "batch_size": 1
+      }
+    },
+    {
+      "Name": "depth-02-second",
+      "Sweep": "depth",
+      "Point": "second",
+      "ChangedFields": [
+        "depth"
+      ],
+      "Config": {
+        "file": "Q:\\github\\windows-threadpool-sys\\.scratch\\ep-x1-2-capture\\fixture.dat",
+        "block_bytes": 65536,
+        "depth": 32,
+        "queue_capacity": 4,
+        "checksum_passes": 1,
+        "repetitions": 6,
+        "timeout_ms": 30000,
+        "processors": null,
+        "buffer_count": 32,
+        "batch_size": 1
+      }
+    },
+    {
+      "Name": "depth-03-second",
+      "Sweep": "depth",
+      "Point": "second",
+      "ChangedFields": [
+        "depth"
+      ],
+      "Config": {
+        "file": "Q:\\github\\windows-threadpool-sys\\.scratch\\ep-x1-2-capture\\fixture.dat",
+        "block_bytes": 65536,
+        "depth": 32,
+        "queue_capacity": 4,
+        "checksum_passes": 1,
+        "repetitions": 6,
+        "timeout_ms": 30000,
+        "processors": null,
+        "buffer_count": 32,
+        "batch_size": 1
+      }
+    },
+    {
+      "Name": "depth-04-first",
+      "Sweep": "depth",
+      "Point": "first",
+      "ChangedFields": [
+        "depth"
+      ],
+      "Config": {
+        "file": "Q:\\github\\windows-threadpool-sys\\.scratch\\ep-x1-2-capture\\fixture.dat",
+        "block_bytes": 65536,
+        "depth": 2,
+        "queue_capacity": 4,
+        "checksum_passes": 1,
+        "repetitions": 6,
+        "timeout_ms": 30000,
+        "processors": null,
+        "buffer_count": 32,
+        "batch_size": 1
+      }
+    },
+    {
+      "Name": "depth-05-control",
+      "Sweep": "depth",
+      "Point": "control",
+      "ChangedFields": [],
+      "Config": {
+        "file": "Q:\\github\\windows-threadpool-sys\\.scratch\\ep-x1-2-capture\\fixture.dat",
+        "block_bytes": 65536,
+        "depth": 8,
+        "queue_capacity": 4,
+        "checksum_passes": 1,
+        "repetitions": 6,
+        "timeout_ms": 30000,
+        "processors": null,
+        "buffer_count": 32,
+        "batch_size": 1
+      }
+    },
+    {
+      "Name": "queue-00-control",
+      "Sweep": "queue",
+      "Point": "control",
+      "ChangedFields": [],
+      "Config": {
+        "file": "Q:\\github\\windows-threadpool-sys\\.scratch\\ep-x1-2-capture\\fixture.dat",
+        "block_bytes": 65536,
+        "depth": 8,
+        "queue_capacity": 4,
+        "checksum_passes": 1,
+        "repetitions": 6,
+        "timeout_ms": 30000,
+        "processors": null,
+        "buffer_count": 32,
+        "batch_size": 1
+      }
+    },
+    {
+      "Name": "queue-01-first",
+      "Sweep": "queue",
+      "Point": "first",
+      "ChangedFields": [
+        "queue_capacity"
+      ],
+      "Config": {
+        "file": "Q:\\github\\windows-threadpool-sys\\.scratch\\ep-x1-2-capture\\fixture.dat",
+        "block_bytes": 65536,
+        "depth": 8,
+        "queue_capacity": 1,
+        "checksum_passes": 1,
+        "repetitions": 6,
+        "timeout_ms": 30000,
+        "processors": null,
+        "buffer_count": 32,
+        "batch_size": 1
+      }
+    },
+    {
+      "Name": "queue-02-second",
+      "Sweep": "queue",
+      "Point": "second",
+      "ChangedFields": [
+        "queue_capacity"
+      ],
+      "Config": {
+        "file": "Q:\\github\\windows-threadpool-sys\\.scratch\\ep-x1-2-capture\\fixture.dat",
+        "block_bytes": 65536,
+        "depth": 8,
+        "queue_capacity": 16,
+        "checksum_passes": 1,
+        "repetitions": 6,
+        "timeout_ms": 30000,
+        "processors": null,
+        "buffer_count": 32,
+        "batch_size": 1
+      }
+    },
+    {
+      "Name": "queue-03-second",
+      "Sweep": "queue",
+      "Point": "second",
+      "ChangedFields": [
+        "queue_capacity"
+      ],
+      "Config": {
+        "file": "Q:\\github\\windows-threadpool-sys\\.scratch\\ep-x1-2-capture\\fixture.dat",
+        "block_bytes": 65536,
+        "depth": 8,
+        "queue_capacity": 16,
+        "checksum_passes": 1,
+        "repetitions": 6,
+        "timeout_ms": 30000,
+        "processors": null,
+        "buffer_count": 32,
+        "batch_size": 1
+      }
+    },
+    {
+      "Name": "queue-04-first",
+      "Sweep": "queue",
+      "Point": "first",
+      "ChangedFields": [
+        "queue_capacity"
+      ],
+      "Config": {
+        "file": "Q:\\github\\windows-threadpool-sys\\.scratch\\ep-x1-2-capture\\fixture.dat",
+        "block_bytes": 65536,
+        "depth": 8,
+        "queue_capacity": 1,
+        "checksum_passes": 1,
+        "repetitions": 6,
+        "timeout_ms": 30000,
+        "processors": null,
+        "buffer_count": 32,
+        "batch_size": 1
+      }
+    },
+    {
+      "Name": "queue-05-control",
+      "Sweep": "queue",
+      "Point": "control",
+      "ChangedFields": [],
+      "Config": {
+        "file": "Q:\\github\\windows-threadpool-sys\\.scratch\\ep-x1-2-capture\\fixture.dat",
+        "block_bytes": 65536,
+        "depth": 8,
+        "queue_capacity": 4,
+        "checksum_passes": 1,
+        "repetitions": 6,
+        "timeout_ms": 30000,
+        "processors": null,
+        "buffer_count": 32,
+        "batch_size": 1
+      }
+    },
+    {
+      "Name": "batch-00-control",
+      "Sweep": "batch",
+      "Point": "control",
+      "ChangedFields": [],
+      "Config": {
+        "file": "Q:\\github\\windows-threadpool-sys\\.scratch\\ep-x1-2-capture\\fixture.dat",
+        "block_bytes": 65536,
+        "depth": 8,
+        "queue_capacity": 4,
+        "checksum_passes": 1,
+        "repetitions": 6,
+        "timeout_ms": 30000,
+        "processors": null,
+        "buffer_count": 32,
+        "batch_size": 1
+      }
+    },
+    {
+      "Name": "batch-01-first",
+      "Sweep": "batch",
+      "Point": "first",
+      "ChangedFields": [
+        "batch_size"
+      ],
+      "Config": {
+        "file": "Q:\\github\\windows-threadpool-sys\\.scratch\\ep-x1-2-capture\\fixture.dat",
+        "block_bytes": 65536,
+        "depth": 8,
+        "queue_capacity": 4,
+        "checksum_passes": 1,
+        "repetitions": 6,
+        "timeout_ms": 30000,
+        "processors": null,
+        "buffer_count": 32,
+        "batch_size": 4
+      }
+    },
+    {
+      "Name": "batch-02-second",
+      "Sweep": "batch",
+      "Point": "second",
+      "ChangedFields": [
+        "batch_size"
+      ],
+      "Config": {
+        "file": "Q:\\github\\windows-threadpool-sys\\.scratch\\ep-x1-2-capture\\fixture.dat",
+        "block_bytes": 65536,
+        "depth": 8,
+        "queue_capacity": 4,
+        "checksum_passes": 1,
+        "repetitions": 6,
+        "timeout_ms": 30000,
+        "processors": null,
+        "buffer_count": 32,
+        "batch_size": 16
+      }
+    },
+    {
+      "Name": "batch-03-second",
+      "Sweep": "batch",
+      "Point": "second",
+      "ChangedFields": [
+        "batch_size"
+      ],
+      "Config": {
+        "file": "Q:\\github\\windows-threadpool-sys\\.scratch\\ep-x1-2-capture\\fixture.dat",
+        "block_bytes": 65536,
+        "depth": 8,
+        "queue_capacity": 4,
+        "checksum_passes": 1,
+        "repetitions": 6,
+        "timeout_ms": 30000,
+        "processors": null,
+        "buffer_count": 32,
+        "batch_size": 16
+      }
+    },
+    {
+      "Name": "batch-04-first",
+      "Sweep": "batch",
+      "Point": "first",
+      "ChangedFields": [
+        "batch_size"
+      ],
+      "Config": {
+        "file": "Q:\\github\\windows-threadpool-sys\\.scratch\\ep-x1-2-capture\\fixture.dat",
+        "block_bytes": 65536,
+        "depth": 8,
+        "queue_capacity": 4,
+        "checksum_passes": 1,
+        "repetitions": 6,
+        "timeout_ms": 30000,
+        "processors": null,
+        "buffer_count": 32,
+        "batch_size": 4
+      }
+    },
+    {
+      "Name": "batch-05-control",
+      "Sweep": "batch",
+      "Point": "control",
+      "ChangedFields": [],
+      "Config": {
+        "file": "Q:\\github\\windows-threadpool-sys\\.scratch\\ep-x1-2-capture\\fixture.dat",
+        "block_bytes": 65536,
+        "depth": 8,
+        "queue_capacity": 4,
+        "checksum_passes": 1,
+        "repetitions": 6,
+        "timeout_ms": 30000,
+        "processors": null,
+        "buffer_count": 32,
+        "batch_size": 1
+      }
+    },
+    {
+      "Name": "queue-batch-00-control",
+      "Sweep": "queue-batch",
+      "Point": "control",
+      "ChangedFields": [],
+      "Config": {
+        "file": "Q:\\github\\windows-threadpool-sys\\.scratch\\ep-x1-2-capture\\fixture.dat",
+        "block_bytes": 65536,
+        "depth": 8,
+        "queue_capacity": 4,
+        "checksum_passes": 1,
+        "repetitions": 6,
+        "timeout_ms": 30000,
+        "processors": null,
+        "buffer_count": 32,
+        "batch_size": 1
+      }
+    },
+    {
+      "Name": "queue-batch-01-queue",
+      "Sweep": "queue-batch",
+      "Point": "queue",
+      "ChangedFields": [
+        "queue_capacity"
+      ],
+      "Config": {
+        "file": "Q:\\github\\windows-threadpool-sys\\.scratch\\ep-x1-2-capture\\fixture.dat",
+        "block_bytes": 65536,
+        "depth": 8,
+        "queue_capacity": 1,
+        "checksum_passes": 1,
+        "repetitions": 6,
+        "timeout_ms": 30000,
+        "processors": null,
+        "buffer_count": 32,
+        "batch_size": 1
+      }
+    },
+    {
+      "Name": "queue-batch-02-batch",
+      "Sweep": "queue-batch",
+      "Point": "batch",
+      "ChangedFields": [
+        "batch_size"
+      ],
+      "Config": {
+        "file": "Q:\\github\\windows-threadpool-sys\\.scratch\\ep-x1-2-capture\\fixture.dat",
+        "block_bytes": 65536,
+        "depth": 8,
+        "queue_capacity": 4,
+        "checksum_passes": 1,
+        "repetitions": 6,
+        "timeout_ms": 30000,
+        "processors": null,
+        "buffer_count": 32,
+        "batch_size": 16
+      }
+    },
+    {
+      "Name": "queue-batch-03-both",
+      "Sweep": "queue-batch",
+      "Point": "both",
+      "ChangedFields": [
+        "queue_capacity",
+        "batch_size"
+      ],
+      "Config": {
+        "file": "Q:\\github\\windows-threadpool-sys\\.scratch\\ep-x1-2-capture\\fixture.dat",
+        "block_bytes": 65536,
+        "depth": 8,
+        "queue_capacity": 1,
+        "checksum_passes": 1,
+        "repetitions": 6,
+        "timeout_ms": 30000,
+        "processors": null,
+        "buffer_count": 32,
+        "batch_size": 16
+      }
+    },
+    {
+      "Name": "queue-batch-04-both",
+      "Sweep": "queue-batch",
+      "Point": "both",
+      "ChangedFields": [
+        "queue_capacity",
+        "batch_size"
+      ],
+      "Config": {
+        "file": "Q:\\github\\windows-threadpool-sys\\.scratch\\ep-x1-2-capture\\fixture.dat",
+        "block_bytes": 65536,
+        "depth": 8,
+        "queue_capacity": 1,
+        "checksum_passes": 1,
+        "repetitions": 6,
+        "timeout_ms": 30000,
+        "processors": null,
+        "buffer_count": 32,
+        "batch_size": 16
+      }
+    },
+    {
+      "Name": "queue-batch-05-batch",
+      "Sweep": "queue-batch",
+      "Point": "batch",
+      "ChangedFields": [
+        "batch_size"
+      ],
+      "Config": {
+        "file": "Q:\\github\\windows-threadpool-sys\\.scratch\\ep-x1-2-capture\\fixture.dat",
+        "block_bytes": 65536,
+        "depth": 8,
+        "queue_capacity": 4,
+        "checksum_passes": 1,
+        "repetitions": 6,
+        "timeout_ms": 30000,
+        "processors": null,
+        "buffer_count": 32,
+        "batch_size": 16
+      }
+    },
+    {
+      "Name": "queue-batch-06-queue",
+      "Sweep": "queue-batch",
+      "Point": "queue",
+      "ChangedFields": [
+        "queue_capacity"
+      ],
+      "Config": {
+        "file": "Q:\\github\\windows-threadpool-sys\\.scratch\\ep-x1-2-capture\\fixture.dat",
+        "block_bytes": 65536,
+        "depth": 8,
+        "queue_capacity": 1,
+        "checksum_passes": 1,
+        "repetitions": 6,
+        "timeout_ms": 30000,
+        "processors": null,
+        "buffer_count": 32,
+        "batch_size": 1
+      }
+    },
+    {
+      "Name": "queue-batch-07-control",
+      "Sweep": "queue-batch",
+      "Point": "control",
+      "ChangedFields": [],
+      "Config": {
+        "file": "Q:\\github\\windows-threadpool-sys\\.scratch\\ep-x1-2-capture\\fixture.dat",
+        "block_bytes": 65536,
+        "depth": 8,
+        "queue_capacity": 4,
+        "checksum_passes": 1,
+        "repetitions": 6,
+        "timeout_ms": 30000,
+        "processors": null,
+        "buffer_count": 32,
+        "batch_size": 1
+      }
+    }
+  ]
+}

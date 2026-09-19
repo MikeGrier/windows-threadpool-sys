@@ -6,6 +6,8 @@ fn config() -> Config {
         file: "unused".into(),
         block_bytes: 1024,
         depth: 8,
+        buffer_count: None,
+        batch_size: 1,
         queue_capacity: 4,
         checksum_passes: 1,
         repetitions: 6,
@@ -87,6 +89,46 @@ fn known_checksum_vectors_and_rounds() {
     assert_eq!(checksum(b"foobar", 1), 0x8594_4171_f739_67e8);
     assert_eq!(checksum(b"abc", 2), checksum(b"abcabc", 1));
     assert_ne!(checksum(b"abc", 1), checksum(b"abd", 1));
+}
+
+#[test]
+fn independent_read_pool_and_batch_limits() {
+    for depth in [2, 4, 8, 16, 32] {
+        for batch_size in [1, 3, 16, MAX_BUFFERS] {
+            let mut candidate = config();
+            candidate.depth = depth;
+            candidate.buffer_count = Some(32);
+            candidate.queue_capacity = 32;
+            candidate.batch_size = batch_size;
+            assert!(candidate.validate(4096).is_ok());
+            assert_eq!(candidate.buffers(), 32);
+        }
+    }
+    for buffers in [0, 1, 4, 9, MAX_BUFFERS + 1, usize::MAX] {
+        let mut candidate = config();
+        candidate.buffer_count = Some(buffers);
+        assert!(candidate.validate(4096).is_err());
+    }
+    for batch_size in [0, MAX_BUFFERS + 1, usize::MAX] {
+        let mut candidate = config();
+        candidate.batch_size = batch_size;
+        assert!(candidate.validate(4096).is_err());
+    }
+    let mut candidate = config();
+    candidate.block_bytes = MAX_POOL_BYTES / 8;
+    candidate.buffer_count = Some(16);
+    assert!(candidate.validate(MAX_FILE_BYTES).is_err());
+}
+
+#[test]
+fn legacy_configs_default_to_depth_buffers_and_single_jobs() {
+    let mut value = serde_json::to_value(config()).unwrap();
+    value.as_object_mut().unwrap().remove("buffer_count");
+    value.as_object_mut().unwrap().remove("batch_size");
+    let decoded: Config = serde_json::from_value(value).unwrap();
+    assert_eq!(decoded.buffers(), decoded.depth);
+    assert_eq!(decoded.batch_size, 1);
+    assert!(decoded.validate(4096).is_ok());
 }
 
 #[test]

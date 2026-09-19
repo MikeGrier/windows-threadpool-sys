@@ -9,8 +9,9 @@ paths remain separate; shared file, checksum and instrumentation primitives are 
 a shared scheduler.
 
 Configuration explicitly names the fixture, block size, total depth, handoff capacity,
-checksum passes, repetition count and timeout. Depth is an even power of two so two
-readers receive equal halves. Every variant allocates the same total payload-buffer
+checksum passes, repetition count and timeout. Read depth and payload-buffer count
+are separate powers of two so two readers receive equal halves; the latter defaults
+to depth in older configurations. Every variant allocates the same total payload-buffer
 capacity. Queue, token and result metadata are additional overhead and are identified
 as such, not included in the payload-buffer figure.
 
@@ -166,3 +167,52 @@ controls around its one-factor sweeps. Review orientations separately and retain
 outliers; overlapping same-code/candidate differences remain inconclusive. No
 arrangement is selected as the sole sweep baseline by its EP-X1.1 throughput rank.
 This action is queued in the parent's item, not deferred to an unscheduled review.
+
+## RC-D9: EP-X1.2 parameter isolation
+
+Use the same deterministic 33,554,449-byte buffered fixture and pinned pair for
+every case, with all arrangements and both orientations. Each case has six balanced
+repetitions and untimed warm-up. Use one release executable, a 30-second cooperative
+deadline per setup/reference/trial phase, and stop on any failure. No elevation,
+external endpoint, device mode or writes outside owned scratch files are authorized.
+Existing cancellation/rundown limits remain unchanged.
+
+The baseline is 65,536-byte blocks, eight aggregate pending reads, 32 payload buffers,
+queue capacity four, one checksum pass and batch size one. Separate pending-read
+credits from payload-buffer credits; old configurations default buffer count to depth.
+Every pair matches read/payload budgets. The labelled single-CPU reference remains
+unequal only in CPU capacity.
+Metadata is outside the payload budget and remains bounded by the fixture and pools.
+
+| Dimension | Lower / baseline / upper values | Held constant or explicitly normalized |
+|---|---|---|
+| Block bytes | 16,384 / 65,536 / 262,144 | Payload pool stays 2 MiB by setting buffer count to 128 / 32 / 8; outstanding byte ceiling and block count necessarily change |
+| Checksum passes | 1 / 1 / 16 | All other fields fixed; baseline also supplies the low point |
+| Read depth | 2 / 8 / 32 | Buffer count remains 32, unlike the old coupled depth/pool setting |
+| Queue capacity | 1 / 4 / 16 | Payload pool and read depth fixed; this setting only affects handoff |
+| Batch size | 1 / 1 / 16 | All other fields fixed; include an intermediate size four |
+
+The compute sweep includes intermediate passes four. Each one-factor sweep runs
+baseline, first non-baseline point, second point, second point, first point, baseline.
+The selected queue/batch interaction runs the four corners of queue {1,4} x batch
+{1,16}, then reverses their order. This tests whether batching's effect changes under
+a narrow handoff queue; no other interactions are claimed measured.
+Direct and independent paths do not consume queue capacity, so their rows in that
+sweep provide additional same-code controls rather than queue-effect measurements.
+
+Batch size is a scheduling quantum, not an OS vectored-I/O or atomic queue operation.
+Direct workers submit available reads then process up to the quantum before refill.
+The pipeline reader drains up to the quantum of returns, refills, then forwards up
+to the quantum; its processor processes and returns up to the quantum per turn.
+Every phase stops early on empty/full, never waits to fill a batch, and checks the
+cooperative budget per job. A full handoff retains at most one waiting payload.
+Partial batches, including the short final block, complete without padding or loss.
+
+Record effective configuration, per-worker read and buffer capacities, observed
+read/lease peaks, buffer-pressure observations, batch sizes/partial batches, queue
+high-water/full attempts, CPU, throughput and existing stage/queue latency metrics.
+Per-worker peaks remain per-worker observations, not a simultaneous global peak.
+Review each orientation separately against the bracketing same-code spread. Retain
+raw samples and inconclusive differences; no universal queue or batch size is chosen.
+Return the result to parent [CHECKLIST.md](../../CHECKLIST.md) -> `EP-R1.7` for
+discussion before closing the item or starting `EP-X1.3`.

@@ -36,7 +36,7 @@ prerequisites rather than on someone else's decision.
 | Milestone | State | What it is waiting on |
 |---|---|---|
 | MR1 design-review reconciliation | active | EP-R1.7 drives MX1 through MX3; EP-R1.8 follows the resulting contracts and names |
-| MX1 controlled read/checksum comparisons | in progress | EP-X1.1 recorded; EP-X1.2 retains its controls |
+| MX1 controlled read/checksum comparisons | in progress | EP-X1.2 implemented and captured; result discussion before closure or EP-X1.3 |
 | MX2 locality and ownership patterns | not started | MX1 measurement controls; revise the sequence at each experiment review |
 | MX3 real endpoints, composition and synthesis | not started | MX2 ownership/ordering evidence and the permissions/hardware named by each experiment |
 | M1 the input contract | 4 done, 1 open | `EP-1.4` waits on EP-R1.7 |
@@ -67,7 +67,7 @@ item; do not start `EP-R1.8` merely because one experiment has finished.
   **In progress:** use [DESIGN-PROPOSAL-EP-R1.7.md](DESIGN-PROPOSAL-EP-R1.7.md) as a working
   basis, not a frozen contract. Start from the primary-source survey and simpler workloads in
   [DESIGN-RESEARCH-WORKLOAD-PATTERNS.md](DESIGN-RESEARCH-WORKLOAD-PATTERNS.md).
-  Review the controlled read/checksum [capture record](experiments/read-checksum/captures/2026-09-19-ep-x1-1/README.md)
+  Review the parameter-sweep [capture record](experiments/read-checksum/captures/2026-09-19-ep-x1-2/README.md)
   before selecting the next experiment. Keep stage separation distinct from processing parallelism,
   and account for run-to-run variation before generalizing the catalog. Define each experiment's
   constraints and correctness/measurement obligations; review speculative paths for retention,
@@ -88,10 +88,10 @@ item; do not start `EP-R1.8` merely because one experiment has finished.
   ten normal cases plus every identified edge case, and replace "deferred for litigation" with a
   linked decision or a concrete blocker and graduation trigger.
   Use MX1 through MX3 below as the experiment work queue, revising it as evidence changes the plan.
-  > **-> CROSS-COMPONENT HANDOFF:** next experimental work is in
-  > `crates/topology-planner/experiments/read-checksum` -> `MX1` -> `EP-X1.2`
-  > below. Its [PLANS.md](experiments/read-checksum/PLANS.md) points back here;
-  > return to this component's `EP-R1.7` discussion after each experiment.
+  > **CROSS-COMPONENT PREREQUISITE:** `crates/topology-planner/experiments/read-checksum`
+  > -> `MX1` -> `EP-X1.2` has returned its capture here for result discussion.
+  > Close that review before the next handoff to `EP-X1.3`; its
+  > [PLANS.md](experiments/read-checksum/PLANS.md) points back here.
 
 - [ ] **EP-R1.8** -- **Materialize executable component-local plans after names and contracts are
   settled.** Create dependency-ordered checklists and reciprocal cross-component handoffs for
@@ -133,6 +133,10 @@ same item ID; do not create an unowned implementation queue.
 - [x] **EP-X1.1** -- Separate repeatability, stage separation and processing parallelism. -> [completed 2026-09-18](COMPLETED-CHECKLIST.md#ep-x11)
 
 - [ ] **EP-X1.2** -- **Isolate block size, compute work, read depth, queue capacity and batching.**
+  **Result discussion pending:** review the implemented protocol and observations in the
+  [capture record](experiments/read-checksum/captures/2026-09-19-ep-x1-2/README.md),
+  agree the path disposition and fixed cases for EP-X1.3, then close this item.
+  The protocol is [DESIGN-NOTES.md](experiments/read-checksum/DESIGN-NOTES.md#rc-d9-ep-x12-parameter-isolation).
   **Question:** how does each dimension change the comparison, rather than several changing
   together? **Controls:** use `EP-X1.1`'s arrangements and a bounded one-factor-at-a-time
   matrix, adding explicitly selected interactions; match aggregate budgets between candidates
@@ -151,6 +155,8 @@ same item ID; do not create an unowned implementation queue.
   > `topology-planner` -> `EP-R1.7` before advancing to `EP-X1.3`.
 
 - [ ] **EP-X1.3** -- **Compare polling, waiting and bounded hybrid idle policies.**
+  Select its fixed configurations at the EP-X1.2 result discussion using the
+  [proposed cases](experiments/read-checksum/captures/2026-09-19-ep-x1-2/README.md#proposed-disposition-and-next-cases).
   **Question:** how much of a candidate's CPU use and response time comes from its idle and
   backpressure policy? **Controls:** hold the workload, placement, topology and resource
   bounds from selected `EP-X1.2` cases fixed; apply equivalent policy choices to comparable

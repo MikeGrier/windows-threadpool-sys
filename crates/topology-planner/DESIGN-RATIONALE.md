@@ -228,3 +228,23 @@ The resulting experiment decision is
 [DESIGN-NOTES.md](experiments/read-checksum/DESIGN-NOTES.md) -> `RC-D8`.
 The working proposal links that decision at its evidence boundary; production
 component names, contracts and selection policy remain under `EP-R1.7`.
+
+## EP-X1.2: independent budgets and scheduling batches
+
+The initial reader used `depth` for both the pending-read ceiling and payload-buffer
+allocation. A depth sweep would therefore have changed two resource allowances.
+The experiment's [DESIGN-NOTES.md](experiments/read-checksum/DESIGN-NOTES.md) ->
+`RC-D9` separates them and defines what batching means in these schedulers.
+The block-size sweep normalizes buffer count to hold payload bytes fixed; it does
+not conceal the resulting changes in block count or outstanding byte ceiling.
+
+Scheduling quanta were chosen to measure refill, forwarding and processing cadence
+without introducing a new I/O backend or changing queue operation semantics.
+The selected interaction combines queue capacity with batch size, while other
+dimensions remain fixed. Reversed point order and bracketing controls retain
+variation rather than converting a single faster sample into a default.
+
+The [capture record](experiments/read-checksum/captures/2026-09-19-ep-x1-2/README.md)
+contains the observations, summary repair and proposed next cases. Result discussion
+remains queued in [CHECKLIST.md](CHECKLIST.md) -> `EP-X1.2`; implementation and
+capture alone do not close it.

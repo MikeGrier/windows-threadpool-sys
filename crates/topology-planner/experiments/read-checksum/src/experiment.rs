@@ -90,6 +90,10 @@ pub struct WorkerReport {
     pub completed: usize,
     pub checksummed_blocks: usize,
     pub buffer_capacity: usize,
+    pub read_capacity: usize,
+    pub buffer_pressure_observations: usize,
+    pub batches: BatchStats,
+    pub return_batches: BatchStats,
     pub peak_outstanding_reads: usize,
     pub peak_leased_buffers: usize,
     pub handoff_full_observations: usize,
@@ -97,6 +101,25 @@ pub struct WorkerReport {
     pub return_high_water: Option<usize>,
     pub pages_before: Option<Residency>,
     pub pages_after: Option<Residency>,
+}
+
+#[derive(Debug, Default, Serialize)]
+pub struct BatchStats {
+    pub count: usize,
+    pub jobs: usize,
+    pub max_jobs: usize,
+    pub partial: usize,
+}
+
+impl BatchStats {
+    fn record(&mut self, jobs: usize, limit: usize) {
+        if jobs != 0 {
+            self.count += 1;
+            self.jobs += jobs;
+            self.max_jobs = self.max_jobs.max(jobs);
+            self.partial += usize::from(jobs < limit);
+        }
+    }
 }
 
 struct WorkerResult {
@@ -182,7 +205,7 @@ fn roles(arrangement: Arrangement, config: &Config) -> io::Result<Vec<Role>> {
                 spsc::bounded_with(config.queue_capacity, Options::new().tracking_high_water())
                     .map_err(|e| invalid(e.to_string()))?;
             let (return_send, returns) =
-                spsc::bounded_with(config.depth, Options::new().tracking_high_water())
+                spsc::bounded_with(config.buffers(), Options::new().tracking_high_water())
                     .map_err(|e| invalid(e.to_string()))?;
             vec![
                 Role::Reader { send, returns },
@@ -195,14 +218,24 @@ fn roles(arrangement: Arrangement, config: &Config) -> io::Result<Vec<Role>> {
     })
 }
 
-fn direct_loop(reader: &mut Reader<'_>, config: &Config, budget: &Budget<'_>) -> io::Result<()> {
+fn direct_loop(
+    reader: &mut Reader<'_>,
+    config: &Config,
+    budget: &Budget<'_>,
+    batches: &mut BatchStats,
+) -> io::Result<()> {
     while !reader.done() {
         budget.check()?;
         let mut progress = reader.submit_available()?;
-        if let Some(job) = reader.poll()? {
+        let mut processed = 0;
+        for _ in 0..config.batch_size {
+            budget.check()?;
+            let Some(job) = reader.poll()? else { break };
             reader.reclaim(job.process(config.checksum_passes, false, || budget.check())?);
+            processed += 1;
             progress = true;
         }
+        batches.record(processed, config.batch_size);
         if !progress {
             thread::yield_now();
         }
@@ -214,37 +247,58 @@ fn pipeline_loop(
     reader: &mut Reader<'_>,
     send: &spsc::Producer<Job>,
     returns: &spsc::Consumer<Finished>,
+    config: &Config,
     budget: &Budget<'_>,
+    report: &mut WorkerReport,
 ) -> io::Result<usize> {
     let mut waiting = None;
     let mut full = 0;
     while !reader.done() {
         budget.check()?;
         let mut progress = false;
-        match returns.pop() {
-            Ok(done) => {
-                reader.reclaim(done);
-                progress = true;
+        let mut returned = 0;
+        for _ in 0..config.batch_size {
+            budget.check()?;
+            match returns.pop() {
+                Ok(done) => {
+                    reader.reclaim(done);
+                    returned += 1;
+                    progress = true;
+                }
+                Err(TryRecvError::Empty) => break,
+                Err(TryRecvError::Disconnected) => {
+                    return Err(failed("processor lost before rundown"));
+                }
+                Err(error) => return Err(failed(format!("return queue: {error}"))),
             }
-            Err(TryRecvError::Empty) => {}
-            Err(TryRecvError::Disconnected) => return Err(failed("processor lost before rundown")),
-            Err(error) => return Err(failed(format!("return queue: {error}"))),
+            if reader.done() {
+                break;
+            }
         }
+        report.return_batches.record(returned, config.batch_size);
         progress |= reader.submit_available()?;
-        if waiting.is_none() {
-            waiting = reader.poll()?;
-        }
-        if let Some(job) = waiting.take() {
+        let mut forwarded = 0;
+        for _ in 0..config.batch_size {
+            budget.check()?;
+            if waiting.is_none() {
+                waiting = reader.poll()?;
+            }
+            let Some(job) = waiting.take() else { break };
             match send.push(job) {
-                Ok(()) => progress = true,
+                Ok(()) => {
+                    progress = true;
+                    forwarded += 1;
+                }
                 Err(PushError::Full(job)) => {
                     waiting = Some(job);
                     full += 1;
+                    break;
                 }
                 Err(PushError::Disconnected(_)) => return Err(failed("processor disconnected")),
                 Err(_) => return Err(failed("unsupported handoff queue failure")),
             }
         }
+        report.batches.record(forwarded, config.batch_size);
         if !progress {
             thread::yield_now();
         }
@@ -256,29 +310,43 @@ fn processor_loop(
     receive: &spsc::Consumer<Job>,
     returns: &spsc::Producer<Finished>,
     blocks: usize,
-    passes: u32,
+    config: &Config,
     budget: &Budget<'_>,
+    batches: &mut BatchStats,
 ) -> io::Result<()> {
+    let processing_quantum = config.batch_size;
     let mut completed = 0;
     while completed < blocks {
         budget.check()?;
-        match receive.pop() {
-            Ok(job) => {
-                let done = job.process(passes, true, || budget.check())?;
-                // Every return owns one of the depth buffers, so a depth-sized return queue
-                // has room for this buffer even if the reader has not reclaimed its peers.
-                returns.push(done).map_err(|e| match e {
-                    PushError::Full(_) => failed("return queue violated payload-credit bound"),
-                    PushError::Disconnected(_) => failed("reader disconnected"),
-                    _ => failed("unsupported return queue failure"),
-                })?;
-                completed += 1;
+        let mut processed = 0;
+        for _ in 0..processing_quantum {
+            if completed == blocks {
+                break;
             }
-            Err(TryRecvError::Empty) => thread::yield_now(),
-            Err(TryRecvError::Disconnected) => {
-                return Err(failed("reader stopped before all blocks"));
+            budget.check()?;
+            match receive.pop() {
+                Ok(job) => {
+                    let done = job.process(config.checksum_passes, true, || budget.check())?;
+                    // Every return owns one of the pool buffers, so a pool-sized return queue
+                    // has room for this buffer even if the reader has not reclaimed its peers.
+                    returns.push(done).map_err(|e| match e {
+                        PushError::Full(_) => failed("return queue violated payload-credit bound"),
+                        PushError::Disconnected(_) => failed("reader disconnected"),
+                        _ => failed("unsupported return queue failure"),
+                    })?;
+                    completed += 1;
+                    processed += 1;
+                }
+                Err(TryRecvError::Empty) => break,
+                Err(TryRecvError::Disconnected) => {
+                    return Err(failed("reader stopped before all blocks"));
+                }
+                Err(error) => return Err(failed(format!("handoff queue: {error}"))),
             }
-            Err(error) => return Err(failed(format!("handoff queue: {error}"))),
+        }
+        batches.record(processed, processing_quantum);
+        if processed == 0 {
+            thread::yield_now();
         }
     }
     Ok(())
@@ -309,6 +377,10 @@ fn worker(
         completed: 0,
         checksummed_blocks: 0,
         buffer_capacity: 0,
+        read_capacity: 0,
+        buffer_pressure_observations: 0,
+        batches: BatchStats::default(),
+        return_batches: BatchStats::default(),
         peak_outstanding_reads: 0,
         peak_leased_buffers: 0,
         handoff_full_observations: 0,
@@ -329,8 +401,9 @@ fn worker(
             &receive,
             &returns,
             context.blocks,
-            config.checksum_passes,
+            config,
             &budget,
+            &mut report.batches,
         )?;
         report.cpu_ns = platform::cpu_ns()? - cpu_start;
         report.processor_at_end = platform::current_processor();
@@ -358,6 +431,7 @@ fn worker(
         lanes,
     )?;
     report.buffer_capacity = reader.free.len();
+    report.read_capacity = reader.read_limit;
     report.pages_before = Some(platform::residency(&reader.free)?);
     let start = gate.wait()?;
     let budget = Budget {
@@ -369,13 +443,13 @@ fn worker(
     match role {
         Role::Direct { .. } => {
             report.role = "direct";
-            direct_loop(&mut reader, config, &budget)?;
+            direct_loop(&mut reader, config, &budget, &mut report.batches)?;
             report.checksummed_blocks = reader.results.len();
         }
         Role::Reader { send, returns } => {
             report.role = "reader";
             report.handoff_full_observations =
-                pipeline_loop(&mut reader, &send, &returns, &budget)?;
+                pipeline_loop(&mut reader, &send, &returns, config, &budget, &mut report)?;
             report.handoff_high_water = send.high_water();
         }
         Role::Processor { .. } => unreachable!(),
@@ -387,7 +461,8 @@ fn worker(
     report.completed = reader.results.len();
     report.peak_outstanding_reads = reader.peak_io;
     report.peak_leased_buffers = reader.peak_leased;
-    if port.outstanding() != 0 || reader.free.len() != config.depth / lanes {
+    report.buffer_pressure_observations = reader.buffer_pressure_observations;
+    if port.outstanding() != 0 || reader.free.len() != config.buffers() / lanes {
         return Err(failed(
             "trial completed without draining all I/O and buffer credits",
         ));
@@ -507,7 +582,11 @@ fn run_trial(
         reports.push(worker.report);
     }
     verify(&mut results, expected)?;
-    let max_pending_reads = reports.iter().map(|report| report.buffer_capacity).sum();
+    let max_pending_reads = reports.iter().map(|report| report.read_capacity).sum();
+    let payload_pool_bytes = reports
+        .iter()
+        .map(|report| report.buffer_capacity * config.block_bytes)
+        .sum();
     Ok(Trial {
         repetition,
         position,
@@ -519,7 +598,7 @@ fn run_trial(
             checksum_workers,
             unequal_cpu_reference: worker_threads == 1,
             max_pending_reads,
-            payload_pool_bytes: max_pending_reads * config.block_bytes,
+            payload_pool_bytes,
         },
         work_wall_ns,
         joined_wall_ns: joined.duration_since(start).as_nanos() as u64,
@@ -583,7 +662,7 @@ pub fn run(config: Config) -> io::Result<Capture> {
     // The handle denying writes/deletion stays alive through reference validation and all trials.
     drop(fixture);
     Ok(Capture {
-        schema: "read-checksum-v2",
+        schema: "read-checksum-v3",
         status: "success",
         build: BuildProvenance {
             git_revision: env!("RC_GIT_REVISION"),
@@ -595,7 +674,7 @@ pub fn run(config: Config) -> io::Result<Capture> {
             opt_level: env!("RC_OPT_LEVEL"),
             rustflags: env!("RC_RUSTFLAGS"),
         },
-        payload_pool_bytes: config.block_bytes * config.depth,
+        payload_pool_bytes: config.block_bytes * config.buffers(),
         config,
         topology,
         processors: pair,

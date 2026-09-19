@@ -332,6 +332,12 @@ selection policy remain open. The
 [capture record](experiments/read-checksum/captures/2026-09-19-ep-x1-1/README.md)
 supplies the experiment evidence, not acceptance of this whole proposal.
 
+The independent read/payload credits and explicit scheduling-batch semantics added
+by EP-X1.2 are defined in the experiment's
+[DESIGN-NOTES.md](experiments/read-checksum/DESIGN-NOTES.md) -> `RC-D9`.
+Its [capture record](experiments/read-checksum/captures/2026-09-19-ep-x1-2/README.md)
+is awaiting result discussion; it does not settle a production batch or queue default.
+
 ### Permissions and budgets
 
 The grant names allowed endpoints and operations, scratch storage, read ranges,

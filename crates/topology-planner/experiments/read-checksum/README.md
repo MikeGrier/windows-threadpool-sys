@@ -7,6 +7,8 @@ and `EP-X2.1`, for remaining work.
 The first observations are in the [capture record](captures/2026-09-19/README.md).
 The role-swapped repeats are in the
 [EP-X1.1 capture record](captures/2026-09-19-ep-x1-1/README.md).
+The parameter sweeps and pending result review are in the
+[EP-X1.2 capture record](captures/2026-09-19-ep-x1-2/README.md).
 
 From the workspace root, build the `windows-read-checksum-experiment` package in
 release mode, then run:
@@ -24,6 +26,8 @@ Put this JSON in the config file:
   "file": ".scratch\\read-checksum.dat",
   "block_bytes": 65536,
   "depth": 8,
+  "buffer_count": 32,
+  "batch_size": 1,
   "queue_capacity": 4,
   "checksum_passes": 1,
   "repetitions": 6,
@@ -39,7 +43,7 @@ Selection is not a permission oracle; an actual binding refusal fails the run.
 The capture retains requested and observed bindings and sampled payload-page nodes.
 
 Each repetition runs direct-owner, bounded reader/processor handoff, and independent
-direct workers in both processor orientations. The `read-checksum-v2` report labels
+direct workers in both processor orientations. The `read-checksum-v3` report labels
 each trial with `reversed` relative to the capture's selected pair. Choose a multiple
 of six repetitions for balanced treatment positions and within-repetition predecessor
 pairs; see [DESIGN-NOTES.md](DESIGN-NOTES.md) -> `RC-D7`. Warm-up runs are not recorded. Total payload
@@ -47,7 +51,7 @@ buffer capacity and maximum aggregate pending reads are the same across arrangem
 Queue, result and thread metadata are additional allocations.
 
 Each trial's `resources` records participating CPUs, worker threads, checksum workers,
-pending-read ceiling and payload capacity. `checksummed_blocks` and `buffer_capacity`
+pending-read ceiling and payload capacity. `checksummed_blocks`, `read_capacity` and `buffer_capacity`
 are recorded per worker. The direct path is labelled `unequal_cpu_reference`:
 pipeline and independent paths both use two CPUs, but only independent workers
 checksum on both. These contrasts do not isolate stage overlap from ownership and
@@ -62,6 +66,42 @@ After building release, run the bounded EP-X1.1 sequence from the workspace root
 The directory must not exist. The script retains configs, reports and a derived
 summary beside its fixture. It uses one executable and reuses the first capture's
 processor pair for the remaining cases. It stops on a failed command.
+
+The same driver runs EP-X1.2 with `-Study EP-X1.2`. Add `-PlanOnly` to print its
+matrix without creating files or running the binary:
+
+```powershell
+.\crates\topology-planner\experiments\read-checksum\capture-ep-x1-1.ps1 -Study EP-X1.2 -OutputDirectory .scratch\ep-x1-2-retake
+```
+
+The exact protocol is [DESIGN-NOTES.md](DESIGN-NOTES.md) -> `RC-D9`.
+Reports include the configuration at every point; the driver retains a matrix,
+raw reports and a derived summary with per-orientation control/point envelopes.
+Range overlap is descriptive, not a statistical significance test. Direct and
+independent workers are also same-code controls within the queue-capacity sweep:
+they never construct the handoff queue.
+`-SummarizeOnly -OutputDirectory <existing-capture-directory>` reads its saved
+matrix and raw reports without running the executable, and creates
+`summary-recomputed.json` without overwriting the original summary. Capture-script
+and analysis-script identities are retained separately. A replay does not require
+the original fixture to remain on disk.
+
+`depth` limits aggregate pending reads; `buffer_count` independently limits payload
+buffers and defaults to depth when absent or null. Both are powers of two, with
+`2 <= depth <= buffer_count <= 1024`. Queue capacity is a power of two no larger
+than buffer count. Total buffer bytes must not exceed 256 MiB.
+`batch_size` defaults to one and accepts 1..=1024, including sizes exceeding the
+pool or remaining input. It limits jobs per scheduling phase; phases stop early
+on empty/full and do not wait for a full batch. It does not batch OS calls or
+make queue operations atomic. Pipeline returns use a pool-sized return queue.
+
+Per-worker `batches` counts nonempty processing batches (forwarding batches for
+the reader); `return_batches` measures the reader's reclaim phase. Each records
+jobs, maximum jobs, count and partial count relative to the requested quantum.
+`buffer_pressure_observations` counts refill attempts with input remaining and
+no free buffer, not stall durations. Payload occupancy is reported as per-reader
+lease peaks; multiplying a peak by block bytes gives occupied buffer capacity,
+not useful payload bytes in the short final block or a simultaneous global peak.
 
 The fixture is read synchronously for per-block reference checksums before timing.
 Trials use buffered asynchronous reads. This does not isolate storage-device service:

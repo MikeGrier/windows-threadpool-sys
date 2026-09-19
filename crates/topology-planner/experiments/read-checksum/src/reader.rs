@@ -74,6 +74,8 @@ pub(crate) struct Reader<'a> {
     pub peak_io: usize,
     pub peak_leased: usize,
     pub submitted: usize,
+    pub buffer_pressure_observations: usize,
+    pub read_limit: usize,
     pool_size: usize,
 }
 
@@ -89,7 +91,7 @@ impl<'a> Reader<'a> {
         let source = UnassociatedEndpoint::open(&config.file, true, false, 0)?;
         let endpoint = port.associate(source, FILE_COMPLETION_KEY)?;
         let expected = (blocks - lane).div_ceil(lanes);
-        let pool_size = config.depth / lanes;
+        let pool_size = config.buffers() / lanes;
         Ok(Self {
             endpoint,
             port,
@@ -108,13 +110,18 @@ impl<'a> Reader<'a> {
             peak_io: 0,
             peak_leased: 0,
             submitted: 0,
+            buffer_pressure_observations: 0,
+            read_limit: config.depth / lanes,
             pool_size,
         })
     }
 
     pub fn submit_available(&mut self) -> io::Result<bool> {
         let mut progress = false;
-        while self.next < self.blocks && !self.free.is_empty() {
+        while self.next < self.blocks
+            && !self.free.is_empty()
+            && self.pending.len() < self.read_limit
+        {
             let id = self.next;
             let offset = id as u64 * self.block_bytes as u64;
             let bytes = (self.file_bytes - offset).min(self.block_bytes as u64) as usize;
@@ -153,6 +160,9 @@ impl<'a> Reader<'a> {
             self.submitted += 1;
             self.peak_leased = self.peak_leased.max(self.pool_size - self.free.len());
             progress = true;
+        }
+        if self.next < self.blocks && self.free.is_empty() {
+            self.buffer_pressure_observations += 1;
         }
         Ok(progress)
     }

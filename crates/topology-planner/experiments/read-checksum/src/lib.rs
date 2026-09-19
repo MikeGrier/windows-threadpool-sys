@@ -28,6 +28,10 @@ pub struct Config {
     pub file: PathBuf,
     pub block_bytes: usize,
     pub depth: usize,
+    #[serde(default)]
+    pub buffer_count: Option<usize>,
+    #[serde(default = "default_batch_size")]
+    pub batch_size: usize,
     pub queue_capacity: usize,
     pub checksum_passes: u32,
     pub repetitions: usize,
@@ -36,6 +40,10 @@ pub struct Config {
 }
 
 impl Config {
+    pub fn buffers(&self) -> usize {
+        self.buffer_count.unwrap_or(self.depth)
+    }
+
     pub fn validate(&self, file_bytes: u64) -> io::Result<usize> {
         if file_bytes > MAX_FILE_BYTES {
             return Err(invalid("fixture exceeds the experiment's 1 GiB limit"));
@@ -46,17 +54,26 @@ impl Config {
         if self.depth < 2 || !self.depth.is_power_of_two() || self.depth > MAX_BUFFERS {
             return Err(invalid("depth must be a power of two in 2..=1024"));
         }
+        let buffers = self.buffers();
+        if buffers < self.depth || !buffers.is_power_of_two() || buffers > MAX_BUFFERS {
+            return Err(invalid(
+                "buffer_count must be a power of two in depth..=1024",
+            ));
+        }
+        if !(1..=MAX_BUFFERS).contains(&self.batch_size) {
+            return Err(invalid("batch_size must be in 1..=1024"));
+        }
         if self.queue_capacity == 0
             || !self.queue_capacity.is_power_of_two()
-            || self.queue_capacity > self.depth
+            || self.queue_capacity > buffers
         {
             return Err(invalid(
-                "queue_capacity must be a power of two no greater than depth",
+                "queue_capacity must be a power of two no greater than buffer_count",
             ));
         }
         if self
             .block_bytes
-            .checked_mul(self.depth)
+            .checked_mul(buffers)
             .is_none_or(|n| n > MAX_POOL_BYTES)
         {
             return Err(invalid("payload pool exceeds 256 MiB"));
@@ -75,6 +92,10 @@ impl Config {
         }
         Ok(blocks as usize)
     }
+}
+
+fn default_batch_size() -> usize {
+    1
 }
 
 pub(crate) fn invalid(message: impl Into<String>) -> io::Error {

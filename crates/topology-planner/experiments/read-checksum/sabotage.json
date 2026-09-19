@@ -3,6 +3,38 @@
   "description": "Read identity, payload-credit measurement and checksum guards, plus an equivalent chunking control.",
   "sabotages": [
     {
+      "name": "summary merges all ordered-dictionary sweeps",
+      "file": "capture-ep-x1-1.ps1",
+      "expect": "caught",
+      "why": "Replay must retain distinct control envelopes and both overlapping and disjoint points; a property-only grouping ignores dictionary keys.",
+      "find": "Group-Object { $_.sweep }",
+      "replace": "Group-Object sweep"
+    },
+    {
+      "name": "block sweep accidentally changes payload allowance",
+      "file": "capture-ep-x1-1.ps1",
+      "expect": "caught",
+      "why": "The executable matrix test checks the fixed byte budget as block size changes, not a copied list of configurations.",
+      "find": "$config.buffer_count = 2097152 / $config.block_bytes",
+      "replace": "$config.buffer_count = 32"
+    },
+    {
+      "name": "pending reads ignore the independent read limit",
+      "file": "src/reader.rs",
+      "expect": "caught",
+      "why": "The live matrix holds more buffers than pending reads and checks the actual peak against the read ceiling.",
+      "find": "self.pending.len() < self.read_limit",
+      "replace": "self.pending.len() < self.pool_size"
+    },
+    {
+      "name": "processor ignores the configured batch quantum",
+      "file": "src/experiment.rs",
+      "expect": "caught",
+      "why": "Prefilled queues must produce the exact nonempty full/partial batches, not just pass checksum validation.",
+      "find": "let processing_quantum = config.batch_size;",
+      "replace": "let processing_quantum = 1;"
+    },
+    {
       "name": "role reversal never reaches worker bindings",
       "file": "src/lib.rs",
       "expect": "caught",
