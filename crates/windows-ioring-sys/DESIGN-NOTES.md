@@ -652,9 +652,33 @@ everything above about completion routing.
 
 ### What is not reachable
 
-Mapping a **file handle to the NUMA node of the device backing it** has no clean user-mode path. It means
-walking volume to disk to device instance and reading `DEVPKEY_Device_Numa_Node`, with real failure modes
-(spanned volumes, Storage Spaces, network paths, VHDs) where the question may have no answer. This crate
+What is not reachable is the **answer** -- "which ring should this file's I/O go to". The **mechanism** is
+reachable, and an earlier version of this section had that wrong: it said the mapping has "no clean
+user-mode path" and "means walking volume to disk to device instance and reading
+`DEVPKEY_Device_Numa_Node`". There is one documented call, and it takes the handle a caller already holds.
+
+- **`FSCTL_QUERY_VOLUME_NUMA_INFO`** is documented in the IFS docs, accepts a handle to a **file or
+  directory** directly, and returns `FSCTL_QUERY_VOLUME_NUMA_INFO_OUTPUT { ULONG NumaNode }`. No device-tree
+  walk.
+- **`GetNumaNodeNumberFromHandle`** is the other path: a Win32 wrapper over `NtQueryInformationFile` with
+  `FileNumaNodeInformation` (class 53, Windows 7 and later), yielding
+  `FILE_NUMA_NODE_INFORMATION { USHORT NodeNumber }`. PHNT and the WDK mark that class **reserved for
+  system use**, so this crate must not build on it. It is named here so the next reader does not rediscover
+  it and assume it is available.
+
+Both were observed to succeed on an ordinary NTFS data file, and on a directory handle, and to agree --
+so an ordinary file is not the no-association case. That run was on a single-node host, so neither call is
+shown to name a node that distinguishes anything; the run and its limits are recorded in the spikes
+[README.md](design-sessions/spikes/README.md), and
+[file-handle-numa-spike.rs](design-sessions/spikes/file-handle-numa-spike.rs) is the instrument. Settling
+what a multi-node host reports needs storage whose PDO advertises a proximity domain, which is a hardware
+gap rather than a deferred decision.
+
+**The conclusion this section has always drawn survives, on different grounds than it used to rest on.**
+What either call returns is the node the *volume* resides on, not where the file's extents live. It is
+absent whenever the device layer advertised no proximity domain -- `IoGetDeviceNumaNode` on the PDO, or
+`DEVPKEY_Numa_Proximity_Domain` with `GetNumaProximityNode` from user mode. And one volume may sit on
+several devices, which is the ordinary case for a spanned volume or a Storage Spaces set. So this crate
 will not offer an automatic "put this file's I/O on the right ring." It offers "bind a ring to a domain and
 submit from there," and leaves the mapping to whoever knows their storage layout.
 

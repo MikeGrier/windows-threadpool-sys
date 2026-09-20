@@ -48,15 +48,17 @@
 //!      `CreateRemoteThreadEx` and an attribute list rather than a file handle.
 //!      It now has its own instrument: `thread-stack-numa-spike.rs`.
 //!
-//! Why it matters: `DESIGN-NOTES.md` asserts that mapping a file handle to the
-//! NUMA node of its backing device "has no clean user-mode path" and "means
-//! walking volume to disk to device instance". That is wrong on mechanism --
-//! `FSCTL_QUERY_VOLUME_NUMA_INFO` is documented, takes a file or directory
-//! handle directly, and returns `FSCTL_QUERY_VOLUME_NUMA_INFO_OUTPUT { ULONG
-//! NumaNode }`. What is *right* is the conclusion, for a different reason: the
-//! documented meaning is the node the **volume** resides on, not where the
-//! file's extents live, and it is absent whenever the device advertised no
-//! proximity domain.
+//! Why it matters: `DESIGN-NOTES.md` used to assert that mapping a file handle
+//! to the NUMA node of its backing device "has no clean user-mode path" and
+//! "means walking volume to disk to device instance". That was wrong on
+//! mechanism -- `FSCTL_QUERY_VOLUME_NUMA_INFO` is documented, takes a file or
+//! directory handle directly, and returns
+//! `FSCTL_QUERY_VOLUME_NUMA_INFO_OUTPUT { ULONG NumaNode }`. What is *right* is
+//! the conclusion, for a different reason: the documented meaning is the node
+//! the **volume** resides on, not where the file's extents live, and it is
+//! absent whenever the device advertised no proximity domain. That correction
+//! landed in "What is not reachable" on 2026-09-19 (M20.4); this header is kept
+//! as the statement of what this instrument was built to settle.
 //!
 //! `GetNumaNodeNumberFromHandle` is the other path: a Win32 wrapper over
 //! `NtQueryInformationFile` with `FileNumaNodeInformation` (class 53, Windows 7

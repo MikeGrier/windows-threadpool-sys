@@ -1565,3 +1565,29 @@ the API whose breaking change 0.2.0 is being cut for, and it is reachable with n
   and D-45 is added to its table of shipped defects of this shape.
   **Swept the count restatements too:** that file said "three defects" in four places and is now four, which
   is the restatement drift the repository's own conventions warn about.
+
+## Moved 2026-09-19 22:40:58 -07:00 -- M20.4: the file-handle NUMA mechanism correction
+
+### <a id="m204"></a>M20.4 -- Correct "What is not reachable" in [DESIGN-NOTES.md](DESIGN-NOTES.md): the file-handle-to-storage-node mapping is reachable on mechanism, and the conclusion it supported now rests on volume granularity, absence, and spanned volumes instead. *(completed 2026-09-19 22:40:58 -07:00)*
+
+The authoritative text is the rewritten "What is not reachable" section in
+[DESIGN-NOTES.md](DESIGN-NOTES.md); the research behind it is `F-1` in
+[DESIGN-SESSION-2026-08-30-numa-sharded-io-execution-domains.md](../../design-sessions/DESIGN-SESSION-2026-08-30-numa-sharded-io-execution-domains.md).
+
+Two things the item's own text had wrong, corrected while doing it rather than copied forward:
+
+- It said to cite [file-handle-numa-spike.rs](design-sessions/spikes/file-handle-numa-spike.rs) as the
+  **unrun** instrument, and to state that no measurement of either call succeeding on an ordinary NTFS
+  data file could be found. `F-1a` of the same session had already smoke-run it: both calls succeed on an
+  ordinary NTFS data file and on a directory handle, and agree. The item was written from `F-1` without
+  `F-1a`. What remains unmeasured is narrower -- whether either call ever names a node that distinguishes
+  one device from another, which needs a multi-node host with storage whose PDO advertises a proximity
+  domain.
+
+- The spikes [README.md](design-sessions/spikes/README.md) carried the same staleness, each instance
+  contradicted by its own body a few paragraphs later. Swept: 3 phrasings in 1 file, plus the sentence
+  promising that a multi-node run "would correct a claim DESIGN-NOTES.md currently makes", which this item
+  has now made false -- it settles an open question instead.
+
+The heading stays "What is not reachable". What is not reachable is the *answer* a ring consumer wants,
+which is still true; renaming it would dangle the pointers in the 2026-09-19 review session.

@@ -204,5 +204,8 @@ is not read as discovering them:
   carries the superseded mechanism (walking volume to disk to device instance and reading
   `DEVPKEY_Device_Numa_Node`). The corrected mechanism is written in the checklist item and not in
   the decision.
+  **Landed the same day**, in this session's follow-up work -- see
+  [COMPLETED-CHECKLIST.md](../COMPLETED-CHECKLIST.md#m204), which also records two things the item's
+  own text had stale.
 - [M20.6](../CHECKLIST.md) -- the `AlternatingRings` re-evaluation. S-2 above is an addendum to it,
   not a replacement.

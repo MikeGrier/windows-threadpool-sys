@@ -31,8 +31,8 @@ defects in that same function: it selects on `DomainKind::Cache { level: 3, .. }
 in `windows-topology-sys` 0.2.0 -- so it can produce **overlapping** ring domains where two cache kinds
 report at level 3, and degrades silently on a host whose outermost partition sits at another level.
 `M20.1` and `M20.3` both land on that function and that rule, so both are **coupled to `SH-4.12`** and
-must follow it. `M20.2` and `M20.4` are independent of it and can proceed now; `M20.6` is gated the other
-way, on `M22.1`.
+must follow it. `M20.2` is independent of it and can proceed now; `M20.4` is done; `M20.6` is gated the
+other way, on `M22.1`.
 
 The design questions the session opened are deliberately **not** queued here. It is still open, and its
 conclusions belong to it until it converges.
@@ -71,22 +71,10 @@ conclusions belong to it until it converges.
   > test now pins behaviour that is about to change. The two halves this item asks for are the right
   > assertions either way; what changes is which rule "the policy's relation is present" names.
 
-- [ ] **M20.4** -- Correct "What is not reachable" in [DESIGN-NOTES.md](DESIGN-NOTES.md). It says mapping a
-  file handle to its backing device's NUMA node "has no clean user-mode path" and "means walking volume to
-  disk to device instance and reading `DEVPKEY_Device_Numa_Node`". **That is wrong on mechanism.**
-  `FSCTL_QUERY_VOLUME_NUMA_INFO` is documented in the IFS docs, takes a handle to a **file or directory**
-  directly, and returns `FSCTL_QUERY_VOLUME_NUMA_INFO_OUTPUT { ULONG NumaNode }`. No walking required.
-  The **conclusion survives for a better reason**, and that is the point of the rewrite: the documented
-  meaning is the node the *volume* resides on, not where the file's extents live, so it cannot answer
-  "which ring should this file's I/O go to" even when it succeeds; and it is absent whenever the device
-  advertised no proximity domain. Record `GetNumaNodeNumberFromHandle` as the other path -- a wrapper over
-  `NtQueryInformationFile` with `FileNumaNodeInformation` (class 53) -- and that PHNT and the WDK mark that
-  class **reserved for system use**, so this crate must not build on it. State plainly that no published
-  measurement of either call succeeding on an ordinary NTFS data file could be found, and cite
-  [file-handle-numa-spike.rs](design-sessions/spikes/file-handle-numa-spike.rs) as the unrun instrument.
-  **Blocked on hardware, not on a decision:** settling it needs a multi-node machine with storage whose
-  PDO advertises a proximity domain. Write the correction now (the documentation defect is independent of
-  the measurement) and leave the empirical question open.
+- [x] **M20.4** -- Correct "What is not reachable" in [DESIGN-NOTES.md](DESIGN-NOTES.md): the
+  file-handle-to-storage-node mapping is reachable on mechanism, and the conclusion it supported now rests
+  on volume granularity, absence, and spanned volumes instead.
+  -> [completed 2026-09-19](COMPLETED-CHECKLIST.md#m204)
 
 - [x] **M20.5** -- Dissolved by [D-47](DESIGN-NOTES.md#d-47-detail) rather than decided: the
   `flush_barrier` assertion was measuring a claim the platform does not honour, so it was never a
@@ -202,8 +190,7 @@ re-reads numbers that its change moves.
 ## M23 -- The ring as a durability domain, and storage affinity
 
 Queued from the same session (findings `S-1` and `S-3`). `S-2` is an addendum to `M20.6` rather than an item
-here. `M23.2` depends on `M20.4` having landed, because it builds on the mechanism correction that item
-carries.
+here. `M23.2` builds on the mechanism correction `M20.4` carried, which has landed.
 
 - [ ] **M23.1** -- Say in [contract.rs](examples/epoch_log/contract.rs) that the ring is part of the
   durability unit (`S-1`). [D-47](DESIGN-NOTES.md#d-47) withdrew the hold-back half of
