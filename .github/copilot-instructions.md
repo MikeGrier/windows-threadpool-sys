@@ -1304,7 +1304,7 @@ sites in three wordings.
 
 **This is the data-side twin of rule 1.** Rule 1 says define a fact once in code and have everything
 ask. This says the same of measurements: hold the number once, and have prose point rather than
-paraphrase.
+paraphrase. Rule 6 extends it once more, to facts that are *derived* rather than measured.
 
 ### 5. Present what was observed; never write the conclusion
 
@@ -1350,6 +1350,45 @@ This is **not a new rule** — it is [D-no-client-prescriptions](../crates/windo
 crate that happens to publish measurements. Every instance found so far has been a violation of that
 existing decision rather than a gap in it. Apply it while writing: no checker can find these,
 because nothing is inconsistent.
+
+### 6. Never store a fact another artifact already owns
+
+Rule 4 governs *measured* numbers. This governs every **derived** fact -- anything a reader could get
+from an artifact that is already authoritative for it. Release or publication status, version numbers,
+which milestones are done, whether a branch has landed, how many crates or tests or files there are.
+Writing one into prose creates a second copy whose only maintenance mechanism is somebody remembering,
+and remembering is what fails.
+
+The tell is that **the copy cannot be wrong at the moment it is written.** It is accurate -- that is why
+it gets written -- and nothing will ever say when it stopped being. A wrong decision gets argued with; a
+stale derived fact is simply believed.
+
+- **Delete rather than update.** When you find a stale derived fact, correcting it is almost never the
+  fix: it re-arms the identical hazard with a fresh date on it. Remove the claim and link the artifact
+  that owns the answer.
+- **Removing the digits is not enough.** "Published at 0.3.1" and "is published" are both copies of the
+  release state; only the first is obviously one. Rule 4's "write the claim, not the digits" shrinks the
+  drift surface of a *measurement whose claim is itself the finding*. It does not license storing a
+  derived fact in words.
+- **An absence may be worth one sentence, once.** Where a reader would expect a status section and find
+  none, say the omission is deliberate and name the artifact that answers it -- otherwise somebody
+  helpfully adds it back.
+- **This does not reach the primary record.** Decisions, measurements, rationale, design intent, and a
+  checklist's own contents are owned here and belong here. The test is simply whether some other
+  artifact is already authoritative: if yes, point at it; if no, this *is* the artifact.
+
+**FAIL FAST rule 6 is the sibling, not a contradiction.** That rule says a claim that counts or
+enumerates repository artifacts must come from a command rather than from recollection. This is the
+prior question -- prefer not to state it at all. Bind it to a command only when the claim must exist
+anyway, such as a test asserting a property of the tree.
+
+Worked example, and the reason this is written down: `windows-ioring-sys`' design notes opened with
+"This crate does not exist yet as compiled code", and its published rustdoc said "Under construction",
+several releases after the first one shipped. The first attempt at a fix replaced both with a carefully
+drift-minimised status paragraph -- no version number, linking `CHANGELOG.md` and the checklists -- and
+that was still wrong, because "is published" is itself a copy of the release state. What the crate's
+status is, is a question `CHANGELOG.md` and the git tags answer. The notes now record that they
+deliberately do not answer it.
 
 ## FAIL FAST — push every rule to the earliest rung that can enforce it
 
