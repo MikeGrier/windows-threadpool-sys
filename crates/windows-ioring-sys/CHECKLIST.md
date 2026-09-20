@@ -12,8 +12,8 @@ and M15-M18
 
 M19 is archived [here](COMPLETED-CHECKLIST.md#m19).
 
-**`M20` is pending; `M6+` is parked rather than pending** -- see the `M{n}+` convention: it is gated work
-with no current obligation, not an unfinished milestone.
+**`M20` through `M23` are pending; `M6+` is parked rather than pending** -- see the `M{n}+` convention: it
+is gated work with no current obligation, not an unfinished milestone.
 
 ## M20 -- Repairs from the 2026-08-30 NUMA-sharding measurement
 
@@ -85,11 +85,130 @@ conclusions belong to it until it converges.
   answer is that the strategy no longer earns its place, that is an API change to a published example.
   The corrected prose in [strategy.rs](examples/epoch_log/strategy.rs) and
   [DESIGN-NOTES.md](DESIGN-NOTES.md) both point here.
+  **Addendum from the 2026-09-19 review** (`S-2` in
+  [DESIGN-SESSION-2026-09-19-epoch-log-review.md](design-sessions/DESIGN-SESSION-2026-09-19-epoch-log-review.md)):
+  the remaining benefit is stronger than "a correctness property". [D-47](DESIGN-NOTES.md#d-47) withdrew the
+  hold-back half but kept the other -- the barrier still reaches *every* operation outstanding on the ring --
+  so alternating rings bounds what a commit's barrier can be dragged into: on a shared ring commit latency is
+  unbounded in unrelated traffic, and on alternating rings it is bounded by the epoch. That is a throughput
+  argument after all, sited differently, and it is measurable with the harness that already exists. Unmeasured
+  as of that session. Settle this **after** `M22.1`, whose per-record submit is a shared term in the numbers
+  being re-read.
   *(Numbered M20.6 rather than M20.5 because M20.5 was in flight on a separate branch when this was
   written. That branch was closed unmerged; M20.5 arrives here instead, dissolved -- see above.)*
 
 
-## M6+ -- Model B: explicit-thread delivery and affinity
+## M21 -- Epoch-log review: correctness repairs
+
+Queued from
+[DESIGN-SESSION-2026-09-19-epoch-log-review.md](design-sessions/DESIGN-SESSION-2026-09-19-epoch-log-review.md)
+(findings `C-1` through `C-5`). Independent of each other; listed in ascending cost. Nothing in this
+milestone was observed failing at the sample's current constants -- these are a withdrawn justification, two
+hang shapes, a latent trigger, and a specification gap.
+
+- [ ] **M21.1** -- Correct the last site that still asserts [D-24](DESIGN-NOTES.md#d-24)'s withdrawn half
+  (`C-1`). [commit.rs](examples/epoch_log/commit.rs) justifies its epoch-order `debug_assert` with "D-24
+  holds an operation pushed after a drained one until it completes"; that claim was withdrawn by
+  [D-47](DESIGN-NOTES.md#d-47), and the same file's module header already carries the correction. The
+  assertion stays -- it is sound by the *surviving* half (commit *N+1* carries the drain flag itself, and no
+  operation queued before a drained flush was ever observed completing after it), so only the reason changes.
+  The blast-radius sweep is already done and recorded in the session: 17 matches of the hold-back phrasing
+  across 10 files, every other site correct. Re-run the sweep to confirm before committing, and state the
+  count in the commit message.
+
+- [ ] **M21.2** -- Decide how a non-`src` caller waits for a completion, then remove the two unbounded spins
+  (`C-2`). [append.rs](examples/epoch_log/append.rs) and [fault_injection.rs](tests/fault_injection.rs) both
+  wrap `try_pop` in a bare `loop`, which [`pop_within`](src/ring.rs) explicitly names as the shape that
+  converts a flake into a hang, and which contradicts
+  [`Batch::submit_and_wait`](src/batch.rs)'s own documented contract that the timeout can expire first. This
+  is an API decision, not a copy-paste fix: `pop_within` is `#[cfg(test)] pub(crate)`, and examples and
+  `tests/` are separate crates, so neither can reach it -- which is *why* five sites implement this four
+  different ways (the session tabulates them). Either publish a bounded pop returning
+  `io::Result` with `TimedOut`, or record why each caller should keep deriving its own. Then fix both spin
+  sites the chosen way. Per the detection ladder, prefer the option that puts the rule on a rung: a written
+  rule that five call sites can each ignore is prose, not enforcement.
+
+- [ ] **M21.3** -- Key the epoch commit off a completed append rather than off the counter (`C-3`).
+  [main.rs](examples/epoch_log/main.rs) tests `appended % EPOCH_SIZE == 0` on every pass of the append loop,
+  including a pass where `append` returned `WouldBlock` and `appended` did not move -- committing a second
+  time, with a covering flush closing an epoch that holds no records. Unreachable at the sample's constants
+  (`SLOTS` 8 > `EPOCH_SIZE` 6, and the commit wait drains the arena), and armed by any reader who copies the
+  sample and raises `EPOCH_SIZE`, which is what the sample exists to be. Move the check into the `Ok` arm so
+  the trigger cannot fire without an append behind it.
+
+- [ ] **M21.4** -- State what a *failed* commit does to `durable_through`, and bind it with a test (`C-4`).
+  [commit.rs](examples/epoch_log/commit.rs) says "A failed commit advances nothing", which reads as though a
+  failed commit of epoch *N* leaves *N* non-durable permanently. It does not: *N*'s writes precede commit
+  *N+1*'s covering flush, so a later success makes *N* genuinely durable and the monotonic reading stays
+  true. Write that reasoning where the monotonicity claim is made, and add a test that fails a commit and
+  then asserts the *next* successful one covers the failed epoch -- both directions, per the bidirectional
+  guard rule, so the test cannot pass against an implementation that never advances.
+
+- [ ] **M21.5** -- Give [strategy.rs](examples/epoch_log/strategy.rs)'s two wait loops the same timeout
+  policy as their sibling (`C-5`). `await_flush` and `await_writes` discard the `submit_and_wait` timeout and
+  loop forever, while [`EventLoop::pump`](examples/epoch_log/event_loop.rs) raises `TimedOut` on the same
+  condition and documents why ("so a stuck loop fails instead of spinning"). One program, opposite policies.
+  Pick `pump`'s, since a measurement harness that hangs reports nothing at all.
+
+
+## M22 -- Epoch-log review: submission and arena
+
+Queued from the same session (findings `E-1` through `E-3`). `M22.1` is sequenced first because `M20.6`
+re-reads numbers that its change moves.
+
+- [ ] **M22.1** -- Batch an epoch's appends into one submission, in both append paths (`E-1`).
+  [`Appender::append`](examples/epoch_log/append.rs) and [`Lane::append`](examples/epoch_log/strategy.rs)
+  each construct a `Batch`, push one write, and submit -- so the sample that exists to teach `Batch` never
+  amortises a submission, which is what `Batch` is for. Two consequences, and the second is why this leads
+  the milestone: the sample teaches the wrong shape, and the fixed per-record submission cost is a shared
+  term in all three strategies of the M14.3 comparison whose headline result is that they are
+  indistinguishable. Whether batching moves that spread is **unmeasured**; measure it, and record the figures
+  in a committed capture the prose links to rather than pasted into two documents.
+
+- [ ] **M22.2** -- Collapse the two free-slot implementations to one (`E-2`).
+  [`Appender::free_slot`](examples/epoch_log/append.rs) scans the arena calling `outstanding()` per slot
+  while `Lane` keeps a `Vec<u32>` free list. Both are correct and the cost difference is nil at eight slots;
+  the duplication is the defect, because the two can drift. One definition, both callers bind to it.
+
+- [ ] **M22.3** -- Give the registered arena a stated placement, or state why it has none (`E-3`).
+  [append.rs](examples/epoch_log/append.rs) allocates it as `vec![0_u8; SLOT_LEN]` -- heap, no alignment, no
+  node -- while [lib.rs](src/lib.rs) tells every consumer that buffer placement "is very likely the
+  highest-leverage locality decision available" and names `VirtualAllocExNuma`, and
+  [ring_copy/buffer.rs](examples/ring_copy/buffer.rs) already implements exactly that. Either adopt that
+  allocator here or write down why a durability sample deliberately makes no locality decision. What is not
+  acceptable is the current silence, which reads as an oversight and contradicts the crate's own front page.
+
+
+## M23 -- The ring as a durability domain, and storage affinity
+
+Queued from the same session (findings `S-1` and `S-3`). `S-2` is an addendum to `M20.6` rather than an item
+here. `M23.2` depends on `M20.4` having landed, because it builds on the mechanism correction that item
+carries.
+
+- [ ] **M23.1** -- Say in [contract.rs](examples/epoch_log/contract.rs) that the ring is part of the
+  durability unit (`S-1`). [D-47](DESIGN-NOTES.md#d-47) withdrew the hold-back half of
+  [D-24](DESIGN-NOTES.md#d-24) and kept the other: the barrier still reaches *every* operation outstanding on
+  the ring, not only the current submission batch. So a commit's latency is a function of whatever else
+  shares the ring, and "one ring per log" is a **precondition** of this sample's durability contract rather
+  than a convenience of how it happens to be written. `contract.rs` is where this sample states its
+  preconditions, and was deliberately written before the code; it does not currently say this.
+
+- [ ] **M23.2** -- Record a decision on how a consumer anticipates storage affinity, given that the node
+  question is unanswerable and the device question is not (`S-3`). Two mechanisms, both leaving policy with
+  the consumer per [D-8](DESIGN-NOTES.md#d-8): (a) let a consumer **declare** a domain's storage node and
+  have the arena allocate there with `VirtualAllocExNuma`, turning an undiscoverable fact into a stated
+  input that [file-handle-numa-spike.rs](design-sessions/spikes/file-handle-numa-spike.rs) can fill in
+  automatically if hardware ever answers; and (b) shard by **backing device** rather than by node, using
+  `IOCTL_STORAGE_GET_DEVICE_NUMBER` and `IOCTL_VOLUME_GET_VOLUME_DISK_EXTENTS` -- both already named in that
+  spike, both reachable today on ordinary hardware. The second is the substantive one: a device cache flush
+  is per-device, so two logs on one device contend at every commit and a ring spanning two devices takes the
+  slower device's flush on every covering flush, which means the reachable question is also the one that
+  governs the cost this sample is built around. **Unmeasured** -- it follows from the flush's recorded scope
+  plus D-47's surviving half, and the instruments to settle it exist. Decide what this crate offers, what it
+  refuses, and what it measures first.
+
+
+
 
 Parked, not pending. Deferred by the engineer's explicit direction during the 2026-08-22 design session,
 with the plan scoped now so the shape is not lost. This is **not** a fallback for a missing capability
