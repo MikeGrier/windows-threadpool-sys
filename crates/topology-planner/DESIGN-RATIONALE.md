@@ -356,6 +356,25 @@ private partitions. Cancellation is an outcome with a defined state effect, not 
 a missing result. The protocol is experiment [DESIGN-NOTES.md](experiments/request-reply/DESIGN-NOTES.md)
 -> `RR-D5`; EP-X2.3 remains the only newly authorized item.
 
+## EP-X2.4: separating a record's own dependency from the order it publishes in
+
+EP-X2.3 established per-key order, where the dependency and the ordering constraint are
+the same relation. Ordered ingestion separates them, which is why it needs its own
+comparison: a record's transform must precede its own publication, while publication
+order is declared across all records regardless of which finished first. A serial owner
+satisfies both by construction and can say nothing about their cost. Staging transforms
+behind a resequencing publisher satisfies them separately, and makes the resulting
+head-of-line delay and bounded intermediate state observable rather than argued.
+
+That separation is also what makes the failure and cancellation obligations non-obvious,
+so the protocol states them rather than leaving them to the implementation: an aborted
+record still advances the publication cursor or the pipeline stalls behind work that will
+never publish, and a cancellation racing publication cannot retract an effect already
+made visible. Effects stay in memory -- the item permits real output I/O only under an
+explicit durability contract, and this experiment declines to create one. The protocol is
+experiment [DESIGN-NOTES.md](experiments/request-reply/DESIGN-NOTES.md) -> `RR-D7`;
+EP-X2.4 is the only newly authorized item.
+
 The implementation gives the shared candidate per-key sequence waiting at commit,
 not a second key-affined scheduler. The owned candidate holds actual private
 partitions and does not acquire that shared-state lock. Preparation can finish out

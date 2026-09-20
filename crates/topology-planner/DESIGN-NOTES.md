@@ -655,6 +655,8 @@ including its deterministic steady/burst traces, under its
 [DESIGN-NOTES.md](experiments/request-reply/DESIGN-NOTES.md). Other work stays paused.
 The engineer subsequently authorized `EP-X2.3` as a separate stateful comparison in
 that component under `RR-D5`, preserving the stateless paths and all startup constraints.
+The engineer then authorized `EP-X2.4` as a separate ordered-ingestion comparison in the
+same component under `RR-D7`, preserving both earlier paths and performing no real output I/O.
 Physical NUMA fidelity is tracked once under [EP-D-11](#ep-d-11), not as a completion
 gate on that item. This does not change the startup constraint.
 

@@ -178,3 +178,75 @@ credits include terminal replies not yet collected, independent of state ownersh
 Record queue/admission pressure and per-key/owner-lane observations rather than
 discarding hot-key waiting. Carry these requirements into the future plan/runtime
 contract; this experiment does not create that production API or a hardware gate.
+
+## RR-D7: serial and staged ordered ingestion
+
+The engineer authorized EP-X2.4 as standalone offline behavioral work. Keep RR-D1's
+stateless paths and RR-D5's stateful paths unchanged. Add a separate ingestion path
+over the same bounded crossbeam-channel backend with two candidates: a serial owner
+that transforms and publishes each record itself, and a staged pipeline whose
+transform workers overlap while one publisher resequences into declared order.
+Workers are unpinned; a stage is a logical role and never a CPU or memory domain.
+
+Two constraints are deliberately distinct, and the experiment exists to separate them.
+The **per-record dependency** is that a record's transform precedes its own publication.
+The **global order** is that publications occur in declared trace order. A serial owner
+satisfies both by construction; the staged pipeline satisfies them independently, so a
+record whose transform finished early waits for its predecessors. Never describe one
+constraint as implying the other, and never reorder publication to raise throughput.
+
+Every record names a unique ID, an absolute arrival offset, a deterministic input value,
+bounded transform and publish work, and an optional injected failure stage. Declared
+order is trace order. The reference result for a published record is a pure function of
+its input and transform work, identical for both candidates. An effect is visible only
+through the publication log, which is in memory: this experiment performs no real output
+I/O and makes no durability claim, so the item's effect/durability contract is declined
+rather than invented. The log records published identities and values in publication order.
+
+Each admitted record reaches exactly one terminal outcome: published with its reference
+value, aborted at a named stage, or cancelled. **An aborted or cancelled record still
+advances the publication cursor**, or the pipeline stalls behind work that will never
+publish; it contributes no entry to the log. Published identities therefore form a
+strictly increasing subsequence of the trace, with no gap before the admitted prefix ends.
+A record that fails at transform never publishes. A record that fails at publish leaves
+no effect. Cancellation stops admission and resolves every admitted identity; a record
+cancelled before its publication leaves no effect, and one already published keeps both
+its effect and its terminal outcome. A cancelled suffix never resumes publishing.
+
+The staged candidate's resequencing buffer is bounded and its capacity is part of the
+candidate, not an incidental allocation. When the next record to publish is slow, later
+finished records occupy that buffer and transform workers block: that is head-of-line
+delay and is reported, never removed by reordering or by an unbounded buffer. Report
+per-record ready and published offsets so the delay between them is separately visible,
+along with buffer occupancy peaks, buffer-full observations and admission pressure.
+The serial candidate has no such buffer; report zero rather than omitting the field.
+
+Both candidates use RR-D3's worker, trace, service-work and deadline ceilings, and
+RR-D1's global admitted-credit rule: credits last until a verified terminal outcome is
+collected, never released at transform or publication. Match the request slots, reply
+slots, credit ceiling, transform/publish work and fixed idle policy within a pair.
+The serial candidate runs one owner; the staged candidate's transform worker count is
+the configured worker count. Resequencing buffer entries, mutex, condition-variable and
+report metadata are additional and labelled, not hidden inside a claimed equality.
+
+Verification is an independent serial replay over the trace and reported outcomes: it
+recomputes each published value, checks the publication log equals the published
+subsequence in declared order, checks each record's own transform-before-publish
+timestamps, and checks abort/cancellation left no effect. Log equality alone is
+insufficient, exactly as final state was for RR-D5. Credit conservation, worker census
+and outcome census are checked as in RR-D1 and RR-D5.
+
+Use deterministic steady/burst arrivals, cheap and uneven transform work, publish-heavy
+and transform-heavy mixes, injected failure at each boundary, pressure and cancellation.
+No random input, speed threshold or hardware requirement. Empty input and short traces
+are legal; include non-power-of-two worker counts, a single-record trace and a trace
+whose slowest record is first. Bound all state by the declared credits, buffer capacity
+and trace size; abort/error paths join workers and release queued payloads. Waiting for
+publication order must observe peer failure and cancellation, never strand a worker
+behind a record that will never arrive.
+
+Test at least ten normal shapes and all new error edges; sabotage actual publication
+order, the cursor advance on abort, cancellation effects, the transform result and the
+verifier binding, with a non-defect control. Retain both candidates until an explicit
+disposition review. This experiment owns no topology or allocation policy and selects
+no timing winner; ordering cost is a workload property here, not a machine fact.

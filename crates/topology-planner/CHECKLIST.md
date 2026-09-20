@@ -145,8 +145,9 @@ before beginning the next.
 
 ## MX1 through MX3: the experiment program for MR2
 
-**Execution is paused pending `EP-R1.7.1`.** Existing captures and completed work are unchanged, and
-paused items retain the work they state.
+**`EP-X2.4` is authorized as an offline behavioral experiment; all other execution remains paused
+pending `EP-R1.7.1`.** Existing captures and completed work are unchanged, and paused items retain
+the work they state.
 
 **These three milestones group experiments by workload, not by execution order.** Execution has
 already interleaved them -- `EP-X2.1` through `EP-X2.3` ran while `EP-X1.2` was still open -- so an
@@ -264,6 +265,11 @@ workaround or reordering; leave unperformed work unchecked.
 - [x] **EP-X2.3** -- Compare shared state with key-owned processing. -> [completed 2026-09-19](COMPLETED-CHECKLIST.md#ep-x23)
 
 - [ ] **EP-X2.4** -- **Compare serial and staged ordered ingestion.**
+  **Authorized standalone scope:** implement a separate ordered-ingestion path in
+  `experiments/request-reply`, preserving its stateless and stateful experiments unchanged.
+  Follow [DESIGN-NOTES.md](experiments/request-reply/DESIGN-NOTES.md) -> `RR-D7`. Effects stay
+  in memory with no durability claim; no startup benchmarking, hardware gate or performance
+  threshold is introduced.
   **Question:** what overlap is legal and useful when operations have dependencies?
   **Controls:** give records dependent transform/publication steps; compare one owner with
   staged overlap while preserving the same declared publication order and bounded buffers.
