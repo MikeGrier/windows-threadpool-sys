@@ -375,6 +375,30 @@ explicit durability contract, and this experiment declines to create one. The pr
 experiment [DESIGN-NOTES.md](experiments/request-reply/DESIGN-NOTES.md) -> `RR-D7`;
 EP-X2.4 is the only newly authorized item.
 
+## EP-X2.5: cardinality is the constraint the earlier shapes never had
+
+EP-X2.3 and EP-X2.4 each measured one record against one result. Fan-out breaks that:
+one record becomes several units and must become one result again, so a candidate can
+now be wrong in ways neither earlier path could express -- a unit counted twice, a unit
+missing, a foreign unit admitted to the join. Those are cardinality defects, and no
+value check finds them, because a combine over the wrong multiset still produces a
+number. The membership of each join is therefore recorded and verified directly rather
+than inferred from the joined value.
+
+Scatter and broadcast are kept as distinct shapes for the same reason. They differ in
+flow rather than in cost: scatter partitions a record's work into disjoint units, while
+broadcast sends the whole value to every branch. Collapsing them into one archetype --
+which the item explicitly warns against -- would lose exactly the constraint a planner
+would need to decide whether a unit may be recomputed, dropped or reordered.
+
+The third question is where the join lives, which is an ownership decision rather than a
+scheduling one. A central joiner holds partial state for every record in flight; a
+record-owning worker holds partial state only for its own. That difference shows up as
+bounded intermediate state and as concentration under skew, so the experiment reports
+both rather than arguing which is preferable. The protocol is experiment
+[DESIGN-NOTES.md](experiments/request-reply/DESIGN-NOTES.md) -> `RR-D9`; EP-X2.5 is the
+only newly authorized item.
+
 The implementation gives the shared candidate per-key sequence waiting at commit,
 not a second key-affined scheduler. The owned candidate holds actual private
 partitions and does not acquire that shared-state lock. Preparation can finish out

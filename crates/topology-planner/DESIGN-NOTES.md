@@ -657,6 +657,8 @@ The engineer subsequently authorized `EP-X2.3` as a separate stateful comparison
 that component under `RR-D5`, preserving the stateless paths and all startup constraints.
 The engineer then authorized `EP-X2.4` as a separate ordered-ingestion comparison in the
 same component under `RR-D7`, preserving both earlier paths and performing no real output I/O.
+The engineer then authorized `EP-X2.5` as a separate fan-out comparison in that component
+under `RR-D9`, preserving all three earlier paths and introducing no new external effect.
 Physical NUMA fidelity is tracked once under [EP-D-11](#ep-d-11), not as a completion
 gate on that item. This does not change the startup constraint.
 

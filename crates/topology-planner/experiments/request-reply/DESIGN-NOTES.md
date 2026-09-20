@@ -293,3 +293,73 @@ that published the right multiset in the wrong order, or the right order with a 
 value, produces a log of the right length either way. Carry these requirements into the
 future plan/runtime contract; this experiment creates no production API, no durability
 contract and no hardware gate.
+
+## RR-D9: scatter/gather and broadcast/branch/join
+
+The engineer authorized EP-X2.5 as standalone offline behavioral work. Keep the stateless,
+stateful and ordered-ingestion paths unchanged. Add a separate fan-out path over the same
+bounded crossbeam-channel backend. Workers are unpinned; an owner is a logical role and
+never a CPU or memory domain. Results stay in memory and no external effect is performed.
+
+**Scatter and broadcast are distinct shapes and must not be collapsed into one archetype.**
+A **scatter** record partitions its work into `parts` disjoint units, each unit transforming
+its own share; a **broadcast** record sends its whole value to `branches` units, each applying
+a different transform. They differ in flow and cardinality rather than in cost: a scatter
+unit is the only holder of its share, while a broadcast unit is one of several readings of
+the same input. A descriptor that records only "fans out" cannot say whether a unit may be
+dropped, recomputed or coalesced, which is the constraint a plan would be built on.
+
+Three arrangements, matched on aggregate budgets and the same per-unit work:
+
+- **`SerialWhole`** -- one owner thread computes every unit of a record and joins it itself.
+  There is no cross-thread join and intermediate state never exceeds one record.
+- **`ScatteredJoin`** -- units enter a shared queue, any worker computes any unit, and one
+  joiner assembles every record. The joiner holds partial state for every record in flight.
+- **`OwnedJoin`** -- every unit of a record is routed to that record's owner, `id % workers`,
+  which computes and joins its own records. Partial state is held per owner rather than
+  centrally, and skew concentrates on an owner instead of spreading.
+
+Each record names a unique ID, an absolute arrival offset, an input value, its shape and unit
+count, bounded per-unit work, an optional slow unit, and an optional injected failure naming a
+unit index. Each unit's result is a pure function of the record's value, its shape and its
+unit index, so both shapes have an independent reference and a unit of one shape cannot
+satisfy the other. The join combines unit results with a commutative operation, because gather
+imposes no order among units -- which is exactly why the joined value cannot establish
+membership, and membership is therefore recorded and checked directly.
+
+**Exact membership is the central obligation.** Every record's join must consume each declared
+unit index exactly once, with no duplicate, no missing unit and no unit belonging to another
+record. The report carries each unit's index, the worker that computed it and its timestamps,
+so membership, ownership and per-unit work are verified structurally rather than inferred from
+the joined value. Under `OwnedJoin` every unit of a record must name that record's owner.
+
+**Intermediate state is bounded and reclaimed.** Report peak partial records and peak partial
+units held at the join, and report residual partial state at the end, which must be zero: a
+completed, aborted or cancelled record releases its partial units. A record whose unit carries
+an injected failure aborts, publishes nothing, and discards the units already gathered for it;
+those discards are counted rather than silently dropped. Cancellation stops admission, resolves
+every admitted record, and discards partially gathered branches the same way. Declared
+publication order is preserved as in `RR-D8`: outcomes are a published/aborted prefix and an
+all-cancelled suffix, and a published result is never retracted.
+
+**Invalid arrangements are rejected before measurement, not measured and then explained.**
+Unit counts are bounded to 1..=16 per record; a zero-unit record, a slow or failing unit index
+outside the record's own unit count, and a unit count above the ceiling are all refused by
+validation. Both candidates use RR-D3's worker, trace, service-work and deadline ceilings and
+RR-D1's global admitted-credit rule, with credits held until a verified terminal outcome is
+collected. Request slots, reply slots, credits, per-unit work and the idle policy match within
+a comparison; thread counts differ by arrangement and are labelled rather than claimed equal.
+
+Verification is an independent serial replay over the trace and reported units: it recomputes
+every unit result and every joined value, checks membership exactly, checks each unit's
+timestamps lie inside its record's span, checks owner routing where the arrangement declares
+it, and checks abort and cancellation left no result behind and no residual partial state.
+
+Use deterministic steady/burst arrivals, scatter-only, broadcast-only and mixed traces, uniform
+and skewed unit counts, a slow unit, injected unit failure, pressure and cancellation. No random
+input, speed threshold or hardware requirement. Empty input and single-unit records are legal;
+include non-power-of-two worker and unit counts. Test at least ten normal shapes and all new
+error edges; sabotage actual membership, the unit transform, shape distinction, owner routing,
+partial reclamation and the verifier binding, with a non-defect control. Retain all three
+arrangements until an explicit disposition review. This experiment owns no topology or
+allocation policy and selects no timing winner.
