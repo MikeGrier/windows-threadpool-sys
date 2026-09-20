@@ -257,3 +257,58 @@ proposal links the resulting key/owner/commit/cancellation requirements.
 > **-> CROSS-COMPONENT HANDOFF:** return to parent `topology-planner` -> `MR1` ->
 > `EP-R1.7.1` in [CHECKLIST.md](CHECKLIST.md). EP-X2.4 and other paused work are not
 > started by this completion; EP-HW.1 remains the sole non-blocking physical follow-up.
+
+## Moved 2026-09-19 17:59:21 -07:00 -- M1's two stated queries, archived behind stubs
+
+These two were completed in `4eb36ea2` on 2026-09-18 and left their full bodies in
+[CHECKLIST.md](CHECKLIST.md) while their four M1 siblings were stubbed. The bodies move here
+unchanged in substance; only the in-place strikethrough correction markup is resolved into plain
+prose, since the archive records the corrected statement and the correction both.
+
+### <a id="ep-12"></a>EP-1.2 -- The proximity query is stated as an unordered-pair query answered by a set of minimal shared granularities. *(completed 2026-09-18 14:37:58 -04:00)*
+
+**The proximity query, which is the crux.** For an **unordered pair** of processors, how close are
+they -- because that is what chooses SPSC versus MPSC versus a routed hop, and it is asked once per
+pair rather than once per machine. **The model available when this item was written could not
+answer it**: `outermost_partitioning_cache` reports one global level and `same_cache_domain` reduces
+it to a boolean at that level, so a client reconstructs the rest and, per `SH-16.9`, reconstructs it
+differently each time.
+
+**Done:** stated as [EP-D-2](DESIGN-NOTES.md#ep-d-2).
+
+**This item said "ordered pair" and was wrong**, corrected in place rather than quietly. The
+repository had already settled it: `windows-placement-probe` documents that its placement labels are
+"deliberately symmetric", that "the *relationship* between two processors genuinely is symmetric",
+and that "direction therefore lives where it is real, not in the label" -- with the measured side
+putting it as "a hop is not symmetric even though the link is". Proximity is the link and is
+unordered; direction is the hop, and belongs to EP-1.3's residency question.
+
+Three requirements came out of stating it. The answer needs the **membership** of the shared
+granularity, not just its identity, or the planner re-derives the grouping to size an MPSC fan-in.
+It needs to distinguish "tightest shared is X" from "**at most** X, and finer was not observed",
+since under the model's bar the planner cannot go and check. And the order being by inclusion rather
+than by firmware numbering means two granularities can be **incomparable**, so the answer is a set
+of minimal shared granularities -- almost always one, but not by construction.
+
+### <a id="ep-13"></a>EP-1.3 -- The residency query is stated, with its cost half scoped to the abstract model and adapter. *(completed 2026-09-18 14:37:58 -04:00)*
+
+**The residency query.** Which memory domain each processor belongs to, and -- for a pair spanning
+two of them -- what it costs to place a shared buffer on one side rather than the other. **Gap
+already identified:** [D-20](../windows-topology-sys/DESIGN-NOTES.md#d-20) removed
+`MachineMemoryTopology::distances` at the Win32 boundary, so this cost has to enter through the
+abstract model via the inward adapter/synthesizer path.
+
+**Done:** stated as [EP-D-3](DESIGN-NOTES.md#ep-d-3). This is where the direction EP-1.2 refused
+lands -- proximity is the link and symmetric, residency is the hop and is not.
+
+The processor-to-node half is answered, with one asymmetry worth preserving: an unknown *cache*
+domain costs an optimisation, but an unknown *memory* domain has no honest fallback, since the pool
+must be allocated somewhere and guessing means quietly allocating remote memory for the life of the
+process. `windows-placement-probe` already refuses on the second while tolerating the first, and
+that judgement was correct.
+
+**The cost half is now scoped to the current boundary.** The planner still needs directed
+residency-cost input plus measurement context, but those facts no longer live in
+`windows-topology-sys`; they are requirements on `topology-model` and the adapter that populates it.
+Measurement ownership for that directed cost was assigned at [EP-1+.4](#ep-1+4). Historical trigger
+analysis remains in [DESIGN-RATIONALE.md](DESIGN-RATIONALE.md#ep-d-3-rationale-and-history).

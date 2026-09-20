@@ -6,5 +6,5 @@
 
 > **CROSS-COMPONENT PREREQUISITE:** parent `topology-planner` -> `EP-X2.2` authorizes
 > this offline experiment following completed `read-checksum` -> `EP-X2.1`.
-> **-> CROSS-COMPONENT HANDOFF:** return to parent `topology-planner` -> `EP-R1.7`
+> **-> CROSS-COMPONENT HANDOFF:** return to parent `topology-planner` -> `MR2`
 > after EP-X2.3 validation and path disposition. No later experiment is implicitly started.

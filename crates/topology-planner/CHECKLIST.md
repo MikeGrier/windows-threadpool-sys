@@ -1,7 +1,7 @@
 # Checklist: the topology planner
 
 Plans an arrangement of execution domains from a stated **goal** plus an **abstracted idealized**
-description of a machine. See [COMPONENT.md](COMPONENT.md) for what this crate is and why it is
+description of a machine. See [COMPONENT.md](COMPONENT.md) for what this component is and why it is
 separate from both the topology crate and the runtime, and
 [EP-D-4](DESIGN-NOTES.md#ep-d-4) for the architecture it now sits in.
 
@@ -13,87 +13,59 @@ the model's traits over the Windows topology objects, one realizing a plan as bu
 threads. The model, its traits, and the plan type live in a separate `topology-model` crate that
 everything depends on and that depends on nothing. A fifth component owns active Windows measurement
 kernels shared by the probes and runtime planner.
-**M2+ onward are written against the superseded shape and are not yet re-cut.**
+**M2+ and M3+ are written against the superseded shape and are not yet re-cut**; MR3 owns
+that re-cut.
 
 ## Where this stands
 
-**The production planner is not implemented.** MR1 is the active design milestone.
-Its `EP-R1.7` experiment program is itemized here as MX1 through MX3; the isolated
-read/checksum baseline is recorded in its
+**The production planner is not implemented.** MR2 is the active milestone: it settles the planner
+contract, and MX1 through MX3 are the experiments that inform it. The isolated read/checksum
+baseline is recorded in its
 [COMPLETED-CHECKLIST.md](experiments/read-checksum/COMPLETED-CHECKLIST.md#rc-1).
-M1 remains a *requirements* milestone rather than an implementation one.
+The two crates under `experiments/` are the only code this component owns, and they are workspace
+members.
 
-**Deferred past PR #56, by direction.** This component contributes only planning documents to that
-PR and no code. `windows-topology-sys`'s reshape lands there without it: per
-[D-21](../windows-topology-sys/DESIGN-NOTES.md#d-21) that crate publishes a refined view of what the
-platform publishes, and an **adapter** absorbs whatever this component needs beyond it, so the two
-are no longer coupled.
+**No longer coupled to `windows-topology-sys`.** PR #56 closed unmerged and that crate's reshape
+shipped separately; per [D-21](../windows-topology-sys/DESIGN-NOTES.md#d-21) it publishes a refined
+view of what the platform publishes, and an **adapter** absorbs whatever this component needs beyond
+it.
 
-The design session that gated M2 onward **has concluded** -- its questions were answered as `D-13`
+The design session that gated M2+ onward **has concluded** -- its questions were answered as `D-13`
 through `D-21`, and the `MMT-*` plan is what it produced. M2+ is now gated on this component's own
 prerequisites rather than on someone else's decision.
 
 | Milestone | State | What it is waiting on |
 |---|---|---|
-| MR1 design-review reconciliation | active | EP-R1.7.1 reconciles the EP-D-10 startup-cost boundary before further MX work |
-| MX1 controlled read/checksum comparisons | paused for scope reconciliation | EP-X1.2 evidence retained; EP-R1.7.1 precedes closure or further execution |
-| MX2 locality and ownership patterns | EP-X2.1 through EP-X2.3 complete | Placement, request and state ownership behavior validated; later work remains paused by EP-R1.7.1 |
-| MX3 real endpoints, composition and synthesis | not started | MX2 ownership/ordering evidence and the permissions/hardware named by each experiment |
-| M1 the input contract | 4 done, 1 open | `EP-1.4` waits on EP-R1.7 |
-| M1+ scenario and naming | 2 done, 3 open | EP-R1.7 owns the topology specification and callbacks; `EP-1+.5` then settles remaining names |
-| M2+ the plan as a value | parked, **and needs re-cutting** | MR1, then EP-R1.8 and the resulting `topology-model` work |
-| M3+ the policies | parked | M2+ |
-| M-inf parked | ungated | not scheduled, deliberately |
-| MH1 physical NUMA fidelity | external hardware unavailable | EP-HW.1 is the single shared follow-up; does not gate other items or milestones |
+| MR2 the planner contract | active | `EP-R1.7.1` first; it gates the rest of MR2 and all MX execution |
+| MX1 read/checksum comparisons | paused | `EP-X1.2`'s result discussion, held under `EP-R1.7.1` |
+| MX2 locality and ownership | paused | `EP-X2.4` and `EP-X2.5`; `EP-R1.7.1` precedes further execution |
+| MX3 real endpoints and composition | not started | MX1/MX2 evidence, an implementation component (`EP-X3.1`), and the permissions each item names |
+| MR3 component-local plans | parked | MR2 |
+| M2+ the plan as a value | parked, **and needs re-cutting** | MR3 |
+| M3+ the policies | parked, **and needs re-cutting** | M2+ |
+| MH1 physical NUMA fidelity | parked, ungated | `EP-HW.1` triggers on hardware access; it gates no other item or milestone |
+| M-inf horizon | parked, ungated | deliberately not scheduled |
 
-## MR1: reconcile the 2026-09-18 design review
+## MR2: settle the planner contract
 
-These items are in dependency order. Resolve and commit one item before beginning the next.
-For `EP-R1.7`, execute and discuss the MX experiment items below before closing the parent
-item; do not start `EP-R1.8` merely because one experiment has finished.
+Item IDs keep the `EP-R1.7.x` sub-numbering this milestone was decomposed from, because `EP-R1.7.2`
+is already archived under that ID. The milestone also owns what the former `M1+` items and `EP-1.4`
+described.
 
-- [x] **EP-R1.1** -- Runtime measurement ownership and its data boundary are settled. -> [completed 2026-09-18](COMPLETED-CHECKLIST.md#ep-r11)
+**Renumbered:** `EP-1+.1` -> `EP-R1.7.3`, `EP-1+.2` -> `EP-R1.7.4`, `EP-1.4` -> `EP-R1.7.5`,
+`EP-1+.5` -> `EP-R1.7.11`. A document citing one of those, or citing `EP-R1.7` as a single item,
+means this milestone. `EP-1+.3` and `EP-1+.4` were already complete and keep their archived IDs.
 
-- [x] **EP-R1.2** -- The five-component architecture and its dependency order are settled. -> [completed 2026-09-18](COMPLETED-CHECKLIST.md#ep-r12)
+[EP-D-10](DESIGN-NOTES.md#ep-d-10) bounds every decision here: topology-first matching inside a small
+startup budget, zero active probes supported, and no workload validation as a deployment
+prerequisite. Use [DESIGN-PROPOSAL-EP-R1.7.md](DESIGN-PROPOSAL-EP-R1.7.md) as a working basis rather
+than a frozen contract, and the primary-source survey in
+[DESIGN-RESEARCH-WORKLOAD-PATTERNS.md](DESIGN-RESEARCH-WORKLOAD-PATTERNS.md) as the starting point.
+The full contract need not be settled before experiments inform it.
 
-- [x] **EP-R1.3** -- Stale external gates are replaced by the component's real internal dependencies. -> [completed 2026-09-18](COMPLETED-CHECKLIST.md#ep-r13)
-
-- [x] **EP-R1.4** -- Query totality, the scoped universe, and specified partitions are distinguished from order totality. -> [completed 2026-09-18](COMPLETED-CHECKLIST.md#ep-r14)
-
-- [x] **EP-R1.5** -- Settled naming is separated from contract-dependent component and type names. -> [completed 2026-09-18](COMPLETED-CHECKLIST.md#ep-r15)
-
-- [x] **EP-R1.6** -- Tier 1 now distinguishes shipped Windows facts, adapter projections, I/O endpoint attachment, and planner-owned measurements. -> [completed 2026-09-18](COMPLETED-CHECKLIST.md#ep-r16)
-
-- [ ] **EP-R1.7** -- **Develop the contracts and acceptance matrix through research and bounded experiments.**
-  **In progress:** use [DESIGN-PROPOSAL-EP-R1.7.md](DESIGN-PROPOSAL-EP-R1.7.md) as a working
-  basis, not a frozen contract; reconcile it under `EP-R1.7.1` before further experiments.
-  [EP-D-10](DESIGN-NOTES.md#ep-d-10) governs startup cost. Start from the primary-source survey and simpler workloads in
-  [DESIGN-RESEARCH-WORKLOAD-PATTERNS.md](DESIGN-RESEARCH-WORKLOAD-PATTERNS.md).
-  Review the parameter-sweep [capture record](experiments/read-checksum/captures/2026-09-19-ep-x1-2/README.md)
-  before selecting the next experiment. Keep stage separation distinct from processing parallelism,
-  and account for run-to-run variation before generalizing the catalog. Define each experiment's
-  constraints and correctness/measurement obligations; review speculative paths for retention,
-  revision, merge or deletion. The full contract need not be settled before experiments inform it.
-  > **CROSS-COMPONENT PREREQUISITE:** `experiments/read-checksum` -> `RC` -> `RC-1`
-  > supplies the first evidence and returns control here; see
-  > [COMPLETED-CHECKLIST.md](experiments/read-checksum/COMPLETED-CHECKLIST.md#rc-1).
-  Plan the scenario/goal contract, plan invariants and errors, deterministic policy and tie-breaking,
-  measurement permission and failure behavior, callback semantics, JSON compatibility, storage,
-  network, and interconnect policy, routed-hop representation, and synthetic acceptance cases.
-  Define the common I/O endpoint contract plus typed storage and network capabilities, including
-  network receive steering and RSS constraints. Decide how much
-  higher-level work-item and buffer-flow machinery this project supplies between completed I/O,
-  parsing, serial or parallel processing, workers, and cross-domain migration, including whether
-  existing repository code or the Windows thread pool already owns any part. Define intent-aware
-  diagnostics for constraints that cross physical cache or memory strata, so the planner reports the
-  observed consequence without treating a deliberate transfer as inherently wrong. Include at least
-  ten normal cases plus every identified edge case, and replace "deferred for litigation" with a
-  linked decision or a concrete blocker and graduation trigger.
-  Use MX1 through MX3 below as the experiment work queue, revising it as evidence changes the plan.
-  > **CROSS-COMPONENT PREREQUISITE:** `crates/topology-planner/experiments/read-checksum`
-  > -> `MX1` -> `EP-X1.2` has returned its capture here for result discussion.
-  > Reconcile scope under `EP-R1.7.1` before closing that review or selecting the next experiment; its
-  > [PLANS.md](experiments/read-checksum/PLANS.md) points back here.
+MX1 through MX3 are this milestone's evidence, not a separate program. Each item below names the
+experiments it needs; an item naming none is settled on design grounds. Resolve and commit one item
+before beginning the next.
 
 - [ ] **EP-R1.7.1** -- **Reconcile the topology-first contract and experiment sequence with the
   bounded startup cost in [EP-D-10](DESIGN-NOTES.md#ep-d-10).** Specify an explicit small
@@ -106,28 +78,91 @@ item; do not start `EP-R1.8` merely because one experiment has finished.
   candidate-selection, measurement-grant and ready-plan rules; queue executable acceptance for
   zero probes, budget exhaustion and no hidden workload validation during setup. Settle EP-X1.2's
   disposition and the next experiment with the engineer before resuming MX execution.
+  **This item gates every other item in this milestone and all MX execution.**
 
 - [x] **EP-R1.7.2** -- Implement and adopt a consistent faux-NUMA test environment. -> [completed 2026-09-19](COMPLETED-CHECKLIST.md#ep-r172)
 
-- [ ] **EP-R1.8** -- **Materialize executable component-local plans after names and contracts are
-  settled.** Create dependency-ordered checklists and reciprocal cross-component handoffs for
-  `topology-model`, `topology-planner`, the inward adapter, the measurement foundation, and the
-  realizer. Move the model, specification, query-trait, measurement-vocabulary, and plan-value work
-  to their owning component. Each plan must identify its first implementable item without a
-  provisional crate name or an unstated contract prerequisite.
-  Carry EP-R1.7.2's consistent gathering/fake-realization acceptance into each owning
-  component, including zero leakage of synthetic identities into live placement calls.
+- [ ] **EP-R1.7.3** -- **Describe the scenario input.** The planner takes *two* inputs and only the
+  machine description is specified anywhere. The scenario says what the caller intends to run, and it
+  is what makes a measurement meaningful: [EP-D-3](DESIGN-NOTES.md#ep-d-3) established that a measured
+  number means nothing without knowing what it measured, so at minimum the scenario must distinguish
+  small-message handoff from large-buffer streaming. State what the caller must supply, what is
+  optional, what the planner may infer, and what it must refuse to guess. Its absence is why "what is
+  most useful for consumers" stayed hard to answer in the abstract.
+  **Evidence:** MX1's workload dimensions and MX2's ownership shapes.
 
-## Experiment execution rules for MX1 through MX3
+- [ ] **EP-R1.7.4** -- **Decide what the caller-callback traits ask.** Planning is a negotiation: the
+  component may call back for clarification the scenario did not settle. Enumerating those questions
+  is what decides whether this is one trait or several, and it cannot be done before `EP-R1.7.3` says
+  what the scenario already answers. Define callback semantics, when they may be invoked, and what a
+  refusal, a failure or a timeout means for the resulting plan.
 
-**EP-X2.3 is complete; further experiment execution remains paused pending `EP-R1.7.1`.**
-[EP-D-10](DESIGN-NOTES.md#ep-d-10) remains the startup constraint. The shared NUMA
-validation policy is [EP-D-11](DESIGN-NOTES.md#ep-d-11); physical hardware is not an item
-or milestone gate. Other items retain their work and remain
-paused. Existing captures and completed work are unchanged.
+- [ ] **EP-R1.7.5** -- **Decide what the planner does when required evidence is unavailable.** Runtime
+  characterization may answer a fact the initial machine observation did not, but measurement can be
+  disallowed, fail, exceed its budget, or remain inconclusive. Decide when the planner adapts to a
+  documented weaker policy, emits a plan carrying an explicit assumption or unresolved constraint, or
+  refuses to plan, and define measurement permission and failure behavior alongside that rule.
+  [D-21](../windows-topology-sys/DESIGN-NOTES.md#d-21) requires `windows-topology-sys` only to state
+  policy-free platform facts and distinguish absence; it does not decide consumer behavior and will
+  not be reshaped to match the planner's goal. Keep [EP-D-3](DESIGN-NOTES.md#ep-d-3)'s asymmetry: an
+  unknown cache domain costs an optimisation, an unknown memory domain has no honest fallback.
 
-Keep this file as the experiment program's work queue; component plan indexes link to
-the owning items here rather than duplicating them in another checklist. Use the
+- [ ] **EP-R1.7.6** -- **State the plan value's invariants and errors, its deterministic policy and
+  tie-breaking, and its JSON compatibility rule.** The same inputs must produce the same plan, so
+  every policy choice needs a stated tie-break rather than an incidental one. Say which JSON changes
+  are compatible and which are not, and whether the plan's schema versions separately from the crates
+  that carry it.
+
+- [ ] **EP-R1.7.7** -- **Define the common I/O endpoint contract and the typed storage and network
+  capabilities over it**, including network receive steering and RSS constraints, and what an endpoint
+  must state about the NUMA domain it is attached to.
+  **Evidence:** `EP-X3.1` for the network side, `EP-X1.5` for the storage side.
+
+- [ ] **EP-R1.7.8** -- **Decide storage, network and interconnect policy, and how a routed hop is
+  represented** both in the plan and in the model the plan is read from.
+  **Evidence:** `EP-X2.1`'s directed-transfer results and `EP-X3.2`'s composition.
+
+- [ ] **EP-R1.7.9** -- **Draw the boundary on work-item and buffer-flow machinery, and define
+  intent-aware diagnostics.** Decide how much higher-level machinery this project supplies between
+  completed I/O, parsing, serial or parallel processing, workers, and cross-domain migration,
+  including whether existing repository code or the Windows thread pool already owns any part. Define
+  diagnostics for constraints that cross physical cache or memory strata so the planner reports the
+  observed consequence without treating a deliberate transfer as inherently wrong.
+  **Evidence:** MX2's ownership and ordering results.
+
+- [ ] **EP-R1.7.10** -- **Build the acceptance matrix.** Include at least ten normal cases plus every
+  identified edge case, expressed as synthetic cases the planner can actually be run against. Trace
+  each accepted and rejected case to an experiment or to an explicit untested design obligation, and
+  replace every "deferred for litigation" with a linked decision or a concrete blocker and graduation
+  trigger.
+  **Evidence:** `EP-X3.3`, which synthesizes the experimental constraints this matrix encodes.
+
+- [ ] **EP-R1.7.11** -- **Name the remaining platform components and public contract types, once the
+  items above have settled their responsibilities.** Apply [EP-D-8](DESIGN-NOTES.md#ep-d-8): platform
+  crates use `windows-`, only direct low-level wrappers use `-sys`, role names are preferred over
+  generic `adapter`, and physical facts, developer intent, and allocation-specific results use
+  distinct nouns. Complete this before MR3 creates the component-local plans.
+
+## MX1 through MX3: the experiment program for MR2
+
+**Execution is paused pending `EP-R1.7.1`.** Existing captures and completed work are unchanged, and
+paused items retain the work they state.
+
+**These three milestones group experiments by workload, not by execution order.** Execution has
+already interleaved them -- `EP-X2.1` through `EP-X2.3` ran while `EP-X1.2` was still open -- so an
+item's position in this list is not a dependency. Each open item states its own prerequisites, and
+the next experiment is chosen at the preceding result discussion under `EP-R1.7.1` rather than by
+reading down the page. If evidence changes a dependency or the next useful question, revise this
+checklist before continuing.
+
+[EP-D-10](DESIGN-NOTES.md#ep-d-10) remains the startup constraint. The shared NUMA validation policy
+is [EP-D-11](DESIGN-NOTES.md#ep-d-11); physical hardware is not an item or milestone gate, and
+physical follow-up belongs only to `EP-HW.1`. Faux NUMA establishes behavior, not hardware timings.
+
+Every MX item is owned in this file. Implementation lands in `experiments/read-checksum` or
+`experiments/request-reply`, which are separate source-components with their own design notes and
+captures, but the checklist item never moves there and those components keep no checklist of their
+own -- their plan indexes link back here. Use the
 [research](DESIGN-RESEARCH-WORKLOAD-PATTERNS.md) and
 [working proposal](DESIGN-PROPOSAL-EP-R1.7.md) as hypotheses, not a fixed archetype catalog.
 
@@ -144,15 +179,8 @@ Discuss the result and explicitly retain, revise, merge or delete each speculati
 update the working contract and affected future items, then commit that item before starting
 another. Do not wait for the final synthesis to record what an experiment teaches.
 
-Treat the order below as the current execution plan, not a promise that every hypothesis
-survives. If evidence changes a dependency or the next useful question, revise this checklist
-before continuing. If hardware, permission or a missing primitive blocks work, name the
-blocker and discuss the workaround or reordering; leave unperformed work unchecked.
-Faux NUMA establishes behavior, not hardware timings. Do not create per-item hardware
-completion gates for the shared limitation; physical follow-up belongs only to EP-HW.1.
-Actual software gaps and other external-boundary requirements remain pending. Before work moves into
-another source-component, record the exact destination and reciprocal handoff against the
-same item ID; do not create an unowned implementation queue.
+If hardware, permission or a missing primitive blocks work, name the blocker and discuss the
+workaround or reordering; leave unperformed work unchecked.
 
 ## MX1: controlled read/checksum comparisons
 
@@ -174,11 +202,11 @@ same item ID; do not create an unowned implementation queue.
   **Evidence:** correctness, useful throughput, stage/queue latency, CPU use, payload
   occupancy and pressure, with the changed dimension recorded. **Review:** retain conditional
   observations and choose subsequent cases without inventing a universal queue or batch size.
-  > **CROSS-COMPONENT PREREQUISITE:** parent `topology-planner` -> `EP-R1.7`
-  > returns the `EP-X1.1` result review and its `RC-D8` controls before work resumes in
-  > `experiments/read-checksum` -> `MX1` -> `EP-X1.2`.
-  > **-> CROSS-COMPONENT HANDOFF:** return from `experiments/read-checksum` to
-  > `topology-planner` -> `EP-R1.7` before advancing to `EP-X1.3`.
+  **Prerequisite:** none outstanding -- the sweep is implemented and captured, and only the result
+  discussion remains.
+  > **-> CROSS-COMPONENT HANDOFF:** implemented in `experiments/read-checksum`, which keeps the
+  > captures and `RC-D9`; the item stays owned here. Return to `MR2` -> `EP-R1.7.1`, which holds the
+  > result discussion and chooses what runs next.
 
 - [ ] **EP-X1.3** -- **Compare polling, waiting and bounded hybrid idle policies.**
   Select its fixed configurations at the EP-X1.2 result discussion using the
@@ -190,8 +218,9 @@ same item ID; do not create an unowned implementation queue.
   **Evidence:** CPU time, wake/queue latency, progress and shutdown under pressure; verify
   the real notification path cannot lose work or a wakeup. **Review:** separate policy
   effects from arrangement effects and retain the measured policy choices explicitly.
-  > **-> CROSS-COMPONENT HANDOFF:** return from `experiments/read-checksum` to
-  > `topology-planner` -> `EP-R1.7` before advancing to `EP-X1.4`.
+  **Prerequisite:** `EP-X1.2`'s result discussion, which selects this item's fixed configurations.
+  > **-> CROSS-COMPONENT HANDOFF:** implemented in `experiments/read-checksum`; the item stays owned
+  > here. Return to `MR2` -> `EP-R1.7.1` for the result discussion.
 
 - [ ] **EP-X1.4** -- **Measure independently paced arrivals and overload behavior.**
   Reuse the deterministic steady/burst trace and outcome-accounting contract from
@@ -204,12 +233,15 @@ same item ID; do not create an unowned implementation queue.
   from scheduled arrival, including generator lateness and pre-admission waiting; queue
   pressure and recovery after a burst. **Review:** distinguish throughput from responsiveness,
   account for unfinished work, and refine the workload's admission/deadline constraints.
-  > **-> CROSS-COMPONENT HANDOFF:** return from `experiments/read-checksum` to
-  > `topology-planner` -> `EP-R1.7` before advancing to `EP-X1.5`.
+  **Prerequisite:** the `EP-X1.2` and `EP-X1.3` configurations this item holds fixed.
+  > **-> CROSS-COMPONENT HANDOFF:** implemented in `experiments/read-checksum`, reusing
+  > `experiments/request-reply`'s `RR-D2` accounting contract; the item stays owned here. Return to
+  > `MR2` -> `EP-R1.7.1` for the result discussion.
 
 - [ ] **EP-X1.5** -- **Separate generated-buffer, buffered-file and device-path evidence.**
-  Use the generated-buffer companion implemented under EP-X2.1; this item still owns the
-  buffered working-set and authorized device-path comparisons and their evidence review.
+  The generated-buffer companion this needs was implemented under `EP-X2.1` and is complete, so that
+  prerequisite is already satisfied; this item still owns the buffered working-set and authorized
+  device-path comparisons and their evidence review.
   **Question:** which differences remain when file/cache service is changed or removed?
   **Controls:** retain equal transforms, logical inputs and per-comparison budgets; compare
   a labelled generated-buffer companion, buffered working-set sweeps and an explicitly
@@ -217,8 +249,11 @@ same item ID; do not create an unowned implementation queue.
   **Evidence:** the actual I/O mode, working set, completed bytes, CPU/latency distributions
   and observed cache/device conditions; do not infer physical service from a mode flag alone.
   **Review:** identify which claims each evidence class supports and what remains unmeasured.
-  > **-> CROSS-COMPONENT HANDOFF:** return from `experiments/read-checksum` to
-  > `topology-planner` -> `EP-R1.7` before advancing to `MX2` -> `EP-X2.1`.
+  **Prerequisite:** device-path access must be explicitly authorized before that comparison runs;
+  the generated-buffer and buffered working-set halves are not blocked on it.
+  > **-> CROSS-COMPONENT HANDOFF:** implemented in `experiments/read-checksum`; the item stays owned
+  > here. Return to `MR2` -> `EP-R1.7.1` for the result discussion, and to `EP-R1.7.7`, which this
+  > item's storage evidence feeds.
 
 ## MX2: locality and ownership patterns
 
@@ -237,6 +272,10 @@ same item ID; do not create an unowned implementation queue.
   pressure and rundown; add real output I/O only with an explicit effect/durability contract.
   **Review:** separate per-record dependency from global order and write down the cancellation
   and visibility obligations needed to describe either arrangement.
+  **Prerequisite:** `EP-X2.3`'s key-owned processing result, which is complete.
+  > **-> CROSS-COMPONENT HANDOFF:** continues in `experiments/request-reply` unless the result
+  > discussion selects another host; the item stays owned here. Return to `MR2` -> `EP-R1.7.9`, which
+  > this item's ordering evidence feeds.
 
 - [ ] **EP-X2.5** -- **Exercise scatter/gather and broadcast/branch/join constraints.**
   **Question:** how do partitioning, fan-out and joining change ownership and pressure?
@@ -247,6 +286,9 @@ same item ID; do not create an unowned implementation queue.
   intermediate state, latency, pressure and cancellation of partially completed branches.
   **Review:** retain the required flow/cardinality constraints and reject invalid arrangements
   before measuring them; do not force distinct dependency shapes into one archetype.
+  **Prerequisite:** `EP-X2.4`'s ordering and publication obligations.
+  > **-> CROSS-COMPONENT HANDOFF:** continues in `experiments/request-reply` unless the result
+  > discussion selects another host; the item stays owned here. Return to `MR2` -> `EP-R1.7.9`.
 
 ## MX3: real endpoints, composition and contract synthesis
 
@@ -260,6 +302,12 @@ same item ID; do not create an unowned implementation queue.
   captures; establish RSS/adapter observations and endpoint permissions before physical runs.
   **Review:** identify which network-specific capabilities belong beside the common I/O
   endpoint contract, without assuming device receive processing determines application ownership.
+  **Prerequisite:** endpoint permissions, and RSS/adapter observations established before any
+  physical-NIC run; loopback needs neither.
+  > **-> CROSS-COMPONENT HANDOFF:** **MX3 has no implementation home yet.** This needs a new
+  > experiment source-component beside `read-checksum` and `request-reply`. Name it and record the
+  > reciprocal handoff at the result discussion that selects this item, before any code is written.
+  > Return to `MR2` -> `EP-R1.7.7`, which this item's network evidence feeds.
 
 - [ ] **EP-X3.2** -- **Compose a multi-endpoint transform/collate/output workload.**
   **Question:** what changes when source, processing, aggregation and destination placement
@@ -272,6 +320,9 @@ same item ID; do not create an unowned implementation queue.
   per-stage pressure, directed transfers and recovery from one slow or failed endpoint.
   **Review:** record which constraints survive composition; do not claim independent devices
   or cross-NUMA behavior from multiple logical handles to one underlying resource.
+  **Prerequisite:** `EP-X3.1`'s endpoint distinctions and MX2's validated dependencies.
+  > **-> CROSS-COMPONENT HANDOFF:** hosted by the component `EP-X3.1` establishes. Return to `MR2`
+  > -> `EP-R1.7.8`, which this item's composition evidence feeds.
 
 - [ ] **EP-X3.3** -- **Synthesize the experimental constraints into the working planner contract.**
   **Question:** what must a workload description and candidate plan express to reproduce
@@ -282,103 +333,31 @@ same item ID; do not create an unowned implementation queue.
   explicit untested design obligation; keep measured costs allocation-specific.
   **Review:** reconcile the [working proposal](DESIGN-PROPOSAL-EP-R1.7.md), canonical decisions
   and acceptance matrix, and record retain/revise/merge/delete dispositions without freezing
-  the catalog merely because this sequence ended. Return to `EP-R1.7`'s remaining contract
-  decisions before closing it and handing off naming/component plans to `EP-R1.8`.
+  the catalog merely because this sequence ended.
+  **Prerequisite:** the MX1 and MX2 evidence each contract item names; MX3's own two experiments
+  where composition constraints are in scope.
+  > **-> CROSS-COMPONENT HANDOFF:** return to `MR2` -> `EP-R1.7.10`, which this item's synthesis
+  > becomes. MR2's remaining contract items close before MR3 begins.
 
-## M1: state what the planner needs from the topology
+## MR3: materialize the component-local plans
 
-The point of doing this first: the design session asks what representation is most useful to
-consumers, and **this crate is the consumer**. Answering in the abstract has already produced one
-wrong answer this session. Each item below states a query the planner makes, why it makes it, and
-whether the topology can answer it today -- so the model is designed against a real caller.
+Parked on MR2. Nothing here starts because one experiment or one contract item has finished.
 
-- [x] **EP-1.1** -- The shard-set query requirements and discovered efficiency-class sentinel defect are recorded. -> [completed 2026-09-18 18:50:30 +00:00](COMPLETED-CHECKLIST.md#ep-11)
-
-- [x] **EP-1.2** -- **The proximity query, which is the crux.** For an ~~*ordered pair*~~
-  **unordered pair** of processors, how close are they -- because that is what chooses SPSC versus
-  MPSC versus a routed hop, and it is asked once per pair rather than once per machine. **The model
-  available when this item was written could not answer it**: `outermost_partitioning_cache` reports one global level and
-  `same_cache_domain` reduces it to a boolean at that level, so a client reconstructs the rest and,
-  per `SH-16.9`, reconstructs it differently each time. State the query precisely enough that the
-  session can design against it.
-  **Done:** stated as [EP-D-2](DESIGN-NOTES.md#ep-d-2).
-  **This item said "ordered pair" and was wrong**, corrected in place rather than quietly. The
-  repository had already settled it: `windows-placement-probe` documents that its placement labels
-  are "deliberately symmetric", that "the *relationship* between two processors genuinely is
-  symmetric", and that "direction therefore lives where it is real, not in the label" -- with the
-  measured side putting it as "a hop is not symmetric even though the link is". Proximity is the
-  link and is unordered; direction is the hop, and belongs to EP-1.3's residency question.
-  Three requirements came out of stating it. The answer needs the **membership** of the shared
-  granularity, not just its identity, or the planner re-derives the grouping to size an MPSC
-  fan-in. It needs to distinguish "tightest shared is X" from "**at most** X, and finer was not
-  observed", since under the model's bar the planner cannot go and check. And the order being by
-  inclusion rather than by firmware numbering means two granularities can be **incomparable**, so
-  the answer is a set of minimal shared granularities -- almost always one, but not by construction.
-
-- [x] **EP-1.3** -- **The residency query.** Which memory domain each processor belongs to, and --
-  for a pair spanning two of them -- what it costs to place a shared buffer on one side rather than
-  the other. **Gap already identified:** [D-20](../windows-topology-sys/DESIGN-NOTES.md#d-20)
-  removed `MachineMemoryTopology::distances` at the Win32 boundary, so this cost has to enter through
-  the abstract model via the inward adapter/synthesizer path. That contract is still missing and
-  remains tracked as `EP-1+.4`.
-  **Done:** stated as [EP-D-3](DESIGN-NOTES.md#ep-d-3). This is where the direction EP-1.2 refused
-  lands -- proximity is the link and symmetric, residency is the hop and is not.
-  The processor-to-node half is answered, with one asymmetry worth preserving: an unknown *cache*
-  domain costs an optimisation, but an unknown *memory* domain has no honest fallback, since the
-  pool must be allocated somewhere and guessing means quietly allocating remote memory for the life
-  of the process. `windows-placement-probe` already refuses on the second while tolerating the
-  first, and that judgement was correct.
-  **The cost half is now scoped to the current boundary.** The planner still needs directed
-  residency-cost input plus measurement context, but those facts no longer live in
-  `windows-topology-sys`; they are requirements on `topology-model` and the adapter that populates it.
-  Historical trigger analysis remains in [DESIGN-RATIONALE.md](DESIGN-RATIONALE.md#ep-d-3-rationale-and-history).
-
-- [ ] **EP-1.4** -- **What the planner does when required evidence remains unavailable.** Runtime
-  characterization may answer a fact the initial machine observation did not, but measurement can
-  be disallowed, fail, exceed its budget, or remain inconclusive. Decide when the planner adapts to
-  a documented weaker policy, emits a plan carrying an explicit assumption or unresolved constraint,
-  or refuses to plan.
-  **Unblocked and owned here.** [D-21](../windows-topology-sys/DESIGN-NOTES.md#d-21) requires
-  `windows-topology-sys` only to state policy-free platform facts and distinguish absence; it does
-  not decide consumer behavior and will not be reshaped to match the planner's goal. The remaining
-  decision depends on the topology-specification, measurement-permission, and plan-evidence
-  contracts, so it is resolved with `EP-R1.7`.
-
-- [x] **EP-1.5** -- The locality-model handoff and shipped-model coverage reconciliation are complete. -> [completed 2026-09-18](COMPLETED-CHECKLIST.md#ep-15)
-
-## M1+: the scenario input, and the naming
-
-Raised when the engineer described this component's function, which turned out to be richer than
-"takes a topology, applies policy". No external model work gates these items. `EP-R1.7` owns the
-topology specification and callback contract; `EP-1+.5` names the remaining components and types
-after those responsibilities are settled.
-
-- [ ] **EP-1+.1** -- **Describe the scenario input.** The synthesizer takes *two* inputs and only one
-  is described anywhere. The scenario says what the caller intends to run, and it is what makes a
-  measurement meaningful: [EP-D-3](DESIGN-NOTES.md#ep-d-3) established that a measured number means
-  nothing without knowing what it measured, so at minimum the scenario must distinguish small-message
-  handoff from large-buffer streaming. Its absence is why "what is most useful for consumers" was
-  hard to answer in the abstract for so long.
-
-- [ ] **EP-1+.2** -- **Decide what the caller-callback traits ask.** Planning is a negotiation: the
-  component may call back for clarification the scenario did not settle. Enumerating those questions
-  is what decides whether this is one trait or several, and it cannot be done before EP-1+.1 says
-  what the scenario already answers.
-
-- [x] **EP-1+.3** -- The planner, model, and conceptual input/output vocabulary are named. -> [completed 2026-09-18](COMPLETED-CHECKLIST.md#ep-1+3)
-
-- [x] **EP-1+.4** -- Measurement ownership for directed residency cost is assigned. -> [completed 2026-09-18](COMPLETED-CHECKLIST.md#ep-1+4)
-
-- [ ] **EP-1+.5** -- **Name the remaining platform components and public contract types after
-  EP-R1.7 settles their responsibilities.** Apply [EP-D-8](DESIGN-NOTES.md#ep-d-8): platform crates
-  use `windows-`, only direct low-level wrappers use `-sys`, role names are preferred over generic
-  `adapter`, and physical facts, developer intent, and allocation-specific results use distinct
-  nouns. Complete this before `EP-R1.8` creates component-local plans.
+- [ ] **EP-R1.8** -- **Materialize executable component-local plans once MR2's names and contracts
+  are settled.** Create dependency-ordered checklists and reciprocal cross-component handoffs for
+  `topology-model`, `topology-planner`, the inward adapter, the measurement foundation, and the
+  realizer. Move the model, specification, query-trait, measurement-vocabulary, and plan-value work
+  to their owning component. Each plan must identify its first implementable item without a
+  provisional crate name or an unstated contract prerequisite.
+  Carry `EP-R1.7.2`'s consistent gathering/fake-realization acceptance into each owning
+  component, including zero leakage of synthetic identities into live placement calls.
 
 ## M2+: the plan as a value
 
-Parked, not pending. The Windows topology reshape has already shipped. This work waits on MR1,
-`EP-R1.8`'s component-local plans, and implementation of the resulting shared `topology-model`
+**Written against the superseded pre-[EP-D-4](DESIGN-NOTES.md#ep-d-4) shape; MR3 re-cuts these items.**
+
+Parked, not pending. The Windows topology reshape has already shipped. This work waits on MR2, then
+MR3's component-local plans, and implementation of the resulting shared `topology-model`
 contracts. Shape recorded so it is not lost, per the `M{n}+` convention.
 
 - [ ] **M2+.1** -- The plan type: domains, each with its processor, its memory domain and its
@@ -395,8 +374,10 @@ contracts. Shape recorded so it is not lost, per the `M{n}+` convention.
 
 ## M3+: the policies
 
-Parked. These are the choices the crate exists to make, and each is a decision item rather than an
-implementation one.
+**Written against the superseded pre-[EP-D-4](DESIGN-NOTES.md#ep-d-4) shape; MR3 re-cuts these items.**
+
+Parked. These are the choices the component exists to make, and each is a decision item rather than
+an implementation one.
 
 - [ ] **M3+.1** -- Domain-per-core versus domain-per-thread, and whether efficiency cores are peers,
   excluded, or a second tier.
