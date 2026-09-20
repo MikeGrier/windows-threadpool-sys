@@ -1,8 +1,12 @@
 # Design notes: windows-ioring-sys (Tier 1)
 
-This crate does not exist yet as compiled code. This file, the checklist beside it, and the design session
-it references are the design record that precedes it. Creating the Cargo skeleton is M1.1 in
-[CHECKLIST.md](CHECKLIST.md).
+This file is the crate's current design record: what was decided, and what forced each choice. It was
+written before the implementation, and the design session it references is where its earliest decisions
+came from.
+
+It deliberately states no release or milestone status. That is derivative of
+[CHANGELOG.md](CHANGELOG.md), the git tags, and [CHECKLIST.md](CHECKLIST.md), and a copy of it here would
+be one more thing to keep true by hand.
 
 ## Intent
 

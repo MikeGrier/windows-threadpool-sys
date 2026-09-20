@@ -139,11 +139,11 @@
 //!   into that domain's ring (see [`Batch::register_buffers`]), is very
 //!   likely the highest-leverage locality decision available.
 //!
-//! # Status
+//! # Where the design lives
 //!
-//! Under construction. The design, including the delivery-architecture guidance
-//! this crate exists to make usable, is recorded in `DESIGN-NOTES.md` beside the
-//! source; the build-out is tracked in `CHECKLIST.md`.
+//! The design, including the delivery-architecture guidance this crate exists
+//! to make usable, is recorded in `DESIGN-NOTES.md` beside the source, and the
+//! work still open against it is tracked in `CHECKLIST.md`.
 
 #![warn(missing_docs)]
 
