@@ -3,6 +3,7 @@
 
 mod engine;
 pub use engine::run;
+pub mod ingest;
 pub mod stateful;
 
 use std::collections::{BTreeMap, BTreeSet};

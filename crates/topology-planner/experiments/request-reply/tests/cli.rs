@@ -123,3 +123,65 @@ fn stateful_capture_preserves_both_candidates_state_and_per_key_summaries() {
     assert_eq!(std::fs::read(&path).unwrap(), bytes);
     std::fs::remove_file(path).unwrap();
 }
+
+#[test]
+fn ingest_capture_preserves_declared_publication_order_across_both_arrangements() {
+    use windows_request_reply_experiment::{StopReason, ingest};
+    let scratch = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .ancestors()
+        .nth(4)
+        .unwrap()
+        .join(".scratch");
+    std::fs::create_dir_all(&scratch).unwrap();
+    let path = scratch.join(format!("ingest-cli-{}.json", std::process::id()));
+    let invoke = || {
+        Command::new(env!("CARGO_BIN_EXE_windows-request-reply-experiment"))
+            .arg("capture-ingest")
+            .arg(&path)
+            .output()
+            .unwrap()
+    };
+    let output = invoke();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stdout)
+    );
+    let bytes = std::fs::read(&path).unwrap();
+    let capture: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(capture["schema"], "ingest-capture-v1");
+    let trials = capture["trials"].as_array().unwrap();
+    assert_eq!(trials.len(), 48);
+    for group in trials.as_chunks::<4>().0 {
+        for (position, trial) in group.iter().enumerate() {
+            let report: ingest::Report = serde_json::from_value(trial["report"].clone()).unwrap();
+            ingest::verify(&report).unwrap();
+            assert_eq!(
+                report.arrangement,
+                if position == 0 || position == 3 {
+                    ingest::Arrangement::SerialOwner
+                } else {
+                    ingest::Arrangement::StagedPipeline
+                }
+            );
+            assert_eq!(trial["report"]["trace"], group[0]["report"]["trace"]);
+            assert_eq!(trial["report"]["config"], group[0]["report"]["config"]);
+            assert_eq!(
+                trial["workers"].as_array().unwrap().len(),
+                ingest::transformers(&report.config, report.arrangement)
+            );
+            let expected = serde_json::to_value(ingest::summary(&report, None).unwrap()).unwrap();
+            assert_eq!(trial["aggregate"], expected);
+            if trial["scenario"] == "cancellation" {
+                assert_eq!(report.stop, StopReason::Cancelled);
+            } else {
+                assert_eq!(report.stop, StopReason::Drained);
+                // Declared order is the contract, so every position must publish identically.
+                assert_eq!(trial["report"]["log"], group[0]["report"]["log"]);
+            }
+        }
+    }
+    assert!(!invoke().status.success());
+    assert_eq!(std::fs::read(&path).unwrap(), bytes);
+    std::fs::remove_file(path).unwrap();
+}

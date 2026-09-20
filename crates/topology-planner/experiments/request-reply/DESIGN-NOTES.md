@@ -250,3 +250,46 @@ order, the cursor advance on abort, cancellation effects, the transform result a
 verifier binding, with a non-defect control. Retain both candidates until an explicit
 disposition review. This experiment owns no topology or allocation policy and selects
 no timing winner; ordering cost is a workload property here, not a machine fact.
+
+## RR-D8: ordered-ingestion findings and disposition
+
+Retain the serial owner and the staged pipeline as separate ingestion candidates, and
+keep the stateless and stateful paths unchanged. Neither becomes a planner default and
+neither is merged or deleted from a timing observation. Eventual production disposition
+stays queued under parent [CHECKLIST.md](../../CHECKLIST.md) -> `EP-X3.3`. The
+[ingestion demonstration](captures/2026-09-19-ingest/README.md) retains the observations.
+
+**A candidate contract must state the per-record dependency and the global publication
+order as two rules, not one.** The serial owner satisfies both by construction and so
+can report nothing about their separate cost; the staged pipeline satisfies them
+independently, which is what makes the resequencing window, the blocking on it, and the
+resulting head-of-line delay observable at all. A descriptor that records only "ordered"
+cannot distinguish the two, and a planner reading it would have no basis for choosing.
+
+**Declared publication order survived overlap in every drained scenario**, including a
+one-slot window, credit pressure and a deliberately slow first record. That is a
+property of the resequencing rule rather than of the schedule: the same runs recorded
+transform workers blocking on the window throughout, so the order was preserved against
+real reordering pressure rather than in its absence. Ordering cost is therefore a
+workload property to be described, not a machine fact to be measured once.
+
+**The bound is part of the candidate and must be stated with it.** The window is
+`reorder_capacity` positions from the cursor, which is what keeps the staged path from
+deadlocking against its own bound while still letting the bound bite. An unbounded
+resequencer would hide head-of-line delay inside memory growth and report neither.
+
+**An aborted or cancelled record must still advance the publication cursor.** Without
+that, a pipeline stalls behind work that will never publish. Abort and cancellation are
+distinct: an abort names the stage its record failed at and leaves the rest of the run
+publishing, while cancellation ends publication for every later record. Publication is
+authoritative for both, so outcomes are a published/aborted prefix and an all-cancelled
+suffix; a cancelled suffix never resumes, and an effect already published is never
+retracted. The completed/cancelled split may vary with scheduling without breaking that
+census, exactly as RR-D4 requires for replies.
+
+**Log equality alone does not verify an ordered ingestion.** Each published value must
+be recomputed and each log entry checked against the declared order, because a candidate
+that published the right multiset in the wrong order, or the right order with a drifted
+value, produces a log of the right length either way. Carry these requirements into the
+future plan/runtime contract; this experiment creates no production API, no durability
+contract and no hardware gate.

@@ -59,6 +59,62 @@
       "replace": "const SERVICE_CHUNK: u32 = 128;"
     },
     {
+      "name": "ingestion publishes whatever is ready",
+      "file": "src/ingest/engine.rs",
+      "expect": "caught",
+      "why": "Declared publication order must survive overlapping transforms, not follow completion order.",
+      "find": "if let Some(prepared) = state.slots.remove(&cursor) {",
+      "replace": "if let Some(prepared) = state.slots.keys().next().copied().and_then(|ready| state.slots.remove(&ready)) {"
+    },
+    {
+      "name": "ingestion transform result drifts",
+      "file": "src/ingest/engine.rs",
+      "expect": "caught",
+      "why": "The serial replay must reject a published value both candidates would agree on.",
+      "find": "value: reference(&job.record),",
+      "replace": "value: reference(&job.record).wrapping_add(1),"
+    },
+    {
+      "name": "ingestion cancellation no longer ends publication",
+      "file": "src/ingest/engine.rs",
+      "expect": "caught",
+      "why": "A cancelled suffix must never resume publishing, which final log length alone would not show.",
+      "find": "let outcome = if self.cancelling {",
+      "replace": "let outcome = if false {"
+    },
+    {
+      "name": "ingestion publish-stage failure is ignored",
+      "file": "src/ingest/engine.rs",
+      "expect": "caught",
+      "why": "A record whose injected failure is at the publish boundary must leave no entry behind.",
+      "find": "} else if record.fail_at == Some(Stage::Publish) {",
+      "replace": "} else if false {"
+    },
+    {
+      "name": "ingestion reorder window is unbounded",
+      "file": "src/ingest/engine.rs",
+      "expect": "caught",
+      "why": "The resequencing bound is part of the staged candidate; without it head-of-line delay is hidden by unbounded buffering.",
+      "find": "while prepared.job.position >= state.cursor + capacity {",
+      "replace": "while false {"
+    },
+    {
+      "name": "ingestion runner bypasses verification",
+      "file": "src/ingest/engine.rs",
+      "expect": "caught",
+      "why": "A controlled service cancelling without a stop condition must fail through the real runner, not only in verifier tests.",
+      "find": "verify(&report)?;",
+      "replace": "let _ = &report;"
+    },
+    {
+      "name": "equivalent ingestion service chunk",
+      "file": "src/ingest/engine.rs",
+      "expect": "survives",
+      "why": "Cancellation-check cadence is not a publication-order, effect or bound contract.",
+      "find": "const SERVICE_CHUNK: u32 = 256;",
+      "replace": "const SERVICE_CHUNK: u32 = 128;"
+    },
+    {
       "name": "assigned requests all enter worker zero",
       "file": "src/engine.rs",
       "expect": "caught",

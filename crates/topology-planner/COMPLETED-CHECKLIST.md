@@ -312,3 +312,53 @@ residency-cost input plus measurement context, but those facts no longer live in
 `windows-topology-sys`; they are requirements on `topology-model` and the adapter that populates it.
 Measurement ownership for that directed cost was assigned at [EP-1+.4](#ep-1+4). Historical trigger
 analysis remains in [DESIGN-RATIONALE.md](DESIGN-RATIONALE.md#ep-d-3-rationale-and-history).
+
+## Moved 2026-09-19 19:06:54 -07:00 -- Ordered ingestion
+
+### <a id="ep-x24"></a>EP-X2.4 -- Compare serial and staged ordered ingestion. *(completed 2026-09-19 19:06:54 -07:00)*
+
+Added a separate ordered-ingestion path to the request/reply experiment without changing its
+stateless or stateful engines. A serial owner transforms and publishes each record itself; a
+staged pipeline overlaps transform workers behind one publisher that resequences into declared
+order through a bounded window. The two constraints the item asked to separate are separated:
+a record's transform precedes its own publication, and publications occur in declared trace
+order. Effects stay in an in-memory publication log, so the item's permission to add real
+output I/O under an explicit durability contract was declined rather than exercised.
+
+Every admitted record reaches one terminal outcome -- published, aborted at its injected stage,
+or cancelled -- and an aborted or cancelled record still advances the publication cursor while
+contributing no log entry. The publisher is authoritative for outcomes, so a run is a
+published/aborted prefix followed by an all-cancelled suffix. The resequencing window is
+`reorder_capacity` positions from the cursor, which lets the bound bite without letting the
+pipeline deadlock against it; blocking on that window is counted rather than removed.
+
+Deterministic tests cover eleven trace shapes at one, two and three workers, publication order
+under overlap, a one-slot window, injected failure at each stage boundary, cancellation
+overriding an injected failure it reaches first, external cancellation, credit pressure,
+invalid configurations and traces, and service/clock failure rundown. Report-level tests mutate
+real reports to confirm the independent serial replay rejects reordered logs, wrong values,
+missing and extra entries, mis-staged aborts, cancellation without a stop, inverted stage
+timestamps, and census or credit drift.
+
+Persistent sabotage detects publishing in completion order, a drifting transform result,
+cancellation no longer ending publication, an ignored publish-stage failure, an unbounded
+reorder window and a bypassed verifier, with an equivalent service-chunk control that
+survives. **The cancellation sabotage initially survived**: the publisher's cancelling flag is
+only load-bearing where cancellation reaches a record that also carries an injected failure,
+and no test combined the two. The harness found that, the case is now covered, and all twenty
+sabotages across the three paths behave as declared.
+
+The [ingestion demonstration](experiments/request-reply/captures/2026-09-19-ingest/README.md)
+retains the observations: every drained scenario produced a byte-identical publication log
+across both arrangements and all four positions, while head-of-line delay separated them and
+the cancellation split varied with scheduling. Both candidates are retained under
+[DESIGN-NOTES.md](experiments/request-reply/DESIGN-NOTES.md) -> `RR-D8`; no timing winner is
+selected and no NUMA, startup or durability claim is made.
+
+> **CROSS-COMPONENT PREREQUISITE:** parent `topology-planner` explicitly authorized
+> `experiments/request-reply` -> `MX2` -> `EP-X2.4` as an offline exception following
+> completed EP-X2.3, preserving the stateless and stateful paths.
+> **-> CROSS-COMPONENT HANDOFF:** return to parent `topology-planner` -> `MR2` ->
+> `EP-R1.7.1` in [CHECKLIST.md](CHECKLIST.md); the ordering evidence feeds `EP-R1.7.9`.
+> EP-X2.5 and other paused work are not started by this completion; EP-HW.1 remains the
+> sole non-blocking physical follow-up.

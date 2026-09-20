@@ -1,6 +1,7 @@
 // Copyright (c) Mike Grier.
 #![cfg(windows)]
 
+mod ingest_capture;
 mod keyed_capture;
 
 use std::fs::OpenOptions;
@@ -75,23 +76,26 @@ fn execute(args: &[String], output: &mut impl Write) -> io::Result<()> {
     let [command, path] = args else {
         return Err(io::Error::new(
             io::ErrorKind::InvalidInput,
-            "usage: windows-request-reply-experiment capture|capture-stateful <new-report.json>",
+            "usage: windows-request-reply-experiment capture|capture-stateful|capture-ingest <new-report.json>",
         ));
     };
-    if command != "capture" && command != "capture-stateful" {
+    if !matches!(
+        command.as_str(),
+        "capture" | "capture-stateful" | "capture-ingest"
+    ) {
         return Err(io::Error::new(
             io::ErrorKind::InvalidInput,
             "unknown command",
         ));
     }
     let mut report = BufWriter::new(OpenOptions::new().write(true).create_new(true).open(path)?);
-    let (schema, result) = if command == "capture-stateful" {
-        ("stateful-capture-v1", keyed_capture::capture())
-    } else {
-        (
+    let (schema, result) = match command.as_str() {
+        "capture-stateful" => ("stateful-capture-v1", keyed_capture::capture()),
+        "capture-ingest" => ("ingest-capture-v1", ingest_capture::capture()),
+        _ => (
             "request-reply-capture-v1",
             capture().and_then(|trials| serde_json::to_value(trials).map_err(io::Error::other)),
-        )
+        ),
     };
     match result {
         Ok(trials) => {

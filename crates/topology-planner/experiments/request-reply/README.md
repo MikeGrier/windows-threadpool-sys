@@ -157,3 +157,47 @@ output writer. [The stateful record](captures/2026-09-19-stateful/README.md) hol
 the saved observations. The protocol and disposition are
 [DESIGN-NOTES.md](DESIGN-NOTES.md) -> `RR-D5` and `RR-D6`. Neither is a startup
 benchmark, physical-NUMA measurement or a performance acceptance criterion.
+
+## Ordered Ingestion Comparison
+
+A third path compares a **serial owner**, which transforms and publishes each
+record itself, with a **staged pipeline**, whose transform workers overlap behind
+one publisher that resequences into declared order. It separates two constraints
+that the stateful path fuses: a record's transform must precede its own
+publication, and publications must occur in declared trace order.
+
+Each record carries a unique ID, an absolute arrival offset, an input value,
+bounded transform and publish work, and an optional injected failure naming the
+stage that fails. An effect is visible only through the in-memory publication
+log; nothing is written outside the report, so this path performs no real output
+I/O and makes no durability claim.
+
+Every admitted record reaches one terminal outcome: published with its reference
+value, aborted at its injected stage, or cancelled. An aborted or cancelled
+record still advances the publication cursor and contributes no log entry, so
+published identities form a strictly increasing subsequence of the trace. The
+publisher is authoritative: once it observes cancellation it cancels the cursor
+record and every record after it, so outcomes are a published/aborted prefix and
+an all-cancelled suffix.
+
+The staged candidate's resequencing buffer is a window of `reorder_capacity`
+positions starting at the cursor, so the record the publisher is waiting for can
+always be staged and the pipeline cannot deadlock against its own bound. A
+transform worker whose record falls outside the window blocks, and that blocking
+is counted in `reorder_full_observations` rather than removed by reordering or by
+an unbounded buffer. `published_ns - ready_ns` is head-of-line delay alone. The
+serial candidate has no buffer and reports zero for both fields.
+
+The serial candidate runs one owner thread and the staged candidate runs the
+configured worker count plus a publisher, so thread counts differ by design and
+are labelled rather than claimed equal. Request slots, reply slots, admitted
+credits, per-record work and the idle policy are matched within a pair.
+
+```powershell
+.\target\release\windows-request-reply-experiment.exe capture-ingest .scratch\ingest-retake.json
+```
+
+[The ingestion record](captures/2026-09-19-ingest/README.md) holds the saved
+observations. The protocol is [DESIGN-NOTES.md](DESIGN-NOTES.md) -> `RR-D7`.
+This is unpinned in-memory ingestion, not a startup benchmark, physical-NUMA
+measurement or a performance acceptance criterion.
