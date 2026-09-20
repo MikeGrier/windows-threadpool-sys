@@ -1591,3 +1591,25 @@ Two things the item's own text had wrong, corrected while doing it rather than c
 
 The heading stays "What is not reachable". What is not reachable is the *answer* a ring consumer wants,
 which is still true; renaming it would dangle the pointers in the 2026-09-19 review session.
+
+## Moved 2026-09-19 22:49:09 -07:00 -- M20.2: the ARM no-L3 measurement recorded as D-48
+
+### <a id="m202"></a>M20.2 -- Record the 2026-08-30 ARM measurement as a decision, beside the zero-NUMA-node observation it is the sibling of. *(completed 2026-09-19 22:49:09 -07:00)*
+
+Landed as [D-48](DESIGN-NOTES.md#d-48) in the decision index, plus a sibling paragraph in
+"Why the NUMA node is the wrong key" where the existing zero-node observation lives, which is where the
+item asked for it.
+
+Two choices worth recording, because both were places this could have gone wrong:
+
+- **The measurement is cited, not re-transcribed.** The capture is Measurement M-1 in
+  [DESIGN-SESSION-2026-08-30-numa-sharded-io-execution-domains.md](../../design-sessions/DESIGN-SESSION-2026-08-30-numa-sharded-io-execution-domains.md),
+  and D-48 links it rather than copying the probe output into a third place. Pasting the block would have
+  created exactly the restatement the repository conventions warn about.
+
+- **The false clause it falsifies is marked, but not rewritten.** D-48 sits two paragraphs from the
+  sentence saying the last-level-cache domain "is meaningful on Intel and ARM too", which this
+  measurement shows is false on a shipping part -- so leaving it unmarked would have made the document
+  contradict itself. A one-line adjacent marker says so and points at `M20.1`. The restatement of the
+  rule and the sweep across the README, `lib.rs` and `policy.rs` remain `M20.1`, which is coupled to
+  `SH-4.12` and must follow it.

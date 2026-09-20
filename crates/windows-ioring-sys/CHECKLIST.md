@@ -31,8 +31,8 @@ defects in that same function: it selects on `DomainKind::Cache { level: 3, .. }
 in `windows-topology-sys` 0.2.0 -- so it can produce **overlapping** ring domains where two cache kinds
 report at level 3, and degrades silently on a host whose outermost partition sits at another level.
 `M20.1` and `M20.3` both land on that function and that rule, so both are **coupled to `SH-4.12`** and
-must follow it. `M20.2` is independent of it and can proceed now; `M20.4` is done; `M20.6` is gated the
-other way, on `M22.1`.
+must follow it. `M20.2` and `M20.4` are done. `M20.6` is gated the other way, on `M22.1`. That leaves
+`SH-4.12` as the only thing standing between M20 and completion.
 
 The design questions the session opened are deliberately **not** queued here. It is still open, and its
 conclusions belong to it until it converges.
@@ -54,11 +54,9 @@ conclusions belong to it until it converges.
   > describe a rule the code below it does not implement -- the contradiction the blast-radius convention
   > exists to prevent.
 
-- [ ] **M20.2** -- Record the measurement itself as a decision in
-  [DESIGN-NOTES.md](DESIGN-NOTES.md), so the next reader inherits the datapoint rather than re-measuring:
-  an ARM Windows laptop with no L3 at all, and zero `Win32_NumaNode` instances, is the *common* consumer
-  shape now rather than an exotic one. This is the ARM sibling of the existing zero-NUMA-node VM
-  observation and belongs beside it.
+- [x] **M20.2** -- Record the 2026-08-30 ARM measurement as a decision, beside the zero-NUMA-node
+  observation it is the sibling of.
+  -> [completed 2026-09-19](COMPLETED-CHECKLIST.md#m202)
 
 - [ ] **M20.3** -- Make `ring_copy`'s degraded-fallback path observable in a test. The whole-machine
   fallback in `Policy::select` is the branch every zero-relation machine takes, and this session was the
