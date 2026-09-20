@@ -20,9 +20,19 @@ is gated work with no current obligation, not an unfinished milestone.
 Queued from
 [DESIGN-SESSION-2026-08-30-numa-sharded-io-execution-domains.md](../../design-sessions/DESIGN-SESSION-2026-08-30-numa-sharded-io-execution-domains.md),
 which measured a shipping ARM laptop and found the L3 heuristic's justification does not hold there. These
-are documentation and policy repairs only; **no defect was found in `ring_copy`** -- `Policy::select`
-already degrades to a whole-machine domain and reports it, which an initial reading of the session got
-wrong and the code corrected.
+were queued as documentation and policy repairs only, on the basis that **no defect was found in
+`ring_copy`** -- `Policy::select` already degrades to a whole-machine domain and reports it, which an
+initial reading of the session got wrong and the code corrected.
+
+**Corrected 2026-09-19: that basis no longer holds, and it changes the order.** `SH-4.12` in
+[CHECKLIST-ship-topology-and-queues.md](../../CHECKLIST-ship-topology-and-queues.md) later found two
+defects in that same function: it selects on `DomainKind::Cache { level: 3, .. }` rather than asking
+`outermost_partitioning_cache()` -- the one definition of which cache level partitions a machine, shipped
+in `windows-topology-sys` 0.2.0 -- so it can produce **overlapping** ring domains where two cache kinds
+report at level 3, and degrades silently on a host whose outermost partition sits at another level.
+`M20.1` and `M20.3` both land on that function and that rule, so both are **coupled to `SH-4.12`** and
+must follow it. `M20.2` and `M20.4` are independent of it and can proceed now; `M20.6` is gated the other
+way, on `M22.1`.
 
 The design questions the session opened are deliberately **not** queued here. It is still open, and its
 conclusions belong to it until it converges.
@@ -37,6 +47,12 @@ conclusions belong to it until it converges.
   level that actually partitions the machine**, and say what happens when no such level is reported. Sweep
   every restatement of the L3 rule per the repository's blast-radius convention, including the README and
   `ring_copy`'s `policy.rs` doc comments, not only the one sentence quoted above.
+  > **COUPLED TO `SH-4.12`** in [CHECKLIST-ship-topology-and-queues.md](../../CHECKLIST-ship-topology-and-queues.md)
+  > -- do that item first. It rewrites `Policy::select` to ask `outermost_partitioning_cache()` and
+  > **renames the policy**, since `byl3` is a user-facing CLI value that would no longer describe what it
+  > does. This item's sweep reaches `policy.rs`'s doc comments, so running it first would make the doc
+  > describe a rule the code below it does not implement -- the contradiction the blast-radius convention
+  > exists to prevent.
 
 - [ ] **M20.2** -- Record the measurement itself as a decision in
   [DESIGN-NOTES.md](DESIGN-NOTES.md), so the next reader inherits the datapoint rather than re-measuring:
@@ -50,6 +66,10 @@ conclusions belong to it until it converges.
   relation is absent returns one whole-machine domain with `degraded = true`, and that a policy whose
   relation is present is **not** flagged degraded -- the second half matters because a test of the first
   alone would pass against a function that always degrades.
+  > **COUPLED TO `SH-4.12`** in [CHECKLIST-ship-topology-and-queues.md](../../CHECKLIST-ship-topology-and-queues.md)
+  > -- do that item first. It rewrites the selection arm this test would assert against, so writing the
+  > test now pins behaviour that is about to change. The two halves this item asks for are the right
+  > assertions either way; what changes is which rule "the policy's relation is present" names.
 
 - [ ] **M20.4** -- Correct "What is not reachable" in [DESIGN-NOTES.md](DESIGN-NOTES.md). It says mapping a
   file handle to its backing device's NUMA node "has no clean user-mode path" and "means walking volume to

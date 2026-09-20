@@ -675,6 +675,11 @@ that previously stood in the way are gone:
   This is the consumer-side twin of the platform-integrity rule: bind to the specified primitive, not
   to the level number that happens to be L3 on today's hardware. The fix renames the policy as well
   as changing it, since `byl3` is a user-facing CLI value that would no longer describe what it does.
+  > **COUPLED TO `M20.1` and `M20.3`** in
+  > [crates/windows-ioring-sys/CHECKLIST.md](crates/windows-ioring-sys/CHECKLIST.md) -- **do this item
+  > first**, then those two. `M20.1` sweeps the L3 rule's prose, which reaches `policy.rs`'s doc comments;
+  > `M20.3` tests the very selection arm this item rewrites. Recorded 2026-09-19: M20's header had asserted
+  > that no defect was found in `ring_copy`, which this item superseded, and neither file said so.
 
 - [ ] **SH-4.13** -- **`ProcessorSet` cannot represent every `u8` processor id, and the public API
   cannot uphold both "every processor" and "no abort".** Raised by Copilot across three unresolved
