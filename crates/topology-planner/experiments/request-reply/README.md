@@ -201,3 +201,44 @@ credits, per-record work and the idle policy are matched within a pair.
 observations. The protocol is [DESIGN-NOTES.md](DESIGN-NOTES.md) -> `RR-D7`.
 This is unpinned in-memory ingestion, not a startup benchmark, physical-NUMA
 measurement or a performance acceptance criterion.
+
+## Fan-out and Join Comparison
+
+A fourth path asks what changes when one record becomes several units and must
+become one result again. Two **shapes** are kept distinct: a **scatter** record
+partitions its work into disjoint parts, while a **broadcast** record sends its
+whole value to every branch. They differ in flow and cardinality rather than in
+cost, so a unit of one shape cannot satisfy the other.
+
+Three arrangements run the same traces under matched credits and per-unit work:
+
+- **`SerialWhole`** -- one owner thread computes every unit of a record and joins
+  it itself. No partial state crosses a thread.
+- **`OwnedJoin`** -- every unit of a record goes to that record's owner,
+  `id % workers`, on its own queue. Parallel across records, not within one.
+- **`ScatteredJoin`** -- units enter a shared queue, any worker computes any unit,
+  and one joiner assembles every record. Parallel within a record, and the only
+  arrangement holding partial state for records it did not compute.
+
+Each record names a unique ID, an arrival offset, an input value, its shape and
+unit count, bounded per-unit work, an optional slow unit and an optional injected
+failure naming a unit index. Every unit is attempted even after one has failed,
+so membership is uniformly exact and an abort discards a complete unit set.
+
+**Exact membership is the central obligation.** The join combines unit results
+with a commutative operation, because gather imposes no order among units -- which
+is exactly why the joined value cannot establish membership. Each unit's index,
+computing worker and timestamps are therefore recorded, and the verifier checks
+that every join consumed its declared unit set exactly once, that owned joins ran
+on their owner, and that abort and cancellation left no result and no residual
+partial state behind. Declared order is resolved by the coordinator, holding the
+resequencing rule `RR-D8` established constant while fan-out varies.
+
+```powershell
+.\target\release\windows-request-reply-experiment.exe capture-fanout .scratch\fanout-retake.json
+```
+
+[The fan-out record](captures/2026-09-19-fanout/README.md) holds the saved
+observations. The protocol is [DESIGN-NOTES.md](DESIGN-NOTES.md) -> `RR-D9`.
+This is unpinned in-memory fan-out, not a startup benchmark, physical-NUMA
+measurement or a performance acceptance criterion.

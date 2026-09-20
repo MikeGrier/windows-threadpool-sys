@@ -3,6 +3,7 @@
 
 mod engine;
 pub use engine::run;
+pub mod fanout;
 pub mod ingest;
 pub mod stateful;
 

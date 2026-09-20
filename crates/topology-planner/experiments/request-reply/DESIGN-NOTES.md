@@ -363,3 +363,41 @@ error edges; sabotage actual membership, the unit transform, shape distinction, 
 partial reclamation and the verifier binding, with a non-defect control. Retain all three
 arrangements until an explicit disposition review. This experiment owns no topology or
 allocation policy and selects no timing winner.
+
+## RR-D10: fan-out and join findings and disposition
+
+Retain all three arrangements and both shapes. Keep the stateless, stateful and ordered-ingestion
+paths unchanged. Nothing here becomes a planner default, and nothing is merged or deleted from a
+timing observation. Eventual production disposition stays queued under parent
+[CHECKLIST.md](../../CHECKLIST.md) -> `EP-X3.3`. The
+[fan-out demonstration](captures/2026-09-19-fanout/README.md) retains the observations.
+
+**A fan-out descriptor must carry cardinality, not just the fact of fanning out.** Scatter and
+broadcast were kept distinct for the whole experiment and stayed distinct at every unit count. A
+planner reading only "fans out" cannot tell whether a unit is the sole holder of its share or one
+of several readings of the same input, and therefore cannot tell whether a unit may be dropped,
+recomputed or coalesced. Forcing the two into one archetype is the specific mistake this item
+warned against, and the oracle now refuses it.
+
+**Membership is a cardinality property and no value check reaches it.** The join combines unit
+results commutatively, because gather imposes no order among units; the consequence is that a
+combine over the wrong multiset still yields a number. Membership is therefore recorded per unit
+and verified directly. Every candidate contract that fans out owes the same: the unit set, the
+worker that produced each unit, and a check that the set was consumed exactly once.
+
+**Where the join lives is an ownership decision, and it is visible in partial state.** Only the
+scattered arrangement held state for records it did not compute; the serial and record-owning
+arrangements held none across a thread. That partial state tracked fan-out width and stayed inside
+the credit ceiling, so the ceiling bounds intermediate state as well as admitted work. A candidate
+contract must say which component holds partial results and what bounds them, because the answer
+differs between arrangements that are otherwise interchangeable.
+
+**Reclamation is part of the contract, not an implementation detail.** A record that does not join
+must release a complete unit set, and the release must be counted; residual partial state at the
+end of a run is a defect rather than a tolerance. Abort and cancellation differ: an abort names the
+unit that failed and leaves the run joining, while cancellation ends joining for every later
+record. Both discard their gathered units, and a joined result is never retracted.
+
+Carry these requirements into the future plan/runtime contract. This experiment creates no
+production API, no durability contract and no hardware gate, and its unpinned owners are logical
+roles rather than NUMA domains.

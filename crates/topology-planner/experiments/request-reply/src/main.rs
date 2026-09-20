@@ -1,6 +1,7 @@
 // Copyright (c) Mike Grier.
 #![cfg(windows)]
 
+mod fanout_capture;
 mod ingest_capture;
 mod keyed_capture;
 
@@ -76,12 +77,12 @@ fn execute(args: &[String], output: &mut impl Write) -> io::Result<()> {
     let [command, path] = args else {
         return Err(io::Error::new(
             io::ErrorKind::InvalidInput,
-            "usage: windows-request-reply-experiment capture|capture-stateful|capture-ingest <new-report.json>",
+            "usage: windows-request-reply-experiment capture|capture-stateful|capture-ingest|capture-fanout <new-report.json>",
         ));
     };
     if !matches!(
         command.as_str(),
-        "capture" | "capture-stateful" | "capture-ingest"
+        "capture" | "capture-stateful" | "capture-ingest" | "capture-fanout"
     ) {
         return Err(io::Error::new(
             io::ErrorKind::InvalidInput,
@@ -92,6 +93,7 @@ fn execute(args: &[String], output: &mut impl Write) -> io::Result<()> {
     let (schema, result) = match command.as_str() {
         "capture-stateful" => ("stateful-capture-v1", keyed_capture::capture()),
         "capture-ingest" => ("ingest-capture-v1", ingest_capture::capture()),
+        "capture-fanout" => ("fanout-capture-v1", fanout_capture::capture()),
         _ => (
             "request-reply-capture-v1",
             capture().and_then(|trials| serde_json::to_value(trials).map_err(io::Error::other)),

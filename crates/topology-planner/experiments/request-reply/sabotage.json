@@ -115,6 +115,70 @@
       "replace": "const SERVICE_CHUNK: u32 = 128;"
     },
     {
+      "name": "fan-out join loses a unit",
+      "file": "src/fanout/engine.rs",
+      "expect": "caught",
+      "why": "Exact membership must be checked structurally; a combine over the wrong multiset still yields a number.",
+      "find": "if partials[&outcome.record.id].entries.len() == expected {",
+      "replace": "if partials[&outcome.record.id].entries.len() >= expected.saturating_sub(1).max(1) {"
+    },
+    {
+      "name": "fan-out unit result drifts",
+      "file": "src/fanout/engine.rs",
+      "expect": "caught",
+      "why": "The serial replay must reject a joined value that all three arrangements would agree on.",
+      "find": "value: unit_result(record, index),",
+      "replace": "value: unit_result(record, index).wrapping_add(1),"
+    },
+    {
+      "name": "fan-out shapes collapse into one archetype",
+      "file": "src/fanout.rs",
+      "expect": "caught",
+      "why": "Scatter and broadcast differ in flow and cardinality; collapsing them into one formula must not still pass.",
+      "find": "record.value.rotate_left(index % 64) ^ u64::from(index).wrapping_add(0x5CA7)",
+      "replace": "record.value.wrapping_mul(u64::from(index).wrapping_add(1)).wrapping_add(0xB70AD)"
+    },
+    {
+      "name": "fan-out owned routing collapses to zero",
+      "file": "src/fanout/engine.rs",
+      "expect": "caught",
+      "why": "OwnedJoin promises every unit of a record reaches that record's owner, including nonzero owners.",
+      "find": "_ => match records[owner(id, records.len())].try_send(RecordJob {",
+      "replace": "_ => match records[0].try_send(RecordJob {"
+    },
+    {
+      "name": "fan-out abort keeps its gathered units",
+      "file": "src/fanout/engine.rs",
+      "expect": "caught",
+      "why": "A record that does not join must release its units, and the discard must be counted rather than dropped.",
+      "find": "report.discarded_partial_units += item.units.len();",
+      "replace": "report.discarded_partial_units += 0;"
+    },
+    {
+      "name": "fan-out cancellation no longer ends joining",
+      "file": "src/fanout/engine.rs",
+      "expect": "caught",
+      "why": "A cancelled suffix must never resume joining, including where cancellation reaches an injected failure.",
+      "find": "let outcome = if publication.cancelling {",
+      "replace": "let outcome = if false {"
+    },
+    {
+      "name": "fan-out runner bypasses verification",
+      "file": "src/fanout/engine.rs",
+      "expect": "caught",
+      "why": "A controlled service cancelling without a stop condition must fail through the real runner.",
+      "find": "verify(&report)?;",
+      "replace": "let _ = &report;"
+    },
+    {
+      "name": "equivalent fan-out service chunk",
+      "file": "src/fanout/engine.rs",
+      "expect": "survives",
+      "why": "Cancellation-check cadence is not a membership, ownership or reclamation contract.",
+      "find": "const SERVICE_CHUNK: u32 = 256;",
+      "replace": "const SERVICE_CHUNK: u32 = 128;"
+    },
+    {
       "name": "assigned requests all enter worker zero",
       "file": "src/engine.rs",
       "expect": "caught",

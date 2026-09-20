@@ -362,3 +362,66 @@ selected and no NUMA, startup or durability claim is made.
 > `EP-R1.7.1` in [CHECKLIST.md](CHECKLIST.md); the ordering evidence feeds `EP-R1.7.9`.
 > EP-X2.5 and other paused work are not started by this completion; EP-HW.1 remains the
 > sole non-blocking physical follow-up.
+
+## Moved 2026-09-19 20:22:00 -07:00 -- Fan-out and join, closing MX2
+
+### <a id="ep-x25"></a>EP-X2.5 -- Exercise scatter/gather and broadcast/branch/join constraints. *(completed 2026-09-19 20:22:00 -07:00)*
+
+Added a separate fan-out path to the request/reply experiment without changing its stateless,
+stateful or ordered-ingestion engines. One record becomes several units and must become one
+result again, which is the first shape in this program where a candidate can be wrong about
+cardinality rather than about value or order.
+
+Two shapes are kept distinct and verified distinct at every unit count: a scatter record
+partitions its work into disjoint parts, a broadcast record sends its whole value to every
+branch. Three arrangements run the same traces under matched credits and per-unit work --
+`SerialWhole` (one owner does every unit), `OwnedJoin` (every unit of a record goes to that
+record's owner on its own queue), and `ScatteredJoin` (any worker computes any unit, one joiner
+assembles). Declared order is resolved by the coordinator, holding `RR-D8`'s resequencing rule
+constant so fan-out is the only variable.
+
+The join combines unit results commutatively, because gather imposes no order among units --
+which is exactly why the joined value cannot establish membership. Each unit's index, computing
+worker and timestamps are recorded, and the independent serial replay checks every join consumed
+its declared unit set exactly once, that owned joins ran on their owner, and that abort and
+cancellation left no result and no residual partial state.
+
+Deterministic tests cover eleven trace shapes at one, two and four workers, exact membership,
+shape distinction from one to sixteen units, owner routing, partial state existing only where a
+join crosses a thread, injected unit failure, cancellation reclaiming branches, cancellation
+overriding an injected failure it reaches first, external cancellation, credit pressure, and
+rejection of zero-unit records, out-of-range slow and failing unit indices, oversized unit counts
+and invalid configurations. Report-level tests mutate real reports to confirm the verifier rejects
+missing, duplicated and foreign units, drifted join values, reordered logs, a scatter record read
+as a broadcast, owned joins assembled elsewhere, unit timestamps outside their record's span,
+aborts naming the wrong unit, and discard, residual, credit or worker census drift.
+
+Persistent sabotage detects a join that loses a unit, a drifting unit result, the two shapes
+collapsed into one formula, owned routing collapsing to worker zero, an abort that keeps its
+gathered units, cancellation no longer ending joining, and a bypassed verifier, with an equivalent
+service-chunk control that survives. All twenty-eight sabotages across the four paths behave as
+declared.
+
+**Three defects were found by building and testing rather than by review.** `OwnedJoin` first used
+one shared record queue, so any worker could take any record and its routing promise was
+incidental; it now has one queue per owner. The scattered joiner sorted its unit reports without
+sorting the parallel kinds vector, so a unit's outcome could be attributed to the wrong index. The
+worker census originally carried joined/aborted/cancelled tallies no worker can know, since the
+coordinator resolves outcomes; those fields were removed rather than backfilled.
+
+The [fan-out demonstration](experiments/request-reply/captures/2026-09-19-fanout/README.md) retains
+the observations: every drained scenario produced a byte-identical join log across all three
+arrangements and all six positions, membership was exact in every trial, partial state across a
+thread appeared only under `ScatteredJoin` and stayed inside the credit ceiling, residual partial
+state was zero in all seventy-two trials, and abort reclamation was identical across arrangements.
+All three arrangements and both shapes are retained under
+[DESIGN-NOTES.md](experiments/request-reply/DESIGN-NOTES.md) -> `RR-D10`; no timing winner is
+selected and no NUMA, startup or durability claim is made.
+
+> **CROSS-COMPONENT PREREQUISITE:** parent `topology-planner` explicitly authorized
+> `experiments/request-reply` -> `MX2` -> `EP-X2.5` as an offline exception following
+> completed EP-X2.4, preserving the three earlier paths.
+> **-> CROSS-COMPONENT HANDOFF:** this completes MX2. Return to parent `topology-planner` ->
+> `MR2` -> `EP-R1.7.1` in [CHECKLIST.md](CHECKLIST.md); the ownership and cardinality evidence
+> feeds `EP-R1.7.9`. MX1's and MX3's paused items are not started by this completion; EP-HW.1
+> remains the sole non-blocking physical follow-up.
