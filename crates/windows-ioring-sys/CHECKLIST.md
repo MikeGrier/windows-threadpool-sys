@@ -135,11 +135,9 @@ what it corrected was the coupling rather than a latent bug. The archived entry 
   failure-path tests on `fault-injection`, since a healthy flush cannot be made to fail.
   -> [completed 2026-09-21](COMPLETED-CHECKLIST.md#m214)
 
-- [ ] **M21.5** -- Give [strategy.rs](examples/epoch_log/strategy.rs)'s two wait loops the same timeout
-  policy as their sibling (`C-5`). `await_flush` and `await_writes` discard the `submit_and_wait` timeout and
-  loop forever, while [`EventLoop::pump`](examples/epoch_log/event_loop.rs) raises `TimedOut` on the same
-  condition and documents why ("so a stuck loop fails instead of spinning"). One program, opposite policies.
-  Pick `pump`'s, since a measurement harness that hangs reports nothing at all.
+- [x] **M21.5** -- Give the harness's wait loops a bound, and collapse the hand-written waits onto the
+  bounded pop. The item named two loops; a census found four, plus two flaky single-`try_pop` sites.
+  -> [completed 2026-09-21](COMPLETED-CHECKLIST.md#m215)
 
 
 ## M22 -- Epoch-log review: submission and arena

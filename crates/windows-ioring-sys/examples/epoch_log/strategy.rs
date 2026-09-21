@@ -99,8 +99,8 @@ use std::os::windows::io::RawHandle;
 use std::time::{Duration, Instant};
 
 use windows_ioring_sys::{
-    Batch, FlushCoverage, FlushMode, IoRing, PushOptions, RegisteredBuffers, RegisteredSpan,
-    RegisteredUse, Token, WriteCaching,
+    Batch, Completion, FlushCoverage, FlushMode, IoRing, PushOptions, RegisteredBuffers,
+    RegisteredSpan, RegisteredUse, Token, WriteCaching,
 };
 
 use crate::commit::Epoch;
@@ -115,6 +115,10 @@ const SLOT_LEN: usize = 4096;
 
 /// Bound on any wait, so a stuck strategy fails instead of hanging.
 const WAIT_MS: u32 = 30_000;
+
+/// The same bound as a [`Duration`], derived from `WAIT_MS` rather than
+/// written twice so the two cannot drift.
+const WAIT: Duration = Duration::from_millis(WAIT_MS as u64);
 
 /// How an epoch's commit establishes that its writes reached the device.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -344,33 +348,58 @@ impl Lane {
         let mut popped = 0;
         while let Some(completion) = self.ring.try_pop()? {
             popped += 1;
-            if let Some((token, slot)) = self.in_flight.remove(&completion.user_data()) {
-                // Claimed before the result is checked, for the reason
-                // `Appender::claim` spells out: bailing out first would drop
-                // the token unclaimed and burn the slot permanently.
-                let released = token
-                    .claim_if(&completion)
-                    .map_err(|_| io::Error::other("a write token refused its own completion"))?;
-                drop(released);
-                self.free.push(slot);
-                completion.result()?;
-            } else {
-                self.flushes
-                    .insert(completion.user_data(), completion.result().map(|_| ()));
-            }
+            self.classify(completion)?;
         }
         Ok(popped)
     }
 
+    /// File one popped completion: an append returns its slot, anything else
+    /// is a flush the commit path will match against.
+    ///
+    /// Factored out of [`Lane::drain`] so the bounded waits below can file a
+    /// completion they blocked for without a second copy of this logic.
+    fn classify(&mut self, completion: Completion) -> io::Result<()> {
+        if let Some((token, slot)) = self.in_flight.remove(&completion.user_data()) {
+            // Claimed before the result is checked, for the reason
+            // `Appender::claim` spells out: bailing out first would drop
+            // the token unclaimed and burn the slot permanently.
+            let released = token
+                .claim_if(&completion)
+                .map_err(|_| io::Error::other("a write token refused its own completion"))?;
+            drop(released);
+            self.free.push(slot);
+            completion.result()?;
+        } else {
+            self.flushes
+                .insert(completion.user_data(), completion.result().map(|_| ()));
+        }
+        Ok(())
+    }
+
     /// Block until `user_data`'s flush has completed, draining as we go.
+    ///
+    /// # Errors
+    ///
+    /// [`io::ErrorKind::TimedOut`] if the flush does not complete within
+    /// [`WAIT`]. This loop used to have no bound at all: it blocked in
+    /// `submit_and_wait` for `WAIT_MS`, ignored the fact that the call had
+    /// returned without a completion, and went round again forever. A
+    /// measurement harness that hangs reports nothing, which is strictly worse
+    /// than one that fails -- the same reason
+    /// [`EventLoop::pump`](crate::event_loop::EventLoop::pump) raises
+    /// `TimedOut` rather than spinning.
     fn await_flush(&mut self, user_data: usize) -> io::Result<()> {
+        let deadline = Instant::now() + WAIT;
         loop {
             if let Some(result) = self.flushes.remove(&user_data) {
                 result?;
                 return Ok(());
             }
             if self.drain()? == 0 {
-                Batch::new(&mut self.ring).submit_and_wait(1, WAIT_MS)?;
+                match self.ring.pop_within(remaining(deadline))? {
+                    Some(completion) => self.classify(completion)?,
+                    None => return Err(timed_out("a commit's flush")),
+                }
             }
         }
     }
@@ -379,14 +408,37 @@ impl Lane {
     ///
     /// This is [`CommitStrategy::HostSequenced`]'s whole mechanism, and the
     /// round trip it is charged for.
+    ///
+    /// # Errors
+    ///
+    /// [`io::ErrorKind::TimedOut`] if they do not all complete within
+    /// [`WAIT`], for the reason given on [`Lane::await_flush`].
     fn await_writes(&mut self) -> io::Result<()> {
+        let deadline = Instant::now() + WAIT;
         while !self.in_flight.is_empty() {
             if self.drain()? == 0 {
-                Batch::new(&mut self.ring).submit_and_wait(1, WAIT_MS)?;
+                match self.ring.pop_within(remaining(deadline))? {
+                    Some(completion) => self.classify(completion)?,
+                    None => return Err(timed_out("this lane's outstanding writes")),
+                }
             }
         }
         Ok(())
     }
+}
+
+/// How long is left before `deadline`, saturating at zero.
+fn remaining(deadline: Instant) -> Duration {
+    deadline.saturating_duration_since(Instant::now())
+}
+
+/// The one spelling of this harness's timeout failure, so the two waits above
+/// cannot describe the same condition differently.
+fn timed_out(what: &str) -> io::Error {
+    io::Error::new(
+        io::ErrorKind::TimedOut,
+        format!("timed out after {WAIT:?} waiting for {what}"),
+    )
 }
 
 /// Run `epochs` epochs of `records_per_epoch` records under `strategy`.

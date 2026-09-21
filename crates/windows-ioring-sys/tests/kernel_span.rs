@@ -108,16 +108,16 @@ fn registered_arena(ring: &mut IoRing, count: u32, seed: u64) -> RegisteredBuffe
     registered
 }
 
-/// Drain until a completion arrives, then hand it back.
+/// Wait for one completion, bounded.
+///
+/// Was an unbounded `loop` around `try_pop` plus `submit_and_wait`, which
+/// turns a completion that never arrives into a hung harness reporting no
+/// test name at all. `IoRing::pop_within` (M21.2) is the crate's own join
+/// between the two and carries the bound.
 fn await_one(ring: &mut IoRing) -> windows_ioring_sys::Completion {
-    loop {
-        if let Some(completion) = ring.try_pop().expect("pop a completion") {
-            return completion;
-        }
-        Batch::new(ring)
-            .submit_and_wait(1, WAIT_MS)
-            .expect("wait for a completion");
-    }
+    ring.pop_within(std::time::Duration::from_millis(u64::from(WAIT_MS)))
+        .expect("pop a completion")
+        .expect("a completion arrived within the bound")
 }
 
 fn open_shared(path: &std::path::Path, write: bool) -> SharedFile {

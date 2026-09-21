@@ -296,10 +296,7 @@ fn a_pending_buffer_registration_claims_only_its_own_completion() {
         panic!("a completion naming another operation must be refused");
     };
 
-    let real = ring
-        .try_pop()
-        .expect("pop")
-        .expect("the registration completion is ready");
+    let real = crate::ring::pop_within(&mut ring, "the registration's completion");
     // Ties the accessor to the operation it names, against an id obtained from
     // the ring rather than from the accessor itself -- a constant `user_data`
     // survives any comparison that starts from `user_data`.
@@ -412,10 +409,7 @@ fn dropping_a_registration_with_work_outstanding_is_refused() {
         .register_buffers(vec![vec![0_u8; 512]])
         .expect("queue buffer registration");
     batch.submit_and_wait(1, 5_000).expect("submit");
-    let completion = ring
-        .try_pop()
-        .expect("pop")
-        .expect("registration completed");
+    let completion = crate::ring::pop_within(&mut ring, "the registration's completion");
     let buffers = pending
         .claim_if(&completion)
         .expect("claims its own")

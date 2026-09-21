@@ -6,7 +6,8 @@ which recorded the review that produced the items. It exists because the next re
 start from what this one learned rather than rediscovering it -- including the places where the
 review itself was wrong.
 
-Updated as items complete. Entries are numbered `F-n` and never renumbered.
+Updated as items complete. Entries are numbered `F-n` and never renumbered. M21 is complete as of
+2026-09-21; F-1 to F-12 are its whole record.
 
 ## The headline: a review that reads code produces claims, not findings
 
@@ -117,6 +118,38 @@ remove, reappearing immediately in the next item.
 **Carry forward:** worth checking in the next pass whether the remaining hand-written waits in the
 sample and in `tests/` can now collapse onto it. `M21.5` covers two of them; there may be more.
 
+### F-10 (M21.5) -- the item named two sites; a census found six
+
+`M21.5` was written as "give strategy.rs's two wait loops a bound". Counting by command over every `.rs`
+outside `target/` and the spikes found **four** unbounded wait loops and **two** more of a related
+shape. Two of the four were helpers *both named `await_one`*, byte-identical, in
+[failure_paths.rs](../tests/failure_paths.rs) and [kernel_span.rs](../tests/kernel_span.rs) -- neither
+mentioned by the item or by the review.
+
+The other two were in [batch/tests.rs](../src/batch/tests.rs): registration waits written as a single
+`try_pop`, which is the flake shape `pop_within` documents, in a file whose **third** such wait already
+used the helper. One predicate, three sites, half-converted -- FAIL FAST rule 1 exactly, inside a single
+file.
+
+**Carry forward:** the review found these by reading one sample, so it found what that sample contained.
+A census by command is cheap and finds the population. Every item in the next pass whose subject is a
+*shape* rather than a specific line should carry its census command.
+
+### F-11 (M21.5) -- the milestone compounded again, and measurably
+
+Sabotaging `Lane::classify` to stop filing flush results leaves `await_flush` waiting for a completion
+that is never recorded. An unbounded loop hangs forever there. The new bound reported
+`timed out after 30s waiting for a commit's flush` -- **in two seconds**, because `pop_within`'s
+nothing-can-arrive early return (`F-9`, `M21.2`) answers immediately once the ring is quiesced.
+
+The bound is what makes the failure possible; `M21.2`'s early return is what makes it quick. Neither was
+designed with the other in mind.
+
+### F-12 (M21.5) -- duplicated helpers do not share a name by accident
+
+Two independently written helpers, in two files, both called `await_one`, both the same eight lines. The
+name being identical is the tell: it is what people call this operation, which is the argument for the
+operation belonging to the library. It now does.
 ## Open questions this pass raised but did not answer
 
 1. Should `IoRing::drop`'s rundown failure be reported some way that does not abort on unwind

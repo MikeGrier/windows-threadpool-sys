@@ -1772,3 +1772,36 @@ shows the tests discriminate rather than all keying on one fact:
 **Leverage from earlier in this milestone:** `commit_and_pop` is three lines because `M21.2` published
 `IoRing::pop_within`. Without it every test here would have carried its own bounded wait, which is the
 duplication `M21.2` existed to remove.
+
+## Moved 2026-09-21 18:18:52 -04:00 -- M21.5: every unbounded wait in the crate, not the two that were named
+
+### <a id="m215"></a>M21.5 -- Give the harness's wait loops a bound, and collapse the hand-written waits onto the bounded pop. *(completed 2026-09-21 18:18:52 -04:00)*
+
+`await_flush` and `await_writes` in [strategy.rs](examples/epoch_log/strategy.rs) blocked in
+`submit_and_wait` for `WAIT_MS`, ignored that it had returned without a completion, and went round
+again forever. Both now carry a deadline and raise `TimedOut`, which is the policy
+[event_loop.rs](examples/epoch_log/event_loop.rs) already documented: a measurement harness that hangs
+reports nothing, which is strictly worse than one that fails.
+
+**The item named two loops. A census found four, and two more of a related shape.** Counted by command
+over every `.rs` outside `target/` and the spikes:
+
+- [strategy.rs](examples/epoch_log/strategy.rs) `await_flush` and `await_writes` -- the two named.
+- [failure_paths.rs](tests/failure_paths.rs) and [kernel_span.rs](tests/kernel_span.rs), each with a
+  helper **called `await_one`**, byte-identical to the other, neither named by the item.
+- [batch/tests.rs](src/batch/tests.rs), where two registration waits were a single `try_pop` -- the
+  flake shape `pop_within` documents -- in a file whose *third* such wait already used the helper.
+  One predicate, three sites, half-converted, which is FAIL FAST rule 1 exactly.
+
+**Sabotage-verified, and it revealed the milestone compounding.** Making `classify` stop filing flush
+results leaves `await_flush` looking for a completion that is never recorded -- an unbounded loop would
+hang forever. It failed with `timed out after 30s waiting for a commit's flush`, and it did so in **two
+seconds**, not thirty: `pop_within`'s nothing-can-arrive early return (`M21.2`) answers immediately once
+the ring is quiesced. The bound is what makes the failure possible; the early return is what makes it
+quick.
+
+A `remaining` helper and a single `timed_out` constructor keep the two waits from describing the same
+condition two ways, and `WAIT` is derived from `WAIT_MS` rather than written twice.
+
+Factoring `Lane::classify` out of `Lane::drain` is what let the bounded waits file a completion they
+blocked for without a second copy of the claim-then-check logic.

@@ -45,16 +45,16 @@ fn temp_file(tag: &str) -> PathBuf {
     ))
 }
 
-/// Drain until a completion arrives.
+/// Wait for one completion, bounded.
+///
+/// Was an unbounded `loop` around `try_pop` plus `submit_and_wait`, which
+/// turns a completion that never arrives into a hung harness with no test
+/// name attached. `IoRing::pop_within` (M21.2) is the crate's own join
+/// between the two and carries the bound.
 fn await_one(ring: &mut IoRing) -> Completion {
-    loop {
-        if let Some(completion) = ring.try_pop().expect("pop a completion") {
-            return completion;
-        }
-        Batch::new(ring)
-            .submit_and_wait(1, 30_000)
-            .expect("wait for a completion");
-    }
+    ring.pop_within(std::time::Duration::from_secs(30))
+        .expect("pop a completion")
+        .expect("a completion arrived within the bound")
 }
 
 #[test]
