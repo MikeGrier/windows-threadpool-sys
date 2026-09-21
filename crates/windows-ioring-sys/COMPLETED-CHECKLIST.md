@@ -1735,3 +1735,40 @@ Swept the claim rather than only fixing the code: finding `C-3` in
 carried the same wrong prediction and now carries the correction beside it. The review lesson recorded
 there is the narrow one: "unreachable today, armed tomorrow" is a claim about a program's reachable
 states, and reading the code is not how to settle one.
+
+## Moved 2026-09-21 16:06:19 -04:00 -- M21.4: what a failed commit means, and the sample's first tests
+
+### <a id="m214"></a>M21.4 -- State what a failed commit does to durable_through, and bind it with tests in both directions. *(completed 2026-09-21 16:06:19 -04:00)*
+
+The doc on `Committer::claim` said "A failed commit advances nothing", which reads as a permanent verdict.
+It is not. Every commit here is a **covering** flush, so commit *N+1* reaches epoch *N*'s writes -- queued
+before it -- and observing *N+1* makes *N* durable after all. What makes a record durable is a flush that
+covered it, not the identity of the flush named for its epoch. The doc now says that, and says what a
+caller must not read into a failure: not "epoch *N* is lost", but "not yet".
+
+**The sample had no tests at all.** Examples are not test targets by default, so `cargo test` compiled
+this one and ran nothing. Binding the claim meant adding `test = true` to the `[[example]]` entry first;
+that is the change that makes any of the sample's policy testable, not just this item's part of it.
+
+**The failure path is unreachable by running the sample**, because a flush against a healthy temp file
+does not fail. The crate's fault-injection seam is the only way in, so four of the six tests are gated on
+`fault-injection` and the other two run by default. That follows the precedent and the reasoning already
+written down in [fault_injection.rs](tests/fault_injection.rs), including that CI's
+`cargo test --workspace --all-features` job is what stops gated tests from being tests that never run.
+
+**An assumption caught by asserting it.** The test first asserted that an injected `ERROR_ACCESS_DENIED`
+would surface as `io::ErrorKind::PermissionDenied`. It surfaces as `Other`: the crate preserves the
+HRESULT in an `IoRingError` rather than classifying it. Corrected to assert the Win32 code, which is the
+assertion `tests/fault_injection.rs` already makes one layer down.
+
+**Sabotage-verified in both directions, and the two produce different failure sets** -- which is what
+shows the tests discriminate rather than all keying on one fact:
+
+- `is_durable` returning `true` unconditionally: **4 of 6 fail**, caught by the assertions that an epoch
+  is *not* yet durable.
+- `is_durable` requiring an exact match with the watermark: **2 of 6 fail**, caught by the covering and
+  monotonicity tests.
+
+**Leverage from earlier in this milestone:** `commit_and_pop` is three lines because `M21.2` published
+`IoRing::pop_within`. Without it every test here would have carried its own bounded wait, which is the
+duplication `M21.2` existed to remove.

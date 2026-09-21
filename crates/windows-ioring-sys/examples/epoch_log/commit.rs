@@ -142,8 +142,30 @@ impl Committer {
     /// # Errors
     ///
     /// The flush's own failure, if it failed. A failed commit advances
-    /// nothing: the epoch it was closing is *not* durable, and saying so is
-    /// the whole point of checking.
+    /// nothing: the epoch it was closing is *not* durable when this returns,
+    /// and saying so is the whole point of checking.
+    ///
+    /// # A failed commit is not permanent, and that is not a loophole
+    ///
+    /// Epoch *N* stays un-durable only until some later commit succeeds.
+    /// Every commit here is a **covering** flush, so commit *N+1* reaches
+    /// every operation outstanding when it runs -- which includes epoch *N*'s
+    /// writes, queued before it. When *N+1*'s completion is observed,
+    /// `durable_through` advances to *N+1*, and [`Committer::is_durable`]
+    /// begins answering `true` for *N* as well.
+    ///
+    /// That is the truthful answer rather than an over-claim. What makes a
+    /// record durable is a flush that covered it, not the identity of the
+    /// flush that happened to be *named* for its epoch. Holding *N*
+    /// un-durable forever on the strength of one failed call would under-report
+    /// a record whose bytes the device already has -- and this module's whole
+    /// posture is that reporting less than reality is safe only while it stays
+    /// *reachable*, not as a permanent verdict.
+    ///
+    /// So the monotonicity [`Committer::is_durable`] promises survives a
+    /// failed commit rather than being suspended by it. What a caller must not
+    /// read into a failure is "epoch *N* is lost": it means *not yet*, and the
+    /// next successful commit is what settles it.
     pub fn claim(&mut self, completion: &Completion) -> io::Result<Option<Epoch>> {
         let Some(epoch) = self.in_flight.remove(&completion.user_data()) else {
             return Ok(None);
@@ -176,3 +198,6 @@ impl Committer {
         Ok(Some(Epoch(epoch)))
     }
 }
+
+#[cfg(test)]
+mod tests;

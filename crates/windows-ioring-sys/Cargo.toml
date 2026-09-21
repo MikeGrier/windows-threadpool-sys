@@ -59,6 +59,11 @@ required-features = ["threadpool"]
 name = "epoch_log"
 path = "examples/epoch_log/main.rs"
 required-features = ["threadpool"]
+# M21.4 gives the sample's durability accounting unit tests -- the failed-commit
+# case cannot be reached by running the sample, because it needs a completion
+# whose result is an injected failure. Examples are not test targets by default,
+# so `cargo test` would compile this and run nothing.
+test = true
 
 # The crate is Windows-only, so docs.rs must build on a Windows target or it
 # would render an almost-empty crate.

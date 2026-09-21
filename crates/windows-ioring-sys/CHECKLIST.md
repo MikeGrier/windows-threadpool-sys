@@ -130,13 +130,10 @@ what it corrected was the coupling rather than a latent bug. The archived entry 
   a fix.
   -> [completed 2026-09-21](COMPLETED-CHECKLIST.md#m213)
 
-- [ ] **M21.4** -- State what a *failed* commit does to `durable_through`, and bind it with a test (`C-4`).
-  [commit.rs](examples/epoch_log/commit.rs) says "A failed commit advances nothing", which reads as though a
-  failed commit of epoch *N* leaves *N* non-durable permanently. It does not: *N*'s writes precede commit
-  *N+1*'s covering flush, so a later success makes *N* genuinely durable and the monotonic reading stays
-  true. Write that reasoning where the monotonicity claim is made, and add a test that fails a commit and
-  then asserts the *next* successful one covers the failed epoch -- both directions, per the bidirectional
-  guard rule, so the test cannot pass against an implementation that never advances.
+- [x] **M21.4** -- State what a *failed* commit does to `durable_through`, and bind it with tests in both
+  directions. Required making the sample a test target at all (`test = true`), and gating the
+  failure-path tests on `fault-injection`, since a healthy flush cannot be made to fail.
+  -> [completed 2026-09-21](COMPLETED-CHECKLIST.md#m214)
 
 - [ ] **M21.5** -- Give [strategy.rs](examples/epoch_log/strategy.rs)'s two wait loops the same timeout
   policy as their sibling (`C-5`). `await_flush` and `await_writes` discard the `submit_and_wait` timeout and
