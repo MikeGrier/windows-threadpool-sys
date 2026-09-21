@@ -544,3 +544,369 @@ fn the_debug_rendering_names_the_ring_and_its_key_fields() {
         "the version field name must appear: {rendering}"
     );
 }
+
+// ---------------------------------------------------------------------------
+// M21.2: the bounded pop, and the wait it is generic over.
+// ---------------------------------------------------------------------------
+
+use super::{CompletionWait, RingWait, SubmitWait};
+
+/// A scratch file to flush against, named per test so tests running as threads
+/// in one process cannot collide on it.
+fn pop_scratch(tag: &str) -> (std::path::PathBuf, std::fs::File) {
+    let path = std::env::temp_dir().join(format!(
+        "windows-ioring-sys-pop-within-{}-{tag}.tmp",
+        std::process::id()
+    ));
+    std::fs::write(&path, b"x").expect("create fixture");
+    let file = std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(&path)
+        .expect("open fixture");
+    (path, file)
+}
+
+/// Push `count` flushes and submit them, popping nothing.
+fn push_flushes(ring: &mut IoRing, file: &std::fs::File, count: usize) -> Vec<usize> {
+    use crate::{Batch, FlushCoverage, FlushMode};
+    use std::os::windows::io::AsRawHandle;
+
+    let mut batch = Batch::new(ring);
+    let mut ids = Vec::with_capacity(count);
+    for _ in 0..count {
+        // SAFETY: `file` outlives every operation pushed here -- the caller
+        // drains before dropping it.
+        ids.push(
+            unsafe {
+                batch.flush_raw(
+                    file.as_raw_handle(),
+                    FlushCoverage::Unordered,
+                    FlushMode::Default,
+                )
+            }
+            .expect("queue a flush"),
+        );
+    }
+    batch.submit().expect("submit");
+    ids
+}
+
+/// Records what the pop loop asked of it, and sleeps instead of blocking in
+/// the ring.
+///
+/// Deliberately does **not** call [`RingWait::block`]. These tests drive the
+/// loop with a reservation that has no real SQE behind it, and `SubmitIoRing`
+/// answers `E_INVALIDARG` when asked to wait for a completion the kernel has
+/// no pending operation for. Keeping the wait out of the kernel is what makes
+/// the loop's own deadline behaviour testable without a slow real device.
+#[derive(Default)]
+struct RecordingWait {
+    calls: usize,
+    last_timeout_ms: u32,
+    outstanding_seen: usize,
+}
+
+impl CompletionWait for RecordingWait {
+    fn wait(&mut self, ring: &mut RingWait<'_>, timeout_ms: u32) -> std::io::Result<()> {
+        self.calls += 1;
+        self.last_timeout_ms = timeout_ms;
+        self.outstanding_seen = ring.outstanding();
+        std::thread::sleep(std::time::Duration::from_millis(2));
+        Ok(())
+    }
+}
+
+/// Refuses to wait at all, so a test can observe the error path.
+struct FailingWait;
+
+impl CompletionWait for FailingWait {
+    fn wait(&mut self, _: &mut RingWait<'_>, _: u32) -> std::io::Result<()> {
+        Err(std::io::Error::other("the wait refused"))
+    }
+}
+
+/// Returns without blocking, which the trait explicitly permits.
+struct ImmediateWait;
+
+impl CompletionWait for ImmediateWait {
+    fn wait(&mut self, _: &mut RingWait<'_>, _: u32) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
+#[test]
+fn pop_within_returns_the_completion_of_a_real_operation() {
+    let mut ring = IoRing::new(16, 16).expect("create ring");
+    let (path, file) = pop_scratch("real");
+    let ids = push_flushes(&mut ring, &file, 1);
+
+    let completion = ring
+        .pop_within(std::time::Duration::from_secs(30))
+        .expect("pop_within")
+        .expect("the flush completes well inside the bound");
+    assert_eq!(
+        completion.user_data(),
+        ids[0],
+        "the completion popped must be the one that was pushed"
+    );
+    let _ = std::fs::remove_file(&path);
+}
+
+#[test]
+fn submit_wait_is_what_the_convenience_uses() {
+    // The same operation through the explicit spelling. This is what proves
+    // `SubmitWait` really does block in the ring: no other wait is involved,
+    // and the completion still arrives.
+    let mut ring = IoRing::new(16, 16).expect("create ring");
+    let (path, file) = pop_scratch("submit-wait");
+    let ids = push_flushes(&mut ring, &file, 1);
+
+    let completion = ring
+        .pop_within_with(&mut SubmitWait, std::time::Duration::from_secs(30))
+        .expect("pop_within_with")
+        .expect("the flush completes");
+    assert_eq!(completion.user_data(), ids[0]);
+    let _ = std::fs::remove_file(&path);
+}
+
+#[test]
+fn pop_within_returns_successive_completions_one_at_a_time() {
+    let mut ring = IoRing::new(16, 32).expect("create ring");
+    let (path, file) = pop_scratch("successive");
+    let ids = push_flushes(&mut ring, &file, 3);
+
+    let mut seen = Vec::new();
+    for _ in 0..ids.len() {
+        let completion = ring
+            .pop_within(std::time::Duration::from_secs(30))
+            .expect("pop_within")
+            .expect("each flush completes");
+        seen.push(completion.user_data());
+    }
+    seen.sort_unstable();
+    let mut expected = ids.clone();
+    expected.sort_unstable();
+    assert_eq!(
+        seen, expected,
+        "every pushed flush must be popped exactly once"
+    );
+
+    assert!(
+        ring.pop_within(std::time::Duration::ZERO)
+            .expect("pop_within")
+            .is_none(),
+        "the queue is empty once every completion has been taken"
+    );
+    let _ = std::fs::remove_file(&path);
+}
+
+#[test]
+fn pop_within_returns_none_at_once_when_nothing_can_ever_arrive() {
+    // With no operation outstanding no completion is possible, so a
+    // thirty-second bound must be answered immediately rather than slept
+    // through. Asserting the elapsed time is what makes this a test of the
+    // early return rather than of a short timeout.
+    let mut ring = IoRing::new(16, 16).expect("create ring");
+    let started = std::time::Instant::now();
+    let popped = ring
+        .pop_within(std::time::Duration::from_secs(30))
+        .expect("pop_within");
+    let elapsed = started.elapsed();
+    assert!(popped.is_none(), "nothing was ever submitted");
+    assert!(
+        elapsed < std::time::Duration::from_secs(1),
+        "an empty, quiesced ring must not wait out the bound; took {elapsed:?}"
+    );
+}
+
+#[test]
+fn a_supplied_wait_is_not_consulted_when_nothing_can_arrive() {
+    // The partner to `a_supplied_wait_is_consulted_...` below. A loop that
+    // always waited once before checking would pass that test and fail this
+    // one.
+    let mut ring = IoRing::new(16, 16).expect("create ring");
+    let mut wait = RecordingWait::default();
+    let popped = ring
+        .pop_within_with(&mut wait, std::time::Duration::from_secs(30))
+        .expect("pop_within_with");
+    assert!(popped.is_none());
+    assert_eq!(
+        wait.calls, 0,
+        "nothing can arrive, so there is nothing to wait for"
+    );
+}
+
+#[test]
+fn a_supplied_wait_is_consulted_when_the_queue_is_not_ready() {
+    let mut ring = IoRing::new(16, 16).expect("create ring");
+    // A reservation with no real SQE behind it: outstanding, and no
+    // completion will ever arrive for it.
+    ring.reserve_user_data().expect("reserve");
+    let mut wait = RecordingWait::default();
+    let popped = ring.pop_within_with(&mut wait, std::time::Duration::from_millis(40));
+    // Settled before any assertion: a panic here would otherwise unwind into
+    // `Drop`, whose rundown cannot settle a reservation the kernel never saw,
+    // and the second panic would abort the whole harness.
+    ring.record_completion();
+
+    assert!(popped.expect("pop_within_with").is_none());
+    assert!(
+        wait.calls >= 1,
+        "the supplied wait must be the thing that blocks"
+    );
+}
+
+#[test]
+fn the_deadline_is_honoured_when_an_operation_never_completes() {
+    let mut ring = IoRing::new(16, 16).expect("create ring");
+    ring.reserve_user_data().expect("reserve");
+
+    let started = std::time::Instant::now();
+    let popped = ring.pop_within_with(
+        &mut RecordingWait::default(),
+        std::time::Duration::from_millis(40),
+    );
+    let elapsed = started.elapsed();
+    ring.record_completion();
+
+    assert!(
+        popped.expect("pop_within_with").is_none(),
+        "no completion was ever going to arrive"
+    );
+    assert!(
+        elapsed >= std::time::Duration::from_millis(20),
+        "the bound must be waited out, not short-circuited; took {elapsed:?}"
+    );
+    assert!(
+        elapsed < std::time::Duration::from_secs(5),
+        "and it must be a bound rather than a hang; took {elapsed:?}"
+    );
+}
+
+#[test]
+fn a_zero_bound_does_not_block() {
+    let mut ring = IoRing::new(16, 16).expect("create ring");
+    ring.reserve_user_data().expect("reserve");
+    let mut wait = RecordingWait::default();
+    let started = std::time::Instant::now();
+    let popped = ring.pop_within_with(&mut wait, std::time::Duration::ZERO);
+    let elapsed = started.elapsed();
+    ring.record_completion();
+
+    assert!(popped.expect("pop_within_with").is_none());
+    assert_eq!(
+        wait.calls, 0,
+        "a zero bound is one try_pop, so the wait is never reached"
+    );
+    assert!(
+        elapsed < std::time::Duration::from_millis(500),
+        "a zero bound must not block; took {elapsed:?}"
+    );
+}
+
+#[test]
+fn the_wait_is_never_handed_a_zero_timeout() {
+    // A sub-millisecond remainder rounds to zero milliseconds, which
+    // `SubmitIoRing` reads as "poll and return" -- turning the tail of every
+    // bound into a spin. The loop clamps it up to one.
+    let mut ring = IoRing::new(16, 16).expect("create ring");
+    ring.reserve_user_data().expect("reserve");
+    let mut wait = RecordingWait::default();
+    let popped = ring.pop_within_with(&mut wait, std::time::Duration::from_micros(600));
+    ring.record_completion();
+
+    assert!(popped.expect("pop_within_with").is_none());
+    assert!(wait.calls >= 1, "the wait must have been reached at all");
+    assert!(
+        wait.last_timeout_ms >= 1,
+        "a sub-millisecond remainder must be clamped up, never passed as zero"
+    );
+}
+
+#[test]
+fn ring_wait_reports_the_rings_outstanding_count() {
+    let mut ring = IoRing::new(16, 16).expect("create ring");
+    ring.reserve_user_data().expect("reserve a");
+    ring.reserve_user_data().expect("reserve b");
+    let mut wait = RecordingWait::default();
+    let popped = ring.pop_within_with(&mut wait, std::time::Duration::from_millis(20));
+    ring.record_completion();
+    ring.record_completion();
+
+    assert!(popped.expect("pop_within_with").is_none());
+    assert_eq!(
+        wait.outstanding_seen, 2,
+        "RingWait::outstanding must agree with IoRing::outstanding"
+    );
+}
+
+#[test]
+fn a_wait_that_fails_ends_the_pop_with_its_error() {
+    let mut ring = IoRing::new(16, 16).expect("create ring");
+    ring.reserve_user_data().expect("reserve");
+    let outcome = ring.pop_within_with(&mut FailingWait, std::time::Duration::from_secs(30));
+    ring.record_completion();
+
+    let error = outcome.expect_err("the wait's failure must reach the caller");
+    assert_eq!(error.to_string(), "the wait refused");
+}
+
+#[test]
+fn a_wait_that_never_blocks_is_permitted_and_still_terminates() {
+    // The trait says returning early is always allowed. A caller that does so
+    // spins, which is their choice -- but the bound must still hold.
+    let mut ring = IoRing::new(16, 16).expect("create ring");
+    ring.reserve_user_data().expect("reserve");
+    let started = std::time::Instant::now();
+    let popped = ring.pop_within_with(&mut ImmediateWait, std::time::Duration::from_millis(30));
+    let elapsed = started.elapsed();
+    ring.record_completion();
+
+    assert!(popped.expect("pop_within_with").is_none());
+    assert!(
+        elapsed < std::time::Duration::from_secs(5),
+        "a non-blocking wait must still be bounded by the deadline; took {elapsed:?}"
+    );
+}
+
+#[test]
+fn a_bound_the_clock_cannot_represent_does_not_panic() {
+    // `Instant + Duration` panics on overflow, and `Duration::MAX` is a
+    // reasonable spelling of "no deadline". Nothing is outstanding here, so
+    // the early return answers before any deadline arithmetic matters.
+    let mut ring = IoRing::new(16, 16).expect("create ring");
+    let popped = ring
+        .pop_within(std::time::Duration::MAX)
+        .expect("pop_within");
+    assert!(popped.is_none());
+}
+
+#[test]
+fn a_bound_the_clock_cannot_represent_reaches_the_wait_rather_than_panicking() {
+    // The half that exercises the overflow branch: something *is* outstanding,
+    // so the loop computes a remaining duration from a deadline that could not
+    // be represented. A failing wait is how the test escapes a bound that by
+    // construction never arrives.
+    let mut ring = IoRing::new(16, 16).expect("create ring");
+    ring.reserve_user_data().expect("reserve");
+    let outcome = ring.pop_within_with(&mut FailingWait, std::time::Duration::MAX);
+    ring.record_completion();
+
+    let error = outcome.expect_err("the wait refuses, which is how this returns at all");
+    assert_eq!(error.to_string(), "the wait refused");
+}
+
+#[test]
+fn the_wait_can_be_supplied_as_a_trait_object() {
+    // `?Sized` on the bound is what makes this compile, and a consumer
+    // choosing a wait at run time is the reason to keep it.
+    let mut ring = IoRing::new(16, 16).expect("create ring");
+    ring.reserve_user_data().expect("reserve");
+    let wait: &mut dyn CompletionWait = &mut FailingWait;
+    let outcome = ring.pop_within_with(wait, std::time::Duration::from_secs(30));
+    ring.record_completion();
+
+    let error = outcome.expect_err("a trait-object wait still refuses");
+    assert_eq!(error.to_string(), "the wait refused");
+}

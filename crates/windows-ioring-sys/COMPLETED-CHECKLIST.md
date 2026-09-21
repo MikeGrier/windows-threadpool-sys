@@ -1644,3 +1644,64 @@ first reading of its output undercounted by one. Counted with a command rather t
 
 Verified by running the example in a debug build, where the `debug_assert` is live: it completed, the
 negative control still caught the corrupted record, and all four epochs reported durable in order.
+
+## Moved 2026-09-21 00:23:49 -04:00 -- M21.2: a bounded pop, generic over the wait
+
+### <a id="m212"></a>M21.2 -- Publish a bounded pop and the wait it is generic over, then remove the two unbounded spins. *(completed 2026-09-21 00:23:49 -04:00)*
+
+**Decided: the trait, plus a default impl and a convenience.** The crate cannot choose the wait for a
+caller, and that is a contract rather than a shrug -- the completion event is auto-reset with exactly one
+waiter per ring ([D-21](DESIGN-NOTES.md#d-21)), so a wait this crate picked could consume an edge the
+caller's own loop was entitled to. Making it a parameter moves the obligation to the only party who can
+discharge it.
+
+The surface added to [ring.rs](src/ring.rs):
+
+- `IoRing::pop_within(timeout)` -- the convenience, using `SubmitWait`.
+- `IoRing::pop_within_with(wait, timeout)` -- the same loop over a caller-chosen wait; `?Sized`, so a
+  trait object works.
+- `CompletionWait` -- one method, whose contract is deliberately weak: returning early or spuriously is
+  always permitted, because [D-19](DESIGN-NOTES.md#d-19) already makes a wake with nothing to pop normal.
+  An implementation cannot be subtly wrong about *when* to return, only wasteful.
+- `RingWait` -- the ring narrowed to `block` and `outstanding`, so a waiter cannot pop the completion
+  its own caller is waiting for, nor submit work nobody asked for. Same narrowing, same reason, as
+  `RingScope` under [D-43](DESIGN-NOTES.md#d-43).
+- `SubmitWait` -- blocks inside `SubmitIoRing` with nothing queued, touching no event, so it composes
+  with a caller who owns the completion event.
+
+**The borrow question, answered even though the check says the surface is unchanged.** `RingWait` is only
+ever passed *in*, never returned, so [BORROW-SURFACE.txt](BORROW-SURFACE.txt) is untouched (verified: 7
+entries, unchanged). Asked anyway, since it is a lifetime-carrying wrapper: safe code reaching it can call
+`block` and `outstanding` and nothing else; the ring it borrows is held exclusively for the call, so
+nothing it could invalidate is live elsewhere; and the narrow type is the point rather than an accident,
+because a bare mutable reference to the ring would have permitted exactly the two things a waiter must
+not do.
+
+**Measured while building it, and now documented on `RingWait::block`:** `SubmitIoRing` answers
+`E_INVALIDARG` (`0x80070057`) -- not a timeout -- when asked to wait for a completion the kernel has no
+pending operation for. Found by a test that drove the loop with a reservation having no real SQE behind
+it. The precondition holds structurally: `pop_within_with` checks `outstanding()` before consulting the
+wait, so `block` is unreachable with nothing pending.
+
+**An early return that is not an optimisation.** With nothing outstanding and an empty queue no completion
+is possible, so the loop answers immediately rather than sleeping out the bound. That turns "you forgot to
+submit" from a timeout into an instant answer, and it is what the sabotage below pins.
+
+**A panic path found and closed before it shipped.** The first draft computed an instant plus the caller
+timeout directly, which panics on overflow -- so `Duration::MAX`, a reasonable spelling of "no deadline",
+would have taken down the process. Now `checked_add`, with an unrepresentable deadline treated as one that
+never arrives. Two tests cover it: one where the early return answers first, one where an operation is
+outstanding so the overflow branch is actually reached.
+
+**Sabotage-verified**, because a test that cannot go red proves nothing:
+
+- Removing the clamp that keeps the wait timeout above zero turns `the_wait_is_never_handed_a_zero_timeout`
+  red.
+- Removing the nothing-can-arrive early return turns two tests red, and the run takes the full 30-second
+  bound instead of finishing instantly -- which is the behaviour the early return exists to remove.
+
+**Call sites converted:** the two unbounded spins in
+[append.rs](examples/epoch_log/append.rs) and [fault_injection.rs](tests/fault_injection.rs), and the
+test-only `pop_within` helper, which is now a thin panicking wrapper over the public API rather than a
+fourth copy of the loop. The panic is the only test-specific part left: a test wants the name of what it
+waited for, a consumer wants an `Option` it can act on.

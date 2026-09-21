@@ -117,17 +117,10 @@ hang shapes, a latent trigger, and a specification gap.
   claim [D-47](DESIGN-NOTES.md#d-47) removed.
   -> [completed 2026-09-20](COMPLETED-CHECKLIST.md#m211)
 
-- [ ] **M21.2** -- Decide how a non-`src` caller waits for a completion, then remove the two unbounded spins
-  (`C-2`). [append.rs](examples/epoch_log/append.rs) and [fault_injection.rs](tests/fault_injection.rs) both
-  wrap `try_pop` in a bare `loop`, which [`pop_within`](src/ring.rs) explicitly names as the shape that
-  converts a flake into a hang, and which contradicts
-  [`Batch::submit_and_wait`](src/batch.rs)'s own documented contract that the timeout can expire first. This
-  is an API decision, not a copy-paste fix: `pop_within` is `#[cfg(test)] pub(crate)`, and examples and
-  `tests/` are separate crates, so neither can reach it -- which is *why* five sites implement this four
-  different ways (the session tabulates them). Either publish a bounded pop returning
-  `io::Result` with `TimedOut`, or record why each caller should keep deriving its own. Then fix both spin
-  sites the chosen way. Per the detection ladder, prefer the option that puts the rule on a rung: a written
-  rule that five call sites can each ignore is prose, not enforcement.
+- [x] **M21.2** -- Publish a bounded pop and the wait it is generic over, then remove the two unbounded
+  spins. `IoRing::pop_within` / `pop_within_with`, over a `CompletionWait` the caller supplies, because
+  [D-21](DESIGN-NOTES.md#d-21) means the crate cannot choose the wait for them.
+  -> [completed 2026-09-21](COMPLETED-CHECKLIST.md#m212)
 
 - [ ] **M21.3** -- Key the epoch commit off a completed append rather than off the counter (`C-3`).
   [main.rs](examples/epoch_log/main.rs) tests `appended % EPOCH_SIZE == 0` on every pass of the append loop,

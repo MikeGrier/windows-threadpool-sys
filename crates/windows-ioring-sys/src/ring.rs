@@ -5,6 +5,7 @@ use std::ffi::c_void;
 use std::io;
 use std::os::windows::io::{AsRawHandle, FromRawHandle, OwnedHandle};
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::{Duration, Instant};
 
 use windows_sys::Win32::Storage::FileSystem::{
     CloseIoRing, CreateIoRing, GetIoRingInfo, IORING_BUFFER_INFO, IORING_CQE,
@@ -985,6 +986,185 @@ impl IoRing {
             ring_id: self.ring_id,
         }))
     }
+
+    /// Pop one completion, blocking in the ring's own wait until one is
+    /// available or `timeout` elapses (M21.2).
+    ///
+    /// This is the join between [`IoRing::try_pop`], whose `None` means
+    /// "empty at this instant", and [`crate::Batch::submit_and_wait`], whose
+    /// return deliberately promises nothing about poppability because its
+    /// timeout may have expired. Neither one alone answers "give me the
+    /// completion I just caused", and before this existed every caller wrote
+    /// that loop again -- four different ways across five sites, two of them
+    /// unbounded spins.
+    ///
+    /// `Ok(None)` means the timeout elapsed, or that **nothing can arrive**:
+    /// with no operation outstanding and an empty queue, no completion is
+    /// possible, so this returns immediately rather than sleeping out the
+    /// full `timeout`. That early return is what turns "you forgot to submit"
+    /// from a timeout into an instant answer.
+    ///
+    /// A zero `timeout` is exactly one [`IoRing::try_pop`], which is the
+    /// honest reading of "wait no time at all".
+    ///
+    /// Uses [`SubmitWait`], which blocks inside `SubmitIoRing` with no new
+    /// entries queued. It does **not** touch the ring's completion event, so
+    /// it cannot disturb a caller who owns that event under
+    /// [D-21](../DESIGN-NOTES.md#d-21). Use
+    /// [`IoRing::pop_within_with`] to supply a different wait.
+    ///
+    /// # Errors
+    ///
+    /// Any error from `SubmitIoRing` or `PopIoRingCompletion`.
+    pub fn pop_within(&mut self, timeout: Duration) -> io::Result<Option<Completion>> {
+        self.pop_within_with(&mut SubmitWait, timeout)
+    }
+
+    /// [`IoRing::pop_within`] with a caller-chosen wait.
+    ///
+    /// The crate cannot pick the wait for you, and that is a contract rather
+    /// than a shrug: the completion event is auto-reset with exactly one
+    /// waiter per ring ([D-21](../DESIGN-NOTES.md#d-21)), so a wait this crate
+    /// chose could consume an edge the caller's own loop was entitled to. The
+    /// owner of the ring is the only party who can discharge that obligation,
+    /// which is why the choice is a parameter.
+    ///
+    /// # Errors
+    ///
+    /// Any error from the wait or from `PopIoRingCompletion`.
+    pub fn pop_within_with<W: CompletionWait + ?Sized>(
+        &mut self,
+        wait: &mut W,
+        timeout: Duration,
+    ) -> io::Result<Option<Completion>> {
+        let deadline = Instant::now().checked_add(timeout);
+        loop {
+            if let Some(completion) = self.try_pop()? {
+                return Ok(Some(completion));
+            }
+            // Checked *after* the pop, never before: `record_completion` runs
+            // during `try_pop`, so reading it first would race the very
+            // completion being drained.
+            if self.outstanding() == 0 {
+                return Ok(None);
+            }
+            // `checked_add` rather than `+`: `Instant + Duration` panics on
+            // overflow, so a caller passing `Duration::MAX` -- a reasonable
+            // spelling of "no deadline" -- would take down the process. A
+            // deadline the clock cannot represent is treated as one that
+            // never arrives, which is what the caller asked for.
+            let remaining = match deadline {
+                Some(deadline) => deadline.saturating_duration_since(Instant::now()),
+                None => Duration::MAX,
+            };
+            if remaining.is_zero() {
+                return Ok(None);
+            }
+            // Clamped up to 1ms so a sub-millisecond remainder cannot become
+            // a zero timeout, which `SubmitIoRing` reads as "poll and return"
+            // and would turn the tail of every wait into a spin.
+            let ms = u32::try_from(remaining.as_millis())
+                .unwrap_or(u32::MAX)
+                .max(1);
+            wait.wait(&mut RingWait { ring: self }, ms)?;
+        }
+    }
+}
+
+/// How [`IoRing::pop_within_with`] blocks between checks of the completion
+/// queue (M21.2).
+///
+/// Implement this to drive a bounded pop from a wait this crate does not own
+/// -- a completion event the caller already holds, a multiplexed
+/// `WaitForMultipleObjects`, or a pure spin on a thread that must not block
+/// in the kernel.
+pub trait CompletionWait {
+    /// Block until a completion *may* be available, or `timeout_ms` elapses.
+    ///
+    /// **Returning early or spuriously is always permitted**, and requires no
+    /// apology: [D-19](../DESIGN-NOTES.md#d-19) makes a wake with nothing to
+    /// pop a normal event, so the caller re-checks the queue either way. An
+    /// implementation therefore cannot be subtly wrong about *when* to
+    /// return; it can only waste time or burn CPU.
+    ///
+    /// What it must not do is block past `timeout_ms`, because that is the
+    /// only thing standing between a stuck ring and a hung process.
+    ///
+    /// # Errors
+    ///
+    /// Whatever the underlying wait reports. An error ends the pop.
+    fn wait(&mut self, ring: &mut RingWait<'_>, timeout_ms: u32) -> io::Result<()>;
+}
+
+/// The ring, narrowed to what a [`CompletionWait`] needs (M21.2).
+///
+/// Deliberately exposes no way to pop and no way to submit work. A waiter that
+/// could pop would consume the completion its own caller is waiting for, and
+/// one that could submit would queue entries the caller never asked for --
+/// both of which a bare `&mut IoRing` would permit. This is the same
+/// narrowing, for the same reason, as
+/// [`RingScope`](crate::RingScope) under [D-43](../DESIGN-NOTES.md#d-43).
+pub struct RingWait<'ring> {
+    ring: &'ring mut IoRing,
+}
+
+impl RingWait<'_> {
+    /// Block in the ring's own wait for up to `timeout_ms`, queueing nothing.
+    ///
+    /// With zero new entries submitted, `SubmitIoRing`'s only effect is to
+    /// wait for an outstanding operation to complete -- the same call
+    /// [`IoRing::run_down`] uses to quiesce.
+    ///
+    /// Returning does **not** mean a completion is poppable; the timeout may
+    /// simply have expired. That is why the loop that calls this re-checks.
+    ///
+    /// # At least one operation must really be outstanding
+    ///
+    /// Measured while building this: `SubmitIoRing` answers
+    /// `E_INVALIDARG` (`0x80070057`) -- not a timeout -- when asked to wait for
+    /// a completion the kernel has no pending operation for. A `RingWait` is
+    /// only ever constructed by [`IoRing::pop_within_with`], which checks
+    /// [`IoRing::outstanding`] before consulting the wait, so that
+    /// precondition holds structurally rather than by the caller remembering
+    /// it. A waiter that wants to block some other way is free to ignore this
+    /// method entirely.
+    ///
+    /// # Errors
+    ///
+    /// Any error from `SubmitIoRing`.
+    pub fn block(&mut self, timeout_ms: u32) -> io::Result<()> {
+        let mut submitted = 0_u32;
+        // SAFETY: the ring handle is live for the borrow, and the out-pointer
+        // is valid. Zero new SQEs are queued, so this call's only effect is
+        // to wait for and reap what is already outstanding.
+        let hr = unsafe { SubmitIoRing(self.ring.handle, 1, timeout_ms, &raw mut submitted) };
+        check(hr)
+    }
+
+    /// Operations submitted but not yet observed complete, as
+    /// [`IoRing::outstanding`].
+    ///
+    /// A waiter that multiplexes several sources can use this to decide
+    /// whether blocking on this ring is worth a slot at all.
+    #[must_use]
+    pub fn outstanding(&self) -> usize {
+        self.ring.outstanding()
+    }
+}
+
+/// The default [`CompletionWait`]: block inside the ring's own
+/// `SubmitIoRing` wait (M21.2).
+///
+/// Costs no kernel object and touches no event, so it composes with a caller
+/// who owns the ring's completion event under
+/// [D-21](../DESIGN-NOTES.md#d-21).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct SubmitWait;
+
+impl CompletionWait for SubmitWait {
+    fn wait(&mut self, ring: &mut RingWait<'_>, timeout_ms: u32) -> io::Result<()> {
+        ring.block(timeout_ms)
+    }
 }
 
 impl Drop for IoRing {
@@ -1049,22 +1229,20 @@ thread_local! {
 /// Thirty seconds matches the deadline the crate's own `failure_paths`
 /// integration test already uses; it is a hang bound, not a latency
 /// expectation, so it is far above any real completion time.
+///
+/// Since M21.2 this is a thin panicking wrapper over the public
+/// [`IoRing::pop_within`] rather than its own loop. The panic is the only
+/// thing left that is specific to tests: a test wants the name of what it
+/// waited for in the failure message, where a consumer wants an `Option` it
+/// can act on.
 #[cfg(test)]
 pub(crate) fn pop_within(ring: &mut IoRing, what: &str) -> Completion {
     // Named once so the bound and the message it reports cannot drift apart.
     const BOUND: std::time::Duration = std::time::Duration::from_secs(30);
 
-    let deadline = std::time::Instant::now() + BOUND;
-    loop {
-        if let Some(completion) = ring.try_pop().expect("pop") {
-            return completion;
-        }
-        assert!(
-            std::time::Instant::now() < deadline,
-            "timed out after {BOUND:?} waiting for {what}"
-        );
-        std::thread::yield_now();
-    }
+    ring.pop_within(BOUND)
+        .expect("pop")
+        .unwrap_or_else(|| panic!("timed out after {BOUND:?} waiting for {what}"))
 }
 
 #[cfg(test)]

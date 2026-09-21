@@ -43,6 +43,10 @@ pub const SLOTS: u32 = 8;
 /// Bytes per slot, and so the largest record this log accepts.
 pub const SLOT_LEN: usize = 4096;
 
+/// Hang bound on the one blocking step this appender has: waiting for the
+/// arena's registration to complete at startup.
+const REGISTRATION_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
+
 /// One in-flight append: the token that holds the arena slot, and where the
 /// record was written.
 struct InFlight {
@@ -84,13 +88,18 @@ impl Appender {
         let buffers = (0..SLOTS).map(|_| vec![0_u8; SLOT_LEN]).collect::<Vec<_>>();
         let mut batch = Batch::new(ring);
         let pending = batch.register_buffers(buffers)?;
-        batch.submit_and_wait(1, 30_000)?;
+        batch.submit()?;
 
-        let completion = loop {
-            if let Some(completion) = ring.try_pop()? {
-                break completion;
-            }
-        };
+        // One bounded wait, not a spin: `pop_within` is the crate's join
+        // between `try_pop`'s "empty right now" and a submit-side wait whose
+        // return promises nothing about poppability. The bare `loop` that
+        // used to be here turned a slow registration into a hung process.
+        let completion = ring.pop_within(REGISTRATION_TIMEOUT)?.ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::TimedOut,
+                "the buffer registration never completed",
+            )
+        })?;
         let arena = pending
             .claim_if(&completion)
             .map_err(|_| {

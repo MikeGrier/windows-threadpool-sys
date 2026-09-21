@@ -190,7 +190,7 @@ pub use event_delivery::{EventDelivery, RingScope};
 #[cfg(all(windows, any(test, feature = "fault-injection")))]
 pub use ring::InjectedFailure;
 #[cfg(windows)]
-pub use ring::{Completion, IoRing, Op, RingInfo};
+pub use ring::{Completion, CompletionWait, IoRing, Op, RingInfo, RingWait, SubmitWait};
 #[cfg(windows)]
 pub use token::Token;
 
