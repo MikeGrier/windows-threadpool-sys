@@ -85,6 +85,20 @@ Not reachable at the sample's current constants -- `SLOTS` is 8, `EPOCH_SIZE` is
 wait drains the arena, so the arena cannot be full at a boundary. It is armed by anyone who copies
 the sample and raises `EPOCH_SIZE`, which is what the sample exists to be.
 
+> **Corrected 2026-09-21 while implementing `M21.3`: the second paragraph is wrong.** The retry is
+> not reachable at *any* constants, because the predicate is true at exactly two moments -- before
+> the first append, and immediately after a commit -- and the arena is empty at both, the commit
+> having waited for a covering flush that retires every outstanding write. Measured rather than
+> re-reasoned: the retry path was instrumented to report when the old shape would have committed,
+> and it fired **zero** times at `EPOCH_SIZE` of 6, 8, 12, 16 and 24, including the values past
+> `SLOTS` this finding predicted would arm it.
+>
+> What survives is the coupling complaint in the heading, and it is worth the change on its own: the
+> trigger was safe because of an invariant three blocks away that nothing stated, rather than
+> because of where it was written. The lesson for this review is narrower and sharper -- "unreachable
+> today, armed tomorrow" is a claim about a program's reachable states, and reading the code is not
+> how to settle one.
+
 ### C-4. `durable_through` across a failed commit is under-specified
 
 [examples/epoch_log/commit.rs](../examples/epoch_log/commit.rs) says "A failed commit advances

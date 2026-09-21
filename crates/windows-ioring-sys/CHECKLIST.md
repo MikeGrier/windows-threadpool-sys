@@ -109,8 +109,10 @@ conclusions belong to it until it converges.
 Queued from
 [DESIGN-SESSION-2026-09-19-epoch-log-review.md](design-sessions/DESIGN-SESSION-2026-09-19-epoch-log-review.md)
 (findings `C-1` through `C-5`). Independent of each other; listed in ascending cost. Nothing in this
-milestone was observed failing at the sample's current constants -- these are a withdrawn justification, two
-hang shapes, a latent trigger, and a specification gap.
+milestone was observed failing at the sample's current constants -- these are a withdrawn justification,
+two hang shapes, a mis-keyed trigger, and a specification gap. (`M21.3` predicted that its trigger was
+merely unreachable *today*; measuring it while implementing showed it is unreachable at any constants, so
+what it corrected was the coupling rather than a latent bug. The archived entry has the numbers.)
 
 - [x] **M21.1** -- Correct the last site that still asserts [D-24](DESIGN-NOTES.md#d-24)'s withdrawn
   half: the epoch-order assertion in the epoch-log committer, whose justification cited the hold-back
@@ -122,13 +124,11 @@ hang shapes, a latent trigger, and a specification gap.
   [D-21](DESIGN-NOTES.md#d-21) means the crate cannot choose the wait for them.
   -> [completed 2026-09-21](COMPLETED-CHECKLIST.md#m212)
 
-- [ ] **M21.3** -- Key the epoch commit off a completed append rather than off the counter (`C-3`).
-  [main.rs](examples/epoch_log/main.rs) tests `appended % EPOCH_SIZE == 0` on every pass of the append loop,
-  including a pass where `append` returned `WouldBlock` and `appended` did not move -- committing a second
-  time, with a covering flush closing an epoch that holds no records. Unreachable at the sample's constants
-  (`SLOTS` 8 > `EPOCH_SIZE` 6, and the commit wait drains the arena), and armed by any reader who copies the
-  sample and raises `EPOCH_SIZE`, which is what the sample exists to be. Move the check into the `Ok` arm so
-  the trigger cannot fire without an append behind it.
+- [x] **M21.3** -- Key the epoch commit off a completed append rather than off the counter, so the
+  trigger cannot fire on a pass that appended nothing. The predicted latent bug turned out to be
+  unreachable at any constants -- measured, not re-reasoned -- so this is a coupling change rather than
+  a fix.
+  -> [completed 2026-09-21](COMPLETED-CHECKLIST.md#m213)
 
 - [ ] **M21.4** -- State what a *failed* commit does to `durable_through`, and bind it with a test (`C-4`).
   [commit.rs](examples/epoch_log/commit.rs) says "A failed commit advances nothing", which reads as though a

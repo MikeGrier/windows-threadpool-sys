@@ -1705,3 +1705,33 @@ outstanding so the overflow branch is actually reached.
 test-only `pop_within` helper, which is now a thin panicking wrapper over the public API rather than a
 fourth copy of the loop. The panic is the only test-specific part left: a test wants the name of what it
 waited for, a consumer wants an `Option` it can act on.
+
+## Moved 2026-09-21 02:23:34 -04:00 -- M21.3: the epoch trigger, and a review claim the measurement disproved
+
+### <a id="m213"></a>M21.3 -- Key the epoch commit off a completed append rather than off the counter, so the trigger cannot fire on a pass that appended nothing. *(completed 2026-09-21 02:23:34 -04:00)*
+
+The match in [main.rs](examples/epoch_log/main.rs) now yields a `closed_an_epoch` value that every arm
+must produce, rather than a `appended % EPOCH_SIZE == 0` test written after it. Closing an epoch is a
+fact about an append that landed, and making each arm answer the question keeps that local -- a new arm
+added later cannot fall through into a commit.
+
+**The item predicted this was a latent bug. It is not, and the measurement is what settled it.**
+The retry path was instrumented to report when the old shape would have committed, and run at
+`EPOCH_SIZE` of 6, 8, 12, 16 and 24. It fired **zero** times -- including at every value past `SLOTS`,
+which both the item and finding `C-3` predicted would arm it.
+
+The reason is an invariant three blocks from the trigger: `appended % EPOCH_SIZE == 0` is true at exactly
+two moments -- before the first append, and immediately after a commit -- and the arena is empty at both,
+because the commit waits for a covering flush that retires every outstanding write. An append is
+therefore never refused at an epoch boundary, at any constants.
+
+**So this is a coupling change, not a bug fix**, and the distinction is the useful part. The old trigger
+was safe because of something nothing stated, three blocks away; the new one cannot fire because of where
+it is written. The second survives a reader who changes the commit path. The first is what made the
+question take a measurement to answer at all.
+
+Swept the claim rather than only fixing the code: finding `C-3` in
+[DESIGN-SESSION-2026-09-19-epoch-log-review.md](design-sessions/DESIGN-SESSION-2026-09-19-epoch-log-review.md)
+carried the same wrong prediction and now carries the correction beside it. The review lesson recorded
+there is the narrow one: "unreachable today, armed tomorrow" is a claim about a program's reachable
+states, and reading the code is not how to settle one.
