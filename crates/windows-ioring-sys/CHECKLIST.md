@@ -112,15 +112,10 @@ Queued from
 milestone was observed failing at the sample's current constants -- these are a withdrawn justification, two
 hang shapes, a latent trigger, and a specification gap.
 
-- [ ] **M21.1** -- Correct the last site that still asserts [D-24](DESIGN-NOTES.md#d-24)'s withdrawn half
-  (`C-1`). [commit.rs](examples/epoch_log/commit.rs) justifies its epoch-order `debug_assert` with "D-24
-  holds an operation pushed after a drained one until it completes"; that claim was withdrawn by
-  [D-47](DESIGN-NOTES.md#d-47), and the same file's module header already carries the correction. The
-  assertion stays -- it is sound by the *surviving* half (commit *N+1* carries the drain flag itself, and no
-  operation queued before a drained flush was ever observed completing after it), so only the reason changes.
-  The blast-radius sweep is already done and recorded in the session: 17 matches of the hold-back phrasing
-  across 10 files, every other site correct. Re-run the sweep to confirm before committing, and state the
-  count in the commit message.
+- [x] **M21.1** -- Correct the last site that still asserts [D-24](DESIGN-NOTES.md#d-24)'s withdrawn
+  half: the epoch-order assertion in the epoch-log committer, whose justification cited the hold-back
+  claim [D-47](DESIGN-NOTES.md#d-47) removed.
+  -> [completed 2026-09-20](COMPLETED-CHECKLIST.md#m211)
 
 - [ ] **M21.2** -- Decide how a non-`src` caller waits for a completion, then remove the two unbounded spins
   (`C-2`). [append.rs](examples/epoch_log/append.rs) and [fault_injection.rs](tests/fault_injection.rs) both

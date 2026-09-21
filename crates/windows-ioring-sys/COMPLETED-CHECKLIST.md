@@ -1613,3 +1613,34 @@ Two choices worth recording, because both were places this could have gone wrong
   contradict itself. A one-line adjacent marker says so and points at `M20.1`. The restatement of the
   rule and the sweep across the README, `lib.rs` and `policy.rs` remain `M20.1`, which is coupled to
   `SH-4.12` and must follow it.
+
+## Moved 2026-09-20 23:16:19 -04:00 -- M21.1: the last site asserting D-24's withdrawn half
+
+### <a id="m211"></a>M21.1 -- Correct the last site that still asserts [D-24](DESIGN-NOTES.md#d-24)'s withdrawn half: the epoch-order assertion in the epoch-log committer, whose justification cited the hold-back claim [D-47](DESIGN-NOTES.md#d-47) removed. *(completed 2026-09-20 23:16:19 -04:00)*
+
+The assertion is unchanged, because it was always sound -- just for the other reason. Every commit
+carries `FlushCoverage::CoversPrecedingOperations`, so commit *N* is outstanding when commit *N+1* is
+reached, and D-47's *surviving* half -- no operation queued before a drained flush was ever observed
+completing after it -- is what orders them. The comment now says that, and says explicitly what it does
+not rest on, so a later reader does not "restore" the withdrawn reasoning.
+
+Sweep re-run before committing, as the item required. **21 matches across 14 files**, disposed as:
+
+- **1 violation**, fixed: the justification in [commit.rs](examples/epoch_log/commit.rs).
+- **1 historical site**, marked rather than rewritten:
+  [DESIGN-SESSION-2026-08-28-external-consumer-correspondence.md](design-sessions/DESIGN-SESSION-2026-08-28-external-consumer-correspondence.md)
+  records what the findings became on that date, and glossed D-24 as a stall that "holds operations
+  against unrelated files". A session is a faithful record of its moment, so the gloss stays and a
+  one-line note beside it says which half was later withdrawn.
+- **2 false positives**, left alone: the spikes README ("checked in deliberately rather than held back",
+  about an instrument) and [fault_injection.rs](tests/fault_injection.rs) ("holds it until the completion
+  is claimed", about a token).
+- **17 already correct** -- the decision index, both sides of the crate docs, the README, the stress
+  tests, strategy.rs, and the item's own text.
+
+The item quoted the original sweep as "17 matches across 10 files". Re-running it found more of both,
+and the file count needed care: `rg` groups the two design-session files under a single header, so the
+first reading of its output undercounted by one. Counted with a command rather than by eye.
+
+Verified by running the example in a debug build, where the `debug_assert` is live: it completed, the
+negative control still caught the corrupted record, and all four epochs reported durable in order.

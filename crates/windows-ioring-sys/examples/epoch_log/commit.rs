@@ -153,11 +153,21 @@ impl Committer {
         // that epoch keeps getting `false` -- which is the truthful answer.
         completion.result()?;
 
-        // Commits are barrier-ordered against each other (D-24 holds an
-        // operation pushed after a drained one until it completes), so
-        // completions should arrive in epoch order. `max` rather than plain
-        // assignment anyway: if that expectation is ever wrong, the reported
-        // answer stays correct and only the assertion is noisy.
+        // Commits arrive in epoch order because each one carries the drain
+        // flag *itself*: commit N is still outstanding when commit N+1 is
+        // reached, and D-47's surviving half -- no operation queued before a
+        // drained flush was ever observed completing after it -- is what puts
+        // N first.
+        //
+        // Note what this deliberately does not rest on. D-24 originally
+        // claimed a drained operation holds back what is pushed behind it, and
+        // D-47 withdrew that (see this module's header). The ordering here is
+        // bought by the *later* flush's own flag, never by the earlier one
+        // holding anything, so it survives the withdrawal intact.
+        //
+        // `max` rather than plain assignment anyway: if that expectation is
+        // ever wrong, the reported answer stays correct and only the assertion
+        // is noisy.
         debug_assert!(
             self.durable_through.is_none_or(|through| through < epoch),
             "commit completions should arrive in epoch order"
