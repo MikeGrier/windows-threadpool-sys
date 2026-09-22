@@ -1805,3 +1805,66 @@ condition two ways, and `WAIT` is derived from `WAIT_MS` rather than written twi
 
 Factoring `Lane::classify` out of `Lane::drain` is what let the bounded waits file a completion they
 blocked for without a second copy of the claim-then-check logic.
+
+## Moved 2026-09-21 21:15:12 -04:00 -- M21.6: the API review's four defects
+
+### <a id="m216"></a>M21.6 -- Fix the four defects an independent review of the M21.2 surface found: the timeout mapping, its victim in \un_down\, the INFINITE collision, and the test hole that hid all of them. *(completed 2026-09-21 21:15:12 -04:00)*
+
+Queued and closed in one item because the first two share a root cause and the fourth is the reason
+neither was caught. The surface is unreleased and on a branch, so none of this is a breaking change.
+
+**The defect.** `SubmitIoRing` reports an expired wait as `ERROR_TIMEOUT` (`0x800705B4`), a *failure*
+HRESULT. `RingWait::block` passed it through `check`, so `pop_within` returned `Err` on every real
+timeout and never the `Ok(None)` it documents. All six converted call sites treat `Err` as fatal and
+`Ok(None)` as the timeout signal, so the `ErrorKind::TimedOut` mapping they document was dead code on
+the only path that produces it.
+
+**Its second victim, pre-existing.** `run_down` polls in 50 ms steps with the same `check`, so any
+operation slower than 50 ms made rundown return `Err` with work still outstanding -- and `Drop` then
+asserted and called `CloseIoRing` anyway, which is precisely the "the kernel may still be writing
+through a token's buffer" hazard the function exists to prevent. One `wait_outcome` helper now
+classifies a wait-only `SubmitIoRing` result for both callers, so they cannot disagree again.
+
+The rundown loop is deliberately left unbounded. Every SQE that queues produces exactly one completion
+(M10.2), so it terminates; blocking until that holds is the safe failure, and closing the ring early is
+not.
+
+**The `INFINITE` collision.** A finite bound above ~49.7 days saturated onto `u32::MAX`, which is Win32's
+`INFINITE` -- and `CompletionWait` explicitly invites implementations built on `WaitForMultipleObjects`.
+Clamped to `MAX_WAIT_MS` (one below), and the trait now states that `timeout_ms` is never zero and never
+`INFINITE`, so it can be passed straight to a Win32 wait.
+
+**The contract gap that would have propagated it.** `CompletionWait` never said how to report an expired
+wait, and every Win32 wait reports one as an error -- so any third-party implementation forwarding its
+underlying result would have reproduced the defect exactly. The trait now says an expired bound is
+`Ok(())`, and says why.
+
+**Why no test caught it, which is the finding worth keeping.** The M21.2 tests drive the loop with a wait
+that never enters the kernel. Deterministic, and it leaves the Win32 interaction untested: replacing
+`RingWait::block`'s entire body with an unconditional error left **the whole suite green**.
+
+Closing that needed an operation still pending when the bound expires, and three attempts failed before
+one worked -- each measured, not assumed:
+
+| Attempt | Result |
+|---|---|
+| Buffered read, up to 256 MiB | completion already poppable, 3-5 us |
+| Flush over 512 MiB of dirty cache | 3 us -- the lazy writer had already written it back |
+| Unbuffered read, 256 MiB | 3 us -- **a handle without `FILE_FLAG_OVERLAPPED` is synchronous**, so the read completes inline during submit |
+| Unbuffered **and** overlapped, 64 MiB+ | genuinely pending; the bound expires |
+
+That third row is the general finding: **the crate's existing tests all use synchronous handles**, so
+ring operations complete inline during submit and asynchronous completion is never exercised. That is why
+a counting waiter over the existing flush pattern was reached in 0 of 50 trials.
+
+[tests/bounded_pop.rs](tests/bounded_pop.rs) now covers it with five tests over a 128 MiB unbuffered,
+overlapped read. Each asserts `outstanding() > 0` alongside the expected answer, so a machine fast enough
+to finish the read early fails loudly instead of passing vacuously. Nothing asserts an upper bound on
+elapsed time: Windows' default timer resolution is ~15.6 ms, so a 5 ms bound routinely takes 14-19 ms.
+
+**Sabotage-verified, twice.** Reverting the timeout mapping turns **all five** red. Reproducing the
+review's original mutation -- `block` always failing -- now turns three red, where before it turned none.
+
+The review's fifth finding, that `check-borrow-surface.ps1` is blind to trait methods and to borrows in
+parameter position, is queued as `M21+.1` rather than fixed here: it is a process gap, not a runtime
+defect, and widening the check obliges a borrow-question answer for every entry it newly reports.

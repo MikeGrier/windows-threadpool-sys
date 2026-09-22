@@ -380,6 +380,44 @@ const S_FALSE: windows_sys::core::HRESULT = 1;
 /// waits are bounded and rechecked, not unbounded").
 const RUN_DOWN_POLL_MS: u32 = 50;
 
+/// `HRESULT_FROM_WIN32(ERROR_TIMEOUT)`, which is how `SubmitIoRing` reports
+/// that its wait expired.
+///
+/// Derived from the named Win32 code rather than written as a literal. The
+/// `0x8007_0000` is `HRESULT_FROM_WIN32`'s severity-plus-FACILITY_WIN32
+/// prefix, which that macro ors onto any code of `0xFFFF` or less.
+const WAIT_EXPIRED: windows_sys::core::HRESULT =
+    (0x8007_0000_u32 | windows_sys::Win32::Foundation::ERROR_TIMEOUT) as windows_sys::core::HRESULT;
+
+/// The largest `timeout_ms` a [`CompletionWait`] is ever handed: one below
+/// `u32::MAX`, because `u32::MAX` is Win32's `INFINITE`.
+///
+/// A waiter built on `WaitForSingleObject` or `WaitForMultipleObjects` -- both
+/// of which [`CompletionWait`] explicitly invites -- reads that value as "no
+/// timeout", so saturating onto it would convert a long but finite bound into
+/// an unbounded block, with the pop loop unable to re-check its own deadline
+/// until the wait returned.
+const MAX_WAIT_MS: u32 = u32::MAX - 1;
+
+/// Classify the result of a `SubmitIoRing` call made **only** to wait.
+///
+/// An expired wait is the ordinary outcome of asking to block for a bounded
+/// time, not a failure -- so it is `Ok`, and the caller re-checks whatever it
+/// was waiting for. Everything else is a real error.
+///
+/// This exists because getting it wrong is silent and was: `check(hr)`
+/// straight through turns every timed-out wait into an `Err`, which made
+/// [`IoRing::pop_within`] report a timeout as a failure rather than as the
+/// `Ok(None)` it documents, and made [`IoRing::run_down`] treat any operation
+/// slower than [`RUN_DOWN_POLL_MS`] as fatal. One classification, two callers,
+/// so they cannot disagree again.
+fn wait_outcome(hr: windows_sys::core::HRESULT) -> io::Result<()> {
+    if hr == WAIT_EXPIRED {
+        return Ok(());
+    }
+    check(hr)
+}
+
 /// An owned `IoRing`, closed with `CloseIoRing` on drop.
 ///
 /// Not `Clone`: cloning would give two owners of the same native ring, and
@@ -914,9 +952,26 @@ impl IoRing {
     /// add the typed completion path `Token` consumes. Idempotent: calling it
     /// again once `outstanding() == 0` is a no-op.
     ///
+    /// # A poll that expires is not a failure
+    ///
+    /// Each poll blocks for `RUN_DOWN_POLL_MS` and then reports
+    /// `ERROR_TIMEOUT` if nothing finished in that window, which is the
+    /// ordinary outcome for any operation slower than 50ms. Treating that as
+    /// an error -- which this did until M21.6 -- made `run_down` return `Err`
+    /// with the operation still outstanding, so `Drop` asserted and then
+    /// called `CloseIoRing` anyway: exactly the "the kernel may still be
+    /// writing through a token's buffer" hazard this function exists to
+    /// prevent.
+    ///
+    /// This loop therefore has no overall bound, and that is deliberate.
+    /// **Every SQE that successfully queues produces exactly one completion**
+    /// (M10.2), so it terminates. Blocking until that holds is the safe
+    /// failure mode; closing the ring early is not.
+    ///
     /// # Errors
     ///
-    /// Returns any error from `SubmitIoRing` or `PopIoRingCompletion`.
+    /// Returns any error from `SubmitIoRing` other than an expired wait, or
+    /// from `PopIoRingCompletion`.
     pub fn run_down(&mut self) -> io::Result<()> {
         while self.outstanding > 0 {
             let mut submitted = 0_u32;
@@ -924,7 +979,7 @@ impl IoRing {
             // new SQEs are queued -- this call's only purpose is to wait for
             // and reap already-outstanding completions.
             let hr = unsafe { SubmitIoRing(self.handle, 1, RUN_DOWN_POLL_MS, &raw mut submitted) };
-            check(hr)?;
+            wait_outcome(hr)?;
             self.drain_for_rundown()?;
         }
         Ok(())
@@ -1060,12 +1115,16 @@ impl IoRing {
             if remaining.is_zero() {
                 return Ok(None);
             }
-            // Clamped up to 1ms so a sub-millisecond remainder cannot become
-            // a zero timeout, which `SubmitIoRing` reads as "poll and return"
-            // and would turn the tail of every wait into a spin.
+            // Clamped into `1..=MAX_WAIT_MS`. The low end stops a
+            // sub-millisecond remainder becoming a zero timeout, which
+            // `SubmitIoRing` reads as "poll and return" and would turn the
+            // tail of every wait into a spin. The high end keeps the waiter
+            // from ever being handed `u32::MAX`, which is Win32's `INFINITE`
+            // -- a `WaitForMultipleObjects`-based waiter would block forever
+            // on a bound its caller believed was finite.
             let ms = u32::try_from(remaining.as_millis())
-                .unwrap_or(u32::MAX)
-                .max(1);
+                .unwrap_or(MAX_WAIT_MS)
+                .clamp(1, MAX_WAIT_MS);
             wait.wait(&mut RingWait { ring: self }, ms)?;
         }
     }
@@ -1090,9 +1149,28 @@ pub trait CompletionWait {
     /// What it must not do is block past `timeout_ms`, because that is the
     /// only thing standing between a stuck ring and a hung process.
     ///
+    /// # An expired wait is `Ok(())`, never an error
+    ///
+    /// This is the one part of the contract an implementation can get wrong
+    /// silently, and the crate's own [`SubmitWait`] got it wrong first: Win32
+    /// reports an expired wait as a *failure* code (`ERROR_TIMEOUT` from
+    /// `SubmitIoRing`, `WAIT_TIMEOUT` from the `WaitFor*` family), so
+    /// forwarding the underlying result verbatim turns every ordinary timeout
+    /// into an `Err`. [`IoRing::pop_within`] then reports a timeout as a
+    /// failure rather than as the `Ok(None)` it promises, and every caller
+    /// that matches on `Ok(None)` to detect a timeout stops working.
+    ///
+    /// So: the bound running out is a **successful** wait that happened to
+    /// observe nothing. Report the error only when the wait itself failed.
+    ///
+    /// `timeout_ms` is never zero and never `u32::MAX`, so it can be passed
+    /// straight to a Win32 wait without being mistaken for "poll and return"
+    /// or for `INFINITE`.
+    ///
     /// # Errors
     ///
-    /// Whatever the underlying wait reports. An error ends the pop.
+    /// Whatever the underlying wait reports as a genuine failure. An error
+    /// ends the pop.
     fn wait(&mut self, ring: &mut RingWait<'_>, timeout_ms: u32) -> io::Result<()>;
 }
 
@@ -1111,19 +1189,24 @@ pub struct RingWait<'ring> {
 impl RingWait<'_> {
     /// Block in the ring's own wait for up to `timeout_ms`, queueing nothing.
     ///
-    /// With zero new entries submitted, `SubmitIoRing`'s only effect is to
-    /// wait for an outstanding operation to complete -- the same call
-    /// [`IoRing::run_down`] uses to quiesce.
+    /// With no new entries of its own, `SubmitIoRing`'s effect here is to
+    /// submit whatever is already queued and wait for an outstanding
+    /// operation to complete -- the same call [`IoRing::run_down`] uses to
+    /// quiesce. Note *submit*: a `Build*` that has queued an SQE but not yet
+    /// submitted it will be submitted by this call, which is why the
+    /// narrowing below is about not letting a waiter **build** work, not
+    /// about suppressing submission.
     ///
-    /// Returning does **not** mean a completion is poppable; the timeout may
-    /// simply have expired. That is why the loop that calls this re-checks.
+    /// **An expired wait is `Ok`, not an error.** Returning therefore does
+    /// not mean a completion is poppable -- the bound may simply have run out
+    /// -- which is why the loop that calls this re-checks either way.
     ///
     /// # At least one operation must really be outstanding
     ///
     /// Measured while building this: `SubmitIoRing` answers
-    /// `E_INVALIDARG` (`0x80070057`) -- not a timeout -- when asked to wait for
-    /// a completion the kernel has no pending operation for. A `RingWait` is
-    /// only ever constructed by [`IoRing::pop_within_with`], which checks
+    /// `E_INVALIDARG` (`0x80070057`) -- not a timeout -- when asked to wait
+    /// for a completion the kernel has no pending operation for. A `RingWait`
+    /// is only ever constructed by [`IoRing::pop_within_with`], which checks
     /// [`IoRing::outstanding`] before consulting the wait, so that
     /// precondition holds structurally rather than by the caller remembering
     /// it. A waiter that wants to block some other way is free to ignore this
@@ -1131,14 +1214,14 @@ impl RingWait<'_> {
     ///
     /// # Errors
     ///
-    /// Any error from `SubmitIoRing`.
+    /// Any error from `SubmitIoRing` other than an expired wait.
     pub fn block(&mut self, timeout_ms: u32) -> io::Result<()> {
         let mut submitted = 0_u32;
         // SAFETY: the ring handle is live for the borrow, and the out-pointer
         // is valid. Zero new SQEs are queued, so this call's only effect is
         // to wait for and reap what is already outstanding.
         let hr = unsafe { SubmitIoRing(self.ring.handle, 1, timeout_ms, &raw mut submitted) };
-        check(hr)
+        wait_outcome(hr)
     }
 
     /// Operations submitted but not yet observed complete, as

@@ -9,7 +9,18 @@ review itself was wrong.
 Updated as items complete. Entries are numbered `F-n` and never renumbered. M21 is complete as of
 2026-09-21; F-1 to F-12 are its whole record.
 
-## The headline: a review that reads code produces claims, not findings
+## Headline 2: an independent review found what this pass could not
+
+After M21 closed, a fresh reviewer audited the `M21.2` public surface and found a **High**-severity defect
+in it, plus a pre-existing one of the same root cause, plus the reason neither was caught. All four are
+fixed in `M21.6`; `F-13` to `F-15` are what they taught.
+
+The uncomfortable part is not that the review found defects. It is *which* defect: the author of that API
+had written its tests, sabotage-verified them, and reported the sabotage in the commit message -- and the
+sabotage that mattered (delete the real wait entirely) was never run, because the tests had been
+restructured away from the real wait on purpose. **Self-review could not have found this, and did not.**
+
+## Headline 1: a review that reads code produces claims, not findings
 
 Two of this pass's corrections were to **the review**, not to the code it reviewed. Both were
 reachability claims -- statements about which states a program can enter -- and neither could have
@@ -150,6 +161,57 @@ designed with the other in mind.
 Two independently written helpers, in two files, both called `await_one`, both the same eight lines. The
 name being identical is the tell: it is what people call this operation, which is the argument for the
 operation belonging to the library. It now does.
+### F-13 (M21.6) -- the crate's tests never exercise asynchronous completion
+
+Measured while building a test that needed a genuinely pending operation. **A file handle opened without
+`FILE_FLAG_OVERLAPPED` is synchronous, so a ring operation against it completes inline during submit.**
+Every fixture in this crate's tests, examples and samples opens its handle that way.
+
+The consequences are larger than the item that found it:
+
+| Attempt at a slow operation | Measured |
+|---|---|
+| Buffered read, up to 256 MiB | 3-5 us -- already poppable |
+| Flush over 512 MiB of dirty cache | 3 us -- lazy writer got there first |
+| Unbuffered read, 256 MiB, synchronous handle | 3 us -- completes during submit |
+| Unbuffered **and** overlapped, 64 MiB and up | genuinely pending |
+
+So the suite has been testing the *synchronous* completion path almost exclusively. A counting waiter over
+the existing flush pattern was reached in **0 of 50 trials**.
+
+**Carry forward, and this is the big one for the next pass:** every claim this crate makes about ordering,
+draining, the completion event, and the barrier was measured against operations that may have completed
+inline. D-19, D-23, D-24 and D-47 all deserve re-reading with that in mind. The drain-ordering spike used
+`NO_BUFFERING` and pre-written extents deliberately, so it is probably fine -- but *probably* is exactly
+the word that needs replacing with a measurement.
+
+### F-14 (M21.6) -- deterministic tests and honest tests are not the same thing
+
+The M21.2 tests were restructured onto a wait that never enters the kernel, precisely to make the loop's
+deadline behaviour deterministic. That was reported in the commit message as a virtue. It was also what
+let a real defect through: replacing `RingWait::block`'s whole body with an unconditional error left the
+entire suite green, because nothing ever reached it.
+
+The isolation was correct for what it tested. The error was not adding anything that drove the real thing
+alongside it -- and then describing the isolation as coverage.
+
+**Carry forward:** when a test double is introduced to make something deterministic, the same change owes
+a test that exercises the real implementation. A mutation that deletes the real implementation should fail
+something.
+
+### F-15 (M21.6) -- an error-vs-timeout mapping is a contract, and Win32 gets it backwards
+
+Every Win32 wait reports an expired bound as a *failure* code -- `ERROR_TIMEOUT` from `SubmitIoRing`,
+`WAIT_TIMEOUT` from the `WaitFor*` family. Any wrapper that forwards its underlying result verbatim
+therefore turns an ordinary timeout into an error, and any API that documents "`Ok(None)` means the bound
+expired" is wrong the moment it does so.
+
+`CompletionWait` had not said which way to report it, so every third-party implementation would have
+reproduced the defect independently. It says so now.
+
+**Carry forward:** check every other place this crate converts a Win32 wait result. The `WaitFor*` calls in
+`event_loop.rs` and `model_b_multiplexed.rs` already handle `WAIT_TIMEOUT` explicitly; whether anything
+else forwards a wait result blindly is worth a census.
 ## Open questions this pass raised but did not answer
 
 1. Should `IoRing::drop`'s rundown failure be reported some way that does not abort on unwind
