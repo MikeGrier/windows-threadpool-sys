@@ -78,9 +78,8 @@
 //! and a reader is better served by knowing that than by a ranking that would
 //! not reproduce.
 //!
-//! Getting that result required fixing the harness twice, which is worth
-//! recording because both mistakes are easy to make and neither announces
-//! itself:
+//! Getting that result required fixing the harness three times, which is worth
+//! recording because the mistakes are easy to make and none announces itself:
 //!
 //! - The first version awaited each commit before appending the next epoch.
 //!   That serialises every strategy, so it measured a workload no real log
@@ -93,6 +92,17 @@
 //! - The second version keyed pending commits by `UserData` in one map across
 //!   both rings. Each ring assigns its own sequence, so the two collided and
 //!   half the samples vanished.
+//! - The third submitted **one write per record**, which made the per-record
+//!   submission cost a term every strategy paid equally -- exactly the shape of
+//!   shared constant that can flatten a comparison into "indistinguishable"
+//!   without the underlying claim being true. Both append paths now batch, and
+//!   the confound was measured rather than argued away: twenty runs, ten each
+//!   side, in
+//!   [measurements/2026-09-22-append-batching/](../../measurements/2026-09-22-append-batching/).
+//!   **The conclusion above survives it** -- removing the shared cost left the
+//!   cross-strategy spread inside a single strategy's own run-to-run range.
+//!   What batching did move is commit latency, which is the half of the system
+//!   the device flush does not dominate.
 
 use std::io;
 use std::os::windows::io::RawHandle;
@@ -279,56 +289,73 @@ impl Lane {
         self.in_flight.len()
     }
 
-    /// Compose one record into a free slot and push its write.
+    /// Compose as many records as there are free slots and push them all in
+    /// **one** submission, starting at `sequence` and `offset`.
     ///
-    /// Returns `None` when every slot is busy, which is the caller's cue to
-    /// drain.
-    fn append(
+    /// Returns how many were accepted and how many bytes they occupy. Zero
+    /// accepted is the caller's cue to drain, not an error.
+    ///
+    /// Batched for the reason [`crate::append::Appender::append_batch`] is:
+    /// one `SubmitIoRing` per record made the per-record submission cost a
+    /// term every strategy paid equally, which is exactly the kind of shared
+    /// constant that flattens a comparison.
+    fn append_batch(
         &mut self,
         file: RawHandle,
-        sequence: Sequence,
+        first_sequence: u64,
         epoch: Epoch,
         payload: &[u8],
-        offset: u64,
-    ) -> io::Result<Option<u64>> {
-        let Some(slot) = self.free.pop() else {
-            return Ok(None);
-        };
-        let total = {
-            let bytes = self.arena.get_mut(slot)?;
-            record::encode(bytes, sequence, epoch, payload)?
-        };
-        // Exactly the bytes the record occupies, not the whole slot: writing
-        // the slot's unused tail would put stale bytes in the log and cost
-        // real device bandwidth.
-        let span = RegisteredSpan {
-            buffer_index: slot,
-            offset: 0,
-            len: u32::try_from(total).map_err(|_| {
-                io::Error::new(
-                    io::ErrorKind::InvalidInput,
-                    "record length exceeds u32::MAX",
-                )
-            })?,
-        };
+        first_offset: u64,
+        want: usize,
+    ) -> io::Result<(usize, u64)> {
+        let take = want.min(self.free.len());
+        if take == 0 {
+            return Ok((0, 0));
+        }
+
         let mut batch = Batch::new(&mut self.ring);
-        // SAFETY: `file` outlives every operation pushed here -- the caller
-        // drains to empty before closing it -- and the token is held in
-        // `in_flight` until its completion is observed, so the slot cannot be
-        // refilled underneath the kernel.
-        let token = unsafe {
-            batch.write_registered_raw(
-                file,
-                &self.arena,
-                span,
-                offset,
-                PushOptions::new(),
-                WriteCaching::Cached,
-            )
-        }?;
+        let mut written = 0_u64;
+        let mut accepted = 0;
+        for index in 0..take {
+            let slot = self.free.pop().expect("checked against free.len() above");
+            let sequence = Sequence(first_sequence + index as u64);
+            let total = {
+                let bytes = self.arena.get_mut(slot)?;
+                record::encode(bytes, sequence, epoch, payload)?
+            };
+            // Exactly the bytes the record occupies, not the whole slot:
+            // writing the slot's unused tail would put stale bytes in the log
+            // and cost real device bandwidth.
+            let span = RegisteredSpan {
+                buffer_index: slot,
+                offset: 0,
+                len: u32::try_from(total).map_err(|_| {
+                    io::Error::new(
+                        io::ErrorKind::InvalidInput,
+                        "record length exceeds u32::MAX",
+                    )
+                })?,
+            };
+            // SAFETY: `file` outlives every operation pushed here -- the
+            // caller drains to empty before closing it -- and the token is
+            // held in `in_flight` until its completion is observed, so the
+            // slot cannot be refilled underneath the kernel.
+            let token = unsafe {
+                batch.write_registered_raw(
+                    file,
+                    &self.arena,
+                    span,
+                    first_offset + written,
+                    PushOptions::new(),
+                    WriteCaching::Cached,
+                )
+            }?;
+            self.in_flight.insert(token.id(), (token, slot));
+            written += total as u64;
+            accepted += 1;
+        }
         batch.submit()?;
-        self.in_flight.insert(token.id(), (token, slot));
-        Ok(Some(total as u64))
+        Ok((accepted, written))
     }
 
     /// Push this lane's commit flush and return its `UserData`.
@@ -503,30 +530,34 @@ pub fn run(
             0
         };
 
-        for _ in 0..records_per_epoch {
-            loop {
-                let lane = &mut lanes[lane_index];
-                match lane.append(file, Sequence(sequence), Epoch(epoch), payload, offset)? {
-                    Some(written) => {
-                        offset += written;
-                        sequence += 1;
-                        records += 1;
-                        break;
-                    }
-                    // Every slot is busy. Drain and retry -- the arena
-                    // working as intended, and the pressure a long commit
-                    // makes worse by holding its slots for the whole of its
-                    // own duration. Timed, because this is the cost a
-                    // covering flush imposes on the append path.
-                    None => {
-                        let blocked = Instant::now();
-                        if lane.drain()? == 0 {
-                            Batch::new(&mut lane.ring).submit_and_wait(1, WAIT_MS)?;
-                        }
-                        append_stall += blocked.elapsed();
-                    }
+        let mut pushed_this_epoch = 0;
+        while pushed_this_epoch < records_per_epoch {
+            let lane = &mut lanes[lane_index];
+            let (accepted, written) = lane.append_batch(
+                file,
+                sequence,
+                Epoch(epoch),
+                payload,
+                offset,
+                records_per_epoch - pushed_this_epoch,
+            )?;
+            if accepted == 0 {
+                // Every slot is busy. Drain and retry -- the arena working as
+                // intended, and the pressure a long commit makes worse by
+                // holding its slots for the whole of its own duration. Timed,
+                // because this is the cost a covering flush imposes on the
+                // append path.
+                let blocked = Instant::now();
+                if lane.drain()? == 0 {
+                    Batch::new(&mut lane.ring).submit_and_wait(1, WAIT_MS)?;
                 }
+                append_stall += blocked.elapsed();
+                continue;
             }
+            offset += written;
+            sequence += accepted as u64;
+            records += accepted;
+            pushed_this_epoch += accepted;
         }
 
         // Settle this lane's previous commit *here*, after its next epoch's

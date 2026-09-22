@@ -263,49 +263,30 @@ fn run_log<O: io::Write, E: io::Write>(
     let mut collected = 0usize;
     while appended < RECORDS {
         let epoch = committer.open_epoch();
-        let payload = payload_for(appended);
-        // Whether the append that just happened *closed* an epoch.
-        //
-        // A value each arm must produce, rather than a test written after the
-        // match: closing an epoch is a fact about an append that landed, and
-        // making every arm answer the question keeps that local. Tested after
-        // the match, the condition reads `appended % EPOCH_SIZE == 0`, which
-        // is still true on a `WouldBlock` retry because `appended` did not
-        // move.
-        //
-        // **That retry cannot actually happen here, and the reason is three
-        // blocks away.** The predicate is true at exactly two moments: before
-        // the first append, and immediately after a commit -- and the commit
-        // below waits for durability, whose covering flush retires every
-        // outstanding write, so the arena is empty at both. An append is
-        // therefore never refused at a boundary. Measured rather than
-        // reasoned: instrumenting the retry path to report when the old shape
-        // would have committed fired zero times at `EPOCH_SIZE` of 6, 8, 12,
-        // 16 and 24 -- including the values well past `SLOTS` that were
-        // expected to arm it.
-        //
-        // So this is not a bug fix. It is the difference between a trigger
-        // that is safe because of an invariant nothing states, and one that
-        // cannot fire because of where it is written. The second survives a
-        // reader who changes the commit path; the first is what made the
-        // question take a measurement to answer.
-        let closed_an_epoch = match appender.append(&mut ring, handle, epoch, &payload) {
-            Ok(_sequence) => {
-                appended += 1;
-                appended % EPOCH_SIZE == 0
-            }
+        // Offer the rest of this epoch in one call. The arena decides how many
+        // of them are actually taken, which is why the count comes back rather
+        // than being assumed.
+        let wanted = (EPOCH_SIZE - (appended % EPOCH_SIZE)).min(RECORDS - appended);
+        let payloads: Vec<Vec<u8>> = (appended..appended + wanted).map(payload_for).collect();
+
+        let accepted = appender.append_batch(&mut ring, handle, epoch, &payloads)?;
+        if accepted == 0 {
             // Every slot is in flight. This is the arena working as intended,
             // not an error: pump once to drain and try again.
-            Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
-                let (_, popped) =
-                    events.pump(WAIT_MS, || drain(&mut ring, &mut appender, &mut committer))?;
-                empty_wakes += usize::from(popped == 0);
-                false
-            }
-            Err(error) => return Err(error),
-        };
+            //
+            // `continue` is what keeps the epoch trigger below honest -- it is
+            // reachable only on a pass that appended something, so it cannot
+            // fire on a retry that made no progress. That was M21.3's point,
+            // and batching must not quietly undo it.
+            let (_, popped) =
+                events.pump(WAIT_MS, || drain(&mut ring, &mut appender, &mut committer))?;
+            empty_wakes += usize::from(popped == 0);
+            continue;
+        }
+        appended += accepted;
 
-        if closed_an_epoch {
+        // Reached only when an append landed, per the `continue` above.
+        if appended % EPOCH_SIZE == 0 {
             let closed = committer.commit(&mut ring, handle)?;
             // Before the commit's completion is observed, the honest answer is
             // "no". Asking here rather than after is what makes the difference
@@ -359,18 +340,17 @@ fn run_log<O: io::Write, E: io::Write>(
     // The uncommitted tail: appended, so their writes complete, but no commit
     // ever closes their epoch. The contract therefore promises nothing about
     // them, and the replay pass below is what proves the reader tolerates that.
-    for index in RECORDS..RECORDS + TAIL_RECORDS {
-        let epoch = committer.open_epoch();
-        let payload = payload_for(index);
-        loop {
-            match appender.append(&mut ring, handle, epoch, &payload) {
-                Ok(_) => break,
-                Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
-                    events.pump(WAIT_MS, || drain(&mut ring, &mut appender, &mut committer))?;
-                }
-                Err(error) => return Err(error),
-            }
+    let tail_epoch = committer.open_epoch();
+    let tail: Vec<Vec<u8>> = (RECORDS..RECORDS + TAIL_RECORDS).map(payload_for).collect();
+    let mut tail_appended = 0;
+    while tail_appended < tail.len() {
+        let accepted =
+            appender.append_batch(&mut ring, handle, tail_epoch, &tail[tail_appended..])?;
+        if accepted == 0 {
+            events.pump(WAIT_MS, || drain(&mut ring, &mut appender, &mut committer))?;
+            continue;
         }
+        tail_appended += accepted;
     }
     report.line(format_args!(
         "appended {TAIL_RECORDS} more records into epoch {} and deliberately never committed it",

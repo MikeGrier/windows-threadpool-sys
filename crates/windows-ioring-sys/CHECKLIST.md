@@ -100,6 +100,13 @@ conclusions belong to it until it converges.
   argument after all, sited differently, and it is measurable with the harness that already exists. Unmeasured
   as of that session. Settle this **after** `M22.1`, whose per-record submit is a shared term in the numbers
   being re-read.
+  > **`M22.1` has landed and its measurement is in.** The confound is **not supported**: removing
+  > the per-record submission cost left the cross-strategy spread inside a single strategy's own
+  > run-to-run range, so the "indistinguishable" conclusion survives on the grounds it already had.
+  > Twenty runs, ten each side, in
+  > [measurements/2026-09-22-append-batching/](measurements/2026-09-22-append-batching/). What
+  > remains for this item is the part no number speaks to: whether alternating rings earns its cost
+  > on **correctness and blast-radius** grounds, per `S-2` above.
   *(Numbered M20.6 rather than M20.5 because M20.5 was in flight on a separate branch when this was
   written. That branch was closed unmerged; M20.5 arrives here instead, dissolved -- see above.)*
 
@@ -159,14 +166,10 @@ Its other four findings were fixed in `M21.6`.
 Queued from the same session (findings `E-1` through `E-3`). `M22.1` is sequenced first because `M20.6`
 re-reads numbers that its change moves.
 
-- [ ] **M22.1** -- Batch an epoch's appends into one submission, in both append paths (`E-1`).
-  [`Appender::append`](examples/epoch_log/append.rs) and [`Lane::append`](examples/epoch_log/strategy.rs)
-  each construct a `Batch`, push one write, and submit -- so the sample that exists to teach `Batch` never
-  amortises a submission, which is what `Batch` is for. Two consequences, and the second is why this leads
-  the milestone: the sample teaches the wrong shape, and the fixed per-record submission cost is a shared
-  term in all three strategies of the M14.3 comparison whose headline result is that they are
-  indistinguishable. Whether batching moves that spread is **unmeasured**; measure it, and record the figures
-  in a committed capture the prose links to rather than pasted into two documents.
+- [x] **M22.1** -- Batch an epoch's appends into one submission in both append paths, and measure
+  whether the per-record submission cost was flattening the strategy comparison. It was not:
+  throughput did not move out of the noise, though commit p50 did.
+  -> [completed 2026-09-22](COMPLETED-CHECKLIST.md#m221)
 
 - [ ] **M22.2** -- Collapse the two free-slot implementations to one (`E-2`).
   [`Appender::free_slot`](examples/epoch_log/append.rs) scans the arena calling `outstanding()` per slot

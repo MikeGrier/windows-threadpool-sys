@@ -132,92 +132,118 @@ impl Appender {
         self.in_flight.len()
     }
 
-    /// A slot with no operation outstanding against it, or `None` if every
-    /// slot is busy.
+    /// Slots with no operation outstanding against them, at most `want` of
+    /// them.
     ///
     /// Asked rather than assumed: the arena is the reason an append can block
-    /// at all, and a caller that gets `None` should drain a completion and try
-    /// again rather than grow the arena.
-    fn free_slot(&self) -> Option<u32> {
-        (0..self.arena.len()).find(|&slot| self.arena.outstanding(slot) == Some(0))
+    /// at all, and a caller that gets fewer than it asked for should drain
+    /// completions rather than grow the arena.
+    fn free_slots(&self, want: usize) -> Vec<u32> {
+        (0..self.arena.len())
+            .filter(|&slot| self.arena.outstanding(slot) == Some(0))
+            .take(want)
+            .collect()
     }
 
-    /// Compose `payload` into a free arena slot and push the write.
+    /// Compose as many of `payloads` as there are free arena slots, and push
+    /// them all in **one** submission.
     ///
-    /// Returns the record's [`Sequence`], which is its identity for the rest
-    /// of its life -- the epoch bookkeeping in M13.3 keys off it.
+    /// Returns how many were accepted. **Zero is not an error**: it means
+    /// every slot still has an append in flight, and the caller must drain a
+    /// completion before trying again.
+    ///
+    /// # Why this is a batch, and why that is the point of the sample
+    ///
+    /// This used to push one write and submit it, per record. That is a
+    /// working log and a misleading example: `Batch` exists so that many
+    /// submission-queue entries cost one `SubmitIoRing`, and a sample whose
+    /// job is to teach `Batch` should not pay that call per record.
+    ///
+    /// The batching is bounded by the arena rather than by the caller's list,
+    /// which is what keeps the two halves of an append honest: a slot is
+    /// composed into only while the kernel is not reading it, and it stays
+    /// spoken for until its completion is observed. So the natural batch is
+    /// "everything that fits right now", not "everything the caller has".
     ///
     /// # Errors
     ///
-    /// [`io::ErrorKind::WouldBlock`] if every arena slot is still in flight:
-    /// the caller must drain a completion before appending again. Otherwise
-    /// any error from encoding the record (notably if it does not fit a slot)
-    /// or from the push.
-    pub fn append(
+    /// Any error from encoding a record (notably if it does not fit a slot) or
+    /// from a push. A failure partway leaves the records already pushed
+    /// accounted for and in flight -- `Batch` submits what it queued when it
+    /// drops (D-5), so they are real operations, not a rollback.
+    pub fn append_batch(
         &mut self,
         ring: &mut IoRing,
         file: RawHandle,
         epoch: Epoch,
-        payload: &[u8],
-    ) -> io::Result<Sequence> {
-        let slot = self.free_slot().ok_or_else(|| {
-            io::Error::new(
-                io::ErrorKind::WouldBlock,
-                "every arena slot has an append in flight; drain a completion first",
-            )
-        })?;
-        let sequence = Sequence(self.next_sequence);
+        payloads: &[Vec<u8>],
+    ) -> io::Result<usize> {
+        let slots = self.free_slots(payloads.len());
+        if slots.is_empty() {
+            return Ok(0);
+        }
 
-        // Step 1: compose. `get_mut` is what makes this possible at all, and
-        // it is also the check that the kernel is not reading this slot.
-        //
-        // The epoch is stamped into the record here, at the moment the append
-        // is accepted -- which is exactly when the contract says a record's
-        // epoch is decided, and never changes afterwards.
-        let total = record::encode(self.arena.get_mut(slot)?, sequence, epoch, payload)?;
-
-        // Step 2: push, over exactly the bytes the record occupies rather than
-        // the whole slot -- writing the slot's unused tail would put stale
-        // bytes in the log and cost real device bandwidth.
-        let span = RegisteredSpan {
-            buffer_index: slot,
-            offset: 0,
-            len: u32::try_from(total).map_err(|_| {
-                io::Error::new(
-                    io::ErrorKind::InvalidInput,
-                    "record length exceeds u32::MAX",
-                )
-            })?,
-        };
-        let offset = self.next_offset;
         let mut batch = Batch::new(ring);
-        // SAFETY: `file` is the log's own handle and outlives every operation
-        // pushed here -- the log drains to empty before it closes. The token
-        // is held in `in_flight` until its completion is observed, so the
-        // arena slot it names cannot be refilled underneath the kernel.
-        //
-        // `PushOptions::new()` deliberately carries no barrier: records stream
-        // unordered within an epoch, exactly as the contract says, and the
-        // ordering that matters is bought once by the epoch's covering flush.
-        // `WriteCaching::Cached` for the same reason -- write-through here
-        // would shape latency without changing what is durable.
-        let token = unsafe {
-            batch.write_registered_raw(
-                file,
-                &self.arena,
-                span,
-                offset,
-                PushOptions::new(),
-                WriteCaching::Cached,
-            )
-        }?;
-        batch.submit()?;
+        let mut accepted = 0;
+        for (&slot, payload) in slots.iter().zip(payloads) {
+            let sequence = Sequence(self.next_sequence);
 
-        self.contract.observe_push(token.id());
-        self.in_flight.insert(token.id(), InFlight { token, slot });
-        self.next_sequence += 1;
-        self.next_offset += total as u64;
-        Ok(sequence)
+            // Compose. `get_mut` is what makes this possible at all, and it is
+            // also the check that the kernel is not reading this slot.
+            //
+            // The epoch is stamped in here, at the moment the append is
+            // accepted -- which is exactly when the contract says a record's
+            // epoch is decided, and never changes afterwards.
+            let total = record::encode(self.arena.get_mut(slot)?, sequence, epoch, payload)?;
+
+            // Push over exactly the bytes the record occupies rather than the
+            // whole slot: writing the slot's unused tail would put stale bytes
+            // in the log and cost real device bandwidth.
+            let span = RegisteredSpan {
+                buffer_index: slot,
+                offset: 0,
+                len: u32::try_from(total).map_err(|_| {
+                    io::Error::new(
+                        io::ErrorKind::InvalidInput,
+                        "record length exceeds u32::MAX",
+                    )
+                })?,
+            };
+            let offset = self.next_offset;
+            // SAFETY: `file` is the log's own handle and outlives every
+            // operation pushed here -- the log drains to empty before it
+            // closes. The token is held in `in_flight` until its completion is
+            // observed, so the arena slot it names cannot be refilled
+            // underneath the kernel.
+            //
+            // `PushOptions::new()` deliberately carries no barrier: records
+            // stream unordered within an epoch, exactly as the contract says,
+            // and the ordering that matters is bought once by the epoch's
+            // covering flush. `WriteCaching::Cached` for the same reason --
+            // write-through here would shape latency without changing what is
+            // durable.
+            let token = unsafe {
+                batch.write_registered_raw(
+                    file,
+                    &self.arena,
+                    span,
+                    offset,
+                    PushOptions::new(),
+                    WriteCaching::Cached,
+                )
+            }?;
+
+            self.contract.observe_push(token.id());
+            self.in_flight.insert(token.id(), InFlight { token, slot });
+            self.next_sequence += 1;
+            self.next_offset += total as u64;
+            accepted += 1;
+        }
+
+        // One submission for the whole batch. This is the line the item
+        // existed for.
+        batch.submit()?;
+        Ok(accepted)
     }
 
     /// Account for one popped completion that belongs to an append.

@@ -1,0 +1,6 @@
+commit strategies: 32 epochs of 64 records, each run replayed
+  these numbers describe THIS machine and THIS device. They are printed rather than quoted in the docs because quoting ours would be misleading.
+  covering-flush        76770 rec/s  commit p50  425 us  p99  528 us  max  528 us  append stall 1339 us  -- pays a long, ring-wide wait at every commit
+  host-sequenced        58933 rec/s  commit p50  422 us  p99  699 us  max  699 us  append stall 1157 us  -- pays a host round trip at every epoch boundary
+  alternating-rings     61743 rec/s  commit p50 1508 us  p99 2051 us  max 2051 us  append stall 1633 us  -- pays the arena registered on both rings, permanently
+  spread across strategies: 1.30x. Run this twice: if the run-to-run spread of one strategy is the same size, the choice is dominated by the device flush that all three pay once per epoch.

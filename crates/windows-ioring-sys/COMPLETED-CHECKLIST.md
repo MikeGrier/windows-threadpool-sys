@@ -1950,3 +1950,46 @@ Also 11x faster (0.20s against 2.26s), with no 128 MiB fixtures.
 
 The `UNRESOLVED-TEST-FAILURES.md` entry moved to
 [RESOLVED-TEST-FAILURES.md](RESOLVED-TEST-FAILURES.md) in this commit, per the append-only rule.
+
+## Moved 2026-09-22 15:54:53 -04:00 -- M22.1: batching the appends, and the confound it was meant to test
+
+### <a id="m221"></a>M22.1 -- Batch an epoch's appends into one submission in both append paths, and measure whether the per-record submission cost was flattening the strategy comparison. *(completed 2026-09-22 15:54:53 -04:00)*
+
+`Appender::append_batch` and `Lane::append_batch` replace the single-record pushes. Both compose as
+many records as there are free arena slots and submit once, so the arena rather than the caller's
+list decides the batch size -- which is what keeps the two halves of an append honest, since a slot
+is composed into only while the kernel is not reading it. With eight slots, an epoch of 64 records
+goes from 64 submissions to 8.
+
+**The teaching defect is the smaller half.** A sample whose job is to teach `Batch` was paying one
+`SubmitIoRing` per record, which is the one thing `Batch` exists to avoid.
+
+**The measurement was the point, and it returned a negative result.** Finding `E-1` raised the
+possibility that the per-record cost was a term every strategy paid equally, and therefore a shared
+constant capable of flattening the three-way comparison into "indistinguishable" without that being
+true. Twenty runs -- ten each side, taken in one sitting by stashing the change so both sets came
+from the same machine and build -- are kept in
+[measurements/2026-09-22-append-batching/](measurements/2026-09-22-append-batching/).
+
+Throughput did not move in a way that can be distinguished from noise: median records/sec shifted by
+1-5% while a single strategy's run-to-run range spans 1.17x to 1.57x. The cross-strategy spread did
+not shrink, and stayed at or below one strategy's own range -- which is the sample's own stated test.
+**So `E-1`'s hypothesis is not supported, and the existing conclusion survives a confound raised
+specifically against it.**
+
+What did move is commit p50, and it is the one figure here that separates: for `covering-flush` the
+ten before-values and ten after-values barely overlap. That is the expected shape rather than a
+surprise -- batching removes seven of every eight submissions from the append path, shortening the
+interval between the last append and the flush being reached. Throughput is bound by the device
+flush and does not move; latency is not, and does.
+
+The figures live in the capture and are **linked** from `strategy.rs` and from `M20.6` rather than
+pasted into either, per the rule that a measurement has one home.
+
+**`M21.3`'s property was preserved deliberately.** Batching changes the append loop, and the naive
+rewrite would have reintroduced a commit trigger reachable on a pass that appended nothing. The loop
+`continue`s when zero records are accepted, so the epoch check is reachable only after progress --
+the same structural guarantee, stated in the same place.
+
+**Unblocks `M20.6`**, whose remaining question is the part no number speaks to: whether alternating
+rings earns its cost on correctness and blast-radius grounds.
