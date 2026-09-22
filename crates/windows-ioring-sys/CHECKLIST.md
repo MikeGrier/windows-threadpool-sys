@@ -189,6 +189,80 @@ re-reads numbers that its change moves.
   was a scheduling preference rather than a blocker.
   -> [completed 2026-09-21](COMPLETED-CHECKLIST.md#m22plus1)
 
+## M24 -- Make the unit suite hermetic
+
+The defect and its classification are [D-49](DESIGN-NOTES.md#d-49); the remedies and their costs are
+[DESIGN-SESSION-2026-09-21-hermetic-unit-tests.md](design-sessions/DESIGN-SESSION-2026-09-21-hermetic-unit-tests.md).
+**63 of 131 lib tests open a real kernel ring**, so `cargo test --lib` does not mean what its name
+implies, and the repository's own Quality rule already classifies an operating-system API as an
+external boundary.
+
+**Sequencing is the open question, not whether.** The cost of waiting is that it compounds: every
+milestone that adds tests adds to the pile to be migrated, and `M22` is a testing-heavy milestone.
+Against that, `M24.1` is an evaluation whose answer could invalidate `M24.4`, so there is no value in
+starting the build before it concludes.
+
+**`M24.1` gates everything after it.** `M24.2` and `M24.3` are safe under any outcome and could be
+taken first if the evaluation is deferred; `M24.4` exists only if `M24.1` says it may.
+
+- [ ] **M24.1** -- Settle whether a fake whose assertions are **shared** with the kernel escapes the
+  objection in [Two techniques deliberately rejected](DESIGN-NOTES.md#two-techniques-deliberately-rejected).
+  That rejection refuses a mock because it "would have manufactured evidence" a kernel-behaviour bug
+  was absent, and this pass added three fresh confirmations of it -- `ERROR_TIMEOUT` on an expired
+  wait, `E_INVALIDARG` on a wait with nothing pending, and inline completion on a synchronous handle,
+  each of which a hand-written fake would have got wrong.
+  **Settle it by demonstration, not by argument**, because the argument is exactly what is in doubt.
+  Build a throwaway fake with a *deliberately wrong* accounting model (decrement `outstanding` in the
+  wrong place) and confirm the shared suite turns red on the fake side while the kernel side stays
+  green. Then do the converse: give the fake a wrong *Windows* belief and confirm the shared suite
+  does **not** catch it -- which is the expected result, and is why the bright line in
+  [D-49](DESIGN-NOTES.md#d-49) exists rather than being a hedge. A co-tested peer is only defensible
+  if both halves behave as predicted.
+  Conclude by amending that decision or recording that it stands, and by checking `M24.4` off as
+  withdrawn if it stands.
+
+- [ ] **M24.2** -- Extract the handle-free accounting into its own type, composed by `IoRing`.
+  Measured as separable: `RingId::next()` is a process-global `AtomicU64` that never touches a
+  handle, and `IoRing`'s ten fields split evenly -- `ring_id`, `next_user_data`, `outstanding`,
+  `registered_files` and `registered_buffers` carry no kernel state, against `handle`,
+  `completion_event`, `registered_buffer_infos`, `version` and `supported_ops` which do.
+  This is the remedy that needs **no fake, no feature gate and no widened visibility**: most of the
+  38 lib tests that currently reach crate-private items become hermetic *in place*, because what
+  they were always testing is bookkeeping rather than the kernel. Safe under any outcome of `M24.1`.
+  Pure refactor of internals; the public surface does not move.
+
+- [ ] **M24.3** -- Relocate the 25 lib tests that open a ring but use **only public API** into
+  `tests/`. A pure relocation, and it carries the split provenance trail the repository requires of
+  any move: `Split-Source` / `Split-Into` trailers, and a `git blame -w -C1 -C1` check that the moved
+  lines still trace to their original commits rather than to the move.
+
+- [ ] **M24.4** -- **Conditional on `M24.1`.** Build the shared conformance suite: bookkeeping tests
+  written once as generic functions, run against a hermetic fake from `src/` and against the real
+  ring from `tests/`. The suite must be reachable from both, so it is a `pub` module behind a
+  non-default `test-util` feature -- the pattern `windows-file-watcher` already ships.
+  **Accept the consequence explicitly rather than discovering it:** feature-gated code is invisible
+  to a default `cargo test` and to `cargo mutants` without `--all-features`, and this repository has
+  measured what that does -- a `windows-file-watcher` sweep reported 247 survivors of which 147 were
+  in gated modules. CI's `--all-features` job must cover the suite, and any mutation run must pass
+  the flag.
+
+- [ ] **M24.5** -- Put the rule on a rung, so it cannot regress. After `M24.2` and `M24.3` the lib
+  tests should construct no ring at all; assert that mechanically rather than by review -- a check
+  that no `src/**/tests.rs` constructs an `IoRing`, wired into CI beside
+  [check-borrow-surface.ps1](../../tools/check-borrow-surface.ps1).
+  **Verify it in both directions**, per the bidirectional-guard rule: it must fire on a lib test that
+  opens a ring, and stay silent on one that does not. A check that cannot fire is decoration, which
+  `M21+.1` established this repository can ship without noticing.
+
+- [ ] **M24.6** -- Sweep what this milestone makes false. The testing-strategy section of
+  [DESIGN-NOTES.md](DESIGN-NOTES.md#testing-strategy-m185) describes which population each technique
+  reaches and was written when every lib test opened a ring; `M21.6`'s archive entry says the M21.2
+  tests "drive the loop with a wait that never enters the kernel", which stops being the notable
+  exception once the suite is hermetic; and the
+  [2026-09-21 remediation ledger](design-sessions/DESIGN-SESSION-2026-09-21-m21-remediation-findings.md)
+  carries `F-13`, whose "the crate's tests never exercise asynchronous completion" is a claim about
+  the structure this milestone changes. Count the restatements with a command, not by eye.
+
 ## M23 -- The ring as a durability domain, and storage affinity
 
 Queued from the same session (findings `S-1` and `S-3`). `S-2` is an addendum to `M20.6` rather than an item

@@ -1,6 +1,10 @@
 # Design session 2026-09-21: hermetic unit tests without losing unit-level coverage
 
-**Status: exploratory. Nothing is decided and nothing is queued.** This records a question, the
+**Status: concluded 2026-09-21.** The engineer's verdict was that the current design is incorrect
+and the question is only when to fix it, so the defect and its classification are recorded as
+[D-49](../DESIGN-NOTES.md#d-49) and the work is scheduled as `M24` in [CHECKLIST.md](../CHECKLIST.md).
+The *remedy* is still open, gated on `M24.1`. What follows is the record as written before that
+verdict; the proposal below is the input to `M24.1`, not its answer. This records a question, the
 measurements taken to answer it, and a proposal, so that a decision can be made against evidence
 rather than against recollection. If the proposal is adopted it becomes a decision in
 [DESIGN-NOTES.md](../DESIGN-NOTES.md) and checklist items in [CHECKLIST.md](../CHECKLIST.md), in the
@@ -211,9 +215,14 @@ remains and genuinely benefits from running against both backends.
    behaviour has a hermetic test" is not, and should not be -- the six items on the bright line above
    must stay kernel-only.
 
-## What is deliberately not queued
+## What was deliberately not queued, and what changed
 
-No checklist items, and no decision recorded. The proposal changes a decision that is currently
-written down and well argued, and the evidence for amending it -- the co-tested-peer distinction --
-is an argument rather than a measurement. It should be accepted or rejected explicitly before any
-code moves.
+As first written this recorded no decision and queued no work, on the grounds that the proposal
+changes a decision that is currently written down and well argued, and that the evidence for
+amending it -- the co-tested-peer distinction -- is an argument rather than a measurement.
+
+The engineer settled the part that did not depend on that argument: **the current structure is
+incorrect regardless of which remedy is chosen**, so the defect is now [D-49](../DESIGN-NOTES.md#d-49)
+and the work is `M24`. The co-tested-peer question survives untouched as `M24.1`, which is
+required to settle it **by demonstration rather than by argument** -- precisely because an argument
+is what is in doubt.
