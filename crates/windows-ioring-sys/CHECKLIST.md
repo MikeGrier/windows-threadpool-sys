@@ -147,22 +147,12 @@ what it corrected was the coupling rather than a latent bug. The archived entry 
 
 Queued from the review of the `M21.2` surface, recorded in
 [DESIGN-SESSION-2026-09-21-m21-remediation-findings.md](design-sessions/DESIGN-SESSION-2026-09-21-m21-remediation-findings.md).
-Its other four findings were fixed in `M21.6`; this one is a process gap rather than a runtime defect, and
-is `M21+` because it is gated on nothing and belongs to whoever next touches the check.
+Its other four findings were fixed in `M21.6`.
 
-- [ ] **M21+.1** -- Teach [check-borrow-surface.ps1](../../tools/check-borrow-surface.ps1) the two shapes it
-  is blind to. **Verified by experiment, both directions:** a `pub trait` method returning `&[u8]` and a
-  `pub fn` taking `&mut RingWait<'_>` both pass silently, while a `pub fn` *returning* `&[u8]` is caught --
-  so the gap is real and the check still works for what it does cover. The cause is two lines: the
-  `^\s*pub...fn\s` filter never matches a trait item (they are declared `fn`, not `pub fn`), and only the
-  text after the last `->` is examined, so a borrow in *parameter* position is invisible.
-  `CompletionWait::wait` is exactly that shape, and it hands a lifetime-carrying wrapper to arbitrary safe
-  code the crate has never seen -- a wider audience than a return value handed to a known caller. The
-  author answered the borrow question by hand; the mechanism that exists so diligence is not required did
-  not fire. Match `^\s*(unsafe\s+)?fn\s` inside a `pub trait` block, scan the parameter list for `&` and
-  `'` as well, and record entries so returns and parameters stay distinguishable. Per
-  [DESIGN-INSTRUCTIONS.md](DESIGN-INSTRUCTIONS.md), widening the check will add entries: answer the borrow
-  question for each before running `-Update`, not after.
+- [x] **M21+.1** -- Teach [check-borrow-surface.ps1](../../tools/check-borrow-surface.ps1) the two shapes
+  it was blind to: methods of a `pub trait`, and borrows in parameter position. Four entries appeared, one
+  of them predating the widening; the probes also found a latent bug in the checker itself.
+  -> [completed 2026-09-21](COMPLETED-CHECKLIST.md#m21plus1)
 
 ## M22 -- Epoch-log review: submission and arena
 

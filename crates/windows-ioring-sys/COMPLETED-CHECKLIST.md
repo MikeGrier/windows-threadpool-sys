@@ -1868,3 +1868,48 @@ review's original mutation -- `block` always failing -- now turns three red, whe
 The review's fifth finding, that `check-borrow-surface.ps1` is blind to trait methods and to borrows in
 parameter position, is queued as `M21+.1` rather than fixed here: it is a process gap, not a runtime
 defect, and widening the check obliges a borrow-question answer for every entry it newly reports.
+
+## Moved 2026-09-21 21:23:24 -04:00 -- M21+.1: the borrow-surface check learns two shapes
+
+### <a id="m21plus1"></a>M21+.1 -- Teach [check-borrow-surface.ps1](../../tools/check-borrow-surface.ps1) the two shapes it was blind to: methods of a \pub trait\, and borrows in parameter position. *(completed 2026-09-21 21:23:24 -04:00)*
+
+The check inspected only the text after the last `->` on lines matching `pub fn`. Trait items are
+declared `fn`, not `pub fn`, so nothing inside any `pub trait` was ever examined; and a borrow-carrying
+type in *parameter* position was invisible in any function. `CompletionWait::wait` is both at once.
+
+**Four entries appeared, and one of them predates the widening by months.**
+`IoRingErrorExt::as_ioring_error` returns `Option<&IoRingError>` and had simply never been inventoried --
+the blind spot made concrete rather than a new risk. The other three are `CompletionWait::wait`,
+`Batch::new` and `EventDelivery::new`, the last two carrying an explicit lifetime in a parameter.
+The borrow question is answered for all four in
+[DESIGN-NOTES.md](DESIGN-NOTES.md#borrow-surface-audit-m21plus1), before the inventory was regenerated,
+as [DESIGN-INSTRUCTIONS.md](DESIGN-INSTRUCTIONS.md) requires. None is a hole.
+
+**A plain `&T` parameter is deliberately not reported.** Reporting every method that borrows something
+would list the whole crate and mean nothing. Only an *explicit lifetime* in parameter position counts --
+the borrow-carrying wrapper whose lifetime the crate chose, not a reference the caller lent us. That is a
+heuristic, and the archived audit says so: it would miss a `&dyn Trait` parameter carrying no named
+lifetime.
+
+**Verified by five probes, restored afterwards** -- and the negative control is the one that matters,
+because a check that fires on everything is as useless as one that fires on nothing:
+
+| Probe | Expected | Result |
+|---|---|---|
+| `pub fn` returning `&[u8]` (control, the old rule) | caught | caught |
+| `pub trait` method returning `&[u8]` | **now caught** | caught |
+| `pub fn` taking `&mut RingWait<->` | **now caught** | caught |
+| `pub fn` taking a plain `&Completion` | **silent** | silent, exit 0 |
+| `pub trait` with a default body plus a borrow-returning sibling | only the sibling | only the sibling |
+
+**The probes found a latent bug in the checker itself**, which is the argument for running them rather
+than reasoning about the regex. A one-line body -- `pub fn f() -> &[u8] { &[] }` -- never satisfied the
+"line ends with `{`" test, so the signature accumulator ran past the end of the file. The old script did
+not crash on it only because it never indexed the lines again afterwards; it silently swallowed the
+following lines instead. Signature termination is now "the accumulated text contains a `{`", and the
+return type is truncated at that brace.
+
+Also swept while here: the script header and its failure message both said **three** shipped defects of
+this shape and listed D-35, D-36, D-43. It is four, and has been since D-45.
+[M19.3](COMPLETED-CHECKLIST.md) swept that count through `DESIGN-INSTRUCTIONS.md` and missed this file,
+which is the restatement-drift pattern landing on the very tool built to stop a different one.

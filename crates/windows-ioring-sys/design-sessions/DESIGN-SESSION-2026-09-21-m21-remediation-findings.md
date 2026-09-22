@@ -212,6 +212,37 @@ reproduced the defect independently. It says so now.
 **Carry forward:** check every other place this crate converts a Win32 wait result. The `WaitFor*` calls in
 `event_loop.rs` and `model_b_multiplexed.rs` already handle `WAIT_TIMEOUT` explicitly; whether anything
 else forwards a wait result blindly is worth a census.
+### F-16 (M21+.1) -- the checker had a latent bug that only a probe could find
+
+Widening `check-borrow-surface.ps1` was verified with five probes rather than by re-reading the regex, and
+one of them crashed it: a one-line body -- `pub fn f() -> &[u8] { &[] }` -- never satisfied the "line ends
+with `{`" test, so the signature accumulator ran off the end of the file. The *old* script did not crash on
+that shape only because it never indexed the lines again afterwards; it silently swallowed the following
+lines instead, which means it could have been skipping real signatures all along.
+
+**Carry forward:** a checker is code, and the argument for testing it is the same as for anything else. The
+negative control matters most -- a check that fires on everything is as useless as one that fires on
+nothing, and only the plain-`&T` probe establishes that this one still discriminates.
+
+### F-17 (M21+.1) -- the blind spot had already swallowed something real
+
+The widened check immediately reported `IoRingErrorExt::as_ioring_error -> Option<&IoRingError>`, a public
+trait method returning a borrow that predates the review by months and had never been inventoried. It is
+not a hole -- the borrow is of the `io::Error` the caller owns -- but it was never *put to anyone*, which
+is the whole function of the inventory.
+
+**Carry forward:** when a check is found to be narrow, assume it has already been narrow for a while and
+look at what it let past, rather than only at the change that exposed it.
+
+### F-18 (M21+.1) -- the count sweep missed the tool built to stop drift
+
+The script's header and its failure message both said **three** shipped defects of this shape, listing
+D-35, D-36 and D-43. It has been four since D-45. `M19.3` explicitly swept that count -- its archive records
+"that file said 'three defects' in four places and is now four" -- and swept `DESIGN-INSTRUCTIONS.md` while
+missing `check-borrow-surface.ps1`.
+
+**Carry forward:** the sweep looked at documentation and not at tooling. A `.ps1` file carrying prose is
+still prose, and the next census of any restated fact should include `tools/`.
 ## Open questions this pass raised but did not answer
 
 1. Should `IoRing::drop`'s rundown failure be reported some way that does not abort on unwind

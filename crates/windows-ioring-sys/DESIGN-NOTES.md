@@ -787,6 +787,35 @@ That is the pattern worth carrying forward into M18.2's recurring rule -- the
 question that finds these is not "is this correct?" but "what else does this
 type allow?"
 
+### <a id="borrow-surface-audit-m21plus1"></a>Four more items, surfaced by widening the check (M21+.1)
+
+The audit above is a point-in-time pass, and nineteen was its count. These four
+are not corrections to it; they are items the *check* could not see, and so
+never put to anyone. A 2026-09-21 review of the `M21.2` surface found that
+[check-borrow-surface.ps1](../../tools/check-borrow-surface.ps1) inspected only
+the text after the last `->` on lines matching `pub fn`, which leaves two shapes
+invisible: **a method of a `pub trait`** (declared `fn`, not `pub fn`) and **a
+borrow-carrying type in parameter position**. Widening it reported exactly four
+entries, answered here before the inventory was regenerated.
+
+Worth stating plainly: the check was not wrong about what it covered, and the
+control still passes -- a `pub fn` returning `&[u8]` was caught throughout. It
+was narrow, and nothing said so.
+
+| Item | Shape the old check missed | What safe code may do with it | Finding |
+|---|---|---|---|
+| `IoRingErrorExt::as_ioring_error` | trait method, borrow **returned** | Read `code`, `name`, `condition` through a shared reference. | **No hole, and it is the honest catch of the four.** This predates the widening by months and was simply never inventoried, which is the blind spot made concrete rather than a new risk. The borrow is of the `io::Error` the caller already owns -- not of ring state, not of anything the kernel holds -- and `&IoRingError` permits reads only. |
+| `CompletionWait::wait` | trait method, borrow **parameter** | Call `RingWait::block` and `RingWait::outstanding`, and nothing else. | **No hole, and the narrowing is the reason.** This is the wider exposure of the two directions: the wrapper goes to arbitrary safe code implementing the trait, not to a known caller. `RingWait` exposes no pop -- one would consume the completion its own caller is waiting for -- and no way to build work. It cannot be retained: the `'ring` lifetime is fresh per call and unconstrained by `Self`. Nothing else can touch the `IoRing` while it is alive, because the pop loop holds `&mut self` across the call. Handing out a bare `&mut IoRing` here would have been [D-43](#d-43) again. |
+| `Batch::new` | borrow **parameter** with an explicit lifetime | Nothing it could not already do: the caller supplied the `&mut IoRing`. | **No hole; this is [D-5](#d-5)'s mechanism, not a leak of one.** The exclusive borrow is what makes two concurrent batches fail to compile, which is the point of taking it. The borrow travels *into* the crate and is released when the `Batch` drops. |
+| `EventDelivery::new` | borrow **parameter** with an explicit lifetime | Nothing; the callback environment is forwarded to `ThreadpoolWait::new` and not retained. | **No hole.** `EventDelivery` stores only `wait` and `ring`, so the `&mut CallbackEnviron<'_>` does not outlive the call. |
+
+**A plain `&T` parameter is deliberately not reported**, or the inventory would
+list every method in the crate and say nothing. Lending a reference *to* a
+callee is the caller's business; what this defect class is about is a
+borrow-carrying wrapper whose lifetime the crate chose. The explicit-lifetime
+test is what separates the two, and it is a heuristic -- it would miss a
+hypothetical `&dyn Trait` parameter carrying no named lifetime.
+
 ## <a id="testing-strategy-m185"></a>Testing strategy (M18.5)
 
 Eight defects came out of the 0.1.x line and the M11-M14 branch. M15 through
