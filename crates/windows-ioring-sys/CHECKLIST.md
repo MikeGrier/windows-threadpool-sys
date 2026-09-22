@@ -190,19 +190,7 @@ re-reads numbers that its change moves.
   was a scheduling preference rather than a blocker.
   -> [completed 2026-09-21](COMPLETED-CHECKLIST.md#m22plus1)
 
-- [ ] **M22+.2** -- Decide whether "which slots are quiet" belongs on
-  [`RegisteredBuffers`](src/batch.rs) rather than in the sample. `M22.2` collapsed the epoch-log's two
-  free-slot implementations into one example-local function, which is all that item asked for. But the
-  evidence points a layer down: `outstanding()`'s own rustdoc names this exact use ("lets a caller pick a
-  quiet buffer ... the normal shape for an arena cycling through its slots"), and **both** in-repo
-  consumers hand-rolled the loop anyway -- one of them with a slot leak. A crate that documents a pattern
-  and then makes every caller re-implement it is inviting the copy it warns about. An iterator
-  (`fn quiet(&self) -> impl Iterator<Item = u32> + '_`) is the shape; the caller collects, because a
-  borrow of the arena cannot outlive the `get_mut` that follows.
-  **Deferred, with the blocker named rather than "no consumer":** it is a public API addition to a
-  published crate, so it needs a lib test, and a `RegisteredBuffers` can only be obtained from a real
-  registration -- so that test opens a kernel ring and joins exactly the pile `M24` exists to drain. Worth
-  doing *after* `M24` settles how such a test is written, not before.
+
 
 ## M24 -- Make the unit suite hermetic
 
@@ -329,6 +317,42 @@ here. `M23.2` builds on the mechanism correction `M20.4` carried, which has land
   sample do this" but the narrower **library** question: does the crate offer a *declared* storage node as
   an input anywhere, or does it stay at "you allocate, you choose"? (b) is untouched and is still the
   substantive one.
+
+- [ ] **M23.3** -- Decide whether the crate offers a **pending-operations map**, and separately whether it
+  offers a **slot arena** on top of one. Record the decision either way; if it is "yes", the
+  implementation is spawned as its own items.
+
+  **Replaces `M22+.2`, which asked a smaller question and justified it with the wrong evidence.** That
+  item proposed `RegisteredBuffers::quiet()` and cited `M22.2`'s slot leak as the reason. The leak was in
+  the hand-maintained *tracking* -- `free.pop()` before composing, verified against `7c12708e` -- not in
+  the free-slot query, so `quiet()` would not have prevented the bug that justified it. `outstanding()`
+  already carries that affordance and says so in its own rustdoc; both consumers had it and hand-rolled a
+  free list anyway. **Do not re-propose `quiet()` without new evidence.**
+
+  **What the duplication actually is, from a census of the tree rather than recollection.** Nine sites
+  keep a map from `UserData` to an unclaimed `Token`, and claim it when the matching completion is
+  popped:
+  [completion_event.rs](tests/completion_event.rs), [event_delivery.rs](tests/event_delivery.rs),
+  [flush_barrier.rs](tests/flush_barrier.rs), [flush_barrier_stress.rs](tests/flush_barrier_stress.rs),
+  [handover.rs](tests/handover.rs), [submission_lifecycle.rs](tests/submission_lifecycle.rs),
+  [checkpoint.rs](examples/epoch_log/checkpoint.rs), [append.rs](examples/epoch_log/append.rs), and
+  [strategy.rs](examples/epoch_log/strategy.rs). Two of them independently declare a `type Pending` alias
+  carrying the **same doc comment**, which is as strong a signal as this tree offers that the construct
+  wants to exist once. Two of the nine -- `append.rs` and `strategy.rs` -- add registered slots on top,
+  and those two are the slot arena.
+
+  **The questions, in order.** (1) Is the pending map a library type, a documented pattern, or neither?
+  It is where the claim discipline lives, and dropping a token unclaimed is the failure `Token`
+  deliberately treats as still-outstanding -- so an abstraction here is an abstraction over a safety
+  rule, which argues for it and also raises the bar. (2) Does a slot arena follow, or is it sample
+  policy like partitioning is under [D-8](DESIGN-NOTES.md#d-8)? (3) If either is offered, what does it
+  refuse to decide -- batching, ordering, and which slot to pick are all caller questions.
+
+  **Counter-argument to answer, not dodge:** six of the nine sites are tests, and test convenience is a
+  weak reason to grow permanent public surface. A `test-util` module, or nothing at all, may be the right
+  answer. The contrast to hold it against is `NumaBuffer` ([D-51](DESIGN-NOTES.md#d-51)): roughly ninety
+  lines of unsafe FFI, RAII and trait impls a caller cannot obtain any other way, which is a different
+  proposition from a `HashMap` a caller can write in three lines.
 
 
 
