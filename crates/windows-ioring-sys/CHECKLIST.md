@@ -182,6 +182,22 @@ re-reads numbers that its change moves.
   acceptable is the current silence, which reads as an oversight and contradicts the crate's own front page.
 
 
+## M22+ -- Queued by what the M21 work left behind
+
+- [ ] **M22+.1** -- Make [bounded_pop.rs](tests/bounded_pop.rs) independent of how fast a device is.
+  The tests need an operation still pending when a short bound expires, and they get it from a 128 MiB
+  unbuffered, overlapped read -- which is a *margin*, not a guarantee, because `NO_BUFFERING` bypasses the
+  system cache but not the drive's. One unidentified failure was observed and is recorded in
+  [UNRESOLVED-TEST-FAILURES.md](UNRESOLVED-TEST-FAILURES.md); it did not reproduce in 19 runs.
+  The robust shape is an operation that **cannot** complete rather than one that is merely slow: a read on
+  an overlapped named pipe nobody writes to, released by writing a byte when the test is done with it.
+  Two unknowns to settle first, both cheap to answer and neither safe to assume: whether `IoRing` accepts a
+  pipe handle for `read_raw` at all, and what adding `Win32_System_Pipes` to the dev-dependency feature set
+  costs. If pipes do not work, the fallback is to keep the read but establish the pending state by bounded
+  retry rather than by assertion, so a single fast run cannot fail the suite.
+  Doing this also lets the fixture shrink from 128 MiB per test, which is the larger part of what this file
+  costs to run.
+
 ## M23 -- The ring as a durability domain, and storage affinity
 
 Queued from the same session (findings `S-1` and `S-3`). `S-2` is an addendum to `M20.6` rather than an item
