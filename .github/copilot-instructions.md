@@ -1373,6 +1373,18 @@ stale derived fact is simply believed.
 - **An absence may be worth one sentence, once.** Where a reader would expect a status section and find
   none, say the omission is deliberate and name the artifact that answers it -- otherwise somebody
   helpfully adds it back.
+- **A characterisation of a sibling item is a derived fact too, and this is the clause that was
+  missing.** "`M22` is a testing-heavy milestone", "`M23.1` touches the crate's contract surface",
+  "those tests only use public API" -- each summarises an artifact that already says what it is, and
+  each is wrong the moment that artifact changes or was misread in the first place. **Link the item;
+  do not describe it.** Measured cost of the omission: both examples above are real, both were
+  written into a milestone's rationale in one session, and both were false when checked -- `M22` is
+  example-only and `M23.1` names the *sample's* `contract.rs`, not the crate's.
+  This is the harder half of the rule to apply, because such a claim arrives as a *subordinate
+  clause supporting an argument* rather than as a statement of fact. "X, because Y is Z" reads as
+  connective tissue; `Y is Z` is nonetheless an assertion about the tree, and the reflex that fires
+  on "I am about to write a version number" does not fire on it. Treat the word **because**,
+  followed by anything about another file, item or milestone, as the tell.
 - **This does not reach the primary record.** Decisions, measurements, rationale, design intent, and a
   checklist's own contents are owned here and belong here. The test is simply whether some other
   artifact is already authoritative: if yes, point at it; if no, this *is* the artifact.
