@@ -1,13 +1,14 @@
 # Design session 2026-09-22: principles, triggers, and measuring the gap between them
 
 **Status: parked. Not approved, not scheduled, no tooling built.** Recorded so the idea and the
-objection to it both survive to a later conversation. The absence of a checklist item is deliberate,
+concern about it both survive to a later conversation. The absence of a checklist item is deliberate,
 not an oversight.
 
-**The engineer's standing objection, unanswered:** it is not clear this is operationalizable to the
-degree claimed. That objection was raised after the proposal below was made and has not been
-addressed. Anyone picking this up should treat the proposal as unproven and the objection as the
-first thing to settle.
+**The engineer's open concern:** it is not clear this is operationalizable to the degree claimed.
+Raised after the proposal below was made, and explicitly *a concern rather than an objection* -- it
+does not block the idea and is not a position to be refuted. It marks the part that is unproven.
+Anyone picking this up should treat feasibility as the open question and start there, rather than
+arguing the idea is either dead or settled.
 
 ## The problem this came from
 
@@ -50,9 +51,10 @@ A secondary effect: attention to any one principle decays as a session fills. Th
 `M21.1` was run unprompted early on; twenty-odd tool calls later a file count was read off a summary
 line without a thought. Same rule, same session.
 
-## The engineer's objection to the obvious fix
+## Why writing the trigger is not simply the answer
 
-The obvious fix is to write the trigger beside the principle. The objection to that is precise and
+The obvious fix is to write the trigger beside the principle. The reservation about that is precise
+and
 was raised before any of this was proposed:
 
 > The problem with *me* writing the triggers rather than the principles is that the triggers are
