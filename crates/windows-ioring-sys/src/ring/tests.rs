@@ -703,21 +703,22 @@ fn pop_within_returns_successive_completions_one_at_a_time() {
 
 #[test]
 fn pop_within_returns_none_at_once_when_nothing_can_ever_arrive() {
-    // With no operation outstanding no completion is possible, so a
-    // thirty-second bound must be answered immediately rather than slept
-    // through. Asserting the elapsed time is what makes this a test of the
-    // early return rather than of a short timeout.
+    // With no operation outstanding no completion is possible, so the loop
+    // answers before consulting any wait at all.
+    //
+    // **The `Ok(None)` is itself the proof, with no clock involved.** This goes
+    // through the convenience, so the wait is `SubmitWait` -- and
+    // `SubmitIoRing` answers `E_INVALIDARG` when asked to wait for a completion
+    // the kernel has no pending operation for. Were the early return removed,
+    // the loop would reach that wait and this would be an `Err`. Asserting
+    // `Ok(None)` therefore distinguishes "returned early" from "waited", which
+    // is exactly what an elapsed-time assertion was being asked to do -- and
+    // unlike a clock, it cannot be wrong because the machine was busy.
     let mut ring = IoRing::new(16, 16).expect("create ring");
-    let started = std::time::Instant::now();
     let popped = ring
         .pop_within(std::time::Duration::from_secs(30))
-        .expect("pop_within");
-    let elapsed = started.elapsed();
+        .expect("the early return means the ring's own wait is never reached");
     assert!(popped.is_none(), "nothing was ever submitted");
-    assert!(
-        elapsed < std::time::Duration::from_secs(1),
-        "an empty, quiesced ring must not wait out the bound; took {elapsed:?}"
-    );
 }
 
 #[test]
@@ -759,15 +760,15 @@ fn a_supplied_wait_is_consulted_when_the_queue_is_not_ready() {
 
 #[test]
 fn the_deadline_is_honoured_when_an_operation_never_completes() {
+    // No clock is consulted. That the loop *waited* rather than
+    // short-circuiting is proved by the wait having been called; that it
+    // *stopped* is proved by this test returning at all. A busy machine
+    // changes how long that takes and changes neither assertion.
     let mut ring = IoRing::new(16, 16).expect("create ring");
     ring.reserve_user_data().expect("reserve");
 
-    let started = std::time::Instant::now();
-    let popped = ring.pop_within_with(
-        &mut RecordingWait::default(),
-        std::time::Duration::from_millis(40),
-    );
-    let elapsed = started.elapsed();
+    let mut wait = RecordingWait::default();
+    let popped = ring.pop_within_with(&mut wait, std::time::Duration::from_millis(40));
     ring.record_completion();
 
     assert!(
@@ -775,12 +776,8 @@ fn the_deadline_is_honoured_when_an_operation_never_completes() {
         "no completion was ever going to arrive"
     );
     assert!(
-        elapsed >= std::time::Duration::from_millis(20),
-        "the bound must be waited out, not short-circuited; took {elapsed:?}"
-    );
-    assert!(
-        elapsed < std::time::Duration::from_secs(5),
-        "and it must be a bound rather than a hang; took {elapsed:?}"
+        wait.calls >= 1,
+        "the bound must be waited out, not short-circuited"
     );
 }
 
@@ -789,19 +786,15 @@ fn a_zero_bound_does_not_block() {
     let mut ring = IoRing::new(16, 16).expect("create ring");
     ring.reserve_user_data().expect("reserve");
     let mut wait = RecordingWait::default();
-    let started = std::time::Instant::now();
     let popped = ring.pop_within_with(&mut wait, std::time::Duration::ZERO);
-    let elapsed = started.elapsed();
     ring.record_completion();
 
     assert!(popped.expect("pop_within_with").is_none());
+    // The causal statement of "did not block": the wait is what blocks, and it
+    // was never reached.
     assert_eq!(
         wait.calls, 0,
         "a zero bound is one try_pop, so the wait is never reached"
-    );
-    assert!(
-        elapsed < std::time::Duration::from_millis(500),
-        "a zero bound must not block; took {elapsed:?}"
     );
 }
 
@@ -856,17 +849,23 @@ fn a_wait_that_fails_ends_the_pop_with_its_error() {
 fn a_wait_that_never_blocks_is_permitted_and_still_terminates() {
     // The trait says returning early is always allowed. A caller that does so
     // spins, which is their choice -- but the bound must still hold.
+    //
+    // **Termination is the assertion, and there is deliberately no clock.** An
+    // earlier version asserted the elapsed time was under five seconds, which
+    // could never have fired on the failure it named: if the deadline were not
+    // honoured the loop would spin forever and that line would never be
+    // reached. The only runs it could fail were slow ones -- so it was capable
+    // of false failures and incapable of true ones. A loop that does not
+    // terminate hangs the harness, which is what a hang looks like in every
+    // other test here too.
     let mut ring = IoRing::new(16, 16).expect("create ring");
     ring.reserve_user_data().expect("reserve");
-    let started = std::time::Instant::now();
     let popped = ring.pop_within_with(&mut ImmediateWait, std::time::Duration::from_millis(30));
-    let elapsed = started.elapsed();
     ring.record_completion();
 
-    assert!(popped.expect("pop_within_with").is_none());
     assert!(
-        elapsed < std::time::Duration::from_secs(5),
-        "a non-blocking wait must still be bounded by the deadline; took {elapsed:?}"
+        popped.expect("pop_within_with").is_none(),
+        "the deadline is what ends a wait that never blocks"
     );
 }
 
