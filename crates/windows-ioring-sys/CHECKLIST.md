@@ -197,10 +197,28 @@ The defect and its classification are [D-49](DESIGN-NOTES.md#d-49); the remedies
 implies, and the repository's own Quality rule already classifies an operating-system API as an
 external boundary.
 
-**Sequencing is the open question, not whether.** The cost of waiting is that it compounds: every
-milestone that adds tests adds to the pile to be migrated, and `M22` is a testing-heavy milestone.
-Against that, `M24.1` is an evaluation whose answer could invalidate `M24.4`, so there is no value in
-starting the build before it concludes.
+**Sequencing is the open question, not whether. Corrected 2026-09-22: the cost of waiting is close
+to zero, which is the opposite of what this paragraph first said.** It claimed that waiting
+compounds, "because every milestone that adds tests adds to the pile to be migrated, and `M22` is a
+testing-heavy milestone". The mechanism is real but the instance was not checked, and it is false:
+**all three `M22` items touch only `examples/epoch_log/`**, and none adds a lib test.
+
+Checked across the whole queue rather than for `M22` alone, since the first claim was wrong for
+want of exactly that: **no pending item outside this milestone modifies `src/**/tests.rs`.** `M22`
+is example-only; `M23.1` is the *sample's* `contract.rs`, not the crate's; `M20.1` and `M20.6` are
+documentation and the `ring_copy` sample; `M23.2` is a decision that may imply API later. The 63
+therefore do not grow while this waits.
+
+So sequencing turns on other things, and they point the other way:
+
+- **`M24.2` is an internals refactor of a published crate**, and the branch carrying this work is
+  already 19 commits with one `feat` and three `fix` commits on it. Stacking a field-layout change
+  on top makes one review cover both a new public API and that refactor.
+- **`M24.1` is an evaluation whose answer could invalidate `M24.4`**, so beginning the build before
+  it concludes risks building something the evaluation rejects.
+- **`M22.1` unblocks `M20.6`**, an open question since 2026-09-07 about whether a strategy still
+  earns its place in a published sample -- which is a decision waiting on a measurement `M22.1`
+  produces.
 
 **`M24.1` gates everything after it.** `M24.2` and `M24.3` are safe under any outcome and could be
 taken first if the evaluation is deferred; `M24.4` exists only if `M24.1` says it may.
