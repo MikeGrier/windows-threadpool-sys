@@ -18,6 +18,47 @@ windows-sys = { version = "0.61.2", default-features = false, features = [
 |---|---|
 | [completion-event-spike.rs](completion-event-spike.rs) | [D-19](../../DESIGN-NOTES.md#d-19) -- the completion event is edge-triggered on the completion queue going empty to non-empty; also what `SetIoRingCompletionEvent` permits (call at any time, replace, clear with `NULL`, duplicate survives closing the original) |
 | [drain-ordering-spike.rs](drain-ordering-spike.rs) | [D-23](../../DESIGN-NOTES.md#d-23) -- an unflagged flush does not cover preceding writes; [D-24](../../DESIGN-NOTES.md#d-24) -- `DRAIN_PRECEDING_OPS` is a full, ring-wide barrier spanning submissions |
+| [write-pending-spike.rs](write-pending-spike.rs) | `M20.6` -- which handle flags make a ring write or flush *pend* rather than complete inside `SubmitIoRing`, measured as a rate over 500 trials per condition. `FILE_FLAG_OVERLAPPED` alone changed nothing; only `NO_BUFFERING` over a pre-written extent pended reliably. See below for why this one reports frequencies and what may **not** be built on them. |
+
+## The pending spike reports rates, and none of them is a contract
+
+[write-pending-spike.rs](write-pending-spike.rs) exists because `epoch_log`'s strategy harness was
+built on the premise that a log "keeps appending while a commit is outstanding", and measurement
+showed nothing was ever outstanding: the commit's `SubmitIoRing` took 289-555 us and returned with
+every completion already queued.
+
+Its first draft ran each condition **once** and printed a verdict. That is the error `D-47` records --
+the spike behind `D-24` saw a barrier hold a handful of times and wrote down a guarantee, when the
+real violation rate was nearer one in a thousand. The rewrite to 500 trials per condition immediately
+justified itself: the `NO_BUFFERING`-extending condition pends in about **1%** of trials, which a
+handful of runs would have reported as "never".
+
+Measured here (single node, ARM64, one device), across two consecutive runs:
+
+| condition | pended / 500, run 1 | run 2 | submit p50 |
+|---|---|---|---|
+| buffered, no `OVERLAPPED` (what `epoch_log` opened) | 0 | 0 | ~510 us |
+| buffered + `OVERLAPPED` | 0 | 0 | ~490 us |
+| `NO_BUFFERING` + `OVERLAPPED`, extending | **5** | **271** | ~270 us |
+| `NO_BUFFERING` + `OVERLAPPED`, pre-written extent | 500 | 500 | ~116 us |
+
+**The extending row moved from 1% to 54% between two runs minutes apart**, with no change to the
+program. Whatever drives it -- filesystem allocation state, cache residency, something else -- it is
+not under this program's control and was not measured. That row alone would defeat any number of
+repetitions of a single condition: a run reporting 5 and a run reporting 271 are both "what the
+platform does", and neither is what it will do next time.
+
+**None of this is a contract, including the two stable rows.** Windows specifies nothing about when a
+ring operation completes relative to `SubmitIoRing`. A rate of zero bounds a frequency rather than
+establishing that something cannot happen, and a rate of 500/500 is the same statement pointing the
+other way: it may never have been false here, and it is still not contractually true.
+
+So the obvious use of this spike is the wrong one. Reading the rows, picking the flags that pended,
+and rebuilding a harness on them would bind the sample's premise to incidental behaviour -- the
+failure PLATFORM INTEGRITY rule 2 names. A log, and a benchmark of one, has to be correct whether an
+operation completes inline or pends. What the spike is legitimately for is explaining why a
+measurement looks the way it does, and knowing which configurations are worth testing *across*.
+
 
 ## One spike here has only a narrow result
 

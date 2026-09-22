@@ -104,9 +104,27 @@ conclusions belong to it until it converges.
   > the per-record submission cost left the cross-strategy spread inside a single strategy's own
   > run-to-run range, so the "indistinguishable" conclusion survives on the grounds it already had.
   > Twenty runs, ten each side, in
-  > [measurements/2026-09-22-append-batching/](measurements/2026-09-22-append-batching/). What
-  > remains for this item is the part no number speaks to: whether alternating rings earns its cost
-  > on **correctness and blast-radius** grounds, per `S-2` above.
+  > [measurements/2026-09-22-append-batching/](measurements/2026-09-22-append-batching/).
+
+  **Investigated 2026-09-22. Half of this item is answered; the other half needs `M25` first.**
+
+  **Answered, structurally, and it needs no measurement.** Alternating rings cannot reduce the
+  per-ring blast radius: `RegisteredBuffers::get_mut` refuses a slot with an operation outstanding
+  and there are `SLOTS` slots, so at most `SLOTS` appends are outstanding on a ring **by
+  construction** -- and each alternating lane registers its own arena of the same size. The bound is
+  identical either way. Probing it agreed (8 and 8), but the argument does not rest on that, and it
+  holds whatever the platform does about pending. So `S-2`'s "on a shared ring commit latency is
+  unbounded in unrelated traffic" does not apply to this sample: the arena bounds it, not the ring
+  topology. `S-2` would still apply against genuinely unrelated traffic from another component with
+  its own buffers, of which this sample has none.
+
+  **Blocked on `M25` for the rest**, because the numbers this item was to re-read do not measure what
+  they are labelled: blocking p50 **and p99 are 0 us** for all three strategies, so the published
+  commit-latency column is entirely deferral, and `AlternatingRings`' apparently-worse latency is an
+  artifact of it settling on a two-epoch rotation against everyone else's one. Underneath that, the
+  commit's `SubmitIoRing` took 289-555 us and returned with every completion already queued, so no
+  overlap exists to differentiate the strategies at all. Re-reading, re-running or annotating these
+  numbers cannot help; the harness has to change first, which is `M25`.
   *(Numbered M20.6 rather than M20.5 because M20.5 was in flight on a separate branch when this was
   written. That branch was closed unmerged; M20.5 arrives here instead, dissolved -- see above.)*
 
@@ -381,3 +399,80 @@ with the plan scoped now so the shape is not lost. This is **not** a fallback fo
 - [ ] **M6+.6** -- Decide `IoBuf`: extract to a shared crate, re-export from
   `windows-overlapped-io-sys`, or leave duplicated (D-1). The merge-or-delete decision that duplicate-then-decide
   defers to the point where the new path is proven -- which is here, not earlier.
+
+
+## M25 -- Make the epoch-log sample's I/O a shape where a commit is observable
+
+Queued by the `M20.6` investigation, which found three things the item did not anticipate.
+
+**The harness measures the wrong quantity.** Decomposing its commit latency into *deferral* (flush
+pushed -> harness next looked) and *blocking* (time actually waiting) gave blocking p50 **and p99 of
+0 us for all three strategies**. The published `commit p50/p99/max` column is entirely deferral: it
+reports how long the next epoch's appends took, not anything about the commit.
+
+**There is no pipeline to measure.** The commit's `SubmitIoRing` took 289-555 us and returned with
+all 9 completions already queued. The handle has no `FILE_FLAG_OVERLAPPED`, so the batch ran inline,
+and the comment in [strategy.rs](examples/epoch_log/strategy.rs) reading "a real log keeps appending
+while a commit is outstanding" describes something that cannot happen there.
+
+**`AlternatingRings`' blast-radius claim is answered structurally, and needs no run.**
+`RegisteredBuffers::get_mut` refuses a slot with an operation outstanding and there are `SLOTS`
+slots, so at most `SLOTS` appends are outstanding on a ring **by construction** -- and each
+alternating lane registers its own arena of the same size. The per-ring bound is identical either
+way. Measured at 8 and 8, but the argument does not rest on the measurement, and it holds whatever
+the platform does about pending.
+
+[write-pending-spike.rs](design-sessions/spikes/write-pending-spike.rs) then established which
+configurations pend at all. `FILE_FLAG_OVERLAPPED` alone changed nothing (0/500). Only
+`NO_BUFFERING` over a **pre-written extent** pended reliably, and its submit p50 fell from ~500 us to
+116 us -- the flush's cost leaving the submit path is what makes a commit separately observable for
+the first time.
+
+**A standing constraint on every item below.** That 500/500 is an observation, not a contract:
+Windows specifies nothing about when a ring operation completes relative to `SubmitIoRing`. So the
+sample may *adopt* this shape -- it is what real write-ahead logs do, and it is the only shape where
+the measurement means anything -- but **nothing here may depend on an operation pending.** Every item
+must leave the log correct if the platform completes inline tomorrow.
+
+- [ ] **M25.1** -- Give records a fixed sector stride, and zero the slot tail before writing.
+  `NO_BUFFERING` requires sector-aligned offsets *and* lengths, and records are variable-length at
+  packed offsets today. One record per `SLOT_LEN`-sized, sector-sized block is the simplest stride
+  that fits the existing arena. This **reverses a deliberate decision** in
+  [append.rs](examples/epoch_log/append.rs) -- "writing the slot's unused tail would put stale bytes
+  in the log and cost real device bandwidth" -- so the tail must now be zeroed rather than left, and
+  the write amplification (a ~50-byte record occupying 4096) is a real cost to state rather than hide.
+  It is also what a real WAL pays for sector atomicity.
+
+- [ ] **M25.2** -- Advance replay by the stride rather than by `total_len`, and tolerate the
+  pre-allocated zero tail. [replay.rs](examples/epoch_log/replay.rs) walks `cursor += found.total_len`.
+  A pre-allocated log also ends in zeros rather than at EOF, so a **clean** log will now stop with
+  `tail_stopped: Some(..)` where it previously ran out of bytes. `is_clean()` only inspects violations
+  so cleanliness is unaffected, but the sample's printed narrative says "stopped at" and must be
+  re-read. Both replay paths -- the normal one and the torn-tail one -- and the negative control have
+  to keep meaning what they claim.
+
+- [ ] **M25.3** -- Pre-allocate the log and open it `NO_BUFFERING | OVERLAPPED`. Create and size the
+  file with an ordinary handle, drop it, then open the ring's handle over the existing extent -- the
+  spike's condition D, and the only one that pended. The arena needs no change: `NumaBuffer` is
+  page-granular from `M22.3`, which is at least sector-granular. Do the same for the strategy
+  harness's own files. **Verify by sabotage that the pre-allocation is load-bearing**, since an
+  extending `NO_BUFFERING` write pends only ~1% of the time and would otherwise look like it works.
+
+- [ ] **M25.4** -- Measure the commit, now that there is one to measure. Report the flush's own
+  duration rather than the deferral window, and keep the deferral visible as its own number so the
+  two cannot be confused again. Whatever is reported must still be meaningful if an operation
+  completes inline, per the standing constraint above -- so the harness reports what it observed,
+  never assumes an overlap it did not get.
+
+- [ ] **M25.5** -- Re-run the three-way comparison and answer `M20.6` on the numbers it was always
+  meant to rest on. Commit the capture under [measurements/](measurements/) and link rather than
+  paste it. The structural answer on blast radius stands whatever this shows; what is open is whether
+  `AlternatingRings` earns its permanent doubled registration on any other ground.
+
+- [ ] **M25.6** -- Sweep what this milestone makes false. At least: the "keeps appending while a
+  commit is outstanding" rationale in [strategy.rs](examples/epoch_log/strategy.rs), that module's
+  "what the measurement found" section, the `M22.1` capture's commit-p50 claim in
+  [measurements/2026-09-22-append-batching/](measurements/2026-09-22-append-batching/) -- which this
+  investigation showed was the deferral window shrinking because appends got faster, i.e. the same
+  fact as the throughput result reported as unmoved -- and any DESIGN-NOTES text describing the
+  sample's I/O as buffered. Record the findings above as decisions in the same pass.
