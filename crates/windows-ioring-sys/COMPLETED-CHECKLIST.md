@@ -1913,3 +1913,40 @@ Also swept while here: the script header and its failure message both said **thr
 this shape and listed D-35, D-36, D-43. It is four, and has been since D-45.
 [M19.3](COMPLETED-CHECKLIST.md) swept that count through `DESIGN-INSTRUCTIONS.md` and missed this file,
 which is the restatement-drift pattern landing on the very tool built to stop a different one.
+
+## Moved 2026-09-21 22:08:52 -04:00 -- M22+.1: a pending operation that owes nothing to a device
+
+### <a id="m22plus1"></a>M22+.1 -- Make [bounded_pop.rs](tests/bounded_pop.rs) independent of how fast a device is, by reading from an overlapped pipe nobody has written to. *(completed 2026-09-21 22:08:52 -04:00)*
+
+**Queued and completed within the hour, and the queueing was the error.** It was filed as `M22+.1` with
+an entry in `UNRESOLVED-TEST-FAILURES.md` on the grounds that the fix did not belong in a push of
+finished milestones. That is a scheduling preference, not a blocker, and the repository's PRIME
+DIRECTIVE is explicit that only a genuine blocking factor justifies deferral. The mechanism was
+understood when it was filed; the two open questions were each one probe away.
+
+**Both probes answered, and neither was safe to assume.** `IoRing` does accept a pipe handle for
+`read_raw`; and `pop_within(20ms)` against an unwritten overlapped pipe returns `Ok(None)` with
+`outstanding == 1`. `Win32_System_Pipes` was added to the dev-dependency feature set; `PIPE_ACCESS_INBOUND`
+is not re-exported where the module name suggests, so it is a named local constant, as
+`FILE_FLAG_NO_BUFFERING` already was in this file.
+
+**The substance of the change is the question the test asks.** A 128 MiB unbuffered read asks "will this
+device take longer than 5 ms?" -- a question about someone else's hardware, which may answer differently
+on two runs of the same machine. A pipe with no writer asks nothing: the read is pending because no byte
+exists to satisfy it, and it completes exactly when the test writes one.
+
+Where a delay is still needed -- `run_down` polls in 50 ms steps, so forcing it to observe an expired poll
+means releasing the read later than that -- it comes from a `thread::sleep`, whose guarantee runs the safe
+way round: a sleep may overshoot, never undershoot. No assertion depends on an operation *finishing*
+within any bound.
+
+**Verified:** 25 consecutive runs of the target and 3 full `--all-features` suite runs, all green; both
+feature configurations green. **Both sabotages still bite exactly as before the rewrite** -- reverting the
+timeout mapping turns all 5 red, making `RingWait::block` always fail turns 3 red -- which is the
+assertion that matters, because a deterministic test that had lost its discriminating power would be a
+worse outcome than the flake.
+
+Also 11x faster (0.20s against 2.26s), with no 128 MiB fixtures.
+
+The `UNRESOLVED-TEST-FAILURES.md` entry moved to
+[RESOLVED-TEST-FAILURES.md](RESOLVED-TEST-FAILURES.md) in this commit, per the append-only rule.

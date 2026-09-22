@@ -123,6 +123,7 @@ serde_json = "1.0"
 windows-sys = { version = "0.61.2", default-features = false, features = [
 	"Win32_System_Ioctl",
 	"Win32_System_Memory",
+	"Win32_System_Pipes",
 	"Win32_System_SystemInformation",
 ] }
 # M14.1's epoch-log sample orders a non-ring `FSCTL` against ring epochs, which

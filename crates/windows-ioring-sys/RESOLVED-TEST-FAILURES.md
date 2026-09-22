@@ -89,3 +89,42 @@ since a caller may have relied on it.
 characterised before it is stabilised. The two natural repairs -- loosen the assertion, or mark the
 test serial -- would both have suppressed the only evidence that shipped documentation was wrong,
 and "flaky test" and "the platform does not do what we wrote down" produce the same symptom.
+
+## Resolved 2026-09-21 22:08:22 -04:00 -- the unidentified 	ests/bounded_pop.rs failure
+
+**Recorded and resolved the same day, which is the honest framing:** it was recorded as an unresolved
+failure on the grounds that fixing it did not belong in a push of finished milestones. That was a
+scheduling preference dressed as a blocker. The mechanism and the fix were both understood at the time of
+recording; nothing was actually blocking.
+
+**The failure.** One `cargo test --all-features` run reported `FAILED: 4 passed; 1 failed` in a 2.12s
+target matching [bounded_pop.rs](tests/bounded_pop.rs) by shape. The test name and panic message were not
+captured. It never reproduced -- 15 isolated runs and 4 full-suite runs were green.
+
+**The cause, and why no amount of re-running would have settled it.** Those tests needed an operation
+still pending when a short bound expired, and got it from a 128 MiB unbuffered, overlapped read. That is
+a *margin*, not a guarantee: `FILE_FLAG_NO_BUFFERING` bypasses the system cache but not the drive\'s own,
+so the test was asking "will this device take longer than 5 ms?" -- a question about someone else\'s
+hardware, whose answer may differ between two runs on the same machine.
+
+**The fix: an operation that cannot complete, rather than one that is merely slow.** The read is now
+issued against an **overlapped named pipe that nobody has written to**. It is pending because no byte
+exists to satisfy it, and it completes exactly when the test writes one. There is no device, no cache and
+no margin in the question.
+
+Confirmed by probe before being adopted, since neither half was safe to assume: `IoRing` does accept a
+pipe handle for `read_raw`, and `pop_within(20ms)` against an unwritten pipe returns `Ok(None)` with
+`outstanding == 1`.
+
+Where a delay is genuinely needed -- `run_down` polls in 50 ms steps, so forcing it to observe an expired
+poll means releasing the read later than that -- it comes from a `thread::sleep`, whose guarantee runs the
+safe way round: a sleep may overshoot, never undershoot. No assertion depends on an operation *finishing*
+within any bound.
+
+**Verified:** 25 consecutive runs of the target and 3 full `--all-features` suite runs, all green. Both
+sabotages still bite exactly as before the rewrite -- reverting the timeout mapping turns all 5 red, and
+making `RingWait::block` always fail turns 3 red -- so the rewrite kept every bit of the discriminating
+power it had.
+
+It is also **11x faster** (0.20s against 2.26s) and allocates no 128 MiB fixtures, which was the larger
+part of what the file cost to run.
