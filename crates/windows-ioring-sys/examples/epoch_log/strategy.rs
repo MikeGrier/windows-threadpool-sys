@@ -109,8 +109,8 @@ use std::os::windows::io::RawHandle;
 use std::time::{Duration, Instant};
 
 use windows_ioring_sys::{
-    Batch, Completion, FlushCoverage, FlushMode, IoRing, PushOptions, RegisteredBuffers,
-    RegisteredSpan, RegisteredUse, Token, WriteCaching,
+    Batch, Completion, FlushCoverage, FlushMode, IoRing, NumaBuffer, PushOptions,
+    RegisteredBuffers, RegisteredSpan, RegisteredUse, Token, WriteCaching,
 };
 
 use crate::append::free_slots;
@@ -249,7 +249,7 @@ impl Outcome {
 /// permanently, because `IoRing` has no unregister call.
 struct Lane {
     ring: IoRing,
-    arena: RegisteredBuffers<Vec<u8>>,
+    arena: RegisteredBuffers<NumaBuffer>,
     /// `UserData` of an in-flight write -> its token and the slot it reads
     /// from. The token must be *claimed* on completion: dropping it unclaimed
     /// is treated as still-outstanding and leaks the slot forever.
@@ -260,9 +260,11 @@ struct Lane {
 }
 
 impl Lane {
-    fn new() -> io::Result<Self> {
+    fn new(node: Option<u32>) -> io::Result<Self> {
         let mut ring = IoRing::new(64, 128)?;
-        let buffers: Vec<Vec<u8>> = (0..SLOTS).map(|_| vec![0u8; SLOT_LEN]).collect();
+        let buffers = (0..SLOTS)
+            .map(|_| NumaBuffer::new(SLOT_LEN, node))
+            .collect::<io::Result<Vec<_>>>()?;
         let mut batch = Batch::new(&mut ring);
         let pending = batch.register_buffers(buffers)?;
         batch.submit_and_wait(1, WAIT_MS)?;
@@ -483,19 +485,25 @@ fn timed_out(what: &str) -> io::Error {
 /// produce the same log: same records, same order, same bytes -- which is the
 /// point. They differ only in what the commit costs.
 ///
+/// Every lane's arena is placed on `node`, the same node the log's own arena
+/// uses, so placement is held constant across the comparison rather than being
+/// one more thing the strategies differ in.
+///
 /// # Errors
 ///
-/// Any error from ring setup, a push, a submit, or an operation's result.
+/// Any error from ring setup, arena allocation, a push, a submit, or an
+/// operation's result.
 pub fn run(
     strategy: CommitStrategy,
     file: RawHandle,
     epochs: usize,
     records_per_epoch: usize,
     payload: &[u8],
+    node: Option<u32>,
 ) -> io::Result<Outcome> {
     let mut lanes = Vec::with_capacity(strategy.rings());
     for _ in 0..strategy.rings() {
-        lanes.push(Lane::new()?);
+        lanes.push(Lane::new(node)?);
     }
 
     let mut offset = 0u64;

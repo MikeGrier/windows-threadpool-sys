@@ -137,7 +137,9 @@
 //!   happens to run is a one-time cache-warmth question by comparison.
 //!   `VirtualAllocExNuma`, on the node closest to the device, registered once
 //!   into that domain's ring (see [`Batch::register_buffers`]), is very
-//!   likely the highest-leverage locality decision available.
+//!   likely the highest-leverage locality decision available. [`NumaBuffer`]
+//!   is that allocation; *which* node is a question about a caller's storage
+//!   layout, and this crate does not answer it for them.
 //!
 //! # Where the design lives
 //!
@@ -165,6 +167,8 @@ mod error;
 #[cfg(all(windows, feature = "threadpool"))]
 mod event_delivery;
 #[cfg(windows)]
+mod numa_buffer;
+#[cfg(windows)]
 mod ring;
 #[cfg(windows)]
 mod token;
@@ -183,6 +187,8 @@ pub use capability::{Capabilities, RingVersion, capabilities};
 pub use error::{IoRingError, IoRingErrorExt, RingCondition};
 #[cfg(all(windows, feature = "threadpool"))]
 pub use event_delivery::{EventDelivery, RingScope};
+#[cfg(windows)]
+pub use numa_buffer::NumaBuffer;
 /// The fault-injection seam (M16.3), for exercising failure paths a healthy
 /// machine will not produce on demand. See
 /// [`Completion::with_injected_failure`] for why transforming a real

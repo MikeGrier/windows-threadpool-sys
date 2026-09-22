@@ -231,15 +231,16 @@ domain to the caller.
   on the node closest to the device, registered once into that domain's ring
   via `Batch::register_buffers`, is very likely the highest-leverage locality
   decision available -- independent of everything above about completion
-  routing.
+  routing. `NumaBuffer` is that allocation; *which* node is still the caller's
+  answer, and this crate does not guess it.
 
 `examples/ring_copy` is where these three points become runnable policy: it
 copies one file to another through per-domain rings, sized by a named
-`ByL3`/`ByNode`/`ByPackage`/`ByCore`/`Single` policy, with buffers placed via
-`VirtualAllocExNuma` and a `--placement local|remote` switch to make the
-placement effect measurable. It is a **sample**, not library surface -- this
-crate itself depends on no partitioning policy and does not depend on
-`windows-topology-sys`; only the sample does.
+`ByL3`/`ByNode`/`ByPackage`/`ByCore`/`Single` policy, with placed buffers and a
+`--placement local|remote` switch to make the placement effect measurable. It
+is a **sample**, not library surface -- this crate itself depends on no
+partitioning policy and does not depend on `windows-topology-sys`; only the
+sample does.
 
 ## License
 

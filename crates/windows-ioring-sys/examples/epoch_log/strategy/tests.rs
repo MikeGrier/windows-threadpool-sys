@@ -69,7 +69,7 @@ fn oversized() -> Vec<u8> {
 
 #[test]
 fn a_fresh_lane_has_every_slot_free() {
-    let lane = Lane::new().expect("a ring and a registered arena");
+    let lane = Lane::new(None).expect("a ring and a registered arena");
     assert_eq!(
         free(&lane),
         SLOTS as usize,
@@ -79,7 +79,7 @@ fn a_fresh_lane_has_every_slot_free() {
 
 #[test]
 fn a_record_too_long_for_a_slot_is_refused() {
-    let mut lane = Lane::new().expect("a ring and a registered arena");
+    let mut lane = Lane::new(None).expect("a ring and a registered arena");
     let (path, file) = scratch("too-long-refused");
 
     let error = lane
@@ -98,7 +98,7 @@ fn a_record_too_long_for_a_slot_is_refused() {
 
 #[test]
 fn a_record_too_long_for_a_slot_leaves_its_slot_free() {
-    let mut lane = Lane::new().expect("a ring and a registered arena");
+    let mut lane = Lane::new(None).expect("a ring and a registered arena");
     let (path, file) = scratch("too-long-no-leak");
     assert_eq!(free(&lane), SLOTS as usize, "precondition: nothing is busy");
 
@@ -128,7 +128,7 @@ fn a_record_too_long_for_a_slot_leaves_its_slot_free() {
 
 #[test]
 fn a_lane_offers_at_most_what_was_asked_for() {
-    let lane = Lane::new().expect("a ring and a registered arena");
+    let lane = Lane::new(None).expect("a ring and a registered arena");
     assert_eq!(free_slots(&lane.arena, 3).len(), 3, "capped by the request");
     assert_eq!(
         free_slots(&lane.arena, 0).len(),

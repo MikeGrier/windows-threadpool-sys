@@ -176,13 +176,11 @@ re-reads numbers that its change moves.
   the tracked free list leaked a slot on every refused append.
   -> [completed 2026-09-22](COMPLETED-CHECKLIST.md#m222)
 
-- [ ] **M22.3** -- Give the registered arena a stated placement, or state why it has none (`E-3`).
-  [append.rs](examples/epoch_log/append.rs) allocates it as `vec![0_u8; SLOT_LEN]` -- heap, no alignment, no
-  node -- while [lib.rs](src/lib.rs) tells every consumer that buffer placement "is very likely the
-  highest-leverage locality decision available" and names `VirtualAllocExNuma`, and
-  [ring_copy/buffer.rs](examples/ring_copy/buffer.rs) already implements exactly that. Either adopt that
-  allocator here or write down why a durability sample deliberately makes no locality decision. What is not
-  acceptable is the current silence, which reads as an oversight and contradicts the crate's own front page.
+- [x] **M22.3** -- Give the registered arena a stated placement: the epoch-log arena is placed on the
+  NUMA node its own log file's volume reports, and the allocator moved into the library as
+  `NumaBuffer` rather than being copied a second time. The sample says plainly that the placement
+  cannot pay at this workload.
+  -> [completed 2026-09-22](COMPLETED-CHECKLIST.md#m223)
 
 
 ## M22+ -- Queued by what the M21 work left behind
@@ -314,7 +312,7 @@ here. `M23.2` builds on the mechanism correction `M20.4` carried, which has land
 - [ ] **M23.2** -- Record a decision on how a consumer anticipates storage affinity, given that the node
   question is unanswerable and the device question is not (`S-3`). Two mechanisms, both leaving policy with
   the consumer per [D-8](DESIGN-NOTES.md#d-8): (a) let a consumer **declare** a domain's storage node and
-  have the arena allocate there with `VirtualAllocExNuma`, turning an undiscoverable fact into a stated
+  have the arena allocate there, turning an undiscoverable fact into a stated
   input that [file-handle-numa-spike.rs](design-sessions/spikes/file-handle-numa-spike.rs) can fill in
   automatically if hardware ever answers; and (b) shard by **backing device** rather than by node, using
   `IOCTL_STORAGE_GET_DEVICE_NUMBER` and `IOCTL_VOLUME_GET_VOLUME_DISK_EXTENTS` -- both already named in that
@@ -324,6 +322,13 @@ here. `M23.2` builds on the mechanism correction `M20.4` carried, which has land
   governs the cost this sample is built around. **Unmeasured** -- it follows from the flush's recorded scope
   plus D-47's surviving half, and the instruments to settle it exist. Decide what this crate offers, what it
   refuses, and what it measures first.
+
+  **Narrowed by `M22.3` (2026-09-22), which settled the sample-level half of (a).** The allocation now
+  exists in the library as `NumaBuffer` ([D-51](DESIGN-NOTES.md#d-51)), and the epoch-log sample already
+  asks the FSCTL and places on the answer ([D-50](DESIGN-NOTES.md#d-50)). So (a) is no longer "should a
+  sample do this" but the narrower **library** question: does the crate offer a *declared* storage node as
+  an input anywhere, or does it stay at "you allocate, you choose"? (b) is untouched and is still the
+  substantive one.
 
 
 

@@ -76,6 +76,7 @@ mod checkpoint;
 mod commit;
 mod contract;
 mod event_loop;
+mod placement;
 mod reclaim;
 mod record;
 mod replay;
@@ -218,7 +219,11 @@ fn run_log<O: io::Write, E: io::Write>(
         .open(checkpoint_path)?;
 
     let mut ring = IoRing::new(64, 128)?;
-    let mut appender = Appender::new(&mut ring)?;
+    // Decided from the log's own handle, before the arena exists: the
+    // documented FSCTL takes a file handle directly, so the node the arena
+    // should prefer is answerable without a device-tree walk.
+    let placement = placement::Placement::decide(handle);
+    let mut appender = Appender::new(&mut ring, &placement)?;
     let mut committer = Committer::new();
 
     // The reclaim worker is shared: the log thread waits on its handle, and a
@@ -245,6 +250,7 @@ fn run_log<O: io::Write, E: io::Write>(
         "arena registered: {SLOTS} slots of {SLOT_LEN} bytes; \
          waiting on the ring's completion event alongside a reclaim event and a shutdown latch"
     ));
+    report.line(format_args!("{}", placement.describe()));
 
     // Something outside the I/O loop decides when to stop -- which is the only
     // reason a second handle is in the wait at all.
@@ -812,7 +818,18 @@ fn compare_strategies<O: io::Write, E: io::Write>(
             .truncate(true)
             .open(&path)?;
 
-        let outcome = strategy::run(strategy, file.as_raw_handle(), EPOCHS, PER_EPOCH, payload);
+        // Each strategy's arena is placed the same way the log's own is, and
+        // on that strategy's own file -- so the comparison holds placement
+        // constant instead of adding it to what the strategies differ in.
+        let placement = placement::Placement::decide(file.as_raw_handle());
+        let outcome = strategy::run(
+            strategy,
+            file.as_raw_handle(),
+            EPOCHS,
+            PER_EPOCH,
+            payload,
+            placement.node(),
+        );
         drop(file);
         let outcome = match outcome {
             Ok(outcome) => outcome,

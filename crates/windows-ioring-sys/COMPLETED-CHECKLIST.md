@@ -2038,3 +2038,53 @@ already requires the match-count check for exactly this reason.
 **Raised a layer-placement question rather than answering it silently:** `outstanding()`'s rustdoc names
 this use case, and both in-repo consumers hand-rolled it anyway. Queued as `M22+.2` with its blocker named
 (a public API addition needs a lib test, and that test opens a real ring -- the `M24` pile).
+
+### <a id="m223"></a>M22.3 -- Give the registered arena a stated placement: the epoch-log arena is placed on the NUMA node its own log file's volume reports, and the allocator moved into the library as `NumaBuffer` rather than being copied a second time. The sample says plainly that the placement cannot pay at this workload. *(completed 2026-09-22 17:41:01 -04:00)*
+
+The item offered a choice -- adopt `ring_copy`'s allocator, or write down why a durability sample makes no
+locality decision. Both halves turned out to be needed, and a third thing fell out of doing them.
+
+**The decision.** [placement.rs](examples/epoch_log/placement.rs) asks the log's own handle through
+`FSCTL_QUERY_VOLUME_NUMA_INFO` -- the documented call [What is not reachable](DESIGN-NOTES.md) already
+established, which takes a file or directory handle directly and needs no device-tree walk -- and the arena
+is allocated preferring whatever comes back. A volume that names no node yields no preference and the log
+runs on; the report line says which happened and why.
+
+**No benefit is claimed, and the sample says so in its own output.** The arena is eight slots of four
+kilobytes against a workload bound by a per-epoch device flush costing hundreds of microseconds, which
+`M22.1` measured directly. So this demonstrates how the decision is made and reported, not that it was
+worth making; `examples/ring_copy` remains where placement meets a load that could show it. The report is
+also qualified by `GetNumaHighestNodeNumber`, because on a one-node machine "placed on node 0" is true and
+misleading -- the line instead says the choice was never available. Two unit tests hold that in **both**
+directions: the disclaimer must appear for a single-node machine and must **not** appear for a multi-node
+one, since a disclaimer that shows up everywhere trains a reader to ignore it.
+
+**The allocator moved into the library ([D-51](DESIGN-NOTES.md#d-51)), by the engineer's call on a
+question raised before any code was written.** The crate's front page names this allocation as the
+highest-leverage locality decision available and then supplied nothing, so the first consumer wrote it in a
+sample and this item was about to write the second. `git mv` carried the history; `ring_copy` lost its
+local module and binds to the library type.
+
+**That move surfaced a packaging defect that would have reached a consumer.** `cargo check --all-targets`
+unifies dev-dependency features into the build, so the library's newly-required `Win32_System_Memory` was
+being supplied by the dev-dependency list and the lib target compiled clean. `cargo doc` -- which does not
+get dev-dependencies -- failed immediately, and `cargo check --lib` confirmed it: **anyone depending on
+this crate alone would not have compiled it.** The manifest now carries the feature on the library
+dependency, and the stale comment asserting "the library itself needs none of them" is corrected rather
+than left to mislead.
+
+**Verified by sabotage, in both directions.** Forcing the FSCTL to report a node the machine does not have
+failed the run at arena allocation with `ERROR_INVALID_PARAMETER`, which is what proves the queried node
+actually reaches the allocator rather than being reported decoratively. Forcing the FSCTL to fail produced
+the `Unplaced` line, the stated reason, and a log that still kept its contract -- the path that will not
+otherwise execute on a machine where the query succeeds.
+
+**Swept the claim rather than the one site.** `VirtualAllocExNuma` and the arena's old `Vec` allocation
+were stated in six places; [README.md](README.md), [lib.rs](src/lib.rs), two DESIGN-NOTES sections and the
+manifest comment were updated, and the design-session and archive copies were left alone as historical
+record. `M23.2` was **narrowed** in the same pass: its option (a) is no longer "should a sample do this"
+but the residual library question, because the sample half is now done.
+
+Gate: fmt, clippy, the full suite (14 new `NumaBuffer` tests, 9 new placement tests), `cargo doc` clean,
+lib-only and `--no-default-features` builds, the borrow-surface, encoding and publishable checks, and the
+example end to end.

@@ -77,11 +77,16 @@ targets = ["x86_64-pc-windows-msvc"]
 # under `Win32_System_IO` as their subject matter might suggest.
 # `Win32_System_Threading` supplies the event primitives the Model A delivery
 # path (M4) waits on.
+# `Win32_System_Memory` is `NumaBuffer`'s `VirtualAllocExNuma` (M22.3). It is a
+# *library* feature, not a dev one: the allocator moved out of a sample and
+# into the crate, and a lib-only build is what catches the difference --
+# `--all-targets` unifies dev-dependency features and hides it.
 windows-sys = { version = "0.61.2", default-features = false, features = [
 	"Win32_Foundation",
 	"Win32_Security",
 	"Win32_Storage_FileSystem",
 	"Win32_System_IO",
+	"Win32_System_Memory",
 	"Win32_System_Threading",
 ] }
 # The Model A delivery path (M4): a `ThreadpoolWait` on the ring's completion
@@ -116,13 +121,17 @@ windows-topology-sys = { path = "../windows-topology-sys", features = [
 ] }
 # M7's ring-copy sample deserializes a fed-in topology description (--topology).
 serde_json = "1.0"
-# M7's ring-copy sample additionally needs `VirtualAllocExNuma` (buffer
-# placement) and `GROUP_AFFINITY` (pinned-thread affinity); M14.1's epoch-log
-# sample needs `Win32_System_Ioctl` for the `FSCTL_SET_ZERO_DATA` reclamation
-# it orders against ring epochs. The library itself needs none of them.
+# M7's ring-copy sample additionally needs `GROUP_AFFINITY` (pinned-thread
+# affinity); M14.1's epoch-log sample needs `Win32_System_Ioctl` for the
+# `FSCTL_SET_ZERO_DATA` reclamation it orders against ring epochs, and for the
+# `FSCTL_QUERY_VOLUME_NUMA_INFO` its arena placement asks (M22.3).
+#
+# `Win32_System_Memory` is deliberately NOT here: buffer placement moved into
+# the library as `NumaBuffer` (M22.3), so the feature is a *library* one now
+# and listing it again would wrongly suggest a sample reaches for
+# `VirtualAllocExNuma` on its own.
 windows-sys = { version = "0.61.2", default-features = false, features = [
 	"Win32_System_Ioctl",
-	"Win32_System_Memory",
 	"Win32_System_Pipes",
 	"Win32_System_SystemInformation",
 ] }

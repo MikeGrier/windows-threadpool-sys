@@ -7,7 +7,6 @@
 //! partitioning policy (D-8 in its `DESIGN-NOTES.md`), so the policy lives
 //! here instead, giving M6's guidance something executable behind it.
 
-mod buffer;
 mod engine;
 mod plan;
 mod policy;

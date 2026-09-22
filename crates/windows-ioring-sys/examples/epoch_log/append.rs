@@ -9,6 +9,12 @@
 //! deliberately -- and it is why this sample uses the registered form rather
 //! than handing an owned `Vec` to every push.
 //!
+//! **Placed** is meant literally as of M22.3: the arena is `NumaBuffer`, not
+//! `Vec<u8>`, on the node [`crate::placement`] decides. That module is also
+//! where the limits of the decision are written down -- notably that this
+//! workload is far too flush-bound for the placement to pay, so the sample
+//! demonstrates how the choice is made rather than that it was worth making.
+//!
 //! Appending therefore has two halves that must not be confused:
 //!
 //! 1. **Compose** the record into a slot the kernel is not currently reading.
@@ -29,11 +35,12 @@ use std::os::windows::io::RawHandle;
 
 use windows_ioring_sys::contract::RingContract;
 use windows_ioring_sys::{
-    Batch, IoRing, PushOptions, RegisteredBuffers, RegisteredSpan, RegisteredUse, Token,
-    WriteCaching,
+    Batch, IoBufMut, IoRing, NumaBuffer, PushOptions, RegisteredBuffers, RegisteredSpan,
+    RegisteredUse, Token, WriteCaching,
 };
 
 use crate::commit::Epoch;
+use crate::placement::Placement;
 use crate::record::{self, Sequence};
 
 /// How many slots the arena holds. More slots means more records can be in
@@ -81,7 +88,7 @@ const REGISTRATION_TIMEOUT: std::time::Duration = std::time::Duration::from_secs
 /// eight appends left the lane reporting **0** of 8 slots free while the arena
 /// held nothing. See [`crate::strategy::tests`], which also says plainly what
 /// those tests can and cannot catch.
-pub fn free_slots(arena: &RegisteredBuffers<Vec<u8>>, want: usize) -> Vec<u32> {
+pub fn free_slots<B: IoBufMut>(arena: &RegisteredBuffers<B>, want: usize) -> Vec<u32> {
     (0..arena.len())
         .filter(|&slot| arena.outstanding(slot) == Some(0))
         .take(want)
@@ -98,7 +105,7 @@ struct InFlight {
 /// The append path: an arena of registered buffers, a monotonic sequence
 /// counter, and the file offset the next record lands at.
 pub struct Appender {
-    arena: RegisteredBuffers<Vec<u8>>,
+    arena: RegisteredBuffers<NumaBuffer>,
     in_flight: HashMap<usize, InFlight>,
     next_sequence: u64,
     next_offset: u64,
@@ -121,12 +128,23 @@ impl Appender {
     /// its completion -- one blocking step at startup, before the log has any
     /// work to pipeline against.
     ///
+    /// # Placement
+    ///
+    /// `placement` decides which NUMA node the arena's pages prefer. It is
+    /// taken as an argument rather than decided here because it is a *policy*
+    /// question about a caller's storage layout, and the library deliberately
+    /// answers none -- [`crate::placement`] is where this sample makes its own
+    /// choice, and says what that choice is and is not worth.
+    ///
     /// # Errors
     ///
-    /// Any error from the registration push, the submit, or the registration
-    /// operation itself.
-    pub fn new(ring: &mut IoRing) -> io::Result<Self> {
-        let buffers = (0..SLOTS).map(|_| vec![0_u8; SLOT_LEN]).collect::<Vec<_>>();
+    /// Any error from allocating the arena, the registration push, the submit,
+    /// or the registration operation itself.
+    pub fn new(ring: &mut IoRing, placement: &Placement) -> io::Result<Self> {
+        let node = placement.node();
+        let buffers = (0..SLOTS)
+            .map(|_| NumaBuffer::new(SLOT_LEN, node))
+            .collect::<io::Result<Vec<_>>>()?;
         let mut batch = Batch::new(ring);
         let pending = batch.register_buffers(buffers)?;
         batch.submit()?;
