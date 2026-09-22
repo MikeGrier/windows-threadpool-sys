@@ -1993,3 +1993,48 @@ the same structural guarantee, stated in the same place.
 
 **Unblocks `M20.6`**, whose remaining question is the part no number speaks to: whether alternating
 rings earns its cost on correctness and blast-radius grounds.
+
+### <a id="m222"></a>M22.2 -- Collapse the two free-slot implementations to one, derived from the arena's own outstanding counts rather than tracked beside them. The item called both correct; one was not -- the tracked free list leaked a slot on every refused append. *(completed 2026-09-22 16:21:23 -04:00)*
+
+The sample had two answers to "which arena slots are free". `Appender` asked the arena, filtering on
+`outstanding(slot) == Some(0)`. `Lane` kept a `Vec<u32>` and maintained it by hand. Both now call one
+`free_slots` in [append.rs](examples/epoch_log/append.rs); `Lane`'s field, its initialiser, and its
+push-on-claim are gone.
+
+**The item's premise was wrong in the direction that mattered.** It said "both are correct and the cost
+difference is nil ... the duplication is the defect, because the two *can* drift". They had already
+drifted. The free list took its slot *before* composing into it, so an append refused between the two --
+a record too long for a slot is the reachable path -- returned with the slot popped and no operation ever
+issued. The arena considered that slot quiet forever; the list never offered it again. `SLOTS` such
+refusals and the harness reports a full arena while the kernel holds nothing.
+
+So this was not a tidying exercise with a correctness footnote: **deriving the fact removed a live bug**,
+and it removed it by construction rather than by fixing the copy -- a slot nothing was pushed against
+never stopped being free.
+
+**Verified by sabotage, in both directions.**
+
+- *Does each caller really bind to the one definition?* Breaking `free_slots` to offer busy slots failed
+  the `Lane` path with the arena's own refusal (`buffer 0 still has 1 operation(s) outstanding`), while
+  the appender ran clean -- so that run proved only half of it. A second sabotage (`take(0)`) starved the
+  appender, which then failed before the strategy section was reached. Both halves bind; one sabotage was
+  not enough to show it, which is the point of running the second.
+- *Was the leak real, or argued from the source?* Re-injecting the free list and failing eight appends
+  left the lane reporting **0** of 8 slots free with the arena entirely idle.
+
+**What the new tests do not catch, stated in the tests.** [strategy/tests.rs](examples/epoch_log/strategy/tests.rs)
+asserts the property from the arena's side, so a re-introduced free list would *not* fail it -- under the
+re-injection above it passed, and only a temporary assertion against the list itself went red. What keeps
+a second definition from returning is that there is one function and both callers call it. Claiming the
+test covers that would be the cosmetic binding the repository's own rules warn about, so the module says
+so plainly instead.
+
+Two harness defects were themselves caught by sabotage discipline and are worth recording, because both
+produce a *false green*: a `.Replace` that matched nothing reported success and ran an unmodified tree,
+and a PowerShell helper that logged with `Write-Output` returned its log line into the patched text. Per-site
+match-count assertions caught the first; the second surfaced as a run with no output at all. The repository
+already requires the match-count check for exactly this reason.
+
+**Raised a layer-placement question rather than answering it silently:** `outstanding()`'s rustdoc names
+this use case, and both in-repo consumers hand-rolled it anyway. Queued as `M22+.2` with its blocker named
+(a public API addition needs a lib test, and that test opens a real ring -- the `M24` pile).

@@ -171,10 +171,10 @@ re-reads numbers that its change moves.
   throughput did not move out of the noise, though commit p50 did.
   -> [completed 2026-09-22](COMPLETED-CHECKLIST.md#m221)
 
-- [ ] **M22.2** -- Collapse the two free-slot implementations to one (`E-2`).
-  [`Appender::free_slot`](examples/epoch_log/append.rs) scans the arena calling `outstanding()` per slot
-  while `Lane` keeps a `Vec<u32>` free list. Both are correct and the cost difference is nil at eight slots;
-  the duplication is the defect, because the two can drift. One definition, both callers bind to it.
+- [x] **M22.2** -- Collapse the two free-slot implementations to one, derived from the arena's own
+  outstanding counts rather than tracked beside them. The item called both correct; one was not --
+  the tracked free list leaked a slot on every refused append.
+  -> [completed 2026-09-22](COMPLETED-CHECKLIST.md#m222)
 
 - [ ] **M22.3** -- Give the registered arena a stated placement, or state why it has none (`E-3`).
   [append.rs](examples/epoch_log/append.rs) allocates it as `vec![0_u8; SLOT_LEN]` -- heap, no alignment, no
@@ -191,6 +191,20 @@ re-reads numbers that its change moves.
   reading from an overlapped pipe nobody has written to. Filed and completed the same hour; the deferral
   was a scheduling preference rather than a blocker.
   -> [completed 2026-09-21](COMPLETED-CHECKLIST.md#m22plus1)
+
+- [ ] **M22+.2** -- Decide whether "which slots are quiet" belongs on
+  [`RegisteredBuffers`](src/batch.rs) rather than in the sample. `M22.2` collapsed the epoch-log's two
+  free-slot implementations into one example-local function, which is all that item asked for. But the
+  evidence points a layer down: `outstanding()`'s own rustdoc names this exact use ("lets a caller pick a
+  quiet buffer ... the normal shape for an arena cycling through its slots"), and **both** in-repo
+  consumers hand-rolled the loop anyway -- one of them with a slot leak. A crate that documents a pattern
+  and then makes every caller re-implement it is inviting the copy it warns about. An iterator
+  (`fn quiet(&self) -> impl Iterator<Item = u32> + '_`) is the shape; the caller collects, because a
+  borrow of the arena cannot outlive the `get_mut` that follows.
+  **Deferred, with the blocker named rather than "no consumer":** it is a public API addition to a
+  published crate, so it needs a lib test, and a `RegisteredBuffers` can only be obtained from a real
+  registration -- so that test opens a kernel ring and joins exactly the pile `M24` exists to drain. Worth
+  doing *after* `M24` settles how such a test is written, not before.
 
 ## M24 -- Make the unit suite hermetic
 

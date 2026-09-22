@@ -47,6 +47,47 @@ pub const SLOT_LEN: usize = 4096;
 /// arena's registration to complete at startup.
 const REGISTRATION_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
 
+/// Slots of `arena` with no operation outstanding against them, at most `want`
+/// of them, lowest index first.
+///
+/// This is the sample's **only** definition of "which slots are free", and
+/// both append paths bind to it: this module's [`Appender`] and the
+/// measurement harness's `Lane` in [`crate::strategy`]. Each used to carry its
+/// own, which is the defect that collapsed them -- not the cost, which is nil
+/// at eight slots, but that two definitions of one fact can drift apart while
+/// each looks locally correct.
+///
+/// # Why this is derived and not tracked
+///
+/// The obvious alternative is a `Vec<u32>` free list: pop a slot when an
+/// append takes it, push it back when the completion is claimed. `Lane` did
+/// exactly that. It is a *second copy* of a fact
+/// [`RegisteredBuffers`] already owns and maintains -- its per-buffer
+/// outstanding count, the same one that makes
+/// [`RegisteredBuffers::get_mut`] refuse a busy slot. Asking is therefore
+/// always right by construction, where a copy is right only as long as every
+/// path that changes the truth remembers to change the copy too.
+///
+/// The free list had already stopped remembering, in a way nothing reported.
+/// It popped a slot before composing into it, so any error between the pop and
+/// the push -- a record too long for a slot is the reachable one -- returned
+/// early with the slot removed from the free list and no operation ever
+/// issued. The arena considered that slot quiet forever; the free list never
+/// offered it again. `SLOTS` such errors and the harness wedges, blaming an
+/// arena that is in fact entirely idle. The derived form cannot express that
+/// bug: a slot nothing was pushed against never stopped being free.
+///
+/// That is measured rather than argued: re-injecting the free list and failing
+/// eight appends left the lane reporting **0** of 8 slots free while the arena
+/// held nothing. See [`crate::strategy::tests`], which also says plainly what
+/// those tests can and cannot catch.
+pub fn free_slots(arena: &RegisteredBuffers<Vec<u8>>, want: usize) -> Vec<u32> {
+    (0..arena.len())
+        .filter(|&slot| arena.outstanding(slot) == Some(0))
+        .take(want)
+        .collect()
+}
+
 /// One in-flight append: the token that holds the arena slot, and where the
 /// record was written.
 struct InFlight {
@@ -132,19 +173,6 @@ impl Appender {
         self.in_flight.len()
     }
 
-    /// Slots with no operation outstanding against them, at most `want` of
-    /// them.
-    ///
-    /// Asked rather than assumed: the arena is the reason an append can block
-    /// at all, and a caller that gets fewer than it asked for should drain
-    /// completions rather than grow the arena.
-    fn free_slots(&self, want: usize) -> Vec<u32> {
-        (0..self.arena.len())
-            .filter(|&slot| self.arena.outstanding(slot) == Some(0))
-            .take(want)
-            .collect()
-    }
-
     /// Compose as many of `payloads` as there are free arena slots, and push
     /// them all in **one** submission.
     ///
@@ -178,7 +206,7 @@ impl Appender {
         epoch: Epoch,
         payloads: &[Vec<u8>],
     ) -> io::Result<usize> {
-        let slots = self.free_slots(payloads.len());
+        let slots = free_slots(&self.arena, payloads.len());
         if slots.is_empty() {
             return Ok(0);
         }
@@ -262,9 +290,10 @@ impl Appender {
         // already been observed, so claiming is sound either way -- and
         // bailing out on a failed write without claiming would drop the token
         // unclaimed, which `Token` deliberately treats as "still outstanding"
-        // and leaks. That would burn this arena slot permanently: `free_slot`
-        // would never offer it again, and after `SLOTS` failures every append
-        // would return `WouldBlock` forever.
+        // and leaks. That would burn this arena slot permanently: the slot's
+        // outstanding count would never return to zero, so `free_slots` would
+        // never offer it again, and after `SLOTS` failures every append would
+        // return `WouldBlock` forever.
         let released = in_flight
             .token
             .claim_if(completion)

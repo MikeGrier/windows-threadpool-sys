@@ -113,6 +113,7 @@ use windows_ioring_sys::{
     RegisteredSpan, RegisteredUse, Token, WriteCaching,
 };
 
+use crate::append::free_slots;
 use crate::commit::Epoch;
 use crate::record::{self, Sequence};
 
@@ -253,7 +254,6 @@ struct Lane {
     /// from. The token must be *claimed* on completion: dropping it unclaimed
     /// is treated as still-outstanding and leaks the slot forever.
     in_flight: std::collections::HashMap<usize, (Token<RegisteredUse>, u32)>,
-    free: Vec<u32>,
     /// Completions that were not writes, kept by `UserData` for the commit
     /// path to match against.
     flushes: std::collections::HashMap<usize, io::Result<()>>,
@@ -276,7 +276,6 @@ impl Lane {
             ring,
             arena,
             in_flight: std::collections::HashMap::new(),
-            free: (0..SLOTS).collect(),
             flushes: std::collections::HashMap::new(),
         })
     }
@@ -299,6 +298,10 @@ impl Lane {
     /// one `SubmitIoRing` per record made the per-record submission cost a
     /// term every strategy paid equally, which is exactly the kind of shared
     /// constant that flattens a comparison.
+    ///
+    /// Which slots are free is asked of [`free_slots`] -- the sample's single
+    /// definition -- rather than tracked here. This lane used to keep its own
+    /// free list; see that function for why the copy was not merely redundant.
     fn append_batch(
         &mut self,
         file: RawHandle,
@@ -308,16 +311,15 @@ impl Lane {
         first_offset: u64,
         want: usize,
     ) -> io::Result<(usize, u64)> {
-        let take = want.min(self.free.len());
-        if take == 0 {
+        let slots = free_slots(&self.arena, want);
+        if slots.is_empty() {
             return Ok((0, 0));
         }
 
         let mut batch = Batch::new(&mut self.ring);
         let mut written = 0_u64;
         let mut accepted = 0;
-        for index in 0..take {
-            let slot = self.free.pop().expect("checked against free.len() above");
+        for (index, &slot) in slots.iter().enumerate() {
             let sequence = Sequence(first_sequence + index as u64);
             let total = {
                 let bytes = self.arena.get_mut(slot)?;
@@ -393,8 +395,14 @@ impl Lane {
             let released = token
                 .claim_if(&completion)
                 .map_err(|_| io::Error::other("a write token refused its own completion"))?;
+            // Dropping the marker is what decrements the slot's outstanding
+            // count, and that count *is* the free list now -- so this drop,
+            // not a push to a side table, is what returns the slot.
             drop(released);
-            self.free.push(slot);
+            debug_assert!(
+                self.arena.outstanding(slot) == Some(0),
+                "claiming the token must release the slot"
+            );
             completion.result()?;
         } else {
             self.flushes
@@ -650,3 +658,6 @@ pub fn run(
         append_stall,
     })
 }
+
+#[cfg(test)]
+mod tests;
