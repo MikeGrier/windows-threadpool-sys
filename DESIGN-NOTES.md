@@ -354,6 +354,30 @@ and close routines. The new crate inherits an established concept rather than in
 **"Ring" was considered and is wrong for the family.** It is accurate for the array shapes and
 false for the intrusive-linked one, which is genuinely not a ring. `queues` covers both.
 
+## <a id="new-crates-take-the-win-prefix"></a>New crates take the `win-` prefix, not `windows-`
+
+**The engineer's decision, 2026-09-23, taken when `win-numa-sys` was proposed.** Crates created
+from now on use a `win-` prefix. The reason is namespace collision: `windows` is Microsoft's, and
+a crate published as `windows-numa-sys` today is a name Microsoft may reasonably want tomorrow.
+Abdicating the prefix costs nothing and removes the risk entirely.
+
+**The `-sys` half is unchanged and is still earned rather than assumed.** It means thin-over-Win32:
+memory-safe over an existing API, adding no policy, per
+[the waitable-queues naming decision](#the-waitable-queues-crate-is-named-plural-and-carries-no-sys-suffix).
+A `win-*` crate that decides something on a consumer's behalf drops the suffix exactly as a
+`windows-*` one would.
+
+**The existing fourteen migrate eventually, and the cost is not uniform.** Eleven of them are
+published to crates.io, and a published name cannot be renamed -- a rename is a *new* crate plus a
+final release of the old name, and the old name persists forever. Three are unpublished
+(`windows-guard-alloc`, `windows-placement-probe`, `windows-platform-probes`) and are nearly free to
+move. One further wrinkle: `windows-threadpool-sys` is also the **repository's** name, so renaming
+that crate either diverges the two or drags the repository rename along with it.
+
+The migration is therefore queued at the horizon rather than scheduled, as `M-inf.3` in
+[CHECKLIST.md](CHECKLIST.md). **This decision schedules no rename now**; what it settles is the
+prefix every *new* crate uses, so the divergence stops growing while the question of the existing
+ones stays open.
 ## Windows SDK model and constraints
 
 This crate targets the object-based thread pool API (introduced in Windows Vista) rather than the legacy

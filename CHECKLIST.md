@@ -443,3 +443,25 @@ Ungated work with no identified predecessor deliverable.
   unexplained result is not mistaken for a tested one.
 
 - [x] **M-inf.2** -- Archived the eight completed milestone groups in [CHECKLIST-thread-ambient.md](CHECKLIST-thread-ambient.md), leaving only the parked `M26+`. -> [completed 2026-09-17](COMPLETED-CHECKLIST.md#m-inf2)
+
+- [ ] **M-inf.3** -- Migrate the existing fourteen `windows-*` crates to the `win-` prefix that
+  [DESIGN-NOTES.md](DESIGN-NOTES.md#new-crates-take-the-win-prefix) makes the go-forward convention.
+  **Horizon work, deliberately unscheduled**, and the cost is not uniform -- so this item is a
+  decision before it is a rename.
+
+  **Three are nearly free**: `windows-guard-alloc`, `windows-placement-probe` and
+  `windows-platform-probes` carry `publish = false`, so they are a directory move plus path
+  dependencies.
+
+  **Eleven are published, and a published name cannot be renamed.** crates.io has no rename: a
+  move is a *new* crate, a final release of the old name pointing at it, and the old name occupying
+  the namespace permanently -- which is a weaker version of the very collision this convention
+  avoids. Each also touches `release-please-config.json`, the publish workflow's tag patterns,
+  CHANGELOG continuity, and every dependent.
+
+  **And one is the repository's own name.** `windows-threadpool-sys` names both a crate and this
+  repository, so renaming the crate either diverges the two or pulls a repository rename along with
+  it, breaking remotes and every inbound link.
+
+  Decide the shape first -- all at once, unpublished-only, or never for the published ones -- rather
+  than starting with the easy three and discovering the policy afterwards.
