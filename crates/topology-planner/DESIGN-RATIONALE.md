@@ -43,8 +43,21 @@ than as canonical decisions.
 The goal's shape had been deferred since `EP-D-4` (2026-09-03) and the deferral was **named**, which
 is what made it survivable: `COMPONENT.md`, the checklist status table and the decision body all said
 "deferred for litigation" rather than quietly omitting the input, so nothing was built on a guess in
-the meantime. It was settled on 2026-09-23 by the engineer stating the component's purpose directly,
-in the course of correcting a milestone that had been written in the wrong crate.
+the meantime.
+
+**That is the smaller half of what the deferral was worth, and the larger half is easy to state
+backwards.** The answer was not sitting formed on 2026-09-03 waiting to be asked for. It did not
+exist. What produced it was the work done in the interval -- the building blocks, then the
+measurement tools, then the experiments that used those tools to infer things -- and the clarity
+arrived as an *output* of that sequence. The deferral's real value was buying the interval, not
+merely guarding it. Writing this up as "the shape was withheld until 2026-09-23" would invert the
+causality and quietly teach that asking earlier and harder would have worked; it would not have, and
+a specific question put to a general sense would have manufactured a lower-confidence answer that
+then got recorded as a decision. (That failure mode is the subject of RESOLUTION GRADIENT in
+[copilot-instructions.md](../../.github/copilot-instructions.md).)
+
+It was stated on 2026-09-23 by the engineer describing the component's purpose, in the course of
+correcting a milestone that had been written in the wrong crate.
 
 **Two candidate shapes had been implicitly in play, and neither was what was chosen.** `EP-1+.1`
 framed the input as a *scenario* -- "what the caller intends to run" -- with a minimum bar of

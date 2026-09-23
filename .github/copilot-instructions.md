@@ -707,7 +707,7 @@ When executing checklist items (CHECKLIST.md files):
 - **If items must be done together, say so and do it; don't tease apart.** Once you have decided (and recorded in the checklist if the structure is wrong) that two items must land together, commit them together in one commit citing both IDs. Do **not** try to "unthread" a coupled implementation into per-item commits after the fact — that is fiction, not history.
 - **Commit immediately after each item.** In mode b (implementing forward), the commit must happen before moving to the next item. In mode a (recording already-finished work), a single commit citing all the item IDs satisfies this.
 - **Commit message format: a Conventional Commits subject line, with the checklist trailer in the body.**
-  `release-please` (see "Release process" in [DEVELOPMENT.md](DEVELOPMENT.md)) drives every crate's version
+  `release-please` (see "Release process" in [DEVELOPMENT.md](../DEVELOPMENT.md)) drives every crate's version
   bump and CHANGELOG **only** from Conventional Commits subject lines (`type(scope)!: summary`); a subject
   that doesn't match that grammar is invisible to it, no matter how much checklist work the commit records.
   The mandatory `Completed item:` provenance is therefore never the subject line — it moves to the body, and
@@ -1187,6 +1187,65 @@ Design Notes column: Path(s) to DESIGN-NOTES.md file(s) that document the work, 
 If a plan exceeds roughly 10 work items or 3 levels of grouping/nesting, checkpoint it
 into a CHECKLIST.md file in the repository before continuing. The goal is that the plan
 survives a lost session — if the plan only exists in the chat, it will be lost.
+
+## RESOLUTION GRADIENT — sharp at the front, deliberately coarse behind, and never manufacture certainty
+
+**A plan is written at decreasing resolution with distance from the present.** The current
+milestone has great resolution. Later milestones are progressively coarser, and that
+coarseness is **correct** — it is not an omission to be closed, and an audit or review pass
+must not treat it as one.
+
+**Why it cannot be otherwise here.** Some work has the shape *build the blocks → build the
+measurement tools → experiment with those tools to infer things*. On such a project the
+later milestones are not merely unwritten, they are **unwritable**: the experiments that
+would resolve them have not happened. The clarity is an **output** of the work, not an
+input being withheld from it. A project small enough to plan end-to-end before
+implementing is a different case, and the distinction is worth making explicitly before
+planning begins.
+
+**The failure mode this exists to stop.** An assistant asks a *very specific* question of
+someone who holds a *general sense* of the direction. The specificity of the question
+implies an answer of matching precision is available, so one is produced — at low
+confidence. It is then recorded as a decision, and it lands in the wrong milestone, or in
+the wrong order, and later work binds to it. **A low-confidence answer recorded as a
+decision is worse than no answer**, because the uncertainty that surrounded it is now
+invisible to everyone downstream.
+
+Four rules follow:
+
+1. **Calibrate the question to the resolution actually available.** Ask whether the general
+   direction is right before asking which of five options to take. If a question would only
+   be answerable *after* work that has not been done, it is not yet a question — it is a
+   description of that work.
+2. **Make "too early to say" a first-class, explicitly offered answer.** When presenting
+   options, say plainly that leaving it coarse is among them. A question posed without that
+   option is a question that forces a choice, and the person answering may not notice they
+   have been forced.
+3. **When an answer arrives hedged, record the hedge.** A direction that is not settled is a
+   **working position, not a decision**: it gets no decision ID, it lives in Tier 2 or Tier 3
+   or a heading that says so, and nothing binds to it. The worked example already in the tree
+   is "Working position on domain counts (not a decision)" in
+   [DESIGN-SESSION-2026-08-30-numa-sharded-io-execution-domains.md](../design-sessions/DESIGN-SESSION-2026-08-30-numa-sharded-io-execution-domains.md).
+4. **Prefer questions that unblock the current milestone.** If the answer would not change
+   what happens next, asking now mostly converts uncertainty into a record of false
+   precision.
+
+**A deferral is productive, not merely protective.** Naming a deferral is usually read as
+"we avoided building on a guess", which is true and is the smaller half. The larger half is
+that it **buys the interval in which the answer becomes derivable** — the blocks get built,
+the instruments get written, the experiments get run, and the answer that was unavailable
+becomes obvious. So when a deferral discharges, do **not** write it up as though the answer
+existed all along and was waiting to be stated. Say what in the interval produced it. The
+difference matters because the first framing quietly teaches that asking earlier and harder
+would have worked, which is exactly the behaviour rule 1 forbids.
+
+**This does not soften the PRIME DIRECTIVE, and the two must not be confused.** They govern
+different objects. The PRIME DIRECTIVE forbids deferring **work** because no consumer for it
+is currently visible; this rule forbids manufacturing **decisions** the work has not yet made
+available. Building a capability nothing calls yet is required; inventing a specific answer to
+a question the experiments have not reached is not. When they appear to collide, the test is
+whether the thing being deferred is *work you could do now* — if it is, do it, and the
+gradient has nothing to say about it.
 
 ## Design notes are not a work queue
 

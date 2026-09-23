@@ -188,8 +188,30 @@ section added afterwards is the answer, and the three properties it lists are ea
 developer never makes a topology decision, stage 1 is stable across every machine the application
 will run on, and the plural answer is OPTION INTEGRITY at component scale.
 
-**And the deferral held up, which is worth recording.** `EP-D-4`'s goal input had been undefined for
-twenty days across four documents, and nothing was built on a guess in the meantime, because the
-deferral was *named* at every site that mentioned it rather than being an absence. Correcting it was
-a sweep of four sites, all of which were found by grepping the phrase the deferral was recorded
-under. An unnamed omission would have left nothing to grep for.
+**And the deferral held up -- but the reason is not the one first recorded here.** `EP-D-4`'s goal
+input had been undefined for twenty days across four documents, and nothing was built on a guess in
+the meantime, because the deferral was *named* at every site that mentioned it rather than being an
+absence. Correcting it was a sweep of four sites, all found by grepping the phrase the deferral was
+recorded under; an unnamed omission would have left nothing to grep for.
+
+That much is true and is the smaller half. **The first version of this paragraph stopped there, and
+in doing so implied the answer had existed since 2026-09-03 and was waiting to be stated.** It had
+not. The engineer's correction, recorded verbatim because the distinction is the point:
+
+> I wasn't "holding out" on my perfectly formed design from before, it was the work that we've done
+> that helped me reach this clarity.
+
+The sequence that produced it was known in outline from the start -- build some building blocks,
+build some measurement tools, then experiment with how those tools could be used to infer things --
+and the shape of the planner's input is an **output** of having done that, not an input withheld
+from it. The way forward is now much clearer than it was and is still not crystal clear, which is
+the expected state and not a gap to be closed by questioning.
+
+**The lesson generalises past this deferral**, and is now recorded as RESOLUTION GRADIENT in
+[copilot-instructions.md](../.github/copilot-instructions.md): a plan is sharp at the front and
+deliberately coarse behind, and an assistant that puts a very specific question to a general sense
+manufactures a low-confidence answer which then gets recorded as a decision and mis-placed. Several
+questions in this session were of that shape. The remedy is to calibrate a question's specificity to
+the resolution actually available, to offer "too early to say" as a real answer, and to record a
+hedged direction as a **working position** rather than a decision -- a device this repository already
+had, in the 2026-08-30 session's "Working position on domain counts (not a decision)".
