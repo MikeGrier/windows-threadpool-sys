@@ -233,6 +233,60 @@ following the rule that a binding which cannot be shown to fail is cosmetic. Fiv
 mutations -- three manifest values, a deleted claim, and a stale version planted in prose --
 each produce a distinct, located failure.
 
+## <a id="why-no-option-is-foreclosed"></a>Why no option is foreclosed while the hardware gap lasts
+
+[DESIGN-NOTES.md](DESIGN-NOTES.md#the-adoption-thesis) records the thesis and
+[copilot-instructions.md](.github/copilot-instructions.md) records the operational rule
+(OPTION INTEGRITY). This is how the rule was reached and what was rejected on the way. The faithful
+record of the engineer's framing is
+[DESIGN-SESSION-2026-09-23-adoption-thesis.md](design-sessions/DESIGN-SESSION-2026-09-23-adoption-thesis.md).
+
+The evidence was a specific over-reach, not an argument in the abstract. A harness comparing three
+commit strategies in the epoch-log sample found no blast-radius difference between one ring and two,
+and the conclusion recorded was that the two-ring strategy's justification was "dead on structural
+grounds". Two things were wrong with it, and they fail differently:
+
+- The harness **could not have shown the difference**. Each lane registers its own arena, so the
+  arena is the limiter rather than the ring topology. The finding was a fact about the apparatus
+  presented as a fact about the design.
+- It contradicted [D-27](crates/windows-ioring-sys/DESIGN-NOTES.md#d-27), which had already committed
+  the crate to multiple rings on the strength of per-CPU NVMe queue pairs. One sample's arena sizing
+  was allowed to overrule a decision made on stronger grounds, and nothing flagged the collision.
+
+The second is the more instructive failure. A repository whose decisions are well measured builds an
+instinct to trust a measurement over a recorded position, and that instinct is right often enough to
+be dangerous: it does not ask whether the measurement's configuration could reach the regime the
+recorded position was about.
+
+Three candidate rules were considered.
+
+**"Prefer the measurement"** is what had been happening, and it is the failure above.
+
+**"Prefer the recorded decision"** inverts the bug without fixing it -- a decision that a measurement
+genuinely falsifies should fall, and this repository has correctly retired decisions that way
+(D-47 withdrew half of D-24 on measured grounds).
+
+What survived distinguishes the two cases by **what the measurement was capable of showing**. A
+measurement that reached the regime and found nothing is evidence; a measurement whose apparatus
+excluded the regime is evidence about the apparatus. The rule then enumerates the grounds that do
+justify foreclosing -- fewer instructions, fewer I/Os, better locality argued structurally, smaller
+support burden, clearer model, or a demonstrated wrong answer -- because "measured slower" is absent
+from that list on purpose, while "computes the wrong thing" is on it and is the honest ground for
+most removals here.
+
+The reason this repository needs the rule more than most is in the thesis: the hardware that would
+make these tradeoffs measurable is not available, and the people best placed to judge the options are
+application authors we have not met. Both conditions are temporary in principle and neither is
+temporary in practice, so the posture has to be encoded rather than remembered.
+
+A corollary was adopted with the rule and is worth separating, because it is the part that changes
+code rather than judgement: when an option is narrowed, **say where the choice still lives**. The
+audit that followed found the rule's own author had withdrawn a cache-level policy on sound grounds
+and then failed to say that selecting a level remained available through the topology API. The
+repair was to make the sample print every level beside the heuristic's pick, which turns the
+justification for the withdrawal into something a reader can see rather than something they are
+asked to accept.
+
 ## Why a measured figure is asked to have one home
 
 [DESIGN-NOTES.md](DESIGN-NOTES.md#prose-volume-and-error-surface) records the rule; this is how it
@@ -269,7 +323,7 @@ moved here from that file, where it had been written inline: Tier 1 is the curre
 section carrying its own motivating question, census procedure and superseded drafts had made the
 decision harder to find inside it.
 
-[Restatement drift](#restatement-drift) explains the mechanism and gives the remedy. This note
+[Restatement drift](DESIGN-NOTES.md#restatement-drift) explains the mechanism and gives the remedy. This note
 records something that section does not: a measurement of **where** the drift actually lives, taken
 after PR #90's eighteenth review round, and what follows from it about formal specification.
 
@@ -374,7 +428,7 @@ uniformly to hit a volume target would remove the only prose that has never been
 leaving the prose that keeps being wrong in proportion.
 
 **A formal spec's most useful property here is not proof -- it is that prose can point at it instead
-of paraphrasing it.** That is [restatement drift](#restatement-drift)'s first remedy applied one
+of paraphrasing it.** That is [restatement drift](DESIGN-NOTES.md#restatement-drift)'s first remedy applied one
 level up: define the protocol once in a form that can be checked, and let every document cite it.
 This is the real connection between the two ideas, and it is why they belong in the same
 conversation despite fixing different things.

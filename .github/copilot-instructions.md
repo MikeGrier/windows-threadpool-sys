@@ -122,6 +122,13 @@ value*, expose it, and give clients the tools to choose it when it applies and t
 the data that makes the choice well-founded. The default posture toward a design
 alternative is to keep it and instrument it, not to rank it.
 
+**The reason this repository needs the rule more than most is recorded separately**, in
+[DESIGN-NOTES.md](../DESIGN-NOTES.md) → [The adoption thesis](../DESIGN-NOTES.md#the-adoption-thesis):
+the hardware that would make these tradeoffs measurable is not available here, and the
+people best placed to judge the options are application authors we have not met. Read it
+before arguing that a particular option is safe to drop — the two conditions it names are
+temporary in principle and are not temporary in practice.
+
 **A measurement that failed to realise an option's value is not a finding against the
 option.** It may mean the hardware, the workload, the software configuration, or the
 apparatus could not reach the conditions where the value appears. Saying "we measured it

@@ -10,6 +10,13 @@ be one more thing to keep true by hand.
 
 ## Intent
 
+**Why this crate exists at all is recorded one level up**, in the workspace's
+[DESIGN-NOTES.md](../../DESIGN-NOTES.md) -> [The adoption thesis](../../DESIGN-NOTES.md#the-adoption-thesis).
+Read it before proposing to remove a design option here: it is the reason this crate keeps
+alternatives alive that no measurement on the development machine can justify, and the reason its
+samples hand a consumer data rather than a verdict. The operational form of that posture is OPTION
+INTEGRITY in [copilot-instructions.md](../../.github/copilot-instructions.md).
+
 Windows 11 / Server 2022 added `IoRing`: a submission/completion ring for file I/O, closer in shape to
 `io_uring` than to anything else Windows offers. This crate raises those primitives into memory-safe Rust
 with the minimum additional CPU and memory cost, in the same spirit as the rest of this repository.

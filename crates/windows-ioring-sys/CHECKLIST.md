@@ -478,3 +478,54 @@ reviewable artifact rather than a recording.
   that file. For each, decide: restate as this crate's own contract, move to a spike with a rate and
   a date, or delete. **Not yet started, and not yet even sampled** -- the candidate above is a guess,
   and the census must come from a command.
+
+## M27 -- Adaptivity: the benefit without the architectural commitment
+
+Queued by [The adoption thesis](../../DESIGN-NOTES.md#the-adoption-thesis) (2026-09-23). The thesis'
+operative phrase is that a consumer should be able to receive locality benefits **without having to
+write specialized code to receive them**, because the up-front architectural commitment -- "do I want
+to take advantage of NUMA or not?", asked at the moment the least is known -- is identified there as
+the principal reason the concept stayed in the datacenter.
+
+**The gap is real and is stated as a gap, not as a plan.** Today partitioning is an explicit
+`Policy` a consumer selects in [ring_copy](examples/ring_copy/policy.rs), and the library itself
+offers no partitioning at all, deliberately, under [D-8](DESIGN-NOTES.md#d-8). Nothing in the thesis
+overturns D-8: "make the benefit reachable" and "make the benefit automatic" are different claims,
+and conflating them would have this crate take a workload decision it has repeatedly refused to
+take. So `M27.1` asks the question and the rest are gated on its answer.
+
+**This milestone does not need NUMA hardware.** Adaptivity is a question about the shape of the API
+and about what is discoverable, both answerable here; the *magnitude* of the benefit is the part
+that is blocked, and it is blocked already.
+
+- [ ] **M27.1** -- Decide what "adaptive" means for this crate, and record it either way. The
+  candidates, in increasing order of what the library takes on: (a) nothing changes -- the consumer
+  selects a policy, and the thesis is served by samples and documentation alone; (b) the crate offers
+  a *derived default* -- a consumer who expresses no preference gets the outermost partitioning cache
+  domain, with the degradation to one domain being a correct answer rather than a fallback; (c) the
+  crate offers a **stated-intent** input -- the consumer declares what they are optimizing for and
+  the topology supplies the partition, which keeps the workload decision with the consumer while
+  removing the topology decision from them. Name what each refuses. The decision must say which of
+  D-8's reasoning survives it, because (b) and (c) both move something D-8 placed outside the
+  library.
+
+- [ ] **M27.2** -- **Gated on `M27.1` choosing (b) or (c).** Census what a consumer must write today
+  to get a locality benefit, from the tree rather than from recollection: every step between "I have
+  a workload" and "my buffers and rings are placed", across [ring_copy](examples/ring_copy) and
+  [epoch_log](examples/epoch_log). The count and the shape of that list is the measurement this
+  milestone is actually about -- if it is short, the thesis is already served and `M27.1` should have
+  chosen (a).
+
+- [ ] **M27.3** -- **Gated on `M27.2`.** Implement whichever of (b)/(c) was chosen, and verify the
+  claim the way the thesis demands rather than the way that is convenient: the test is that a
+  consumer who writes *no* locality code still lands on a sensible partition on a machine that has
+  one, and on one domain on a machine that does not, with both outcomes reported rather than silent.
+  Sabotage must enter at the topology, not at the policy -- a synthetic topology that partitions and
+  one that does not, per the repository rule that sabotage enters where the real condition enters.
+
+- [ ] **M27.4** -- Give a consumer the means to answer this on their own hardware, which is the
+  thesis' client-side corollary and the half that does **not** depend on `M27.1`. `cache_domains.rs`
+  now prints every cache level beside the heuristic's pick; the equivalent for placement is a sample
+  that reports what a chosen partition costs and what the alternatives would have cost, on the
+  machine in hand. [ring_copy](examples/ring_copy) is the natural host, being already policy-
+  selectable. **Do not ship a verdict** -- report the observation and let the consumer conclude.
