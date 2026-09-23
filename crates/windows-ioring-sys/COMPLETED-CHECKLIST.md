@@ -2329,3 +2329,55 @@ to ignore it.
 Four directions verified after the fix: fires on a direct `IoRing::new`, fires on a ring reached only
 through a helper, stays silent on a new hermetic test, and reports removals as progress needing only
 regeneration. Wired into CI as its own job beside `borrow-surface`; needs no toolchain.
+
+### <a id="m246"></a>M24.6 -- Sweep what this milestone makes false. *(completed 2026-09-23 11:49:58 -04:00)*
+
+The item named three sites. **Two were false alarms and the third was false for a different and more
+serious reason than the item gave** -- which is the argument for running the census rather than
+editing the named list.
+
+**Named, and genuinely stale: [D-49](DESIGN-NOTES.md#d-49).** Its "63 of 131" is the figure `M24`
+*started* from; measured after, **41 of 151 open a ring and 110 do not**. It also still said the mock
+rejection "stands until `M24.1` settles it" and that the remedy choice was "gated on one unresolved
+question", both of which `M24.1` closed. Corrected, with pointers to [D-52](DESIGN-NOTES.md#d-52) and
+[D-53](DESIGN-NOTES.md#d-53).
+
+**Named, false alarm: the testing-strategy section.** The item expected it to be stale because it was
+"written when every lib test opened a ring". Reading it, nothing in it turns on hermeticity -- it
+classifies *defect populations* and *techniques*, and `M24` added or removed neither. Its "all five
+techniques" framing is also correctly left alone: the resolver is a sixth *when `M26` builds it*, and
+`M26.6` already owns that edit. Claiming six today would be the opposite error.
+
+**Named, false alarm: `M21.6`'s archive entry.** The item said its "a wait that never enters the
+kernel" clause "stops being the notable exception once the suite is hermetic". Hermeticity does not
+bear on that sentence, and the archive is append-only history describing what was true when written.
+
+**Named, and false -- but not because of `M24`: `F-13`.** Its headline says "Every fixture in this
+crate's tests, examples and samples opens its handle that way [synchronous]". Three do not:
+`flush_barrier.rs`, `handover.rs` and `flush_barrier_stress.rs` open
+`FILE_FLAG_OVERLAPPED | FILE_FLAG_NO_BUFFERING`, dated 2026-08-28, 08-29 and 09-06 -- **weeks before
+F-13 was recorded on 09-21**. So it was false when written, not made false by this milestone.
+
+That matters because the entry's carry-forward escalated from the false half: it says every claim
+about ordering, draining, the completion event and the barrier "was measured against operations that
+may have completed inline" and names D-19, D-23, D-24 and D-47 for re-reading. But D-23, D-24 and
+D-47 were measured by `flush_barrier.rs` -- one of the three overlapped fixtures. The entry even
+hedged correctly ("the drain-ordering spike used `NO_BUFFERING` ... so it is probably fine") and then
+checked only the spike, not the tests sharing its shape. A dated correction was added rather than a
+rewrite, so the record of what was believed survives.
+
+**Unnamed, and found by the sweep: [bounded_pop.rs](tests/bounded_pop.rs) named the wrong gap.** It
+said "every other test of `pop_within` drives the loop with a wait that never enters the kernel".
+Several do enter it through `SubmitWait`. The real gap is narrower and more interesting: the tests
+using the kernel wait drive operations that *complete*, and the one test that lets a bound expire
+fakes both halves -- a `RecordingWait` instead of the kernel and a bare `reserve_user_data` instead of
+a pending operation. **No test had a real operation pending when a real bound expired**, which is
+exactly the state the `ERROR_TIMEOUT` path needs. Corrected in place.
+
+**Unnamed, and found by the sweep: this milestone's own header** still carried the 63-of-131 opening
+figure and a "recount before starting" caution that had been acted on.
+
+**The transferable part.** Three of the five corrections were over-generalisations from a single
+observation -- one fixture becoming "every fixture", one wait shape becoming "every other test". Each
+was a census away from being right, and each then had an alarm built on top of it. That is the same
+shape as the spike that ran one trial per condition, in the same crate, two days earlier.

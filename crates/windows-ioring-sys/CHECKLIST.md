@@ -197,9 +197,14 @@ re-reads numbers that its change moves.
 
 The defect and its classification are [D-49](DESIGN-NOTES.md#d-49); the remedies and their costs are
 [DESIGN-SESSION-2026-09-21-hermetic-unit-tests.md](design-sessions/DESIGN-SESSION-2026-09-21-hermetic-unit-tests.md).
-**63 of 131 lib tests open a real kernel ring**, so `cargo test --lib` does not mean what its name
-implies, and the repository's own Quality rule already classifies an operating-system API as an
-external boundary.
+It began at **63 of 131 lib tests opening a real kernel ring**, so `cargo test --lib` did not mean
+what its name implies, and the repository's own Quality rule already classifies an operating-system
+API as an external boundary.
+
+**Where it ended: 41 of 151 open a ring, 110 do not.** The remainder is not movable without
+`M26.2`'s FFI seam, and [D-53](DESIGN-NOTES.md#d-53) records the rung that keeps it from climbing
+back -- an inventory of *which* tests open a ring, since a zero-check would fail on day one and
+could only be satisfied by deleting coverage.
 
 **Sequencing is the open question, not whether. Corrected 2026-09-22: the cost of waiting is close
 to zero, which is the opposite of what this paragraph first said.** It claimed that waiting
@@ -211,11 +216,6 @@ testing-heavy milestone". The mechanism is real but the instance was not checked
 milestone waits on an evaluation any more. The hermetic goal is reached by relocation and by the
 accounting extraction alone; the technique `M24.1` went looking for turned out to be a different
 and larger thing, and is `M26`.
-
-**Recount the population before starting.** [D-49](DESIGN-NOTES.md#d-49) records 63 of 131 lib tests
-opening a ring, and the suite has since grown -- `M22.3` added 14 `NumaBuffer` tests, which open
-none. The 63 is the number to act on, but the denominator in any prose written during this milestone
-must come from a command rather than from that decision.
 
 Checked across the whole queue rather than for `M22` alone, since the first claim was wrong for
 want of exactly that: **no pending item outside this milestone modifies `src/**/tests.rs`.** `M22`
@@ -269,14 +269,10 @@ So sequencing turns on other things, and they point the other way:
   in the guard.
   -> [completed 2026-09-22](COMPLETED-CHECKLIST.md#m245)
 
-- [ ] **M24.6** -- Sweep what this milestone makes false. The testing-strategy section of
-  [DESIGN-NOTES.md](DESIGN-NOTES.md#testing-strategy-m185) describes which population each technique
-  reaches and was written when every lib test opened a ring; `M21.6`'s archive entry says the M21.2
-  tests "drive the loop with a wait that never enters the kernel", which stops being the notable
-  exception once the suite is hermetic; and the
-  [2026-09-21 remediation ledger](design-sessions/DESIGN-SESSION-2026-09-21-m21-remediation-findings.md)
-  carries `F-13`, whose "the crate's tests never exercise asynchronous completion" is a claim about
-  the structure this milestone changes. Count the restatements with a command, not by eye.
+- [x] **M24.6** -- Sweep what this milestone makes false. Two of the three sites the item named
+  were false alarms; the third was false for a different and larger reason than the item gave, and
+  the sweep found two more it did not name.
+  -> [completed 2026-09-23](COMPLETED-CHECKLIST.md#m246)
 
 ## M23 -- The ring as a durability domain, and storage affinity
 

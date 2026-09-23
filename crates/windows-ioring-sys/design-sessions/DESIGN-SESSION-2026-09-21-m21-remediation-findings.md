@@ -163,6 +163,29 @@ name being identical is the tell: it is what people call this operation, which i
 operation belonging to the library. It now does.
 ### F-13 (M21.6) -- the crate's tests never exercise asynchronous completion
 
+> **Corrected 2026-09-23 by `M24.6`'s sweep. The headline overstates, and it did so when written.**
+> "Every fixture in this crate's tests, examples and samples opens its handle that way" is false:
+> [flush_barrier.rs](../tests/flush_barrier.rs), [handover.rs](../tests/handover.rs) and
+> [flush_barrier_stress.rs](../tests/flush_barrier_stress.rs) all open
+> `FILE_FLAG_OVERLAPPED | FILE_FLAG_NO_BUFFERING` handles, and had done since 2026-08-28, 08-29 and
+> 09-06 respectively -- weeks before this was recorded on 09-21. What is true is the narrower claim
+> the measurements below actually support: the fixture *that finding was built against* was
+> synchronous, and so are the epoch-log sample's.
+>
+> **The carry-forward escalated from the false half, and is largely unfounded because of it.** It
+> says every claim about ordering, draining, the completion event and the barrier "was measured
+> against operations that may have completed inline", and names D-19, D-23, D-24 and D-47 for
+> re-reading. But D-23, D-24 and D-47 were measured by `flush_barrier.rs`, which is one of the three
+> overlapped, unbuffered fixtures. The entry hedged in the right direction -- "the drain-ordering
+> spike used `NO_BUFFERING` and pre-written extents deliberately, so it is probably fine" -- and then
+> checked only the spike, not the tests that shared its shape.
+>
+> The shape of the error is worth more than the correction: a measurement of **one** fixture was
+> generalised to **every** fixture without a census, and the alarm that followed inherited the
+> generalisation. A census is one command. See `M20.6`'s findings for the case where the same claim
+> *was* true -- the epoch-log sample really did run entirely on synchronous handles, which is what
+> made its strategy comparison measure a pipeline that did not exist.
+
 Measured while building a test that needed a genuinely pending operation. **A file handle opened without
 `FILE_FLAG_OVERLAPPED` is synchronous, so a ring operation against it completes inline during submit.**
 Every fixture in this crate's tests, examples and samples opens its handle that way.

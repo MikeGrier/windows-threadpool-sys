@@ -3,9 +3,20 @@
 //!
 //! # Why an integration test, and why a pipe
 //!
-//! Every other test of [`IoRing::pop_within`] drives the loop with a wait that
-//! never enters the kernel, which makes the loop's arithmetic deterministic and
-//! leaves the Win32 interaction untested. That gap hid a real defect: a
+//! No other test of [`IoRing::pop_within`] has a **real operation still pending
+//! when a real bound expires**, and that is the exact state the Win32 timeout
+//! path needs. The coverage either side of it misses in opposite directions:
+//! the tests that use the ring's own `SubmitWait` drive operations that
+//! *complete*, so the expiry branch is never reached, and the test that does
+//! let a bound expire fakes both halves -- a `RecordingWait` instead of the
+//! kernel, and a bare `reserve_user_data` instead of a pending operation.
+//!
+//! (An earlier version of this comment said every other test "drives the loop
+//! with a wait that never enters the kernel". That is not so -- several reach
+//! the kernel through `SubmitWait` -- and the imprecision mattered, because it
+//! named the wrong gap. Corrected by `M24.6`'s sweep.)
+//!
+//! That gap hid a real defect: a
 //! timed-out `SubmitIoRing` reports `ERROR_TIMEOUT`, so the crate's own
 //! `SubmitWait` turned every expired bound into an `Err` instead of the
 //! `Ok(None)` `pop_within` documents. Replacing `RingWait::block`'s whole body
