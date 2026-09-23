@@ -762,11 +762,7 @@ fn report_contract<O: io::Write, E: io::Write>(report: &mut Report<O, E>) {
     report.line(format_args!("epoch-log durability contract"));
     report.line(format_args!("=============================="));
 
-    for clause in [
-        Clause::Guarantees,
-        Clause::DoesNotGuarantee,
-        Clause::Assumes,
-    ] {
+    for clause in Clause::ALL {
         report.line(format_args!(""));
         report.line(format_args!("This log {}:", clause.heading()));
         for statement in CONTRACT.iter().filter(|s| s.clause == clause) {

@@ -1,0 +1,79 @@
+{
+  "package": "windows-ioring-sys",
+  "description": "Sabotages for the epoch-log sample's durability contract as the program presents it (M23.1). The prose in examples/epoch_log/contract.rs is the authoritative contract; CONTRACT is its presentable reduction, and main.rs prints that reduction through Clause::ALL. These cases verify the guards over that path -- that no clause loses its section, no statement becomes unreachable, and no statement renders ragged. Run with tools/run-sabotage.ps1; see tools/README-sabotage.md for the format and for why the results are read the way they are.",
+  "notCoveredHere": "No sabotage here asserts that any particular *rule* is stated -- nothing looks for the word `ring`, or counts assumptions. That is deliberate and is the same reason the tests decline to: a check that the statement list still contains a given sentence is a check of the copy, not of the contract, and it passes exactly when two hand-written copies agree. The claim that the contract says the right things is carried by review of the module prose, which is the authoritative form. Also uncovered: that a new Clause variant reaches Clause::ALL. The exhaustive `match` in Clause::heading forces a new variant to be *handled* at compile time, but nothing forces it into ALL; the `a clause vanishes from the report` case below is the closest reachable proxy, since it exercises the same omission from the other direction.",
+  "sabotages": [
+    {
+      "name": "a clause vanishes from the report",
+      "file": "examples/epoch_log/contract.rs",
+      "expect": "caught",
+      "why": "Clause::ALL drives the report's sections, so a clause dropped from it is never printed. The statements still exist, still compile, and the sample still runs -- it just silently stops telling a reader what it does not guarantee, which for a durability program is the most dangerous section to lose. This is the failure the list exists to make impossible to introduce quietly, and the one main.rs's hand-written array would have allowed.",
+      "find": [
+        "    pub const ALL: [Self; 3] = [Self::Guarantees, Self::DoesNotGuarantee, Self::Assumes];"
+      ],
+      "replace": [
+        "    pub const ALL: [Self; 3] = [Self::Guarantees, Self::Assumes, Self::Assumes];"
+      ]
+    },
+    {
+      "name": "a clause is listed twice",
+      "file": "examples/epoch_log/contract.rs",
+      "expect": "caught",
+      "why": "A repeat in Clause::ALL prints a whole section twice. Harmless-looking and easy to introduce by editing the array rather than replacing it, and the duplicate section reads as though the contract were emphasising something.",
+      "find": [
+        "    pub const ALL: [Self; 3] = [Self::Guarantees, Self::DoesNotGuarantee, Self::Assumes];"
+      ],
+      "replace": [
+        "    pub const ALL: [Self; 3] = [Self::Guarantees, Self::Guarantees, Self::Assumes];"
+      ]
+    },
+    {
+      "name": "two clauses print under one heading",
+      "file": "examples/epoch_log/contract.rs",
+      "expect": "caught",
+      "why": "The worst available failure for this particular program: a caller reading the `guarantees` section would be shown the things the log explicitly does NOT guarantee. Nothing about the statements changes, so every other test stays green and the output is confidently wrong.",
+      "find": [
+        "            Self::DoesNotGuarantee => \"does NOT guarantee\","
+      ],
+      "replace": [
+        "            Self::DoesNotGuarantee => \"guarantees\","
+      ]
+    },
+    {
+      "name": "a statement renders ragged",
+      "file": "examples/epoch_log/contract.rs",
+      "expect": "caught",
+      "why": "The report prints each statement as `  - {text}`, so stray leading whitespace shows up as a misaligned bullet. The statement sources are wrapped across several lines with trailing backslashes, which is exactly the shape where a continuation edit adds or drops a space without anyone noticing.",
+      "find": [
+        "        text: \"durability is monotonic: if epoch N is durable, every earlier epoch is durable too\","
+      ],
+      "replace": [
+        "        text: \" durability is monotonic: if epoch N is durable, every earlier epoch is durable too\","
+      ]
+    },
+    {
+      "name": "a statement is emptied",
+      "file": "examples/epoch_log/contract.rs",
+      "expect": "caught",
+      "why": "An empty statement prints as a bare dash under its heading -- a bullet that says nothing, in a list a reader is told to trust. Catches the case where a statement is gutted rather than removed.",
+      "find": [
+        "        text: \"a record reported durable is present and intact when the log is replayed\","
+      ],
+      "replace": [
+        "        text: \"\","
+      ]
+    },
+    {
+      "name": "CONTROL: rewording a statement changes nothing",
+      "file": "examples/epoch_log/contract.rs",
+      "expect": "survives",
+      "why": "The control that makes the cases above meaningful. These guards check that the reduction survives being *printed* -- they are deliberately indifferent to what any statement says, because asserting a particular sentence would be checking the copy rather than the contract. A suite that caught this would have bound itself to the wording, and every future correction to the contract's prose would arrive as a red test. It must survive.",
+      "find": [
+        "        text: \"a record reported durable is present and intact when the log is replayed\","
+      ],
+      "replace": [
+        "        text: \"a record reported durable is present and intact when the log is read back\","
+      ]
+    }
+  ]
+}

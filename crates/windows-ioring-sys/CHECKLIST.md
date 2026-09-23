@@ -237,7 +237,7 @@ So sequencing turns on other things, and they point the other way:
 Queued from the same session (findings `S-1` and `S-3`). `S-2` is an addendum to `M20.6` rather than an item
 here. `M23.2` builds on the mechanism correction `M20.4` carried, which has landed.
 
-- [ ] **M23.1** -- Say in [contract.rs](examples/epoch_log/contract.rs) that the ring is part of the
+- [x] **M23.1** -- Say in [contract.rs](examples/epoch_log/contract.rs) that the ring is part of the
   durability unit (`S-1`). [D-47](DESIGN-NOTES.md#d-47) withdrew the hold-back half of
   [D-24](DESIGN-NOTES.md#d-24) and kept the other: the barrier still reaches *every* operation outstanding on
   the ring, not only the current submission batch. So a commit's latency is a function of whatever else

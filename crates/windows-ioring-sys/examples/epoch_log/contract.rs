@@ -70,6 +70,13 @@
 //!   committed epoch may be wholly present, wholly absent, or torn, and all
 //!   three are legal outcomes of the same crash. A reader must tolerate all
 //!   three, which is exactly what the replay pass is written to do.
+//! - **No bound on what a commit waits for.** The covering flush's barrier
+//!   reaches *every operation outstanding on the ring when the flush is
+//!   reached* -- not only the records of the epoch being closed. Appends
+//!   already accepted into the *next* epoch are therefore often covered
+//!   incidentally. That incidental coverage is not a promise and must not be
+//!   read as one: a record is durable when **its own** epoch's commit
+//!   completes, which is the guarantee above and the only one.
 //!
 //! # What this contract assumes
 //!
@@ -81,6 +88,10 @@
 //! - **A record is at most one write.** This sample does not split a record
 //!   across writes, so it never has to reason about a partially-written record
 //!   whose pieces landed in different epochs.
+//! - **The log's ring carries only the log's operations.** One ring per log is
+//!   a *precondition* of this contract, not a convenience of how the sample
+//!   happens to be written. See "The ring is part of the durability unit"
+//!   below.
 //!
 //! # Why an epoch at all
 //!
@@ -94,6 +105,39 @@
 //! amortizes one expensive operation over many records -- the group-commit
 //! shape every write-ahead log converges on -- and the price is precisely the
 //! non-guarantees above.
+//!
+//! # The ring is part of the durability unit
+//!
+//! The barrier that makes a commit cover anything reaches **every operation
+//! outstanding on the ring when the flush is reached**. That is the whole of
+//! what a drained flush promises -- D-47 measured the drain half over roughly
+//! 4,500 trials and withdrew the other half -- and nothing narrows it to the
+//! operations of one epoch, one file, or one component.
+//!
+//! Two things follow, and both are properties of the *ring* rather than of this
+//! log:
+//!
+//! - **Scope.** Whatever else is outstanding on that ring is made durable by
+//!   this log's commit, whether or not this log knows it exists.
+//! - **Cost.** This log's commit latency is a function of whatever else shares
+//!   the ring. Somebody else's slow operation is this log's slow commit.
+//!
+//! So the durability unit is not "the log" -- it is **the ring**. That is what
+//! makes one ring per log a precondition of everything above rather than an
+//! implementation detail. A consumer who transplants this pattern onto a shared
+//! ring keeps the guarantee and silently loses the cost model; a consumer whose
+//! log spans *two* rings does not get one durability point across both, and
+//! needs two commits with an explicit join between them.
+//!
+//! **This sample honors the precondition, and does so for a second, independent
+//! reason.** The checkpoint has its own ring ([`crate::checkpoint`]) because a
+//! ring handed to `EventDelivery` is owned by it and cannot also be drained by
+//! the log thread -- a *delivery* argument, and the only one stated at that
+//! point of use. The structure is therefore right twice over, which is
+//! comfortable and is also the hazard: a future change to the delivery model
+//! would retire the reason written down over there, and nothing over there
+//! mentions this one. The separation is load-bearing for durability whatever
+//! the delivery model becomes.
 
 /// Which part of the contract a statement belongs to.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -108,6 +152,21 @@ pub enum Clause {
 }
 
 impl Clause {
+    /// Every clause, in the order a report should present them.
+    ///
+    /// Exists so that a caller printing the contract **asks** for the list
+    /// rather than restating it. [`crate::main`]'s report previously carried
+    /// its own array of the three variants, which would have silently omitted
+    /// a fourth: the report would simply have been one section short, with
+    /// nothing failing.
+    ///
+    /// This list is still hand-maintained -- Rust offers no exhaustive
+    /// iteration of a plain enum. What brings a new variant to the author's
+    /// attention is [`Self::heading`] below, whose `match` is exhaustive and
+    /// will not compile until the new variant is handled; this array sits
+    /// beside it so the two are edited together.
+    pub const ALL: [Self; 3] = [Self::Guarantees, Self::DoesNotGuarantee, Self::Assumes];
+
     /// The heading this clause is printed under.
     pub fn heading(self) -> &'static str {
         match self {
@@ -165,6 +224,13 @@ pub const CONTRACT: &[Statement] = &[
                absent, or torn, and a reader must tolerate all three",
     },
     Statement {
+        clause: Clause::DoesNotGuarantee,
+        text: "that a commit waits only for its own epoch -- the covering flush's barrier reaches \
+               every operation outstanding on the ring when it is reached, so records already \
+               accepted into the next epoch are often covered incidentally, which promises \
+               nothing about them",
+    },
+    Statement {
         clause: Clause::Assumes,
         text: "the device honors the flush and commits its volatile write cache; a device that \
                lies defeats this contract and every other built on the same primitive",
@@ -173,4 +239,13 @@ pub const CONTRACT: &[Statement] = &[
         clause: Clause::Assumes,
         text: "a record is written by at most one write, so no record straddles an epoch boundary",
     },
+    Statement {
+        clause: Clause::Assumes,
+        text: "this log's ring carries only this log's operations -- one ring per log is a \
+               precondition of the contract, not a convenience, because the barrier's scope is \
+               the ring rather than the log",
+    },
 ];
+
+#[cfg(test)]
+mod tests;
