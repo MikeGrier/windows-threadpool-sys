@@ -155,6 +155,32 @@ what is blocked, what is not, and what to run when a real multi-node machine is 
 [DESIGN-SESSION-2026-08-30-numa-sharded-io-execution-domains.md](design-sessions/DESIGN-SESSION-2026-08-30-numa-sharded-io-execution-domains.md)
 under "Working under a hardware gap", and that analysis is unchanged by this section.
 
+### The mechanism: describe the application, not the machine
+
+**The component that removes the up-front commitment is
+[topology-planner](crates/topology-planner/COMPONENT.md)**, and its shape is the thesis made
+concrete. The developer supplies a sufficiently abstract definition of the application's **input,
+output, and processing code paths** -- a dataflow description, which is a statement about their own
+program and something they must know anyway. From it the planner infers the connectivity and
+directed flow needed to realize that graph, with no machine in hand; then, given a physical machine
+model, it returns **one or more suggested realizations** as specific threads pinned to specific
+processor groups, with a stated number of queues of stated types
+([EP-D-6](crates/topology-planner/DESIGN-NOTES.md#ep-d-6)).
+
+Three properties of that arrangement are what make it answer the barrier named above, rather than
+relocating it:
+
+- **The developer never makes a topology decision.** They describe an application; the locality
+  reasoning happens against a machine model, at a point where the machine is actually known, rather
+  than as a bet taken at design time.
+- **The first stage does not involve a machine at all**, so the application's own structure is
+  stable across every machine it will ever run on, and only the second stage is redone when the
+  machine changes.
+- **The answer is plural.** Several arrangements are usually defensible and they differ in ways the
+  planner cannot rank without knowing what the developer values, so it presents candidates and
+  supplies the means to tell them apart. That is OPTION INTEGRITY at component scale -- the same
+  refusal to convert an absence of evidence into a verdict.
+
 ### What follows: no early foreclosure
 
 **Avoid all early foreclosure of techniques that may yield benefits to application
@@ -177,12 +203,21 @@ decide, and they can only do it if we give them the means to measure.
 
 **This section does schedule work**, and so differs from
 [The value is existence, not cleverness](#the-value-is-existence-not-cleverness), which
-deliberately schedules none. The gap between "benefits arrive adaptively out of the
-structure" and what exists today -- where partitioning is an explicit policy a consumer
-selects, deliberately left to them by
-[D-8](crates/windows-ioring-sys/DESIGN-NOTES.md#d-8) -- is queued as `M27` in
-[CHECKLIST.md](crates/windows-ioring-sys/CHECKLIST.md). That milestone asks the question;
-it does not presume the answer is "the library should decide for you".
+deliberately schedules none. The mechanism above is the bulk of it, and it is queued in
+that component's own [CHECKLIST.md](crates/topology-planner/CHECKLIST.md) -- `EP-1+.1` for
+the dataflow description's vocabulary, `EP-1+.5` for the connectivity graph's type, and
+`EP-1+.6` for the plural answer.
+
+What the runtime crates owe is the other end: being **realizable from** a plan they did
+not choose. That is `M27` in
+[windows-ioring-sys/CHECKLIST.md](crates/windows-ioring-sys/CHECKLIST.md), which was first
+written as an adaptivity question for that crate and **re-planned the same day it was
+authored**, because the adaptivity has an owner and it is not there. Answering it in the
+ring crate would have grown a second policy surface beside the planner's -- the
+`outermost_partitioning_cache` defect again, a policy answer landing in a crate whose job
+is something else. [D-8](crates/windows-ioring-sys/DESIGN-NOTES.md#d-8) is untouched by any
+of this: being constructible from a policy decision made elsewhere is the opposite of
+taking one.
 
 ## <a id="the-value-is-existence-not-cleverness"></a>The value is existence, not cleverness: "it is only a SMOP" is why it is missing, not a reason to skip it
 

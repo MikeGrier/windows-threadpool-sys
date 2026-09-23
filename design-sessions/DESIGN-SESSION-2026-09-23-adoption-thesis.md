@@ -136,3 +136,60 @@ than restated: the ARM laptop reporting no L3 and zero nodes
 ([D-48](../crates/windows-ioring-sys/DESIGN-NOTES.md#d-48)), and this host's L3 spanning
 all 16 processors over a real 8-way L2 partition. What is *not* measured is every forward
 step of the cycle, and the Tier 1 section says so.
+
+## Later the same day: the mechanism has a name, and it already existed
+
+The thesis above was recorded without naming the component that delivers it, and the gap was queued
+as an adaptivity question inside `windows-ioring-sys`. The engineer's correction:
+
+> This is why it's the "topology planner". The idea is to have the developer give a sufficiently
+> abstract definition of the application's input, output, and processing code paths and then the
+> topology planner would be able to infer both the general connectivity / directed flow of data
+> needed to realize the graph and then when given a physical machine model would respond with one or
+> more suggested realizations of the graph in terms of specific execution threads pinned on which
+> processor groups, numbers of queues of which types, etc.
+
+[topology-planner](../crates/topology-planner/COMPONENT.md) had been planned since 2026-09-03 and
+its input was the one part left open: `EP-D-4` recorded the goal as an input whose shape was
+"deferred for litigation". That deferral is what this statement discharges, and it is recorded as
+[EP-D-6](../crates/topology-planner/DESIGN-NOTES.md#ep-d-6).
+
+**Three things arrived at once, and only the first was the deferred question.**
+
+1. **The input is a dataflow description** -- the application's input, output, and processing code
+   paths. Not a topology preference and not a set of tuning hints.
+2. **Planning is two stages.** Connectivity and directed flow are inferred with no machine in hand;
+   the machine enters only at the second stage. This was not asked for separately and follows from
+   the first: a derivation that needs no machine should not be entangled with one.
+3. **The answer is plural** -- one or more *suggested* realizations, which the developer chooses
+   between.
+
+**The third is the one worth guarding.** A single returned plan is easier to consume, test and
+document, and those pressures will argue for collapsing the set at some later convenient moment. The
+reason not to is structural: ranking candidates requires knowing what the developer values, and this
+component was handed a description of an application rather than a statement of preference. A
+planner that returns one arrangement has either acquired a preference it was not given or hidden a
+choice it was not entitled to make.
+
+### What this corrected about the morning's work
+
+**`M27` was in the wrong crate.** It had been written that morning, asking whether
+`windows-ioring-sys` should derive a partition for a consumer who expresses no preference. Answering
+that there would have produced a second policy surface beside the planner's -- which is precisely the
+`outermost_partitioning_cache` defect the planner exists to avoid, a policy answer landing in a crate
+whose job is something else. `M27` was re-planned the same day into what the ring crate genuinely
+owes: being **realizable from** a plan it did not choose. The checklist rules require saying that
+plainly rather than silently rewriting the milestone, which is why both the milestone and the two
+PLANS rows describing it now carry the correction.
+
+**The thesis section was incomplete rather than wrong.** It named the barrier -- an architectural
+commitment demanded when the least is known -- and did not name what removes it. The mechanism
+section added afterwards is the answer, and the three properties it lists are each doing work: the
+developer never makes a topology decision, stage 1 is stable across every machine the application
+will run on, and the plural answer is OPTION INTEGRITY at component scale.
+
+**And the deferral held up, which is worth recording.** `EP-D-4`'s goal input had been undefined for
+twenty days across four documents, and nothing was built on a guess in the meantime, because the
+deferral was *named* at every site that mentioned it rather than being an absence. Correcting it was
+a sweep of four sites, all of which were found by grepping the phrase the deferral was recorded
+under. An unnamed omission would have left nothing to grep for.

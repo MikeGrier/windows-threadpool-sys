@@ -479,53 +479,50 @@ reviewable artifact rather than a recording.
   a date, or delete. **Not yet started, and not yet even sampled** -- the candidate above is a guess,
   and the census must come from a command.
 
-## M27 -- Adaptivity: the benefit without the architectural commitment
+## M27 -- What this crate owes the topology planner
 
-Queued by [The adoption thesis](../../DESIGN-NOTES.md#the-adoption-thesis) (2026-09-23). The thesis'
-operative phrase is that a consumer should be able to receive locality benefits **without having to
-write specialized code to receive them**, because the up-front architectural commitment -- "do I want
-to take advantage of NUMA or not?", asked at the moment the least is known -- is identified there as
-the principal reason the concept stayed in the datacenter.
+**Re-planned 2026-09-23, the same day it was written.** M27 was originally "Adaptivity: the benefit
+without the architectural commitment", and asked whether *this crate* should derive a partition for a
+consumer who expresses no preference. That was the wrong owner, and the checklist rules require
+saying so rather than quietly rewriting it. The adaptivity the
+[adoption thesis](../../DESIGN-NOTES.md#the-adoption-thesis) asks for is delivered by
+[topology-planner](../topology-planner/COMPONENT.md), which takes a dataflow description of the
+application and returns one or more suggested realizations
+([EP-D-6](../topology-planner/DESIGN-NOTES.md#ep-d-6)). Had the original M27.1 been answered here it
+would have grown a second, weaker policy surface beside the one that component exists to provide --
+the `outermost_partitioning_cache` defect again, where a policy answer lands in a crate whose job is
+something else.
 
-**The gap is real and is stated as a gap, not as a plan.** Today partitioning is an explicit
-`Policy` a consumer selects in [ring_copy](examples/ring_copy/policy.rs), and the library itself
-offers no partitioning at all, deliberately, under [D-8](DESIGN-NOTES.md#d-8). Nothing in the thesis
-overturns D-8: "make the benefit reachable" and "make the benefit automatic" are different claims,
-and conflating them would have this crate take a workload decision it has repeatedly refused to
-take. So `M27.1` asks the question and the rest are gated on its answer.
+> **-> CROSS-COMPONENT PREREQUISITE:** `M27.1` and `M27.2` are gated on component
+> `crates/topology-planner` -> `M1+` -> `EP-1+.5` and `EP-1+.6`, which decide the plan vocabulary
+> this crate would be realized from. See [CHECKLIST.md](../topology-planner/CHECKLIST.md).
 
-**This milestone does not need NUMA hardware.** Adaptivity is a question about the shape of the API
-and about what is discoverable, both answerable here; the *magnitude* of the benefit is the part
-that is blocked, and it is blocked already.
+**What survives here is the realization end, not the policy end.** The planner emits a plan; the
+outward adapter realizes it as buffers, rings and threads
+([EP-D-5](../topology-planner/DESIGN-NOTES.md#ep-d-5)). That adapter is a separate crate, but it can
+only build what this crate exposes, and nothing has ever checked that what it exposes is sufficient.
+[D-8](DESIGN-NOTES.md#d-8) is untouched by all of this: policy stays out of this crate, and being
+*constructible from* a policy decision made elsewhere is the opposite of taking one.
 
-- [ ] **M27.1** -- Decide what "adaptive" means for this crate, and record it either way. The
-  candidates, in increasing order of what the library takes on: (a) nothing changes -- the consumer
-  selects a policy, and the thesis is served by samples and documentation alone; (b) the crate offers
-  a *derived default* -- a consumer who expresses no preference gets the outermost partitioning cache
-  domain, with the degradation to one domain being a correct answer rather than a fallback; (c) the
-  crate offers a **stated-intent** input -- the consumer declares what they are optimizing for and
-  the topology supplies the partition, which keeps the workload decision with the consumer while
-  removing the topology decision from them. Name what each refuses. The decision must say which of
-  D-8's reasoning survives it, because (b) and (c) both move something D-8 placed outside the
-  library.
+- [ ] **M27.1** -- **Census what a realizer would need from this crate, against the plan vocabulary,
+  and name what is missing.** A plan states which processor a domain pins to, which memory node its
+  pool allocates from, how many queues of which types, and where each channel's buffer lives. Walk
+  each of those to the public API that would realize it and record the gaps. `NumaBuffer`
+  ([D-51](DESIGN-NOTES.md#d-51)) is one half of the pool answer and arrived this month; the ring's
+  own construction takes no placement input at all. **The output is a gap list, not an API** --
+  proposing surface before the plan vocabulary is settled would be binding to a draft.
 
-- [ ] **M27.2** -- **Gated on `M27.1` choosing (b) or (c).** Census what a consumer must write today
-  to get a locality benefit, from the tree rather than from recollection: every step between "I have
-  a workload" and "my buffers and rings are placed", across [ring_copy](examples/ring_copy) and
-  [epoch_log](examples/epoch_log). The count and the shape of that list is the measurement this
-  milestone is actually about -- if it is short, the thesis is already served and `M27.1` should have
-  chosen (a).
+- [ ] **M27.2** -- **Gated on `M27.1` and on the planner's `EP-1+.6`.** Close the gaps the census
+  names, as ordinary capability on this crate with no policy attached. Each gap is an input a caller
+  supplies, never a choice this crate makes. Verify the way the thesis demands rather than the
+  convenient way: construct from a plan built against a *synthetic* machine, since the planner is
+  mockable by construction and this crate should be realizable without the hardware the plan
+  describes.
 
-- [ ] **M27.3** -- **Gated on `M27.2`.** Implement whichever of (b)/(c) was chosen, and verify the
-  claim the way the thesis demands rather than the way that is convenient: the test is that a
-  consumer who writes *no* locality code still lands on a sensible partition on a machine that has
-  one, and on one domain on a machine that does not, with both outcomes reported rather than silent.
-  Sabotage must enter at the topology, not at the policy -- a synthetic topology that partitions and
-  one that does not, per the repository rule that sabotage enters where the real condition enters.
-
-- [ ] **M27.4** -- Give a consumer the means to answer this on their own hardware, which is the
-  thesis' client-side corollary and the half that does **not** depend on `M27.1`. `cache_domains.rs`
-  now prints every cache level beside the heuristic's pick; the equivalent for placement is a sample
-  that reports what a chosen partition costs and what the alternatives would have cost, on the
-  machine in hand. [ring_copy](examples/ring_copy) is the natural host, being already policy-
-  selectable. **Do not ship a verdict** -- report the observation and let the consumer conclude.
+- [ ] **M27.3** -- Give a consumer the means to answer placement questions on their own hardware.
+  **Not gated on the planner** -- it is the client-side half of the thesis, and it is what lets a
+  developer disagree with any plan they are handed. `cache_domains.rs` now prints every cache level
+  beside the heuristic's pick; the equivalent for placement is a sample that reports what a chosen
+  arrangement costs and what the alternatives would have cost, on the machine in hand.
+  [ring_copy](examples/ring_copy) is the natural host, being already policy-selectable. **Do not ship
+  a verdict** -- report the observation and let the consumer conclude, per OPTION INTEGRITY.
