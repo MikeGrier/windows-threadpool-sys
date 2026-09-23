@@ -802,6 +802,13 @@ fn compare_strategies<O: io::Write, E: io::Write>(
         "  these numbers describe THIS machine and THIS device. They are printed rather than \
          quoted in the docs because quoting ours would be misleading."
     ));
+    report.line(format_args!(
+        "  'ack lag' is NOT device flush time. Every strategy defers its await by design, so the \
+         figure is dominated by work done before the program got around to asking -- measured at \
+         p99 = 0 us of actual blocking. A strategy that defers further reports a larger number \
+         while being no slower, which is exactly what alternating-rings does. Compare rec/s. \
+         M25 makes this a real commit measurement; see M20.6."
+    ));
 
     let payload = b"strategy comparison record payload";
     let mut reference: Option<(&'static str, Vec<u8>)> = None;
@@ -887,7 +894,7 @@ fn compare_strategies<O: io::Write, E: io::Write>(
             ),
         }
         report.line(format_args!(
-            "  {:<18} {:>8.0} rec/s  commit p50 {:>7}  p99 {:>7}  max {:>7}  \
+            "  {:<18} {:>8.0} rec/s  ack lag p50 {:>7}  p99 {:>7}  max {:>7}  \
              append stall {:>7}  -- pays {}",
             outcome.strategy.name(),
             outcome.throughput(),
@@ -905,13 +912,17 @@ fn compare_strategies<O: io::Write, E: io::Write>(
     // The spread across strategies is only meaningful next to the spread the
     // *same* strategy shows between runs, so the program says so instead of
     // declaring a winner. On the machine this was written on the two are the
-    // same size, and the reason is visible in the numbers above: every
-    // strategy pays exactly one device flush per epoch, that flush is hundreds
-    // of microseconds, and everything the strategies actually differ about --
-    // how long the flush itself waits, an extra host round trip -- lands in
-    // the tens. The
-    // distinction D-24 draws is real; on this device it is two orders of
-    // magnitude below the dominant term.
+    // same size.
+    //
+    // The reason given here used to be that every strategy pays one device
+    // flush per epoch and the things they differ about land two orders of
+    // magnitude below it. The first half is true. The second is not reachable
+    // on this sample: its handle is synchronous, so a ring operation completes
+    // inline during submit and nothing is ever outstanding across a submit
+    // boundary -- there is no overlap for the strategies to differ in at all.
+    // They are indistinguishable because they do the same serialized work
+    // (M20.6). D-24's distinction is still real; this harness simply cannot
+    // put it under load. M25 rebuilds it so it can.
     //
     // That is not a licence to pick the cheapest-looking one. A device with a
     // fast flush, a log that commits far more often, or an arena under real
@@ -922,8 +933,10 @@ fn compare_strategies<O: io::Write, E: io::Write>(
     if low > 0.0 {
         report.line(format_args!(
             "  spread across strategies: {:.2}x. Run this twice: if the run-to-run spread of one \
-             strategy is the same size, the choice is dominated by the device flush that all \
-             three pay once per epoch.",
+             strategy is the same size, the strategies are not distinguishable on this workload. \
+             Two things make that so here, and only the first was originally claimed: all three \
+             pay one device flush per epoch, AND this sample's handle is synchronous, so no \
+             overlap exists for them to differ in. M25 changes the second.",
             high / low
         ));
     }

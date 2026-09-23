@@ -2381,3 +2381,47 @@ figure and a "recount before starting" caution that had been acted on.
 observation -- one fixture becoming "every fixture", one wait shape becoming "every other test". Each
 was a census away from being right, and each then had an alarm built on top of it. That is the same
 shape as the spike that ran one trial per condition, in the same crate, two days earlier.
+
+### <a id="m206"></a>M20.6 -- Re-evaluate `CommitStrategy::AlternatingRings` and the epoch-log benchmark's conclusion against D-47. *(completed 2026-09-23 12:06:40 -04:00)*
+
+**Question 1 -- does alternating rings still earn its cost? Answered on its stated grounds: no.**
+`S-2` argued that because a covering flush reaches every operation outstanding on its ring, two rings
+bound what a commit's barrier can be dragged into. That is structurally false for this sample and
+needs no measurement: `RegisteredBuffers::get_mut` refuses a busy slot and there are `SLOTS` slots, so
+at most `SLOTS` appends are outstanding on a ring **by construction** -- and each alternating lane
+registers its own arena of the same size. The arena bounds the blast radius, not the ring topology.
+Probing agreed (8 and 8); the argument does not rest on it and holds whatever the platform does about
+pending. The argument survives against genuinely unrelated traffic from another component; this sample
+has none.
+
+**The strategy is deliberately NOT removed.** The item said that if it no longer earns its place, that
+is an API change to a published example -- and the temptation was to make it. What two rings could
+*also* buy is **overlap**, and overlap is precisely what this harness cannot exhibit: its handle is
+synchronous, so a ring operation completes inline during submit and nothing is ever outstanding across
+a submit boundary. Deleting a strategy on the strength of a measurement that could not have shown it
+working would be the same error as the measurements this item exists to correct. `M25.5` answers it on
+a harness where operations genuinely pend.
+
+**Question 2 -- re-read, re-run, or annotate the numbers?** The investigation concluded "none of
+those": the column measures deferral rather than a commit, and prose cannot fix a measurement.
+**That conclusion was right about the measurement and wrong about the output.** Leaving a column
+labelled `commit p50` in a published sample until `M25` lands is shipping a false claim for the sake
+of a purist position on annotation. The column is now `ack lag`, with a caveat line naming the p99 = 0
+blocking measurement, and pointing at `M25`.
+
+**The rustdoc already knew, which is the finding worth keeping.** `Outcome::commit_latencies` already
+said the figure is "not device flush time", that deferral inflates it, and that alternating rings
+"reports the highest latency of the three while matching them on throughput". A previous pass had
+diagnosed the artifact correctly **and only in the rustdoc** -- the printed output never got the same
+treatment, and the M20.6 investigation re-derived from scratch what was already written one file away.
+What the investigation genuinely added is the extent: blocking is not merely a component of the figure,
+it is **0 us at p99**, so the number is entirely deferral; and underneath that, no pipeline exists at
+all.
+
+**Swept the mechanism, not just the label.** The explanation "the strategies differ about how long the
+flush itself waits and the extra host round trip, and those land in the tens" appears in the module
+docs, in a `main.rs` code comment, and in the printed summary line. It is wrong in the same way at all
+three: those differences cannot occur on a synchronous handle. The three are indistinguishable because
+they do the same serialized work -- both readings give the same ranking and only one is true. All three
+corrected, plus the "a real log keeps appending while a commit is outstanding" claim, which describes
+a state this program has never reached.

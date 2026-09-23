@@ -61,55 +61,12 @@ conclusions belong to it until it converges.
   `flush_barrier` assertion was measuring a claim the platform does not honour, so it was never a
   flaky test. -> [completed 2026-09-07](COMPLETED-CHECKLIST.md#m205)
 
-- [ ] **M20.6** -- Re-evaluate `CommitStrategy::AlternatingRings` and the epoch-log benchmark's conclusion
-  against [D-47](DESIGN-NOTES.md#d-47-detail). The strategy comparison in
-  [strategy.rs](examples/epoch_log/strategy.rs) was designed around D-24's claim that a covering flush holds
-  back operations queued behind it: the harness deliberately keeps appending while a commit is outstanding so
-  that the stall would be visible in the numbers. D-47 established there is no such stall, so **the rationale
-  the benchmark rests on is withdrawn even though the measurements themselves stand**. Two things to settle,
-  and they are independent: whether alternating rings still earns its cost now that its stated benefit
-  (keeping appends off a stalled ring) does not exist -- the remaining benefit is that epoch *N+1*'s appends
-  are provably outside epoch *N*, which is a correctness property rather than a throughput one -- and whether
-  the published numbers should be re-read, re-run, or annotated. **Not a documentation-only fix:** if the
-  answer is that the strategy no longer earns its place, that is an API change to a published example.
-  The corrected prose in [strategy.rs](examples/epoch_log/strategy.rs) and
-  [DESIGN-NOTES.md](DESIGN-NOTES.md) both point here.
-  **Addendum from the 2026-09-19 review** (`S-2` in
-  [DESIGN-SESSION-2026-09-19-epoch-log-review.md](design-sessions/DESIGN-SESSION-2026-09-19-epoch-log-review.md)):
-  the remaining benefit is stronger than "a correctness property". [D-47](DESIGN-NOTES.md#d-47) withdrew the
-  hold-back half but kept the other -- the barrier still reaches *every* operation outstanding on the ring --
-  so alternating rings bounds what a commit's barrier can be dragged into: on a shared ring commit latency is
-  unbounded in unrelated traffic, and on alternating rings it is bounded by the epoch. That is a throughput
-  argument after all, sited differently, and it is measurable with the harness that already exists. Unmeasured
-  as of that session. Settle this **after** `M22.1`, whose per-record submit is a shared term in the numbers
-  being re-read.
-  > **`M22.1` has landed and its measurement is in.** The confound is **not supported**: removing
-  > the per-record submission cost left the cross-strategy spread inside a single strategy's own
-  > run-to-run range, so the "indistinguishable" conclusion survives on the grounds it already had.
-  > Twenty runs, ten each side, in
-  > [measurements/2026-09-22-append-batching/](measurements/2026-09-22-append-batching/).
-
-  **Investigated 2026-09-22. Half of this item is answered; the other half needs `M25` first.**
-
-  **Answered, structurally, and it needs no measurement.** Alternating rings cannot reduce the
-  per-ring blast radius: `RegisteredBuffers::get_mut` refuses a slot with an operation outstanding
-  and there are `SLOTS` slots, so at most `SLOTS` appends are outstanding on a ring **by
-  construction** -- and each alternating lane registers its own arena of the same size. The bound is
-  identical either way. Probing it agreed (8 and 8), but the argument does not rest on that, and it
-  holds whatever the platform does about pending. So `S-2`'s "on a shared ring commit latency is
-  unbounded in unrelated traffic" does not apply to this sample: the arena bounds it, not the ring
-  topology. `S-2` would still apply against genuinely unrelated traffic from another component with
-  its own buffers, of which this sample has none.
-
-  **Blocked on `M25` for the rest**, because the numbers this item was to re-read do not measure what
-  they are labelled: blocking p50 **and p99 are 0 us** for all three strategies, so the published
-  commit-latency column is entirely deferral, and `AlternatingRings`' apparently-worse latency is an
-  artifact of it settling on a two-epoch rotation against everyone else's one. Underneath that, the
-  commit's `SubmitIoRing` took 289-555 us and returned with every completion already queued, so no
-  overlap exists to differentiate the strategies at all. Re-reading, re-running or annotating these
-  numbers cannot help; the harness has to change first, which is `M25`.
-  *(Numbered M20.6 rather than M20.5 because M20.5 was in flight on a separate branch when this was
-  written. That branch was closed unmerged; M20.5 arrives here instead, dissolved -- see above.)*
+- [x] **M20.6** -- Re-evaluate `CommitStrategy::AlternatingRings` and the benchmark's conclusion
+  against [D-47](DESIGN-NOTES.md#d-47-detail). Its blast-radius justification is dead on structural
+  grounds; the overlap question is **deliberately left open** for `M25.5`, because the harness
+  cannot exhibit overlap. The strategy is not removed on a measurement that could not have shown it
+  working. The sample's output and prose are corrected so they stop claiming to measure a commit.
+  -> [completed 2026-09-23](COMPLETED-CHECKLIST.md#m206)
 
 
 ## M21 -- Epoch-log review: correctness repairs

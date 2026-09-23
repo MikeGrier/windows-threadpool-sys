@@ -78,6 +78,37 @@
 //! and a reader is better served by knowing that than by a ranking that would
 //! not reproduce.
 //!
+//! ## The conclusion survives; the explanation above does not (M20.6)
+//!
+//! "Indistinguishable" still holds, and `M22.1` re-measured it after removing
+//! a shared per-record cost that could have flattened it. What does not hold
+//! is the *mechanism* this section gives for it. It says the strategies differ
+//! about "how long the flush itself waits" and "the extra host round trip",
+//! and that those land in the tens -- but on this sample's handle **none of
+//! those differences can occur at all**.
+//!
+//! The handle carries no `FILE_FLAG_OVERLAPPED`, so a ring operation completes
+//! inline during `SubmitIoRing`: the commit's submit takes hundreds of
+//! microseconds and returns with every completion already queued. Nothing is
+//! ever outstanding across a submit boundary, so there is no overlap for the
+//! strategies to differ in, and the comment further down claiming "a real log
+//! keeps appending while a commit is outstanding" describes something this
+//! program cannot do.
+//!
+//! So the three are indistinguishable *because they are doing the same
+//! serialized work*, not because a shared dominant term swamps real
+//! differences. Both readings give the same ranking and only one is true.
+//!
+//! **What this does not settle is whether `AlternatingRings` earns its place.**
+//! Its blast-radius justification is dead on structural grounds -- see
+//! [`CommitStrategy::AlternatingRings`] -- but the other thing two rings could
+//! buy is *overlap*, and overlap is precisely what this harness cannot
+//! exhibit. Removing it now would be deciding against it using a measurement
+//! that could not have shown it working. `M25` rebuilds the harness on a
+//! pre-allocated unbuffered log where operations genuinely pend; `M25.5`
+//! re-runs this comparison and answers the question on numbers that mean what
+//! they say.
+//!
 //! Getting that result required fixing the harness three times, which is worth
 //! recording because the mistakes are easy to make and none announces itself:
 //!
@@ -89,6 +120,13 @@
 //!   flush *holds back* those appends. It does not; see D-47. Keeping the
 //!   overlap is still right, but the comparison it produces should be re-read
 //!   with that correction in mind -- see M20.6.)
+//!
+//!   **And `M20.6` found the deeper version of the same error.** Removing the
+//!   serialisation was necessary and not sufficient: on a synchronous handle
+//!   there is no overlap to restore, because the work is already done when
+//!   submit returns. This fix made the harness *able* to overlap and the
+//!   platform still does not, so what the sentence above describes as the
+//!   corrected state has never actually run. `M25` is what makes it true.
 //! - The second version keyed pending commits by `UserData` in one map across
 //!   both rings. Each ring assigns its own sequence, so the two collided and
 //!   half the samples vanished.
@@ -144,6 +182,36 @@ pub enum CommitStrategy {
     /// Two rings, epochs alternating between them, each committed with a
     /// covering flush on its own ring, so the appending ring is never the one
     /// waiting, at the cost of registering the arena twice.
+    ///
+    /// # Its blast-radius justification is dead, on structural grounds (M20.6)
+    ///
+    /// The argument for two rings was that a covering flush reaches *every*
+    /// operation outstanding on its ring ([D-47](../../DESIGN-NOTES.md#d-47)
+    /// withdrew the hold-back half and kept this one), so alternating bounds
+    /// what a commit's barrier can be dragged into. On a shared ring, the
+    /// reasoning went, commit latency is unbounded in unrelated traffic.
+    ///
+    /// Not here, and it needs no measurement to see why.
+    /// `RegisteredBuffers::get_mut` refuses a slot with an operation
+    /// outstanding, and there are `SLOTS` slots -- so at most `SLOTS` appends
+    /// are outstanding on a ring **by construction**. Each alternating lane
+    /// registers its own arena of the same size, so the per-ring bound is
+    /// identical either way. The arena bounds the blast radius, not the ring
+    /// topology. (Probing agreed: 8 and 8. The argument does not rest on that,
+    /// and holds whatever the platform does about pending.)
+    ///
+    /// The argument would still apply against genuinely unrelated traffic from
+    /// another component with its own buffers. This sample has none.
+    ///
+    /// # What is still open
+    ///
+    /// Overlap. Two rings let one ring's appends proceed while the other's
+    /// flush is outstanding, and that is a real thing to buy -- but this
+    /// harness cannot exhibit it, because its handle is synchronous and
+    /// nothing is ever outstanding across a submit boundary. It is deliberately
+    /// **not** removed on the strength of a measurement that could not have
+    /// shown it working; `M25.5` answers that on a harness where operations
+    /// genuinely pend.
     AlternatingRings,
 }
 
@@ -206,6 +274,27 @@ pub struct Outcome {
     /// So compare [`Outcome::elapsed`] across strategies, and read this as
     /// "how stale is a commit acknowledgement by the time this design collects
     /// it" -- which is a real property, just not the one its name suggests.
+    ///
+    /// # Measured, and it is worse than "includes" (M20.6)
+    ///
+    /// The paragraphs above were right about the shape and understated the
+    /// extent. Decomposing the figure into deferral (flush pushed -> harness
+    /// next looked) and blocking (time actually waiting) gives **blocking p50
+    /// and p99 of 0 us for all three strategies**: the harness never waits for
+    /// a flush at all, so this is not "inflated by" deferral, it *is*
+    /// deferral. What it measures is how long the next epoch's appends took.
+    ///
+    /// The cause is underneath the harness. The commit's `SubmitIoRing` takes
+    /// hundreds of microseconds and returns with every completion already
+    /// queued, because the sample's handle carries no `FILE_FLAG_OVERLAPPED`
+    /// and a synchronous handle completes a ring operation inline. So the
+    /// commit is already durable before this clock starts -- and the overlap
+    /// the comparison is built on does not exist.
+    ///
+    /// `M25` rebuilds the harness on a pre-allocated unbuffered log, where a
+    /// commit genuinely pends and this becomes a real measurement. Until then
+    /// the printed column is labelled "ack lag" rather than "commit", because
+    /// a reader of the *output* deserves what a reader of this doc gets.
     pub commit_latencies: Vec<Duration>,
     /// Time appends spent blocked because every arena slot was busy.
     ///
