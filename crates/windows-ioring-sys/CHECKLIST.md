@@ -248,24 +248,23 @@ So sequencing turns on other things, and they point the other way:
   `Accounting` now owns them with 19 hermetic tests, and `IoRing` delegates nine methods.
   -> [completed 2026-09-22](COMPLETED-CHECKLIST.md#m242)
 
-- [ ] **M24.7** -- **Convert the lib tests that construct a ring only to exercise bookkeeping.**
-  `M24.2` said "most of the 38 lib tests that currently reach crate-private items become hermetic
-  *in place*"; that is the **payoff** of the extraction rather than part of it, and doing 71 test
-  conversions inside the extraction's commit would have been a different item wearing its name.
-  Measured after `M24.2` landed, per file: `batch` 18 tests / 15 ring constructions,
-  `event_delivery` 6/6, `ring` 40/35, `token` 7/8 -- against 93 tests already hermetic across
-  `accounting`, `buf`, `capability`, `contract`, `error` and `numa_buffer`.
-  **Recount before starting and do not trust those figures**: they are a per-file `IoRing::new`
-  count, not a per-test one, and a first pass at this census produced false positives by matching
-  `to_string()` with a sloppy pattern.
-  Complementary to `M24.3`, which relocates the public-API ones; between them they should drain the
-  71. A test that genuinely needs the kernel stays and moves to `tests/` -- the point is that a test
-  of *bookkeeping* should not need a ring to reach its subject.
+- [x] **M24.7** -- Convert the lib tests that construct a ring only to exercise bookkeeping.
+  **61 -> 52**, by narrowing `Token::new` to take the ring's ledger rather than the ring. The
+  remaining 52 are not convertible and the reason is structural, not effort -- see the archive.
+  -> [completed 2026-09-22](COMPLETED-CHECKLIST.md#m247)
 
-- [ ] **M24.3** -- Relocate the 25 lib tests that open a ring but use **only public API** into
+- [ ] **M24.3** -- Relocate the lib tests that open a ring but use **only public API** into
   `tests/`. A pure relocation, and it carries the split provenance trail the repository requires of
   any move: `Split-Source` / `Split-Into` trailers, and a `git blame -w -C1 -C1` check that the moved
   lines still trace to their original commits rather than to the move.
+  **`M24.7` established that this is the remedy for the rest, not conversion.** After it, 52 lib
+  tests still open a ring, and none is convertible: `event_delivery` (6) needs a real ring and the
+  pool; `ring`'s injected-failure cluster deliberately transforms a **real** completion, because
+  fabricating one is the unsoundness the seam exists to avoid; and `batch` (13) needs a `Batch`,
+  which needs the handle. The last group becomes convertible only under `M26.2`'s FFI seam, which
+  is a far larger change than relocation.
+  **Recount first**, per `M24.7`: the item previously said "25", which predates two milestones of
+  test growth.
 
 - [x] **M24.4** -- **Withdrawn by `M24.1` (2026-09-22).** A shared conformance suite over a
   hand-written fake is superseded by the response-space resolver in `M26`, which serves the same

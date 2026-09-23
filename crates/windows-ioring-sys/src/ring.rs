@@ -854,6 +854,15 @@ impl IoRing {
         self.accounting.cancel_reservation();
     }
 
+    /// This ring's ledger, for the crate's own minting paths (M24.2).
+    ///
+    /// Handed out rather than proxied so that a `Token` can be minted from
+    /// the bookkeeping alone -- which is what lets `token.rs`'s tests run
+    /// without a kernel ring, since minting is all they ever needed one for.
+    pub(crate) fn accounting_mut(&mut self) -> &mut Accounting {
+        &mut self.accounting
+    }
+
     /// This ring's native handle, for `batch.rs`'s `Build*`/`Submit` calls.
     pub(crate) fn raw_handle(&self) -> *mut c_void {
         self.handle

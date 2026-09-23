@@ -262,7 +262,7 @@ fn a_pending_buffer_registration_claims_only_its_own_completion() {
     // one leaves `-> 1` indistinguishable -- both of which survived in turn
     // while this test was being written.
     for expected in 0..2 {
-        let burned = crate::Token::new(&mut ring, vec![0_u8; 1]).expect("mint a token");
+        let burned = crate::Token::new(ring.accounting_mut(), vec![0_u8; 1]).expect("mint a token");
         assert_eq!(
             burned.id(),
             expected,

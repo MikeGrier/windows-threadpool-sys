@@ -2234,3 +2234,39 @@ lib tests "become hermetic *in place*". That is 71 tests across four files, whic
 wearing this one's name; it is queued as `M24.7` with the measured per-file census, and with a warning
 that the census must be recounted because the first attempt at it produced false positives by matching
 `to_string()`.
+
+### <a id="m247"></a>M24.7 -- Convert the lib tests that construct a ring only to exercise bookkeeping. *(completed 2026-09-22 21:43:29 -04:00)*
+
+**The recount the item demanded was right to demand.** Its figure of 71 was a per-*file*
+`IoRing::new` count. A per-*test* census gives **61**, and the difference is not rounding -- a file
+with 40 tests and 35 constructions has five tests that never touch a ring.
+
+**61 -> 52.** Two changes, one structural and one an excision.
+
+**`Token::new` now takes the ring's ledger rather than the ring.** It only ever used
+`reserve_user_data()` and `ring_id()`, both bookkeeping, so the wide parameter was the only reason
+`token`'s tests opened a ring at all -- **all seven of them, to mint a token and nothing else.** The
+ring was actively a liability there: none of those tests ever submitted, so `Drop`'s run-down would
+wait for completions that were never coming, and a `settle` helper existed purely to stop teardown
+hanging. The helper is gone with the hazard it worked around. `token` is now 7 hermetic, 0 opening.
+
+**Two `ring` tests were removed rather than converted**, being duplicates of what `M24.2`'s hermetic
+tests now cover: `reserve_user_data_increments_outstanding_and_never_repeats_an_id` and
+`record_completion_saturates_rather_than_underflowing`. Deleting them loses no delegation coverage --
+`run_down_returns_once_a_recorded_completion_zeroes_the_count` already drives reserve, `outstanding`
+and `record_completion` through `IoRing`, and must keep a ring for its own sake.
+
+**The remaining 52 are not convertible, and the reason is structural rather than effort.** Recorded
+here so the next reader does not re-derive it:
+
+- `event_delivery` (6) needs a real ring and the thread pool. There is nothing to narrow.
+- `ring`'s injected-failure cluster **looks** convertible by name and is not. It uses a real
+  completion on purpose -- one test says so in an assertion message, "the flush really did succeed,
+  or this test proves nothing" -- because `with_injected_failure` *transforms* a real completion, and
+  fabricating one is precisely the unsoundness the seam exists to avoid.
+- `batch` (13) needs a `Batch`, which needs the handle for its `Build*` calls. Narrowing that
+  parameter is not possible the way `Token`'s was; it becomes reachable only under `M26.2`'s FFI
+  seam, which is a far larger change.
+
+So **relocation, not conversion, is the remedy for the rest**, which is `M24.3` -- updated with this
+finding and with a warning to recount its own stale figure of 25.

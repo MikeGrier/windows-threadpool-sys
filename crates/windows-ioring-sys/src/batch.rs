@@ -1241,7 +1241,7 @@ impl<'ring> Batch<'ring> {
         let len = checked_len(buffer.bytes_len())?;
         let address = buffer.stable_mut_ptr().cast::<c_void>();
         let target = handle_ref(file.into(), self.ring.ring_id())?;
-        let token = Token::new(self.ring, buffer)?;
+        let token = Token::new(self.ring.accounting_mut(), buffer)?;
         let user_data = token.id();
         // SAFETY: `self.ring`'s handle is live; `address` is `IoBufMut`'s
         // promised stable, exclusively-owned pointer, valid for `len` bytes
@@ -1281,7 +1281,7 @@ impl<'ring> Batch<'ring> {
         let len = checked_len(buffer.bytes_len())?;
         let address = buffer.stable_mut_ptr().cast::<c_void>();
         let target = handle_ref(file.as_file_ref(), self.ring.ring_id())?;
-        let token = Token::new(self.ring, (buffer, file.guard()))?;
+        let token = Token::new(self.ring.accounting_mut(), (buffer, file.guard()))?;
         let user_data = token.id();
         // SAFETY: `self.ring`'s handle is live; `address` is `IoBufMut`'s
         // promised stable, exclusively-owned pointer, valid for `len` bytes
@@ -1332,7 +1332,7 @@ impl<'ring> Batch<'ring> {
         let len = checked_len(buffer.bytes_len())?;
         let address = buffer.stable_ptr().cast_mut().cast::<c_void>();
         let target = handle_ref(file.into(), self.ring.ring_id())?;
-        let token = Token::new(self.ring, buffer)?;
+        let token = Token::new(self.ring.accounting_mut(), buffer)?;
         let user_data = token.id();
         // SAFETY: `address` is `IoBuf`'s promised stable pointer, valid for
         // `len` bytes until `token` is claimed; the kernel only reads
@@ -1373,7 +1373,7 @@ impl<'ring> Batch<'ring> {
         let len = checked_len(buffer.bytes_len())?;
         let address = buffer.stable_ptr().cast_mut().cast::<c_void>();
         let target = handle_ref(file.as_file_ref(), self.ring.ring_id())?;
-        let token = Token::new(self.ring, (buffer, file.guard()))?;
+        let token = Token::new(self.ring.accounting_mut(), (buffer, file.guard()))?;
         let user_data = token.id();
         // SAFETY: as `write_raw`'s; `target` stays valid at least as long as
         // `token`'s hold on `file`'s guard does (see `Batch::read`).
@@ -1545,7 +1545,7 @@ impl<'ring> Batch<'ring> {
     ) -> io::Result<Token<F::Guard>> {
         self.require(Op::Flush)?;
         let target = handle_ref(file.as_file_ref(), self.ring.ring_id())?;
-        let token = Token::new(self.ring, file.guard())?;
+        let token = Token::new(self.ring.accounting_mut(), file.guard())?;
         let user_data = token.id();
         // SAFETY: `target` stays valid at least as long as `token`'s hold on
         // `file`'s guard does (see `Batch::read`); there is no buffer.
@@ -1623,7 +1623,7 @@ impl<'ring> Batch<'ring> {
     ) -> io::Result<Token<F::Guard>> {
         self.require(Op::Cancel)?;
         let handle = handle_ref(file.as_file_ref(), self.ring.ring_id())?;
-        let token = Token::new(self.ring, file.guard())?;
+        let token = Token::new(self.ring.accounting_mut(), file.guard())?;
         let user_data = token.id();
         // SAFETY: `handle` stays valid at least as long as `token`'s hold on
         // `file`'s guard does (see `Batch::read`);
@@ -1844,7 +1844,7 @@ impl<'ring> Batch<'ring> {
         let target = handle_ref(file.into(), self.ring.ring_id())?;
         let index = registration.checked_span(span)?;
         let token = Token::new(
-            self.ring,
+            self.ring.accounting_mut(),
             registration.begin_use(span, KernelAccess::WritesBuffer),
         )?;
         let user_data = token.id();
@@ -1893,7 +1893,7 @@ impl<'ring> Batch<'ring> {
         let target = handle_ref(file.as_file_ref(), self.ring.ring_id())?;
         let index = registration.checked_span(span)?;
         let token = Token::new(
-            self.ring,
+            self.ring.accounting_mut(),
             (
                 registration.begin_use(span, KernelAccess::WritesBuffer),
                 file.guard(),
@@ -1946,7 +1946,7 @@ impl<'ring> Batch<'ring> {
         let target = handle_ref(file.into(), self.ring.ring_id())?;
         let index = registration.checked_span(span)?;
         let token = Token::new(
-            self.ring,
+            self.ring.accounting_mut(),
             registration.begin_use(span, KernelAccess::ReadsBuffer),
         )?;
         let user_data = token.id();
@@ -1993,7 +1993,7 @@ impl<'ring> Batch<'ring> {
         let target = handle_ref(file.as_file_ref(), self.ring.ring_id())?;
         let index = registration.checked_span(span)?;
         let token = Token::new(
-            self.ring,
+            self.ring.accounting_mut(),
             (
                 registration.begin_use(span, KernelAccess::ReadsBuffer),
                 file.guard(),

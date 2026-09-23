@@ -105,17 +105,6 @@ fn nop_read_and_write_are_supported_on_any_real_ring() {
 // --- outstanding-operation accounting and rundown (M2.4) ---
 
 #[test]
-fn reserve_user_data_increments_outstanding_and_never_repeats_an_id() {
-    let mut ring = IoRing::new(64, 128).expect("create ring");
-    let a = ring.reserve_user_data().expect("reserve a");
-    let b = ring.reserve_user_data().expect("reserve b");
-    assert_ne!(a, b);
-    assert_eq!(ring.outstanding(), 2);
-    ring.record_completion();
-    ring.record_completion();
-}
-
-#[test]
 fn run_down_is_a_no_op_when_nothing_is_outstanding() {
     let mut ring = IoRing::new(64, 128).expect("create ring");
     ring.run_down().expect("run_down with nothing outstanding");
@@ -135,18 +124,6 @@ fn run_down_returns_once_a_recorded_completion_zeroes_the_count() {
     ring.run_down()
         .expect("run_down with the count already settled");
     assert_eq!(ring.outstanding(), 0);
-}
-
-#[test]
-fn record_completion_saturates_rather_than_underflowing() {
-    let mut ring = IoRing::new(64, 128).expect("create ring");
-    assert_eq!(ring.outstanding(), 0);
-    ring.record_completion();
-    assert_eq!(
-        ring.outstanding(),
-        0,
-        "recording more completions than were ever reserved must not wrap"
-    );
 }
 
 #[test]
