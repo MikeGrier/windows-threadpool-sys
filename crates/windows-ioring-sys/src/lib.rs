@@ -119,13 +119,22 @@
 //! sizing a Model B execution domain to the caller. Three pointers, not a
 //! partitioning policy:
 //!
-//! - **Size a domain by last-level (L3) cache, not by NUMA node.** Node count
-//!   is a firmware setting a process cannot see (AMD NPS, Intel Sub-NUMA
-//!   Clustering), and most real deployments are virtualized, where NUMA
-//!   topology is often invisible entirely. `GetLogicalProcessorInformationEx`
-//!   filtered to `RelationCache` / `CacheLevel == 3` degrades sanely instead:
-//!   one reported domain on a VM is correct. See `examples/l3_domains.rs` for
-//!   a runnable enumeration (M6.3), built on the safe wrapper in
+//! - **Size a domain by the outermost cache level that partitions the
+//!   machine, not by NUMA node.** Node count is a firmware setting a process
+//!   cannot see (AMD NPS, Intel Sub-NUMA Clustering), and most real
+//!   deployments are virtualized, where NUMA topology is often invisible
+//!   entirely. A cache partition degrades sanely instead: a machine whose
+//!   caches partition nothing yields one ring, which is correct.
+//!
+//!   **Ask which level partitions; do not filter on `CacheLevel == 3`.**
+//!   `MachineMemoryTopology::outermost_partitioning_cache` is the one
+//!   definition, and it is not a convenience wrapper over that filter: a
+//!   shipping ARM part reports no L3 at all, and a machine can report an L3
+//!   spanning every processor above a real L2 partition -- where filtering on
+//!   level 3 does not even degrade, because it matched something. It returns
+//!   one whole-machine domain and calls it a cache-aware partition. See
+//!   `examples/cache_domains.rs` for a runnable enumeration (M6.3), built on
+//!   the safe wrapper in
 //!   [`windows-topology-sys`](https://docs.rs/windows-topology-sys).
 //! - **Processor groups are a hard floor.** A thread's affinity is a
 //!   `GROUP_AFFINITY` and a ring's waiter lives in exactly one group, so above

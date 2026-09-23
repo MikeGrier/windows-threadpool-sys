@@ -663,7 +663,7 @@ that previously stood in the way are gone:
   every case observed so far. It is weaker than its own comment claims, and the comment must be
   corrected even if the check is not.
 
-- [ ] **SH-4.12** -- **`ring_copy`'s `ByL3` policy restates the partition rule instead of asking for
+- [x] **SH-4.12** -- **`ring_copy`'s `ByL3` policy restates the partition rule instead of asking for
   it.** Raised by Copilot at reviews `5116772196` and `5116886015`.
   [policy.rs](crates/windows-ioring-sys/examples/ring_copy/policy.rs) selects domains with
   `matches!(domain.kind, DomainKind::Cache { level: 3, .. })`. The reshaped topology model makes
@@ -675,7 +675,12 @@ that previously stood in the way are gone:
   This is the consumer-side twin of the platform-integrity rule: bind to the specified primitive, not
   to the level number that happens to be L3 on today's hardware. The fix renames the policy as well
   as changing it, since `byl3` is a user-facing CLI value that would no longer describe what it does.
-  > **COUPLED TO `M20.1`** in
+  > **DONE 2026-09-22, together with `M20.1`** -- the two were one change: the prose rule and the code
+  > that implements it could not land separately without the doc describing something the code did not do.
+  > Measuring the old filter while replacing it found a shape neither item anticipated: this workspace's
+  > own machine reports an L3 spanning all 16 processors above a real 8-way L2 partition, so `level: 3`
+  > matched, did **not** degrade, and returned one whole-machine domain as a successful cache-aware
+  > partition. Previously coupled to `M20.1` in
   > [crates/windows-ioring-sys/CHECKLIST.md](crates/windows-ioring-sys/CHECKLIST.md) -- **do this item
   > first**, then that one. `M20.1` sweeps the L3 rule's prose, which reaches `policy.rs`'s doc comments.
   > Recorded 2026-09-19: M20's header had asserted that no defect was found in `ring_copy`, which this

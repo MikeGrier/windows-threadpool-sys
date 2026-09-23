@@ -35,7 +35,8 @@
 use std::collections::BTreeMap;
 
 use windows_topology_sys::{
-    Domain, DomainKind, MachineMemoryTopology, Observed, Processor, ProcessorId, ProcessorSet,
+    CacheKind, Domain, DomainKind, MachineMemoryTopology, Observed, Processor, ProcessorId,
+    ProcessorSet,
 };
 
 use super::Policy;
@@ -97,6 +98,19 @@ fn core(ids: &[(u16, u8)]) -> Domain {
         DomainKind::Core {
             simultaneous_multithreading: false,
             efficiency_class: 0,
+        },
+        ids,
+    )
+}
+
+fn cache(level: u8, ids: &[(u16, u8)]) -> Domain {
+    domain(
+        DomainKind::Cache {
+            level,
+            associativity: 0,
+            line_size: 0,
+            size_bytes: 0,
+            cache_type: CacheKind::Unified,
         },
         ids,
     )
@@ -230,6 +244,88 @@ fn degrading_unconditionally_would_fail_a_test_here() {
     );
 }
 
+// ----------------------------------------------------- ByCache (SH-4.12) ---
+
+#[test]
+fn by_cache_selects_the_level_that_partitions_not_the_level_numbered_three() {
+    // The regression this policy was rewritten for, and it is not
+    // hypothetical: measured on the machine this repository is developed on,
+    // which reports an L3 spanning all 16 processors and a real 8-way L2
+    // partition underneath it. The old `level: 3` filter found that L3,
+    // returned ONE whole-machine domain, and -- because it matched something
+    // -- did not flag the result degraded. It reported success while
+    // collapsing an 8-domain machine to a single ring.
+    let topology = machine(vec![
+        cache(2, &[(0, 0), (0, 1)]),
+        cache(2, &[(0, 2), (0, 3)]),
+        cache(3, &[(0, 0), (0, 1), (0, 2), (0, 3)]),
+    ]);
+    let (domains, degraded) = Policy::ByCache.select(&topology);
+
+    assert!(!degraded);
+    assert_eq!(
+        domains.len(),
+        2,
+        "L2 partitions this machine; L3 covers all of it and partitions nothing"
+    );
+    assert!(
+        domains
+            .iter()
+            .all(|d| matches!(d.kind, DomainKind::Cache { level: 2, .. })),
+        "the level chosen is the one that splits the machine, not the larger number"
+    );
+}
+
+#[test]
+fn by_cache_degrades_when_the_only_cache_spans_the_whole_machine() {
+    // A cache every processor shares offers no boundary to size a ring by, so
+    // the honest answer is one ring *reported as degraded* -- not one ring
+    // reported as a cache-aware partition, which is what the old filter did.
+    let topology = machine(vec![cache(3, &[(0, 0), (0, 1), (0, 2), (0, 3)])]);
+    let (domains, degraded) = Policy::ByCache.select(&topology);
+
+    assert!(degraded, "one block is not a partition");
+    assert!(is_whole_machine(&domains));
+}
+
+#[test]
+fn by_cache_degrades_when_no_cache_is_reported_at_all() {
+    let topology = machine(vec![package(&[(0, 0), (0, 1), (0, 2), (0, 3)])]);
+    let (domains, degraded) = Policy::ByCache.select(&topology);
+
+    assert!(degraded);
+    assert!(is_whole_machine(&domains));
+}
+
+#[test]
+fn by_cache_works_on_a_machine_whose_outermost_partition_is_l2() {
+    // D-48's shape: a shipping ARM part with no L3 at all, whose natural
+    // cluster boundary is L2. The old filter returned zero domains here and
+    // degraded; this returns the partition that exists.
+    let topology = machine(vec![
+        cache(2, &[(0, 0), (0, 1)]),
+        cache(2, &[(0, 2), (0, 3)]),
+    ]);
+    let (domains, degraded) = Policy::ByCache.select(&topology);
+
+    assert!(
+        !degraded,
+        "this machine has a cache partition, it is just not L3"
+    );
+    assert_eq!(domains.len(), 2);
+}
+
+#[test]
+fn by_cache_is_not_spelled_byl3_any_more() {
+    // The rename is the point, not a side effect: `byl3` named a rule this
+    // sample no longer implements, and accepting it would let a script keep
+    // asking for L3 and keep believing it got L3.
+    assert_eq!(Policy::parse("bycache"), Some(Policy::ByCache));
+    assert_eq!(Policy::parse("cache"), Some(Policy::ByCache));
+    assert_eq!(Policy::parse("byl3"), None, "byl3 must not silently map on");
+    assert_eq!(Policy::parse("l3"), None, "nor l3");
+}
+
 // ------------------------------------------------------- Single, and edges ---
 
 #[test]
@@ -330,6 +426,8 @@ fn the_fallback_domain_carries_no_observations() {
 #[test]
 fn a_policy_name_round_trips_through_parse() {
     for (name, expected) in [
+        ("bycache", Policy::ByCache),
+        ("cache", Policy::ByCache),
         ("bynode", Policy::ByNode),
         ("node", Policy::ByNode),
         ("bypackage", Policy::ByPackage),

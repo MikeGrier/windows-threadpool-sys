@@ -218,11 +218,15 @@ This crate does not partition anything for you (D-8): it makes a ring cheap and
 correct, makes its affinity explicit, and leaves sizing a Model B execution
 domain to the caller.
 
-- **Size a domain by last-level (L3) cache, not by NUMA node.** Node count is a
+- **Size a domain by the outermost cache level that partitions the machine, not by NUMA node.** Node count is a
   firmware setting a process cannot see, and most real deployments are
-  virtualized, where NUMA topology is often invisible entirely. See
-  [examples/l3_domains.rs](examples/l3_domains.rs) for a runnable enumeration,
-  built on the safe `GetLogicalProcessorInformationEx` wrapper in
+  virtualized, where NUMA topology is often invisible entirely. Ask
+  `outermost_partitioning_cache()` rather than filtering on `CacheLevel == 3`:
+  a shipping ARM part reports no L3 at all, and a machine can report an L3
+  spanning every processor above a real L2 partition, where a level filter
+  returns one whole-machine domain and calls it a cache-aware partition. See
+  [examples/cache_domains.rs](examples/cache_domains.rs) for a runnable
+  enumeration, built on the safe `GetLogicalProcessorInformationEx` wrapper in
   [`windows-topology-sys`](../windows-topology-sys/README.md).
 - **Processor groups are a hard floor.** A thread's affinity is a
   `GROUP_AFFINITY` and a ring's waiter lives in exactly one group, so above 64
@@ -236,7 +240,7 @@ domain to the caller.
 
 `examples/ring_copy` is where these three points become runnable policy: it
 copies one file to another through per-domain rings, sized by a named
-`ByL3`/`ByNode`/`ByPackage`/`ByCore`/`Single` policy, with placed buffers and a
+`ByCache`/`ByNode`/`ByPackage`/`ByCore`/`Single` policy, with placed buffers and a
 `--placement local|remote` switch to make the placement effect measurable. It
 is a **sample**, not library surface -- this crate itself depends on no
 partitioning policy and does not depend on `windows-topology-sys`; only the

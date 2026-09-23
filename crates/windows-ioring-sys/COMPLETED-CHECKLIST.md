@@ -2127,3 +2127,40 @@ have asserted a measurement nobody made -- in a test whose subject is honest rep
 `ring_copy` was auto-discovered and therefore **not a test target**, so `cargo test` would have compiled
 these and run nothing. It now has an explicit `[[example]]` entry with `test = true`, the same reason
 `epoch_log` has one.
+
+### <a id="m201"></a>M20.1 -- Restate the cache heuristic as "the outermost cache level that actually partitions the machine", sweep every restatement, and replace the consumer that bound to the level number. *(completed 2026-09-22 20:27:15 -04:00)*
+
+**Done together with `SH-4.12`, because they are one change.** That coupling was real, unlike `M20.3`'s:
+this item's sweep reaches `policy.rs`'s doc comments, and rewriting those to describe the new rule while
+the code still filtered `level: 3` is exactly the contradiction the blast-radius convention exists to
+prevent. Splitting them would have produced a commit whose documentation lied.
+
+**The item's evidence was a shipping ARM part with no L3. Measuring the consumer found a second shape,
+on this workspace's own development machine, that nobody had anticipated.** It reports an L3 spanning
+**all 16 processors** above a real **8-way L2** partition. So the old filter did not fail the way the
+item assumed:
+
+| | domains selected | reported degraded? |
+|---|---|---|
+| old `level: 3` filter | **1**, mask `0xffff` | **no** |
+| `outermost_partitioning_cache()` | **8**, at L2 | no |
+
+The old code *matched something*, so it did not degrade -- it reported success while collapsing an
+eight-domain machine to a single ring. A silent wrong answer, not a visible fallback, and live on the
+machine this repository is developed on rather than on hardware nobody here owns.
+
+Three consumers restated the rule, not the two the items named. `ring_copy`'s `policy.rs` and the prose
+were known; `examples/l3_domains.rs` also hardcoded `cache.level == 3` and was named after the
+assumption. It is now `examples/cache_domains.rs`, asks the same primitive, and reports the level it
+found -- `git mv` kept its history.
+
+**`byl3` and `l3` are rejected rather than aliased.** They named a rule the sample no longer implements;
+mapping them onto `ByCache` would let a script keep asking for L3 and keep believing it got L3, which on
+an L2-partitioned machine is a wrong answer delivered quietly. An unknown policy prints the usage line,
+which is a question rather than a wrong answer.
+
+Five tests were added to the file `M20.3` created two hours earlier -- the assertion `SH-4.12` had
+inherited. Re-injecting the `level: 3` filter fails three of them, including the one that pins the
+measured shape above. The swept sites: `DESIGN-NOTES.md` (the heuristic section, the sizing note, the
+policy list, D-27's pointer, and D-48's own "restating the rule is M20.1" reference, which was itself a
+restatement that would have gone stale), `README.md`, `src/lib.rs`, both examples, and both checklists.

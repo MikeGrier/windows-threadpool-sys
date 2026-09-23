@@ -37,22 +37,10 @@ must follow it. `M20.2` and `M20.4` are done. `M20.6` is gated the other way, on
 The design questions the session opened are deliberately **not** queued here. It is still open, and its
 conclusions belong to it until it converges.
 
-- [ ] **M20.1** -- Correct the L3 heuristic's justification in
-  [DESIGN-NOTES.md](DESIGN-NOTES.md). It currently says the last-level-cache domain "is meaningful on Intel
-  and ARM too, where the NUMA node often is not." **Measured counter-example:** a Snapdragon X2 Elite
-  (X2E80100, Qualcomm Oryon; 12 cores, no SMT) reports **zero** L3 cache domains -- `L3CacheSize = 0` from
-  WMI, and `GetLogicalProcessorInformationEx` yields L1 and L2 only, with L2 forming two domains of six
-  processors that agree with the two `Module` domains. The claim that L3 is meaningful on ARM is false on a
-  shipping part. Keep the finding that L3 beats the NUMA node; restate the rule as **the outermost cache
-  level that actually partitions the machine**, and say what happens when no such level is reported. Sweep
-  every restatement of the L3 rule per the repository's blast-radius convention, including the README and
-  `ring_copy`'s `policy.rs` doc comments, not only the one sentence quoted above.
-  > **COUPLED TO `SH-4.12`** in [CHECKLIST-ship-topology-and-queues.md](../../CHECKLIST-ship-topology-and-queues.md)
-  > -- do that item first. It rewrites `Policy::select` to ask `outermost_partitioning_cache()` and
-  > **renames the policy**, since `byl3` is a user-facing CLI value that would no longer describe what it
-  > does. This item's sweep reaches `policy.rs`'s doc comments, so running it first would make the doc
-  > describe a rule the code below it does not implement -- the contradiction the blast-radius convention
-  > exists to prevent.
+- [x] **M20.1** -- Restate the cache heuristic as "the outermost cache level that actually partitions
+  the machine", sweep every restatement, and replace the consumer that bound to the level number.
+  Done together with `SH-4.12`, which is the code half of the same change.
+  -> [completed 2026-09-22](COMPLETED-CHECKLIST.md#m201)
 
 - [x] **M20.2** -- Record the 2026-08-30 ARM measurement as a decision, beside the zero-NUMA-node
   observation it is the sibling of.
