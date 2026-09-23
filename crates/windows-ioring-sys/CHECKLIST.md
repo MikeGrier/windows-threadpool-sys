@@ -237,22 +237,7 @@ So sequencing turns on other things, and they point the other way:
 Queued from the same session (findings `S-1` and `S-3`). `S-2` is an addendum to `M20.6` rather than an item
 here. `M23.2` builds on the mechanism correction `M20.4` carried, which has landed.
 
-- [x] **M23.1** -- Say in [contract.rs](examples/epoch_log/contract.rs) that the ring is part of the
-  durability unit (`S-1`). [D-47](DESIGN-NOTES.md#d-47) withdrew the hold-back half of
-  [D-24](DESIGN-NOTES.md#d-24) and kept the other: the barrier still reaches *every* operation outstanding on
-  the ring, not only the current submission batch. So a commit's latency is a function of whatever else
-  shares the ring, and "one ring per log" is a **precondition** of this sample's durability contract rather
-  than a convenience of how it happens to be written. `contract.rs` is where this sample states its
-  preconditions, and was deliberately written before the code; it does not currently say this.
-
-  **Execution refined the claim, and the refinement is the interesting part.** The item -- and `S-1`
-  before it -- said one ring per log is a precondition of the *durability contract*. Writing it found
-  that two scopes had been conflated: `IOSQE_FLAGS_DRAIN_PRECEDING_OPS` is a **ring** flag and
-  `BuildIoRingFlushFile` names a **file**, so the barrier bounds what a commit *waits for* while the
-  flush bounds what it *makes durable*. Completion is not durability -- this contract says so about a
-  record's own write -- so a shared ring does **not** endanger the guarantee, which the flush's own
-  file target secures. What it endangers is the cost model. Recorded because the first draft of this
-  work shipped the conflation, and a question caught it rather than the gate.
+- [x] **M23.1** -- State in the epoch-log contract that the barrier is ring-wide while the flush names a file, so one ring per log is a precondition of the cost model. -> [completed 2026-09-23](COMPLETED-CHECKLIST.md#m231)
 
 - [ ] **M23.2** -- Decide whether this crate accepts a **declared storage node** as an input, or stays
   at "you allocate, you choose". The node question is not discoverable -- `FSCTL_QUERY_VOLUME_NUMA_INFO`

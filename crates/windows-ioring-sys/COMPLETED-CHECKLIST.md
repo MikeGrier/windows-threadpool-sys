@@ -2454,3 +2454,45 @@ consumer the means to answer this on their own hardware, not handing them a verd
 Nothing about the measurement corrections in the entry above changes: the ack-lag relabel, the p99 = 0
 blocking finding, and the swept mechanism claim all stand. What changed is the conclusion drawn from
 them.
+
+### <a id="m231"></a>M23.1 -- State in the epoch-log contract that the barrier is ring-wide while the flush names a file, so one ring per log is a precondition of the cost model. *(completed 2026-09-23 17:03:35 -04:00)*
+
+*Queued from finding `S-1` of the 2026-09-19 epoch-log review.*
+
+**The item was right that the contract was silent, and wrong about what it was silent on.**
+`S-1` reasoned from [D-47](DESIGN-NOTES.md#d-47)'s surviving half -- the barrier reaches every
+operation outstanding on the ring, not only the current submission batch -- and concluded that
+"one ring per log" is a precondition of the sample's *durability contract*.
+[contract.rs](examples/epoch_log/contract.rs), written before the code precisely so it would state
+preconditions, said nothing about it.
+
+**Writing it found two scopes conflated, and the first draft shipped the conflation.**
+`IOSQE_FLAGS_DRAIN_PRECEDING_OPS` is a flag on the **ring**; `BuildIoRingFlushFile` names a
+**file**. So the barrier bounds what a commit *waits for* and the flush bounds what it *makes
+durable*, and completion is not durability -- a claim the same file already made three paragraphs
+earlier, about a record's own write. The corrected reading: a shared ring does **not** endanger the
+guarantee, which the flush's own file target secures. It endangers the **cost model**, because the
+barrier waits for unrelated traffic unconditionally.
+
+**Three commits, because the first two were not right.** `d845bb28` added the section, an
+assumption, a non-guarantee, `Clause::ALL` -- replacing a hand-written variant list in `main.rs`
+that would have printed one section short had a fourth clause ever been added -- five tests over the
+report's own properties, and the crate's first [sabotage.json](sabotage.json): five injected defects
+caught, plus a control that rewords a statement and survives, so the guards are sensitive to the
+report degrading without being bound to the contract's wording. `4adea675` corrected the
+conflation. `48dc99d3` right-sized what the correction had grown into -- a title giving the device
+equal billing with the ring, plus a bullet and a milestone pointer about multi-device reach, in a
+sample that runs one log file on one ring.
+
+**The conflation was caught by a question, not by the gate**, which stayed green across all three:
+every test passed, the sabotage sweep reported all six cases as declared, and the two contradictory
+sentences sat a screen apart in one file. The tests check that the report *prints* correctly and
+deliberately not what it *says*, so nothing built here could have found it.
+
+**Two things this work left elsewhere.** The primitive-level half moved to the library under
+[D-54](DESIGN-NOTES.md#d-54): the barrier/flush scope distinction is a fact about one flush, so it
+belongs on `FlushCoverage` rather than only in a sample's contract. And
+[checkpoint.rs](examples/epoch_log/checkpoint.rs) gained the reciprocal note -- it already took its
+own ring, for an unrelated *delivery* reason (D-21), so the structure was right twice over with only
+one reason written down. Both sites now point at each other, so collapsing the rings cannot look
+harmless from either end.
