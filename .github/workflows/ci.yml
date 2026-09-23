@@ -153,6 +153,23 @@ jobs:
         shell: pwsh
         run: ./tools/check-borrow-surface.ps1
 
+  # The same mechanism, for a different population that also grew unnoticed:
+  # lib tests that open a real kernel ring. D-49 found 63 of them, which made
+  # `cargo test --lib` an integration suite wearing a unit suite's name. M24 took
+  # it to 41 and none of those is movable without M26.2, so a zero-check would
+  # fail on day one -- hence an inventory, which fails when the SET changes. An
+  # addition obliges the question "does this need the kernel, or only a
+  # ring-shaped thing?"; a removal is progress and needs only regeneration.
+  # Needs no toolchain -- it only reads files.
+  ring-test-population:
+    name: ioring ring-opening lib tests
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: Run check-ring-tests.ps1
+        shell: pwsh
+        run: ./tools/check-ring-tests.ps1
+
   build-test:
     name: build + test
     runs-on: windows-latest

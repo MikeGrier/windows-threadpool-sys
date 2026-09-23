@@ -263,20 +263,11 @@ So sequencing turns on other things, and they point the other way:
   the same structural one `M24.7` found.
   -> [completed 2026-09-22](COMPLETED-CHECKLIST.md#m243)
 
-- [ ] **M24.5** -- Put the rule on a rung, so it cannot regress.
-  **The rule the item assumed is not the rule that is true, and this must be settled before the
-  check is written.** It said that after `M24.2` and `M24.3` "the lib tests should construct no ring
-  at all", so a check for *zero* `IoRing::new` under `src/**/tests.rs` would do. Measured after both
-  landed: **41 remain**, and `M24.7`/`M24.3` established they are not movable -- `event_delivery`
-  needs the pool, the injected-failure cluster needs a *real* completion by design, `batch` needs
-  the handle, and several reach `#[cfg(test)] pub(crate)` helpers that only exist inside the crate.
-  So a zero-check would fail on day one and could only be satisfied by deleting real coverage.
-  Decide what the rung actually asserts. Candidates: a **ratchet** (the count may fall, never rise),
-  an allow-list of the modules that legitimately need a ring, or no check at all until `M26.2`'s FFI
-  seam makes the remainder reachable. Whichever is chosen, **verify it in both directions** per the
-  bidirectional-guard rule -- it must fire on a newly-added ring-opening lib test and stay silent
-  otherwise. A check that cannot fire is decoration, which `M21+.1` established this repository can
-  ship without noticing.
+- [x] **M24.5** -- Put the rule on a rung. An **inventory** of which lib tests open a ring
+  ([D-53](DESIGN-NOTES.md#d-53)), not the zero-check the item assumed -- that rule is false and
+  could only be satisfied by deleting coverage. The guard's own bidirectional check found a defect
+  in the guard.
+  -> [completed 2026-09-22](COMPLETED-CHECKLIST.md#m245)
 
 - [ ] **M24.6** -- Sweep what this milestone makes false. The testing-strategy section of
   [DESIGN-NOTES.md](DESIGN-NOTES.md#testing-strategy-m185) describes which population each technique

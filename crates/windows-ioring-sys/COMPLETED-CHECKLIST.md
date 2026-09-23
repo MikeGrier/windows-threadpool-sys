@@ -2302,3 +2302,30 @@ that after `M24.2` and `M24.3` the lib tests would "construct no ring at all", s
 do. Forty-one remain and none is movable, so a zero-check would fail on day one and could only be
 satisfied by deleting real coverage. The item now asks what the rung should actually assert -- a
 ratchet, an allow-list, or nothing until `M26.2` -- rather than presuming the answer.
+
+### <a id="m245"></a>M24.5 -- Put the rule on a rung, so it cannot regress. *(completed 2026-09-22 23:44:37 -04:00)*
+
+**The rule the item assumed was false, and that is the decision this item really made**
+([D-53](DESIGN-NOTES.md#d-53)). It expected a zero-check -- "the lib tests should construct no ring at
+all" -- which would have failed on day one and could only ever be satisfied by deleting real coverage.
+Forty-one remain and none is movable without `M26.2`.
+
+So the rung is an **inventory**: [RING-OPENING-LIB-TESTS.txt](RING-OPENING-LIB-TESTS.txt), regenerated
+from source by [check-ring-tests.ps1](../../tools/check-ring-tests.ps1), failing when the two
+disagree. Deliberately the same mechanism as the borrow-surface check, so there is nothing new to
+explain. Per-test rather than per-file, because two thirds of the 41 live in `ring/tests.rs` and a
+file-level allow-list would let exactly that file grow. An inventory rather than a count, because
+add-one-remove-one nets to zero and a bare number is derived data nobody can check by reading.
+
+**The bidirectional verification found a defect in the guard, which is the whole reason the rule
+demands it.** Direction 3 -- a test that reaches a ring only through a helper -- reported the expected
+test *and an innocent one*. The body extraction ended at the next `#[`, so a plain helper defined
+after the last test in a file was swallowed into that test's body, and a helper containing
+`IoRing::new` made the test above it look ring-opening. The body now ends at a column-0 `}`, which
+`cargo fmt` guarantees is a function end. Had only the "must fire" direction been run, the check would
+have shipped with a false positive that fires on innocent changes -- the fastest way to train people
+to ignore it.
+
+Four directions verified after the fix: fires on a direct `IoRing::new`, fires on a ring reached only
+through a helper, stays silent on a new hermetic test, and reports removals as progress needing only
+regeneration. Wired into CI as its own job beside `borrow-surface`; needs no toolchain.
