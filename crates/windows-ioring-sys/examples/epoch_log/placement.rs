@@ -133,6 +133,38 @@ impl Placement {
 }
 
 /// The NUMA node `handle`'s volume reports, if it reports one.
+///
+/// # Why this calls `DeviceIoControl` directly
+///
+/// This sample already depends on `windows-overlapped-io-sys` and already
+/// issues two other `FSCTL`s through its typed adapter --
+/// [`reclaim.rs`](../reclaim.rs) uses `BlockingEndpoint::ioctl` for
+/// `FSCTL_SET_SPARSE` and `FSCTL_SET_ZERO_DATA`. Using the raw call *here* and
+/// the adapter *there* looks like an inconsistency, and the note exists because
+/// it was read as one: the two sites differ in their handles, not in their care.
+///
+/// The adapter is unavailable to this function for two independent reasons,
+/// either of which alone would be enough:
+///
+/// - **The handle is borrowed.** `decide` takes a `RawHandle` that the log's
+///   `File` owns. `UnassociatedEndpoint::assume_overlapped` takes an
+///   `OwnedHandle`, so routing through it would transfer ownership and close
+///   the log's handle out from under it.
+/// - **The handle is synchronous.** The log is opened with a plain
+///   `OpenOptions` and carries no `FILE_FLAG_OVERLAPPED`; `BlockingEndpoint`
+///   issues an *overlapped* `DeviceIoControl`, and `assume_overlapped`'s safety
+///   contract requires the handle actually be overlapped. Calling it here would
+///   be unsound, not merely awkward.
+///
+/// `reclaim.rs` meets neither constraint because it opens its own handle with
+/// `UnassociatedEndpoint::open`, which always sets `FILE_FLAG_OVERLAPPED` and
+/// yields an owned endpoint. That is a second open, which this function
+/// deliberately avoids -- the documented `FSCTL` accepts the file handle the log
+/// already holds.
+///
+/// **`M25.3` lifts the second reason** by opening the log
+/// `NO_BUFFERING | OVERLAPPED`. The first still stands, so revisit this then
+/// rather than assuming it resolves itself.
 fn volume_numa_node(handle: RawHandle) -> io::Result<u32> {
     let mut node: u32 = u32::MAX;
     let mut returned: u32 = 0;

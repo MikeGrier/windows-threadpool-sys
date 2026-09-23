@@ -388,6 +388,17 @@ must leave the log correct if the platform completes inline tomorrow.
   harness's own files. **Verify by sabotage that the pre-allocation is load-bearing**, since an
   extending `NO_BUFFERING` write pends only ~1% of the time and would otherwise look like it works.
 
+  **This item changes a constraint two other files state as fact, so sweep them with it.**
+  [strategy.rs](examples/epoch_log/strategy.rs) says in two places that the handle carries no
+  `FILE_FLAG_OVERLAPPED` and reasons from it; [placement.rs](examples/epoch_log/placement.rs)'s
+  `volume_numa_node` documents that it cannot use `windows-overlapped-io-sys`'s typed
+  `BlockingEndpoint::ioctl` partly *because* the handle is synchronous. Making the handle overlapped
+  removes that half of the reason -- the other half, that `decide` borrows a handle the log's `File`
+  owns while `assume_overlapped` demands an `OwnedHandle`, is untouched and still forbids it. So the
+  expected outcome is a **narrowed comment, not a refactor**; if it looks like a refactor, re-read
+  the ownership half first. (Recorded because the inconsistency between those two FSCTL call styles
+  was already misread once, by its own author, two days after writing it.)
+
 - [ ] **M25.4** -- Measure the commit, now that there is one to measure. Report the flush's own
   duration rather than the deferral window, and keep the deferral visible as its own number so the
   two cannot be confused again. Whatever is reported must still be meaningful if an operation
