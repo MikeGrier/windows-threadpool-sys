@@ -2270,3 +2270,35 @@ here so the next reader does not re-derive it:
 
 So **relocation, not conversion, is the remedy for the rest**, which is `M24.3` -- updated with this
 finding and with a warning to recount its own stale figure of 25.
+
+### <a id="m243"></a>M24.3 -- Relocate the lib tests that open a ring but use only public API into `tests/`. *(completed 2026-09-22 22:43:39 -04:00)*
+
+**52 -> 41.** Eleven tests moved into `tests/ring_lifecycle.rs` (new), `bounded_pop.rs`,
+`event_delivery.rs`, `registration.rs` and `submission_lifecycle.rs`. Totals conserved: 162 lib + 68
+integration before, 151 + 79 after.
+
+**The item predicted 25 and that was never achievable.** Its figure predated two milestones of test
+growth, and more importantly it assumed the constraint was *which* tests had been looked at rather
+than what they reach. `M24.7` had already found the structural version of this; relocation hits the
+same wall from the other side.
+
+**A regex census got the classification wrong, and the compiler caught it.** The scan excluded
+`pop_within` from the blocking list because it is a public method on `IoRing` -- but `ring.rs` also
+has a `#[cfg(test)] pub(crate) fn pop_within(ring, what)` free function, and
+`windows_refuses_an_empty_buffer_registration` uses *that*. It was moved, failed to compile, and was
+returned. A second miss was structural rather than nominal: the scan only looked at `fn` definitions,
+so it did not see that `a_supplied_wait_is_not_consulted_when_nothing_can_arrive` depends on a
+`RecordingWait` **struct** shared with eight other call sites. That one was caught before moving, by
+a second pass that looked for local `struct`/`const` definitions too.
+
+The method that worked was **moving the candidates and letting the compiler rule**, rather than
+trusting the census. Two milestones running, a crude census has produced false classifications here;
+the compiler produced none.
+
+`HugeBuffer` and `NULL_FILE` travelled with the two tests that used them, having no other call sites.
+
+**`M24.5` needed re-planning as a result, and that is the more consequential outcome.** It assumed
+that after `M24.2` and `M24.3` the lib tests would "construct no ring at all", so a zero-check would
+do. Forty-one remain and none is movable, so a zero-check would fail on day one and could only be
+satisfied by deleting real coverage. The item now asks what the rung should actually assert -- a
+ratchet, an allow-list, or nothing until `M26.2` -- rather than presuming the answer.

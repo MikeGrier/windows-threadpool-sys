@@ -1198,3 +1198,27 @@ fn get_refuses_a_buffer_a_read_is_landing_into_but_allows_one_a_write_is_reading
 
     let _ = std::fs::remove_file(&path);
 }
+
+// ------------------------------------------------------------------------
+// Relocated from `src/batch/tests.rs` at 9bc0350e (M24.3).
+
+#[test]
+fn the_debug_rendering_names_the_registration_and_its_identity() {
+    // `<impl Debug for PendingBufferRegistration<B>>::fmt -> Ok(Default::default())`
+    // survived: that mutation writes nothing to the formatter, so the
+    // rendering comes back empty regardless of what the registration holds.
+    let mut ring = IoRing::new(8, 8).expect("create ring");
+    let mut batch = Batch::new(&mut ring);
+    let pending = batch
+        .register_buffers(vec![vec![0_u8; 64]])
+        .expect("queue buffer registration");
+    let rendering = format!("{pending:?}");
+    assert!(
+        rendering.contains("PendingBufferRegistration"),
+        "got {rendering}"
+    );
+    assert!(
+        rendering.contains(&pending.user_data().to_string()),
+        "the operation's identity must appear: {rendering}"
+    );
+}

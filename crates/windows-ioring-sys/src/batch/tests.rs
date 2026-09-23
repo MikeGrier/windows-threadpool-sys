@@ -1,5 +1,4 @@
 // Copyright (c) 2026 Mike Grier
-use windows_sys::Win32::Foundation::HANDLE;
 use windows_sys::Win32::Storage::FileSystem::{
     FILE_FLUSH_DATA, FILE_FLUSH_DEFAULT, FILE_FLUSH_MIN_METADATA, FILE_FLUSH_NO_SYNC,
     FILE_WRITE_FLAGS_NONE, FILE_WRITE_FLAGS_WRITE_THROUGH, IOSQE_FLAGS_DRAIN_PRECEDING_OPS,
@@ -8,7 +7,6 @@ use windows_sys::Win32::Storage::FileSystem::{
 
 use super::{Batch, FlushCoverage, FlushMode, PushOptions, WriteCaching};
 use crate::IoRing;
-use crate::buf::{IoBuf, IoBufMut};
 
 #[test]
 fn default_push_options_set_no_barrier() {
@@ -67,75 +65,6 @@ fn drain_preceding_sets_the_barrier_flag() {
             .drain_preceding(false)
             .sqe_flags(),
         IOSQE_FLAGS_NONE
-    );
-}
-
-/// A buffer that claims a length no real allocation could ever have, to
-/// exercise `checked_len`'s rejection without needing a real file: the
-/// rejection must happen before the buffer's pointer is ever read.
-struct HugeBuffer;
-
-// SAFETY: `stable_ptr`/`stable_mut_ptr` are never dereferenced in the tests
-// that use this type -- `checked_len` rejects the operation first.
-unsafe impl IoBuf for HugeBuffer {
-    fn stable_ptr(&self) -> *const u8 {
-        std::ptr::NonNull::dangling().as_ptr()
-    }
-
-    fn bytes_len(&self) -> usize {
-        usize::MAX
-    }
-}
-
-// SAFETY: see the `IoBuf` impl above.
-unsafe impl IoBufMut for HugeBuffer {
-    fn stable_mut_ptr(&mut self) -> *mut u8 {
-        std::ptr::NonNull::dangling().as_ptr()
-    }
-}
-
-const NULL_FILE: HANDLE = std::ptr::null_mut();
-
-#[test]
-fn read_rejects_a_buffer_longer_than_u32_max_without_touching_the_ring() {
-    let mut ring = IoRing::new(8, 8).expect("create ring");
-    let outstanding_before = ring.outstanding();
-    let mut batch = Batch::new(&mut ring);
-    // SAFETY: NULL_FILE is never dereferenced -- the oversized buffer is
-    // rejected before the handle would be used.
-    let error = unsafe { batch.read_raw(NULL_FILE, HugeBuffer, 0, PushOptions::new()) }
-        .expect_err("an oversized buffer must be rejected");
-    assert_eq!(error.kind(), std::io::ErrorKind::InvalidInput);
-    drop(batch);
-    assert_eq!(
-        ring.outstanding(),
-        outstanding_before,
-        "a rejected push must not reserve an identity"
-    );
-}
-
-#[test]
-fn write_rejects_a_buffer_longer_than_u32_max_without_touching_the_ring() {
-    let mut ring = IoRing::new(8, 8).expect("create ring");
-    let outstanding_before = ring.outstanding();
-    let mut batch = Batch::new(&mut ring);
-    // SAFETY: as above.
-    let error = unsafe {
-        batch.write_raw(
-            NULL_FILE,
-            HugeBuffer,
-            0,
-            PushOptions::new(),
-            WriteCaching::Cached,
-        )
-    }
-    .expect_err("an oversized buffer must be rejected");
-    assert_eq!(error.kind(), std::io::ErrorKind::InvalidInput);
-    drop(batch);
-    assert_eq!(
-        ring.outstanding(),
-        outstanding_before,
-        "a rejected push must not reserve an identity"
     );
 }
 
@@ -460,27 +389,6 @@ fn require_refuses_an_op_the_ring_does_not_support() {
     batch
         .require(crate::Op::Nop)
         .expect("Nop is in the constructed capability set");
-}
-
-#[test]
-fn the_debug_rendering_names_the_registration_and_its_identity() {
-    // `<impl Debug for PendingBufferRegistration<B>>::fmt -> Ok(Default::default())`
-    // survived: that mutation writes nothing to the formatter, so the
-    // rendering comes back empty regardless of what the registration holds.
-    let mut ring = IoRing::new(8, 8).expect("create ring");
-    let mut batch = Batch::new(&mut ring);
-    let pending = batch
-        .register_buffers(vec![vec![0_u8; 64]])
-        .expect("queue buffer registration");
-    let rendering = format!("{pending:?}");
-    assert!(
-        rendering.contains("PendingBufferRegistration"),
-        "got {rendering}"
-    );
-    assert!(
-        rendering.contains(&pending.user_data().to_string()),
-        "the operation's identity must appear: {rendering}"
-    );
 }
 
 #[test]

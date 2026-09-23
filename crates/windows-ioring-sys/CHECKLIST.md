@@ -253,31 +253,30 @@ So sequencing turns on other things, and they point the other way:
   remaining 52 are not convertible and the reason is structural, not effort -- see the archive.
   -> [completed 2026-09-22](COMPLETED-CHECKLIST.md#m247)
 
-- [ ] **M24.3** -- Relocate the lib tests that open a ring but use **only public API** into
-  `tests/`. A pure relocation, and it carries the split provenance trail the repository requires of
-  any move: `Split-Source` / `Split-Into` trailers, and a `git blame -w -C1 -C1` check that the moved
-  lines still trace to their original commits rather than to the move.
-  **`M24.7` established that this is the remedy for the rest, not conversion.** After it, 52 lib
-  tests still open a ring, and none is convertible: `event_delivery` (6) needs a real ring and the
-  pool; `ring`'s injected-failure cluster deliberately transforms a **real** completion, because
-  fabricating one is the unsoundness the seam exists to avoid; and `batch` (13) needs a `Batch`,
-  which needs the handle. The last group becomes convertible only under `M26.2`'s FFI seam, which
-  is a far larger change than relocation.
-  **Recount first**, per `M24.7`: the item previously said "25", which predates two milestones of
-  test growth.
-
 - [x] **M24.4** -- **Withdrawn by `M24.1` (2026-09-22).** A shared conformance suite over a
   hand-written fake is superseded by the response-space resolver in `M26`, which serves the same
   purpose without encoding a belief about the platform at all. Nothing is deferred by this: `M24`'s
   goal is a hermetic lib suite, and `M24.2` plus `M24.3` achieve that without it.
 
-- [ ] **M24.5** -- Put the rule on a rung, so it cannot regress. After `M24.2` and `M24.3` the lib
-  tests should construct no ring at all; assert that mechanically rather than by review -- a check
-  that no `src/**/tests.rs` constructs an `IoRing`, wired into CI beside
-  [check-borrow-surface.ps1](../../tools/check-borrow-surface.ps1).
-  **Verify it in both directions**, per the bidirectional-guard rule: it must fire on a lib test that
-  opens a ring, and stay silent on one that does not. A check that cannot fire is decoration, which
-  `M21+.1` established this repository can ship without noticing.
+- [x] **M24.3** -- Relocate the lib tests that open a ring but use only public API into `tests/`.
+  **52 -> 41.** Eleven moved; the "25" the item predicted was never achievable, and the reason is
+  the same structural one `M24.7` found.
+  -> [completed 2026-09-22](COMPLETED-CHECKLIST.md#m243)
+
+- [ ] **M24.5** -- Put the rule on a rung, so it cannot regress.
+  **The rule the item assumed is not the rule that is true, and this must be settled before the
+  check is written.** It said that after `M24.2` and `M24.3` "the lib tests should construct no ring
+  at all", so a check for *zero* `IoRing::new` under `src/**/tests.rs` would do. Measured after both
+  landed: **41 remain**, and `M24.7`/`M24.3` established they are not movable -- `event_delivery`
+  needs the pool, the injected-failure cluster needs a *real* completion by design, `batch` needs
+  the handle, and several reach `#[cfg(test)] pub(crate)` helpers that only exist inside the crate.
+  So a zero-check would fail on day one and could only be satisfied by deleting real coverage.
+  Decide what the rung actually asserts. Candidates: a **ratchet** (the count may fall, never rise),
+  an allow-list of the modules that legitimately need a ring, or no check at all until `M26.2`'s FFI
+  seam makes the remainder reachable. Whichever is chosen, **verify it in both directions** per the
+  bidirectional-guard rule -- it must fire on a newly-added ring-opening lib test and stay silent
+  otherwise. A check that cannot fire is decoration, which `M21+.1` established this repository can
+  ship without noticing.
 
 - [ ] **M24.6** -- Sweep what this milestone makes false. The testing-strategy section of
   [DESIGN-NOTES.md](DESIGN-NOTES.md#testing-strategy-m185) describes which population each technique

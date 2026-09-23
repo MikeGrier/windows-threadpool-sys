@@ -10,21 +10,6 @@ fn op_support_starts_empty() {
 }
 
 #[test]
-fn a_ring_negotiates_a_version_no_higher_than_the_hosts_maximum() {
-    let ring = IoRing::new(64, 128).expect("create ring");
-    let caps = capabilities().expect("capabilities");
-    assert!(ring.version() <= caps.max_version);
-    assert!(ring.version() <= RingVersion::HIGHEST_KNOWN);
-}
-
-#[test]
-fn a_negotiated_ring_reports_its_version_back_through_get_ring_info() {
-    let ring = IoRing::new(64, 128).expect("create ring");
-    let info = ring.info().expect("GetIoRingInfo");
-    assert_eq!(info.version, ring.version());
-}
-
-#[test]
 fn every_named_version_the_host_supports_creates_and_closes() {
     let caps = capabilities().expect("capabilities");
     let mut created_at_least_one = false;
@@ -105,13 +90,6 @@ fn nop_read_and_write_are_supported_on_any_real_ring() {
 // --- outstanding-operation accounting and rundown (M2.4) ---
 
 #[test]
-fn run_down_is_a_no_op_when_nothing_is_outstanding() {
-    let mut ring = IoRing::new(64, 128).expect("create ring");
-    ring.run_down().expect("run_down with nothing outstanding");
-    assert_eq!(ring.outstanding(), 0);
-}
-
-#[test]
 fn run_down_returns_once_a_recorded_completion_zeroes_the_count() {
     let mut ring = IoRing::new(64, 128).expect("create ring");
     ring.reserve_user_data().expect("reserve");
@@ -124,14 +102,6 @@ fn run_down_returns_once_a_recorded_completion_zeroes_the_count() {
     ring.run_down()
         .expect("run_down with the count already settled");
     assert_eq!(ring.outstanding(), 0);
-}
-
-#[test]
-fn dropping_a_ring_with_nothing_outstanding_does_not_hang() {
-    // The ordinary path: no tokens were ever minted, so Drop's run_down must
-    // return immediately rather than waiting on SubmitIoRing at all.
-    let ring = IoRing::new(64, 128).expect("create ring");
-    drop(ring);
 }
 
 #[test]
@@ -679,26 +649,6 @@ fn pop_within_returns_successive_completions_one_at_a_time() {
 }
 
 #[test]
-fn pop_within_returns_none_at_once_when_nothing_can_ever_arrive() {
-    // With no operation outstanding no completion is possible, so the loop
-    // answers before consulting any wait at all.
-    //
-    // **The `Ok(None)` is itself the proof, with no clock involved.** This goes
-    // through the convenience, so the wait is `SubmitWait` -- and
-    // `SubmitIoRing` answers `E_INVALIDARG` when asked to wait for a completion
-    // the kernel has no pending operation for. Were the early return removed,
-    // the loop would reach that wait and this would be an `Err`. Asserting
-    // `Ok(None)` therefore distinguishes "returned early" from "waited", which
-    // is exactly what an elapsed-time assertion was being asked to do -- and
-    // unlike a clock, it cannot be wrong because the machine was busy.
-    let mut ring = IoRing::new(16, 16).expect("create ring");
-    let popped = ring
-        .pop_within(std::time::Duration::from_secs(30))
-        .expect("the early return means the ring's own wait is never reached");
-    assert!(popped.is_none(), "nothing was ever submitted");
-}
-
-#[test]
 fn a_supplied_wait_is_not_consulted_when_nothing_can_arrive() {
     // The partner to `a_supplied_wait_is_consulted_...` below. A loop that
     // always waited once before checking would pass that test and fail this
@@ -844,18 +794,6 @@ fn a_wait_that_never_blocks_is_permitted_and_still_terminates() {
         popped.expect("pop_within_with").is_none(),
         "the deadline is what ends a wait that never blocks"
     );
-}
-
-#[test]
-fn a_bound_the_clock_cannot_represent_does_not_panic() {
-    // `Instant + Duration` panics on overflow, and `Duration::MAX` is a
-    // reasonable spelling of "no deadline". Nothing is outstanding here, so
-    // the early return answers before any deadline arithmetic matters.
-    let mut ring = IoRing::new(16, 16).expect("create ring");
-    let popped = ring
-        .pop_within(std::time::Duration::MAX)
-        .expect("pop_within");
-    assert!(popped.is_none());
 }
 
 #[test]

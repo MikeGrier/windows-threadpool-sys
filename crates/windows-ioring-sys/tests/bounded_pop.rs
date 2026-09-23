@@ -314,3 +314,39 @@ fn dropping_a_ring_with_a_pending_operation_does_not_panic() {
 
     writer.join().expect("the writer thread");
 }
+
+// ------------------------------------------------------------------------
+// Relocated from `src/ring/tests.rs` at 9bc0350e (M24.3). Pure relocation;
+// these reach nothing crate-private, which is what let them move.
+
+#[test]
+fn pop_within_returns_none_at_once_when_nothing_can_ever_arrive() {
+    // With no operation outstanding no completion is possible, so the loop
+    // answers before consulting any wait at all.
+    //
+    // **The `Ok(None)` is itself the proof, with no clock involved.** This goes
+    // through the convenience, so the wait is `SubmitWait` -- and
+    // `SubmitIoRing` answers `E_INVALIDARG` when asked to wait for a completion
+    // the kernel has no pending operation for. Were the early return removed,
+    // the loop would reach that wait and this would be an `Err`. Asserting
+    // `Ok(None)` therefore distinguishes "returned early" from "waited", which
+    // is exactly what an elapsed-time assertion was being asked to do -- and
+    // unlike a clock, it cannot be wrong because the machine was busy.
+    let mut ring = IoRing::new(16, 16).expect("create ring");
+    let popped = ring
+        .pop_within(std::time::Duration::from_secs(30))
+        .expect("the early return means the ring's own wait is never reached");
+    assert!(popped.is_none(), "nothing was ever submitted");
+}
+
+#[test]
+fn a_bound_the_clock_cannot_represent_does_not_panic() {
+    // `Instant + Duration` panics on overflow, and `Duration::MAX` is a
+    // reasonable spelling of "no deadline". Nothing is outstanding here, so
+    // the early return answers before any deadline arithmetic matters.
+    let mut ring = IoRing::new(16, 16).expect("create ring");
+    let popped = ring
+        .pop_within(std::time::Duration::MAX)
+        .expect("pop_within");
+    assert!(popped.is_none());
+}
