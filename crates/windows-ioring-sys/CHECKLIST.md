@@ -289,6 +289,25 @@ here. `M23.2` builds on the mechanism correction `M20.4` carried, which has land
   this item's subject; its *priority* is low, and the two are easy to confuse when the reasoning is
   interesting.
 
+  **Open question raised 2026-09-23, not resolved here: is (b) even at this level?** The engineer's
+  reading is that the interaction between rings, durability and flushing arrives with the **epoch**
+  concept rather than with the ring primitive, and the item's own wording is the evidence for it --
+  every operative noun in (b) is epoch-layer: two *logs*, contending at every *commit*. This crate has
+  neither. It has `Batch::flush(file, coverage, mode)`; `Epoch` lives in the sample and is planned
+  as its own crate (C-3, and M33+.5 in
+  [CHECKLIST-io-domains.md](../../CHECKLIST-io-domains.md)).
+
+  The line that seems to hold: **this crate owns what *one* flush means** -- the coverage flag, the
+  mode, the barrier's ring-wide scope -- because those are facts about the primitive, and `D-23`
+  already forced one of them into the API. **The durability layer owns what a *group* costs** -- how
+  groups interact, whether two contend, what a co-flush regime implies. By that line (a) stays (it is
+  arena placement, and `NumaBuffer` is library surface here) and (b)'s *cost reasoning* goes, while
+  the bare fact which device backs this handle is a file question that is at home in neither -- see
+  the separate windows-overlapped-io-sys discussion.
+
+  **Decide the split before starting this item**, because it determines whether this item is mostly
+  (a) with a pointer, or the whole of what it currently says.
+
 - [ ] **M23.3** -- Decide whether the crate offers a **pending-operations map**, and separately whether it
   offers a **slot arena** on top of one. Record the decision either way; if it is "yes", the
   implementation is spawned as its own items.

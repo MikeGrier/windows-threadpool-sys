@@ -466,6 +466,14 @@ Parked, not pending. Shape recorded so it is not lost, per the `M{n}+` conventio
   Carry one constraint from the start: the flush barrier stops at the ring's edge, so **an epoch is
   per-domain** and a client spanning two domains needs two flushes and an explicit join.
 
+  **Musing, recorded not prioritized (the engineer, 2026-09-23).** If a consumer could *tell* this
+  layer which files share a device and are therefore subject to a common flush regime, that might be
+  useful -- it is the declare rather than discover shape that S-3 proposed for the storage node,
+  applied to the co-flush group instead. Fit it in if it falls out naturally; do not build toward it.
+  It belongs here rather than in windows-ioring-sys because co-flush *grouping* is reasoning about
+  durability groups, and that crate has none -- see
+  [windows-ioring-sys/CHECKLIST.md](crates/windows-ioring-sys/CHECKLIST.md) M23.2.
+
 ## M-inf -- Ungated
 
 - [ ] **M-inf.1** -- The linked and sharded MPSC shapes, if and only if M31.5 shows the array queue's tail
