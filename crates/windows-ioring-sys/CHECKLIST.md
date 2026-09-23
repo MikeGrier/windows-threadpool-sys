@@ -275,6 +275,20 @@ here. `M23.2` builds on the mechanism correction `M20.4` carried, which has land
   an input anywhere, or does it stay at "you allocate, you choose"? (b) is untouched and is still the
   substantive one.
 
+  **Working position, not a decision (the engineer, 2026-09-23, explicitly hedged and unmeasured).**
+  The industry-wide conversion of FUA to Flush has pushed storage devices toward better flush
+  behaviour, so several flushes in a row is **suboptimal rather than pathological**. Worth addressing
+  later; not worth front-loading now. Recorded as a working position per the RESOLUTION GRADIENT rule
+  -- it steers priority and nothing binds to it, and it is the engineer's read of the hardware trend
+  rather than anything this repository has measured.
+
+  **Consequence for how this item is approached:** do not reason forward about multi-device reach in
+  advance of doing the work. M23.1 drifted that way -- it shipped a section that gave the device
+  equal billing with the ring and pointed here as though the question were pressing, in a sample that
+  has one log file on one ring. That was trimmed to a parenthesis. The device question is real and is
+  this item's subject; its *priority* is low, and the two are easy to confuse when the reasoning is
+  interesting.
+
 - [ ] **M23.3** -- Decide whether the crate offers a **pending-operations map**, and separately whether it
   offers a **slot arena** on top of one. Record the decision either way; if it is "yes", the
   implementation is spawned as its own items.

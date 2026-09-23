@@ -32,10 +32,10 @@
 //! barrier and couple the log's commit latency to control-plane work. That is a
 //! cost coupling rather than a correctness one -- the flush names a *file*, so
 //! the log's own durability guarantee would survive the sharing -- but the cost
-//! model the log is built around would not. See [`crate::contract`] -> "The ring
-//! bounds the wait; the device bounds the durability". Stated here because the
-//! delivery argument above is the one a reader meets at this point of use: if it
-//! ever stops applying, the rings must still not be collapsed.
+//! model the log is built around would not. See [`crate::contract`] -> "One ring
+//! per log, because the barrier is ring-wide". Stated here because the delivery
+//! argument above is the one a reader meets at this point of use: if it ever
+//! stops applying, the rings must still not be collapsed.
 //!
 //! # The ordering chain, and where it crosses threads
 //!

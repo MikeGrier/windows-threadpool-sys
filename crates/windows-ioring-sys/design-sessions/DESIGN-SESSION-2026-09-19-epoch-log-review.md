@@ -164,8 +164,8 @@ log's durability unit, and "one ring per log" is a precondition rather than a sa
 The barrier is a *ring* flag and the flush names a *file*, so the two bound different things: the
 barrier bounds what a commit waits for, the flush bounds what it makes durable. Completion is not
 durability, so a shared ring threatens the **cost model** rather than the guarantee. See
-[contract.rs](../examples/epoch_log/contract.rs) -> "The ring bounds the wait; the device bounds the
-durability", which is authoritative over this paragraph.
+[contract.rs](../examples/epoch_log/contract.rs) -> "One ring per log, because the barrier is
+ring-wide", which is authoritative over this paragraph.
 [contract.rs](../examples/epoch_log/contract.rs) -- which is where this sample puts its
 preconditions, and which was deliberately written before the code -- does not say so.
 

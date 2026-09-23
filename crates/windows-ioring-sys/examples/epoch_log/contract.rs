@@ -93,8 +93,8 @@
 //!   log's commit latency to work it knows nothing about. The durability
 //!   *guarantee* survives such sharing -- the flush names a file -- but the
 //!   cost model does not, and the cost model is why the guarantees above are
-//!   worth having. See "The ring bounds the wait; the device bounds the
-//!   durability" below.
+//!   worth having. See "One ring per log, because the barrier is ring-wide"
+//!   below.
 //!
 //! # Why an epoch at all
 //!
@@ -109,45 +109,32 @@
 //! shape every write-ahead log converges on -- and the price is precisely the
 //! non-guarantees above.
 //!
-//! # The ring bounds the wait; the device bounds the durability
+//! # One ring per log, because the barrier is ring-wide
 //!
-//! Two scopes are in play here and they are **not** the same one, which is easy
-//! to miss because a single call sets both. `Batch::flush` takes a *file*, and
-//! `FlushCoverage::CoversPrecedingOperations` is a flag on the *ring*:
+//! One call sets two scopes, which is why they are easy to merge.
+//! `FlushCoverage::CoversPrecedingOperations` is a flag on the **ring**: a
+//! drained flush does not execute until every operation outstanding when it was
+//! reached has *completed* (D-47, measured over roughly 4,500 trials).
+//! `Batch::flush` names a **file**: what a syncing mode pushes to stable media
+//! is that file's data and the device cache behind it. Completion is not
+//! durability -- this contract says so above, about a record's own write -- so
+//! the barrier bounds what a commit **waits for**, and the flush bounds what it
+//! **makes durable**.
 //!
-//! - **The barrier is ring-wide.** A drained flush does not execute until every
-//!   operation outstanding on the ring when it was reached has **completed**.
-//!   D-47 measured that half over roughly 4,500 trials; nothing narrows it to
-//!   the operations of one epoch, one file, or one component.
-//! - **The flush names one file.** What a syncing flush pushes to stable media
-//!   is that file's data, and the device cache behind it.
+//! The consequence that matters here is cost, and it is unconditional: because
+//! the barrier waits for everything on the ring, a shared ring makes this log's
+//! commit latency a function of unrelated work. Somebody else's slow operation
+//! is this log's slow commit, whatever the storage underneath turns out to be.
+//! That is why one ring per log is a precondition -- of the *cost model* that
+//! makes the guarantees above worth having, rather than of their correctness,
+//! which the flush's own file target secures. A log spanning *two* rings gets
+//! no single durability point across both, and needs two commits with an
+//! explicit join between them.
 //!
-//! Completion is not durability -- this contract says so above, about a
-//! record's own write -- and the distinction is exactly what separates the two
-//! scopes. The barrier bounds what a commit **waits for**. The flush bounds
-//! what a commit **makes durable**.
-//!
-//! Two consequences, and only the first is fully known here:
-//!
-//! - **Cost.** This log's commit latency is a function of whatever else shares
-//!   the ring, because the barrier waits for all of it. Somebody else's slow
-//!   operation is this log's slow commit. That much follows directly from the
-//!   barrier's measured scope.
-//! - **Reach, which this program cannot currently determine.** Whether some
-//!   *other* file's completed writes are also made durable by this log's commit
-//!   depends on whether that file's data sits behind the same device cache this
-//!   flush syncs. This log does not know which device backs any handle, so it
-//!   cannot answer that -- and it must not assume either answer. `M23.2` is
-//!   where that question is asked; until it is, treat a shared ring as giving
-//!   you the cost coupling without any durability promise for the other party.
-//!
-//! So "one ring per log" is a precondition, and the reason is the first bullet
-//! rather than the second: a shared ring couples this log's commit latency to
-//! unrelated traffic, unconditionally and whatever the storage turns out to be.
-//! It is a precondition of the *cost model* the guarantees above are worth
-//! having -- not of their correctness, which the flush's own target secures.
-//! A consumer whose log spans *two* rings gets no single durability point
-//! across both, and needs two commits with an explicit join between them.
+//! (Whether some *other* file on a shared ring is also made durable depends on
+//! whether it sits behind the same device cache, which this log does not
+//! determine. It does not arise here -- one log file, one ring -- and is left
+//! to `M23.2` rather than reasoned about in advance.)
 //!
 //! **This sample honors the precondition, and does so for a second, independent
 //! reason.** The checkpoint has its own ring ([`crate::checkpoint`]) because a
