@@ -207,6 +207,16 @@ compounds, "because every milestone that adds tests adds to the pile to be migra
 testing-heavy milestone". The mechanism is real but the instance was not checked, and it is false:
 **all three `M22` items touch only `examples/epoch_log/`**, and none adds a lib test.
 
+**Unconditional as of 2026-09-22.** `M24.1` concluded and `M24.4` is withdrawn, so nothing in this
+milestone waits on an evaluation any more. The hermetic goal is reached by relocation and by the
+accounting extraction alone; the technique `M24.1` went looking for turned out to be a different
+and larger thing, and is `M26`.
+
+**Recount the population before starting.** [D-49](DESIGN-NOTES.md#d-49) records 63 of 131 lib tests
+opening a ring, and the suite has since grown -- `M22.3` added 14 `NumaBuffer` tests, which open
+none. The 63 is the number to act on, but the denominator in any prose written during this milestone
+must come from a command rather than from that decision.
+
 Checked across the whole queue rather than for `M22` alone, since the first claim was wrong for
 want of exactly that: **no pending item outside this milestone modifies `src/**/tests.rs`.** `M22`
 is example-only; `M23.1` is the *sample's* `contract.rs`, not the crate's; `M20.1` and `M20.6` are
@@ -227,21 +237,11 @@ So sequencing turns on other things, and they point the other way:
 **`M24.1` gates everything after it.** `M24.2` and `M24.3` are safe under any outcome and could be
 taken first if the evaluation is deferred; `M24.4` exists only if `M24.1` says it may.
 
-- [ ] **M24.1** -- Settle whether a fake whose assertions are **shared** with the kernel escapes the
-  objection in [Two techniques deliberately rejected](DESIGN-NOTES.md#two-techniques-deliberately-rejected).
-  That rejection refuses a mock because it "would have manufactured evidence" a kernel-behaviour bug
-  was absent, and this pass added three fresh confirmations of it -- `ERROR_TIMEOUT` on an expired
-  wait, `E_INVALIDARG` on a wait with nothing pending, and inline completion on a synchronous handle,
-  each of which a hand-written fake would have got wrong.
-  **Settle it by demonstration, not by argument**, because the argument is exactly what is in doubt.
-  Build a throwaway fake with a *deliberately wrong* accounting model (decrement `outstanding` in the
-  wrong place) and confirm the shared suite turns red on the fake side while the kernel side stays
-  green. Then do the converse: give the fake a wrong *Windows* belief and confirm the shared suite
-  does **not** catch it -- which is the expected result, and is why the bright line in
-  [D-49](DESIGN-NOTES.md#d-49) exists rather than being a hedge. A co-tested peer is only defensible
-  if both halves behave as predicted.
-  Conclude by amending that decision or recording that it stands, and by checking `M24.4` off as
-  withdrawn if it stands.
+- [x] **M24.1** -- Settle whether a co-tested fake escapes the mock objection. **Answered: the fake
+  was the wrong instrument.** A shared suite is strong over what we specify and blind to the
+  platform's incidental behaviour, and an assertion about the latter is a frozen observation rather
+  than a contract. Superseded by the resolver in `M26`.
+  -> [completed 2026-09-22](COMPLETED-CHECKLIST.md#m241)
 
 - [ ] **M24.2** -- Extract the handle-free accounting into its own type, composed by `IoRing`.
   Measured as separable: `RingId::next()` is a process-global `AtomicU64` that never touches a
@@ -258,15 +258,10 @@ taken first if the evaluation is deferred; `M24.4` exists only if `M24.1` says i
   any move: `Split-Source` / `Split-Into` trailers, and a `git blame -w -C1 -C1` check that the moved
   lines still trace to their original commits rather than to the move.
 
-- [ ] **M24.4** -- **Conditional on `M24.1`.** Build the shared conformance suite: bookkeeping tests
-  written once as generic functions, run against a hermetic fake from `src/` and against the real
-  ring from `tests/`. The suite must be reachable from both, so it is a `pub` module behind a
-  non-default `test-util` feature -- the pattern `windows-file-watcher` already ships.
-  **Accept the consequence explicitly rather than discovering it:** feature-gated code is invisible
-  to a default `cargo test` and to `cargo mutants` without `--all-features`, and this repository has
-  measured what that does -- a `windows-file-watcher` sweep reported 247 survivors of which 147 were
-  in gated modules. CI's `--all-features` job must cover the suite, and any mutation run must pass
-  the flag.
+- [x] **M24.4** -- **Withdrawn by `M24.1` (2026-09-22).** A shared conformance suite over a
+  hand-written fake is superseded by the response-space resolver in `M26`, which serves the same
+  purpose without encoding a belief about the platform at all. Nothing is deferred by this: `M24`'s
+  goal is a hermetic lib suite, and `M24.2` plus `M24.3` achieve that without it.
 
 - [ ] **M24.5** -- Put the rule on a rung, so it cannot regress. After `M24.2` and `M24.3` the lib
   tests should construct no ring at all; assert that mechanically rather than by review -- a check
@@ -459,3 +454,75 @@ must leave the log correct if the platform completes inline tomorrow.
   investigation showed was the deferral window shrinking because appends got faster, i.e. the same
   fact as the throughput result reported as unmoved -- and any DESIGN-NOTES text describing the
   sample's I/O as buffered. Record the findings above as decisions in the same pass.
+
+
+## M26 -- Test against the space of kernel responses, not one observation of it
+
+Queued by
+[DESIGN-SESSION-2026-09-22-kernel-response-space.md](design-sessions/DESIGN-SESSION-2026-09-22-kernel-response-space.md),
+which set out to answer `M24.1` and found a different technique instead.
+
+**The idea.** A fake that models *what Windows does* freezes one run's testimony. A **resolver**
+models what Windows is *permitted* to do, and a seed picks one resolution out of that space: which
+operations finish inside `SubmitIoRing` and which pend, in what order completions are posted, which
+fail. The assertions are then about **us** -- does this crate behave correctly under that resolution
+-- and never about the kernel. There is no belief to be wrong about, which is why this dissolves the
+mock objection rather than working around it.
+
+**Justified by what it catches, not by hermeticity.** `M24` reaches a hermetic lib suite without it,
+so this milestone has to earn its place on the defect class it detects: code that is brittle to
+platform variation *inside* the permitted space. Nothing in the current toolkit detects that --
+[DESIGN-NOTES.md](DESIGN-NOTES.md#what-none-of-them-cover) records that all five existing techniques
+check this crate against *its own stated contract*.
+
+**The standing constraint, inherited from the session.** The permitted space must be **wider than
+anything observed**, and must not be derived from observation -- deriving it from what we have seen
+closes the trap again. It is a deliberate specification of what we will tolerate, and therefore a
+reviewable artifact rather than a recording.
+
+- [ ] **M26.1** -- Specify the permitted response space, and record it as a decision. What may a
+  submitted batch do? At minimum: each operation may complete inside `SubmitIoRing` or pend;
+  completion order is unconstrained; an operation may fail individually; a wait may expire; a wait
+  may return with nothing poppable. **Say equally which constraints hold**, because a resolver free
+  to violate everything makes us write code defending against impossible kernels --
+  [D-23](DESIGN-NOTES.md#d-23)'s covering-flush guarantee held with zero failures in ~4,500 trials,
+  and whether the resolver may break it is a decision, not a default. Cite the spike or decision
+  behind every entry, and mark the ones that are deliberate over-provision rather than observation.
+
+- [ ] **M26.2** -- Build the seam. The resolver sits under the `windows-sys` calls -- `SubmitIoRing`,
+  `PopIoRingCompletion`, the `Build*` family -- so those become indirect. **This is the expensive
+  item and the one that touches a published crate's internals**; it is substantially more than
+  `M24.2`'s field split. Do `M24.2` first: it is smaller, independently useful, and will show how
+  much of `IoRing` separates cleanly before this commits to a shape.
+
+- [ ] **M26.3** -- Build the resolver over the space `M26.1` specifies, seeded the way
+  [generated_sequences.rs](tests/generated_sequences.rs) already is ([D-41](DESIGN-NOTES.md#d-41)):
+  one number replays a whole run, announced with the command to replay it, pinnable from the
+  environment. Keep that file's two-seed discipline in mind -- this adds a third axis, and
+  conflating them would produce a replay that reproduces some of a run and not the rest.
+
+- [ ] **M26.4** -- Write the properties that must hold under **every** resolution: conservation (no
+  lost, duplicated or unclaimed completion), no hang, `pop_within` honours its bound, `outstanding`
+  is accurate, no use-after-free. [`RingContract`](src/contract.rs) already states most of this as
+  an oracle over observed sequences and should be the definition rather than a second copy.
+
+- [ ] **M26.5** -- **Calibrate it, or it is not evidence.** Re-inject the two historical defects and
+  confirm the resolver turns red: [D-47](DESIGN-NOTES.md#d-47)'s assumption that a covering flush
+  holds back subsequent operations, and `M21.6`'s treatment of an expired wait as a failure. The
+  session argued both by analogy from a demonstration and **deliberately did not claim them as
+  measured**. `D-41`'s corollary is the rule: a green result from an instrument nobody has shown
+  can go red is not evidence. This session produced two apparatus failures of exactly that kind.
+
+- [ ] **M26.6** -- Point the kernel tests at their new job: confirming that reality stays **inside**
+  the declared space, rather than re-checking behaviour the resolver already sweeps. A real kernel
+  observed outside the space is a genuine finding and should fail loudly; a kernel that moves
+  *within* it should change nothing. Sweep what this makes false, including the testing-strategy
+  section's "five techniques" framing, which becomes six.
+
+- [ ] **M26.7** -- Audit the existing suite for assertions that are **frozen observations rather
+  than contracts** -- the failure case 4 of the session demonstrated, where one assertion gave
+  opposite answers on two handles of the same API. [flush_barrier.rs](tests/flush_barrier.rs) is the
+  obvious first candidate, being the direct descendant of `D-47`, but the audit is the point and not
+  that file. For each, decide: restate as this crate's own contract, move to a spike with a rate and
+  a date, or delete. **Not yet started, and not yet even sampled** -- the candidate above is a guess,
+  and the census must come from a command.

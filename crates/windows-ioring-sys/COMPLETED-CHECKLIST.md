@@ -2164,3 +2164,38 @@ inherited. Re-injecting the `level: 3` filter fails three of them, including the
 measured shape above. The swept sites: `DESIGN-NOTES.md` (the heuristic section, the sizing note, the
 policy list, D-27's pointer, and D-48's own "restating the rule is M20.1" reference, which was itself a
 restatement that would have gone stale), `README.md`, `src/lib.rs`, both examples, and both checklists.
+
+### <a id="m241"></a>M24.1 -- Settle whether a co-tested fake escapes the mock objection. Answered: the fake was the wrong instrument. *(completed 2026-09-22 21:18:30 -04:00)*
+
+The item predicted two outcomes and both held -- a wrong **accounting** model was caught by the shared
+suite, a wrong **Windows belief** slipped through. Two further cases changed the answer.
+
+**Case 3, which the item did not predict, is the argument *for* co-testing.** Run an assertion written
+from the *wrong* belief against both peers: the kernel goes red and refutes us, the fake goes green and
+confirms us. That is the manufactured-evidence mechanism made visible, and also the escape -- a
+mock-only world never performs that experiment.
+
+**Case 4 invalidated the line the first three cases suggested.** Raised in review: kernel behaviour is an
+observation at a point in time, not objective truth, and we must not over-index on a record of how it
+runs. Demonstrated: "after submitting, the completion is already queued" reads like a contract and gave
+**opposite answers on two handles of the same API**. So the axis is not "accounting versus Windows
+behaviour" -- it is **our specified contract versus the platform's incidental behaviour**.
+
+**Case 5 replaced the technique.** Also from review: model what the platform is *permitted* to do and
+let a seed pick a resolution, so the assertions are about this crate rather than about the kernel. That
+dissolves the mock objection instead of working around it, because there is no belief to be wrong about.
+A minimal resolver broke a FIFO-assuming consumer under 189 of 200 seeds -- and passed under the other
+11, which is the point: a fixed fake reports whichever single answer it encoded.
+
+**Two apparatus failures in one session, both caught, both the same shape.** The first spike draft ran
+each condition once and printed a verdict -- exactly `D-47`'s error; rewritten to 500 trials it
+immediately found a condition that pends about 1% of the time and would have been called "never". The
+case-4 harness used a bare flush, which completes inline on every handle, so it could not discriminate
+until it was rebuilt around sector-aligned writes. Both are recorded because the repository's rule is
+that an instrument nobody has shown can go red is not evidence.
+
+Outcome: the rejection **stands** with its scope sharpened ([D-52](DESIGN-NOTES.md#d-52)), `M24.4` is
+**withdrawn**, `M24` becomes unconditional, and the technique that actually answers the question is
+`M26`. The apparatus is kept as
+[kernel-response-space-probe.rs](design-sessions/kernel-response-space-probe.rs); the reasoning is
+[DESIGN-SESSION-2026-09-22-kernel-response-space.md](design-sessions/DESIGN-SESSION-2026-09-22-kernel-response-space.md).
