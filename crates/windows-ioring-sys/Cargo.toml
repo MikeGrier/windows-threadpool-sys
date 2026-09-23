@@ -65,6 +65,16 @@ required-features = ["threadpool"]
 # so `cargo test` would compile this and run nothing.
 test = true
 
+# `ring_copy` was auto-discovered until M20.3, which needed it to be a test
+# target for the same reason `epoch_log` is: the degraded-fallback branch in
+# `Policy::select` is the one every zero-relation machine takes, and it cannot
+# be reached by *running* the sample on a machine that reports its relations.
+# A synthetic topology reaches it; a test target is what lets one run.
+[[example]]
+name = "ring_copy"
+path = "examples/ring_copy/main.rs"
+test = true
+
 # The crate is Windows-only, so docs.rs must build on a Windows target or it
 # would render an almost-empty crate.
 [package.metadata.docs.rs]

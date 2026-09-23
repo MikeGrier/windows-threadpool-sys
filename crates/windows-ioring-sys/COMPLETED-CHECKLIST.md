@@ -2088,3 +2088,42 @@ but the residual library question, because the sample half is now done.
 Gate: fmt, clippy, the full suite (14 new `NumaBuffer` tests, 9 new placement tests), `cargo doc` clean,
 lib-only and `--no-default-features` builds, the borrow-surface, encoding and publishable checks, and the
 example end to end.
+
+### <a id="m203"></a>M20.3 -- Make `ring_copy`'s degraded-fallback path observable in a test, asserting both that an absent relation degrades and that a present one does not. *(completed 2026-09-22 20:11:18 -04:00)*
+
+The whole-machine fallback in `Policy::select` is the branch every zero-relation machine takes -- the
+shape [D-48](DESIGN-NOTES.md#d-48) records as ordinary rather than exotic -- and it cannot be reached
+by *running* the sample on a machine that reports its relations. A synthetic topology reaches it.
+Fifteen tests in [examples/ring_copy/policy/tests.rs](examples/ring_copy/policy/tests.rs).
+
+**The item's reason for demanding both halves was verified rather than trusted.** It argued that a
+test of the absent case alone "would pass against a function that always degrades". Sabotaging
+`select` to degrade unconditionally showed exactly that: `a_policy_whose_relation_is_absent_...`
+**still passed**, while four present-case tests failed. The reverse sabotage -- never degrade -- failed
+five absent-case tests. Neither half is redundant, and that is now a measured statement.
+
+One test, `degrading_unconditionally_would_fail_a_test_here`, exists to put that dependency in code
+rather than in a comment, so a future edit that deletes the present-case coverage has something named
+to delete.
+
+**Done without waiting on `SH-4.12`, and the coupling was narrowed rather than ignored.** The recorded
+callout said that item "rewrites the selection arm this test would assert against". That is true only
+of a test asserting through `ByL3`. The fallback tail is shared by all five policies and is not what
+`SH-4.12` changes -- it changes which domains `ByL3` matches -- so exercising it through `ByNode` and
+`ByPackage` pins nothing. Both checklists now say so, and `SH-4.12` inherited the one assertion that is
+genuinely its own: `ByL3`'s degradation condition, under whichever rule replaces the `level: 3` match.
+
+Beyond the two halves, the cases cover what the fallback must get right and what it must not claim: a
+memory domain with no processors is not a usable node; degradation is per-policy rather than a property
+of the machine; `Single` returns the whole machine **undegraded**, because degrading is a statement
+about not getting what was asked for and `Single` asked for exactly this; the fallback covers every
+online processor, excludes reserved-but-offline slots, and spans processor groups; and it carries no
+observations, because nothing observed it.
+
+The synthetic memory domain uses `Observed::NotObserved` for its size rather than `Known(0)`, which the
+type's own documentation calls the variant "a hand-written description leaves behind". `Known(0)` would
+have asserted a measurement nobody made -- in a test whose subject is honest reporting.
+
+`ring_copy` was auto-discovered and therefore **not a test target**, so `cargo test` would have compiled
+these and run nothing. It now has an explicit `[[example]]` entry with `test = true`, the same reason
+`epoch_log` has one.

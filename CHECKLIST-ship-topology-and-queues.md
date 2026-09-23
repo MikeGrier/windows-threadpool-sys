@@ -675,11 +675,19 @@ that previously stood in the way are gone:
   This is the consumer-side twin of the platform-integrity rule: bind to the specified primitive, not
   to the level number that happens to be L3 on today's hardware. The fix renames the policy as well
   as changing it, since `byl3` is a user-facing CLI value that would no longer describe what it does.
-  > **COUPLED TO `M20.1` and `M20.3`** in
+  > **COUPLED TO `M20.1`** in
   > [crates/windows-ioring-sys/CHECKLIST.md](crates/windows-ioring-sys/CHECKLIST.md) -- **do this item
-  > first**, then those two. `M20.1` sweeps the L3 rule's prose, which reaches `policy.rs`'s doc comments;
-  > `M20.3` tests the very selection arm this item rewrites. Recorded 2026-09-19: M20's header had asserted
-  > that no defect was found in `ring_copy`, which this item superseded, and neither file said so.
+  > first**, then that one. `M20.1` sweeps the L3 rule's prose, which reaches `policy.rs`'s doc comments.
+  > Recorded 2026-09-19: M20's header had asserted that no defect was found in `ring_copy`, which this
+  > item superseded, and neither file said so.
+  >
+  > **`M20.3` is no longer coupled, and landed first (2026-09-22).** That coupling read "it rewrites the
+  > selection arm this test would assert against", which is true only of a test asserting through
+  > `ByL3`. The degraded-fallback tail is shared by all five policies and is not what this item changes,
+  > so `M20.3`'s tests exercise it through `ByNode` and `ByPackage` and pin nothing here. **What this
+  > item still owes is `ByL3`'s own degradation condition** -- currently "no `level: 3` domain", after
+  > this "no `outermost_partitioning_cache()`" -- which belongs in this item's verification, where the
+  > rule being degraded on is the new one. `examples/ring_copy/policy/tests.rs` is where it goes.
 
 - [ ] **SH-4.13** -- **`ProcessorSet` cannot represent every `u8` processor id, and the public API
   cannot uphold both "every processor" and "no abort".** Raised by Copilot across three unresolved

@@ -58,16 +58,11 @@ conclusions belong to it until it converges.
   observation it is the sibling of.
   -> [completed 2026-09-19](COMPLETED-CHECKLIST.md#m202)
 
-- [ ] **M20.3** -- Make `ring_copy`'s degraded-fallback path observable in a test. The whole-machine
-  fallback in `Policy::select` is the branch every zero-relation machine takes, and this session was the
-  first time anyone confirmed it runs. Assert both halves on a synthetic topology: that a policy whose
-  relation is absent returns one whole-machine domain with `degraded = true`, and that a policy whose
-  relation is present is **not** flagged degraded -- the second half matters because a test of the first
-  alone would pass against a function that always degrades.
-  > **COUPLED TO `SH-4.12`** in [CHECKLIST-ship-topology-and-queues.md](../../CHECKLIST-ship-topology-and-queues.md)
-  > -- do that item first. It rewrites the selection arm this test would assert against, so writing the
-  > test now pins behaviour that is about to change. The two halves this item asks for are the right
-  > assertions either way; what changes is which rule "the policy's relation is present" names.
+- [x] **M20.3** -- Make `ring_copy`'s degraded-fallback path observable in a test, asserting both
+  that an absent relation degrades and that a present one does not. Done without waiting on
+  `SH-4.12`: the fallback tail is shared by every policy, so exercising it through `ByNode` and
+  `ByPackage` pins nothing that item rewrites.
+  -> [completed 2026-09-22](COMPLETED-CHECKLIST.md#m203)
 
 - [x] **M20.4** -- Correct "What is not reachable" in [DESIGN-NOTES.md](DESIGN-NOTES.md): the
   file-handle-to-storage-node mapping is reachable on mechanism, and the conclusion it supported now rests
