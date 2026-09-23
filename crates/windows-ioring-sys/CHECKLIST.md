@@ -234,31 +234,13 @@ So sequencing turns on other things, and they point the other way:
 
 ## M23 -- The ring as a durability domain, and storage affinity
 
-Queued from the same session (findings `S-1` and `S-3`). `S-2` is an addendum to `M20.6` rather than an item
-here. `M23.2` builds on the mechanism correction `M20.4` carried, which has landed.
+Queued from the 2026-09-19 epoch-log review (findings `S-1` and `S-3`). `S-2` is an addendum to `M20.6`
+rather than an item here. `M23.1` and `M23.2` are done; `M23.3` is the remaining question, and it is
+about this crate's own surface rather than about storage at all.
 
 - [x] **M23.1** -- State in the epoch-log contract that the barrier is ring-wide while the flush names a file, so one ring per log is a precondition of the cost model. -> [completed 2026-09-23](COMPLETED-CHECKLIST.md#m231)
 
-- [ ] **M23.2** -- Decide whether this crate accepts a **declared storage node** as an input, or stays
-  at "you allocate, you choose". The node question is not discoverable -- `FSCTL_QUERY_VOLUME_NUMA_INFO`
-  answers for a *volume*, which may span devices, so it cannot say where a file's extents live
-  ([M20.4](COMPLETED-CHECKLIST.md#m204)) -- so the mechanism on offer is to let a consumer *state* it and
-  have the arena allocate there, with
-  [file-handle-numa-spike.rs](design-sessions/spikes/file-handle-numa-spike.rs) filling it in
-  automatically if hardware ever answers. Record the decision either way, including what the crate
-  refuses. Keeps [D-8](DESIGN-NOTES.md#d-8) intact: policy stays with the consumer.
-
-  **Scope, after two narrowings.** `M22.3` settled the sample half -- the allocation is now
-  `NumaBuffer` in the library ([D-51](DESIGN-NOTES.md#d-51)) and the epoch-log sample asks the FSCTL
-  and places on the answer ([D-50](DESIGN-NOTES.md#d-50)) -- leaving only the library question above.
-  Then [D-54](DESIGN-NOTES.md#d-54) removed the item's other half: sharding by backing device needs the
-  concept of a set of operations that commit together, which this crate does not have. Arena placement
-  needs no such concept, so it passes D-54's test and stays.
-
-  > **-> CROSS-COMPONENT HANDOFF:** the backing-device half moves to the repository root checklist ->
-  > `M33+` -> `M33+.5`, the durability layer as its own crate, where the concept is sharpened from
-  > device identity to **flush equivalence**. See
-  > [CHECKLIST-io-domains.md](../../CHECKLIST-io-domains.md).
+- [x] **M23.2** -- Decide how a caller arrives at a NUMA node: `win-numa-sys` offers declaring and discovering, and refuses the shortcut that does both at once. -> [completed 2026-09-23](COMPLETED-CHECKLIST.md#m232)
 
 - [ ] **M23.3** -- Decide whether the crate offers a **pending-operations map**, and separately whether it
   offers a **slot arena** on top of one. Record the decision either way; if it is "yes", the

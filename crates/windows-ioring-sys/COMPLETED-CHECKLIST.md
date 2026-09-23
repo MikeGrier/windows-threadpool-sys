@@ -2496,3 +2496,41 @@ belongs on `FlushCoverage` rather than only in a sample's contract. And
 own ring, for an unrelated *delivery* reason (D-21), so the structure was right twice over with only
 one reason written down. Both sites now point at each other, so collapsing the rings cannot look
 harmless from either end.
+
+### <a id="m232"></a>M23.2 -- Decide how a caller arrives at a NUMA node: `win-numa-sys` offers declaring and discovering, and refuses the shortcut that does both at once. *(completed 2026-09-23 19:57:34 -04:00)*
+
+*Queued from finding `S-3` of the 2026-09-19 epoch-log review.*
+
+**The item was narrowed three times before it was answered, and the last narrowing moved it out of
+this crate entirely.** `M22.3` settled its sample half by making the allocator library surface.
+[D-54](DESIGN-NOTES.md#d-54) removed its other half -- sharding by backing device needs the concept
+of a set of operations that commit together, which this crate does not have -- and handed that to
+the durability layer, where it was sharpened from device identity to *flush equivalence*. Then
+`win-numa-sys` was created and `NumaBuffer` moved into it, so "this crate" in the item text stopped
+naming the crate that had to answer.
+
+**What remained was answered by building that crate, so this item's deliverable was the recorded
+decision rather than code.** It is
+[N-D-1](../win-numa-sys/DESIGN-NOTES.md#n-d-1): a caller may *declare* a node
+(`NumaBuffer::new`), *discover* one (`volume_numa_node`), or *qualify* what a discovered answer is
+worth (`highest_numa_node`); what is refused is a `NumaBuffer::for_file` that would query and
+allocate in one step.
+
+Four reasons for the refusal, of which the first is the one that generalises: such a call **hides
+the answer**, and on a single-node machine "placed on the node the volume named" and "no preference"
+are the same allocation, so a caller could not tell whether the query found anything. It also fuses
+two failure domains, withholds an answer useful beyond one buffer, and saves exactly one line,
+since `NumaBuffer::new(len, volume_numa_node(h).ok())` already type-checks.
+
+**A fifth argument was dropped rather than kept, and the decision says so.** When this was first
+argued, a `for_file` constructor would have dragged `Win32_System_Ioctl` into a crate that
+otherwise touched only memory. That was true of `windows-ioring-sys` and is not true of
+`win-numa-sys`, where the query already lives. Recording a void argument as void is cheaper than
+having someone re-make it.
+
+**Neither path is speculative.** `examples/epoch_log` discovers from its log file's volume;
+`examples/ring_copy` declares a node it computed from the processor topology. Both were already
+written against this shape before the decision recorded it.
+
+[D-8](DESIGN-NOTES.md#d-8) is intact, which was the item's stated constraint: locality stays the
+consumer's decision, and the crate supplies a fact and an allocator rather than a choice.
