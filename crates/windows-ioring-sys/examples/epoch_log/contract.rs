@@ -88,10 +88,13 @@
 //! - **A record is at most one write.** This sample does not split a record
 //!   across writes, so it never has to reason about a partially-written record
 //!   whose pieces landed in different epochs.
-//! - **The log's ring carries only the log's operations.** One ring per log is
-//!   a *precondition* of this contract, not a convenience of how the sample
-//!   happens to be written. See "The ring is part of the durability unit"
-//!   below.
+//! - **The log's ring carries only the log's operations.** The barrier waits
+//!   for everything outstanding on the ring, so a shared ring couples this
+//!   log's commit latency to work it knows nothing about. The durability
+//!   *guarantee* survives such sharing -- the flush names a file -- but the
+//!   cost model does not, and the cost model is why the guarantees above are
+//!   worth having. See "The ring bounds the wait; the device bounds the
+//!   durability" below.
 //!
 //! # Why an epoch at all
 //!
@@ -106,28 +109,45 @@
 //! shape every write-ahead log converges on -- and the price is precisely the
 //! non-guarantees above.
 //!
-//! # The ring is part of the durability unit
+//! # The ring bounds the wait; the device bounds the durability
 //!
-//! The barrier that makes a commit cover anything reaches **every operation
-//! outstanding on the ring when the flush is reached**. That is the whole of
-//! what a drained flush promises -- D-47 measured the drain half over roughly
-//! 4,500 trials and withdrew the other half -- and nothing narrows it to the
-//! operations of one epoch, one file, or one component.
+//! Two scopes are in play here and they are **not** the same one, which is easy
+//! to miss because a single call sets both. `Batch::flush` takes a *file*, and
+//! `FlushCoverage::CoversPrecedingOperations` is a flag on the *ring*:
 //!
-//! Two things follow, and both are properties of the *ring* rather than of this
-//! log:
+//! - **The barrier is ring-wide.** A drained flush does not execute until every
+//!   operation outstanding on the ring when it was reached has **completed**.
+//!   D-47 measured that half over roughly 4,500 trials; nothing narrows it to
+//!   the operations of one epoch, one file, or one component.
+//! - **The flush names one file.** What a syncing flush pushes to stable media
+//!   is that file's data, and the device cache behind it.
 //!
-//! - **Scope.** Whatever else is outstanding on that ring is made durable by
-//!   this log's commit, whether or not this log knows it exists.
+//! Completion is not durability -- this contract says so above, about a
+//! record's own write -- and the distinction is exactly what separates the two
+//! scopes. The barrier bounds what a commit **waits for**. The flush bounds
+//! what a commit **makes durable**.
+//!
+//! Two consequences, and only the first is fully known here:
+//!
 //! - **Cost.** This log's commit latency is a function of whatever else shares
-//!   the ring. Somebody else's slow operation is this log's slow commit.
+//!   the ring, because the barrier waits for all of it. Somebody else's slow
+//!   operation is this log's slow commit. That much follows directly from the
+//!   barrier's measured scope.
+//! - **Reach, which this program cannot currently determine.** Whether some
+//!   *other* file's completed writes are also made durable by this log's commit
+//!   depends on whether that file's data sits behind the same device cache this
+//!   flush syncs. This log does not know which device backs any handle, so it
+//!   cannot answer that -- and it must not assume either answer. `M23.2` is
+//!   where that question is asked; until it is, treat a shared ring as giving
+//!   you the cost coupling without any durability promise for the other party.
 //!
-//! So the durability unit is not "the log" -- it is **the ring**. That is what
-//! makes one ring per log a precondition of everything above rather than an
-//! implementation detail. A consumer who transplants this pattern onto a shared
-//! ring keeps the guarantee and silently loses the cost model; a consumer whose
-//! log spans *two* rings does not get one durability point across both, and
-//! needs two commits with an explicit join between them.
+//! So "one ring per log" is a precondition, and the reason is the first bullet
+//! rather than the second: a shared ring couples this log's commit latency to
+//! unrelated traffic, unconditionally and whatever the storage turns out to be.
+//! It is a precondition of the *cost model* the guarantees above are worth
+//! having -- not of their correctness, which the flush's own target secures.
+//! A consumer whose log spans *two* rings gets no single durability point
+//! across both, and needs two commits with an explicit join between them.
 //!
 //! **This sample honors the precondition, and does so for a second, independent
 //! reason.** The checkpoint has its own ring ([`crate::checkpoint`]) because a
@@ -136,8 +156,8 @@
 //! point of use. The structure is therefore right twice over, which is
 //! comfortable and is also the hazard: a future change to the delivery model
 //! would retire the reason written down over there, and nothing over there
-//! mentions this one. The separation is load-bearing for durability whatever
-//! the delivery model becomes.
+//! mentions this one. The separation is load-bearing for the cost model
+//! whatever the delivery model becomes.
 
 /// Which part of the contract a statement belongs to.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -241,9 +261,10 @@ pub const CONTRACT: &[Statement] = &[
     },
     Statement {
         clause: Clause::Assumes,
-        text: "this log's ring carries only this log's operations -- one ring per log is a \
-               precondition of the contract, not a convenience, because the barrier's scope is \
-               the ring rather than the log",
+        text: "this log's ring carries only this log's operations -- the barrier waits for \
+               everything outstanding on the ring, so a shared ring couples this log's commit \
+               latency to unrelated work; the durability guarantee survives sharing because the \
+               flush names a file, but the cost model does not",
     },
 ];
 

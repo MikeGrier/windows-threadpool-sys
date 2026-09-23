@@ -245,6 +245,15 @@ here. `M23.2` builds on the mechanism correction `M20.4` carried, which has land
   than a convenience of how it happens to be written. `contract.rs` is where this sample states its
   preconditions, and was deliberately written before the code; it does not currently say this.
 
+  **Execution refined the claim, and the refinement is the interesting part.** The item -- and `S-1`
+  before it -- said one ring per log is a precondition of the *durability contract*. Writing it found
+  that two scopes had been conflated: `IOSQE_FLAGS_DRAIN_PRECEDING_OPS` is a **ring** flag and
+  `BuildIoRingFlushFile` names a **file**, so the barrier bounds what a commit *waits for* while the
+  flush bounds what it *makes durable*. Completion is not durability -- this contract says so about a
+  record's own write -- so a shared ring does **not** endanger the guarantee, which the flush's own
+  file target secures. What it endangers is the cost model. Recorded because the first draft of this
+  work shipped the conflation, and a question caught it rather than the gate.
+
 - [ ] **M23.2** -- Record a decision on how a consumer anticipates storage affinity, given that the node
   question is unanswerable and the device question is not (`S-3`). Two mechanisms, both leaving policy with
   the consumer per [D-8](DESIGN-NOTES.md#d-8): (a) let a consumer **declare** a domain's storage node and

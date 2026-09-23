@@ -26,16 +26,16 @@
 //! shapes buys both rings.
 //!
 //! **There is a second, independent reason for the separation, and it survives
-//! any change to the delivery model.** A covering flush's barrier reaches every
-//! operation outstanding on the ring it is pushed to, so the durability unit is
-//! the *ring* rather than the log -- which makes one ring per log a
-//! precondition of the log's durability contract rather than a convenience.
-//! Putting checkpoint writes on the log's ring would drag them into every
-//! commit's barrier and couple the log's commit latency to control-plane work.
-//! See [`crate::contract`] -> "The ring is part of the durability unit". Stated
-//! here because the delivery argument above is the one a reader meets at this
-//! point of use: if it ever stops applying, the rings must still not be
-//! collapsed.
+//! any change to the delivery model.** A covering flush's barrier waits for
+//! every operation outstanding on the ring it is pushed to, so putting
+//! checkpoint writes on the log's ring would drag them into every commit's
+//! barrier and couple the log's commit latency to control-plane work. That is a
+//! cost coupling rather than a correctness one -- the flush names a *file*, so
+//! the log's own durability guarantee would survive the sharing -- but the cost
+//! model the log is built around would not. See [`crate::contract`] -> "The ring
+//! bounds the wait; the device bounds the durability". Stated here because the
+//! delivery argument above is the one a reader meets at this point of use: if it
+//! ever stops applying, the rings must still not be collapsed.
 //!
 //! # The ordering chain, and where it crosses threads
 //!
