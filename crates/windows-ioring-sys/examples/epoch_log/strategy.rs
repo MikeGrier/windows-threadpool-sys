@@ -159,6 +159,8 @@ use windows_ioring_sys::{
     RegisteredBuffers, RegisteredSpan, RegisteredUse, Token, WriteCaching,
 };
 
+use win_numa_sys::NumaNode;
+
 use crate::append::free_slots;
 use crate::commit::Epoch;
 use crate::record::{self, Sequence};
@@ -370,7 +372,7 @@ struct Lane {
 }
 
 impl Lane {
-    fn new(node: Option<u32>) -> io::Result<Self> {
+    fn new(node: Option<NumaNode>) -> io::Result<Self> {
         let mut ring = IoRing::new(64, 128)?;
         let buffers = (0..SLOTS)
             .map(|_| NumaBuffer::new(SLOT_LEN, node))
@@ -609,7 +611,7 @@ pub fn run(
     epochs: usize,
     records_per_epoch: usize,
     payload: &[u8],
-    node: Option<u32>,
+    node: Option<NumaNode>,
 ) -> io::Result<Outcome> {
     let mut lanes = Vec::with_capacity(strategy.rings());
     for _ in 0..strategy.rings() {

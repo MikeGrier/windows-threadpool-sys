@@ -4,6 +4,7 @@ name: publish-crate
 on:
   push:
     tags:
+      - 'win-numa-sys-v*'
       - 'windows-file-enumeration-sys-v*'
       - 'windows-file-watcher-v*'
       - 'windows-file-watcher-example-test-harness-v*'

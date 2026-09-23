@@ -8,6 +8,7 @@ use std::ops::Range;
 use std::ptr;
 use std::time::{Duration, Instant};
 
+use win_numa_sys::NumaNode;
 use windows_ioring_sys::{
     Batch, IoRing, NumaBuffer, PushOptions, RegisteredBuffers, RegisteredSpan, Token, WriteCaching,
 };
@@ -42,7 +43,7 @@ pub fn copy_domain(
     destination: HANDLE,
     byte_range: Range<u64>,
     chunk_len: usize,
-    numa_node: Option<u32>,
+    numa_node: Option<NumaNode>,
 ) -> io::Result<DomainReport> {
     affinitize(plan.group, plan.mask)?;
 

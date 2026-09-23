@@ -178,7 +178,7 @@ mod error;
 #[cfg(all(windows, feature = "threadpool"))]
 mod event_delivery;
 #[cfg(windows)]
-mod numa_buffer;
+mod numa_buffer_io;
 #[cfg(windows)]
 mod ring;
 #[cfg(windows)]
@@ -198,8 +198,10 @@ pub use capability::{Capabilities, RingVersion, capabilities};
 pub use error::{IoRingError, IoRingErrorExt, RingCondition};
 #[cfg(all(windows, feature = "threadpool"))]
 pub use event_delivery::{EventDelivery, RingScope};
-#[cfg(windows)]
-pub use numa_buffer::NumaBuffer;
+// Re-exported rather than defined here: the allocator moved to `win-numa-sys`,
+// and re-exporting keeps `windows_ioring_sys::NumaBuffer` resolving for anyone
+// who already bound to it. The `IoBuf`/`IoBufMut` impls live in
+// `numa_buffer_io`, which explains there why they are separated from the type.
 /// The fault-injection seam (M16.3), for exercising failure paths a healthy
 /// machine will not produce on demand. See
 /// [`Completion::with_injected_failure`] for why transforming a real
@@ -210,6 +212,8 @@ pub use ring::InjectedFailure;
 pub use ring::{Completion, CompletionWait, IoRing, Op, RingInfo, RingWait, SubmitWait};
 #[cfg(windows)]
 pub use token::Token;
+#[cfg(windows)]
+pub use win_numa_sys::NumaBuffer;
 
 // The crate's markdown documentation is compiled as doctests, so an example that
 // a contract change invalidates breaks the build instead of quietly teaching the

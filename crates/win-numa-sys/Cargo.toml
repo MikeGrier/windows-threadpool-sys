@@ -1,0 +1,41 @@
+# Copyright (c) 2026 Mike Grier
+
+[package]
+name = "win-numa-sys"
+version = "0.1.0"
+authors.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+description = "Memory-safe Rust over the Windows NUMA APIs: a VirtualAllocExNuma-backed buffer, a NumaNode newtype, and the node queries a caller needs to decide what to pass. Thin over Win32, with no policy about which node anything should use."
+
+# The first crate to take the `win-` prefix rather than `windows-`; see
+# DESIGN-NOTES.md at the repository root. `windows` is Microsoft's namespace,
+# and a crate published as `windows-numa-sys` today is a name they may
+# reasonably want tomorrow.
+
+[dependencies]
+# `default-features = false` matches every other crate in the workspace.
+#
+# `Win32_System_Memory` is `VirtualAllocExNuma` and `VirtualFree`.
+# `Win32_System_Threading` is `GetCurrentProcess` and
+# `GetNumaHighestNodeNumber` -- the latter lives there rather than under
+# `SystemInformation`, which is where its subject matter would suggest.
+# `Win32_System_IO` and `Win32_System_Ioctl` are `DeviceIoControl` and
+# `FSCTL_QUERY_VOLUME_NUMA_INFO`, for asking a handle's volume which node it
+# reports.
+windows-sys = { version = "0.61.2", default-features = false, features = [
+	"Win32_Foundation",
+	"Win32_System_IO",
+	"Win32_System_Ioctl",
+	"Win32_System_Memory",
+	"Win32_System_Threading",
+] }
+
+[package.metadata.docs.rs]
+# The crate is Windows-only, so docs.rs must build on a Windows target or it
+# would render an almost-empty crate.
+default-target = "x86_64-pc-windows-msvc"
+targets = ["x86_64-pc-windows-msvc", "aarch64-pc-windows-msvc"]

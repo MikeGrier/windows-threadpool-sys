@@ -4,6 +4,7 @@
 
 use std::io;
 
+use win_numa_sys::NumaNode;
 use windows_topology_sys::{Domain, DomainKind, MachineMemoryTopology, ProcessorSet, Source};
 
 /// What one execution domain needs to run: a single-group affinity mask and,
@@ -13,7 +14,7 @@ pub struct DomainPlan {
     pub label: String,
     pub group: u16,
     pub mask: usize,
-    pub local_numa_node: Option<u32>,
+    pub local_numa_node: Option<NumaNode>,
 }
 
 /// Build one plan per domain, rejecting any domain the platform cannot
@@ -94,7 +95,7 @@ fn label_for(domain: &Domain) -> String {
 
 /// The NUMA node whose processors overlap `processors`, if any domain
 /// reports one -- `None` on a machine that reports no NUMA nodes at all.
-fn numa_node_for(topology: &MachineMemoryTopology, processors: &ProcessorSet) -> Option<u32> {
+fn numa_node_for(topology: &MachineMemoryTopology, processors: &ProcessorSet) -> Option<NumaNode> {
     topology
         .domains
         .iter()
@@ -104,6 +105,10 @@ fn numa_node_for(topology: &MachineMemoryTopology, processors: &ProcessorSet) ->
             }
             _ => None,
         })
+        // The relationship walk's label is the real Windows node number, not a
+        // position in this list. Wrapping it here rather than at the call site
+        // is what stops a positional index ever reaching `VirtualAllocExNuma`.
+        .map(NumaNode::new)
 }
 
 /// What `--placement remote` can actually be given on this topology.
@@ -115,7 +120,7 @@ fn numa_node_for(topology: &MachineMemoryTopology, processors: &ProcessorSet) ->
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RemoteNode {
     /// A NUMA node other than the local one. The switch does what it says.
-    Other(u32),
+    Other(NumaNode),
     /// The memory domains name their nodes, and there is only the local one --
     /// an ordinary single-node machine. Falling back to local is the honest
     /// answer here, because no other node exists to place on.
@@ -163,7 +168,7 @@ pub fn names_any_numa_node(topology: &MachineMemoryTopology) -> bool {
     })
 }
 
-pub fn remote_numa_node(topology: &MachineMemoryTopology, local: Option<u32>) -> RemoteNode {
+pub fn remote_numa_node(topology: &MachineMemoryTopology, local: Option<NumaNode>) -> RemoteNode {
     // **Remoteness is a relationship, so it needs both ends.** Without a local
     // node there is nothing for a candidate to be remote *from*: the comparison
     // below is `Some(id) != local`, and against `None` that is true for every
@@ -181,6 +186,7 @@ pub fn remote_numa_node(topology: &MachineMemoryTopology, local: Option<u32>) ->
         let Some(id) = domain.label_from(Source::RelationshipWalk) else {
             continue;
         };
+        let id = NumaNode::new(id);
         any_named = true;
         if Some(id) != local {
             return RemoteNode::Other(id);

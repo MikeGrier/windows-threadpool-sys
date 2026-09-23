@@ -17,6 +17,8 @@
 
 use std::os::windows::io::AsRawHandle;
 
+use win_numa_sys::NumaNode;
+
 use super::Placement;
 
 /// A scratch file to ask about, named per test so tests running as threads in
@@ -87,8 +89,8 @@ fn a_single_node_machine_is_told_the_placement_bought_nothing() {
     // misleading, so the description must say the choice was not available.
     // Constructed rather than queried, so the assertion holds on any host.
     let described = Placement::OnVolumeNode {
-        node: 0,
-        highest_node: Some(0),
+        node: NumaNode::new(0),
+        highest_node: Some(NumaNode::new(0)),
     }
     .describe();
     assert!(
@@ -102,8 +104,8 @@ fn a_multi_node_machine_is_not_told_that() {
     // The other direction: the disclaimer above must not appear where it would
     // be false, or it would train a reader to ignore it.
     let described = Placement::OnVolumeNode {
-        node: 1,
-        highest_node: Some(3),
+        node: NumaNode::new(1),
+        highest_node: Some(NumaNode::new(3)),
     }
     .describe();
     assert!(
@@ -119,7 +121,7 @@ fn a_multi_node_machine_is_not_told_that() {
 #[test]
 fn an_unknown_node_count_is_admitted_rather_than_assumed() {
     let described = Placement::OnVolumeNode {
-        node: 2,
+        node: NumaNode::new(2),
         highest_node: None,
     }
     .describe();
@@ -158,10 +160,10 @@ fn an_unplaced_arena_offers_no_node() {
 
 #[test]
 fn a_placed_arena_offers_the_node_it_named() {
-    for node in [0_u32, 1, 7, 63] {
+    for node in [0_u32, 1, 7, 63].map(NumaNode::new) {
         let placement = Placement::OnVolumeNode {
             node,
-            highest_node: Some(63),
+            highest_node: Some(NumaNode::new(63)),
         };
         assert_eq!(
             placement.node(),
