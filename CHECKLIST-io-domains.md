@@ -470,9 +470,21 @@ Parked, not pending. Shape recorded so it is not lost, per the `M{n}+` conventio
   layer which files share a device and are therefore subject to a common flush regime, that might be
   useful -- it is the declare rather than discover shape that S-3 proposed for the storage node,
   applied to the co-flush group instead. Fit it in if it falls out naturally; do not build toward it.
-  It belongs here rather than in windows-ioring-sys because co-flush *grouping* is reasoning about
+  It belongs here rather than in `windows-ioring-sys` because co-flush *grouping* is reasoning about
   durability groups, and that crate has none -- see
-  [windows-ioring-sys/CHECKLIST.md](crates/windows-ioring-sys/CHECKLIST.md) M23.2.
+  [windows-ioring-sys/DESIGN-NOTES.md](crates/windows-ioring-sys/DESIGN-NOTES.md#d-54).
+
+  **Handed over from `windows-ioring-sys` M23.2(b) on 2026-09-23 under D-54.** The reasoning arrives
+  with it so the deferral loses nothing: a device cache flush is per-device, so two logs on one
+  device contend at every commit, and a ring spanning two devices takes the slower device's flush on
+  every covering flush. `IOCTL_STORAGE_GET_DEVICE_NUMBER` and `IOCTL_VOLUME_GET_VOLUME_DISK_EXTENTS`
+  answer which physical device backs a handle and are reachable today on ordinary hardware, both
+  already written and smoke-tested in
+  [file-handle-numa-spike.rs](crates/windows-ioring-sys/design-sessions/spikes/file-handle-numa-spike.rs),
+  which counts distinct `DiskNumber` rather than extents because a volume extended twice onto one disk
+  is still one device. **Unmeasured.** The engineer's working position, hedged and unmeasured: the
+  FUA-to-Flush conversion has pushed devices toward better flush behaviour, so several flushes in a
+  row is suboptimal rather than pathological. Low priority; do not front-load it.
 
 ## M-inf -- Ungated
 

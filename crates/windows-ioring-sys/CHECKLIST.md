@@ -289,24 +289,21 @@ here. `M23.2` builds on the mechanism correction `M20.4` carried, which has land
   this item's subject; its *priority* is low, and the two are easy to confuse when the reasoning is
   interesting.
 
-  **Open question raised 2026-09-23, not resolved here: is (b) even at this level?** The engineer's
-  reading is that the interaction between rings, durability and flushing arrives with the **epoch**
-  concept rather than with the ring primitive, and the item's own wording is the evidence for it --
-  every operative noun in (b) is epoch-layer: two *logs*, contending at every *commit*. This crate has
-  neither. It has `Batch::flush(file, coverage, mode)`; `Epoch` lives in the sample and is planned
-  as its own crate (C-3, and M33+.5 in
-  [CHECKLIST-io-domains.md](../../CHECKLIST-io-domains.md)).
+  **Resolved 2026-09-23 as [D-54](DESIGN-NOTES.md#d-54): (b) is not at this level.** The engineer's
+  reading was right, and the item's own wording was the evidence -- every operative noun in (b) is
+  grouping-layer: two *logs*, contending at every *commit*. This crate has neither. D-54's test is
+  whether a proposal needs the concept of a set of operations that become durable together; (b)
+  does, so it is deferred to the durability crate along with the co-flush musing.
 
-  The line that seems to hold: **this crate owns what *one* flush means** -- the coverage flag, the
-  mode, the barrier's ring-wide scope -- because those are facts about the primitive, and `D-23`
-  already forced one of them into the API. **The durability layer owns what a *group* costs** -- how
-  groups interact, whether two contend, what a co-flush regime implies. By that line (a) stays (it is
-  arena placement, and `NumaBuffer` is library surface here) and (b)'s *cost reasoning* goes, while
-  the bare fact which device backs this handle is a file question that is at home in neither -- see
-  the separate windows-overlapped-io-sys discussion.
+  **What remains is (a), on its own merits.** Does the crate accept a *declared* storage node as an
+  input anywhere, or stay at "you allocate, you choose"? That is arena placement -- `NumaBuffer` is
+  library surface here ([D-51](DESIGN-NOTES.md#d-51)) -- and it needs no grouping concept, so it
+  passes D-54's test. The bare fact "which device backs this handle" is a *file* question at home in
+  neither crate; see the unrecorded `windows-overlapped-io-sys` discussion.
 
-  **Decide the split before starting this item**, because it determines whether this item is mostly
-  (a) with a pointer, or the whole of what it currently says.
+  > **-> CROSS-COMPONENT HANDOFF:** (b) moves to the repository root checklist -> `M33+` ->
+  > `M33+.5`, the durability layer as its own crate. See
+  > [CHECKLIST-io-domains.md](../../CHECKLIST-io-domains.md).
 
 - [ ] **M23.3** -- Decide whether the crate offers a **pending-operations map**, and separately whether it
   offers a **slot arena** on top of one. Record the decision either way; if it is "yes", the

@@ -122,6 +122,31 @@ impl PushOptions {
 /// It is an enum rather than a `bool` for the same reason: `flush(&file,
 /// true)` does not say what the `true` decides, and this is not a parameter
 /// anyone should have to look up.
+///
+/// # The barrier's scope is the ring; the flush's is the file
+///
+/// One call sets both, which makes them easy to merge, and merging them is a
+/// mistake about durability rather than about style:
+///
+/// - **This flag is ring-wide.** [`Self::CoversPrecedingOperations`] means the
+///   flush does not execute until every operation outstanding *on the ring*
+///   when it was reached has **completed** -- whatever file each one targets,
+///   and whoever queued it (D-47, measured over roughly 4,500 trials).
+/// - **The flush names one file.** [`Batch::flush`] takes a [`FileTarget`], so
+///   what a syncing [`FlushMode`] pushes to stable media is that file's data
+///   and the device cache behind it.
+///
+/// **Completion is not durability.** A write completing means the kernel took
+/// the bytes, not that they reached non-volatile media. So the barrier bounds
+/// what a flush **waits for**, and the flush itself bounds what is **made
+/// durable**, and those are different sets whenever a ring carries operations
+/// against more than one file.
+///
+/// The practical consequence for a caller is cost rather than correctness:
+/// operations this flush will never make durable can still make it wait. A
+/// caller who cares about that bounds it by controlling what shares the ring;
+/// this crate does not decide that (D-8), and the flush's own target is what
+/// secures the durability of the file named.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum FlushCoverage {
     /// Wait for every operation already outstanding on the ring, then flush.
