@@ -100,14 +100,22 @@
 //! differences. Both readings give the same ranking and only one is true.
 //!
 //! **What this does not settle is whether `AlternatingRings` earns its place.**
-//! Its blast-radius justification is dead on structural grounds -- see
-//! [`CommitStrategy::AlternatingRings`] -- but the other thing two rings could
-//! buy is *overlap*, and overlap is precisely what this harness cannot
-//! exhibit. Removing it now would be deciding against it using a measurement
-//! that could not have shown it working. `M25` rebuilds the harness on a
+//! This harness cannot show a blast-radius difference -- but that is a fact
+//! about the harness, in which each lane's own arena is the limiter rather
+//! than the ring topology, and not evidence that the strategy buys nothing.
+//! See [`CommitStrategy::AlternatingRings`] for the conditions under which it
+//! would, which include a ring shared with anything else, asymmetric arena
+//! sizing, real overlap, and the per-CPU queue affinity
+//! [D-27](../../DESIGN-NOTES.md#d-27) is built on. Removing it on the strength
+//! of a measurement that could not have shown it working would be foreclosing
+//! an option this crate exists to keep open. `M25` rebuilds the harness on a
 //! pre-allocated unbuffered log where operations genuinely pend; `M25.5`
-//! re-runs this comparison and answers the question on numbers that mean what
-//! they say.
+//! re-runs this comparison there.
+//!
+//! **And the point of the comparison is the instrument, not the verdict.** The
+//! numbers below describe one machine, one device and one workload. A consumer
+//! whose answer differs is not contradicting this sample -- they are the reason
+//! it prints its numbers instead of quoting them.
 //!
 //! Getting that result required fixing the harness three times, which is worth
 //! recording because the mistakes are easy to make and none announces itself:
@@ -183,35 +191,48 @@ pub enum CommitStrategy {
     /// covering flush on its own ring, so the appending ring is never the one
     /// waiting, at the cost of registering the arena twice.
     ///
-    /// # Its blast-radius justification is dead, on structural grounds (M20.6)
+    /// # What this harness can and cannot show about it (M20.6)
     ///
     /// The argument for two rings was that a covering flush reaches *every*
     /// operation outstanding on its ring ([D-47](../../DESIGN-NOTES.md#d-47)
     /// withdrew the hold-back half and kept this one), so alternating bounds
-    /// what a commit's barrier can be dragged into. On a shared ring, the
-    /// reasoning went, commit latency is unbounded in unrelated traffic.
+    /// what a commit's barrier can be dragged into.
     ///
-    /// Not here, and it needs no measurement to see why.
+    /// **This sample cannot exhibit that difference, and the reason is the
+    /// sample's own shape rather than anything about the strategy.**
     /// `RegisteredBuffers::get_mut` refuses a slot with an operation
-    /// outstanding, and there are `SLOTS` slots -- so at most `SLOTS` appends
-    /// are outstanding on a ring **by construction**. Each alternating lane
-    /// registers its own arena of the same size, so the per-ring bound is
-    /// identical either way. The arena bounds the blast radius, not the ring
-    /// topology. (Probing agreed: 8 and 8. The argument does not rest on that,
-    /// and holds whatever the platform does about pending.)
+    /// outstanding, and there are `SLOTS` slots, so at most `SLOTS` appends
+    /// are outstanding on a ring by construction -- and each alternating lane
+    /// registers its own arena of the same size. Here the arena is the
+    /// limiter, not the ring topology, so the covered count is identical
+    /// either way. (Probed: 8 and 8.)
     ///
-    /// The argument would still apply against genuinely unrelated traffic from
-    /// another component with its own buffers. This sample has none.
+    /// That is a statement about this apparatus. It is **not** evidence that
+    /// alternating rings buys nothing, and the conditions under which it would
+    /// are ordinary rather than exotic:
     ///
-    /// # What is still open
+    /// - **A ring shared with anything else.** This sample owns its ring
+    ///   entirely. A consumer whose ring also carries another component's
+    ///   traffic has a barrier whose reach is bounded by that traffic, not by
+    ///   this arena.
+    /// - **Arenas sized differently from the lanes.** One large arena on a
+    ///   shared ring against two small ones is a different bound, and nothing
+    ///   makes the sample's symmetric choice the general case.
+    /// - **Real overlap.** With operations that genuinely pend, a shared
+    ///   ring's flush can be reached *after* the next epoch's appends are
+    ///   queued, so the same covered count is not the same wait. This handle
+    ///   is synchronous, so that cannot happen here at all.
+    /// - **Per-CPU queue affinity.** [D-27](../../DESIGN-NOTES.md#d-27) is
+    ///   this crate's decision that one ring per thread is userspace's proxy
+    ///   for one ring per CPU, and records that NVMe queue pairs are per-CPU
+    ///   with their completion interrupt routed by their own vector. Two rings
+    ///   on two pinned threads is that architecture; one ring is not.
     ///
-    /// Overlap. Two rings let one ring's appends proceed while the other's
-    /// flush is outstanding, and that is a real thing to buy -- but this
-    /// harness cannot exhibit it, because its handle is synchronous and
-    /// nothing is ever outstanding across a submit boundary. It is deliberately
-    /// **not** removed on the strength of a measurement that could not have
-    /// shown it working; `M25.5` answers that on a harness where operations
-    /// genuinely pend.
+    /// So this strategy stays, and the sample's job is to let a consumer find
+    /// out **on their own hardware and workload** rather than to hand them a
+    /// verdict from ours. `M25.5` re-runs the comparison on a harness where
+    /// operations genuinely pend, which removes the third condition above and
+    /// makes the answer here mean more than it currently can.
     AlternatingRings,
 }
 

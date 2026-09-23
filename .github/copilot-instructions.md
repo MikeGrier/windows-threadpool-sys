@@ -115,6 +115,45 @@ baseline truly unaffordable, that is a **decision for the engineer driving the w
 raised explicitly per the PRIME DIRECTIVE's blocker protocol — never a shortcut an
 assistant takes unilaterally in the name of efficiency.
 
+## OPTION INTEGRITY — enable choices; foreclose only on analytic grounds
+
+**Our job is to enable options.** Unless an option can be shown to have *no possible
+value*, expose it, and give clients the tools to choose it when it applies and to gather
+the data that makes the choice well-founded. The default posture toward a design
+alternative is to keep it and instrument it, not to rank it.
+
+**A measurement that failed to realise an option's value is not a finding against the
+option.** It may mean the hardware, the workload, the software configuration, or the
+apparatus could not reach the conditions where the value appears. Saying "we measured it
+and it did not help" is a statement about the *measurement*; converting it into "it does
+not help" is a category error, and it is the one this rule exists to stop.
+
+**This binds hardest where there is literature or prior art suggesting conditional
+applicability.** Queue and ring topologies, cache and NUMA placement, batching strategies,
+and scheduling disciplines all have regimes where each choice wins. An in-repo measurement
+on one machine cannot settle a question the field treats as workload-dependent, and this
+repository's own decisions (for example that one ring per thread is userspace's proxy for
+one ring per CPU, with NVMe queue pairs as the hardware reason) frequently *are* that prior
+art. Contradicting a recorded decision on the strength of one sample's configuration is a
+defect, not a finding.
+
+**What does justify removing or narrowing an option** is a clear analytic result, of the
+kind that can be argued from the code rather than from a run:
+
+- fewer instructions, fewer allocations, fewer I/Os issued;
+- better locality of reference, argued structurally;
+- a smaller support burden or a clearer programming model;
+- a demonstrated *wrong answer* — an option that binds to incidental behaviour, produces
+  overlapping domains, or silently reports success while doing the wrong thing.
+
+The last is the honest ground for most removals here: not "it measured slower" but "it
+computes the wrong thing."
+
+**When an option stays but cannot be shown to pay, say exactly that**, and say what would
+change the answer: which conditions the apparatus could not reach, and what a consumer
+would need to measure on their own hardware. Foreclosing costs a client a choice they may
+have needed; keeping an unproven option costs a paragraph.
+
 ## Line endings in tool parameters
 
 All text content passed to tpu tools (`content`, `replacement`, `data` in edit ops) is

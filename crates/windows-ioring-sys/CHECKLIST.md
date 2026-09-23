@@ -62,10 +62,11 @@ conclusions belong to it until it converges.
   flaky test. -> [completed 2026-09-07](COMPLETED-CHECKLIST.md#m205)
 
 - [x] **M20.6** -- Re-evaluate `CommitStrategy::AlternatingRings` and the benchmark's conclusion
-  against [D-47](DESIGN-NOTES.md#d-47-detail). Its blast-radius justification is dead on structural
-  grounds; the overlap question is **deliberately left open** for `M25.5`, because the harness
-  cannot exhibit overlap. The strategy is not removed on a measurement that could not have shown it
-  working. The sample's output and prose are corrected so they stop claiming to measure a commit.
+  against [D-47](DESIGN-NOTES.md#d-47-detail). **The harness cannot exhibit a blast-radius
+  difference, which is a fact about the harness and not a finding against the strategy** -- each
+  lane's own arena is the limiter there. The strategy stays, with the conditions under which it
+  would pay written down; `M25.5` re-runs the comparison where operations genuinely pend. The
+  sample's output and prose are corrected so they stop claiming to measure a commit.
   -> [completed 2026-09-23](COMPLETED-CHECKLIST.md#m206)
 
 

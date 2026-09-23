@@ -669,6 +669,17 @@ That second case is why the rule is stated as a question to ask rather than a le
 is silent, and it collapses an eight-domain machine to a single ring while reporting success. The finding
 that a cache domain beats the NUMA node is untouched by either.
 
+**Choosing a specific level is still available; it is just not the default.** What was withdrawn is a
+*policy* that matched on a level number, because that policy computed the wrong partition on two of the
+three machines above. The underlying capability is untouched: `MachineMemoryTopology::cache_levels` and
+`cache_partitions_at_level` let a consumer who knows their part ask about any level directly, and
+`examples/cache_domains.rs` prints every level's distinct processor sets beside the heuristic's choice,
+so the comparison the old policy got wrong is visible rather than asserted. On the development host that
+output is `L1: 8`, `L2: 8` (chosen, checked pairwise disjoint), `L3: 1` -- a consumer can see in one
+glance why matching `level == 3` there collapses the machine, and equally that on a part where L3 does
+partition, choosing it is theirs to make. A consumer is given the data and the means to decide; what they
+are not given is a preset that answers wrongly without saying so.
+
 **Processor groups are a hard floor.** A thread's affinity is a `GROUP_AFFINITY` and a ring's waiter lives
 in exactly one group, so above 64 logical processors the partition is forced whether or not it is wanted.
 

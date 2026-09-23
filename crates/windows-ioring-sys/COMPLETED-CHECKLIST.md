@@ -2425,3 +2425,32 @@ three: those differences cannot occur on a synchronous handle. The three are ind
 they do the same serialized work -- both readings give the same ranking and only one is true. All three
 corrected, plus the "a real log keeps appending while a commit is outstanding" claim, which describes
 a state this program has never reached.
+
+### <a id="m206-correction"></a>M20.6 -- correction, same day *(recorded 2026-09-23 13:03:35 -04:00)*
+
+**The entry above declared `AlternatingRings`' blast-radius justification "dead on structural grounds".
+That over-reached, and the over-reach is the kind this repository now has a rule against** -- see
+OPTION INTEGRITY in the repository instructions, added by this correction.
+
+What the structural argument actually establishes is that **this harness** cannot exhibit a
+blast-radius difference, because each lane registers its own arena of `SLOTS` slots and the arena is
+the limiter rather than the ring topology. That is a statement about the apparatus. Generalising it to
+"the justification is dead" converted a fact about one sample's configuration into a verdict on a
+design option.
+
+**It also contradicted the crate's own recorded position.** [D-27](DESIGN-NOTES.md#d-27) is this
+crate's decision that one ring per thread is userspace's proxy for one ring per CPU, and records the
+hardware reason: NVMe queue pairs are per-CPU with each pair's completion interrupt routed by its own
+vector. Two rings on two pinned threads *is* that architecture. Declaring a multi-ring strategy's
+justification dead on the strength of one sample's arena sizing sits directly against a decision the
+crate already made on stronger grounds.
+
+The conditions under which alternating rings would pay are now written at
+`CommitStrategy::AlternatingRings`, and they are ordinary rather than exotic: a ring shared with any
+other component, arenas sized asymmetrically from the lanes, real overlap (where the same covered
+count is not the same wait), and per-CPU queue affinity. The sample's job is restated as giving a
+consumer the means to answer this on their own hardware, not handing them a verdict from ours.
+
+Nothing about the measurement corrections in the entry above changes: the ack-lag relabel, the p99 = 0
+blocking finding, and the swept mechanism claim all stand. What changed is the conclusion drawn from
+them.
