@@ -2199,3 +2199,38 @@ Outcome: the rejection **stands** with its scope sharpened ([D-52](DESIGN-NOTES.
 `M26`. The apparatus is kept as
 [kernel-response-space-probe.rs](design-sessions/kernel-response-space-probe.rs); the reasoning is
 [DESIGN-SESSION-2026-09-22-kernel-response-space.md](design-sessions/DESIGN-SESSION-2026-09-22-kernel-response-space.md).
+
+### <a id="m242"></a>M24.2 -- Extract the handle-free accounting into its own type, composed by `IoRing`. *(completed 2026-09-22 21:29:07 -04:00)*
+
+The item named five fields as handle-free and five as carrying kernel state. **Checked before acting,
+and it was exactly right** -- `ring_id`, `next_user_data`, `outstanding`, `registered_files` and
+`registered_buffers` against `handle`, `version`, `supported_ops`, `registered_buffer_infos` and
+`completion_event`. Nine methods touch only the first five; they moved with the fields, and `IoRing`
+delegates. `RingId` moved too, since the identity counter is part of the ledger rather than of the
+handle. The public surface did not move.
+
+**19 hermetic tests, and they are the first in `src/` for which [D-49](DESIGN-NOTES.md#d-49)'s
+complaint does not apply.** They open no ring, because every rule they check is this crate's own
+specification: an identity is never reused, a refused reservation costs nothing, the counters saturate
+rather than wrap, the two registration indices are independent, and two ledgers never share an
+identity. The last of those used to need two live kernel objects.
+
+**The tests found an off-by-one in their own author's assumptions.** Two of them asserted that the
+last identity handed out is `usize::MAX`, and failed: `checked_add` runs *before* the value is
+returned, so a reservation made at `usize::MAX` fails rather than handing it out, and the identity
+space is `0..=usize::MAX - 1`. Not a defect -- one value out of 2^64, and "fails rather than wraps" is
+the property that matters -- but invisible from the source, so
+`the_last_identity_is_max_minus_one_not_max` records it rather than leaving the next reader to make
+the same wrong assumption.
+
+**Sabotage, four ways, all caught:** a no-op `record_completion` (2 red), a recycled identity (6 red),
+`wrapping_sub` in place of `saturating_sub` (1 red), and the buffer-registration count advancing the
+file counter (4 red). The recycled-identity sabotage first produced *no output at all* rather than a
+red suite -- an ambiguous-integer compile error -- which is the silent-failure shape the repository's
+rules warn about, and was rerun with an explicit type before being believed.
+
+**The payoff was deliberately not taken here.** The item's motivation said most of the ring-opening
+lib tests "become hermetic *in place*". That is 71 tests across four files, which is a different item
+wearing this one's name; it is queued as `M24.7` with the measured per-file census, and with a warning
+that the census must be recounted because the first attempt at it produced false positives by matching
+`to_string()`.

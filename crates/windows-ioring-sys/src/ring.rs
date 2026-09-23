@@ -4,7 +4,6 @@
 use std::ffi::c_void;
 use std::io;
 use std::os::windows::io::{AsRawHandle, FromRawHandle, OwnedHandle};
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
 use windows_sys::Win32::Storage::FileSystem::{
@@ -16,31 +15,11 @@ use windows_sys::Win32::Storage::FileSystem::{
 };
 use windows_sys::Win32::System::Threading::{CreateEventW, SetEvent};
 
+use crate::accounting::Accounting;
 use crate::capability::{RingVersion, capabilities};
 use crate::error::check;
 
-/// A ring's identity, unique for the process's lifetime (PR #20 review
-/// response): every value a ring hands out that later gets checked back
-/// against it -- a [`crate::Token`], a [`crate::RegisteredFile`], a
-/// [`crate::RegisteredBuffers`] -- carries the id of the ring that minted
-/// it, and every [`Completion`] carries the id of the ring that popped it.
-///
-/// A monotonic counter rather than the ring's own `HANDLE`: a `HANDLE` is
-/// only unique while the object it names is still open, and Windows is free
-/// to hand a closed ring's numeric value to the *next* object created --
-/// which would let a stale identity from a closed ring collide with a
-/// brand-new one. This counter never repeats within one process run
-/// (`u64` overflow is not a practical concern), so a mismatch always means
-/// a genuine cross-ring mixup, never a false negative from handle reuse.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub(crate) struct RingId(u64);
-
-impl RingId {
-    fn next() -> Self {
-        static NEXT: AtomicU64 = AtomicU64::new(1);
-        Self(NEXT.fetch_add(1, Ordering::Relaxed))
-    }
-}
+pub(crate) use crate::accounting::RingId;
 
 /// One `IoRing` operation.
 ///
@@ -433,18 +412,10 @@ pub struct IoRing {
     handle: *mut c_void,
     version: RingVersion,
     supported_ops: OpSupport,
-    /// This ring's own identity (PR #20 review response); see [`RingId`].
-    ring_id: RingId,
-    /// The next `UserData` value [`IoRing::reserve_user_data`] will hand out.
-    next_user_data: usize,
-    /// Operations minted but not yet observed to have completed (M2.4).
-    outstanding: usize,
-    /// How many file handles are registered so far, across every confirmed
-    /// `BuildIoRingRegisterFileHandles` (M5.1). The base index of the next
-    /// registration.
-    registered_files: u32,
-    /// As `registered_files`, for `BuildIoRingRegisterBuffers` (M5.2).
-    registered_buffers: u32,
+    /// The half of this ring that never touches the kernel: identity,
+    /// operation identities, and the counts (M24.2). Split out so those rules
+    /// can be tested without opening a ring -- see [`crate::accounting`].
+    accounting: Accounting,
     /// The `IORING_BUFFER_INFO` array handed to `BuildIoRingRegisterBuffers`,
     /// kept alive because the kernel reads it when the registration op
     /// *runs*, not when the `Build*` call returns (D-32, measured).
@@ -476,11 +447,11 @@ impl std::fmt::Debug for IoRing {
             .field("handle", &self.handle)
             .field("version", &self.version)
             .field("supported_ops", &self.supported_ops)
-            .field("ring_id", &self.ring_id)
-            .field("next_user_data", &self.next_user_data)
-            .field("outstanding", &self.outstanding)
-            .field("registered_files", &self.registered_files)
-            .field("registered_buffers", &self.registered_buffers)
+            // One field rather than five, because the ledger derives `Debug`
+            // and prints its own. Keeping the five spelled out here would be a
+            // second copy of the field list, drifting the moment either side
+            // gains a field.
+            .field("accounting", &self.accounting)
             .field(
                 "registered_buffer_infos",
                 &self.registered_buffer_infos.len(),
@@ -546,11 +517,7 @@ impl IoRing {
             handle,
             version,
             supported_ops,
-            ring_id: RingId::next(),
-            next_user_data: 0,
-            outstanding: 0,
-            registered_files: 0,
-            registered_buffers: 0,
+            accounting: Accounting::new(),
             registered_buffer_infos: Vec::new(),
             completion_event: None,
         })
@@ -776,7 +743,7 @@ impl IoRing {
     /// index for.
     #[must_use]
     pub fn registered_file_count(&self) -> u32 {
-        self.registered_files
+        self.accounting.registered_file_count()
     }
 
     /// As [`IoRing::registered_file_count`], for registered buffers (M5.2) --
@@ -784,7 +751,7 @@ impl IoRing {
     /// consequences (M10.3, D-31).
     #[must_use]
     pub fn registered_buffer_count(&self) -> u32 {
-        self.registered_buffers
+        self.accounting.registered_buffer_count()
     }
 
     /// Advance the registered-file base index by `count`, the instant a
@@ -807,12 +774,12 @@ impl IoRing {
     /// which is a different thing from when it claims the *indices*. The
     /// latter remains unmeasured, and dissolved rather than resolved.
     pub(crate) fn reserve_registered_files(&mut self, count: u32) {
-        self.registered_files = self.registered_files.saturating_add(count);
+        self.accounting.reserve_registered_files(count);
     }
 
     /// As [`IoRing::reserve_registered_files`], for registered buffers.
     pub(crate) fn reserve_registered_buffers(&mut self, count: u32) {
-        self.registered_buffers = self.registered_buffers.saturating_add(count);
+        self.accounting.reserve_registered_buffers(count);
     }
 
     /// Take ownership of the `IORING_BUFFER_INFO` array a
@@ -847,7 +814,7 @@ impl IoRing {
     /// `record_completion`).
     #[must_use]
     pub fn outstanding(&self) -> usize {
-        self.outstanding
+        self.accounting.outstanding()
     }
 
     /// Mint a fresh `UserData` identity for a new operation, and account for
@@ -865,19 +832,14 @@ impl IoRing {
     /// is ever exhausted, mirroring `windows-threadpool-sys`'s own
     /// "exhausting the generation sequence fails rather than wraps."
     pub(crate) fn reserve_user_data(&mut self) -> io::Result<usize> {
-        let id = self.next_user_data;
-        self.next_user_data = id
-            .checked_add(1)
-            .ok_or_else(|| io::Error::other("IoRing operation identity space exhausted"))?;
-        self.outstanding += 1;
-        Ok(id)
+        self.accounting.reserve_user_data()
     }
 
     /// Record that one outstanding operation's completion has been observed
     /// (a real `IORING_CQE` was popped for it), whether or not a live
     /// [`crate::Token`] was still around to claim it.
     pub(crate) fn record_completion(&mut self) {
-        self.outstanding = self.outstanding.saturating_sub(1);
+        self.accounting.record_completion();
     }
 
     /// Release a reservation for an operation that was never actually
@@ -889,7 +851,7 @@ impl IoRing {
     /// the op never entered the queue, so it must not count against
     /// [`IoRing::run_down`] either.
     pub(crate) fn cancel_reservation(&mut self) {
-        self.outstanding = self.outstanding.saturating_sub(1);
+        self.accounting.cancel_reservation();
     }
 
     /// This ring's native handle, for `batch.rs`'s `Build*`/`Submit` calls.
@@ -901,7 +863,7 @@ impl IoRing {
     /// registration it mints and checking against on use (PR #20 review
     /// response); see [`RingId`].
     pub(crate) fn ring_id(&self) -> RingId {
-        self.ring_id
+        self.accounting.ring_id()
     }
 
     /// Queue a raw, not-yet-wrapped SQE via a caller-supplied `Build*` call
@@ -973,7 +935,7 @@ impl IoRing {
     /// Returns any error from `SubmitIoRing` other than an expired wait, or
     /// from `PopIoRingCompletion`.
     pub fn run_down(&mut self) -> io::Result<()> {
-        while self.outstanding > 0 {
+        while self.accounting.outstanding() > 0 {
             let mut submitted = 0_u32;
             // SAFETY: `self.handle` is a live ring; valid out-pointer. Zero
             // new SQEs are queued -- this call's only purpose is to wait for
@@ -1038,7 +1000,7 @@ impl IoRing {
             user_data: cqe.UserData,
             result_code: cqe.ResultCode,
             information: cqe.Information,
-            ring_id: self.ring_id,
+            ring_id: self.accounting.ring_id(),
         }))
     }
 

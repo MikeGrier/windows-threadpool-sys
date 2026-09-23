@@ -159,6 +159,8 @@
 #![warn(missing_docs)]
 
 #[cfg(windows)]
+mod accounting;
+#[cfg(windows)]
 mod batch;
 #[cfg(windows)]
 mod buf;

@@ -234,8 +234,8 @@ So sequencing turns on other things, and they point the other way:
   earns its place in a published sample -- which is a decision waiting on a measurement `M22.1`
   produces.
 
-**`M24.1` gates everything after it.** `M24.2` and `M24.3` are safe under any outcome and could be
-taken first if the evaluation is deferred; `M24.4` exists only if `M24.1` says it may.
+**`M24.1` concluded (2026-09-22) and nothing here waits on it.** `M24.4` is withdrawn; `M24.2`,
+`M24.3` and `M24.7` are the path to a hermetic suite and are independent of each other.
 
 - [x] **M24.1** -- Settle whether a co-tested fake escapes the mock objection. **Answered: the fake
   was the wrong instrument.** A shared suite is strong over what we specify and blind to the
@@ -243,15 +243,24 @@ taken first if the evaluation is deferred; `M24.4` exists only if `M24.1` says i
   than a contract. Superseded by the resolver in `M26`.
   -> [completed 2026-09-22](COMPLETED-CHECKLIST.md#m241)
 
-- [ ] **M24.2** -- Extract the handle-free accounting into its own type, composed by `IoRing`.
-  Measured as separable: `RingId::next()` is a process-global `AtomicU64` that never touches a
-  handle, and `IoRing`'s ten fields split evenly -- `ring_id`, `next_user_data`, `outstanding`,
-  `registered_files` and `registered_buffers` carry no kernel state, against `handle`,
-  `completion_event`, `registered_buffer_infos`, `version` and `supported_ops` which do.
-  This is the remedy that needs **no fake, no feature gate and no widened visibility**: most of the
-  38 lib tests that currently reach crate-private items become hermetic *in place*, because what
-  they were always testing is bookkeeping rather than the kernel. Safe under any outcome of `M24.1`.
-  Pure refactor of internals; the public surface does not move.
+- [x] **M24.2** -- Extract the handle-free accounting into its own type, composed by `IoRing`. The
+  item's field split was verified exactly: five fields carry no kernel state, five do.
+  `Accounting` now owns them with 19 hermetic tests, and `IoRing` delegates nine methods.
+  -> [completed 2026-09-22](COMPLETED-CHECKLIST.md#m242)
+
+- [ ] **M24.7** -- **Convert the lib tests that construct a ring only to exercise bookkeeping.**
+  `M24.2` said "most of the 38 lib tests that currently reach crate-private items become hermetic
+  *in place*"; that is the **payoff** of the extraction rather than part of it, and doing 71 test
+  conversions inside the extraction's commit would have been a different item wearing its name.
+  Measured after `M24.2` landed, per file: `batch` 18 tests / 15 ring constructions,
+  `event_delivery` 6/6, `ring` 40/35, `token` 7/8 -- against 93 tests already hermetic across
+  `accounting`, `buf`, `capability`, `contract`, `error` and `numa_buffer`.
+  **Recount before starting and do not trust those figures**: they are a per-file `IoRing::new`
+  count, not a per-test one, and a first pass at this census produced false positives by matching
+  `to_string()` with a sloppy pattern.
+  Complementary to `M24.3`, which relocates the public-API ones; between them they should drain the
+  71. A test that genuinely needs the kernel stays and moves to `tests/` -- the point is that a test
+  of *bookkeeping* should not need a ring to reach its subject.
 
 - [ ] **M24.3** -- Relocate the 25 lib tests that open a ring but use **only public API** into
   `tests/`. A pure relocation, and it carries the split provenance trail the repository requires of
