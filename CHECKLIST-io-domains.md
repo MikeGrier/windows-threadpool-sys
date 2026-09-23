@@ -467,24 +467,43 @@ Parked, not pending. Shape recorded so it is not lost, per the `M{n}+` conventio
   per-domain** and a client spanning two domains needs two flushes and an explicit join.
 
   **Musing, recorded not prioritized (the engineer, 2026-09-23).** If a consumer could *tell* this
-  layer which files share a device and are therefore subject to a common flush regime, that might be
-  useful -- it is the declare rather than discover shape that S-3 proposed for the storage node,
-  applied to the co-flush group instead. Fit it in if it falls out naturally; do not build toward it.
-  It belongs here rather than in `windows-ioring-sys` because co-flush *grouping* is reasoning about
-  durability groups, and that crate has none -- see
+  layer which of its files share a **flush regime** -- that is, which commits will contend -- that
+  might be useful. It is the "declare rather than discover" shape `S-3` proposed for the storage node,
+  applied to the co-flush group instead. Note the wording: *not* "which files share a device", because
+  the inference from one to the other is exactly what the handover below calls unsound. Fit it in if
+  it falls out naturally; do not build toward it. It belongs here rather than in `windows-ioring-sys`
+  because co-flush *grouping* is reasoning about durability groups, and that crate has none -- see
   [windows-ioring-sys/DESIGN-NOTES.md](crates/windows-ioring-sys/DESIGN-NOTES.md#d-54).
 
-  **Handed over from `windows-ioring-sys` M23.2(b) on 2026-09-23 under D-54.** The reasoning arrives
-  with it so the deferral loses nothing: a device cache flush is per-device, so two logs on one
-  device contend at every commit, and a ring spanning two devices takes the slower device's flush on
-  every covering flush. `IOCTL_STORAGE_GET_DEVICE_NUMBER` and `IOCTL_VOLUME_GET_VOLUME_DISK_EXTENTS`
-  answer which physical device backs a handle and are reachable today on ordinary hardware, both
-  already written and smoke-tested in
+  **Handed over from `windows-ioring-sys` M23.2(b) on 2026-09-23 under D-54, and sharpened on the way.**
+  The concept to keep is **flush equivalence**, not device identity: the set of files whose flushes are
+  not independent of one another. What a durability group actually needs to know is whether two of its
+  commits land in the same such set, because that is what makes them contend.
+
+  **Device number is a proxy for that set, and the proxy is not known to be sound.** The obvious
+  model -- a device cache flush is per-device, so two logs on one device contend and a group spanning
+  two devices pays the slower flush -- is the *starting* model, not the finding. The engineer's
+  refinement: a flush group may be **larger than the one physical device of interest**, with Storage
+  Spaces the candidate case, since a virtual disk over a pool need not have per-physical-device flush
+  independence. That is the same shape as the already-recorded `Q6` hazard -- "whether a Storage Space
+  reports honestly or reports a fiction" -- reaching the flush question rather than the placement one.
+  Whether the class can also be *smaller* than a device is open and unexamined.
+
+  **This is the argument for declaring rather than discovering, and it is stronger than convenience.**
+  If the equivalence class cannot be soundly derived from a device number, then a consumer stating it
+  is not a stopgap until discovery is implemented -- it may be the only sound mechanism, with
+  discovery serving as a default that must be overridable. That upgrades the musing above from
+  "might be useful" to "might be the answer", without settling it.
+
+  The instruments exist and answer the *proxy* question today:
+  `IOCTL_STORAGE_GET_DEVICE_NUMBER` and `IOCTL_VOLUME_GET_VOLUME_DISK_EXTENTS`, both written and
+  smoke-tested in
   [file-handle-numa-spike.rs](crates/windows-ioring-sys/design-sessions/spikes/file-handle-numa-spike.rs),
   which counts distinct `DiskNumber` rather than extents because a volume extended twice onto one disk
-  is still one device. **Unmeasured.** The engineer's working position, hedged and unmeasured: the
+  is still one device. **All of it unmeasured.** The engineer's working position, hedged: the
   FUA-to-Flush conversion has pushed devices toward better flush behaviour, so several flushes in a
-  row is suboptimal rather than pathological. Low priority; do not front-load it.
+  row is suboptimal rather than pathological. **Low priority, and explicitly not a blocker** -- record
+  the concept, do not let it gate progress.
 
 ## M-inf -- Ungated
 

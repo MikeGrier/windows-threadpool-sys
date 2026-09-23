@@ -254,55 +254,25 @@ here. `M23.2` builds on the mechanism correction `M20.4` carried, which has land
   file target secures. What it endangers is the cost model. Recorded because the first draft of this
   work shipped the conflation, and a question caught it rather than the gate.
 
-- [ ] **M23.2** -- Record a decision on how a consumer anticipates storage affinity, given that the node
-  question is unanswerable and the device question is not (`S-3`). Two mechanisms, both leaving policy with
-  the consumer per [D-8](DESIGN-NOTES.md#d-8): (a) let a consumer **declare** a domain's storage node and
-  have the arena allocate there, turning an undiscoverable fact into a stated
-  input that [file-handle-numa-spike.rs](design-sessions/spikes/file-handle-numa-spike.rs) can fill in
-  automatically if hardware ever answers; and (b) shard by **backing device** rather than by node, using
-  `IOCTL_STORAGE_GET_DEVICE_NUMBER` and `IOCTL_VOLUME_GET_VOLUME_DISK_EXTENTS` -- both already named in that
-  spike, both reachable today on ordinary hardware. The second is the substantive one: a device cache flush
-  is per-device, so two logs on one device contend at every commit and a ring spanning two devices takes the
-  slower device's flush on every covering flush, which means the reachable question is also the one that
-  governs the cost this sample is built around. **Unmeasured** -- it follows from the flush's recorded scope
-  plus D-47's surviving half, and the instruments to settle it exist. Decide what this crate offers, what it
-  refuses, and what it measures first.
+- [ ] **M23.2** -- Decide whether this crate accepts a **declared storage node** as an input, or stays
+  at "you allocate, you choose". The node question is not discoverable -- `FSCTL_QUERY_VOLUME_NUMA_INFO`
+  answers for a *volume*, which may span devices, so it cannot say where a file's extents live
+  ([M20.4](COMPLETED-CHECKLIST.md#m204)) -- so the mechanism on offer is to let a consumer *state* it and
+  have the arena allocate there, with
+  [file-handle-numa-spike.rs](design-sessions/spikes/file-handle-numa-spike.rs) filling it in
+  automatically if hardware ever answers. Record the decision either way, including what the crate
+  refuses. Keeps [D-8](DESIGN-NOTES.md#d-8) intact: policy stays with the consumer.
 
-  **Narrowed by `M22.3` (2026-09-22), which settled the sample-level half of (a).** The allocation now
-  exists in the library as `NumaBuffer` ([D-51](DESIGN-NOTES.md#d-51)), and the epoch-log sample already
-  asks the FSCTL and places on the answer ([D-50](DESIGN-NOTES.md#d-50)). So (a) is no longer "should a
-  sample do this" but the narrower **library** question: does the crate offer a *declared* storage node as
-  an input anywhere, or does it stay at "you allocate, you choose"? (b) is untouched and is still the
-  substantive one.
+  **Scope, after two narrowings.** `M22.3` settled the sample half -- the allocation is now
+  `NumaBuffer` in the library ([D-51](DESIGN-NOTES.md#d-51)) and the epoch-log sample asks the FSCTL
+  and places on the answer ([D-50](DESIGN-NOTES.md#d-50)) -- leaving only the library question above.
+  Then [D-54](DESIGN-NOTES.md#d-54) removed the item's other half: sharding by backing device needs the
+  concept of a set of operations that commit together, which this crate does not have. Arena placement
+  needs no such concept, so it passes D-54's test and stays.
 
-  **Working position, not a decision (the engineer, 2026-09-23, explicitly hedged and unmeasured).**
-  The industry-wide conversion of FUA to Flush has pushed storage devices toward better flush
-  behaviour, so several flushes in a row is **suboptimal rather than pathological**. Worth addressing
-  later; not worth front-loading now. Recorded as a working position per the RESOLUTION GRADIENT rule
-  -- it steers priority and nothing binds to it, and it is the engineer's read of the hardware trend
-  rather than anything this repository has measured.
-
-  **Consequence for how this item is approached:** do not reason forward about multi-device reach in
-  advance of doing the work. M23.1 drifted that way -- it shipped a section that gave the device
-  equal billing with the ring and pointed here as though the question were pressing, in a sample that
-  has one log file on one ring. That was trimmed to a parenthesis. The device question is real and is
-  this item's subject; its *priority* is low, and the two are easy to confuse when the reasoning is
-  interesting.
-
-  **Resolved 2026-09-23 as [D-54](DESIGN-NOTES.md#d-54): (b) is not at this level.** The engineer's
-  reading was right, and the item's own wording was the evidence -- every operative noun in (b) is
-  grouping-layer: two *logs*, contending at every *commit*. This crate has neither. D-54's test is
-  whether a proposal needs the concept of a set of operations that become durable together; (b)
-  does, so it is deferred to the durability crate along with the co-flush musing.
-
-  **What remains is (a), on its own merits.** Does the crate accept a *declared* storage node as an
-  input anywhere, or stay at "you allocate, you choose"? That is arena placement -- `NumaBuffer` is
-  library surface here ([D-51](DESIGN-NOTES.md#d-51)) -- and it needs no grouping concept, so it
-  passes D-54's test. The bare fact "which device backs this handle" is a *file* question at home in
-  neither crate; see the unrecorded `windows-overlapped-io-sys` discussion.
-
-  > **-> CROSS-COMPONENT HANDOFF:** (b) moves to the repository root checklist -> `M33+` ->
-  > `M33+.5`, the durability layer as its own crate. See
+  > **-> CROSS-COMPONENT HANDOFF:** the backing-device half moves to the repository root checklist ->
+  > `M33+` -> `M33+.5`, the durability layer as its own crate, where the concept is sharpened from
+  > device identity to **flush equivalence**. See
   > [CHECKLIST-io-domains.md](../../CHECKLIST-io-domains.md).
 
 - [ ] **M23.3** -- Decide whether the crate offers a **pending-operations map**, and separately whether it
