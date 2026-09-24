@@ -3173,3 +3173,46 @@ must leave the log correct if the platform completes inline tomorrow.
 - [x] **M25.6** -- Swept what this milestone made false, and recorded the two findings as `D-56` and `D-57`. -> [completed 2026-09-24](COMPLETED-CHECKLIST.md#m256)
 
 - [x] **M25.7** -- Replay keeps its slice for a reason about failure vocabulary, recorded as `D-58`; the second multi-megabyte buffer became a digest. -> [completed 2026-09-24](COMPLETED-CHECKLIST.md#m257)
+
+### <a id="m261"></a>M26.1 -- The permitted space is specified in [RESPONSE-SPACE.md](RESPONSE-SPACE.md) as eleven cited clauses, and recorded as `D-59`. *(completed 2026-09-24 19:30:19 -04:00)*
+
+**Eleven clauses: seven permissions and four constraints**, each with an ID, a source, and a
+provenance tag. The IDs exist so `M26.3`'s resolver, `M26.4`'s properties and `M26.6`'s kernel tests
+can cite a clause rather than restate it -- and so a clause no code cites is visible as
+unimplemented.
+
+**The provenance tag is what makes it a specification rather than a recording.** Every clause is
+`Observed`, `Over-provision`, or `Decided`, and where a clause is wider than its own observation the
+two parts are split so they can be argued separately. `RS-P-1` is the clearest case: that an
+operation may complete inline or pend is measured, but that operations within one batch resolve
+**independently** is not, and the space permits it anyway -- because a consumer depending on them
+resolving together depends on something Windows never promised.
+
+**The call the item demanded, made rather than defaulted: `RS-C-4` constrains the resolver to
+honour the drain half of `DRAIN_PRECEDING_OPS`.** [D-47](DESIGN-NOTES.md#d-47) measured roughly
+4,500 trials without a single violation; the drain is what this crate's durability story rests on;
+and a resolver permitted to break it would require every consumer to re-verify durability some other
+way, which is to say it would make the primitive useless. The cost is stated plainly: a Windows that
+broke the drain would not be caught by the resolver at all. That is why `M26.6` gained a line
+requiring at least one kernel test to exercise the clause -- otherwise the one constraint the space
+takes on faith is untested in both halves at once.
+
+**The hold-back half stays unconstrained**, since `D-24` claimed it and `D-47` withdrew it. `RS-P-2`
+applies in full to anything queued after a drained flush, which is the defect class that campaign
+found.
+
+**Three citations were checked and one was wrong.** The draft attributed `M22.2`'s defect to the
+checkpoint control plane; it was on the *append* path, and the checkpoint module merely documents
+the same case. Both now appear, distinguished. The other two -- `pop_within`'s "promises nothing
+about poppability" and `D-47`'s trial count -- were verified against the files rather than recalled.
+
+**A working artifact was found rather than assumed missing.**
+[kernel-response-space-probe.rs](design-sessions/kernel-response-space-probe.rs) already contains a
+seeded `Resolver` exercising `RS-P-2`, which broke a FIFO-assuming consumer under 189 of 200 seeds.
+`M26.3` now points at it as a starting point, with the note that the probe marks itself throwaway --
+so promoting it is a deliberate decision rather than a default.
+
+**Four things are listed as deliberately undecided** -- rates, partial transfers, failure-code sets,
+and timing -- so that a later reader can tell an omission from a choice. Rates in particular are
+excluded on principle: a space carrying observed probabilities would be the recording this milestone
+exists to avoid.

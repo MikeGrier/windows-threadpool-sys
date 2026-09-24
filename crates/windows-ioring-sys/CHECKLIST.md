@@ -273,14 +273,7 @@ anything observed**, and must not be derived from observation -- deriving it fro
 closes the trap again. It is a deliberate specification of what we will tolerate, and therefore a
 reviewable artifact rather than a recording.
 
-- [ ] **M26.1** -- Specify the permitted response space, and record it as a decision. What may a
-  submitted batch do? At minimum: each operation may complete inside `SubmitIoRing` or pend;
-  completion order is unconstrained; an operation may fail individually; a wait may expire; a wait
-  may return with nothing poppable. **Say equally which constraints hold**, because a resolver free
-  to violate everything makes us write code defending against impossible kernels --
-  [D-23](DESIGN-NOTES.md#d-23)'s covering-flush guarantee held with zero failures in ~4,500 trials,
-  and whether the resolver may break it is a decision, not a default. Cite the spike or decision
-  behind every entry, and mark the ones that are deliberate over-provision rather than observation.
+- [x] **M26.1** -- The permitted space is specified in [RESPONSE-SPACE.md](RESPONSE-SPACE.md) as eleven cited clauses, and recorded as [D-59](DESIGN-NOTES.md#d-59). -> [completed 2026-09-24](COMPLETED-CHECKLIST.md#m261)
 
 - [ ] **M26.2** -- Build the seam. The resolver sits under the `windows-sys` calls -- `SubmitIoRing`,
   `PopIoRingCompletion`, the `Build*` family -- so those become indirect. **This is the expensive
@@ -293,6 +286,13 @@ reviewable artifact rather than a recording.
   one number replays a whole run, announced with the command to replay it, pinnable from the
   environment. Keep that file's two-seed discipline in mind -- this adds a third axis, and
   conflating them would produce a replay that reproduces some of a run and not the rest.
+
+  **Bind to the clause IDs rather than re-stating the space.** Each freedom the resolver exercises
+  cites its `RS-P-n`, and each thing it declines to do cites its `RS-C-n` -- so a reader can check
+  the resolver against the specification mechanically, and a clause that no code cites is visible as
+  unimplemented. [kernel-response-space-probe.rs](design-sessions/kernel-response-space-probe.rs)
+  already has a working `Resolver` over `RS-P-2` alone; start from it rather than from nothing, and
+  note that it is marked throwaway, so promoting it is a decision to make deliberately.
 
 - [ ] **M26.4** -- Write the properties that must hold under **every** resolution: conservation (no
   lost, duplicated or unclaimed completion), no hang, `pop_within` honours its bound, `outstanding`
@@ -311,6 +311,13 @@ reviewable artifact rather than a recording.
   observed outside the space is a genuine finding and should fail loudly; a kernel that moves
   *within* it should change nothing. Sweep what this makes false, including the testing-strategy
   section's "five techniques" framing, which becomes six.
+
+  **`RS-C-4` is the clause that makes this job real rather than nominal.** The resolver is forbidden
+  to break the drain half of `DRAIN_PRECEDING_OPS`, so a Windows that broke it would be caught by
+  nothing the resolver does -- these tests are where that would surface, and the division of labour
+  is stated in [RESPONSE-SPACE.md](RESPONSE-SPACE.md) on the strength of it. Make sure at least one
+  test actually exercises that clause against a real ring, or the constraint is untested in both
+  halves at once.
 
 - [ ] **M26.7** -- Audit the existing suite for assertions that are **frozen observations rather
   than contracts** -- the failure case 4 of the session demonstrated, where one assertion gave
