@@ -40,6 +40,28 @@
 //! recovery path, a header rewrite, or a segment that seeks. See
 //! [measurements/2026-09-24-set-len-zero-fill-cost/](../../measurements/2026-09-24-set-len-zero-fill-cost/README.md).
 //!
+//! # The forcing can be used on purpose, and is a real alternative
+//!
+//! Raised in review: since a write past the valid data length forces the fill
+//! anyway, it can be *triggered* deliberately -- `set_len` to the final size,
+//! then write one sector at the very end, and the filesystem zero-fills
+//! everything in front of it. That was measured as condition F and it reaches
+//! the same end state this function does; over sixteen runs it had the highest
+//! floor of any condition (147/500 against the zero-fill's 65) at a
+//! comparable median.
+//!
+//! It is a genuine trade rather than a strictly worse option:
+//!
+//! - **It needs no buffer at all** -- two syscalls, whatever the extent's size.
+//! - **It costs about eight times the wall time** for a large extent, because
+//!   the filesystem's own fill is much slower than a sequential write of the
+//!   same bytes.
+//!
+//! This function takes the explicit fill because the cost is bounded and
+//! predictable and the memory is now bounded too. A caller pre-allocating tens
+//! of gigabytes, who would rather spend wall time than write the loop, has the
+//! other option and it works.
+//!
 //! # `set_len` is not a substitute for the zero-fill, and the difference is
 //! measured rather than argued
 //!
@@ -111,12 +133,22 @@
 
 use std::fs::{File, OpenOptions};
 use std::io;
+use std::io::Write;
 use std::os::windows::fs::OpenOptionsExt;
 use std::path::Path;
 
 use windows_sys::Win32::Storage::FileSystem::{FILE_FLAG_NO_BUFFERING, FILE_FLAG_OVERLAPPED};
 
 use crate::record::RECORD_STRIDE;
+
+/// Bytes per write while zero-filling the extent.
+///
+/// The fill used to be a single `std::fs::write` of a `vec![0; len]`, which
+/// allocates the **whole extent** in memory -- harmless for this sample's
+/// handful of blocks and a bad pattern for a log to copy, since a real one
+/// pre-allocates in gigabytes. A fixed chunk keeps the fill's memory cost
+/// constant in the size of the extent.
+const FILL_CHUNK: usize = 1 << 20;
 
 /// Create `path` with `blocks` zeroed record blocks already written, and return
 /// a handle over that extent opened `NO_BUFFERING | OVERLAPPED`.
@@ -136,10 +168,20 @@ pub fn create_preallocated(path: &Path, blocks: usize) -> io::Result<File> {
 
     // The zero-fill, done eagerly here rather than left for the filesystem to
     // do lazily on the ring's write path -- see the module docs, and note that
-    // `set_len` is not a substitute however identical the resulting file looks.
-    // The ordinary handle is dropped at the end of this statement, before the
-    // reopen.
-    std::fs::write(path, vec![0_u8; len])?;
+    // `set_len` alone is not a substitute however identical the resulting file
+    // looks. The ordinary handle is dropped at the end of this block, before
+    // the reopen.
+    {
+        let mut file = File::create(path)?;
+        let chunk = vec![0_u8; FILL_CHUNK.min(len.max(1))];
+        let mut written = 0;
+        while written < len {
+            let take = chunk.len().min(len - written);
+            file.write_all(&chunk[..take])?;
+            written += take;
+        }
+        file.flush()?;
+    }
 
     // No `create`, no `truncate`: this must be `OPEN_EXISTING`, because
     // truncating would discard the extent that is the only thing distinguishing

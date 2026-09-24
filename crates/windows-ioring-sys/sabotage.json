@@ -199,12 +199,12 @@
       "name": "M25.3: the extent is not pre-allocated",
       "file": "examples/epoch_log/logfile.rs",
       "expect": "caught",
-      "why": "Pre-allocation is the whole point of the item: the spike measured four configurations and only NO_BUFFERING over an extent written beforehand behaved differently from a buffered handle, because the filesystem serialises writes past the valid-data length. An extending write is therefore the configuration that looks like it works and measures like a buffered one, which is exactly the failure mode that needed a guard rather than a comment.",
+      "why": "Pre-allocation is the whole point of the item: the spike measured six configurations and the zero-filled extent has both the highest central tendency and a floor far above the unfilled ones, because the filesystem serialises writes past the valid-data length. An extending write is therefore the configuration that looks like it works and measures like a buffered one, which is exactly the failure mode that needed a guard rather than a comment. The patch seeds the fill loop as already-complete, so the file is created and left empty; it used to replace a single std::fs::write and was updated when that became a chunked loop.",
       "find": [
-        "    std::fs::write(path, vec![0_u8; len])?;"
+        "        let mut written = 0;"
       ],
       "replace": [
-        "    std::fs::write(path, Vec::new())?;"
+        "        let mut written = len;"
       ]
     },
     {
@@ -237,10 +237,19 @@
       "expect": "survives",
       "why": "This is NOT an inert change and must not be read as one -- it is a real regression that nothing in this workspace detects, recorded here so the gap is tracked rather than invisible. set_len and a zero-fill both produce a file of the right size whose bytes read back as zero, because reads past the valid data length are answered with zeros the filesystem synthesises without touching the disk -- so the two are indistinguishable to every assertion available here. The difference is measured rather than argued, in measurements/2026-09-24-set-len-vs-zero-fill: over sixteen runs the zero-filled extent pended at a median of 471/500 against set_len's 268/500, with a floor of 121 against 1. Read that capture before trusting this note, because it also corrects a stronger claim this repository had been repeating -- that the zero-filled extent was the only condition that pended at all, which descends from one run and does not replicate. Note what is NOT the reason: the zeroing cost is identical for a sequential writer, measured in measurements/2026-09-24-set-len-zero-fill-cost. This case stays untested because the difference is a RATE that varies enormously run to run, and a test asserting it would assert an observation about one machine as though it were a contract, which M25's standing constraint forbids.",
       "find": [
-        "    std::fs::write(path, vec![0_u8; len])?;"
+        "        let mut file = File::create(path)?;",
+        "        let chunk = vec![0_u8; FILL_CHUNK.min(len.max(1))];",
+        "        let mut written = 0;",
+        "        while written < len {",
+        "            let take = chunk.len().min(len - written);",
+        "            file.write_all(&chunk[..take])?;",
+        "            written += take;",
+        "        }",
+        "        file.flush()?;"
       ],
       "replace": [
-        "    std::fs::File::create(path)?.set_len(len as u64)?;"
+        "        let file = File::create(path)?;",
+        "        file.set_len(len as u64)?;"
       ]
     },
     {

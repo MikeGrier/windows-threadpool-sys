@@ -206,6 +206,14 @@ enum Extent {
     /// `set_len` only. Same end-of-file as `Written`, same bytes on read, and
     /// the whole question condition E exists to settle.
     SetLen,
+    /// `set_len`, then a single write at the **end** of the extent, which
+    /// obliges the filesystem to zero-fill everything in front of it.
+    ///
+    /// The question condition F exists to settle, raised in review: since a
+    /// write past the valid data length forces the fill anyway, can that be
+    /// used deliberately -- one small write instead of a buffer the size of
+    /// the file -- to reach the same end state a zero-fill reaches?
+    SetLenTouchEnd,
 }
 
 fn run(label: &'static str, flags: u32, extent: Extent) -> Outcome {
@@ -230,6 +238,21 @@ fn run(label: &'static str, flags: u32, extent: Extent) -> Outcome {
             let file = std::fs::File::create(&path).expect("create for set_len");
             file.set_len((WRITE_LEN * (WRITES + 1)) as u64)
                 .expect("set_len the extent");
+        }
+        Extent::SetLenTouchEnd => {
+            use std::io::{Seek, SeekFrom, Write};
+            let total = WRITE_LEN * (WRITES + 1);
+            let mut file = std::fs::File::create(&path).expect("create for set_len");
+            file.set_len(total as u64).expect("set_len the extent");
+            // One sector at the very end. Everything in front of it is now
+            // between the valid data length and this write, so the filesystem
+            // must zero it before this write can proceed -- which is the
+            // forcing behaviour, used on purpose rather than tripped over.
+            file.seek(SeekFrom::Start((total - WRITE_LEN) as u64))
+                .expect("seek to the last sector");
+            file.write_all(&vec![0_u8; WRITE_LEN])
+                .expect("touch the end");
+            file.flush().expect("flush");
         }
     }
 
@@ -394,6 +417,11 @@ fn main() {
             "E-nobuffer-set_len",
             FILE_FLAG_OVERLAPPED | FILE_FLAG_NO_BUFFERING,
             Extent::SetLen,
+        ),
+        run(
+            "F-nobuffer-touch-end",
+            FILE_FLAG_OVERLAPPED | FILE_FLAG_NO_BUFFERING,
+            Extent::SetLenTouchEnd,
         ),
     ];
 

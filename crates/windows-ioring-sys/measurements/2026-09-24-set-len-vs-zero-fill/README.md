@@ -84,6 +84,43 @@ correct whichever way it goes, which is why `M25`'s standing constraint forbids
 anything depending on an operation pending -- a constraint this measurement
 makes more rather than less important.
 
+## A follow-up question, and the answer
+
+Review asked the obvious next thing: since a write past the valid data length
+forces the fill anyway, can that be *triggered on purpose* -- `set_len` to the
+final size, then write one sector at the very end -- so the filesystem does the
+zeroing and the caller never allocates a buffer?
+
+**Yes.** That is condition F, added after the runs above. Sixteen runs of all
+six conditions are in [runs-with-touch-end.tsv](runs-with-touch-end.tsv):
+
+| condition | min | median | max | runs >= 250/500 |
+|---|---|---|---|---|
+| A buffered sync | 0 | 0 | 0 | 0/16 |
+| B buffered overlapped | 0 | 0 | 0 | 0/16 |
+| C nobuffer extending | 2 | 256.5 | 492 | 8/16 |
+| D nobuffer zero-filled | 65 | 396.5 | 500 | 11/16 |
+| E nobuffer set_len | 1 | 105 | 497 | 6/16 |
+| F nobuffer set_len + touch end | 147 | 381 | 500 | 12/16 |
+
+F reaches the same end state the zero-fill reaches -- comparable median, and the
+**highest floor of any condition measured** (147 against the zero-fill's 65).
+`set_len` alone (E) remains clearly the worst of the unbuffered group, which is
+what makes F interesting: the difference between E and F is one small write.
+
+The trade, with the cost figures from
+[2026-09-24-set-len-zero-fill-cost/](../2026-09-24-set-len-zero-fill-cost/README.md):
+
+- F needs **no buffer at all**, two syscalls, whatever the extent's size.
+- F costs about **eight times the wall time** of an explicit sequential fill for
+  a large extent, because the filesystem's own zeroing is much slower than
+  writing the same bytes.
+
+`logfile::create_preallocated` keeps the explicit fill, now chunked so its
+memory is bounded rather than the size of the extent. A caller pre-allocating
+tens of gigabytes who would rather spend wall time than write the loop has a
+measured alternative.
+
 ## Provenance
 
 - Host: the development machine this repository is worked on; single NUMA node,
