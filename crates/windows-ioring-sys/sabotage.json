@@ -64,6 +64,30 @@
       ]
     },
     {
+      "name": "M23.3 spike: the unclaimed-token Drop guard is removed",
+      "file": "src/pending.rs",
+      "expect": "caught",
+      "why": "The whole claim of the M23.3 spike. A token dropped unclaimed leaks its buffer on purpose -- Token forgets the value rather than freeing it, because the kernel may still be writing -- so the state is invisible at runtime: the program keeps working and loses memory. A raw HashMap cannot notice. If this guard can be removed without a test objecting, the type is a convenience and not a safety improvement.",
+      "find": [
+        "        if self.entries.is_empty() || std::thread::panicking() {"
+      ],
+      "replace": [
+        "        if true || self.entries.is_empty() || std::thread::panicking() {"
+      ]
+    },
+    {
+      "name": "M23.3 spike: push stops telling the oracle",
+      "file": "src/pending.rs",
+      "expect": "caught",
+      "why": "The other half of the spike: that one call site keeps the map and the conservation oracle in step. Twelve consumers currently drive the two by hand, which is a restatement that can drift in both directions. If the wiring can be cut without a test noticing, the map is not actually driving the oracle and the argument for the type collapses.",
+      "find": [
+        "            contract.observe_push(user_data);"
+      ],
+      "replace": [
+        "            let _ = user_data;"
+      ]
+    },
+    {
       "name": "CONTROL: rewording a statement changes nothing",
       "file": "examples/epoch_log/contract.rs",
       "expect": "survives",

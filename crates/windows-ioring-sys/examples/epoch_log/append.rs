@@ -29,14 +29,13 @@
 //! *accepted into the open epoch*, which is all [`crate::contract`] promises;
 //! durability arrives with the epoch's commit in M13.3.
 
-use std::collections::HashMap;
 use std::io;
 use std::os::windows::io::RawHandle;
 
 use windows_ioring_sys::contract::RingContract;
 use windows_ioring_sys::{
-    Batch, IoBufMut, IoRing, NumaBuffer, PushOptions, RegisteredBuffers, RegisteredSpan,
-    RegisteredUse, Token, WriteCaching,
+    Batch, IoBufMut, IoRing, NumaBuffer, Pending, PushOptions, RegisteredBuffers, RegisteredSpan,
+    RegisteredUse, WriteCaching,
 };
 
 use crate::commit::Epoch;
@@ -95,30 +94,22 @@ pub fn free_slots<B: IoBufMut>(arena: &RegisteredBuffers<B>, want: usize) -> Vec
         .collect()
 }
 
-/// One in-flight append: the token that holds the arena slot, and where the
-/// record was written.
-struct InFlight {
-    token: Token<RegisteredUse>,
-    slot: u32,
-}
-
 /// The append path: an arena of registered buffers, a monotonic sequence
 /// counter, and the file offset the next record lands at.
 pub struct Appender {
     arena: RegisteredBuffers<NumaBuffer>,
-    in_flight: HashMap<usize, InFlight>,
+    /// Unclaimed tokens, with the arena slot each holds.
+    ///
+    /// Checked, so the conservation oracle is driven by the same call that
+    /// updates the map (M16.2's accounting, now wired rather than hand-driven).
+    /// That matters for the specific failure it guards: an early return from
+    /// [`Appender::claim`] that skips the token claim leaks the arena slot
+    /// permanently, and nothing else in this program notices until the arena
+    /// runs dry `SLOTS` failures later -- somewhere else entirely, with no
+    /// trace of the cause.
+    pending: Pending<RegisteredUse, u32>,
     next_sequence: u64,
     next_offset: u64,
-    /// Conservation accounting for this appender's own operations (M16.2).
-    ///
-    /// Owned here rather than threaded in from `main` because the component
-    /// that issues the operations is the one that can report them without a
-    /// caller having to remember to. That matters for the specific failure
-    /// this guards: an early return from [`Appender::claim`] that skips the
-    /// token claim leaks the arena slot permanently, and nothing else in this
-    /// program notices until the arena runs dry `SLOTS` failures later --
-    /// somewhere else entirely, with no trace of the cause.
-    contract: RingContract,
 }
 
 impl Appender {
@@ -168,17 +159,25 @@ impl Appender {
 
         Ok(Self {
             arena,
-            in_flight: HashMap::new(),
+            pending: Pending::checked(),
             next_sequence: 0,
             next_offset: 0,
-            contract: RingContract::new(),
         })
     }
 
     /// This appender's conservation record, for a caller to assert against at
     /// teardown.
+    ///
+    /// Reads through to the map's own oracle rather than a separate one. An
+    /// earlier draft of this conversion kept the `RingContract` field beside
+    /// `Pending::checked()`, which compiled, ran, and made
+    /// `assert_quiescent()` pass **vacuously** -- the field was never written
+    /// to again, so a caller's teardown check was asserting against an oracle
+    /// that had observed nothing.
     pub fn contract(&self) -> &RingContract {
-        &self.contract
+        self.pending
+            .contract()
+            .expect("the appender's map is always checked")
     }
 
     /// The sequence the next appended record will carry.
@@ -188,7 +187,7 @@ impl Appender {
 
     /// How many appends are pushed but not yet observed complete.
     pub fn in_flight(&self) -> usize {
-        self.in_flight.len()
+        self.pending.len()
     }
 
     /// Compose as many of `payloads` as there are free arena slots, and push
@@ -279,8 +278,9 @@ impl Appender {
                 )
             }?;
 
-            self.contract.observe_push(token.id());
-            self.in_flight.insert(token.id(), InFlight { token, slot });
+            // One call updates the map and its oracle, where this previously
+            // updated them separately and could drift.
+            self.pending.push(token, slot);
             self.next_sequence += 1;
             self.next_offset += total as u64;
             accepted += 1;
@@ -299,29 +299,28 @@ impl Appender {
     /// completions on the floor will run the arena dry and never recover --
     /// which is the same drain-to-empty discipline the ring itself demands.
     pub fn claim(&mut self, completion: &windows_ioring_sys::Completion) -> io::Result<bool> {
-        let Some(in_flight) = self.in_flight.remove(&completion.user_data()) else {
+        // Claiming happens here, before the write's result is inspected, and
+        // that ordering still matters: bailing out on a failed write without
+        // claiming drops the token unclaimed, which `Token` deliberately
+        // treats as "still outstanding" and leaks -- burning this arena slot
+        // permanently, so `free_slots` never offers it again and after `SLOTS`
+        // failures every append returns `WouldBlock` forever. `M22.2` found
+        // exactly that bug here.
+        //
+        // **`Pending` does not make that impossible, and measurement says so.**
+        // Moving `completion.result()?` above this line still compiles and
+        // still passes every test, because no test produces a failed write.
+        // What changed is the *consequence*: the token stays in the map, so
+        // teardown reports it instead of the program losing a slot in silence.
+        // A detected leak rather than a prevented one.
+        let Some((released, slot)) = self.pending.claim(completion) else {
             return Ok(false);
         };
-        let user_data = completion.user_data();
-        self.contract.observe_completion(user_data);
-        // Claim *before* checking the write's result. The completion has
-        // already been observed, so claiming is sound either way -- and
-        // bailing out on a failed write without claiming would drop the token
-        // unclaimed, which `Token` deliberately treats as "still outstanding"
-        // and leaks. That would burn this arena slot permanently: the slot's
-        // outstanding count would never return to zero, so `free_slots` would
-        // never offer it again, and after `SLOTS` failures every append would
-        // return `WouldBlock` forever.
-        let released = in_flight
-            .token
-            .claim_if(completion)
-            .map_err(|_| io::Error::other("an append token refused its own completion"))?;
         // Dropping the marker is what decrements the slot's count, so it has
         // to happen before the check below rather than at end of scope.
         drop(released);
-        self.contract.observe_claim(user_data);
         debug_assert!(
-            self.arena.outstanding(in_flight.slot) == Some(0),
+            self.arena.outstanding(slot) == Some(0),
             "claiming the token must release the slot"
         );
 

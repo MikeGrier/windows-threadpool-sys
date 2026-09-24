@@ -179,6 +179,11 @@ mod error;
 mod event_delivery;
 #[cfg(windows)]
 mod numa_buffer_io;
+// M23.3 SPIKE -- exported so a real consumer can be converted, which is the
+// only way to validate whether one type fits the twelve hand-rolled shapes.
+// Whether it stays public is the decision M23.3 has not yet taken.
+#[cfg(windows)]
+mod pending;
 #[cfg(windows)]
 mod ring;
 #[cfg(windows)]
@@ -202,6 +207,8 @@ pub use event_delivery::{EventDelivery, RingScope};
 // and re-exporting keeps `windows_ioring_sys::NumaBuffer` resolving for anyone
 // who already bound to it. The `IoBuf`/`IoBufMut` impls live in
 // `numa_buffer_io`, which explains there why they are separated from the type.
+#[cfg(windows)]
+pub use pending::Pending;
 /// The fault-injection seam (M16.3), for exercising failure paths a healthy
 /// machine will not produce on demand. See
 /// [`Completion::with_injected_failure`] for why transforming a real
@@ -210,7 +217,6 @@ pub use event_delivery::{EventDelivery, RingScope};
 pub use ring::InjectedFailure;
 #[cfg(windows)]
 pub use ring::{Completion, CompletionWait, IoRing, Op, RingInfo, RingWait, SubmitWait};
-#[cfg(windows)]
 pub use token::Token;
 #[cfg(windows)]
 pub use win_numa_sys::NumaBuffer;
