@@ -49,6 +49,14 @@ pub const SLOTS: u32 = 8;
 /// Bytes per slot, and so the largest record this log accepts.
 pub const SLOT_LEN: usize = 4096;
 
+// The write covers a whole stride out of one slot, so a stride wider than a
+// slot would read past the arena. The stride itself is the format's, and is
+// defined in `record` beside the layout it describes.
+const _: () = assert!(
+    record::RECORD_STRIDE <= SLOT_LEN,
+    "a slot must hold a whole stride: the write spans one stride of one buffer"
+);
+
 /// Hang bound on the one blocking step this appender has: waiting for the
 /// arena's registration to complete at startup.
 const REGISTRATION_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
@@ -239,18 +247,24 @@ impl Appender {
             // The epoch is stamped in here, at the moment the append is
             // accepted -- which is exactly when the contract says a record's
             // epoch is decided, and never changes afterwards.
-            let total = record::encode(self.arena.get_mut(slot)?, sequence, epoch, payload)?;
+            let buffer = self.arena.get_mut(slot)?;
+            record::encode_block(buffer, sequence, epoch, payload)?;
 
-            // Push over exactly the bytes the record occupies rather than the
-            // whole slot: writing the slot's unused tail would put stale bytes
-            // in the log and cost real device bandwidth.
+            // Push over the whole stride rather than the record's own length.
+            //
+            // This reverses the decision this line used to carry -- "writing
+            // the slot's unused tail would put stale bytes in the log and cost
+            // real device bandwidth". The stale-bytes half is handled by
+            // `encode_block`, which zeroes the remainder of the block. The
+            // bandwidth half was correct and is simply the price: see
+            // `record::RECORD_STRIDE` for what it costs and why a log pays it.
             let span = RegisteredSpan {
                 buffer_index: slot,
                 offset: 0,
-                len: u32::try_from(total).map_err(|_| {
+                len: u32::try_from(record::RECORD_STRIDE).map_err(|_| {
                     io::Error::new(
                         io::ErrorKind::InvalidInput,
-                        "record length exceeds u32::MAX",
+                        "record stride exceeds u32::MAX",
                     )
                 })?,
             };
@@ -282,7 +296,7 @@ impl Appender {
             // updated them separately and could drift.
             self.pending.push(token, slot);
             self.next_sequence += 1;
-            self.next_offset += total as u64;
+            self.next_offset += record::RECORD_STRIDE as u64;
             accepted += 1;
         }
 

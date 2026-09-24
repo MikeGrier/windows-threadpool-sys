@@ -28,9 +28,15 @@ use windows_ioring_sys::IoRing;
 #[cfg(feature = "fault-injection")]
 use windows_ioring_sys::IoRingErrorExt;
 
-use super::{Appender, SLOTS};
+use super::Appender;
+// Used only by the fault-injection tests below, so the import is gated the
+// same way they are -- an unconditional one warns on a default-feature build
+// of the test target.
+#[cfg(feature = "fault-injection")]
+use super::SLOTS;
 use crate::commit::Epoch;
 use crate::placement::Placement;
+use crate::record;
 
 /// Hang bound on every wait here. Far above any real append.
 const WAIT: Duration = Duration::from_secs(30);
@@ -183,6 +189,131 @@ fn a_successful_write_releases_its_arena_slot() {
         .expect("the append's completion arrives well inside the bound");
     assert!(appender.claim(&completion).expect("a successful claim"));
     assert_eq!(appender.in_flight(), 0);
+
+    drop(file);
+    let _ = std::fs::remove_file(&path);
+}
+
+/// A reused slot must not write the previous record's tail (M25.1).
+///
+/// Records are variable-length but land one per `RECORD_STRIDE` block, so the
+/// write covers bytes the record itself never set. A slot is reused for the
+/// log's whole life -- a `NumaBuffer` arrives zeroed, but only once -- so those
+/// bytes are whatever the *previous*, longer record left in them.
+///
+/// **Replay cannot catch this, so the assertion is on the file's bytes.**
+/// Replay decodes only at block starts and takes a record's extent from its own
+/// header, so a stale fragment living past a short record's end is never read.
+/// That makes leaving it a hygiene defect rather than a decode failure -- the
+/// log would carry fragments of unrelated records, in a format whose whole
+/// purpose is reconstructing what happened after a crash. Stating it that way
+/// rather than as a corruption is deliberate: the zeroing is worth doing, and
+/// claiming it prevents a decode error it cannot prevent would be worse than
+/// not documenting it.
+#[test]
+fn a_reused_slot_does_not_write_the_previous_records_tail() {
+    let mut ring = IoRing::new(16, 16).expect("create ring");
+    let (path, file) = scratch("reused-slot-tail");
+    let mut appender =
+        Appender::new(&mut ring, &Placement::decide(file.as_raw_handle())).expect("appender");
+
+    // A long record, then a short one. `free_slots` hands out the lowest free
+    // index, so draining between the two puts both records in slot 0 -- which
+    // is what makes the second write's tail the first record's bytes.
+    let long = vec![0xAB_u8; 200];
+    let short = b"short".to_vec();
+
+    for payload in [long, short.clone()] {
+        let pushed = appender
+            .append_batch(&mut ring, file.as_raw_handle(), Epoch(0), &[payload])
+            .expect("push one append");
+        assert_eq!(pushed, 1, "a drained arena always has a slot");
+        let completion = ring
+            .pop_within(WAIT)
+            .expect("pop_within")
+            .expect("the append's completion arrives well inside the bound");
+        assert!(appender.claim(&completion).expect("a successful claim"));
+    }
+
+    let bytes = std::fs::read(&path).expect("read the log back");
+    assert_eq!(
+        bytes.len(),
+        2 * record::RECORD_STRIDE,
+        "two records occupy two whole blocks, whatever their own lengths"
+    );
+
+    let second = &bytes[record::RECORD_STRIDE..];
+    let decoded = record::decode(second).expect("the short record decodes");
+    assert_eq!(
+        decoded.payload, short,
+        "the second block holds the second record"
+    );
+    assert!(
+        second[decoded.extent()..].iter().all(|&byte| byte == 0),
+        "the rest of the block must be zero, not the 0xAB tail of the record \
+         that used this slot before it"
+    );
+
+    drop(file);
+    let _ = std::fs::remove_file(&path);
+}
+
+/// Records land one per stride, and replay walks them back (M25.1 + M25.2).
+///
+/// **The guard this sample did not have.** M25.1 changed the writer's layout
+/// and M25.2 the reader's, and between the two the log is unreadable -- replay
+/// advances into a zeroed block tail and reports every record after the first
+/// as missing. That was measured, not imagined: with the writer converted and
+/// the reader not, every test in this file still passed, and only running the
+/// example caught it. No CI job runs the example.
+///
+/// So this binds the two ends together at a rung that runs on every machine:
+/// it appends through the real writer, reads the real file, and hands it to the
+/// real reader. Either end changing alone turns it red.
+#[test]
+fn records_land_one_per_stride_and_replay_walks_them_back() {
+    let payload_for = |index: usize| format!("record {index}: the quick brown fox").into_bytes();
+    const COUNT: usize = 3;
+
+    let mut ring = IoRing::new(16, 16).expect("create ring");
+    let (path, file) = scratch("stride-replay");
+    let mut appender =
+        Appender::new(&mut ring, &Placement::decide(file.as_raw_handle())).expect("appender");
+
+    for index in 0..COUNT {
+        let pushed = appender
+            .append_batch(
+                &mut ring,
+                file.as_raw_handle(),
+                Epoch(0),
+                &[payload_for(index)],
+            )
+            .expect("push one append");
+        assert_eq!(pushed, 1, "a drained arena always has a slot");
+        let completion = ring
+            .pop_within(WAIT)
+            .expect("pop_within")
+            .expect("the append's completion arrives well inside the bound");
+        assert!(appender.claim(&completion).expect("a successful claim"));
+    }
+
+    let bytes = std::fs::read(&path).expect("read the log back");
+    assert_eq!(
+        bytes.len(),
+        COUNT * record::RECORD_STRIDE,
+        "each record occupies exactly one block"
+    );
+
+    let outcome = crate::replay::replay(&bytes, Epoch(0), COUNT, payload_for);
+    assert!(
+        outcome.is_clean(),
+        "the reader must walk the writer's layout: {:?}",
+        outcome.violations
+    );
+    assert_eq!(
+        outcome.durable_verified, COUNT,
+        "every record written must be read back, in sequence, with its payload intact"
+    );
 
     drop(file);
     let _ = std::fs::remove_file(&path);

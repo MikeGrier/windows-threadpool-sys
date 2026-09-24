@@ -66,6 +66,14 @@ pub struct Outcome {
     /// Why decoding stopped, if it stopped before the end of the file. Past
     /// the watermark this is expected rather than exceptional.
     pub tail_stopped: Option<Torn>,
+    /// Bytes the records themselves occupy, padding excluded.
+    ///
+    /// Against the length of the file this is the log's write amplification,
+    /// which the stride (M25.1) makes large and which the sample reports rather
+    /// than leaves to a doc comment. A reader who only saw the file size would
+    /// have no way to tell a log holding a lot of data from one holding very
+    /// little in a lot of blocks.
+    pub record_bytes: usize,
     /// Contract failures. Empty means the log kept every promise it made.
     pub violations: Vec<Violation>,
 }
@@ -93,6 +101,7 @@ pub fn replay(
         durable_verified: 0,
         tail_records: 0,
         tail_stopped: None,
+        record_bytes: 0,
         violations: Vec::new(),
     };
 
@@ -101,9 +110,30 @@ pub fn replay(
     let mut past_watermark = false;
 
     while cursor < bytes.len() {
-        match record::decode(&bytes[cursor..]) {
+        // Hand `decode` this record's own block, not the rest of the file
+        // (M25.2). Without the stride there was no block to confine it to, so
+        // a corrupted `payload_len` was bounded only by the file's length and
+        // a record could claim bytes belonging to its successors -- caught,
+        // but by the checksum failing rather than structurally. `min` keeps
+        // the last block correct when the file ends inside it, which is
+        // exactly the torn tail the contract requires a reader to tolerate.
+        let block_end = (cursor + record::RECORD_STRIDE).min(bytes.len());
+        match record::decode(&bytes[cursor..block_end]) {
             Ok(found) => {
-                cursor += found.total_len;
+                // Advance by the stride, not by the record's own extent
+                // (M25.2). Records land one per fixed-size block with a zeroed
+                // remainder, so a record's extent says where it *ends* and the
+                // stride says where the next one *starts*; they stopped being
+                // the same number when the log gained sector atomicity.
+                // Walking by the extent lands in the zero tail and decodes as
+                // `NeverWritten`, which replay would report -- correctly, given
+                // what it was told -- as a durable record having gone missing.
+                cursor += record::RECORD_STRIDE;
+
+                // Counted for every whole record, durable or tail, because
+                // amplification is a property of the file rather than of the
+                // durable region.
+                outcome.record_bytes += found.extent();
 
                 if found.epoch > durable_through {
                     // The tail. Nothing is promised about it, so nothing is

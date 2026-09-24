@@ -282,22 +282,23 @@ sample may *adopt* this shape -- it is what real write-ahead logs do, and it is 
 the measurement means anything -- but **nothing here may depend on an operation pending.** Every item
 must leave the log correct if the platform completes inline tomorrow.
 
-- [ ] **M25.1** -- Give records a fixed sector stride, and zero the slot tail before writing.
-  `NO_BUFFERING` requires sector-aligned offsets *and* lengths, and records are variable-length at
-  packed offsets today. One record per `SLOT_LEN`-sized, sector-sized block is the simplest stride
-  that fits the existing arena. This **reverses a deliberate decision** in
-  [append.rs](examples/epoch_log/append.rs) -- "writing the slot's unused tail would put stale bytes
-  in the log and cost real device bandwidth" -- so the tail must now be zeroed rather than left, and
-  the write amplification (a ~50-byte record occupying 4096) is a real cost to state rather than hide.
-  It is also what a real WAL pays for sector atomicity.
+- [x] **M25.1** -- Records gained a fixed sector stride with a zeroed block tail, in both writers. -> [completed 2026-09-23](COMPLETED-CHECKLIST.md#m251)
 
-- [ ] **M25.2** -- Advance replay by the stride rather than by `total_len`, and tolerate the
-  pre-allocated zero tail. [replay.rs](examples/epoch_log/replay.rs) walks `cursor += found.total_len`.
-  A pre-allocated log also ends in zeros rather than at EOF, so a **clean** log will now stop with
-  `tail_stopped: Some(..)` where it previously ran out of bytes. `is_clean()` only inspects violations
-  so cleanliness is unaffected, but the sample's printed narrative says "stopped at" and must be
-  re-read. Both replay paths -- the normal one and the torn-tail one -- and the negative control have
-  to keep meaning what they claim.
+- [x] **M25.2** -- Replay walks by the stride and confines each decode to its own block. Landed with `M25.1`: a strided writer and an unstrided reader cannot coexist. -> [completed 2026-09-23](COMPLETED-CHECKLIST.md#m251)
+
+- [ ] **M25.1b** -- **Nothing runs the sample, and that is how `M25.1` nearly shipped broken.**
+  `main.rs`'s three replay paths plus its negative control are, in this crate's own words, "the only
+  part that can catch a durability bug" -- and no CI job executes the example. Measured during
+  `M25.1`: with the writer strided and the reader not, **every one of the 21 example tests passed**
+  while the log was unreadable; only `cargo run --example epoch_log` caught it.
+
+  `M25.1` closed the specific hole with three end-to-end tests, but that is the narrow fix. The
+  general one is a job that runs the sample and fails on its exit code, which is nearly free --
+  the sample already asserts and already returns non-zero. **Decide where it belongs**: a CI step
+  is the honest rung for something that takes seconds and needs a real device, but the repository's
+  own FAIL FAST rule prefers the lowest rung that can carry it, and a `#[test]` that invokes
+  `run_log` directly may be able to. Check whether the strategy comparison has to run too, since
+  that is the expensive part and is separately covered now.
 
 - [ ] **M25.3** -- Pre-allocate the log and open it `NO_BUFFERING | OVERLAPPED`. Create and size the
   file with an ordinary handle, drop it, then open the ring's handle over the existing extent -- the

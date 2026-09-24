@@ -31,7 +31,7 @@
 
 use std::os::windows::io::AsRawHandle;
 
-use super::{Lane, SLOT_LEN, SLOTS};
+use super::{CommitStrategy, Lane, SLOT_LEN, SLOTS};
 use crate::append::free_slots;
 use crate::commit::Epoch;
 use crate::record::HEADER_LEN;
@@ -140,4 +140,55 @@ fn a_lane_offers_at_most_what_was_asked_for() {
         SLOTS as usize,
         "and capped by the arena when the request exceeds it"
     );
+}
+
+/// A whole harness run lays its records out one per stride, and replays clean
+/// (M25.1 + M25.2).
+///
+/// **The gap this closes was measured, not suspected.** The harness's `Lane`
+/// is a second writer over the same on-disk format as the log's own
+/// `Appender`, and when the stride was introduced nothing tested it: reverting
+/// this lane to a packed layout left every test in the example green. The only
+/// thing that exercised it was running the sample, and no CI job does.
+///
+/// `CoveringFlush` specifically, because it uses **one** ring. The multi-ring
+/// strategies interleave two lanes into one offset space, so the on-disk order
+/// is not the sequence order and replay's in-order check would refuse a
+/// perfectly good log. That is a property of the harness rather than of the
+/// format, so this test picks the configuration where the format's own rule is
+/// the only thing under test.
+#[test]
+fn a_run_lays_its_records_out_one_per_stride() {
+    let (path, file) = scratch("stride-layout");
+    let payload = b"a harness record".to_vec();
+
+    let outcome = super::run(
+        CommitStrategy::CoveringFlush,
+        file.as_raw_handle(),
+        2,
+        3,
+        &payload,
+        None,
+    )
+    .expect("a small run completes");
+
+    let bytes = std::fs::read(&path).expect("read the log back");
+    assert_eq!(
+        bytes.len(),
+        outcome.records * crate::record::RECORD_STRIDE,
+        "every record must occupy exactly one block"
+    );
+
+    let replayed = crate::replay::replay(&bytes, outcome.durable_through, outcome.records, |_| {
+        payload.clone()
+    });
+    assert!(
+        replayed.is_clean(),
+        "the harness writes the same format the reader walks: {:?}",
+        replayed.violations
+    );
+    assert_eq!(replayed.durable_verified, outcome.records);
+
+    drop(file);
+    let _ = std::fs::remove_file(&path);
 }

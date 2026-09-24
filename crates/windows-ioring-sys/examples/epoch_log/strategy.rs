@@ -435,20 +435,22 @@ impl Lane {
         let mut accepted = 0;
         for (index, &slot) in slots.iter().enumerate() {
             let sequence = Sequence(first_sequence + index as u64);
-            let total = {
+            {
                 let bytes = self.arena.get_mut(slot)?;
-                record::encode(bytes, sequence, epoch, payload)?
-            };
-            // Exactly the bytes the record occupies, not the whole slot:
-            // writing the slot's unused tail would put stale bytes in the log
-            // and cost real device bandwidth.
+                // The same composition the log's own appender uses, from one
+                // definition: encode, then zero the rest of the block. This
+                // lane is a second writer over the same format, and it
+                // previously carried its own packed layout *and* its own copy
+                // of the justification for it.
+                record::encode_block(bytes, sequence, epoch, payload)?;
+            }
             let span = RegisteredSpan {
                 buffer_index: slot,
                 offset: 0,
-                len: u32::try_from(total).map_err(|_| {
+                len: u32::try_from(record::RECORD_STRIDE).map_err(|_| {
                     io::Error::new(
                         io::ErrorKind::InvalidInput,
-                        "record length exceeds u32::MAX",
+                        "record stride exceeds u32::MAX",
                     )
                 })?,
             };
@@ -467,7 +469,7 @@ impl Lane {
                 )
             }?;
             self.in_flight.insert(token.id(), (token, slot));
-            written += total as u64;
+            written += record::RECORD_STRIDE as u64;
             accepted += 1;
         }
         batch.submit()?;

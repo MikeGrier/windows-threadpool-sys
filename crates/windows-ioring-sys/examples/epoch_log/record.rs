@@ -76,6 +76,69 @@ mod field {
 /// Total header size. The payload begins here.
 pub const HEADER_LEN: usize = field::CHECKSUM.end;
 
+/// The largest physical sector size this sample is prepared for.
+///
+/// `NO_BUFFERING` (M25.3) requires the file offset *and* the transfer length
+/// to be multiples of the volume's physical sector size. 4096 is the largest
+/// in common use, and anything that is a multiple of it is a multiple of 512
+/// as well, so a stride satisfying this satisfies every volume the sample can
+/// plausibly run on.
+const LARGEST_SECTOR_LEN: usize = 4096;
+
+/// Bytes on disk per record, whatever the record's own length (M25.1).
+///
+/// Records are variable-length but land one per fixed-size block, so record
+/// *n* occupies `[n * RECORD_STRIDE, n * RECORD_STRIDE + total_len)` and the
+/// remainder of its block is zero. Two reasons, and the first is what forced
+/// it:
+///
+/// 1. **`NO_BUFFERING` constrains transfer lengths, not just offsets.** A
+///    packed layout could satisfy the offset rule only by accident and cannot
+///    satisfy the length rule at all, since record lengths are whatever a
+///    payload makes them.
+/// 2. **It is what a real write-ahead log does**, for a related reason: a
+///    device's power-fail atomic unit is a sector, so a record sharing a
+///    sector with its neighbour can be torn by that neighbour's write.
+///
+/// # This lives here, with the format, and not with either writer
+///
+/// The stride is a property of the on-disk format, so both writers
+/// ([`crate::append::Appender`] and the measurement harness's `Lane`) and the
+/// reader ([`crate::replay`]) bind to this one definition. They previously
+/// carried a packed layout each, with the *same* justifying comment written
+/// out twice -- which is exactly the shape that lets two copies of one rule
+/// drift apart while each looks locally correct.
+///
+/// # The cost, reported rather than described
+///
+/// This is write amplification, and for records as small as this sample's it
+/// is large. The sample measures it and prints it -- `layout: N bytes of
+/// records in M bytes of file` -- rather than stating a ratio here that would
+/// be a hand-maintained copy of a number the program already computes. What
+/// is acceptable depends entirely on a caller's record size. A production
+/// design amortises it by packing many records into one block and flushing the
+/// block once, which is a different sample than this one. What is bought is
+/// sector atomicity, which is what a log actually needs.
+pub const RECORD_STRIDE: usize = 4096;
+
+// A stride that is not a whole number of sectors cannot be the length of a
+// `NO_BUFFERING` write, so `M25.3` would fail at runtime with
+// `ERROR_INVALID_PARAMETER` on a volume whose sectors are this size. A `const`
+// assertion refuses it at build time instead, which is the stronger rung: it
+// cannot be skipped, and it fails for whoever changes the stride rather than
+// for whoever next runs the sample on 4K-native storage.
+const _: () = assert!(
+    RECORD_STRIDE.is_multiple_of(LARGEST_SECTOR_LEN),
+    "RECORD_STRIDE must be a whole number of sectors, or NO_BUFFERING writes are refused"
+);
+
+// A record has to fit in its own block, header included, or the format cannot
+// represent even an empty payload.
+const _: () = assert!(
+    HEADER_LEN < RECORD_STRIDE,
+    "RECORD_STRIDE must leave room for a record header"
+);
+
 /// A record's monotonic identity, assigned when the append is accepted.
 ///
 /// Orders records *logically*. The contract is explicit that it says nothing
@@ -159,13 +222,60 @@ pub fn encode(
     Ok(total)
 }
 
-/// A record recovered from the log, and how many bytes it occupied.
+/// Compose a record into `slot` as a whole block, returning the record's own
+/// extent (M25.1).
+///
+/// [`encode`] lays the record out; this additionally zeroes the rest of its
+/// stride, which is what makes the block safe to write whole. Slots are reused
+/// for a log's entire life -- a fresh buffer arrives zeroed, but only once --
+/// so without this the bytes past a short record are whatever the previous,
+/// longer record left there, and the write puts them on disk.
+///
+/// # Why both writers call this rather than each doing the two steps
+///
+/// The sample has two writers over this format: [`crate::append::Appender`]
+/// and the measurement harness's `Lane`. They previously carried a packed
+/// layout each, with the same justifying comment written out twice, and
+/// converting them to the stride converted that duplication into a rule
+/// stated at two sites. Measured before this function existed: reverting the
+/// harness lane to a packed layout was **caught by nothing** -- the end-to-end
+/// test covers `Appender`, and only running the sample exercises `Lane`.
+/// Giving the composition one site makes half that drift unrepresentable
+/// rather than merely tested for.
+pub fn encode_block(
+    slot: &mut [u8],
+    sequence: Sequence,
+    epoch: Epoch,
+    payload: &[u8],
+) -> io::Result<usize> {
+    let total = encode(slot, sequence, epoch, payload)?;
+    slot[total..RECORD_STRIDE].fill(0);
+    Ok(total)
+}
+
+/// A record recovered from the log.
 #[derive(Debug)]
 pub struct Decoded<'a> {
     pub sequence: Sequence,
     pub epoch: Epoch,
     pub payload: &'a [u8],
-    pub total_len: usize,
+}
+
+impl Decoded<'_> {
+    /// How many bytes this record occupies, header included.
+    ///
+    /// Derived rather than stored. It was a field until M25.2, when replay
+    /// stopped reading it -- a strided reader advances by
+    /// [`RECORD_STRIDE`], not by the record's own length, so the only
+    /// remaining consumer was a test. Keeping it as a field would have kept a
+    /// second copy of a fact `payload` already carries, which is the shape
+    /// that lets two statements of one rule drift apart.
+    ///
+    /// Note this is the record's **extent**, not its footprint: the rest of
+    /// its block is zero padding, so `extent() <= RECORD_STRIDE`.
+    pub fn extent(&self) -> usize {
+        HEADER_LEN + self.payload.len()
+    }
 }
 
 /// Why a region of the log did not yield a record.
@@ -240,6 +350,5 @@ pub fn decode(bytes: &[u8]) -> Result<Decoded<'_>, Torn> {
         sequence,
         epoch,
         payload,
-        total_len,
     })
 }

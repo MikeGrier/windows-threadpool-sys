@@ -148,6 +148,54 @@
       ]
     },
     {
+      "name": "M25.1: encode_block stops zeroing the block tail",
+      "file": "examples/epoch_log/record.rs",
+      "expect": "caught",
+      "why": "Records are variable-length but occupy a whole RECORD_STRIDE block each, and slots are reused for the log's whole life -- a NumaBuffer arrives zeroed, but only once. Without this fill the bytes past a short record are whatever the previous, longer record left there, and the write puts them on disk. Replay cannot catch it: it decodes only at block starts and takes a record's extent from its own header, so a stale fragment past a short record's end is never read. That is why the guard asserts on the file's bytes rather than on a replay outcome. The composition lives in one function for both writers precisely so this case covers the harness lane as well as the log's appender; before encode_block existed the two carried the step separately.",
+      "find": [
+        "    slot[total..RECORD_STRIDE].fill(0);"
+      ],
+      "replace": [
+        "    // zeroing removed"
+      ]
+    },
+    {
+      "name": "M25.2: replay walks by the record extent instead of the stride",
+      "file": "examples/epoch_log/replay.rs",
+      "expect": "caught",
+      "why": "The reader half of the stride, and the exact defect that sat in the tree between M25.1 and M25.2. A strided writer with an unstrided reader lands the cursor in a zeroed block tail, decodes NeverWritten, and reports every record after the first as a missing durable record -- the log looks catastrophically broken while being perfectly fine. Measured: with the writer converted and the reader not, all 21 example tests still passed and only running the sample caught it. No CI job runs the sample, which is why the end-to-end tests this case fires were added rather than relying on that.",
+      "find": [
+        "                cursor += record::RECORD_STRIDE;"
+      ],
+      "replace": [
+        "                cursor += found.extent();"
+      ]
+    },
+    {
+      "name": "M25.1: the harness lane packs its record offsets",
+      "file": "examples/epoch_log/strategy.rs",
+      "expect": "caught",
+      "why": "The sample has two writers over one on-disk format, and this is the second. Listed separately from the appender's offset advance below because they are genuinely separate facts at separate sites: measured, reverting this one leaves every appender test green and vice versa, so a single case would have reported the pair covered while half of it was not. This case was SURVIVING when the stride was first introduced -- nothing tested the harness lane at all, and the end-to-end test in strategy/tests.rs exists because this sabotage said so.",
+      "find": [
+        "            written += record::RECORD_STRIDE as u64;"
+      ],
+      "replace": [
+        "            written += record::HEADER_LEN as u64;"
+      ]
+    },
+    {
+      "name": "M25.1: the appender packs its record offsets",
+      "file": "examples/epoch_log/append.rs",
+      "expect": "caught",
+      "why": "The log's own writer, the sibling of the harness case above. Packing the offsets makes consecutive records overlap inside one block, so the guards fire for two independent reasons at once -- the layout assertion and the zeroed-tail assertion both go red -- which is worth knowing when reading the result: this case being caught does not on its own establish that the stride is what caught it. The narrower evidence for that is the reader case above, which moves only one number.",
+      "find": [
+        "            self.next_offset += record::RECORD_STRIDE as u64;"
+      ],
+      "replace": [
+        "            self.next_offset += total as u64;"
+      ]
+    },
+    {
       "name": "CONTROL: rewording a statement changes nothing",
       "file": "examples/epoch_log/contract.rs",
       "expect": "survives",

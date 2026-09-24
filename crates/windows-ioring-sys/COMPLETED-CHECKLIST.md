@@ -2697,3 +2697,81 @@ out. That is a pre-existing property of the crate --
 ungated -- and no CI job runs tests in release. Matching the existing precedent was preferred over
 introducing a `cfg(debug_assertions)` gate on two of the three, which would have left the crate
 inconsistent with itself. If release-mode testing is ever added, all three need the gate together.
+
+### <a id="m251"></a>M25.1 + M25.2 -- Records gained a fixed sector stride with a zeroed block tail, and replay learned to walk it. *(completed 2026-09-23 23:36:23 -04:00)*
+
+**These two items could not land separately, and that is a defect in how they were written rather
+than a discovery about the code.** A strided writer and an unstrided reader do not describe the same
+file. The checklist sequenced M25.1 (writer) before M25.2 (reader), so the tree between them holds a
+log nothing can read. They are recorded here as one entry, citing both IDs, per the checklist rule
+for acknowledged coupling; the alternative -- restructuring them into independent items -- is not
+available, because the writer and the reader of one format are not independent.
+
+**What the coupling actually cost was nearly a silent break.** With M25.1 applied alone, the log was
+unreadable: replay advanced by a record's own length, landed in a zeroed block tail, decoded
+`NeverWritten`, and reported every record after the first as a missing durable record. And **all 21
+of the example's tests passed anyway.** The only thing that caught it was
+`cargo run --example epoch_log`, which asserts and exits 101 -- and no CI job runs the sample. That
+is the more important finding of the two, and it is queued as `M25.1b` rather than left in this
+entry, because a finding recorded only in an archive is a finding nobody is obliged to act on.
+
+**Three end-to-end tests were added to close the specific hole**, each binding one writer to the
+real reader through a real file: `records_land_one_per_stride_and_replay_walks_them_back` over the
+log's own `Appender`, `a_run_lays_its_records_out_one_per_stride` over the harness's `Lane`, and
+`a_reused_slot_does_not_write_the_previous_records_tail` over the zeroing. The harness test exists
+because a sabotage said it had to: reverting `Lane` to a packed layout was **caught by nothing**
+until it was written.
+
+**The zeroing is not observable through replay, and the comment says so rather than inventing a
+failure mode for it.** Replay decodes only at block starts and takes a record's extent from its own
+header, so a stale fragment past a short record's end is never read. A first draft of the comment
+claimed a stale fragment "would be decoded as a record", which is false for exactly that reason.
+What zeroing actually prevents is the log carrying fragments of unrelated records -- a hygiene
+defect in a format whose purpose is reconstructing what happened after a crash -- so the test
+asserts on the file's bytes rather than on a replay outcome.
+
+**Two duplications were collapsed rather than converted twice.** The sample has two writers over one
+on-disk format, and both carried a packed layout *and* a verbatim copy of the comment justifying it.
+Converting each in place would have turned one duplicated decision into one duplicated rule, so the
+stride moved to `record`, beside the format it describes, and the whole composition -- encode, then
+zero the remainder -- became `record::encode_block`, which both writers call. That makes half the
+drift unrepresentable rather than merely tested for.
+
+**`Decoded::total_len` became a derived `extent()` rather than a silenced warning.** Once replay
+advanced by the stride, the field's only consumer was a test, and it was exactly
+`HEADER_LEN + payload.len()` -- a stored copy of a fact `payload` already carried. The dead-code
+warning was the signal; the fix was to delete the copy, not to `allow` it.
+
+**Replay now confines each decode to its own block.** Previously `decode` received the rest of the
+file, so a corrupted `payload_len` was bounded only by the file's length and a record could claim
+bytes belonging to its successors -- caught, but by the checksum happening to fail rather than
+structurally. The stride is what makes a block boundary exist to confine it to.
+
+**The cost is reported, not described.** M25.1 asked for the write amplification to be "a real cost
+to state rather than hide", and the first draft stated it as a ratio in a doc comment -- a
+hand-maintained copy of a number the program can compute. The sample now measures and prints it
+(`layout: N bytes of records in M bytes of file`) and the doc comment points at that line instead of
+restating it. No conclusion is drawn about whether the ratio is acceptable, because that depends
+entirely on a caller's record size.
+
+**A `const` assertion carries the sector rule**, verified load-bearing in both directions: a stride
+of 4000 fails the build with `error[E0080]: evaluation panicked: RECORD_STRIDE must be a whole
+number of sectors`, and 4096 builds clean. That is the build rung rather than a test, which matters
+because the failure it prevents -- `ERROR_INVALID_PARAMETER` from a `NO_BUFFERING` write in M25.3 --
+would otherwise appear only on 4K-native storage, on somebody else's machine.
+
+**Four sabotages recorded, not one.** The writers' offset advances are separate facts at separate
+sites: measured, reverting the harness lane leaves every appender test green and vice versa, so a
+single case would have declared the pair covered while half of it was not. The full sweep is
+16-of-16 as declared with the `CONTROL` still surviving. Note what the appender case does *not*
+establish: packing its offsets makes records overlap inside a block, so two guards fire at once for
+two different reasons -- the narrower evidence that the stride itself is what is caught is the
+reader case, which moves only one number.
+
+**All three replay paths report the same numbers as before the change**, which is the check that the
+layout moved and the contract did not: 24 durable records verified, 3 tail records tolerated, the
+torn tail still stopping at `Truncated`, and the negative control still catching a corrupted byte.
+The torn-tail simulation needed its arithmetic rewritten to keep meaning that -- it trimmed a fixed
+count of bytes off the end of the file, which after striding lands in the final record's zero
+padding and tears nothing at all. It now derives the cut from the last record's own block, which
+also survives M25.3's pre-allocation.

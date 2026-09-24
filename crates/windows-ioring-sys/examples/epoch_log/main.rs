@@ -596,11 +596,33 @@ fn verify<O: io::Write, E: io::Write>(
     assert_eq!(clean.durable_verified, run.durable_records);
     assert_eq!(clean.tail_records, run.tail_records);
 
+    // What the stride costs, reported rather than left to a doc comment
+    // (M25.1). Records are variable-length but occupy a whole block each, so
+    // the file is far larger than the data in it. The figures are given and
+    // the reader draws their own conclusion -- what is acceptable here depends
+    // entirely on a log's record size, which is a caller's question.
+    report.line(format_args!(
+        "layout: {} bytes of records in {} bytes of file, one record per {}-byte block",
+        clean.record_bytes,
+        bytes.len(),
+        record::RECORD_STRIDE
+    ));
+
     // 2. A torn tail, which is what a crash actually leaves behind. Cutting
     //    the file mid-record simulates a write that did not land whole. The
     //    contract says the reader must tolerate this, so a violation here
     //    would mean the reader is stricter than the contract allows.
-    let torn_at = bytes.len() - (record::HEADER_LEN + 4);
+    //
+    //    Derived from the last record's own block rather than from the file
+    //    length (M25.2). Records are strided now, so trimming a fixed number
+    //    of bytes off the end of the file lands in the final record's zeroed
+    //    remainder and tears nothing at all -- the replay would pass while
+    //    demonstrating the opposite of what it claims. This cuts partway
+    //    through the last record's payload, where `decode` reports `Truncated`.
+    //    It also survives M25.3's pre-allocation, which decouples the file's
+    //    length from the number of records in it entirely.
+    let last_record_start = (run.durable_records + run.tail_records - 1) * record::RECORD_STRIDE;
+    let torn_at = last_record_start + record::HEADER_LEN + 4;
     let torn = replay::replay(
         &bytes[..torn_at],
         run.durable_through,
