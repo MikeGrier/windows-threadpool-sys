@@ -1078,8 +1078,17 @@ impl<B: IoBufMut> Drop for RegisteredBuffers<B> {
             // simply never reclaimed rather than freed out from under a
             // still-outstanding op. Any one buffer still in use holds the
             // whole registration, because they are freed together.
+            //
+            // Silent while already panicking (M23.4). A second panic during
+            // unwind aborts the process, which *replaces* the failure that
+            // started the unwind: a test asserting on a leaked slot reports
+            // `STATUS_STACK_BUFFER_OVERRUN` instead of its own message, so
+            // the diagnosis is destroyed by the guard meant to aid it. The
+            // leak is still refused -- the early `return` below is what makes
+            // leaking rather than freeing the failure mode, and it happens
+            // either way.
             debug_assert!(
-                false,
+                std::thread::panicking(),
                 "RegisteredBuffers dropped while an operation still references it"
             );
             return;

@@ -1237,14 +1237,37 @@ impl Drop for IoRing {
         // avoid it), but Drop cannot propagate the error, so this asserts in
         // debug builds rather than silently closing a ring the kernel may
         // still be writing through.
+        //
+        // Both asserts here are silent while already panicking (M23.4): a
+        // second panic during unwind aborts, replacing whatever failure
+        // started the unwind with `STATUS_STACK_BUFFER_OVERRUN`. A ring is
+        // dropped on the way out of almost every failing test in this crate,
+        // so an unguarded assert here would convert a readable assertion
+        // message into a crash in the common case rather than a rare one.
+        //
+        // Neither assert is reachable from a test on a healthy host, and
+        // that was measured, not assumed: suppressing both unconditionally
+        // leaves every test in the crate green. `run_down` fails only when
+        // `SubmitIoRing` or `PopIoCompletion` returns an error HRESULT, and
+        // `CloseIoRing` fails only when the kernel refuses the close; the
+        // `fault-injection` seam sits at the completion-result level and
+        // produces neither. A seam over the raw HRESULTs would reach them,
+        // and is M23.5.
         if let Err(error) = self.run_down() {
-            debug_assert!(false, "IoRing rundown failed before close: {error}");
+            debug_assert!(
+                std::thread::panicking(),
+                "IoRing rundown failed before close: {error}"
+            );
         }
         // SAFETY: `self.handle` is a live ring this `IoRing` exclusively
         // owns, and `run_down` just established that nothing is outstanding
         // (or made a best-effort attempt to, above).
         let hr = unsafe { CloseIoRing(self.handle) };
-        debug_assert!(hr >= 0, "CloseIoRing failed: 0x{:08X}", hr as u32);
+        debug_assert!(
+            hr >= 0 || std::thread::panicking(),
+            "CloseIoRing failed: 0x{:08X}",
+            hr as u32
+        );
     }
 }
 

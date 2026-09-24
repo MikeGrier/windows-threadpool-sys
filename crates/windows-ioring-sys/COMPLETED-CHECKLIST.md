@@ -2576,3 +2576,60 @@ nothing to guard, which is `M28.5` and may dissolve when `M25.3` changes how the
 
 **What it refuses**, unchanged by the shape: batching, ordering and which slot to pick stay caller
 questions. The sharper refusal is that the inventory does not decide whether a caller is checked.
+
+### <a id="m234"></a>M23.4 -- A failing test that left registered buffers outstanding aborted the process instead of reporting; the drop guards now stay silent during unwind. *(completed 2026-09-23 23:16:48 -04:00)*
+
+`RegisteredBuffers::drop` refused to free while an operation was outstanding (M5.3, correctly) and
+said so with a bare `debug_assert!(false, ...)`. Nothing checked `std::thread::panicking()`, so a
+test that failed *because* a slot leaked panicked, unwound, dropped the arena, panicked a second
+time inside `Drop`, and aborted -- replacing its own assertion message with
+`STATUS_STACK_BUFFER_OVERRUN`. The detection was never weakened; what the abort destroyed was the
+diagnosis.
+
+**The item named one site and there were three.** It said "the fix is presumably the same one line
+here", and a sweep of every `impl Drop` in the crate found the assert it named plus **two more** in
+`IoRing::drop` -- the rundown failure and the `CloseIoRing` failure. That second impl is the worse
+of the two: a ring is dropped on the way out of almost every failing test in this crate, so an
+unguarded assert there converts a readable failure into a crash in the *common* case rather than a
+rare one. The reported site was a sample of the population, which is what CONTRACT INTEGRITY rule 3
+says to expect.
+
+**The sweep also produced two false positives worth naming**, because the pattern that produced
+them is the obvious one to reach for. A grep for `impl.*Drop for` matched cargo-mutants-style
+comment text (`<impl Drop for RegisteredBuffers>::drop -> ()`) inside test files, which read as two
+further unguarded sites. Anchoring the pattern at line start reduced eight candidate impls to the
+three real asserts. A loose grep over a crate that documents its own mutants will find its
+documentation.
+
+**`Pending::drop` was already correct** and is what the fix copies -- it returns early when
+`std::thread::panicking()`, which is why the M23.3 spike never exhibited this.
+
+**Verified by sabotage, as the item required, and the verdict alone would not have shown it.** The
+`M22.2 regression` case in [sabotage.json](sabotage.json) was `caught` before the fix and `caught`
+after; what changed is that it ended in `exit 101` -- a clean `FAILED` naming
+`a_failed_write_still_releases_its_arena_slot` and its message -- instead of `exit -1073740791`.
+That case's `why` text, which had documented the abort as expected behaviour, now carries the
+post-fix failure mode and says a regression in *either* direction (no longer caught, or caught but
+crashing) is visible there. The full sweep stayed at 9-of-9 as declared with the `CONTROL` still
+surviving.
+
+**Only one of the guards has a test that depends on it firing, and the sabotage that established
+that also falsified the first draft of this entry.** Suppressing both guards unconditionally
+(`true` in place of `std::thread::panicking()`) turned
+`batch::tests::dropping_a_registration_with_work_outstanding_is_refused` red, which is the check
+that the fix *narrowed* the guard rather than removing it -- that test drops deliberately, not
+during an unwind, so `thread::panicking()` is false and the assert still fires. But
+`ring::tests::dropping_a_ring_actually_runs_its_drop_body` stayed green under the same sabotage.
+It is not a `#[should_panic]` test and it does not reach either assert; this entry had claimed it
+did, on the strength of its name, until the sabotage said otherwise.
+
+**`IoRing::drop`'s two asserts are therefore unreachable from any test on a healthy host**, and
+that is recorded at the definition rather than left to be rediscovered. `run_down` fails only when
+`SubmitIoRing` or `PopIoCompletion` returns a kernel error HRESULT, and `CloseIoRing` fails only
+when the kernel refuses the close; the crate's `fault-injection` seam sits at the
+*completion-result* level (`Completion::with_injected_failure`) and cannot produce either. Reaching
+them needs a seam over the raw HRESULTs, which is `M23.5` -- spawned rather than assumed, per the
+move-or-spawn rule, because "no test can reach it" is a blocker to name and not a reason to check
+the box and move on. The fix still lands there on its merits: it is precisely the `IoRing` case
+that turns a readable failure into a crash most often, since a ring is dropped on the way out of
+almost every failing test in this crate.

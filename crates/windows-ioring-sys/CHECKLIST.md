@@ -244,23 +244,25 @@ about this crate's own surface rather than about storage at all.
 
 - [x] **M23.3** -- Decide what this crate offers for holding a token between push and completion: the ring owns the inventory, `IoRing` becomes generic, and the break is accepted. -> [completed 2026-09-23](COMPLETED-CHECKLIST.md#m233)
 
-- [ ] **M23.4** -- **A failing test that leaves registered buffers outstanding aborts instead of
-  reporting.** `RegisteredBuffers::drop` refuses to free while any operation is outstanding (M5.3,
-  correctly -- freeing would leave an `IORING_BUFFER_REF` pointing at freed memory) and says so
-  with a bare `debug_assert!(false, ...)`. That does not check `std::thread::panicking()`, so when
-  a test fails *because* a slot leaked, the assertion fires, unwinding drops the arena, the
-  `debug_assert` panics during unwind, and the process aborts with
-  `STATUS_STACK_BUFFER_OVERRUN` -- replacing a clean `FAILED` and its message with a crash.
+- [x] **M23.4** -- Drop guards that panicked during unwind aborted the process instead of reporting; they now stay silent while `std::thread::panicking()`. -> [completed 2026-09-23](COMPLETED-CHECKLIST.md#m234)
 
-  **Found by measurement, not by reading**: the `M22.2` regression sabotage recorded in
-  [sabotage.json](sabotage.json) ends exactly this way. The detection is not weakened -- the
-  assertion fires first and names the leak -- but the report is, and the repository's own
-  cargo-mutants guidance warns that a crash-scored result is easy to misread as a stronger or
-  weaker signal than it is.
+- [ ] **M23.5** -- **Neither assert in `IoRing::drop` is reachable from a test.** M23.4 narrowed
+  them to fire only outside an unwind, and measured that suppressing both unconditionally leaves
+  every test in the crate green -- so the guards are unverified in the direction that matters, and
+  FAIL FAST rule 4 says a path no test can traverse is written rather than implemented. `run_down`
+  fails only when `SubmitIoRing` or `PopIoCompletion` returns an error HRESULT, and `CloseIoRing`
+  fails only when the kernel refuses the close. The crate's `fault-injection` seam
+  (`Completion::with_injected_failure`) sits at the completion-result level and produces neither.
 
-  `Pending::drop` guards with `std::thread::panicking()` for this reason and stays silent; the
-  fix is presumably the same one line here. **Verify by sabotage that it changes the failure mode
-  and not the detection**: the sabotage must still be caught, and must now end in `FAILED`.
+  **What this needs is a seam one level lower** -- over the raw HRESULTs the ring's Win32 calls
+  return -- which is a larger change than M23.4 and touches every call site, not just `Drop`. Decide
+  first whether that seam is worth its blast radius, or whether the honest answer is that these two
+  asserts stay documented-unreachable. Do not manufacture a test that reaches code nothing calls;
+  the repository's cargo-mutants guidance names that as worse than leaving the gap visible.
+
+  Note it is only the `IoRing` guard that is unreachable.
+  `batch::tests::dropping_a_registration_with_work_outstanding_is_refused` does cover
+  `RegisteredBuffers::drop`, and went red under the same sabotage.
 
 
 ## M25 -- Make the epoch-log sample's I/O a shape where a commit is observable
