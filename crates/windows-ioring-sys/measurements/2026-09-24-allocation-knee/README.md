@@ -91,6 +91,22 @@ The rule's other half is not a measurement and is not challenged by any of this:
 a threshold that makes someone ask "does this really need to be contiguous?" is
 doing design work, not allocator work.
 
+## A decision these measurements argue for and review overruled
+
+Everything above points at removing the allocation instead of sizing it: a
+`static` array of zeros needs no heap, no knee, and no justification, and its
+pages arrive demand-zero from the loader.
+
+**That was declined for a reason no measurement here could produce.** A `static`
+sits at a fixed offset within the module, so any leak of a module base also
+gives away the address of a large, writable, zero-filled region -- present for
+the life of the process whether or not a log is ever opened, and no longer
+protected by ASLR once the base is known. A transient heap allocation has an
+unpredictable address and a lifetime bounded by the fill.
+
+It is recorded here, and at the constant's definition, because the `static` is
+the obvious "optimization" for a reader who has only the figures on this page.
+
 ## What this cannot tell you
 
 One machine, one toolchain, one allocator, one workload. Rust's default

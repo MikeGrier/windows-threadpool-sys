@@ -175,6 +175,26 @@ use crate::record::RECORD_STRIDE;
 /// 64 KiB is additionally the Windows virtual-memory allocation granularity,
 /// which is why it is a good habit as well as a good measurement: it is the
 /// point past which a block cannot share its region with anything else.
+///
+/// # Why this is allocated rather than a `static` array of zeros
+///
+/// A `static ZEROS: [u8; 64 * 1024]` would remove the allocation entirely --
+/// no heap, no knee to reason about, pages arriving demand-zero from the
+/// loader. On every axis a performance reader would check it is the better
+/// choice, which is exactly why the reason to refuse it is written down here:
+/// **it is a security decision and no measurement will surface it.**
+///
+/// A `static` lives at a fixed offset within the module, so a process that
+/// leaks any module base thereby knows the address of a large, writable,
+/// zero-filled region -- a ready-made landing pad for staging data, at an
+/// address ASLR no longer protects once the base is known, present for the
+/// life of the process whether or not a log is ever opened. A transient heap
+/// allocation has neither property: its address is unpredictable and it exists
+/// only while the fill is running.
+///
+/// The cost of declining the `static` is one allocation per call to
+/// [`create_preallocated`], which the measurements above put at nothing worth
+/// having.
 const FILL_CHUNK: usize = 64 * 1024;
 
 /// Create `path` with `blocks` zeroed record blocks already written, and return
