@@ -10,50 +10,83 @@
 //!    FILE_FLAG_OVERLAPPED`.
 //!
 //! [write-pending-spike.rs](../../design-sessions/spikes/write-pending-spike.rs)
-//! measured four configurations and only this one behaved differently from a
-//! plain buffered handle. `FILE_FLAG_OVERLAPPED` on its own changed nothing,
-//! and `NO_BUFFERING` over a file the writes were *extending* behaved like a
-//! buffered one -- the filesystem serialises writes past the valid-data length,
-//! so an extending write does not get to be asynchronous however it was opened.
+//! measured five configurations, and what replicates across sixteen runs is
+//! that a **buffered** handle essentially never pends while every
+//! `NO_BUFFERING` one pends in most runs. Among the unbuffered conditions the
+//! zero-filled extent has the highest rate and much the highest floor, which
+//! is why the log uses it -- but the three overlap heavily and a single run of
+//! any of them can land in another's range. See
+//! [measurements/2026-09-24-set-len-vs-zero-fill/](../../measurements/2026-09-24-set-len-vs-zero-fill/README.md)
+//! for the runs and for the earlier, stronger reading this replaced.
 //!
-//! # The zero-fill is not avoided, it is moved
+//! # The zero-fill is not avoided, it is moved -- and moving it is not free
 //!
 //! Writing past NTFS's valid data length obliges the filesystem to zero-fill
-//! the gap first, and it serialises writes while it does. Step 1 does not save
-//! that work -- it does the **same** zero-fill once, eagerly, on an ordinary
+//! the gap first. Step 1 does that zeroing once, eagerly, on an ordinary
 //! handle, at a moment when nothing is being measured and no ring is involved.
-//! What the log gains is not less zeroing but a write path with none of it
-//! left, which is the only reason its operations can be asynchronous at all.
 //!
-//! So the eager zero-fill here and the lazy one the filesystem would otherwise
-//! perform are the same operation at different times, and the whole of step 1
-//! is choosing the time.
+//! **For a sequential writer the total zeroing cost is the same either way**,
+//! and that is measured: filling an extent after `set_len` costs what
+//! zero-filling it outright costs (287 ms against 315 ms per GiB), because
+//! every write lands exactly at the valid data length and none has a gap in
+//! front of it. So this log is not buying cheaper zeroing.
 //!
-//! # `set_len` is not a substitute for the zero-fill, and nothing here catches
-//! the difference
+//! **What it is avoiding is the case where the bill arrives inside one write.**
+//! A write that lands *past* the valid data length pays to zero the whole gap,
+//! synchronously, before it proceeds: one sector written at the end of a
+//! `set_len`'d 1 GiB file took roughly 2.3 seconds, about eight times the cost
+//! of writing the entire extent. A log that only ever appends does not hit
+//! that -- but a log is exactly the kind of program that later grows a
+//! recovery path, a header rewrite, or a segment that seeks. See
+//! [measurements/2026-09-24-set-len-zero-fill-cost/](../../measurements/2026-09-24-set-len-zero-fill-cost/README.md).
+//!
+//! # `set_len` is not a substitute for the zero-fill, and the difference is
+//! measured rather than argued
 //!
 //! Step 1 writes a real buffer of zeros rather than calling
 //! [`std::fs::File::set_len`]. Both produce a file of the right size whose
 //! bytes read back as zero -- reads past the valid data length are answered
 //! with zeros the filesystem synthesises without touching the disk -- so the
-//! two are indistinguishable to everything in this sample. But only the write
-//! advances the valid data length, and the valid data length is the thing that
-//! decides whether a later write is extending. A `set_len` extent would leave
-//! every write in condition C, the one that was measured as behaving like a
-//! buffered handle.
+//! two are indistinguishable to everything in this sample. Only the write
+//! advances the valid data length, which is the thing that decides whether a
+//! later write is extending.
+//!
+//! An earlier version of this comment asserted that a `set_len` extent "would
+//! leave every write in condition C". That was reasoned from documentation and
+//! was challenged in review, so it was measured instead, twice over.
+//!
+//! **On zeroing cost, the assertion was simply the wrong mechanism.** For a
+//! sequential writer `set_len` costs nothing extra -- see the section above.
+//!
+//! **On pending rate there is a real difference**, which is the measured reason
+//! this function zero-fills. The spike gained a condition E over a `set_len`
+//! extent, and sixteen runs are in
+//! [measurements/2026-09-24-set-len-vs-zero-fill/](../../measurements/2026-09-24-set-len-vs-zero-fill/README.md):
+//! the zero-filled extent pended at a median of 471/500 against `set_len`'s
+//! 268/500, with a floor of 121 against 1. But the extending case and the
+//! `set_len` case are not distinguishable from each other on that data, so the
+//! claim that `set_len` *is* the extending case remains unsupported and is not
+//! made.
+//!
+//! **Read those measurements before relying on any of this.** The first also
+//! corrects a stronger claim this repository had been repeating -- that the
+//! zero-filled extent was the only condition that pended at all. That descends
+//! from a single run and does not replicate.
 //!
 //! (`SetFileValidData` moves the valid data length without writing anything,
 //! which is how a database pre-allocates in one syscall. It is not used here:
 //! it needs `SE_MANAGE_VOLUME_NAME`, and it exposes whatever bytes were
-//! previously on those clusters to anything that reads the file -- a privilege
-//! requirement and a disclosure hazard that a sample has no business taking on
-//! to save a few milliseconds of zeroing.)
+//! previously on those clusters to anything that reads the file. An earlier
+//! draft of this paragraph said it saves "a few milliseconds of zeroing",
+//! which was wrong by two to three orders of magnitude -- the measured cost is
+//! ~300 ms per GiB done well, and seconds per GiB when forced onto a seeking
+//! write. That cost is the whole reason the API exists.)
 //!
-//! This is stated rather than tested because it is not observable from here:
-//! see the `notCoveredHere` note in [sabotage.json](../../sabotage.json). The
-//! only user-mode way to read back a valid-data length is
-//! `FSCTL_QUERY_FILE_REGIONS`, and putting that in a sample to check a property
-//! the sample does not otherwise use would be machinery for its own sake.
+//! Nothing in the test suite catches a swap to `set_len`: see the declared
+//! blind spot in [sabotage.json](../../sabotage.json). The difference is a
+//! *rate* that varies enormously run to run, so a test asserting it would be
+//! asserting an observation about one machine as though it were a contract,
+//! which `M25`'s standing constraint forbids.
 //!
 //! # What is deliberately *not* opened this way
 //!

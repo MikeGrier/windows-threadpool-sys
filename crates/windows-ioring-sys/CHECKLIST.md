@@ -276,6 +276,17 @@ configurations pend at all. `FILE_FLAG_OVERLAPPED` alone changed nothing (0/500)
 116 us -- the flush's cost leaving the submit path is what makes a commit separately observable for
 the first time.
 
+> **Corrected 2026-09-24, after `M25.3` landed: the paragraph above overstates what replicates.**
+> Sixteen runs with a fifth condition added are in
+> [measurements/2026-09-24-set-len-vs-zero-fill/](measurements/2026-09-24-set-len-vs-zero-fill/README.md).
+> What holds is that a **buffered** handle essentially never pends while every `NO_BUFFERING` one
+> pends in most runs. What does not hold is "only the pre-written extent pended": the extending
+> condition has a median of 268/500 over those runs. The zero-filled extent is still the best of
+> the five -- median 471/500, floor 121 against 1 -- so `M25.3`'s choice stands, but as a
+> difference of degree rather than of kind. The single-run reading came from a pair of numbers the
+> spike's own header already warned was unstable. `M25.4` and `M25.5` must be read with that
+> variance in mind rather than against the original framing.
+
 **A standing constraint on every item below.** That 500/500 is an observation, not a contract:
 Windows specifies nothing about when a ring operation completes relative to `SubmitIoRing`. So the
 sample may *adopt* this shape -- it is what real write-ahead logs do, and it is the only shape where

@@ -195,19 +195,51 @@ impl Outcome {
     }
 }
 
-fn run(label: &'static str, flags: u32, prewrite: bool) -> Outcome {
+/// How a condition's file is prepared before the measured writes.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Extent {
+    /// Nothing: the measured writes extend the file.
+    None,
+    /// Zero-filled with a real write, so the valid data length covers every
+    /// offset the measured writes will touch.
+    Written,
+    /// `set_len` only. Same end-of-file as `Written`, same bytes on read, and
+    /// the whole question condition E exists to settle.
+    SetLen,
+}
+
+fn run(label: &'static str, flags: u32, extent: Extent) -> Outcome {
     let path = temp(label);
     let buffer = aligned(WRITE_LEN, 0xAB);
 
     // Give the writes an existing extent to land in, so they are not extending
     // writes -- which the drain spike observed behaving like buffered ones.
-    if prewrite {
-        std::fs::write(&path, vec![0u8; WRITE_LEN * (WRITES + 1)]).expect("pre-write the extent");
+    match extent {
+        Extent::None => {}
+        Extent::Written => {
+            std::fs::write(&path, vec![0u8; WRITE_LEN * (WRITES + 1)])
+                .expect("zero-fill the extent");
+        }
+        Extent::SetLen => {
+            // The question condition E exists to answer: `set_len` sets the
+            // file's length without writing anything, so it costs nothing and
+            // produces a file that reads back identically to the written one.
+            // Whether it *behaves* identically on the write path is the thing
+            // that cannot be settled by reading either file back, and was
+            // being asserted from documentation until this row existed.
+            let file = std::fs::File::create(&path).expect("create for set_len");
+            file.set_len((WRITE_LEN * (WRITES + 1)) as u64)
+                .expect("set_len the extent");
+        }
     }
 
-    // A pre-written condition must open the existing file: CREATE_ALWAYS would
+    // A condition with an existing extent must open it: CREATE_ALWAYS would
     // truncate the extent that is the only thing distinguishing it from C.
-    let disposition = if prewrite { OPEN_EXISTING } else { CREATE_ALWAYS };
+    let disposition = if matches!(extent, Extent::None) {
+        CREATE_ALWAYS
+    } else {
+        OPEN_EXISTING
+    };
     // SAFETY: `wide` is NUL-terminated and outlives the call.
     let file = unsafe {
         CreateFileW(
@@ -346,17 +378,22 @@ fn main() {
     );
 
     let mut conditions = vec![
-        run("A-buffered-sync", 0, false),
-        run("B-buffered-overlapped", FILE_FLAG_OVERLAPPED, false),
+        run("A-buffered-sync", 0, Extent::None),
+        run("B-buffered-overlapped", FILE_FLAG_OVERLAPPED, Extent::None),
         run(
             "C-nobuffer-extending",
             FILE_FLAG_OVERLAPPED | FILE_FLAG_NO_BUFFERING,
-            false,
+            Extent::None,
         ),
         run(
             "D-nobuffer-prewritten",
             FILE_FLAG_OVERLAPPED | FILE_FLAG_NO_BUFFERING,
-            true,
+            Extent::Written,
+        ),
+        run(
+            "E-nobuffer-set_len",
+            FILE_FLAG_OVERLAPPED | FILE_FLAG_NO_BUFFERING,
+            Extent::SetLen,
         ),
     ];
 

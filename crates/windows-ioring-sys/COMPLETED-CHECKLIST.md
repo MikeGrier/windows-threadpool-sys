@@ -2827,6 +2827,17 @@ as behaving like a buffered handle. The only user-mode way to read a valid-data 
 otherwise use was judged machinery for its own sake. Recording it as `expect: "survives"` means a
 future change that makes it observable will show up as a discrepancy in the sweep.
 
+> **Corrected 2026-09-24, the same day, after review challenged the claim rather than the code.**
+> The paragraph above asserts from documentation that `set_len` is a regression, and the reasoning
+> it gives is the wrong mechanism. Two measurements settled it:
+> [2026-09-24-set-len-zero-fill-cost/](measurements/2026-09-24-set-len-zero-fill-cost/README.md)
+> shows the zeroing cost is **identical** for a sequential writer, so that is not the reason; and
+> [2026-09-24-set-len-vs-zero-fill/](measurements/2026-09-24-set-len-vs-zero-fill/README.md) shows
+> the zero-filled extent pends at a median of 471/500 against `set_len`'s 268/500, which is. The
+> blind spot is real and the conclusion survives; the argument for it did not. The second capture
+> also corrects this entry's own framing of the spike, which repeated "only the pre-written extent
+> pended" from a single run that does not replicate.
+
 **The harness caught a stale case in its own manifest, which is worth more than the case was.** The
 `M25.1: the appender packs its record offsets` sabotage stopped compiling, because M25.1 ended by
 removing the `total` binding its patch referenced in order to clear an unused-variable warning --
