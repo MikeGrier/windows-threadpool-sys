@@ -131,6 +131,65 @@ fn dropping_a_ring_actually_runs_its_drop_body() {
     );
 }
 
+/// `IoRing::drop`'s close assert, traversed for real (M23.5).
+///
+/// M23.4 narrowed both asserts in `IoRing::drop` to fire only outside an
+/// unwind, and measured that suppressing them entirely left every test in the
+/// crate green -- so the guards were unverified in the direction that matters.
+/// The item that followed assumed reaching them required a fault-injection
+/// seam over every raw HRESULT the ring's Win32 calls return, and priced that
+/// seam's blast radius. It is not required: the kernel already refuses a null
+/// ring handle, and `ring::tests` is a child of `ring`, so it can build an
+/// `IoRing` around one. See [`IoRing::refused_by_the_kernel`] for why null
+/// specifically, and why a non-null stand-in would crash instead.
+#[test]
+#[should_panic(expected = "CloseIoRing failed")]
+fn a_ring_whose_close_the_kernel_refuses_reports_the_close_failure() {
+    let ring = IoRing::refused_by_the_kernel();
+
+    // Nothing is outstanding, so `run_down` returns `Ok` without ever
+    // submitting. That is what makes the close assert the only one this test
+    // can reach -- see the sibling test for the other one.
+    assert_eq!(
+        ring.accounting.outstanding(),
+        0,
+        "a fresh ledger has nothing outstanding"
+    );
+    drop(ring);
+}
+
+/// `IoRing::drop`'s rundown assert, traversed for real (M23.5).
+///
+/// The same construction as the sibling test above, plus the one thing that
+/// selects the other assert: `run_down` submits only *while* something is
+/// outstanding, so a ring with an empty ledger never calls `SubmitIoRing` and
+/// never fails. Reserving one identity makes the loop run once, that submit
+/// is refused, and `run_down` returns the error the assert names.
+///
+/// The two `expected` strings are what keep these tests honest about which
+/// assert they reached: if this one fell through to the close instead, its
+/// panic would say `CloseIoRing failed` and the test would go red rather than
+/// pass for the wrong reason. That is sabotaged in [sabotage.json], not merely
+/// asserted here.
+///
+/// [sabotage.json]: ../../sabotage.json
+#[test]
+#[should_panic(expected = "IoRing rundown failed before close")]
+fn a_ring_whose_rundown_the_kernel_refuses_reports_the_rundown_failure() {
+    let mut ring = IoRing::refused_by_the_kernel();
+
+    ring.accounting
+        .reserve_user_data()
+        .expect("a fresh ring's identity space is not exhausted");
+    assert_eq!(
+        ring.accounting.outstanding(),
+        1,
+        "rundown must have a reason to submit, or it cannot fail"
+    );
+
+    drop(ring);
+}
+
 // --- The fault-injection seam (M16.3) ---
 
 /// A real completion for a real, finished operation.

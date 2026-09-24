@@ -103,6 +103,51 @@
       ]
     },
     {
+      "name": "M23.5: the rundown guard stops distinguishing an unwind",
+      "file": "src/ring.rs",
+      "expect": "caught",
+      "why": "IoRing::drop's rundown assert fires only outside an unwind (M23.4). Forcing the condition true makes it fire unconditionally, which is the pre-M23.4 behaviour that turns a failing test into STATUS_STACK_BUFFER_OVERRUN. Until M23.5 nothing caught this: suppressing both guards in IoRing::drop entirely left every test in the crate green, because no test reached either assert. a_ring_whose_rundown_the_kernel_refuses_reports_the_rundown_failure now does, by putting a null handle in the field -- measured, SubmitIoRing(null, ..) returns 0x80070006 (ERROR_INVALID_HANDLE) rather than crashing, so the failure the assert reports is a real refusal from the kernel and not a fabrication.",
+      "find": [
+        "                std::thread::panicking(),",
+        "                \"IoRing rundown failed before close: {error}\""
+      ],
+      "replace": [
+        "                true,",
+        "                \"IoRing rundown failed before close: {error}\""
+      ]
+    },
+    {
+      "name": "M23.5: the close guard stops distinguishing an unwind",
+      "file": "src/ring.rs",
+      "expect": "caught",
+      "why": "The sibling of the case above, for the second of IoRing::drop's two asserts. Both are listed because they are separate conditions on separate lines and a change can reach one without the other -- measured: suppressing the rundown guard leaves the close test green and vice versa, so a single case would have declared the pair covered while half of it was not. The two tests are told apart by their should_panic expected strings, and that selection is itself sabotaged below.",
+      "find": [
+        "            hr >= 0 || std::thread::panicking(),"
+      ],
+      "replace": [
+        "            true,"
+      ]
+    },
+    {
+      "name": "M23.5: the rundown test stops reaching the rundown assert",
+      "file": "src/ring/tests.rs",
+      "expect": "caught",
+      "why": "A sabotage of the test rather than of the code, because the thing at risk is which assert the test arrives at. run_down submits only while something is outstanding, so without the reservation the ring falls straight through to CloseIoRing and panics with 'CloseIoRing failed: 0x80070006' -- a panic, from the same Drop body, in a test that expects one. What refuses it is should_panic's expected substring, and this case is what shows that substring is load-bearing rather than decorative. Measured before being recorded: with the reservation removed the test reports `panic message: \"CloseIoRing failed: 0x80070006\"` against `expected substring: \"IoRing rundown failed before close\"`. Note the replacement also removes the outstanding==1 assertion, deliberately: leaving it in place catches the sabotage one line earlier and would prove only that the test guards its own preconditions, not that it lands on the right assert.",
+      "find": [
+        "    ring.accounting",
+        "        .reserve_user_data()",
+        "        .expect(\"a fresh ring's identity space is not exhausted\");",
+        "    assert_eq!(",
+        "        ring.accounting.outstanding(),",
+        "        1,",
+        "        \"rundown must have a reason to submit, or it cannot fail\"",
+        "    );"
+      ],
+      "replace": [
+        "    // nothing outstanding: rundown cannot fail, so Drop reaches the close"
+      ]
+    },
+    {
       "name": "CONTROL: rewording a statement changes nothing",
       "file": "examples/epoch_log/contract.rs",
       "expect": "survives",

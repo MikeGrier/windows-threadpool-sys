@@ -1221,6 +1221,37 @@ impl CompletionWait for SubmitWait {
     }
 }
 
+#[cfg(test)]
+impl IoRing {
+    /// An `IoRing` that owns no kernel ring, for driving `Drop`'s two error
+    /// paths (M23.5).
+    ///
+    /// The handle is null **deliberately and specifically**. Measured:
+    /// `CloseIoRing(null)` and `SubmitIoRing(null, ..)` both return
+    /// `0x80070006` -- `HRESULT_FROM_WIN32(ERROR_INVALID_HANDLE)` -- so both
+    /// of `Drop`'s failure branches can be reached without a fault-injection
+    /// seam over the raw HRESULTs, which is what M23.5 was opened to price.
+    ///
+    /// A *non-null* fabricated handle is not a substitute and must never be
+    /// swapped in: `CloseIoRing` on a plausible-looking `0xDEAD_0000` raises
+    /// `STATUS_ACCESS_VIOLATION`, because a ring handle is a pointer the
+    /// kernel dereferences rather than an index into a handle table.
+    ///
+    /// Nothing here opens a ring, so the tests built on it are not part of the
+    /// ring-opening population `tools/check-ring-tests.ps1` tracks (D-49) --
+    /// they need the kernel only to refuse them, which costs no ring.
+    fn refused_by_the_kernel() -> Self {
+        Self {
+            handle: std::ptr::null_mut(),
+            version: RingVersion::V1,
+            supported_ops: OpSupport::default(),
+            accounting: Accounting::new(),
+            registered_buffer_infos: Vec::new(),
+            completion_event: None,
+        }
+    }
+}
+
 impl Drop for IoRing {
     fn drop(&mut self) {
         // A count of how many times this body has run, so a test can confirm
@@ -1245,14 +1276,19 @@ impl Drop for IoRing {
         // so an unguarded assert here would convert a readable assertion
         // message into a crash in the common case rather than a rare one.
         //
-        // Neither assert is reachable from a test on a healthy host, and
-        // that was measured, not assumed: suppressing both unconditionally
-        // leaves every test in the crate green. `run_down` fails only when
-        // `SubmitIoRing` or `PopIoCompletion` returns an error HRESULT, and
-        // `CloseIoRing` fails only when the kernel refuses the close; the
-        // `fault-injection` seam sits at the completion-result level and
-        // produces neither. A seam over the raw HRESULTs would reach them,
-        // and is M23.5.
+        // Both are covered, and neither needed a fault-injection seam to get
+        // there (M23.5). `a_ring_whose_rundown_the_kernel_refuses_..` and
+        // `a_ring_whose_close_the_kernel_refuses_..` put a null handle in the
+        // field and let this body run for real: measured, `CloseIoRing(null)`
+        // and `SubmitIoRing(null, ..)` both return `0x80070006`
+        // (`ERROR_INVALID_HANDLE`). Whether `run_down` submits at all is what
+        // selects between the two, since it loops only while something is
+        // outstanding.
+        //
+        // A *non-null* bad handle is not equivalent and must never be
+        // substituted: `CloseIoRing(0xDEAD_0000)` raises
+        // `STATUS_ACCESS_VIOLATION`, because a ring handle is a pointer the
+        // kernel dereferences rather than an index into a handle table.
         if let Err(error) = self.run_down() {
             debug_assert!(
                 std::thread::panicking(),

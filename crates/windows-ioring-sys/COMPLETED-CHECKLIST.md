@@ -1808,7 +1808,7 @@ blocked for without a second copy of the claim-then-check logic.
 
 ## Moved 2026-09-21 21:15:12 -04:00 -- M21.6: the API review's four defects
 
-### <a id="m216"></a>M21.6 -- Fix the four defects an independent review of the M21.2 surface found: the timeout mapping, its victim in \un_down\, the INFINITE collision, and the test hole that hid all of them. *(completed 2026-09-21 21:15:12 -04:00)*
+### <a id="m216"></a>M21.6 -- Fix the four defects an independent review of the M21.2 surface found: the timeout mapping, its victim in `run_down`, the INFINITE collision, and the test hole that hid all of them. *(completed 2026-09-21 21:15:12 -04:00)*
 
 Queued and closed in one item because the first two share a root cause and the fourth is the reason
 neither was caught. The surface is unreleased and on a branch, so none of this is a breaking change.
@@ -2633,3 +2633,67 @@ move-or-spawn rule, because "no test can reach it" is a blocker to name and not 
 the box and move on. The fix still lands there on its merits: it is precisely the `IoRing` case
 that turns a readable failure into a crash most often, since a ring is dropped on the way out of
 almost every failing test in this crate.
+
+> **The paragraph above was wrong about the remedy, and [M23.5](#m235) overturned it the same
+> evening.** Both asserts are reachable, no seam was built, and no production line changed: the
+> kernel rejects a *null* ring handle cleanly, and `ring::tests` is a child module that can put one
+> in the field. What the paragraph got right is the finding that prompted it -- the guards were
+> genuinely uncovered. It is left standing rather than rewritten because the archive is history,
+> and because the error in it is instructive: it priced a seam it never checked was necessary.
+### <a id="m235"></a>M23.5 -- Both asserts in `IoRing::drop` are now reached by tests, and the seam the item priced turned out not to be needed. *(completed 2026-09-23 23:20:27 -04:00)*
+
+M23.4 left both asserts in `IoRing::drop` uncovered: suppressing them entirely left every test in
+the crate green. This item asked whether to build a fault-injection seam over the raw HRESULTs the
+ring's Win32 calls return, or to accept the asserts as documented-unreachable. **Neither. The item's
+premise was false**, and one probe falsified it.
+
+**What the probe measured.** `CloseIoRing(null)` and `SubmitIoRing(null, ..)` both return
+`0x80070006` -- `HRESULT_FROM_WIN32(ERROR_INVALID_HANDLE)` -- a clean refusal. `CloseIoRing` on a
+plausible-looking `0xDEAD_0000` raises `STATUS_ACCESS_VIOLATION`. So a ring handle is **a pointer
+the kernel dereferences, not an index into a handle table**, and null is the one bad value that is
+refused rather than followed. That asymmetry is the whole finding, and it is recorded at the
+definition and in both tests, because a later cleanup that "tidies" the null into a non-null
+sentinel converts two passing tests into a process crash.
+
+**Why no seam was needed.** `mod tests` is a *child* of `ring`, so it already sees the private
+`handle` and `accounting` fields -- a child module can see its ancestors' private items. A
+`#[cfg(test)]` constructor, `IoRing::refused_by_the_kernel`, assembles a whole `IoRing` around a
+null handle, and the tests let the real `Drop` body run against it. Whether `run_down` submits at
+all is what selects between the two asserts, since it loops only while something is outstanding.
+Production code was not touched: the blast radius the item worried about was zero, because the
+change is entirely in test-only code.
+
+**The D-49 ring-test gate improved the design, which is what it is for.** The first working version
+opened a real ring, closed it by hand, and put a null in the field -- and
+[tools/check-ring-tests.ps1](../../tools/check-ring-tests.ps1) flagged two `ADDED` entries and
+asked its standing question: *does this test need the kernel, or only a ring-shaped thing?* Only
+the latter. `RingVersion::V1` is a public const and `OpSupport` derives `Default`, so every one of
+`IoRing`'s six fields is constructible without opening anything. Answering the gate rather than
+re-baselining it removed the real ring, the hand-close, two `unsafe` blocks and their safety
+arguments from both tests, and left the ring-opening population unchanged at 41. These tests need
+the kernel only to *refuse* them, and refusing costs no ring.
+
+**Three sabotages recorded in [sabotage.json](sabotage.json), not one.** Suppressing the rundown
+guard leaves the close test green and vice versa, so the two asserts are independent conditions and
+a single case would have declared the pair covered while half of it was not. The third sabotage is
+of the *test* rather than the code: removing the reservation makes the ring fall through to the
+close, and the panic message becomes `CloseIoRing failed: 0x80070006` against an expected substring
+of `IoRing rundown failed before close`. That is what shows `should_panic`'s `expected` string is
+load-bearing in selecting the assert rather than decorative. The full sweep is 12-of-12 as declared
+with the `CONTROL` still surviving.
+
+**The methodological point, which is the same one this crate keeps paying for.** The item was
+written an hour earlier, by me, and it reasoned from the shape of the code to "this needs a seam"
+without ever asking the kernel what it does with a bad handle. It then priced that seam's blast
+radius and proposed accepting a permanent coverage gap as the alternative. Both options were
+answers to a question that a single `eprintln!` dissolved. The repository's standing instruction is
+never to report that something cannot be done on the basis of reading it; that applies to "no test
+can reach this" exactly as it applies to "this will not compile".
+
+**A note on release builds, swept but deliberately not changed.** These are `#[should_panic]` tests
+over `debug_assert!`, so they would fail under `cargo test --release`, where the assert compiles
+out. That is a pre-existing property of the crate --
+`batch::tests::dropping_a_registration_with_work_outstanding_is_refused` has the same shape and is
+ungated -- and no CI job runs tests in release. Matching the existing precedent was preferred over
+introducing a `cfg(debug_assertions)` gate on two of the three, which would have left the crate
+inconsistent with itself. If release-mode testing is ever added, all three need the gate together.

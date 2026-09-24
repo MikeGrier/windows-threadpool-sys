@@ -246,23 +246,7 @@ about this crate's own surface rather than about storage at all.
 
 - [x] **M23.4** -- Drop guards that panicked during unwind aborted the process instead of reporting; they now stay silent while `std::thread::panicking()`. -> [completed 2026-09-23](COMPLETED-CHECKLIST.md#m234)
 
-- [ ] **M23.5** -- **Neither assert in `IoRing::drop` is reachable from a test.** M23.4 narrowed
-  them to fire only outside an unwind, and measured that suppressing both unconditionally leaves
-  every test in the crate green -- so the guards are unverified in the direction that matters, and
-  FAIL FAST rule 4 says a path no test can traverse is written rather than implemented. `run_down`
-  fails only when `SubmitIoRing` or `PopIoCompletion` returns an error HRESULT, and `CloseIoRing`
-  fails only when the kernel refuses the close. The crate's `fault-injection` seam
-  (`Completion::with_injected_failure`) sits at the completion-result level and produces neither.
-
-  **What this needs is a seam one level lower** -- over the raw HRESULTs the ring's Win32 calls
-  return -- which is a larger change than M23.4 and touches every call site, not just `Drop`. Decide
-  first whether that seam is worth its blast radius, or whether the honest answer is that these two
-  asserts stay documented-unreachable. Do not manufacture a test that reaches code nothing calls;
-  the repository's cargo-mutants guidance names that as worse than leaving the gap visible.
-
-  Note it is only the `IoRing` guard that is unreachable.
-  `batch::tests::dropping_a_registration_with_work_outstanding_is_refused` does cover
-  `RegisteredBuffers::drop`, and went red under the same sabotage.
+- [x] **M23.5** -- Both asserts in `IoRing::drop` are now reached by tests; the raw-HRESULT seam the item priced turned out not to be needed, because the kernel refuses a null ring handle cleanly. -> [completed 2026-09-23](COMPLETED-CHECKLIST.md#m235)
 
 
 ## M25 -- Make the epoch-log sample's I/O a shape where a commit is observable
