@@ -2817,11 +2817,12 @@ using an ordinary handle, so the refusals are attributable to the flags rather t
 about the file.
 
 **A blind spot is recorded in [sabotage.json](sabotage.json) as a declared survivor rather than left
-invisible.** Replacing the zero-write with `set_len` is a **real regression that nothing here
-detects**: both produce a file of the right size whose bytes read back as zero, and only the write
-advances NTFS's valid data length -- which is the thing that decides whether a later write is
-extending. A `set_len` extent silently returns the log to the configuration measured as behaving
-like a buffered handle. The only user-mode way to read a valid-data length back is
+invisible.** Replacing the zero-fill with `set_len` is a **real regression that nothing here
+detects**: both produce a file of the right size whose bytes read back as zero, because reads past
+the valid data length are answered with zeros the filesystem synthesises without touching the disk.
+Only the zero-fill advances that valid data length -- which is the thing that decides whether a
+later write is extending. A `set_len` extent silently returns the log to the configuration measured
+as behaving like a buffered handle. The only user-mode way to read a valid-data length back is
 `FSCTL_QUERY_FILE_REGIONS`, and adding it to a sample purely to check a property the sample does not
 otherwise use was judged machinery for its own sake. Recording it as `expect: "survives"` means a
 future change that makes it observable will show up as a discrepancy in the sweep.

@@ -232,10 +232,10 @@
       ]
     },
     {
-      "name": "DECLARED BLIND SPOT: set_len replaces writing the extent",
+      "name": "DECLARED BLIND SPOT: set_len replaces the zero-fill",
       "file": "examples/epoch_log/logfile.rs",
       "expect": "survives",
-      "why": "This is NOT an inert change and must not be read as one -- it is a real regression that nothing in this workspace detects, recorded here so the gap is tracked rather than invisible. set_len and a real write both produce a file of the right size whose bytes read back as zero, so they are indistinguishable to every assertion available here. Only the write advances NTFS's valid data length, and the valid data length is what decides whether a later write is extending -- so a set_len extent silently returns the log to the configuration the spike measured as behaving like a buffered handle. The only user-mode way to read a valid-data length back is FSCTL_QUERY_FILE_REGIONS, and adding that to a sample purely to check a property the sample does not otherwise use was judged machinery for its own sake. If a future change makes this observable, this case will start being caught and the sweep will report the discrepancy, which is the point of recording it.",
+      "why": "This is NOT an inert change and must not be read as one -- it is a real regression that nothing in this workspace detects, recorded here so the gap is tracked rather than invisible. set_len and a zero-fill both produce a file of the right size whose bytes read back as zero, because reads past the valid data length are answered with zeros the filesystem synthesises without touching the disk -- so the two are indistinguishable to every assertion available here. Only the zero-fill advances the valid data length, and the valid data length is what decides whether a later write is extending -- so a set_len extent silently returns the log to the configuration the spike measured as behaving like a buffered handle. The only user-mode way to read a valid-data length back is FSCTL_QUERY_FILE_REGIONS, and adding that to a sample purely to check a property the sample does not otherwise use was judged machinery for its own sake. If a future change makes this observable, this case will start being caught and the sweep will report the discrepancy, which is the point of recording it.",
       "find": [
         "    std::fs::write(path, vec![0_u8; len])?;"
       ],

@@ -5,7 +5,7 @@
 //!
 //! Two steps, and neither is interchangeable with the other:
 //!
-//! 1. **Write the extent** with an ordinary handle, then drop it.
+//! 1. **Zero-fill the extent** with an ordinary handle, then drop it.
 //! 2. **Reopen** the existing file with `FILE_FLAG_NO_BUFFERING |
 //!    FILE_FLAG_OVERLAPPED`.
 //!
@@ -16,16 +16,38 @@
 //! buffered one -- the filesystem serialises writes past the valid-data length,
 //! so an extending write does not get to be asynchronous however it was opened.
 //!
-//! # `set_len` is not a substitute for writing the zeros, and nothing here
-//! catches the difference
+//! # The zero-fill is not avoided, it is moved
+//!
+//! Writing past NTFS's valid data length obliges the filesystem to zero-fill
+//! the gap first, and it serialises writes while it does. Step 1 does not save
+//! that work -- it does the **same** zero-fill once, eagerly, on an ordinary
+//! handle, at a moment when nothing is being measured and no ring is involved.
+//! What the log gains is not less zeroing but a write path with none of it
+//! left, which is the only reason its operations can be asynchronous at all.
+//!
+//! So the eager zero-fill here and the lazy one the filesystem would otherwise
+//! perform are the same operation at different times, and the whole of step 1
+//! is choosing the time.
+//!
+//! # `set_len` is not a substitute for the zero-fill, and nothing here catches
+//! the difference
 //!
 //! Step 1 writes a real buffer of zeros rather than calling
 //! [`std::fs::File::set_len`]. Both produce a file of the right size whose
-//! bytes read back as zero, so they are indistinguishable to everything in this
-//! sample -- but only the write advances NTFS's **valid data length**, and the
-//! valid data length is the thing that decides whether a later write is
-//! extending. A `set_len` extent would leave every write in condition C, the
-//! one that was measured as behaving like a buffered handle.
+//! bytes read back as zero -- reads past the valid data length are answered
+//! with zeros the filesystem synthesises without touching the disk -- so the
+//! two are indistinguishable to everything in this sample. But only the write
+//! advances the valid data length, and the valid data length is the thing that
+//! decides whether a later write is extending. A `set_len` extent would leave
+//! every write in condition C, the one that was measured as behaving like a
+//! buffered handle.
+//!
+//! (`SetFileValidData` moves the valid data length without writing anything,
+//! which is how a database pre-allocates in one syscall. It is not used here:
+//! it needs `SE_MANAGE_VOLUME_NAME`, and it exposes whatever bytes were
+//! previously on those clusters to anything that reads the file -- a privilege
+//! requirement and a disclosure hazard that a sample has no business taking on
+//! to save a few milliseconds of zeroing.)
 //!
 //! This is stated rather than tested because it is not observable from here:
 //! see the `notCoveredHere` note in [sabotage.json](../../sabotage.json). The
@@ -73,15 +95,17 @@ use crate::record::RECORD_STRIDE;
 ///
 /// # Errors
 ///
-/// Any error from writing the extent or from reopening it.
+/// Any error from the zero-fill or from reopening it.
 pub fn create_preallocated(path: &Path, blocks: usize) -> io::Result<File> {
     let len = blocks
         .checked_mul(RECORD_STRIDE)
         .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "log extent overflows"))?;
 
-    // Written, not `set_len`-ed, and the distinction is the whole point of the
-    // step -- see the module docs. The ordinary handle is dropped at the end of
-    // this statement, before the reopen.
+    // The zero-fill, done eagerly here rather than left for the filesystem to
+    // do lazily on the ring's write path -- see the module docs, and note that
+    // `set_len` is not a substitute however identical the resulting file looks.
+    // The ordinary handle is dropped at the end of this statement, before the
+    // reopen.
     std::fs::write(path, vec![0_u8; len])?;
 
     // No `create`, no `truncate`: this must be `OPEN_EXISTING`, because
