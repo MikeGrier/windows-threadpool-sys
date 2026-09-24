@@ -26,6 +26,28 @@
 //! -- a slot index, an expected length, a phase, a sequence number. `X` is that
 //! sidecar, defaulted to `()` so the bare sites read unchanged.
 //!
+//! # The shape this is not, and the reason it was wrongly ruled out
+//!
+//! A stronger design is available: a generic `IoRing<T>` owning the map, so the
+//! **ring notifies** rather than being told. That makes drift between the ring
+//! and the inventory structurally impossible, where this type only removes
+//! drift between the map and the oracle -- nothing here forces a minted
+//! `Token` into a `Pending` at all.
+//!
+//! It was first dismissed on the grounds that one ring carries several
+//! `Token<T>` types, forcing `Box<dyn Any>` and a downcast at the claim site.
+//! **That reasoning is wrong twice over**, and checking is what showed it:
+//! per-ring monomorphisation holds for every real consumer here, and where it
+//! genuinely does not, the answer is a closed enum rather than `dyn Any` --
+//! `tests/generated_sequences.rs` already puts eight token types on one ring
+//! behind `enum Held`, with an exhaustive `match` and no runtime type check.
+//!
+//! The real costs are different: `IoRing` is not generic today, so it is a
+//! breaking change to a published crate; a consumer mixing shapes writes a
+//! `Held`-style enum; and tokenless pushes need a story, since `flush_raw`
+//! returns a bare `usize` and `epoch_log`'s commit path depends on that. See
+//! [DESIGN-SESSION-2026-09-23-pending-inventory.md](../../design-sessions/DESIGN-SESSION-2026-09-23-pending-inventory.md).
+//!
 //! # What this cannot do, which is also a finding
 //!
 //! **It cannot force the discipline.** Rust has no linear types, so nothing

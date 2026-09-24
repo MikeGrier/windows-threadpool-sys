@@ -272,6 +272,45 @@ about this crate's own surface rather than about storage at all.
   policy like partitioning is under [D-8](DESIGN-NOTES.md#d-8)? (3) If either is offered, what does it
   refuse to decide -- batching, ordering, and which slot to pick are all caller questions.
 
+  **Explored 2026-09-23 with a working spike. The decision is still open; what changed is that it
+  is now informed.** Full record in
+  [DESIGN-SESSION-2026-09-23-pending-inventory.md](design-sessions/DESIGN-SESSION-2026-09-23-pending-inventory.md).
+  `src/pending.rs` is the spike -- exported only so a real consumer could be converted, which is
+  the only way to test fit.
+
+  **The census above is wrong and is kept for the record.** There are ~12 sites, not nine; the list
+  missed `model_a_delivery.rs`, `model_b_multiplexed.rs` and `generated_sequences.rs`; and only
+  about a third keep the bare map described. The rest carry per-operation sidecar data, so the
+  duplicated thing is the **claim discipline over a map whose value type differs at nearly every
+  site** -- which is why the spike is `Pending<T, X>`. The count was this item's main evidence and
+  predated `M24` relocating eleven tests.
+
+  **Established by test and sabotage:** one call site keeps the map and `RingContract` in step
+  (they are hand-driven in parallel today, a restatement that can drift); an unclaimed token is
+  loud at teardown instead of a silent deliberate leak; the type fits a real consumer
+  (`append.rs` lost its `InFlight` struct and its hand-driven observe pair); and `M22.2`'s
+  ordering defect is now caught by an assertion, via a failed write driven through the injection
+  seam.
+
+  **Not established, including two corrections to claims made during the exploration:**
+  the ring notifies nobody -- `Pending` is consumer-driven and nothing forces a minted token into
+  it; one consumer is converted, not twelve; `Pending::checked()` owning the oracle makes a
+  consumer's existing `RingContract` a decoy, which happened during the conversion and made a
+  teardown assertion pass vacuously with nothing catching it; and ring-teardown drop ordering is
+  untested.
+
+  **A dismissed alternative that should not have been.** A generic `IoRing<T>` owning the map --
+  so the *ring* notifies -- was ruled out on the claim that one ring carries several `Token<T>`
+  types and would need `dyn Any`. Both halves are false: per-ring monomorphisation holds for every
+  real consumer, and where it does not, a closed enum suffices -- `generated_sequences.rs` already
+  puts eight token types on one ring behind `enum Held`. The real costs are a breaking change to a
+  published crate, a `Held`-style enum for mixed consumers, and a story for tokenless pushes.
+
+  **So the decision has four parts:** (1) public type, documented pattern, or `test-util`;
+  (2) whether `checked()` survives its decoy hazard; (3) whether the `IoRing<T>` shape is worth a
+  break; (4) what it refuses -- and the sharper refusal than batching/ordering/slot choice is that
+  **the map does not decide whether you are checked.**
+
   **Counter-argument to answer, not dodge:** six of the nine sites are tests, and test convenience is a
   weak reason to grow permanent public surface. A `test-util` module, or nothing at all, may be the right
   answer. The contrast to hold it against is `NumaBuffer` ([D-51](DESIGN-NOTES.md#d-51)): roughly ninety
