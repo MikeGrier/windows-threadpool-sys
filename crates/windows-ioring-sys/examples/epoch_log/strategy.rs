@@ -87,17 +87,29 @@
 //! and that those land in the tens -- but on this sample's handle **none of
 //! those differences can occur at all**.
 //!
-//! The handle carries no `FILE_FLAG_OVERLAPPED`, so a ring operation completes
-//! inline during `SubmitIoRing`: the commit's submit takes hundreds of
-//! microseconds and returns with every completion already queued. Nothing is
-//! ever outstanding across a submit boundary, so there is no overlap for the
-//! strategies to differ in, and the comment further down claiming "a real log
-//! keeps appending while a commit is outstanding" describes something this
-//! program cannot do.
+//! The handle carried no `FILE_FLAG_OVERLAPPED` when this was written, so a
+//! ring operation completed inline during `SubmitIoRing`: the commit's submit
+//! took hundreds of microseconds and returned with every completion already
+//! queued. Nothing was ever outstanding across a submit boundary, so there was
+//! no overlap for the strategies to differ in, and the comment further down
+//! claiming "a real log keeps appending while a commit is outstanding"
+//! described something the program could not do.
 //!
-//! So the three are indistinguishable *because they are doing the same
-//! serialized work*, not because a shared dominant term swamps real
-//! differences. Both readings give the same ranking and only one is true.
+//! **M25.3 changed the handle**: the log and each strategy's file are now
+//! pre-allocated and opened `NO_BUFFERING | OVERLAPPED`, which is the one
+//! configuration [the spike](../../design-sessions/spikes/write-pending-spike.rs)
+//! measured as behaving differently from a buffered handle. What that removes
+//! is the *reason* the paragraph above gives for the strategies being unable to
+//! differ. It does not by itself establish that they now do, and this section
+//! deliberately does not claim they do -- Windows specifies nothing about when
+//! a ring operation completes relative to `SubmitIoRing`, so that is a question
+//! for measurement rather than for reasoning. `M25.4` is where the harness
+//! starts reporting the commit itself, and `M25.5` is where the three-way
+//! comparison is re-run and read.
+//!
+//! So the three were indistinguishable *because they were doing the same
+//! serialized work*, not because a shared dominant term swamped real
+//! differences. Both readings gave the same ranking and only one was true.
 //!
 //! **What this does not settle is whether `AlternatingRings` earns its place.**
 //! This harness cannot show a blast-radius difference -- but that is a fact
@@ -132,9 +144,11 @@
 //!   **And `M20.6` found the deeper version of the same error.** Removing the
 //!   serialisation was necessary and not sufficient: on a synchronous handle
 //!   there is no overlap to restore, because the work is already done when
-//!   submit returns. This fix made the harness *able* to overlap and the
-//!   platform still does not, so what the sentence above describes as the
-//!   corrected state has never actually run. `M25` is what makes it true.
+//!   submit returns. That fix made the harness *able* to overlap while the
+//!   handle still could not, so what the sentence above describes as the
+//!   corrected state had never actually run. `M25.3` has since given the
+//!   handle the shape the spike measured as pending; whether the corrected
+//!   state now runs is what `M25.5` reads.
 //! - The second version keyed pending commits by `UserData` in one map across
 //!   both rings. Each ring assigns its own sequence, so the two collided and
 //!   half the samples vanished.
@@ -222,8 +236,10 @@ pub enum CommitStrategy {
     ///   makes the sample's symmetric choice the general case.
     /// - **Real overlap.** With operations that genuinely pend, a shared
     ///   ring's flush can be reached *after* the next epoch's appends are
-    ///   queued, so the same covered count is not the same wait. This handle
-    ///   is synchronous, so that cannot happen here at all.
+    ///   queued, so the same covered count is not the same wait. This could not
+    ///   happen at all while the handle was synchronous; `M25.3` removed that
+    ///   obstacle, and whether operations actually pend remains an observation
+    ///   about a machine rather than something this crate may assume.
     /// - **Per-CPU queue affinity.** [D-27](../../DESIGN-NOTES.md#d-27) is
     ///   this crate's decision that one ring per thread is userspace's proxy
     ///   for one ring per CPU, and records that NVMe queue pairs are per-CPU
@@ -307,17 +323,22 @@ pub struct Outcome {
     /// a flush at all, so this is not "inflated by" deferral, it *is*
     /// deferral. What it measures is how long the next epoch's appends took.
     ///
-    /// The cause is underneath the harness. The commit's `SubmitIoRing` takes
-    /// hundreds of microseconds and returns with every completion already
-    /// queued, because the sample's handle carries no `FILE_FLAG_OVERLAPPED`
+    /// The cause was underneath the harness. The commit's `SubmitIoRing` took
+    /// hundreds of microseconds and returned with every completion already
+    /// queued, because the sample's handle carried no `FILE_FLAG_OVERLAPPED`
     /// and a synchronous handle completes a ring operation inline. So the
-    /// commit is already durable before this clock starts -- and the overlap
-    /// the comparison is built on does not exist.
+    /// commit was already durable before this clock started -- and the overlap
+    /// the comparison is built on did not exist.
     ///
-    /// `M25` rebuilds the harness on a pre-allocated unbuffered log, where a
-    /// commit genuinely pends and this becomes a real measurement. Until then
-    /// the printed column is labelled "ack lag" rather than "commit", because
-    /// a reader of the *output* deserves what a reader of this doc gets.
+    /// `M25.3` has since moved the log and every strategy file onto a
+    /// pre-allocated `NO_BUFFERING | OVERLAPPED` handle, which removes that
+    /// cause. It does not follow that this figure is now a commit measurement,
+    /// and it is not being relabelled on the strength of a flag: **this clock
+    /// still starts when the harness next looks**, so it still reports
+    /// deferral. `M25.4` is the item that reports the flush's own duration and
+    /// keeps deferral visible as its own number, and until it lands the printed
+    /// column stays labelled "ack lag" -- a reader of the *output* deserves
+    /// what a reader of this doc gets.
     pub commit_latencies: Vec<Duration>,
     /// Time appends spent blocked because every arena slot was busy.
     ///

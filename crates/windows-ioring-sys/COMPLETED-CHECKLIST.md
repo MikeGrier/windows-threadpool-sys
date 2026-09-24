@@ -2775,3 +2775,78 @@ The torn-tail simulation needed its arithmetic rewritten to keep meaning that --
 count of bytes off the end of the file, which after striding lands in the final record's zero
 padding and tears nothing at all. It now derives the cut from the last record's own block, which
 also survives M25.3's pre-allocation.
+
+### <a id="m253"></a>M25.3 -- The log and every strategy file are pre-allocated and opened `NO_BUFFERING | OVERLAPPED`. *(completed 2026-09-24 12:45:57 -04:00)*
+
+Two steps in `logfile::create_preallocated`, neither interchangeable with the other: write the
+extent with an ordinary handle and drop it, then reopen `OPEN_EXISTING` with both flags. This is
+[the spike](design-sessions/spikes/write-pending-spike.rs)'s condition D, the only one of four it
+measured as behaving differently from a buffered handle.
+
+**What this buys is an opportunity, not a guarantee, and nothing here claims otherwise.** Per the
+standing constraint on M25, Windows specifies nothing about when a ring operation completes relative
+to `SubmitIoRing`. The log is correct either way; what changes is whether a commit is separately
+*measurable*, which is M25.4's problem and M25.5's to read.
+
+**The sweep found four live sites, and the item named two of them.** It predicted two statements in
+[strategy.rs](examples/epoch_log/strategy.rs) reasoning from a synchronous handle. There were also
+two in [main.rs](examples/epoch_log/main.rs) -- one an internal comment, one **printed to the user**
+as part of the strategy comparison's own narrative. All four were corrected the same way: the
+historical finding is preserved in the past tense, since it was true when written and is how M20.6
+reached its conclusion, and what follows is that the cause has been removed *without* asserting the
+consequence. Whether the strategies are now distinguishable is not settled by changing a flag.
+
+**The third site the item named no longer exists, and that is the right outcome rather than a
+miss.** `placement.rs`'s `volume_numa_node` documented that it could not use
+`windows-overlapped-io-sys`'s typed `BlockingEndpoint::ioctl` partly because the handle was
+synchronous. Earlier this session, `947b252b` moved that function into `win-numa-sys`, and the
+comment went with the move -- correctly, because `win-numa-sys` depends only on `windows-sys` and
+has no occasion to explain why it is not using a crate it does not reference. The item was written
+before that move; its prediction of "a narrowed comment, not a refactor" was answered by the
+comment's home changing.
+
+**The `NO_BUFFERING` alignment rule could not be tested the obvious way, and finding that out is
+what produced the better test.** The first attempt wrote through [`std::io::Write`] and failed on
+the *aligned* write: `write_all` issues `WriteFile` with a null `OVERLAPPED`, which an asynchronous
+handle refuses however well-aligned the transfer is. That is now its own test -- it is the only
+property of the handle's *mode* reachable from here, since `GetFileInformationByHandleEx` does not
+report it and the ring works on synchronous and asynchronous handles alike. The alignment rule is
+tested through a real ring instead, which is also how production reaches this handle, with both
+directions asserted: an aligned write accepted and an unaligned one refused. Each test has a control
+using an ordinary handle, so the refusals are attributable to the flags rather than to anything else
+about the file.
+
+**A blind spot is recorded in [sabotage.json](sabotage.json) as a declared survivor rather than left
+invisible.** Replacing the zero-write with `set_len` is a **real regression that nothing here
+detects**: both produce a file of the right size whose bytes read back as zero, and only the write
+advances NTFS's valid data length -- which is the thing that decides whether a later write is
+extending. A `set_len` extent silently returns the log to the configuration measured as behaving
+like a buffered handle. The only user-mode way to read a valid-data length back is
+`FSCTL_QUERY_FILE_REGIONS`, and adding it to a sample purely to check a property the sample does not
+otherwise use was judged machinery for its own sake. Recording it as `expect: "survives"` means a
+future change that makes it observable will show up as a discrepancy in the sweep.
+
+**The harness caught a stale case in its own manifest, which is worth more than the case was.** The
+`M25.1: the appender packs its record offsets` sabotage stopped compiling, because M25.1 ended by
+removing the `total` binding its patch referenced in order to clear an unused-variable warning --
+so a sabotage that was correct when written was broken by a later edit in the same session. The
+harness reported `MANIFEST DOES NOT COMPILE (tests never ran)` rather than scoring it as caught or
+survived. **A manifest is a restatement site like any other**, and has to be swept when the code it
+patches moves; nothing else would have noticed.
+
+**One assertion had to change because pre-allocation made it vacuous.** The strategy harness
+compared `outcome.bytes` against the file's length to check its own accounting. A pre-allocated file
+spans its whole extent from the moment it is created, whatever was written into it, so that equality
+would have held just as well for a run that wrote nothing. It now checks the accounting against the
+layout rule -- one block per record -- and separately that the extent covers what was written.
+
+**Deliberately left buffered, and said so at the definition.** The checkpoint file's records are
+sixteen bytes from a `Vec` at offset 0, which satisfies none of `NO_BUFFERING`'s three alignment
+rules; the retired segment is written once with `std::fs::write` and never goes through a ring. The
+control plane's correctness comes from its covering flush, not from how its bytes are cached.
+
+**The log is pre-allocated with slack rather than to its exact record count.** A real write-ahead log
+pre-allocates ahead of its writer, because an append that reaches the end of the extent becomes an
+extending write again. It also means a clean log now ends in zeros rather than at EOF, so replay
+stops with `NeverWritten` -- the path M25.2 taught it to tolerate, now actually exercised by the
+sample rather than left for a reader of a real log to meet first.

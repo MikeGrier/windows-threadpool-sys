@@ -187,12 +187,60 @@
       "name": "M25.1: the appender packs its record offsets",
       "file": "examples/epoch_log/append.rs",
       "expect": "caught",
-      "why": "The log's own writer, the sibling of the harness case above. Packing the offsets makes consecutive records overlap inside one block, so the guards fire for two independent reasons at once -- the layout assertion and the zeroed-tail assertion both go red -- which is worth knowing when reading the result: this case being caught does not on its own establish that the stride is what caught it. The narrower evidence for that is the reader case above, which moves only one number.",
+      "why": "The log's own writer, the sibling of the harness case above. Advancing by less than a stride makes consecutive records overlap inside one block, so the guards fire for two independent reasons at once -- the layout assertion and the zeroed-tail assertion both go red -- which is worth knowing when reading the result: this case being caught does not on its own establish that the stride is what caught it. The narrower evidence for that is the reader case above, which moves only one number. The replacement uses HEADER_LEN rather than the record's own length because this call site no longer binds one: M25.1 ended by removing the `total` binding to clear an unused-variable warning, which broke this case's patch and was reported by the harness as MANIFEST DOES NOT COMPILE. A manifest is a restatement site like any other and has to be swept when the code it patches moves.",
       "find": [
         "            self.next_offset += record::RECORD_STRIDE as u64;"
       ],
       "replace": [
-        "            self.next_offset += total as u64;"
+        "            self.next_offset += record::HEADER_LEN as u64;"
+      ]
+    },
+    {
+      "name": "M25.3: the extent is not pre-allocated",
+      "file": "examples/epoch_log/logfile.rs",
+      "expect": "caught",
+      "why": "Pre-allocation is the whole point of the item: the spike measured four configurations and only NO_BUFFERING over an extent written beforehand behaved differently from a buffered handle, because the filesystem serialises writes past the valid-data length. An extending write is therefore the configuration that looks like it works and measures like a buffered one, which is exactly the failure mode that needed a guard rather than a comment.",
+      "find": [
+        "    std::fs::write(path, vec![0_u8; len])?;"
+      ],
+      "replace": [
+        "    std::fs::write(path, Vec::new())?;"
+      ]
+    },
+    {
+      "name": "M25.3: FILE_FLAG_NO_BUFFERING is dropped",
+      "file": "examples/epoch_log/logfile.rs",
+      "expect": "caught",
+      "why": "Dropping this flag changes nothing a caller can observe except the thing the item exists for, which is why it needs a guard that is not a measurement. The test pushes an aligned write and an unaligned one through a real ring -- the way production reaches this handle -- and requires the first to be accepted and the second refused. Both directions are asserted deliberately: a guard that only showed the aligned write succeeding would pass just as happily against a buffered handle. Note the unaligned case breaks two of NO_BUFFERING's three rules at once, since a Vec guarantees neither a sector address nor a sector length, so it establishes that the handle has rules a buffered one does not rather than which rule refused it.",
+      "find": [
+        "        .custom_flags(FILE_FLAG_NO_BUFFERING | FILE_FLAG_OVERLAPPED)"
+      ],
+      "replace": [
+        "        .custom_flags(FILE_FLAG_OVERLAPPED)"
+      ]
+    },
+    {
+      "name": "M25.3: FILE_FLAG_OVERLAPPED is dropped",
+      "file": "examples/epoch_log/logfile.rs",
+      "expect": "caught",
+      "why": "Listed separately from the NO_BUFFERING case because they are separate flags with separate guards: measured, dropping either leaves the other's test green. This one is caught by a synchronous write_all being refused, which is the only property of the handle's mode reachable from here -- GetFileInformationByHandleEx does not report it, and the ring works on synchronous and asynchronous handles alike. That test began as an attempt to check alignment through std::io::Write and failed on the *aligned* write, which is how the discriminator was found rather than designed.",
+      "find": [
+        "        .custom_flags(FILE_FLAG_NO_BUFFERING | FILE_FLAG_OVERLAPPED)"
+      ],
+      "replace": [
+        "        .custom_flags(FILE_FLAG_NO_BUFFERING)"
+      ]
+    },
+    {
+      "name": "DECLARED BLIND SPOT: set_len replaces writing the extent",
+      "file": "examples/epoch_log/logfile.rs",
+      "expect": "survives",
+      "why": "This is NOT an inert change and must not be read as one -- it is a real regression that nothing in this workspace detects, recorded here so the gap is tracked rather than invisible. set_len and a real write both produce a file of the right size whose bytes read back as zero, so they are indistinguishable to every assertion available here. Only the write advances NTFS's valid data length, and the valid data length is what decides whether a later write is extending -- so a set_len extent silently returns the log to the configuration the spike measured as behaving like a buffered handle. The only user-mode way to read a valid-data length back is FSCTL_QUERY_FILE_REGIONS, and adding that to a sample purely to check a property the sample does not otherwise use was judged machinery for its own sake. If a future change makes this observable, this case will start being caught and the sweep will report the discrepancy, which is the point of recording it.",
+      "find": [
+        "    std::fs::write(path, vec![0_u8; len])?;"
+      ],
+      "replace": [
+        "    std::fs::File::create(path)?.set_len(len as u64)?;"
       ]
     },
     {

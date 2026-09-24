@@ -300,23 +300,7 @@ must leave the log correct if the platform completes inline tomorrow.
   `run_log` directly may be able to. Check whether the strategy comparison has to run too, since
   that is the expensive part and is separately covered now.
 
-- [ ] **M25.3** -- Pre-allocate the log and open it `NO_BUFFERING | OVERLAPPED`. Create and size the
-  file with an ordinary handle, drop it, then open the ring's handle over the existing extent -- the
-  spike's condition D, and the only one that pended. The arena needs no change: `NumaBuffer` is
-  page-granular from `M22.3`, which is at least sector-granular. Do the same for the strategy
-  harness's own files. **Verify by sabotage that the pre-allocation is load-bearing**, since an
-  extending `NO_BUFFERING` write pends only ~1% of the time and would otherwise look like it works.
-
-  **This item changes a constraint two other files state as fact, so sweep them with it.**
-  [strategy.rs](examples/epoch_log/strategy.rs) says in two places that the handle carries no
-  `FILE_FLAG_OVERLAPPED` and reasons from it; [placement.rs](examples/epoch_log/placement.rs)'s
-  `volume_numa_node` documents that it cannot use `windows-overlapped-io-sys`'s typed
-  `BlockingEndpoint::ioctl` partly *because* the handle is synchronous. Making the handle overlapped
-  removes that half of the reason -- the other half, that `decide` borrows a handle the log's `File`
-  owns while `assume_overlapped` demands an `OwnedHandle`, is untouched and still forbids it. So the
-  expected outcome is a **narrowed comment, not a refactor**; if it looks like a refactor, re-read
-  the ownership half first. (Recorded because the inconsistency between those two FSCTL call styles
-  was already misread once, by its own author, two days after writing it.)
+- [x] **M25.3** -- The log and every strategy file are pre-allocated and opened `NO_BUFFERING | OVERLAPPED`. -> [completed 2026-09-24](COMPLETED-CHECKLIST.md#m253)
 
 - [ ] **M25.4** -- Measure the commit, now that there is one to measure. Report the flush's own
   duration rather than the deferral window, and keep the deferral visible as its own number so the

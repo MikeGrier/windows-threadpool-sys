@@ -76,6 +76,7 @@ mod checkpoint;
 mod commit;
 mod contract;
 mod event_loop;
+mod logfile;
 mod placement;
 mod reclaim;
 mod record;
@@ -117,6 +118,21 @@ const QUIESCE_ATTEMPTS: usize = 64;
 /// whole segments, and reclaims them once the epoch that superseded them is
 /// durable.
 const RETIRED_LEN: u64 = 64 * 1024;
+
+/// Blocks pre-allocated beyond what a run will actually write (M25.3).
+///
+/// A real write-ahead log pre-allocates *ahead* of its writer rather than
+/// exactly to it, because an append that reaches the end of the extent becomes
+/// an extending write -- the configuration the spike measured as behaving like
+/// a buffered handle, whatever flags the handle carries. Sizing to the exact
+/// record count would put this log one record away from that.
+///
+/// It also means a clean log now ends in zeros rather than at EOF, so replay
+/// stops with `NeverWritten` where it previously ran out of bytes. That is the
+/// ordinary shape of a pre-allocated log, it is not a violation, and it is the
+/// path `M25.2` taught replay to tolerate -- so the sample exercises it rather
+/// than leaving it to be met first by a reader of a real log.
+const SLACK_BLOCKS: usize = 8;
 
 /// The byte the retired segment is filled with, so "was it reclaimed?" has an
 /// answer that does not depend on what happened to be there.
@@ -204,14 +220,18 @@ fn run_log<O: io::Write, E: io::Write>(
     retired: &std::path::Path,
     checkpoint_path: &std::path::Path,
 ) -> io::Result<LogRun> {
-    let file = std::fs::OpenOptions::new()
-        .create(true)
-        .write(true)
-        .truncate(true)
-        .open(path)?;
+    // Pre-allocated and opened NO_BUFFERING | OVERLAPPED (M25.3). Sized for
+    // every record this run will write plus slack: an append past the extent
+    // would be an extending write, which is the configuration the spike
+    // measured as behaving like a buffered one, and a log that pre-allocates
+    // exactly what it needs is one record away from being that log.
+    let file = logfile::create_preallocated(path, RECORDS + TAIL_RECORDS + SLACK_BLOCKS)?;
     let handle = file.as_raw_handle();
 
     std::fs::write(retired, vec![RETIRED_FILL; RETIRED_LEN as usize])?;
+    // Ordinary and buffered, deliberately: a checkpoint record is sixteen
+    // bytes from a `Vec` at offset 0, which satisfies none of NO_BUFFERING's
+    // three alignment rules. See `logfile`'s module docs.
     let checkpoint_file = std::fs::OpenOptions::new()
         .create(true)
         .write(true)
@@ -837,11 +857,11 @@ fn compare_strategies<O: io::Write, E: io::Write>(
             std::process::id(),
             strategy.name()
         ));
-        let file = std::fs::OpenOptions::new()
-            .create(true)
-            .write(true)
-            .truncate(true)
-            .open(&path)?;
+        // Pre-allocated and opened NO_BUFFERING | OVERLAPPED, the same shape
+        // the log itself uses (M25.3) -- the harness exists to measure the log,
+        // so measuring it through a differently-opened handle would compare the
+        // strategies on a configuration the log does not run.
+        let file = logfile::create_preallocated(&path, EPOCHS * PER_EPOCH + SLACK_BLOCKS)?;
 
         // Each strategy's arena is placed the same way the log's own is, and
         // on that strategy's own file -- so the comparison holds placement
@@ -867,13 +887,26 @@ fn compare_strategies<O: io::Write, E: io::Write>(
         // Replayed with the same verifier the log itself uses, because a
         // strategy that is fast and wrong is not a strategy.
         let bytes = std::fs::read(&path)?;
+        // Accounting against the *layout rule*, not against the file's length.
+        // This compared the two until M25.3, and pre-allocation is what made
+        // that comparison stop meaning anything: the file now spans its whole
+        // extent from the moment it is created, whatever the harness went on to
+        // write into it, so an equality against `bytes.len()` would have held
+        // just as well for a run that wrote nothing at all.
         assert_eq!(
             outcome.bytes as usize,
-            bytes.len(),
-            "{} wrote {} bytes but accounted for {}",
+            outcome.records * record::RECORD_STRIDE,
+            "{} accounted for {} bytes across {} records, which is not one block each",
             strategy.name(),
-            bytes.len(),
-            outcome.bytes
+            outcome.bytes,
+            outcome.records
+        );
+        assert!(
+            bytes.len() >= outcome.bytes as usize,
+            "{} wrote {} bytes into an extent of only {}",
+            strategy.name(),
+            outcome.bytes,
+            bytes.len()
         );
         let outcome_replay =
             replay::replay(&bytes, outcome.durable_through, outcome.records, |index| {
@@ -934,13 +967,17 @@ fn compare_strategies<O: io::Write, E: io::Write>(
     //
     // The reason given here used to be that every strategy pays one device
     // flush per epoch and the things they differ about land two orders of
-    // magnitude below it. The first half is true. The second is not reachable
-    // on this sample: its handle is synchronous, so a ring operation completes
-    // inline during submit and nothing is ever outstanding across a submit
-    // boundary -- there is no overlap for the strategies to differ in at all.
-    // They are indistinguishable because they do the same serialized work
-    // (M20.6). D-24's distinction is still real; this harness simply cannot
-    // put it under load. M25 rebuilds it so it can.
+    // magnitude below it. The first half is true. The second was not reachable
+    // while this sample ran on a synchronous handle: a ring operation completed
+    // inline during submit, nothing was ever outstanding across a submit
+    // boundary, and there was no overlap for the strategies to differ in at all
+    // (M20.6). D-24's distinction was still real; the harness simply could not
+    // put it under load.
+    //
+    // M25.3 has moved every strategy onto a pre-allocated NO_BUFFERING |
+    // OVERLAPPED file, which removes that cause. Whether the strategies are
+    // distinguishable *now* is not settled by that and is not claimed here --
+    // M25.5 re-runs the comparison and reads it.
     //
     // That is not a licence to pick the cheapest-looking one. A device with a
     // fast flush, a log that commits far more often, or an arena under real
@@ -952,9 +989,10 @@ fn compare_strategies<O: io::Write, E: io::Write>(
         report.line(format_args!(
             "  spread across strategies: {:.2}x. Run this twice: if the run-to-run spread of one \
              strategy is the same size, the strategies are not distinguishable on this workload. \
-             Two things make that so here, and only the first was originally claimed: all three \
-             pay one device flush per epoch, AND this sample's handle is synchronous, so no \
-             overlap exists for them to differ in. M25 changes the second.",
+             All three pay one device flush per epoch. The second reason they were previously \
+             indistinguishable -- a synchronous handle leaving no overlap to differ in -- was \
+             removed by M25.3, which put every strategy on a pre-allocated unbuffered overlapped \
+             file. Whether that changed this number is what M25.5 reads.",
             high / low
         ));
     }
