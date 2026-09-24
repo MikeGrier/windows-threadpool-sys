@@ -2534,3 +2534,45 @@ written against this shape before the decision recorded it.
 
 [D-8](DESIGN-NOTES.md#d-8) is intact, which was the item's stated constraint: locality stays the
 consumer's decision, and the crate supplies a fact and an allocator rather than a choice.
+
+### <a id="m233"></a>M23.3 -- Decide what this crate offers for holding a token between push and completion: the ring owns the inventory, `IoRing` becomes generic, and the break is accepted. *(completed 2026-09-23 23:09:13 -04:00)*
+
+*Recorded as [D-55](DESIGN-NOTES.md#d-55). Implementation is `M28`. The exploration, including
+everything it falsified, is in
+[DESIGN-SESSION-2026-09-23-pending-inventory.md](design-sessions/DESIGN-SESSION-2026-09-23-pending-inventory.md).*
+
+**The item was decided against a different argument than the one it was written on.** It argued
+from duplication -- nine sites keeping the same map. A census found ~12 sites of which only a
+third keep the map described, so duplication was both mis-counted and the wrong frame. The
+mechanism is that this crate **mandates** the construct and does not provide it:
+`Batch::write` returns a `Token`, `IoRing::pop_within` returns a `Completion`, and nothing
+connects them but caller-supplied storage -- which the crate's own rustdoc instructs callers to
+build, twice. That follows from [D-4](DESIGN-NOTES.md#d-4) splitting ring-side counting from
+caller-side identity, which is right; what was missing is the half it left to prose.
+
+**A working spike was built and is why the decision is informed rather than argued.**
+`Pending<T, X>` fits a real consumer -- converting `append.rs` removed its `InFlight` struct and
+its hand-driven oracle calls -- and sabotage established that removing its drop guard or cutting
+its oracle wiring is caught. A test driving a failed write through the injection seam turned
+`M22.2`'s ordering defect from undetected into caught by assertion.
+
+**But the spike also showed why offering it beside the ring is not enough.** Nothing forces a
+minted token into it, so the ring-to-inventory drift survives -- and `Pending::checked()` owning
+an oracle made the converted consumer's existing `RingContract` a decoy, passing
+`assert_quiescent()` vacuously with nothing in the suite catching it. A generic `IoRing<T>`
+owning the map removes the class, because the consumer never holds a token to lose.
+
+**The objection that had ruled that out was false, and checking it was what settled the item.**
+Per-ring monomorphisation holds for every real consumer; `tests/generated_sequences.rs` already
+carries eight token types on one ring behind a closed `enum Held` with no runtime type check;
+and [D-4](DESIGN-NOTES.md#d-4) rules type erasure out in as many words. The dismissal had
+contradicted a decision already on the books, in the opposite direction from the one it assumed.
+
+**Two findings the decision rests on that were not in the item.** `RingContract` never prunes --
+one retained entry per operation for the process's life, undocumented, invisible in a sample that
+appends 24 records -- which rules out checking by default and is `M28.2`. And `epoch_log`'s
+commits are tokenless because a flush has no buffer and a *borrowed* `RawHandle` leaves its token
+nothing to guard, which is `M28.5` and may dissolve when `M25.3` changes how the log is opened.
+
+**What it refuses**, unchanged by the shape: batching, ordering and which slot to pick stay caller
+questions. The sharper refusal is that the inventory does not decide whether a caller is checked.
