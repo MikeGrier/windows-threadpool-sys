@@ -332,6 +332,27 @@ must leave the log correct if the platform completes inline tomorrow.
   fact as the throughput result reported as unmoved -- and any DESIGN-NOTES text describing the
   sample's I/O as buffered. Record the findings above as decisions in the same pass.
 
+- [ ] **M25.7** -- **The sample allocates 8 MiB contiguously to replay a strategy file, and
+  three smaller blocks besides.** Raised in review as a rule of thumb -- avoid contiguous
+  allocations over 64 KB from the general heap, because the threshold is a useful place to be asked
+  "does this really need to be contiguous?" -- and the allocator half of it is now measured in
+  [measurements/2026-09-24-allocation-knee/](measurements/2026-09-24-allocation-knee/README.md).
+  `M25.3`'s own fill chunk was fixed in that pass; these four were found by the same sweep and left,
+  because each is a design question rather than a constant:
+
+  - [main.rs](examples/epoch_log/main.rs) `std::fs::read` of a strategy file -- **8 MiB**, the
+    largest in the sample.
+  - [main.rs](examples/epoch_log/main.rs) `std::fs::read` of the log for replay -- 140 KiB.
+  - [main.rs](examples/epoch_log/main.rs) `std::fs::read` of the retired segment, and the
+    `vec![RETIRED_FILL; RETIRED_LEN]` that writes it -- 64 KiB each, exactly at the threshold.
+
+  **The interesting one is whether replay should stream.** It walks strictly forward one
+  `RECORD_STRIDE` block at a time, so it has no need of the whole file at once -- but `replay()`
+  takes `&[u8]`, and the torn-tail and negative-control paths in `verify` slice and mutate that
+  buffer, so a reader that streams is a different interface rather than a smaller allocation. Decide
+  whether the sample teaches more by streaming it or by staying legible; either answer is fine, but
+  an 8 MiB `fs::read` sitting unremarked in a teaching sample is not.
+
 
 ## M26 -- Test against the space of kernel responses, not one observation of it
 

@@ -156,7 +156,26 @@ use crate::record::RECORD_STRIDE;
 /// handful of blocks and a bad pattern for a log to copy, since a real one
 /// pre-allocates in gigabytes. A fixed chunk keeps the fill's memory cost
 /// constant in the size of the extent.
-const FILL_CHUNK: usize = 1 << 20;
+///
+/// # Why 64 KiB, measured rather than picked
+///
+/// This was 1 MiB first, which is the worst of the plausible values on two
+/// counts, both in
+/// [measurements/2026-09-24-allocation-knee/](../../measurements/2026-09-24-allocation-knee/README.md):
+///
+/// - **Throughput stops improving at about 64 KiB.** Filling at 4 KiB chunks
+///   runs at a few hundred MiB/s; by 64 KiB it is within run-to-run variance
+///   of every larger size tried, up to 4 MiB. So a bigger chunk buys nothing.
+/// - **1 MiB is exactly where this allocator stops using the heap.** Measured
+///   with `VirtualQuery`: at 512 KiB and below, sixty-four live allocations
+///   share a handful of reservations; at 1 MiB every one gets its own. So the
+///   first size with no throughput benefit is also the first size that
+///   guarantees a reservation and its teardown on every call.
+///
+/// 64 KiB is additionally the Windows virtual-memory allocation granularity,
+/// which is why it is a good habit as well as a good measurement: it is the
+/// point past which a block cannot share its region with anything else.
+const FILL_CHUNK: usize = 64 * 1024;
 
 /// Create `path` with `blocks` zeroed record blocks already written, and return
 /// a handle over that extent opened `NO_BUFFERING | OVERLAPPED`.
