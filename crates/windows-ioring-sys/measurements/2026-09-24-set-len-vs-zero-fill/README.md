@@ -50,10 +50,9 @@ runs between them, over 16,000 trials. Every `NO_BUFFERING` condition pended in
 most runs. That is the one distinction in this table large enough to survive the
 run-to-run variance.
 
-**C and E are not distinguishable here.** Identical medians, overlapping ranges,
-and neither consistently above the other -- run 7 has C at 269 and E at 3, run 8
-has C at 1 and E at 469. So the data is consistent with a `set_len` extent
-behaving like an extending one, and it does **not** establish that it *is* one.
+**C and E have identical medians and overlapping ranges, and neither is
+consistently above the other** -- run 7 has C at 269 and E at 3, run 8 has C at
+1 and E at 469. Nothing in this data separates them.
 
 **D is higher than C and E, and much less than the earlier record implies.** Its
 median is around 470 against 268, and its floor over sixteen runs is 121 where
@@ -67,8 +66,8 @@ The `M25` checklist preamble says condition D "pended reliably", and the spike's
 own prose says D "was the only condition that pends". **Neither replicates.**
 Both descend from a single run in which D reported 500/500 and C reported
 5/500; the spike's own header already warned that two runs minutes apart gave C
-as 5/500 and then 271/500, and sixteen runs make clear that the C/D separation
-is a difference of degree that a single pair of numbers dramatically overstates.
+as 5/500 and then 271/500. Over sixteen runs, C pends in most of them, with a
+median of 268/500 against D's 471.5.
 
 This does not undo `M25.3`. The log is opened `NO_BUFFERING | OVERLAPPED` over a
 zero-filled extent, and that configuration has the highest observed pending rate

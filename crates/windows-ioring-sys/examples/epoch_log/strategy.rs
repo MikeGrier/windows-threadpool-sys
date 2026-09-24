@@ -65,13 +65,12 @@
 //!
 //! # What the measurement found here, and why it is worth saying
 //!
-//! On the machine this was written on, the three are **indistinguishable on
-//! throughput and on total commit cost**: the spread across strategies is
-//! smaller than the spread one strategy shows between consecutive runs. What
-//! *does* separate them, reproducibly, is **where** each spends its commit --
-//! `HostSequenced` in a host round trip before the flush, the covering
-//! strategies inside the submit that carries it. Fifteen runs, with the ranges
-//! beside the medians, are in
+//! On the machine this was written on: the spread in throughput and in total
+//! commit cost **across** the three strategies is smaller than the spread one
+//! strategy shows **between** consecutive runs. What does not vary between
+//! runs is *where* each spends its commit -- `HostSequenced` in a host round
+//! trip before the flush, the covering strategies inside the submit that
+//! carries it. Fifteen runs, with the ranges beside the medians, are in
 //! [measurements/2026-09-24-commit-decomposed/](../../measurements/2026-09-24-commit-decomposed/README.md).
 //! Read the capture rather than this paragraph; nothing is quoted here that
 //! would have to be kept true by hand.
@@ -82,8 +81,9 @@
 //!
 //! ## Two earlier explanations of that result were wrong (M20.6, M25.5)
 //!
-//! "Indistinguishable" has survived every correction. The *reasons* given for
-//! it did not, twice, and both are recorded because each looked settled:
+//! The spread relation above has held through every correction. The *reasons*
+//! given for it did not, twice, and both are recorded because each looked
+//! settled:
 //!
 //! **The first said the strategies differ only in things "two orders of
 //! magnitude below" a dominant device flush** -- how long the flush waits, the
@@ -111,9 +111,9 @@
 //!
 //! One figure from the old explanation is now measured and is not what it said:
 //! the strategies' differences land in the **hundreds** of microseconds, not
-//! the tens. They are still smaller than the run-to-run spread, which is why
-//! the conclusion is unchanged -- but "below the noise" and "two orders of
-//! magnitude below the flush" are different claims, and only the first survived.
+//! the tens. They remain smaller than the run-to-run spread. "Below the
+//! run-to-run spread" and "two orders of magnitude below the flush" are
+//! different claims, and the measurement supports only the first.
 //!
 //! **What this does not settle is whether `AlternatingRings` earns its place.**
 //! This harness cannot show a blast-radius difference -- but that is a fact

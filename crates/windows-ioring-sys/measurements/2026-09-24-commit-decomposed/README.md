@@ -47,48 +47,46 @@ Where each strategy spends its commit, and how long it defers:
 | host-sequenced | 886 (173-1071) | 198 (171-272) | 6753 (1537-8237) |
 | alternating-rings | 0 | 1149 (435-1487) | 15041 (4916-17650) |
 
-**On throughput and on total commit cost, the three are not distinguishable on
-this workload.** The medians sit within a few percent of each other and every
-range overlaps every other range. Run-to-run spread within a single strategy is
-larger than the spread across strategies, which is the condition the sample's
-own output tells a reader to check.
+**Throughput and total commit cost: the spread across strategies is smaller
+than the spread within one.** The medians sit within a few percent of each
+other, every range overlaps every other range, and the run-to-run range of a
+single strategy is wider than the gap between strategies. That comparison is
+the test the sample's own output tells a reader to apply.
 
-**Where the cost sits is structural and reproduces in all fifteen runs.**
-`HostSequenced` spends its commit in `prep` and almost nothing in `submit`; the
-covering strategies do the reverse. Neither ordering ever inverts. That is a
-real difference in mechanism, and it is invisible in any single blended number
--- which is what `M25.4` was for.
+**Where the cost sits does not vary between runs.** `HostSequenced` spends its
+commit in `prep` and almost nothing in `submit`; the covering strategies do the
+reverse. The ordering holds in all fifteen runs. A single blended number cannot
+show this, which is what `M25.4` was for.
 
 **`AlternatingRings` defers about twice as long as the other two**, in every
-run. That is the mechanism behind the ranking `M20.6` found misleading: the old
-figure was deferral, so the strategy that defers across two epochs reported the
-worst commit latency while being no slower.
+run. The figure `M20.6` found misleading was deferral, so the strategy that
+defers across two epochs reported the worst commit latency at the same
+throughput as the others.
 
 **`block` is zero at the median for all three**, in every run. That does not
 establish inline completion -- an operation that pended and finished during a
 deferral of several milliseconds reads identically from here.
 
-## The open question, answered as far as this can answer it
+## The open question, and what the data says about it
 
-`AlternatingRings` shows **no advantage this harness can measure**: its
-throughput median sits between the other two and inside their ranges, its commit
-cost likewise, its deferral is consistently the longest, and the single worst
-commit p99 in the capture is its 34,453 us outlier. Against that it pays a
-doubled arena registration for the life of the run.
+`M25.5` asked whether `AlternatingRings` earns its doubled arena registration on
+some ground other than blast radius. What the fifteen runs show about it:
 
-**That is not a finding against the strategy**, and reading it as one would
-repeat the error `M20.6` was opened to fix. The ground `AlternatingRings` was
-built on is blast radius -- a covering flush reaching every operation on its
-ring -- and `M20.6` established that **this harness cannot exhibit that
-difference at all**, because each lane registers its own arena of the same size,
-so the per-ring bound is identical either way by construction. The question this
-capture could answer is whether some *other* ground shows up, and the answer is
-that none did.
+- its throughput median sits between the other two and inside both their ranges;
+- its commit-cost median likewise;
+- its deferral median is the longest of the three, in every run;
+- the largest single commit p99 in the capture is its 34,453 us.
 
-So what is on the record is: no other ground found, on this workload, on this
-machine, with the commit measured properly. Whether that is enough to change the
-strategy's status is a decision for the engineer, and the conditions under which
-it would pay are already written down in
+**What the harness cannot show, as a matter of its construction**: a
+blast-radius difference. `M20.6` established that each lane registers its own
+arena of the same size, so the per-ring bound on outstanding operations is
+identical whether one ring or two are used. No run of this harness can separate
+the strategies on the property `AlternatingRings` exists for.
+
+So the record is: the ground the strategy was built on is not measurable here,
+and the fifteen runs above are what was found on the grounds that are. What
+follows for the strategy's status is a decision for the engineer; the conditions
+under which it would pay are written down in
 [strategy.rs](../../examples/epoch_log/strategy.rs).
 
 ## What this cannot tell you

@@ -79,10 +79,10 @@ move every figure. What the numbers support is a shape -- free, free, free,
 catastrophic, free -- and the conditions under which the expensive case fires,
 not a constant to design against.
 
-## What it costs *here*, which is the question that decides whether it matters
+## What it costs at this sample's own sizes
 
 The figures above answer "what does zeroing cost per unit". Review then asked
-the practical one: how large are the areas this sample actually zeroes?
+what this sample actually pays: how large are the areas it zeroes?
 
 Measured at the sample's real sizes with
 [prealloc-cost.rs](prealloc-cost.rs), three runs of fifty fills each, in
@@ -100,15 +100,14 @@ roughly 1.0-1.3 seconds.
 **At the log's own size the cost is not the zeroing.** 140 KiB fills at about
 190 bytes per microsecond where 8 MiB fills at about 920; the small case is
 dominated by creating the file and flushing it, not by writing zeros into it.
-The maximum over fifty fills was ~10 ms for the 140 KiB case, which is
-filesystem variance, not work.
+The maximum over fifty fills was ~10 ms for the 140 KiB case, which tracks
+filesystem variance rather than the amount written.
 
-**So none of the three strategies would be perceptible in this sample.**
-Explicit fill, `set_len` alone, or the touch-end trick -- at 140 KiB and 8 MiB
-they are all in the noise of a run that takes over a second. The measurements
-on this page matter for what the sample *teaches*, where a real log
-pre-allocates in gigabytes and the eightfold difference is minutes, not for
-what the sample *costs*.
+**At these sizes the three approaches differ by less than that variance.**
+Explicit fill, `set_len` alone, and the touch-end trick all complete within the
+spread of a single case's own repeats. The eightfold difference the table at
+the top of this page shows appears at gigabyte extents, which is the scale the
+sample's code is written to teach rather than the scale it runs at.
 
 ## Provenance
 
