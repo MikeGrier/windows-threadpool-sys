@@ -278,6 +278,44 @@
       ]
     },
     {
+      "name": "M25.4: flush() folds the deferral back in",
+      "file": "examples/epoch_log/strategy.rs",
+      "expect": "caught",
+      "why": "The exact defect M20.6 found, re-expressible in one line once the parts exist. A commit's reported cost is its submit plus its wait; adding the deferral back produces a number that grows when a design defers further while being no slower, which is what the harness published for months and what a reader took for commit latency. The guard is an identity rather than a value, because which part carries the cost is a property of the machine and M25's standing constraint forbids depending on it.",
+      "find": [
+        "        self.submit + self.blocking",
+        "    }"
+      ],
+      "replace": [
+        "        self.submit + self.blocking + self.deferral",
+        "    }"
+      ]
+    },
+    {
+      "name": "M25.4: the deferral stops being measured",
+      "file": "examples/epoch_log/strategy.rs",
+      "expect": "caught",
+      "why": "A part that always reads zero satisfies every identity the split can assert while making the decomposition a rename. Measured SURVIVING against the identity assertions alone, which is why the test also requires some sample of deferral and of submit to be non-zero. Stated as 'some sample is non-zero' rather than a lower bound on a duration: this harness defers by construction, pushing the next epoch's appends before settling the previous commit, so a run in which nothing deferred means the clock is not running rather than that the machine was fast. `blocking` deliberately gets no such guard -- zero is a legitimate and frequently observed reading for it.",
+      "find": [
+        "    let deferral = submitted_at.elapsed();"
+      ],
+      "replace": [
+        "    let deferral = Duration::ZERO;"
+      ]
+    },
+    {
+      "name": "M25.4: the submit stops being timed",
+      "file": "examples/epoch_log/strategy.rs",
+      "expect": "caught",
+      "why": "The sibling of the case above, for the other part that must not silently read zero. Listed separately because they are measured at different sites -- the submit around the commit call, the deferral at the settle -- and one can be lost without the other. This is the part that matters most on a handle where the operation completes inline, since the device round trip lands here and nowhere else.",
+      "find": [
+        "Some((user_data, submitting.elapsed(), Instant::now()))"
+      ],
+      "replace": [
+        "Some((user_data, Duration::ZERO, Instant::now()))"
+      ]
+    },
+    {
       "name": "CONTROL: rewording a statement changes nothing",
       "file": "examples/epoch_log/contract.rs",
       "expect": "survives",

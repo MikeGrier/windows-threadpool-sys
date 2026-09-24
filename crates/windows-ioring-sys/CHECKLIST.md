@@ -301,11 +301,7 @@ must leave the log correct if the platform completes inline tomorrow.
 
 - [x] **M25.3** -- The log and every strategy file are pre-allocated and opened `NO_BUFFERING | OVERLAPPED`. -> [completed 2026-09-24](COMPLETED-CHECKLIST.md#m253)
 
-- [ ] **M25.4** -- Measure the commit, now that there is one to measure. Report the flush's own
-  duration rather than the deferral window, and keep the deferral visible as its own number so the
-  two cannot be confused again. Whatever is reported must still be meaningful if an operation
-  completes inline, per the standing constraint above -- so the harness reports what it observed,
-  never assumes an overlap it did not get.
+- [x] **M25.4** -- The commit is measured as submit / blocking / deferral, so the flush's own cost and the deferral window cannot be confused again. -> [completed 2026-09-24](COMPLETED-CHECKLIST.md#m254)
 
 - [ ] **M25.5** -- Re-run the three-way comparison and answer `M20.6` on the numbers it was always
   meant to rest on. Commit the capture under [measurements/](measurements/) and link rather than

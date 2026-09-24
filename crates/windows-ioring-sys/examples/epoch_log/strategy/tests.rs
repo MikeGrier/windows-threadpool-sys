@@ -142,6 +142,81 @@ fn a_lane_offers_at_most_what_was_asked_for() {
     );
 }
 
+/// A commit's cost is reported in three parts that add up (M25.4).
+///
+/// The harness published one blended number until `M20.6` decomposed it by
+/// hand and found it was **entirely deferral** -- a figure that looked like a
+/// commit latency and measured how long the next epoch's appends took. The
+/// split is the fix, and this pins the two properties that make it a fix
+/// rather than a rename:
+///
+/// - the parts **sum** to the old number, so nothing was lost in splitting;
+/// - `flush()` **excludes** deferral, which is the whole point.
+///
+/// It deliberately asserts nothing about the *values*. Which part carries the
+/// cost is a property of the machine and the handle, not of this crate, and
+/// `M25`'s standing constraint forbids depending on an operation pending.
+#[test]
+fn a_commits_cost_is_reported_in_parts_that_do_not_overlap() {
+    let (path, file) = scratch("timing-parts");
+    let payload = b"a harness record".to_vec();
+
+    let outcome = super::run(
+        CommitStrategy::CoveringFlush,
+        file.as_raw_handle(),
+        3,
+        4,
+        &payload,
+        None,
+    )
+    .expect("a small run completes");
+
+    assert!(
+        !outcome.commit_timings.is_empty(),
+        "a run of three epochs must time three commits"
+    );
+    for timing in &outcome.commit_timings {
+        assert_eq!(
+            timing.flush(),
+            timing.submit + timing.blocking,
+            "the flush's own cost is its submit plus its wait, and nothing else"
+        );
+        assert!(
+            timing.flush() <= timing.submit + timing.blocking + timing.deferral,
+            "deferral must not be folded into the flush: that is the defect M20.6 found"
+        );
+    }
+
+    // The identity above is satisfied by a part that is never measured at all,
+    // which is not hypothetical: replacing the deferral measurement with zero
+    // was **survived** by the assertions above alone. A part that always reads
+    // zero is a column of zeros in the report and a decomposition in name only.
+    //
+    // Asserted as "some sample is non-zero" rather than a lower bound on any
+    // duration. This harness defers by construction -- it pushes the next
+    // epoch's appends before settling the previous commit -- so a run in which
+    // *nothing* deferred means the clock is not running, not that the machine
+    // was fast. `blocking` gets no such assertion, because zero is a legitimate
+    // and frequently observed reading for it.
+    assert!(
+        outcome
+            .commit_timings
+            .iter()
+            .any(|timing| !timing.deferral.is_zero()),
+        "a harness that defers by design must observe some deferral, or it is not measuring it"
+    );
+    assert!(
+        outcome
+            .commit_timings
+            .iter()
+            .any(|timing| !timing.submit.is_zero()),
+        "submitting a flush must cost something, or it is not being measured"
+    );
+
+    drop(file);
+    let _ = std::fs::remove_file(&path);
+}
+
 /// All three strategies must write byte-identical logs (M25.1b).
 ///
 /// This is `compare_strategies`' strongest assertion and the one with real

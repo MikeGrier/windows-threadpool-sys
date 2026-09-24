@@ -2917,3 +2917,49 @@ recorded in [sabotage.json](sabotage.json).
 would multiply the suite's cost to re-check a layout and a replay that `M25.1` already covers, and
 what the full run adds beyond the invariant above is a *measurement* -- which is not a contract this
 crate may assert.
+
+### <a id="m254"></a>M25.4 -- The commit is measured as submit / blocking / deferral, so the flush's own cost and the deferral window cannot be confused again. *(completed 2026-09-24 16:32:56 -04:00)*
+
+`CommitTiming` replaces the single `Duration` the harness used to publish. The three parts sum to
+that old number, and `flush()` is `submit + blocking` -- the deferral excluded, which is the whole
+point.
+
+**The split satisfies M25's standing constraint by construction rather than by assumption.** Windows
+specifies nothing about when a ring operation completes relative to `SubmitIoRing`, so the harness
+must be meaningful either way: if the flush completes inline the device round trip lands in `submit`
+and `blocking` is zero; if it pends, `submit` is short and the wait appears in `blocking`. Nothing
+has to know which case it got.
+
+**The strategies were always distinguishable on the commit, and the blended number hid it
+completely.** They now separate by roughly sixfold on the flush, where the old figure ranked them in
+the opposite order -- alternating-rings reported the *worst* commit latency while being the fastest,
+because its deferral is about twice the others'. That is not a new finding so much as `M20.6`'s
+finding finally visible in the program's own output. Figures are not quoted here; the sample prints
+them and `M25.5` is where they are read.
+
+**`blocking` reads zero for all three, and the output says plainly that this proves nothing.** A
+zero beside a large deferral is ambiguous: the operation may have completed inline, or it may have
+pended and finished while the program was busy elsewhere. Those are indistinguishable from here.
+Recording that is the point -- reading `blocking` alone would be the same error as before in the
+opposite direction, and the temptation is real now that `M25.3` has given the handle the shape the
+spike measured as pending.
+
+**The settle logic became one function rather than two copies.** Both sites -- the loop's and the
+drain after it -- applied the same rule about where deferral ends and blocking begins, and a rule
+stated twice can be half-corrected. `settle` states it once.
+
+**A sabotage found the guard that the obvious assertions miss.** Asserting the identity
+`flush() == submit + blocking` catches deferral being folded back in, and is **survived** by a part
+that is never measured at all: replacing the deferral measurement with zero satisfies every identity
+while making the decomposition a rename. The test therefore also requires some sample of `deferral`
+and of `submit` to be non-zero -- phrased as "some sample" rather than a lower bound on a duration,
+because this harness defers by construction, so a run in which nothing deferred means the clock is
+not running rather than that the machine was fast. `blocking` deliberately gets no such guard, since
+zero is a legitimate and frequently observed reading for it.
+
+Three cases in [sabotage.json](sabotage.json): the fold, and the two parts that can silently read
+zero. They are listed separately because `submit` and `deferral` are measured at different sites and
+one can be lost without the other.
+
+**What this does not do** is assert any value. Which part carries the cost is a property of the
+machine and the handle, not of this crate.

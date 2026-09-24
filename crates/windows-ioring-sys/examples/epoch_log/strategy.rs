@@ -300,46 +300,19 @@ pub struct Outcome {
     pub bytes: u64,
     /// Wall clock for the whole run, appends and commits together.
     pub elapsed: Duration,
-    /// Per epoch, from pushing the commit to observing its completion.
+    /// Per epoch, what its commit cost, decomposed (M25.4).
     ///
-    /// Read this carefully, because it is **not** device flush time. Every
-    /// strategy here defers its await by design, so the figure includes time
-    /// the program spent doing useful work before it got around to asking --
-    /// and a strategy that defers *further* therefore reports a *larger*
-    /// number while being no slower. Alternating rings shows this most
-    /// plainly: it defers across two epochs and reports the highest latency of
-    /// the three while matching them on throughput.
+    /// This was a single `Duration` measured from pushing the flush to
+    /// observing its completion, and `M20.6` established that the number was
+    /// **entirely deferral**: blocking p50 *and* p99 were 0 us for all three
+    /// strategies, so the published figure reported how long the next epoch's
+    /// appends took rather than anything about the commit. A strategy that
+    /// deferred further reported a larger number while being no slower.
     ///
-    /// So compare [`Outcome::elapsed`] across strategies, and read this as
-    /// "how stale is a commit acknowledgement by the time this design collects
-    /// it" -- which is a real property, just not the one its name suggests.
-    ///
-    /// # Measured, and it is worse than "includes" (M20.6)
-    ///
-    /// The paragraphs above were right about the shape and understated the
-    /// extent. Decomposing the figure into deferral (flush pushed -> harness
-    /// next looked) and blocking (time actually waiting) gives **blocking p50
-    /// and p99 of 0 us for all three strategies**: the harness never waits for
-    /// a flush at all, so this is not "inflated by" deferral, it *is*
-    /// deferral. What it measures is how long the next epoch's appends took.
-    ///
-    /// The cause was underneath the harness. The commit's `SubmitIoRing` took
-    /// hundreds of microseconds and returned with every completion already
-    /// queued, because the sample's handle carried no `FILE_FLAG_OVERLAPPED`
-    /// and a synchronous handle completes a ring operation inline. So the
-    /// commit was already durable before this clock started -- and the overlap
-    /// the comparison is built on did not exist.
-    ///
-    /// `M25.3` has since moved the log and every strategy file onto a
-    /// pre-allocated `NO_BUFFERING | OVERLAPPED` handle, which removes that
-    /// cause. It does not follow that this figure is now a commit measurement,
-    /// and it is not being relabelled on the strength of a flag: **this clock
-    /// still starts when the harness next looks**, so it still reports
-    /// deferral. `M25.4` is the item that reports the flush's own duration and
-    /// keeps deferral visible as its own number, and until it lands the printed
-    /// column stays labelled "ack lag" -- a reader of the *output* deserves
-    /// what a reader of this doc gets.
-    pub commit_latencies: Vec<Duration>,
+    /// Splitting it is the fix, and the split is the point: the three parts
+    /// cannot be confused for one another the way one blended number invited.
+    /// See [`CommitTiming`].
+    pub commit_timings: Vec<CommitTiming>,
     /// Time appends spent blocked because every arena slot was busy.
     ///
     /// This is where a long commit shows up as a number: an arena slot is not
@@ -351,6 +324,66 @@ pub struct Outcome {
     pub append_stall: Duration,
 }
 
+/// What one epoch's commit cost, split so the parts cannot be read as each
+/// other (M25.4).
+///
+/// The harness published a single blended number until `M20.6` decomposed it
+/// and found it was entirely deferral. These three add up to that old number
+/// and are reported separately for that reason.
+///
+/// # Every part stays meaningful whether or not the operation pends
+///
+/// `M25`'s standing constraint forbids anything here depending on an operation
+/// pending, because Windows specifies nothing about when a ring operation
+/// completes relative to `SubmitIoRing`. This split satisfies it by
+/// construction rather than by assumption:
+///
+/// - if the flush completes **inline**, the device round trip lands in
+///   [`submit`](Self::submit) and [`blocking`](Self::blocking) is zero;
+/// - if it **pends**, `submit` is short and the wait shows up in `blocking`;
+/// - either way [`deferral`](Self::deferral) is the program's own choice and
+///   belongs to neither.
+///
+/// So the harness reports what it observed and never has to know which case it
+/// got.
+#[derive(Clone, Copy, Debug)]
+pub struct CommitTiming {
+    /// Wall time inside the call that builds and submits the flush.
+    ///
+    /// On a handle where the operation completes inline, this **is** the
+    /// flush: the device round trip happens inside `SubmitIoRing`.
+    pub submit: Duration,
+    /// From the submit returning to the harness asking for the completion.
+    ///
+    /// **Not a cost of the flush.** It is work the program chose to do first
+    /// -- here, pushing the next epoch's appends -- and a design that defers
+    /// further grows this number while being no slower. It is kept because the
+    /// figure this harness used to publish as commit latency was exactly this,
+    /// and a number that was once mistaken for another is worth showing beside
+    /// the one it was mistaken for.
+    pub deferral: Duration,
+    /// Wall time actually spent waiting for the flush's completion.
+    ///
+    /// Zero when the completion was already queued by the time the harness
+    /// looked. **That happens for two different reasons and this number cannot
+    /// tell them apart**: the operation may have completed inline during the
+    /// submit, or it may have pended and then finished during the deferral.
+    /// Reading a zero here as evidence of inline completion is the same error
+    /// in the opposite direction as the one `M20.6` found, which is why this
+    /// is never reported without `deferral` beside it.
+    pub blocking: Duration,
+}
+
+impl CommitTiming {
+    /// What the flush itself cost: submitting it, plus waiting for it.
+    ///
+    /// Excludes [`deferral`](Self::deferral), which is the program's and not
+    /// the flush's. This is the figure `M25.4` asked for.
+    pub fn flush(&self) -> Duration {
+        self.submit + self.blocking
+    }
+}
+
 impl Outcome {
     /// Records per second over the whole run.
     pub fn throughput(&self) -> f64 {
@@ -360,19 +393,59 @@ impl Outcome {
         self.records as f64 / self.elapsed.as_secs_f64()
     }
 
-    /// Commit latency at `fraction` through the sorted distribution.
+    /// The quantile at `fraction` of whichever part of a commit `part`
+    /// selects.
     ///
     /// Nearest-rank rather than interpolated: with tens of samples an
     /// interpolated quantile invents precision the data does not have.
-    pub fn commit_quantile(&self, fraction: f64) -> Duration {
-        if self.commit_latencies.is_empty() {
+    ///
+    /// Taking a projection rather than offering one method per part is what
+    /// keeps the four call sites from drifting -- each asks the same question
+    /// of a different field instead of each carrying its own copy of the
+    /// sort-and-rank.
+    pub fn commit_quantile(
+        &self,
+        part: impl Fn(&CommitTiming) -> Duration,
+        fraction: f64,
+    ) -> Duration {
+        if self.commit_timings.is_empty() {
             return Duration::ZERO;
         }
-        let mut sorted = self.commit_latencies.clone();
+        let mut sorted: Vec<Duration> = self.commit_timings.iter().map(part).collect();
         sorted.sort_unstable();
         let rank = ((sorted.len() as f64 - 1.0) * fraction).round() as usize;
         sorted[rank.min(sorted.len() - 1)]
     }
+}
+
+/// Wait for one lane's outstanding commit and record what it cost (M25.4).
+///
+/// One function rather than the same four lines at each of the two settle
+/// sites -- the loop's, and the drain after it -- because the rule being
+/// applied is *where the deferral ends and the blocking begins*, and a rule
+/// stated twice is a rule that can be half-corrected. The split has to happen
+/// here, at the moment the harness decides to ask, which is precisely what a
+/// single `elapsed()` at the end could not distinguish.
+///
+/// A lane with nothing outstanding is not an error: the first epoch on each
+/// lane has no previous commit to settle.
+fn settle(
+    lane: &mut Lane,
+    deferred: &mut Option<(usize, Duration, Instant)>,
+    timings: &mut Vec<CommitTiming>,
+) -> io::Result<()> {
+    let Some((user_data, submit, submitted_at)) = deferred.take() else {
+        return Ok(());
+    };
+    let deferral = submitted_at.elapsed();
+    let blocked = Instant::now();
+    lane.await_flush(user_data)?;
+    timings.push(CommitTiming {
+        submit,
+        deferral,
+        blocking: blocked.elapsed(),
+    });
+    Ok(())
 }
 
 /// One ring plus the arena registered on it.
@@ -644,7 +717,7 @@ pub fn run(
     let mut offset = 0u64;
     let mut sequence = 0u64;
     let mut records = 0usize;
-    let mut commit_latencies = Vec::with_capacity(epochs);
+    let mut commit_timings = Vec::with_capacity(epochs);
     let mut append_stall = Duration::ZERO;
     // Registration is deliberately outside the clock: it happens once, and
     // charging a strategy's throughput for it would say more about setup than
@@ -672,7 +745,7 @@ pub fn run(
     // `UserData`. Each ring assigns its own `UserData` sequence, so the two
     // lanes hand out colliding values and a single map silently loses half the
     // samples -- which is exactly what the second attempt at this measured.
-    let mut deferred: Vec<Option<(usize, Instant)>> = vec![None; lanes.len()];
+    let mut deferred: Vec<Option<(usize, Duration, Instant)>> = vec![None; lanes.len()];
 
     for epoch in 0..epochs as u64 {
         let lane_index = if strategy == CommitStrategy::AlternatingRings {
@@ -726,10 +799,11 @@ pub fn run(
         // exposes is the strategies' other costs rather than a stall. The
         // placement stays; the conclusion drawn from the numbers needs
         // re-reading, which is `M20.6`.
-        if let Some((user_data, pushed)) = deferred[lane_index].take() {
-            lanes[lane_index].await_flush(user_data)?;
-            commit_latencies.push(pushed.elapsed());
-        }
+        settle(
+            &mut lanes[lane_index],
+            &mut deferred[lane_index],
+            &mut commit_timings,
+        )?;
 
         let coverage = match strategy {
             // The round trip: every write observed complete *before* the flush
@@ -743,17 +817,22 @@ pub fn run(
                 FlushCoverage::CoversPrecedingOperations
             }
         };
+        // Timed around the submit itself, which is the half of a commit's cost
+        // that exists whether or not the operation pends: on a handle that
+        // completes inline, the device round trip happens inside this call.
+        let submitting = Instant::now();
         let user_data = lanes[lane_index].commit(file, coverage)?;
-        deferred[lane_index] = Some((user_data, Instant::now()));
+        deferred[lane_index] = Some((user_data, submitting.elapsed(), Instant::now()));
     }
 
     // Settle the last outstanding commit, or `durable_through` below would be
     // a claim rather than an observation.
     for lane_index in 0..lanes.len() {
-        if let Some((user_data, pushed)) = deferred[lane_index].take() {
-            lanes[lane_index].await_flush(user_data)?;
-            commit_latencies.push(pushed.elapsed());
-        }
+        settle(
+            &mut lanes[lane_index],
+            &mut deferred[lane_index],
+            &mut commit_timings,
+        )?;
     }
     // One observation per epoch. Cheap, and it binds a real invariant -- but be
     // precise about which one, because this comment previously overclaimed.
@@ -780,11 +859,11 @@ pub fn run(
     // empties the slot whether or not the `if let` binds -- so it was removed
     // rather than left to look like a guard.
     assert_eq!(
-        commit_latencies.len(),
+        commit_timings.len(),
         epochs,
         "{} observed {} of {epochs} commits",
         strategy.name(),
-        commit_latencies.len()
+        commit_timings.len()
     );
     for lane in &mut lanes {
         lane.await_writes()?;
@@ -797,7 +876,7 @@ pub fn run(
         durable_through: Epoch(epochs as u64 - 1),
         bytes: offset,
         elapsed,
-        commit_latencies,
+        commit_timings,
         append_stall,
     })
 }
