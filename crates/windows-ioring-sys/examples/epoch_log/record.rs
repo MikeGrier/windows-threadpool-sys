@@ -177,6 +177,28 @@ fn checksum(sequence: Sequence, epoch: Epoch, payload: &[u8]) -> u32 {
     hash
 }
 
+/// A digest over a whole log, for comparing two logs without holding both.
+///
+/// FNV-1a, the same construction [`checksum`] uses on a record and for the
+/// same reason: this is not cryptographic and is not trying to be. Its job is
+/// to answer "are these two files the same bytes" for files this program just
+/// wrote itself, where the alternative is keeping one of them in memory for
+/// the length of the comparison (M25.7).
+///
+/// A reader whose logs come from somewhere less trusted wants a hash chosen
+/// against an adversary rather than against accident.
+pub fn digest(bytes: &[u8]) -> u32 {
+    const OFFSET_BASIS: u32 = 0x811C_9DC5;
+    const PRIME: u32 = 0x0100_0193;
+
+    let mut hash = OFFSET_BASIS;
+    for &byte in bytes {
+        hash ^= u32::from(byte);
+        hash = hash.wrapping_mul(PRIME);
+    }
+    hash
+}
+
 /// Write one record into `slot`, returning how many bytes it occupies.
 ///
 /// `slot` is a borrowed view of a registered buffer, which is why this takes a
@@ -352,3 +374,6 @@ pub fn decode(bytes: &[u8]) -> Result<Decoded<'_>, Torn> {
         payload,
     })
 }
+
+#[cfg(test)]
+mod tests;

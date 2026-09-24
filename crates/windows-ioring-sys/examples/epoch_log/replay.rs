@@ -91,6 +91,35 @@ impl Outcome {
 /// `expected_durable` how many records it reported durable. `payload_for`
 /// reproduces what record *n* should contain, so a payload that came back
 /// altered is caught rather than merely present.
+///
+/// # Why this takes a slice and not a reader (M25.7)
+///
+/// The walk is strictly forward, one [`record::RECORD_STRIDE`] block at a
+/// time, and never looks back -- so it has no need of the whole file at once,
+/// and a caller with a log larger than memory cannot give it one. A real log
+/// is larger than memory. Reading the whole file is therefore the wrong
+/// reflex to teach at exactly the point a reader is learning how to verify
+/// one, and the slice is kept anyway, for a reason that is about this
+/// function's *vocabulary*:
+///
+/// **It returns an [`Outcome`], not a `Result`.** Every way it can end is a
+/// statement about the log -- verified, tolerated, or a [`Violation`]. A
+/// reader that streams introduces a third kind of ending, `io::Error`, into
+/// the one component whose entire job is to distinguish "the log broke its
+/// promise" from "the log kept it". Those two failures want different
+/// responses from a caller, and a signature that returns both through one
+/// channel invites exactly the conflation this file exists to prevent: an
+/// unreadable file reported as a missing durable record.
+///
+/// So the streaming version is a **different interface**, not a smaller
+/// allocation, and this sample keeps the one whose failure vocabulary is
+/// closed. The cost is bounded and stated rather than hidden: `main` reads a
+/// 140 KiB log here, and its harness reads 8 MiB per strategy.
+///
+/// A consumer building a real verifier wants the other shape, and wants
+/// `io::Error` and `Violation` kept apart in it -- a `Result<Outcome>` whose
+/// `Err` means "could not read" and whose `Ok` still carries every violation
+/// found before the read failed.
 pub fn replay(
     bytes: &[u8],
     durable_through: Epoch,

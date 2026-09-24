@@ -3063,3 +3063,113 @@ number survived three rounds of correction because every round re-read the concl
 instrument -- with the generalisation that "the conclusion still holds" is not evidence that the
 instrument does. `D-57`: a flag whose requirements reach into the caller's data layout is not a flag
 change, and costing it as one underestimates it by the size of a format migration.
+
+### <a id="m257"></a>M25.7 -- Replay keeps its slice for a reason about failure vocabulary, recorded as `D-58`; the second multi-megabyte buffer became a digest. *(completed 2026-09-24 19:07:31 -04:00)*
+
+The item offered two acceptable answers -- stream the verifier, or stay legible -- and required only
+that an 8 MiB `fs::read` not sit unremarked in a teaching sample.
+
+**The decision is to keep `replay(&[u8])`, and the reason is not simplicity.** The walk is strictly
+forward one block at a time and never looks back, so it genuinely has no need of the whole file, and
+a real log is larger than memory -- which makes reading the whole file the wrong reflex to teach at
+exactly the point a reader is learning to verify one. That argument is real and it lost to a
+stronger one.
+
+**`replay` returns an `Outcome`, not a `Result`.** Every way it can end is a statement about the
+log: verified, tolerated, or a `Violation`. A streaming reader introduces a third kind of ending --
+`io::Error` -- into the one component whose entire job is to distinguish *the log broke its promise*
+from *the log kept it*. Those want different responses from a caller, and a signature returning both
+through one channel invites precisely the conflation this file exists to prevent: an unreadable file
+reported as a missing durable record. **So the streaming version is a different interface, not a
+smaller allocation** -- which is what the item suspected, and the suspicion is what turned out to
+decide it.
+
+The cost of declining it is stated where it is paid rather than hidden: 140 KiB at the log's own
+`fs::read`, 8 MiB per strategy at the harness's, each with a comment saying so. `D-58` records the
+decision and what a consumer building a real verifier should want instead -- the streaming shape,
+*with* the two failure kinds kept apart inside it.
+
+**What was reducible without touching that interface was reduced.** The cross-strategy comparison
+held a whole reference log in memory for the length of the comparison, so two multi-megabyte buffers
+were alive at once. It now keeps a 32-bit digest, which halves the peak and loses nothing a reader
+had: the assertion could already only say *that* two logs differed, never where.
+
+**The digest is a weaker check than the byte comparison it replaced**, and the weakening is guarded
+rather than assumed away. Two different logs can in principle share a digest where two byte arrays
+cannot share their bytes, so `record/tests.rs` -- a test module `record.rs` did not previously have
+-- pins that a flipped byte, a dropped record, and a trailing zeroed block each change it. The
+sabotage confirms the separation is real: a digest folding only the length still distinguishes logs
+of different sizes, so the two length-based tests stay green and only the flipped-byte one fails.
+What none of them establish, and the definition says so, is that no two logs collide.
+
+**The two 64 KiB sites were left with a note rather than churned.** `RETIRED_LEN` is exactly 64 KiB
+-- at the threshold this repository treats as the point to ask the question, not past it -- so both
+the fill that writes it and the read that checks it are within the rule. The note says what a reader
+growing that segment should do: the write has the same shape as `logfile`'s zero-fill, and the check
+is a fold that never needs the bytes all at once.
+
+## Moved 2026-09-24 19:17:17 -04:00 -- M25: the epoch-log sample's I/O became a shape where a commit is observable
+
+The milestone's eight items are archived individually above; what follows is the context the
+section carried, kept because it records what M20.6 found and the constraint every item was
+held to.
+
+## M25 -- Make the epoch-log sample's I/O a shape where a commit is observable
+
+Queued by the `M20.6` investigation, which found three things the item did not anticipate.
+
+**The harness measures the wrong quantity.** Decomposing its commit latency into *deferral* (flush
+pushed -> harness next looked) and *blocking* (time actually waiting) gave blocking p50 **and p99 of
+0 us for all three strategies**. The published `commit p50/p99/max` column is entirely deferral: it
+reports how long the next epoch's appends took, not anything about the commit.
+
+**There is no pipeline to measure.** The commit's `SubmitIoRing` took 289-555 us and returned with
+all 9 completions already queued. The handle has no `FILE_FLAG_OVERLAPPED`, so the batch ran inline,
+and the comment in [strategy.rs](examples/epoch_log/strategy.rs) reading "a real log keeps appending
+while a commit is outstanding" describes something that cannot happen there.
+
+**`AlternatingRings`' blast-radius claim is answered structurally, and needs no run.**
+`RegisteredBuffers::get_mut` refuses a slot with an operation outstanding and there are `SLOTS`
+slots, so at most `SLOTS` appends are outstanding on a ring **by construction** -- and each
+alternating lane registers its own arena of the same size. The per-ring bound is identical either
+way. Measured at 8 and 8, but the argument does not rest on the measurement, and it holds whatever
+the platform does about pending.
+
+[write-pending-spike.rs](design-sessions/spikes/write-pending-spike.rs) then established which
+configurations pend at all. `FILE_FLAG_OVERLAPPED` alone changed nothing (0/500). Only
+`NO_BUFFERING` over a **pre-written extent** pended reliably, and its submit p50 fell from ~500 us to
+116 us -- the flush's cost leaving the submit path is what makes a commit separately observable for
+the first time.
+
+> **Corrected 2026-09-24, after `M25.3` landed: the paragraph above overstates what replicates.**
+> Sixteen runs with a fifth condition added are in
+> [measurements/2026-09-24-set-len-vs-zero-fill/](measurements/2026-09-24-set-len-vs-zero-fill/README.md).
+> What holds is that a **buffered** handle essentially never pends while every `NO_BUFFERING` one
+> pends in most runs. What does not hold is "only the pre-written extent pended": the extending
+> condition has a median of 268/500 over those runs. The zero-filled extent is still the best of
+> the five -- median 471/500, floor 121 against 1 -- so `M25.3`'s choice stands, but as a
+> difference of degree rather than of kind. The single-run reading came from a pair of numbers the
+> spike's own header already warned was unstable. `M25.4` and `M25.5` must be read with that
+> variance in mind rather than against the original framing.
+
+**A standing constraint on every item below.** That 500/500 is an observation, not a contract:
+Windows specifies nothing about when a ring operation completes relative to `SubmitIoRing`. So the
+sample may *adopt* this shape -- it is what real write-ahead logs do, and it is the only shape where
+the measurement means anything -- but **nothing here may depend on an operation pending.** Every item
+must leave the log correct if the platform completes inline tomorrow.
+
+- [x] **M25.1** -- Records gained a fixed sector stride with a zeroed block tail, in both writers. -> [completed 2026-09-23](COMPLETED-CHECKLIST.md#m251)
+
+- [x] **M25.2** -- Replay walks by the stride and confines each decode to its own block. Landed with `M25.1`: a strided writer and an unstrided reader cannot coexist. -> [completed 2026-09-23](COMPLETED-CHECKLIST.md#m251)
+
+- [x] **M25.1b** -- The sample's own verification now runs under `cargo test`, and `main` itself under CI. -> [completed 2026-09-24](COMPLETED-CHECKLIST.md#m251b)
+
+- [x] **M25.3** -- The log and every strategy file are pre-allocated and opened `NO_BUFFERING | OVERLAPPED`. -> [completed 2026-09-24](COMPLETED-CHECKLIST.md#m253)
+
+- [x] **M25.4** -- The commit is measured as submit / blocking / deferral, so the flush's own cost and the deferral window cannot be confused again. -> [completed 2026-09-24](COMPLETED-CHECKLIST.md#m254)
+
+- [x] **M25.5** -- The comparison was re-run over fifteen runs and `M20.6` answered: no other ground found for `AlternatingRings`, and the accounting defect that would have inverted the reading was fixed first. -> [completed 2026-09-24](COMPLETED-CHECKLIST.md#m255)
+
+- [x] **M25.6** -- Swept what this milestone made false, and recorded the two findings as `D-56` and `D-57`. -> [completed 2026-09-24](COMPLETED-CHECKLIST.md#m256)
+
+- [x] **M25.7** -- Replay keeps its slice for a reason about failure vocabulary, recorded as `D-58`; the second multi-megabyte buffer became a digest. -> [completed 2026-09-24](COMPLETED-CHECKLIST.md#m257)

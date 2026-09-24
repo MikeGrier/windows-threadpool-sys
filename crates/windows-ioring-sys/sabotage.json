@@ -328,6 +328,26 @@
       ]
     },
     {
+      "name": "M25.7: the log digest stops reading the bytes",
+      "file": "examples/epoch_log/record.rs",
+      "expect": "caught",
+      "why": "M25.7 replaced the cross-strategy byte comparison with a digest, which retains thirty-two bits instead of eight megabytes and is a WEAKER check -- two different logs can in principle share a digest where two different byte arrays cannot share their bytes. This sabotages the weakening directly: a digest that folds only the length still distinguishes logs of different sizes, so a guard that tested only 'a dropped record changes it' would pass. The flipped-byte test is what fails, and the two length-based tests deliberately do not, which is the separation worth having -- each guard covers a different way the digest could stop discriminating. What none of them establish is that no two logs collide; FNV-1a over 32 bits has collisions and the definition says so.",
+      "find": [
+        "        hash ^= u32::from(byte);",
+        "        hash = hash.wrapping_mul(PRIME);",
+        "    }",
+        "    hash",
+        "}"
+      ],
+      "replace": [
+        "        let _ = byte;",
+        "        hash = hash.wrapping_mul(PRIME);",
+        "    }",
+        "    hash",
+        "}"
+      ]
+    },
+    {
       "name": "CONTROL: rewording a statement changes nothing",
       "file": "examples/epoch_log/contract.rs",
       "expect": "survives",

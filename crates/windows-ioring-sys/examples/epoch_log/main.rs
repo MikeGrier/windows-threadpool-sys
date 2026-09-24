@@ -232,6 +232,12 @@ fn run_log<O: io::Write, E: io::Write>(
     let file = logfile::create_preallocated(path, RECORDS + TAIL_RECORDS + SLACK_BLOCKS)?;
     let handle = file.as_raw_handle();
 
+    // `RETIRED_LEN` is 64 KiB, which sits exactly at the threshold this
+    // repository treats as the point to ask whether an allocation needs to be
+    // contiguous, and not past it (M25.7). Left whole on that basis. A reader
+    // who grows this segment should revisit it: the write has the same shape
+    // as `logfile`'s zero-fill and chunks the same way, and the check further
+    // down is a fold over the bytes that never needs them all at once.
     std::fs::write(retired, vec![RETIRED_FILL; RETIRED_LEN as usize])?;
     // Ordinary and buffered, deliberately: a checkpoint record is sixteen
     // bytes from a `Vec` at offset 0, which satisfies none of NO_BUFFERING's
@@ -594,6 +600,12 @@ fn verify<O: io::Write, E: io::Write>(
     path: &std::path::Path,
     run: &LogRun,
 ) -> io::Result<()> {
+    // Read whole rather than streamed, and the size is stated because it is
+    // paid here: this log is `RECORDS + TAIL_RECORDS + SLACK_BLOCKS` blocks,
+    // so a few hundred kilobytes. `replay` explains why it takes a slice
+    // (M25.7) -- the short version is that a streaming reader would have to
+    // return `io::Error` alongside `Violation`, and keeping those apart is
+    // this verifier's whole purpose.
     let bytes = std::fs::read(path)?;
 
     // 1. The log as written. Everything committed must be intact, and the
@@ -889,7 +901,7 @@ fn compare_strategies<O: io::Write, E: io::Write>(
     ));
 
     let payload = b"strategy comparison record payload";
-    let mut reference: Option<(&'static str, Vec<u8>)> = None;
+    let mut reference: Option<(&'static str, u32)> = None;
     let mut throughputs: Vec<f64> = Vec::new();
     for strategy in strategy::CommitStrategy::ALL {
         let path = directory.join(format!(
@@ -926,6 +938,14 @@ fn compare_strategies<O: io::Write, E: io::Write>(
 
         // Replayed with the same verifier the log itself uses, because a
         // strategy that is fast and wrong is not a strategy.
+        //
+        // This is the sample's largest allocation: `EPOCHS * PER_EPOCH`
+        // blocks, so about 8 MiB per strategy (M25.7). It is one buffer at a
+        // time now rather than two -- the cross-strategy comparison below
+        // keeps a digest instead of a reference copy -- and it stays whole for
+        // the reason `replay` gives. A harness that needed to compare logs
+        // this program had not just written, or logs too large to read, would
+        // want the streaming verifier described there.
         let bytes = std::fs::read(&path)?;
         // Accounting against the *layout rule*, not against the file's length.
         // This compared the two until M25.3, and pre-allocation is what made
@@ -967,19 +987,28 @@ fn compare_strategies<O: io::Write, E: io::Write>(
         // The cross-strategy invariant, and the one with real teeth. Replay
         // checks a log against itself; this checks the three strategies
         // against *each other*, so a dropped record, a wrong offset, or an
-        // epoch tagged to the wrong commit shows up as a byte difference
-        // rather than passing three times independently.
+        // epoch tagged to the wrong commit shows up as a difference rather
+        // than passing three times independently.
+        //
+        // Compared by digest rather than by keeping a reference copy (M25.7).
+        // The copy was the second of two multi-megabyte buffers alive at once
+        // -- this loop held the first strategy's whole log for the length of
+        // the comparison while reading each later one beside it. A digest
+        // retains thirty-two bytes instead, and loses nothing a reader had:
+        // the assertion could already only say *that* two logs differed, never
+        // where.
         //
         // What it cannot check is the thing the strategies actually differ
         // about: whether the ordering held on the *device*. That is only
         // observable across a power cut, and no in-process check substitutes
         // for it -- which is why the strategies are argued from D-23 and D-24
         // rather than from this run passing.
+        let digest = record::digest(&bytes);
         match &reference {
-            None => reference = Some((strategy.name(), bytes)),
+            None => reference = Some((strategy.name(), digest)),
             Some((first, expected)) => assert_eq!(
-                &bytes,
-                expected,
+                digest,
+                *expected,
                 "{} produced a different log than {first}; all three must write the same bytes",
                 strategy.name()
             ),
