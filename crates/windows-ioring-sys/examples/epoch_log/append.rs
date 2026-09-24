@@ -307,12 +307,11 @@ impl Appender {
         // failures every append returns `WouldBlock` forever. `M22.2` found
         // exactly that bug here.
         //
-        // **`Pending` does not make that impossible, and measurement says so.**
-        // Moving `completion.result()?` above this line still compiles and
-        // still passes every test, because no test produces a failed write.
-        // What changed is the *consequence*: the token stays in the map, so
-        // teardown reports it instead of the program losing a slot in silence.
-        // A detected leak rather than a prevented one.
+        // `Pending` does not make the inverted order unrepresentable -- it
+        // compiles -- but it is no longer silent either way: the token stays in
+        // the map, and `append/tests.rs` drives a failed write through the
+        // injection seam so the inversion is caught by an assertion rather than
+        // waiting for a production arena to run dry.
         let Some((released, slot)) = self.pending.claim(completion) else {
             return Ok(false);
         };
@@ -328,3 +327,6 @@ impl Appender {
         Ok(true)
     }
 }
+
+#[cfg(test)]
+mod tests;

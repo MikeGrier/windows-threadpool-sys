@@ -33,13 +33,17 @@
 //! violation *loud* at the moment it happens rather than silent forever -- see
 //! this type's `Drop`.
 //!
-//! **It does not make ordering hazards unrepresentable, only detectable.**
-//! Measured rather than assumed: reinstating `M22.2`'s defect in the converted
-//! consumer -- checking a write's result *before* claiming, so a failed write
-//! returns early with the token still held -- still compiles and still passes
-//! every test, because no test produces a failed write. The difference is that
-//! the token remains in the map, so teardown reports it. A detected leak, not a
-//! prevented one.
+//! **It does not make ordering hazards unrepresentable, only detectable -- and
+//! detectability had to be built.** Reinstating `M22.2`'s defect in the
+//! converted consumer -- checking a write's result *before* claiming, so a
+//! failed write returns early with the token still held -- still compiles. When
+//! first measured it also still *passed*, because nothing produced a failed
+//! write. That gap is now closed: `append/tests.rs` drives the failure through
+//! [`Completion::with_injected_failure`], and the sabotage is caught by an
+//! assertion naming the leak. The type makes the leak visible; a test is what
+//! makes it visible *in CI* rather than in production.
+//!
+//! [`Completion::with_injected_failure`]: crate::Completion::with_injected_failure
 //!
 //! **Owning the oracle creates a decoy hazard.** [`Pending::checked`] mints its
 //! own [`RingContract`], so a consumer that already had one keeps a field that

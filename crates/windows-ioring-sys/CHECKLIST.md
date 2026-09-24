@@ -307,6 +307,25 @@ with the plan scoped now so the shape is not lost. This is **not** a fallback fo
   defers to the point where the new path is proven -- which is here, not earlier.
 
 
+- [ ] **M23.4** -- **A failing test that leaves registered buffers outstanding aborts instead of
+  reporting.** `RegisteredBuffers::drop` refuses to free while any operation is outstanding (M5.3,
+  correctly -- freeing would leave an `IORING_BUFFER_REF` pointing at freed memory) and says so
+  with a bare `debug_assert!(false, ...)`. That does not check `std::thread::panicking()`, so when
+  a test fails *because* a slot leaked, the assertion fires, unwinding drops the arena, the
+  `debug_assert` panics during unwind, and the process aborts with
+  `STATUS_STACK_BUFFER_OVERRUN` -- replacing a clean `FAILED` and its message with a crash.
+
+  **Found by measurement, not by reading**: the `M22.2` regression sabotage recorded in
+  [sabotage.json](sabotage.json) ends exactly this way. The detection is not weakened -- the
+  assertion fires first and names the leak -- but the report is, and the repository's own
+  cargo-mutants guidance warns that a crash-scored result is easy to misread as a stronger or
+  weaker signal than it is.
+
+  `Pending::drop` guards with `std::thread::panicking()` for this reason and stays silent; the
+  fix is presumably the same one line here. **Verify by sabotage that it changes the failure mode
+  and not the detection**: the sabotage must still be caught, and must now end in `FAILED`.
+
+
 ## M25 -- Make the epoch-log sample's I/O a shape where a commit is observable
 
 Queued by the `M20.6` investigation, which found three things the item did not anticipate.

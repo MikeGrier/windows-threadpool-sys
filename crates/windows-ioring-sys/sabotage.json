@@ -1,5 +1,7 @@
 {
   "package": "windows-ioring-sys",
+  "testArgs": ["test", "-p", "windows-ioring-sys", "--locked", "--all-features"],
+  "whyTestArgs": "--all-features, and the reason is measured rather than precautionary. The M22.2 regression case below is caught by a test gated behind `fault-injection`, which is off by default. Without the flag the harness compiled that test out, the sabotage landed in code nothing exercised, and the sweep reported SURVIVED for a defect that is in fact caught -- the same trap this repository already documents for cargo-mutants, arriving through a different tool. A feature-gated guard and an absent guard are indistinguishable to a runner that does not enable the feature.",
   "description": "Sabotages for the epoch-log sample's durability contract as the program presents it (M23.1). The prose in examples/epoch_log/contract.rs is the authoritative contract; CONTRACT is its presentable reduction, and main.rs prints that reduction through Clause::ALL. These cases verify the guards over that path -- that no clause loses its section, no statement becomes unreachable, and no statement renders ragged. Run with tools/run-sabotage.ps1; see tools/README-sabotage.md for the format and for why the results are read the way they are.",
   "notCoveredHere": "No sabotage here asserts that any particular *rule* is stated -- nothing looks for the word `ring`, or counts assumptions. That is deliberate and is the same reason the tests decline to: a check that the statement list still contains a given sentence is a check of the copy, not of the contract, and it passes exactly when two hand-written copies agree. The claim that the contract says the right things is carried by review of the module prose, which is the authoritative form. Also uncovered: that a new Clause variant reaches Clause::ALL. The exhaustive `match` in Clause::heading forces a new variant to be *handled* at compile time, but nothing forces it into ALL; the `a clause vanishes from the report` case below is the closest reachable proxy, since it exercises the same omission from the other direction.",
   "sabotages": [
@@ -85,6 +87,19 @@
       ],
       "replace": [
         "            let _ = user_data;"
+      ]
+    },
+    {
+      "name": "M22.2 regression: the write result is checked before the claim",
+      "file": "examples/epoch_log/append.rs",
+      "expect": "caught",
+      "why": "The exact defect M22.2 found. Returning early on a failed write without claiming leaves the token unclaimed, which Token treats as still outstanding, so the arena slot is never returned -- and after SLOTS failures every append returns WouldBlock forever, somewhere else entirely and with no trace of the cause. This case was measured SURVIVING before append/tests.rs existed: the inversion compiled and every test passed, because nothing produced a failed write. It is recorded now because the injection seam makes the failure reachable, which is the difference between the leak being found in CI and being found in production. Note the failure mode: the assertion in a_failed_write_still_releases_its_arena_slot fires first and names the leak, then RegisteredBuffers Drop debug_assert fires during unwind and aborts the process, so the run ends in STATUS_STACK_BUFFER_OVERRUN rather than a clean FAILED. That second panic is a pre-existing guard that does not check thread::panicking; it obscures the report but does not weaken it, because the assertion is what detected the defect.",
+      "find": [
+        "        let Some((released, slot)) = self.pending.claim(completion) else {"
+      ],
+      "replace": [
+        "        let _written_early = completion.result()?;",
+        "        let Some((released, slot)) = self.pending.claim(completion) else {"
       ]
     },
     {
