@@ -242,109 +242,102 @@ about this crate's own surface rather than about storage at all.
 
 - [x] **M23.2** -- Decide how a caller arrives at a NUMA node: `win-numa-sys` offers declaring and discovering, and refuses the shortcut that does both at once. -> [completed 2026-09-23](COMPLETED-CHECKLIST.md#m232)
 
-- [ ] **M23.3** -- Decide whether the crate offers a **pending-operations map**, and separately whether it
-  offers a **slot arena** on top of one. Record the decision either way; if it is "yes", the
-  implementation is spawned as its own items.
+- [ ] **M23.3** -- Decide what this crate offers for **holding a token between its push and its
+  completion**: a library type, a documented pattern, a `test-util` module, or nothing. Record the
+  decision either way, including what it refuses. If it is "yes", the implementation and the
+  conversion of existing sites are spawned as their own items.
 
-  **Replaces `M22+.2`, which asked a smaller question and justified it with the wrong evidence.** That
-  item proposed `RegisteredBuffers::quiet()` and cited `M22.2`'s slot leak as the reason. The leak was in
-  the hand-maintained *tracking* -- `free.pop()` before composing, verified against `7c12708e` -- not in
-  the free-slot query, so `quiet()` would not have prevented the bug that justified it. `outstanding()`
-  already carries that affordance and says so in its own rustdoc; both consumers had it and hand-rolled a
-  free list anyway. **Do not re-propose `quiet()` without new evidence.**
+  **The driver is not duplication. It is that this crate mandates a construct and does not provide
+  it.** `Batch::write` hands a caller a `Token`; `IoRing::pop_within` hands them a `Completion`;
+  **nothing connects the two but storage the caller supplies.** The crate says so itself, in its
+  own rustdoc, twice -- `Completion::user_data` says to "match it against a held `Token`", and
+  `IoRing::push_raw` says the identity "is returned so the caller can match it against a later
+  `Completion`". Those are instructions to build something the crate ships no way to build.
 
-  **What the duplication actually is, from a census of the tree rather than recollection.** Nine sites
-  keep a map from `UserData` to an unclaimed `Token`, and claim it when the matching completion is
-  popped:
-  [completion_event.rs](tests/completion_event.rs), [event_delivery.rs](tests/event_delivery.rs),
-  [flush_barrier.rs](tests/flush_barrier.rs), [flush_barrier_stress.rs](tests/flush_barrier_stress.rs),
-  [handover.rs](tests/handover.rs), [submission_lifecycle.rs](tests/submission_lifecycle.rs),
-  [checkpoint.rs](examples/epoch_log/checkpoint.rs), [append.rs](examples/epoch_log/append.rs), and
-  [strategy.rs](examples/epoch_log/strategy.rs). Two of them independently declare a `type Pending` alias
-  carrying the **same doc comment**, which is as strong a signal as this tree offers that the construct
-  wants to exist once. Two of the nine -- `append.rs` and `strategy.rs` -- add registered slots on top,
-  and those two are the slot arena.
+  That gap follows from a deliberate decision rather than an oversight.
+  [D-4](DESIGN-NOTES.md#d-4) splits the accounting: the **ring** owns the outstanding *count*, the
+  **caller** owns the *identity*, and `Token` deliberately holds no back-reference to the ring that
+  minted it. The split is right -- only the caller knows which token belongs to which `UserData`,
+  and `Token<T>` is generic over a payload the ring has no reason to name. What follows is that
+  every consumer with more than one outstanding tokened operation **must** build the identity
+  half. The tree bears that out: every such consumer has one, and `reclaim.rs` escapes only by
+  having a single operation, so its map is a `bool`.
 
-  **The questions, in order.** (1) Is the pending map a library type, a documented pattern, or neither?
-  It is where the claim discipline lives, and dropping a token unclaimed is the failure `Token`
-  deliberately treats as still-outstanding -- so an abstraction here is an abstraction over a safety
-  rule, which argues for it and also raises the bar. (2) Does a slot arena follow, or is it sample
-  policy like partitioning is under [D-8](DESIGN-NOTES.md#d-8)? (3) If either is offered, what does it
-  refuse to decide -- batching, ordering, and which slot to pick are all caller questions.
+  **The obvious construction is a `HashMap`. The correct one additionally encodes four rules a
+  `HashMap` cannot express:**
 
-  **Explored 2026-09-23 with a working spike. The decision is still open; what changed is that it
-  is now informed.** Full record in
+  1. Claim before checking the result, or a failed operation leaks its slot. This is `M22.2`'s
+     actual defect, found in `append.rs`, and it burned an arena slot permanently -- invisible
+     until the arena ran dry `SLOTS` failures later, somewhere else, with no trace of the cause.
+  2. Never drop the map still holding tokens. `Token` leaks **on purpose** on an unclaimed drop,
+     because the kernel may still be writing, so the failure is silent and the program keeps
+     working while losing memory.
+  3. Drive [`RingContract`](DESIGN-NOTES.md#d-4) in step, or the checker drifts from the thing it
+     checks. Today every consumer updates the map and the oracle separately, by hand, at each of
+     push/complete/claim.
+  4. Distinguish abandoning from forgetting, which is the difference the oracle exists to report.
+
+  **This is [the value is existence, not cleverness](../../DESIGN-NOTES.md#the-value-is-existence-not-cleverness)
+  in its literal form** -- "when the correct construction is difficult, providing the constructor
+  is the feature", and "the measure of success is whether the correct path is easier to reach than
+  the obvious wrong one". A `HashMap` is more reachable than the correct thing, and this crate has
+  **two measured instances of that costing defects**: `M22.2`'s slot leak, and the strategy
+  harness sharing one deferred-commit slot between two lanes so half its commits were never
+  awaited. Both are cited in `contract.rs` as the reason the oracle exists.
+
+  **The counter-argument, restated now that the driver has changed.** Six of the sites are tests,
+  and test convenience is weak grounds for permanent public surface -- so a `test-util` module, or
+  nothing, may still be right. But the force it had against a *duplication* argument does not
+  carry against this one: the question is no longer whether twelve callers repeat themselves, but
+  whether a crate that instructs callers to build a construct should leave its safety rules in
+  prose. The `NumaBuffer` contrast this item originally drew now points the other way -- that
+  allocator exists because the front page recommended a placement and did not provide it
+  ([D-51](DESIGN-NOTES.md#d-51)), which is the same shape with a softer edge, since getting it
+  wrong there was merely inconvenient rather than a leak.
+
+  **Explored 2026-09-23 with a working spike; the decision is still open and is now informed.**
+  `src/pending.rs` holds `Pending<T, X>`, exported only so a real consumer could be converted,
+  which is the only way to test fit. Full record, including what was measured and what was
+  falsified, in
   [DESIGN-SESSION-2026-09-23-pending-inventory.md](design-sessions/DESIGN-SESSION-2026-09-23-pending-inventory.md).
-  `src/pending.rs` is the spike -- exported only so a real consumer could be converted, which is
-  the only way to test fit.
 
-  **The census above is wrong and is kept for the record.** There are ~12 sites, not nine; the list
-  missed `model_a_delivery.rs`, `model_b_multiplexed.rs` and `generated_sequences.rs`; and only
-  about a third keep the bare map described. The rest carry per-operation sidecar data, so the
-  duplicated thing is the **claim discipline over a map whose value type differs at nearly every
-  site** -- which is why the spike is `Pending<T, X>`. The count was this item's main evidence and
-  predated `M24` relocating eleven tests.
+  - **Established by test and sabotage:** one call site keeps the map and the oracle in step;
+    an unclaimed token is loud at teardown; the type fits a real consumer (`append.rs` lost its
+    `InFlight` struct and its hand-driven observe pair); and `M22.2`'s ordering defect is now
+    caught by an assertion, via a failed write driven through the injection seam.
+  - **Not established:** the ring notifies nobody, so nothing forces a minted token into the map;
+    one consumer is converted, not twelve; `Pending::checked()` owning the oracle makes a
+    consumer's existing `RingContract` a decoy, which happened during the conversion and made a
+    teardown assertion pass vacuously with nothing catching it; and ring-teardown drop ordering
+    is untested.
 
-  **Established by test and sabotage:** one call site keeps the map and `RingContract` in step
-  (they are hand-driven in parallel today, a restatement that can drift); an unclaimed token is
-  loud at teardown instead of a silent deliberate leak; the type fits a real consumer
-  (`append.rs` lost its `InFlight` struct and its hand-driven observe pair); and `M22.2`'s
-  ordering defect is now caught by an assertion, via a failed write driven through the injection
-  seam.
+  **The decision has four parts.** (1) Library type, documented pattern, `test-util`, or nothing.
+  (2) Whether `checked()` survives its decoy hazard, or the oracle is borrowed rather than owned.
+  (3) Whether the stronger shape is worth a break: a generic `IoRing<T>` owning the map would make
+  the **ring** notify, and drift between ring and inventory structurally impossible rather than
+  merely discouraged. That was dismissed on a false claim about type erasure -- per-ring
+  monomorphisation holds for every real consumer, and `tests/generated_sequences.rs` already puts
+  eight token types on one ring behind a closed `enum Held` with no runtime type check. Note that
+  [D-4](DESIGN-NOTES.md#d-4) independently rules type erasure out for this crate -- "no slab entry,
+  no box, no type erasure" -- so the dismissal contradicted a decision already on the books rather
+  than merely being unchecked. Its real costs are a breaking change to a published crate, a
+  `Held`-style enum for mixed consumers, and a story for tokenless pushes. (4) What it refuses:
+  batching, ordering and slot choice are caller questions, and the sharper refusal is that **the map
+  does not decide whether you are checked.**
 
-  **Not established, including two corrections to claims made during the exploration:**
-  the ring notifies nobody -- `Pending` is consumer-driven and nothing forces a minted token into
-  it; one consumer is converted, not twelve; `Pending::checked()` owning the oracle makes a
-  consumer's existing `RingContract` a decoy, which happened during the conversion and made a
-  teardown assertion pass vacuously with nothing catching it; and ring-teardown drop ordering is
-  untested.
+  **Do not re-propose `RegisteredBuffers::quiet()` without new evidence.** `M22+.2` proposed it and
+  cited `M22.2`'s slot leak as the reason; the leak was in the hand-maintained *tracking* --
+  `free.pop()` before composing, verified against `7c12708e` -- not in the free-slot query, so
+  `quiet()` would not have prevented the bug that justified it. `outstanding()` already carries
+  that affordance and says so in its own rustdoc.
 
-  **A dismissed alternative that should not have been.** A generic `IoRing<T>` owning the map --
-  so the *ring* notifies -- was ruled out on the claim that one ring carries several `Token<T>`
-  types and would need `dyn Any`. Both halves are false: per-ring monomorphisation holds for every
-  real consumer, and where it does not, a closed enum suffices -- `generated_sequences.rs` already
-  puts eight token types on one ring behind `enum Held`. The real costs are a breaking change to a
-  published crate, a `Held`-style enum for mixed consumers, and a story for tokenless pushes.
-
-  **So the decision has four parts:** (1) public type, documented pattern, or `test-util`;
-  (2) whether `checked()` survives its decoy hazard; (3) whether the `IoRing<T>` shape is worth a
-  break; (4) what it refuses -- and the sharper refusal than batching/ordering/slot choice is that
-  **the map does not decide whether you are checked.**
-
-  **Counter-argument to answer, not dodge:** six of the nine sites are tests, and test convenience is a
-  weak reason to grow permanent public surface. A `test-util` module, or nothing at all, may be the right
-  answer. The contrast to hold it against is `NumaBuffer` ([D-51](DESIGN-NOTES.md#d-51)): roughly ninety
-  lines of unsafe FFI, RAII and trait impls a caller cannot obtain any other way, which is a different
-  proposition from a `HashMap` a caller can write in three lines.
-
-
-
-
-Parked, not pending. Deferred by the engineer's explicit direction during the 2026-08-22 design session,
-with the plan scoped now so the shape is not lost. This is **not** a fallback for a missing capability
-(D-3) -- it is the high-performance architecture, and M4's thread-pool path is the convenient one.
-
-- [ ] **M6+.1** -- `DeliveryMode::{ThreadpoolWait, PinnedThread}` as an explicit consumer choice, never an
-  automatic degradation.
-
-- [ ] **M6+.2** -- Resolve the contention between a thread parked in `SubmitIoRing(ring, n, INFINITE, ..)`
-  and callers wanting to build SQEs. This is the hard part and the reason this is its own milestone: it
-  directly contradicts M3.1's `&mut`-enforced serialization, and needs either a submit-ownership handoff
-  or an internal lock. Neither is obviously right.
-
-- [ ] **M6+.3** -- Shutdown: waking a thread parked on `INFINITE`. `IORING_OP_NOP` is supported and is the
-  wake mechanism.
-
-- [ ] **M6+.4** -- Affinity: binding a ring's thread with `SetThreadGroupAffinity`, and documenting the
-  execution-domain pattern (one pinned thread, its ring, its node-local registered pool, its shard).
-
-- [ ] **M6+.5** -- A test seam forcing the pinned-thread path even where the completion event is available,
-  so it stays testable on every machine rather than only on hardware that lacks the feature.
-
-- [ ] **M6+.6** -- Decide `IoBuf`: extract to a shared crate, re-export from
-  `windows-overlapped-io-sys`, or leave duplicated (D-1). The merge-or-delete decision that duplicate-then-decide
-  defers to the point where the new path is proven -- which is here, not earlier.
-
+  **The census this item was originally written on is wrong, and is recorded rather than removed
+  because the count was its main evidence.** It said nine sites keeping a map from `UserData` to an
+  unclaimed `Token`. A fresh census finds ~12 -- it missed `model_a_delivery.rs`,
+  `model_b_multiplexed.rs` and `generated_sequences.rs` -- and only about a third keep the bare map
+  described; the rest carry per-operation sidecar data, which is why the spike is `Pending<T, X>`.
+  Exactly one site needs synchronisation (`model_a_delivery.rs`, the Model A pool-thread path).
+  The original list predated `M24` relocating eleven tests.
 
 - [ ] **M23.4** -- **A failing test that leaves registered buffers outstanding aborts instead of
   reporting.** `RegisteredBuffers::drop` refuses to free while any operation is outstanding (M5.3,
