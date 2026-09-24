@@ -62,6 +62,14 @@
 //! of gigabytes, who would rather spend wall time than write the loop, has the
 //! other option and it works.
 //!
+//! **None of this is perceptible at this sample's own sizes**, and that is
+//! measured too: the log's extent is 140 KiB and each strategy file is 8 MiB,
+//! so a whole run zero-fills 24 MiB in tens of milliseconds against a run that
+//! takes over a second. At 140 KiB the cost is dominated by creating the file
+//! rather than by writing zeros into it. The choice here is made for what this
+//! code *teaches* a log that pre-allocates in gigabytes, not for what it costs
+//! the sample.
+//!
 //! # `set_len` is not a substitute for the zero-fill, and the difference is
 //! measured rather than argued
 //!
