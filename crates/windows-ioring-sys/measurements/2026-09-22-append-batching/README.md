@@ -55,6 +55,29 @@ append path, which shortens the interval between the last append and the flush
 being reached. Throughput is bound by the device flush and does not move;
 latency is not, and does.
 
+> **Corrected 2026-09-24 by `M25.6`: the paragraph above is measuring the
+> append path, not the commit.** `M20.6` established that the figure this
+> harness published as "commit p50" was **entirely deferral** -- the interval
+> from pushing a flush to the harness next looking, which is how long the *next
+> epoch's appends* took. Batching made those appends faster, so the number fell.
+> The reduction is real and its stated mechanism is even correct as written
+> ("shortens the interval between the last append and the flush being reached");
+> what is wrong is the label, and therefore the conclusion that it "separates".
+>
+> **It is not an independent finding from the throughput result above.** Both
+> are the same fact seen twice: the append path got faster, and the run is
+> flush-bound, so the change appears in the metric that is not flush-bound and
+> not in the one that is. Reporting one as "no change that can be distinguished
+> from noise" and the other as "the one finding here that separates" reads as
+> two results and is one.
+>
+> **What this does not disturb** is the question the capture was taken to
+> answer. `E-1` asked whether a shared per-record submission cost was flattening
+> the three-way comparison; the cross-strategy spread did not shrink, and that
+> conclusion stands. See
+> [2026-09-24-commit-decomposed/](../2026-09-24-commit-decomposed/README.md) for
+> the comparison re-run once a commit could actually be measured.
+
 **The cross-strategy spread did not shrink.** It sits at or below the
 run-to-run range of a single strategy both before and after -- which is the
 sample's own stated test for whether the choice is dominated by the device
@@ -65,10 +88,16 @@ flush.
 **Settles:** `E-1`'s second possibility is **not supported**. Removing the
 shared per-record submission cost did not change the comparison, so the
 sample's existing conclusion -- that the three strategies are indistinguishable
-because each pays one device flush per epoch, and everything they differ about
-lands two orders of magnitude below it -- survives a confound that was
-specifically raised against it. `M20.6` can be settled on the grounds it
-already had.
+-- survives a confound that was specifically raised against it. `M20.6` can be
+settled on the grounds it already had.
+
+> The mechanism this paragraph originally gave for that conclusion -- "because
+> each pays one device flush per epoch, and everything they differ about lands
+> two orders of magnitude below it" -- is the same claim corrected above, and
+> `M25.5` has since measured those differences at *hundreds* of microseconds
+> rather than tens. The conclusion is unchanged, because they remain smaller
+> than the run-to-run spread; "below the noise" and "two orders of magnitude
+> below the flush" are simply different claims, and only the first held.
 
 **Does not settle:** whether `CommitStrategy::AlternatingRings` earns its cost.
 That is a question about what the strategy buys in *correctness* and in

@@ -65,55 +65,55 @@
 //!
 //! # What the measurement found here, and why it is worth saying
 //!
-//! On the machine this was written on, the three are **indistinguishable**:
-//! the throughput spread across strategies is the same size as the spread one
-//! strategy shows between consecutive runs. The reason is visible in the
-//! numbers the sample prints. Every strategy pays exactly one device flush per
-//! epoch, that flush costs hundreds of microseconds, and everything the
-//! strategies actually differ about -- how long the flush itself waits, the
-//! extra host round trip -- lands in the tens.
-//!
-//! The distinction [D-24](../../DESIGN-NOTES.md#d-24) draws is real. It is
-//! simply two orders of magnitude below the dominant term at this workload,
-//! and a reader is better served by knowing that than by a ranking that would
-//! not reproduce.
-//!
-//! ## The conclusion survives; the explanation above does not (M20.6)
-//!
-//! "Indistinguishable" still holds, and `M22.1` re-measured it after removing
-//! a shared per-record cost that could have flattened it. What does not hold
-//! is the *mechanism* this section gives for it. It says the strategies differ
-//! about "how long the flush itself waits" and "the extra host round trip",
-//! and that those land in the tens -- but on this sample's handle **none of
-//! those differences can occur at all**.
-//!
-//! The handle carried no `FILE_FLAG_OVERLAPPED` when this was written, so a
-//! ring operation completed inline during `SubmitIoRing`: the commit's submit
-//! took hundreds of microseconds and returned with every completion already
-//! queued. Nothing was ever outstanding across a submit boundary, so there was
-//! no overlap for the strategies to differ in, and the comment further down
-//! claiming "a real log keeps appending while a commit is outstanding"
-//! described something the program could not do.
-//!
-//! **M25.3 changed the handle**: the log and each strategy's file are now
-//! pre-allocated and opened `NO_BUFFERING | OVERLAPPED`, which is the one
-//! configuration [the spike](../../design-sessions/spikes/write-pending-spike.rs)
-//! measured as behaving differently from a buffered handle. `M25.4` then split
-//! a commit's cost into parts so the flush and the deferral could not be read
-//! as each other, and `M25.5` re-ran the comparison on those numbers:
+//! On the machine this was written on, the three are **indistinguishable on
+//! throughput and on total commit cost**: the spread across strategies is
+//! smaller than the spread one strategy shows between consecutive runs. What
+//! *does* separate them, reproducibly, is **where** each spends its commit --
+//! `HostSequenced` in a host round trip before the flush, the covering
+//! strategies inside the submit that carries it. Fifteen runs, with the ranges
+//! beside the medians, are in
 //! [measurements/2026-09-24-commit-decomposed/](../../measurements/2026-09-24-commit-decomposed/README.md).
+//! Read the capture rather than this paragraph; nothing is quoted here that
+//! would have to be kept true by hand.
 //!
-//! **Read that capture rather than this paragraph for the answer.** In short,
-//! over fifteen runs the three are not distinguishable on throughput or on
-//! total commit cost -- the run-to-run spread within one strategy exceeds the
-//! spread across them -- while *where* each spends its commit is structural and
-//! never inverts. The capture also records a correction it had to make first:
-//! the commit clock started after `HostSequenced`'s host round trip, which made
-//! that strategy look six times cheaper than it is.
+//! The distinction [D-24](../../DESIGN-NOTES.md#d-24) draws is real. Whether
+//! it dominates a given workload is a question for that workload's own
+//! numbers, which is why this sample prints its own instead of quoting ours.
 //!
-//! So the three were indistinguishable *because they were doing the same
-//! serialized work*, not because a shared dominant term swamped real
-//! differences. Both readings gave the same ranking and only one was true.
+//! ## Two earlier explanations of that result were wrong (M20.6, M25.5)
+//!
+//! "Indistinguishable" has survived every correction. The *reasons* given for
+//! it did not, twice, and both are recorded because each looked settled:
+//!
+//! **The first said the strategies differ only in things "two orders of
+//! magnitude below" a dominant device flush** -- how long the flush waits, the
+//! extra host round trip -- landing "in the tens" of microseconds. `M20.6`
+//! found that none of those differences could occur at all: the handle carried
+//! no `FILE_FLAG_OVERLAPPED`, so a ring operation completed inline during
+//! `SubmitIoRing`, nothing was ever outstanding across a submit boundary, and
+//! the comment further down claiming "a real log keeps appending while a commit
+//! is outstanding" described something the program could not do. The three were
+//! indistinguishable *because they were doing the same serialized work*. Both
+//! readings gave the same ranking and only one was true.
+//!
+//! **The second was the figure itself.** The published commit latency was
+//! entirely deferral -- how long the program went on appending before it got
+//! around to asking -- so the strategy that defers furthest reported the worst
+//! commit while being no slower.
+//!
+//! `M25.3` gave the handle the shape [the spike](../../design-sessions/spikes/write-pending-spike.rs)
+//! measured as pending, `M25.4` split a commit's cost so the flush and the
+//! deferral could not be read as each other, and `M25.5` re-ran the comparison
+//! on those numbers. The capture linked above also records a correction it had
+//! to make before it could answer: the commit clock started *after*
+//! `HostSequenced`'s host round trip, which made that strategy look six times
+//! cheaper than it is.
+//!
+//! One figure from the old explanation is now measured and is not what it said:
+//! the strategies' differences land in the **hundreds** of microseconds, not
+//! the tens. They are still smaller than the run-to-run spread, which is why
+//! the conclusion is unchanged -- but "below the noise" and "two orders of
+//! magnitude below the flush" are different claims, and only the first survived.
 //!
 //! **What this does not settle is whether `AlternatingRings` earns its place.**
 //! This harness cannot show a blast-radius difference -- but that is a fact
@@ -150,9 +150,16 @@
 //!   there is no overlap to restore, because the work is already done when
 //!   submit returns. That fix made the harness *able* to overlap while the
 //!   handle still could not, so what the sentence above describes as the
-//!   corrected state had never actually run. `M25.3` has since given the
-//!   handle the shape the spike measured as pending; whether the corrected
-//!   state now runs is what `M25.5` reads.
+//!   corrected state had never actually run.
+//!
+//!   **`M25.3` gave the handle the shape that can overlap, and `M25.5`
+//!   measured what followed.** Every strategy's `block` reads zero at the
+//!   median in every run -- so the harness still never waits for a flush. That
+//!   is not evidence the operation completed inline: it defers by several
+//!   milliseconds, and an operation that pended and finished during that window
+//!   is indistinguishable from one that never pended. **The sentence above is
+//!   now describable rather than demonstrated**, which is a smaller claim than
+//!   it has ever carried before, and the honest one.
 //! - The second version keyed pending commits by `UserData` in one map across
 //!   both rings. Each ring assigns its own sequence, so the two collided and
 //!   half the samples vanished.

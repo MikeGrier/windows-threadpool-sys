@@ -87,9 +87,15 @@
 //!
 //! Sector alignment is why the C/D distinction matters beyond curiosity:
 //! `NO_BUFFERING` requires sector-aligned buffers, offsets and lengths, and
-//! `epoch_log` writes variable-length records at packed offsets. If D is the
-//! only condition that pends, the harness fix is not a flag change -- it is a
-//! change to the log's on-disk format.
+//! `epoch_log` wrote variable-length records at packed offsets when this was
+//! written. If D is the only condition that pends, the harness fix is not a
+//! flag change -- it is a change to the log's on-disk format.
+//!
+//! **That prediction held.** `M25.1` gave records a fixed sector stride with a
+//! zeroed block tail, in both writers, before `M25.3` could change a single
+//! flag. The paragraph is left in the past tense rather than deleted because
+//! the reasoning is the useful part: a flag whose requirements the caller's
+//! data layout cannot meet is not a flag change.
 //!
 //! # What "discriminating" means here
 //!

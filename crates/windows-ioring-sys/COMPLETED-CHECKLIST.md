@@ -3012,3 +3012,54 @@ written hours earlier. Each time the code moved, the manifest's patches stopped 
 `run-sabotage.ps1` noticed -- `MANIFEST STALE: pattern found 0 times`. The note that a manifest is a
 restatement site like any other is now load-bearing three times over, which is enough to call it a
 standing hazard rather than an incident.
+
+### <a id="m256"></a>M25.6 -- Swept what this milestone made false, and recorded the two findings as `D-56` and `D-57`. *(completed 2026-09-24 18:03:24 -04:00)*
+
+**Four named sites, and the sweep found two more.** The item listed the "keeps appending while a
+commit is outstanding" rationale, `strategy.rs`'s "what the measurement found" section, the `M22.1`
+capture's commit-p50 claim, and any DESIGN-NOTES text calling the sample's I/O buffered. Grepping
+the falsified *claims* rather than the listed files also turned up the spike's premise that
+`epoch_log` "writes variable-length records at packed offsets", and a second copy of the "two orders
+of magnitude" mechanism inside the `M22.1` capture's `Settles` paragraph. As usual the reported
+sites were a sample of the population.
+
+**One named site turned out not to exist.** No DESIGN-NOTES text describes the sample's I/O as
+buffered. The three near-matches are about other things -- `D-40` is a cached *read* in the handover
+tests, `D-49` is the unit suite's hermeticity, and the note that a ring handle "does not need
+`FILE_FLAG_OVERLAPPED`" is a fact about rings that `M25` did not touch. Recorded because a sweep
+that quietly finds nothing at a named site is indistinguishable from one that did not look.
+
+**The `M22.1` correction is the sharpest of them, and it is not that the number was wrong.** That
+capture reported a commit-p50 reduction as "the one finding here that separates", beside a
+throughput result reported as unmoved. The reduction is real and its stated mechanism is correct as
+written -- batching shortened the interval between the last append and the flush being reached. What
+is wrong is the label: `M20.6` established that figure was **entirely deferral**, so it measured the
+*append path* getting faster. And that makes it not an independent finding at all. Both lines are
+the same fact seen twice -- the appends got faster, the run is flush-bound, so the change appears in
+the metric that is not flush-bound and not in the one that is. Reporting them as two results
+overstates the evidence by exactly one result.
+
+**One figure is now measured and is not what it said.** The old explanation had the strategies
+differing by amounts "two orders of magnitude below" the flush, "in the tens" of microseconds.
+`M25.5` measured hundreds. The conclusion is unchanged, because they remain smaller than the
+run-to-run spread -- but "below the noise" and "two orders of magnitude below the flush" are
+different claims and only the first held, so both copies of the stronger one were corrected rather
+than left standing beside a note.
+
+**`strategy.rs`'s top section was restructured rather than annotated.** It had accumulated a true
+current claim, a superseded mechanism, and two correction sections underneath, so a reader met the
+false explanation first and the correction several paragraphs later. It now states what is measured,
+links the capture instead of quoting figures, and keeps both superseded explanations compactly below
+under a heading that says they are superseded -- which is what CONTRACT INTEGRITY asks for and what
+the file was violating.
+
+**The spike's prediction is left in the past tense rather than deleted**, because the reasoning is
+the reusable part: it said that if only the pre-written condition pends, "the harness fix is not a
+flag change -- it is a change to the log's on-disk format." That is exactly what happened, and it is
+now `D-57`.
+
+**Two decisions recorded.** `D-56`: a benchmark that defers its await measures the deferral, and the
+number survived three rounds of correction because every round re-read the conclusion instead of the
+instrument -- with the generalisation that "the conclusion still holds" is not evidence that the
+instrument does. `D-57`: a flag whose requirements reach into the caller's data layout is not a flag
+change, and costing it as one underestimates it by the size of a format migration.

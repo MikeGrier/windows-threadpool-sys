@@ -305,13 +305,7 @@ must leave the log correct if the platform completes inline tomorrow.
 
 - [x] **M25.5** -- The comparison was re-run over fifteen runs and `M20.6` answered: no other ground found for `AlternatingRings`, and the accounting defect that would have inverted the reading was fixed first. -> [completed 2026-09-24](COMPLETED-CHECKLIST.md#m255)
 
-- [ ] **M25.6** -- Sweep what this milestone makes false. At least: the "keeps appending while a
-  commit is outstanding" rationale in [strategy.rs](examples/epoch_log/strategy.rs), that module's
-  "what the measurement found" section, the `M22.1` capture's commit-p50 claim in
-  [measurements/2026-09-22-append-batching/](measurements/2026-09-22-append-batching/) -- which this
-  investigation showed was the deferral window shrinking because appends got faster, i.e. the same
-  fact as the throughput result reported as unmoved -- and any DESIGN-NOTES text describing the
-  sample's I/O as buffered. Record the findings above as decisions in the same pass.
+- [x] **M25.6** -- Swept what this milestone made false, and recorded the two findings as `D-56` and `D-57`. -> [completed 2026-09-24](COMPLETED-CHECKLIST.md#m256)
 
 - [ ] **M25.7** -- **The sample allocates 8 MiB contiguously to replay a strategy file, and
   three smaller blocks besides.** Raised in review as a rule of thumb -- avoid contiguous
