@@ -2963,3 +2963,52 @@ one can be lost without the other.
 
 **What this does not do** is assert any value. Which part carries the cost is a property of the
 machine and the handle, not of this crate.
+
+### <a id="m255"></a>M25.5 -- The comparison was re-run over fifteen runs and `M20.6` answered: no other ground found for `AlternatingRings`, and the accounting defect that would have inverted the reading was fixed first. *(completed 2026-09-24 17:19:59 -04:00)*
+
+The capture is [measurements/2026-09-24-commit-decomposed/](measurements/2026-09-24-commit-decomposed/README.md)
+and the figures live there rather than here.
+
+**The measurement had a defect that had to be found before it could answer anything.** `M25.4`'s
+first numbers showed `HostSequenced` committing roughly **six times cheaper** than the other two.
+That was where the clock started: it waits for every write in userspace before pushing an unordered
+flush, and the commit clock began at the *submit*, so its host round trip fell outside every
+measured part. The cost had not gone anywhere; nothing was looking at it.
+
+A fourth part, `prepare`, now covers whatever a strategy must do before its flush can be pushed.
+With it, `HostSequenced` is within noise of the others rather than six times cheaper. **A reader of
+the uncorrected figures would have drawn the opposite of the right conclusion** -- which is the same
+failure mode `M20.6` was opened to fix, one layer down, found by reading the very numbers the fix
+for it produced.
+
+**What fifteen runs show.** The three are **not distinguishable** on throughput or on total commit
+cost: medians within a few percent, every range overlapping every other, and run-to-run spread
+within a single strategy larger than the spread across them -- which is the condition the sample's
+own output tells a reader to check. What *is* structural, and never inverts across fifteen runs, is
+where each spends its commit: `HostSequenced` in `prepare` and almost nothing in `submit`, the
+covering strategies the reverse. That difference is invisible in any blended number, which is what
+`M25.4` was for.
+
+**The open question, answered as far as this can answer it.** `AlternatingRings` shows no advantage
+this harness can measure -- its throughput and commit medians sit inside the others' ranges, its
+deferral is consistently about twice theirs, and the single worst commit p99 in the capture is its
+outlier -- against a doubled arena registration it pays for the life of the run.
+
+**That is not a finding against the strategy**, and the entry says so where a reader will meet it.
+The ground it was built on is blast radius, and `M20.6` established that this harness **cannot
+exhibit that difference at all**, because each lane registers its own arena of the same size so the
+per-ring bound is identical by construction. What this capture could answer is whether some *other*
+ground appears, and none did. Whether that changes the strategy's status is the engineer's decision;
+the conditions under which it would pay are already written in
+[strategy.rs](examples/epoch_log/strategy.rs).
+
+**`block` reads zero at the median in every run**, and the capture records that this establishes
+nothing: an operation that pended and finished during a deferral of several milliseconds is
+indistinguishable from one that completed inline.
+
+**The harness caught stale manifest patches for the third time today.** Adding `prepare` changed
+both `flush()` and the deferred tuple, invalidating two `M25.4` cases that had been correct when
+written hours earlier. Each time the code moved, the manifest's patches stopped applying and only
+`run-sabotage.ps1` noticed -- `MANIFEST STALE: pattern found 0 times`. The note that a manifest is a
+restatement site like any other is now load-bearing three times over, which is enough to call it a
+standing hazard rather than an incident.

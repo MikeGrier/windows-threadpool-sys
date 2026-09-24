@@ -142,6 +142,48 @@ fn a_lane_offers_at_most_what_was_asked_for() {
     );
 }
 
+/// The host round trip is inside the commit's measured cost (M25.5).
+///
+/// `HostSequenced` waits for every write in userspace before pushing an
+/// unordered flush. `M25.4` started the commit clock at the submit, which put
+/// that wait outside every measured part -- so the strategy reported a commit
+/// roughly six times cheaper than the covering ones while doing the same work
+/// somewhere nothing was looking, and a reader comparing the published figures
+/// would have drawn the opposite of the right conclusion.
+///
+/// The guard is that the round trip shows up at all. It asserts a non-zero
+/// `prepare` rather than any relationship between the strategies' costs,
+/// because what is being pinned is the **measurement boundary** -- where a
+/// strategy's preparation is accounted -- and not a fact about how expensive
+/// any of them is on a given machine.
+#[test]
+fn a_host_round_trip_is_counted_as_part_of_its_commit() {
+    let (path, file) = scratch("prepare-boundary");
+    let payload = b"a harness record".to_vec();
+
+    let outcome = super::run(
+        CommitStrategy::HostSequenced,
+        file.as_raw_handle(),
+        3,
+        4,
+        &payload,
+        None,
+    )
+    .expect("a small run completes");
+
+    assert!(
+        outcome
+            .commit_timings
+            .iter()
+            .any(|timing| !timing.prepare.is_zero()),
+        "host-sequenced waits for every write before it flushes, and that wait is part of what \
+         its commit costs -- a zero here means the clock starts after it"
+    );
+
+    drop(file);
+    let _ = std::fs::remove_file(&path);
+}
+
 /// A commit's cost is reported in three parts that add up (M25.4).
 ///
 /// The harness published one blended number until `M20.6` decomposed it by
@@ -178,12 +220,12 @@ fn a_commits_cost_is_reported_in_parts_that_do_not_overlap() {
     for timing in &outcome.commit_timings {
         assert_eq!(
             timing.flush(),
-            timing.submit + timing.blocking,
-            "the flush's own cost is its submit plus its wait, and nothing else"
+            timing.prepare + timing.submit + timing.blocking,
+            "a commit's cost is its preparation, its submit and its wait, and nothing else"
         );
         assert!(
-            timing.flush() <= timing.submit + timing.blocking + timing.deferral,
-            "deferral must not be folded into the flush: that is the defect M20.6 found"
+            timing.flush() <= timing.prepare + timing.submit + timing.blocking + timing.deferral,
+            "deferral must not be folded into the commit: that is the defect M20.6 found"
         );
     }
 

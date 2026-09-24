@@ -870,10 +870,10 @@ fn compare_strategies<O: io::Write, E: io::Write>(
          quoted in the docs because quoting ours would be misleading."
     ));
     report.line(format_args!(
-        "  'flush' is the flush's own cost: the submit that carries it plus any time spent \
-         waiting for it. Its two halves are shown beside it because which one holds the cost \
-         says what happened -- an operation that completed inside SubmitIoRing puts it in \
-         'submit' and leaves 'block' at zero, and one that pended does the reverse."
+        "  'commit' is what committing costs the strategy: preparing for the flush, submitting \
+         it, and waiting for it. The three are shown beside it because which one holds the cost \
+         is what tells the strategies apart -- host-sequenced spends it in 'prep', waiting for \
+         every write in userspace, where the covering strategies spend it in 'submit'."
     ));
     report.line(format_args!(
         "  a zero 'block' beside a large 'deferral' does NOT establish that the operation \
@@ -882,7 +882,7 @@ fn compare_strategies<O: io::Write, E: io::Write>(
          reading 'block' alone is how the old single number came to mean something it did not."
     ));
     report.line(format_args!(
-        "  'deferral' is NOT part of the flush. It is how long this program went on doing other \
+        "  'deferral' is NOT part of the commit. It is how long this program went on doing other \
          work before asking, so a design that defers further grows it while being no slower. It \
          is shown because the column here used to be exactly this number, labelled as commit \
          latency (M20.6). Compare rec/s for which strategy to pay for."
@@ -985,13 +985,14 @@ fn compare_strategies<O: io::Write, E: io::Write>(
             ),
         }
         report.line(format_args!(
-            "  {:<18} {:>8.0} rec/s  flush p50 {:>7}  p99 {:>7}  \
-             (submit {:>7} / block {:>7})  deferral p50 {:>7}  \
+            "  {:<18} {:>8.0} rec/s  commit p50 {:>7}  p99 {:>7}  \
+             (prep {:>7} / submit {:>7} / block {:>7})  deferral p50 {:>7}  \
              append stall {:>7}  -- pays {}",
             outcome.strategy.name(),
             outcome.throughput(),
             micros(outcome.commit_quantile(CommitTiming::flush, 0.50)),
             micros(outcome.commit_quantile(CommitTiming::flush, 0.99)),
+            micros(outcome.commit_quantile(|t| t.prepare, 0.50)),
             micros(outcome.commit_quantile(|t| t.submit, 0.50)),
             micros(outcome.commit_quantile(|t| t.blocking, 0.50)),
             micros(outcome.commit_quantile(|t| t.deferral, 0.50)),

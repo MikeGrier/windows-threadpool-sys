@@ -283,11 +283,11 @@
       "expect": "caught",
       "why": "The exact defect M20.6 found, re-expressible in one line once the parts exist. A commit's reported cost is its submit plus its wait; adding the deferral back produces a number that grows when a design defers further while being no slower, which is what the harness published for months and what a reader took for commit latency. The guard is an identity rather than a value, because which part carries the cost is a property of the machine and M25's standing constraint forbids depending on it.",
       "find": [
-        "        self.submit + self.blocking",
+        "        self.prepare + self.submit + self.blocking",
         "    }"
       ],
       "replace": [
-        "        self.submit + self.blocking + self.deferral",
+        "        self.prepare + self.submit + self.blocking + self.deferral",
         "    }"
       ]
     },
@@ -309,10 +309,22 @@
       "expect": "caught",
       "why": "The sibling of the case above, for the other part that must not silently read zero. Listed separately because they are measured at different sites -- the submit around the commit call, the deferral at the settle -- and one can be lost without the other. This is the part that matters most on a handle where the operation completes inline, since the device round trip lands here and nowhere else.",
       "find": [
-        "Some((user_data, submitting.elapsed(), Instant::now()))"
+        "        deferred[lane_index] = Some((user_data, prepare, submitting.elapsed(), Instant::now()));"
       ],
       "replace": [
-        "Some((user_data, Duration::ZERO, Instant::now()))"
+        "        deferred[lane_index] = Some((user_data, prepare, Duration::ZERO, Instant::now()));"
+      ]
+    },
+    {
+      "name": "M25.5: the host round trip falls outside the commit's measured cost",
+      "file": "examples/epoch_log/strategy.rs",
+      "expect": "caught",
+      "why": "The defect M25.5 found in M25.4's own numbers. HostSequenced waits for every write in userspace before pushing an unordered flush; starting the commit clock at the submit puts that round trip outside every measured part, and the strategy then reports a commit roughly six times cheaper than the covering ones while doing the same work where nothing is looking. A reader comparing the published figures would have drawn the opposite of the right conclusion -- the same failure mode M20.6 found, one layer down. The patch moves the clock back to after the preparation, which is exactly the shape the defect had. The guard asserts only that a non-zero prepare is observed, because what is pinned is the measurement boundary and not how expensive any strategy is on a given machine.",
+      "find": [
+        "        let prepare = preparing.elapsed();"
+      ],
+      "replace": [
+        "        let prepare = Duration::ZERO;"
       ]
     },
     {

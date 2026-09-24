@@ -303,10 +303,7 @@ must leave the log correct if the platform completes inline tomorrow.
 
 - [x] **M25.4** -- The commit is measured as submit / blocking / deferral, so the flush's own cost and the deferral window cannot be confused again. -> [completed 2026-09-24](COMPLETED-CHECKLIST.md#m254)
 
-- [ ] **M25.5** -- Re-run the three-way comparison and answer `M20.6` on the numbers it was always
-  meant to rest on. Commit the capture under [measurements/](measurements/) and link rather than
-  paste it. The structural answer on blast radius stands whatever this shows; what is open is whether
-  `AlternatingRings` earns its permanent doubled registration on any other ground.
+- [x] **M25.5** -- The comparison was re-run over fifteen runs and `M20.6` answered: no other ground found for `AlternatingRings`, and the accounting defect that would have inverted the reading was fixed first. -> [completed 2026-09-24](COMPLETED-CHECKLIST.md#m255)
 
 - [ ] **M25.6** -- Sweep what this milestone makes false. At least: the "keeps appending while a
   commit is outstanding" rationale in [strategy.rs](examples/epoch_log/strategy.rs), that module's

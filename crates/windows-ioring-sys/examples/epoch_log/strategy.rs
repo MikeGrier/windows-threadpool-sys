@@ -98,14 +98,18 @@
 //! **M25.3 changed the handle**: the log and each strategy's file are now
 //! pre-allocated and opened `NO_BUFFERING | OVERLAPPED`, which is the one
 //! configuration [the spike](../../design-sessions/spikes/write-pending-spike.rs)
-//! measured as behaving differently from a buffered handle. What that removes
-//! is the *reason* the paragraph above gives for the strategies being unable to
-//! differ. It does not by itself establish that they now do, and this section
-//! deliberately does not claim they do -- Windows specifies nothing about when
-//! a ring operation completes relative to `SubmitIoRing`, so that is a question
-//! for measurement rather than for reasoning. `M25.4` is where the harness
-//! starts reporting the commit itself, and `M25.5` is where the three-way
-//! comparison is re-run and read.
+//! measured as behaving differently from a buffered handle. `M25.4` then split
+//! a commit's cost into parts so the flush and the deferral could not be read
+//! as each other, and `M25.5` re-ran the comparison on those numbers:
+//! [measurements/2026-09-24-commit-decomposed/](../../measurements/2026-09-24-commit-decomposed/README.md).
+//!
+//! **Read that capture rather than this paragraph for the answer.** In short,
+//! over fifteen runs the three are not distinguishable on throughput or on
+//! total commit cost -- the run-to-run spread within one strategy exceeds the
+//! spread across them -- while *where* each spends its commit is structural and
+//! never inverts. The capture also records a correction it had to make first:
+//! the commit clock started after `HostSequenced`'s host round trip, which made
+//! that strategy look six times cheaper than it is.
 //!
 //! So the three were indistinguishable *because they were doing the same
 //! serialized work*, not because a shared dominant term swamped real
@@ -348,6 +352,23 @@ pub struct Outcome {
 /// got.
 #[derive(Clone, Copy, Debug)]
 pub struct CommitTiming {
+    /// Wall time the strategy spent preparing before the flush could be
+    /// pushed at all.
+    ///
+    /// Zero for the covering strategies, which push the flush immediately and
+    /// let its coverage do the ordering. For `HostSequenced` it is the host
+    /// round trip -- waiting for every write's completion in userspace, which
+    /// is what makes an unordered flush sufficient for it.
+    ///
+    /// **This part exists because leaving it out inverted the comparison.**
+    /// `M25.4` started the clock at the submit, which put that round trip
+    /// outside every measured part; `HostSequenced` then reported a flush
+    /// roughly six times cheaper than the other two while doing the same work
+    /// in a place nothing was looking. The cost had not gone anywhere, and a
+    /// reader comparing the published numbers would have concluded the
+    /// opposite of the truth. Found by `M25.5` while reading the very figures
+    /// `M25.4` produced.
+    pub prepare: Duration,
     /// Wall time inside the call that builds and submits the flush.
     ///
     /// On a handle where the operation completes inline, this **is** the
@@ -375,12 +396,14 @@ pub struct CommitTiming {
 }
 
 impl CommitTiming {
-    /// What the flush itself cost: submitting it, plus waiting for it.
+    /// What the commit itself cost: preparing for it, submitting it, and
+    /// waiting for it.
     ///
     /// Excludes [`deferral`](Self::deferral), which is the program's and not
-    /// the flush's. This is the figure `M25.4` asked for.
+    /// the commit's. This is the figure `M25.4` asked for, with the
+    /// [`prepare`](Self::prepare) term `M25.5` found it was missing.
     pub fn flush(&self) -> Duration {
-        self.submit + self.blocking
+        self.prepare + self.submit + self.blocking
     }
 }
 
@@ -431,16 +454,17 @@ impl Outcome {
 /// lane has no previous commit to settle.
 fn settle(
     lane: &mut Lane,
-    deferred: &mut Option<(usize, Duration, Instant)>,
+    deferred: &mut Option<(usize, Duration, Duration, Instant)>,
     timings: &mut Vec<CommitTiming>,
 ) -> io::Result<()> {
-    let Some((user_data, submit, submitted_at)) = deferred.take() else {
+    let Some((user_data, prepare, submit, submitted_at)) = deferred.take() else {
         return Ok(());
     };
     let deferral = submitted_at.elapsed();
     let blocked = Instant::now();
     lane.await_flush(user_data)?;
     timings.push(CommitTiming {
+        prepare,
         submit,
         deferral,
         blocking: blocked.elapsed(),
@@ -745,7 +769,7 @@ pub fn run(
     // `UserData`. Each ring assigns its own `UserData` sequence, so the two
     // lanes hand out colliding values and a single map silently loses half the
     // samples -- which is exactly what the second attempt at this measured.
-    let mut deferred: Vec<Option<(usize, Duration, Instant)>> = vec![None; lanes.len()];
+    let mut deferred: Vec<Option<(usize, Duration, Duration, Instant)>> = vec![None; lanes.len()];
 
     for epoch in 0..epochs as u64 {
         let lane_index = if strategy == CommitStrategy::AlternatingRings {
@@ -805,6 +829,11 @@ pub fn run(
             &mut commit_timings,
         )?;
 
+        // Timed from here, not from the submit. What a strategy must do
+        // *before* it can push its flush is part of what committing costs it
+        // -- and leaving it out is what made `HostSequenced` look six times
+        // cheaper than the others in M25.4's first numbers.
+        let preparing = Instant::now();
         let coverage = match strategy {
             // The round trip: every write observed complete *before* the flush
             // is even pushed. That is what makes an unordered flush sufficient
@@ -817,12 +846,13 @@ pub fn run(
                 FlushCoverage::CoversPrecedingOperations
             }
         };
-        // Timed around the submit itself, which is the half of a commit's cost
-        // that exists whether or not the operation pends: on a handle that
-        // completes inline, the device round trip happens inside this call.
+        let prepare = preparing.elapsed();
+        // The submit itself, which is the part of a commit's cost that exists
+        // whether or not the operation pends: on a handle that completes
+        // inline, the device round trip happens inside this call.
         let submitting = Instant::now();
         let user_data = lanes[lane_index].commit(file, coverage)?;
-        deferred[lane_index] = Some((user_data, submitting.elapsed(), Instant::now()));
+        deferred[lane_index] = Some((user_data, prepare, submitting.elapsed(), Instant::now()));
     }
 
     // Settle the last outstanding commit, or `durable_through` below would be
