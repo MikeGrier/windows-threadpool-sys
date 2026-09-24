@@ -83,6 +83,9 @@ mod record;
 mod replay;
 mod strategy;
 
+#[cfg(test)]
+mod tests;
+
 use std::io;
 use std::os::windows::io::AsRawHandle;
 use std::path::PathBuf;
@@ -662,6 +665,31 @@ fn verify<O: io::Write, E: io::Write>(
     assert_eq!(
         torn.durable_verified, run.durable_records,
         "tearing the tail must not cost a single durable record"
+    );
+    // And the tear must have actually torn something. Without this the case
+    // can quietly stop testing what it claims: a cut that lands in a zeroed
+    // block tail -- or in M25.3's pre-allocated slack -- leaves every record
+    // whole, so `is_clean` and the durable count both pass while nothing has
+    // been demonstrated about tolerating a partial record.
+    //
+    // The hazard was described in the comment above from the moment the cut
+    // was rewritten, and describing it did not catch it: reverting that cut to
+    // the old file-length form left this whole function passing. Measured
+    // during M25.1b, which is what turned the description into an assertion.
+    //
+    // `Truncated` specifically, not merely "stopped": a cut landing past the
+    // last record reports `NeverWritten`, which is the unwritten extent rather
+    // than a torn record and would mean the case had stopped tearing.
+    assert_eq!(
+        torn.tail_stopped,
+        Some(record::Torn::Truncated),
+        "the torn-tail case must actually tear a record, or it demonstrates nothing"
+    );
+    assert!(
+        torn.tail_records < clean.tail_records,
+        "tearing the last record must cost a tail record: clean saw {}, torn saw {}",
+        clean.tail_records,
+        torn.tail_records
     );
 
     // 3. The negative control. A verifier that cannot fail proves nothing, so

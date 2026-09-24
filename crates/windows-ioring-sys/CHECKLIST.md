@@ -297,19 +297,7 @@ must leave the log correct if the platform completes inline tomorrow.
 
 - [x] **M25.2** -- Replay walks by the stride and confines each decode to its own block. Landed with `M25.1`: a strided writer and an unstrided reader cannot coexist. -> [completed 2026-09-23](COMPLETED-CHECKLIST.md#m251)
 
-- [ ] **M25.1b** -- **Nothing runs the sample, and that is how `M25.1` nearly shipped broken.**
-  `main.rs`'s three replay paths plus its negative control are, in this crate's own words, "the only
-  part that can catch a durability bug" -- and no CI job executes the example. Measured during
-  `M25.1`: with the writer strided and the reader not, **every one of the 21 example tests passed**
-  while the log was unreadable; only `cargo run --example epoch_log` caught it.
-
-  `M25.1` closed the specific hole with three end-to-end tests, but that is the narrow fix. The
-  general one is a job that runs the sample and fails on its exit code, which is nearly free --
-  the sample already asserts and already returns non-zero. **Decide where it belongs**: a CI step
-  is the honest rung for something that takes seconds and needs a real device, but the repository's
-  own FAIL FAST rule prefers the lowest rung that can carry it, and a `#[test]` that invokes
-  `run_log` directly may be able to. Check whether the strategy comparison has to run too, since
-  that is the expensive part and is separately covered now.
+- [x] **M25.1b** -- The sample's own verification now runs under `cargo test`, and `main` itself under CI. -> [completed 2026-09-24](COMPLETED-CHECKLIST.md#m251b)
 
 - [x] **M25.3** -- The log and every strategy file are pre-allocated and opened `NO_BUFFERING | OVERLAPPED`. -> [completed 2026-09-24](COMPLETED-CHECKLIST.md#m253)
 

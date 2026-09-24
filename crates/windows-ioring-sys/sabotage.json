@@ -253,6 +253,31 @@
       ]
     },
     {
+      "name": "M25.1b: the torn-tail case stops tearing anything",
+      "file": "examples/epoch_log/main.rs",
+      "expect": "caught",
+      "why": "The sample's torn-tail replay exists to show the reader tolerates a partial record, which the contract requires. Reverting the cut to the old file-length form makes it land in a zeroed block tail -- or, since M25.3, in the pre-allocated slack -- so every record is whole and the case demonstrates the opposite of what it claims while still passing is_clean and the durable count. This was measured SURVIVING even after M25.1b's end-to-end test was added: the hazard had been written into the comment above the cut and describing it caught nothing. The assertions on tail_stopped and tail_records are what turned the description into a check, and this case is what shows they are load-bearing. Only the end-to-end test catches it; the M25.1 layout tests all stay green.",
+      "find": [
+        "    let last_record_start = (run.durable_records + run.tail_records - 1) * record::RECORD_STRIDE;",
+        "    let torn_at = last_record_start + record::HEADER_LEN + 4;"
+      ],
+      "replace": [
+        "    let torn_at = bytes.len() - (record::HEADER_LEN + 4);"
+      ]
+    },
+    {
+      "name": "M25.1b: the negative control stops corrupting the durable region",
+      "file": "examples/epoch_log/main.rs",
+      "expect": "caught",
+      "why": "The negative control is what makes the other two replay passes mean anything: it corrupts one byte INSIDE the durable region and requires replay to report it. Moving the victim byte into the file's unwritten tail leaves the durable region intact, so replay correctly finds no violation and the control silently stops controlling -- a verifier that cannot fail, which is exactly the thing replay.rs's own module docs say would make the whole sample decoration. Caught only by the end-to-end test, because nothing else in the suite runs the sample's verify().",
+      "find": [
+        "    let victim = record::HEADER_LEN + 2;"
+      ],
+      "replace": [
+        "    let victim = bytes.len() - 1;"
+      ]
+    },
+    {
       "name": "CONTROL: rewording a statement changes nothing",
       "file": "examples/epoch_log/contract.rs",
       "expect": "survives",

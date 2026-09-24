@@ -142,8 +142,64 @@ fn a_lane_offers_at_most_what_was_asked_for() {
     );
 }
 
-/// A whole harness run lays its records out one per stride, and replays clean
-/// (M25.1 + M25.2).
+/// All three strategies must write byte-identical logs (M25.1b).
+///
+/// This is `compare_strategies`' strongest assertion and the one with real
+/// teeth: replay checks a log against itself, where this checks the three
+/// against *each other*, so a dropped record, a wrong offset, or an ordering
+/// bug in any one of them shows up as a difference from the other two.
+///
+/// It had no test. The harness test above runs `CoveringFlush` alone, and
+/// `main`'s version needs all three -- which made it the one assertion in the
+/// sample that only `cargo run` could reach. Running them at two epochs of
+/// three records instead of thirty-two of sixty-four puts it at a rung that
+/// runs everywhere, for a cost the suite does not notice.
+///
+/// **Why identical bytes is the right expectation even across ring counts:**
+/// a record's offset is its position in the global sequence times the stride,
+/// and a strategy decides which *ring* submits a write, never where it lands.
+/// `AlternatingRings` therefore interleaves submissions across two lanes into
+/// the same offset space and must still produce the same file.
+#[test]
+fn every_strategy_writes_the_same_log() {
+    const EPOCHS: usize = 2;
+    const PER_EPOCH: usize = 3;
+    let payload = b"a harness record".to_vec();
+
+    let mut reference: Option<(&'static str, Vec<u8>)> = None;
+    for strategy in super::CommitStrategy::ALL {
+        let (path, file) = scratch(&format!("cross-{}", strategy.name()));
+        let outcome = super::run(
+            strategy,
+            file.as_raw_handle(),
+            EPOCHS,
+            PER_EPOCH,
+            &payload,
+            None,
+        )
+        .expect("a small run completes");
+        assert_eq!(
+            outcome.records,
+            EPOCHS * PER_EPOCH,
+            "{} did not write every record it was asked for",
+            strategy.name()
+        );
+
+        let bytes = std::fs::read(&path).expect("read the log back");
+        drop(file);
+        let _ = std::fs::remove_file(&path);
+
+        match &reference {
+            None => reference = Some((strategy.name(), bytes)),
+            Some((first, expected)) => assert_eq!(
+                &bytes,
+                expected,
+                "{} produced a different log than {first}; all three must write the same bytes",
+                strategy.name()
+            ),
+        }
+    }
+}
 ///
 /// **The gap this closes was measured, not suspected.** The harness's `Lane`
 /// is a second writer over the same on-disk format as the log's own

@@ -529,6 +529,22 @@ jobs:
           RUST_BACKTRACE: 1
           RUST_LIB_BACKTRACE: 1
         run: cargo test -p windows-ioring-sys --locked --no-fail-fast
+      # `cargo test` compiles the epoch-log sample as a test harness and never
+      # calls `main`, so until M25.1b nothing ran the program itself. That was
+      # not theoretical: M25.1 converted the log's writer to a strided layout
+      # without the reader, which left the log unreadable while every one of
+      # the example's tests passed.
+      #
+      # M25.1b put the contract checks in tests, which is the rung that runs on
+      # every developer's machine. What a test cannot reach is `main` itself --
+      # its path setup, its error plumbing, and its exit code -- and that is a
+      # published example a consumer runs, so a panic on startup is exactly the
+      # failure worth catching. Release, because the sample takes about a second
+      # there against several in debug.
+      - name: cargo run (epoch-log sample, end to end)
+        env:
+          RUST_BACKTRACE: 1
+        run: cargo run -p windows-ioring-sys --example epoch_log --release --locked
 
   placement-probe-no-serde:
     name: windows-placement-probe (no serde feature)

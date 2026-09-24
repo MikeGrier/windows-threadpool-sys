@@ -2862,3 +2862,58 @@ pre-allocates ahead of its writer, because an append that reaches the end of the
 extending write again. It also means a clean log now ends in zeros rather than at EOF, so replay
 stops with `NeverWritten` -- the path M25.2 taught it to tolerate, now actually exercised by the
 sample rather than left for a reader of a real log to meet first.
+
+### <a id="m251b"></a>M25.1b -- The sample's own verification now runs under `cargo test`, and `main` itself under CI. *(completed 2026-09-24 15:20:02 -04:00)*
+
+The item asked where this belonged: a CI job running the binary, or a `#[test]` calling the sample's
+functions. **Both, because they carry different facts**, and the split follows the FAIL FAST ladder
+rather than splitting the difference.
+
+**Everything the sample asserts is now a test.** `run_log` and `verify` are ordinary functions over
+a generic `Report`, so `tests.rs` drives the real log against a real ring and a real file and then
+runs the real verifier -- the same code path `main` takes. That is not a proxy for running the
+sample; it *is* running it, minus the strategy comparison. It costs nothing measurable: the example
+suite still finishes in well under a second.
+
+**The comparison's strongest assertion had no test, and now does.** `compare_strategies` requires
+all three strategies to write **byte-identical** logs -- replay checks a log against itself, where
+this checks the three against each other, so a dropped record or a wrong offset in any one shows up
+as a difference from the other two. `M25.1`'s harness test runs `CoveringFlush` alone, so this was
+the one assertion only `cargo run` could reach. `every_strategy_writes_the_same_log` runs all three
+at two epochs of three records instead of thirty-two of sixty-four. The expectation survives the
+ring count because a record's offset is its position in the global sequence times the stride, and a
+strategy decides which *ring* submits a write, never where it lands.
+
+**CI runs the binary for what a test cannot reach**: `main` itself -- its path setup, its error
+plumbing, its exit code. This is a published example a consumer runs, so a panic on startup is
+exactly the failure worth catching, and it is the rung that fits because nothing smaller executes
+`main`. Release, where the sample takes about a second.
+
+**The sabotage found a real hole, and it was in the thing this item exists to protect.** Reverting
+`M25.2`'s torn-tail cut to the old file-length form was **survived** by the new end-to-end test.
+With the extent pre-allocated, trimming a fixed count of bytes off the file lands in the slack, so
+every record stays whole -- and `is_clean()` and the durable count both pass while the case
+demonstrates the opposite of what it claims. A verifier that had quietly stopped verifying.
+
+What makes that worth recording is where the hazard already was: **written out in full, in the
+comment directly above the cut**, since `M25.2`. Describing it caught nothing. Two assertions now
+carry it -- that `tail_stopped` is `Truncated` specifically, not merely present, since a cut past
+the last record reports `NeverWritten` and would mean the case had stopped tearing; and that a tail
+record was actually lost. Prose is not a rung, stated once more by a file that had the prose.
+
+**What each guard is load-bearing for**, measured:
+
+| sabotage | end-to-end test | M25.1's layout tests |
+|---|---|---|
+| replay walks by extent (the `M25.1` defect) | red | red |
+| torn cut taken from the file length | **red** | green |
+| negative control moved out of the durable region | **red** | green |
+
+So the end-to-end test would have caught the defect that motivated the item, and it is the only
+thing covering two failures that make the sample's evidence vacuous rather than wrong. Both are
+recorded in [sabotage.json](sabotage.json).
+
+**What is deliberately still only in CI**: the strategy comparison end to end. Running it in a test
+would multiply the suite's cost to re-check a layout and a replay that `M25.1` already covers, and
+what the full run adds beyond the invariant above is a *measurement* -- which is not a contract this
+crate may assert.
