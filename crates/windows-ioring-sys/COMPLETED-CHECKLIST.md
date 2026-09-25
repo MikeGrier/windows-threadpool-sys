@@ -3493,3 +3493,59 @@ reader can judge the instrument's strength rather than take "more than none" on 
 **Seeds here are fixed rather than clock-derived**, unlike the generated suites. A calibration that
 could sometimes fail to demonstrate its own sensitivity would be the exact failure it exists to
 prevent, arriving as a flake.
+
+## Moved 2026-09-24 23:54:45 -04:00 -- M26.6: the kernel tests' new job
+
+### <a id="m266"></a>M26.6 -- Point the kernel tests at confirming reality stays inside the declared space. *(completed 2026-09-24 23:54:45 -04:00)*
+
+The shape is recorded as [D-65](DESIGN-NOTES.md#d-65); what follows is what the work found.
+
+**A hole was found exactly where the split is load-bearing.**
+[flush_barrier.rs](tests/flush_barrier.rs) already asserted `RS-C-4` against a real ring -- but the
+assertion sat behind an early return taken whenever its control could not discriminate. On such a
+machine the constraint was untested on **both** sides at once: the resolver is forbidden to produce
+a violation, and the only test that would notice had skipped. That is precisely the condition the
+item was written to prevent, and it was live.
+
+**The fix separates two questions one gate had been answering together.** *Is the barrier doing
+work* is a comparative claim and genuinely meaningless when the control shows no reordering -- the
+covering case would match a control that did nothing. *Did the kernel stay inside `RS-C-4`* is a
+conformance question, where skipping can only ever hide a violation; observing none is weak
+evidence when nothing could have reordered, but observing one is a finding on any machine. The
+conformance assertion now runs everywhere and only the comparative claim is withheld, with the
+output saying `PARTIAL` rather than `SKIP` so the difference is visible in a log.
+
+**The census was green and useless on its first build, and only trying to make it go red found
+that.** It searched each file for the clause ID anywhere in its text. Removing `RS-C-4`'s check
+from the only test performing it did **not** turn it red, because
+[generated_sequences.rs](tests/generated_sequences.rs) mentioned that clause solely to *disclaim*
+it -- "`RS-C-4` is flush_barrier's" -- and under a substring search a disclaimer reads exactly like
+a claim. This repository had already recorded that trap once, for a probe whose only mention of a
+tag was a comment, and it was walked into again anyway.
+
+**So a claim is now a structured marker.** `CONFIRMS:` for a constraint checked against a real
+kernel, `EXERCISES:` for a permission the resolver takes, each naming a clause and nothing else --
+a hedged `CONFIRMS: RS-C-4 eventually` does not parse as a claim, and that case is asserted. The
+rebuilt census was verified to go red in three directions before being trusted: a removed marker, a
+marker naming a clause the document does not declare, and a prose mention standing in for a marker.
+
+**Two blind spots are declared rather than left invisible.** A census over source proves a clause is
+*claimed*, never that the file's assertion still runs or still means anything -- comparing a
+constant against itself leaves the marker in place and the suite green. And dropping the covering
+flag does **not** fire the `RS-C-4` assertion on every machine: measured here, a device stack that
+orders a flush behind its file's outstanding writes by itself produces no violation to see, so that
+sabotage demonstrates nothing portable. The assertion's conformance value -- reporting a violation
+if one occurs -- is separate from its sensitivity, and only the first is claimed.
+
+**The sweep found a stale site from two milestones back.**
+[D-60](DESIGN-NOTES.md#d-60) still listed `SetIoRingCompletionEvent` among the five lifecycle calls
+left outside the seam, which `M26.3` had moved behind it. The correction is recorded in that row
+rather than only in `D-61`, since a reader arriving there would otherwise take the superseded list
+as current.
+
+**The "five techniques" framing becomes six, and the sixth is different in kind.** The other five
+check this crate against its own stated contract and cannot tell you that contract is wrong -- which
+is what happened in the two most expensive defects. The resolver checks the crate against a written
+specification of what the platform may do, and the kernel tests check the platform against that same
+specification. `M26`'s row also joins defect population A, on the observation that the kernel's
+*response* is a precondition and was never varied either.

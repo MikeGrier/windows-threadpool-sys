@@ -264,9 +264,10 @@ mock objection rather than working around it.
 
 **Justified by what it catches, not by hermeticity.** `M24` reaches a hermetic lib suite without it,
 so this milestone has to earn its place on the defect class it detects: code that is brittle to
-platform variation *inside* the permitted space. Nothing in the current toolkit detects that --
-[DESIGN-NOTES.md](DESIGN-NOTES.md#what-none-of-them-cover) records that all five existing techniques
-check this crate against *its own stated contract*.
+platform variation *inside* the permitted space. Nothing in the toolkit that preceded it detected
+that -- [DESIGN-NOTES.md](DESIGN-NOTES.md#what-none-of-them-cover) records that the five techniques
+which existed before `M26` all check this crate against *its own stated contract*. The resolver is
+the sixth, added by this milestone.
 
 **The standing constraint, inherited from the session.** The permitted space must be **wider than
 anything observed**, and must not be derived from observation -- deriving it from what we have seen
@@ -283,18 +284,7 @@ reviewable artifact rather than a recording.
 
 - [x] **M26.5** -- Both historical defects are re-injected and confirmed to turn the instrument red in [calibration.rs](tests/calibration.rs) and [sabotage.json](sabotage.json); recorded as [D-63](DESIGN-NOTES.md#d-63). -> [completed 2026-09-24](COMPLETED-CHECKLIST.md#m265)
 
-- [ ] **M26.6** -- Point the kernel tests at their new job: confirming that reality stays **inside**
-  the declared space, rather than re-checking behaviour the resolver already sweeps. A real kernel
-  observed outside the space is a genuine finding and should fail loudly; a kernel that moves
-  *within* it should change nothing. Sweep what this makes false, including the testing-strategy
-  section's "five techniques" framing, which becomes six.
-
-  **`RS-C-4` is the clause that makes this job real rather than nominal.** The resolver is forbidden
-  to break the drain half of `DRAIN_PRECEDING_OPS`, so a Windows that broke it would be caught by
-  nothing the resolver does -- these tests are where that would surface, and the division of labour
-  is stated in [RESPONSE-SPACE.md](RESPONSE-SPACE.md) on the strength of it. Make sure at least one
-  test actually exercises that clause against a real ring, or the constraint is untested in both
-  halves at once.
+- [x] **M26.6** -- The kernel tests confirm reality stays inside the space, enforced by [response_space_census.rs](tests/response_space_census.rs); `RS-C-4`'s conformance assertion no longer sits behind a skip. Recorded as [D-65](DESIGN-NOTES.md#d-65). -> [completed 2026-09-25](COMPLETED-CHECKLIST.md#m266)
 
 - [ ] **M26.7** -- Audit the existing suite for assertions that are **frozen observations rather
   than contracts** -- the failure case 4 of the session demonstrated, where one assertion gave

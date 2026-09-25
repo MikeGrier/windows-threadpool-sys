@@ -553,6 +553,60 @@
       ]
     },
     {
+      "name": "M26.6: a constraint loses its CONFIRMS marker",
+      "file": "tests/flush_barrier.rs",
+      "expect": "caught",
+      "why": "RESPONSE-SPACE.md justifies forbidding the resolver from ever violating RS-C-4 on the grounds that the kernel tests cover it. If the only test claiming that clause stops claiming it, the constraint is untested on both sides at once -- the resolver cannot produce it and nothing watches for it -- and the document's justification silently becomes false. This is the hole M26.6 exists to close, and the census is what closes it.",
+      "testArgs": ["test", "-p", "windows-ioring-sys", "--locked", "--all-features", "--test", "response_space_census"],
+      "find": [
+          "//! CONFIRMS: RS-C-4"
+      ],
+      "replace": [
+          "//! The drain clause is confirmed below."
+      ]
+    },
+    {
+      "name": "M26.6: the census counts a mention as a claim",
+      "file": "tests/response_space_census.rs",
+      "expect": "caught",
+      "why": "THE DEFECT THIS CENSUS SHIPPED WITH, AND THE REASON IT WAS REBUILT. The first version searched each file for the clause ID anywhere in its text. Measured: removing RS-C-4's check from the only test performing it did NOT turn it red, because a second file mentioned that clause only to say the check was somebody else's -- and under a substring search a disclaimer is indistinguishable from a claim. That is the same trap this repository recorded once before, where a bare substring matched a probe whose only mention of a tag was a comment. A marker is a claim; a mention is not, and this patch collapses the distinction again.",
+      "testArgs": ["test", "-p", "windows-ioring-sys", "--locked", "--all-features", "--test", "response_space_census"],
+      "find": [
+          "            let at = line.find(marker)?;",
+          "            let id = line[at + marker.len()..].trim();"
+      ],
+      "replace": [
+          "            let at = line.find(marker).unwrap_or(0);",
+          "            let id = line[at..].trim().trim_start_matches(marker).trim();"
+      ]
+    },
+    {
+      "name": "DECLARED BLIND SPOT: the RS-C-4 assertion is made vacuous while its marker stays",
+      "file": "tests/flush_barrier.rs",
+      "expect": "survives",
+      "why": "The honest limit of a source census, recorded rather than left invisible. The census proves a clause is CLAIMED by a file; it cannot prove the file's assertion still runs or still means anything. Comparing a constant against itself leaves the CONFIRMS marker in place and the test green, so nothing here notices. Closing this would need the assertion's execution to be observable from outside the test process, which is machinery this milestone judged disproportionate -- and the calibration discipline covers the same ground from the other direction, since M26.5 shows the instruments go red on real defects. If a cheap way to observe it appears, this case reports the discrepancy.",
+      "testArgs": ["test", "-p", "windows-ioring-sys", "--locked", "--all-features", "--test", "flush_barrier"],
+      "find": [
+          "        covering.a_after_flush, 0,"
+      ],
+      "replace": [
+          "        0, 0,"
+      ]
+    },
+    {
+      "name": "DECLARED BLIND SPOT: dropping the covering flag does not fire RS-C-4 on this machine",
+      "file": "tests/flush_barrier.rs",
+      "expect": "survives",
+      "why": "A hardware-dependent limit on the conformance assertion's SENSITIVITY, measured rather than assumed. Running the treatment case with FlushCoverage::Unordered removes the barrier entirely, and on a machine where the device stack orders a flush behind that file's outstanding writes by itself -- which this file's own header documents, and which is the case here -- no preceding write completes after the flush even unflagged, so the assertion stays green. It is therefore NOT a portable demonstration that the assertion can go red: on the spike's machine it would be caught, on this one it survives. Recorded because a reader would otherwise reasonably expect this to be the calibration for RS-C-4, and it cannot be. What the assertion still does everywhere is report a violation if one occurs, which is the conformance job; what it cannot do everywhere is prove it would notice.",
+      "testArgs": ["test", "-p", "windows-ioring-sys", "--locked", "--all-features", "--test", "flush_barrier"],
+      "find": [
+          "    let covering = run_case(&mut ring, handle, FlushCoverage::CoversPrecedingOperations);"
+      ],
+      "replace": [
+          "    let covering = run_case(&mut ring, handle, FlushCoverage::Unordered);"
+      ]
+    },
+    {
       "name": "CONTROL: rewording a statement changes nothing",
       "file": "examples/epoch_log/contract.rs",
       "expect": "survives",

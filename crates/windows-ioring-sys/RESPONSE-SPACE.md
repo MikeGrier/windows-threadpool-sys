@@ -4,10 +4,12 @@ What `windows-ioring-sys` will tolerate from the platform, stated as a
 specification rather than recorded from a run.
 
 This document is normative. `M26.3`'s resolver generates resolutions **from
-this space**, `M26.4`'s properties must hold under every one of them, and
-`M26.6`'s kernel tests exist to confirm that a real Windows stays **inside**
-it. Every clause carries an ID so those three can cite the clause rather than
-restate it.
+this space**, `M26.4`'s properties must hold under every one of them, and the
+kernel tests confirm that a real Windows stays **inside** it (`M26.6`). Every
+clause carries an ID so those three can cite the clause rather than restate it
+-- and [response_space_census.rs](tests/response_space_census.rs) fails when a
+clause is claimed by nothing on the side that owes it a check, so the division
+of labour is enforced rather than merely described.
 
 ## What this is, and what it deliberately is not
 
@@ -198,8 +200,13 @@ No operation queued **before** a flush carrying
   permitted to break it would require every consumer to re-verify durability by
   some other means, which is to say it would make the primitive useless. The
   cost of this call is that a Windows which broke the drain would not be caught
-  by the resolver -- it would be caught by `M26.6`'s kernel tests, which is
-  exactly the division of labour those tests are being repointed to.
+  by the resolver at all -- it is caught by the kernel tests instead, which is
+  the division of labour they were repointed to in `M26.6`. That is now a
+  mechanical arrangement rather than an intention:
+  [flush_barrier.rs](tests/flush_barrier.rs) carries a `CONFIRMS: RS-C-4`
+  marker and asserts the clause against a real ring on every machine, and
+  [response_space_census.rs](tests/response_space_census.rs) fails if that
+  marker ever disappears.
 - **Note what is *not* constrained:** the hold-back half.
   [D-24](DESIGN-NOTES.md#d-24) claimed the flag holds back what follows and
   [D-47](DESIGN-NOTES.md#d-47) withdrew that claim, so RS-P-2 applies in full

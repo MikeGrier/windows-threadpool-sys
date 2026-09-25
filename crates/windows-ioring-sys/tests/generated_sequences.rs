@@ -15,6 +15,28 @@
 //! completion is reported as a contract violation rather than inferred (M16).
 //! Without those, a generator would only be checking that nothing crashed.
 //!
+//! **What this confirms about the platform (M26.6).** Because these sequences
+//! run against a real ring and report to [`RingContract`], this file is where
+//! [RESPONSE-SPACE.md](../RESPONSE-SPACE.md)'s conservation constraints are
+//! checked against **Windows** rather than against a resolver: every submitted
+//! operation completes exactly once (by the oracle's duplicate and outstanding
+//! violations), a completion identifies its operation (by every token claiming
+//! its own completion), and nothing completes before it is submitted (by the
+//! oracle's unexpected-completion violation).
+//!
+//! The drain-ordering constraint is [flush_barrier.rs](flush_barrier.rs)'s,
+//! since it needs an ordering observable this file deliberately does not
+//! construct.
+//!
+//! A failure of one of those is a **finding about Windows**, not a regression
+//! in this crate, and the space says so: those clauses are `Decided` rather
+//! than `Observed`, meaning this crate requires them of the platform and has
+//! no fallback if they do not hold.
+//!
+//! CONFIRMS: RS-C-1
+//! CONFIRMS: RS-C-2
+//! CONFIRMS: RS-C-3
+//!
 //! **Calibrated, and it failed the first time.** M17.4 reverted D-20's setup
 //! signal -- #47 exactly as it shipped -- and this file reported green. It
 //! attached the event and sampled the right states, but drained by polling

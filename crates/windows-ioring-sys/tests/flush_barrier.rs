@@ -2,6 +2,24 @@
 //! M12.2: the flush-barrier contract, tested against the *measured* behaviour
 //! rather than against the implementation.
 //!
+//! # This file's job changed in M26.6
+//!
+//! It is now the place that confirms a **real kernel stays inside**
+//! [RESPONSE-SPACE.md](../RESPONSE-SPACE.md)'s `RS-C-4` -- no operation queued
+//! before a drain-flagged flush completes after it. That matters because
+//! `RS-C-4` is the one clause the resolver is *forbidden* to break: a Windows
+//! that broke the drain would be caught by nothing the resolver does, so this
+//! is the only half of the pair that can see it. The division of labour is
+//! stated in that document on the strength of this test existing.
+//!
+//! Two consequences follow, and both are visible below. The conformance
+//! assertion runs on every machine, including ones where the control cannot
+//! discriminate -- skipping it could only ever hide a violation. And a failure
+//! here is a **finding about Windows**, not a regression in this crate, so it
+//! says so in its own message.
+//!
+//! CONFIRMS: RS-C-4
+//!
 //! [`FlushCoverage`] exists because an unflagged flush does not cover the
 //! writes queued before it (D-23). A unit test can pin the enum-to-SQE-flag
 //! mapping, and `batch/tests.rs` does -- but that only proves the flag is set,
@@ -304,33 +322,57 @@ fn a_covering_flush_waits_for_preceding_writes_and_an_unordered_one_does_not() {
     // this test skip on hardware where it has plenty to say.
     let unordered = run_case(&mut ring, handle, FlushCoverage::Unordered);
 
-    if !unordered.saw_reordering() {
-        drop(ring);
-        drop(file);
-        let _ = std::fs::remove_file(&path);
-        eprintln!(
-            "SKIP: an unordered flush produced completions in strict submission order on this \
-             machine, so there is no reordering here to distinguish a barrier from, and the \
-             covering assertions would pass for the wrong reason."
-        );
-        return;
-    }
-
+    // WHETHER THE CONTROL DISCRIMINATED DECIDES WHAT MAY BE CLAIMED, NOT
+    // WHETHER THE KERNEL IS CHECKED AT ALL (M26.6).
+    //
+    // This used to return here, and that was a hole. Two distinct questions
+    // were being answered by one gate:
+    //
+    //   1. "Is the barrier doing work?" -- a comparative claim, and it is
+    //      genuinely meaningless when the control shows no reordering, since
+    //      the covering case would then match a control that did nothing.
+    //   2. "Did the kernel stay inside `RS-C-4`?" -- a conformance question,
+    //      and skipping it can only ever hide a violation. Observing no
+    //      pre-flush write completing after the flush is weak evidence when
+    //      nothing could have reordered, but observing one is a finding on
+    //      any machine.
+    //
+    // `RESPONSE-SPACE.md` makes the second question this test's job, because
+    // `RS-C-4` is the one clause the resolver is forbidden to break: a Windows
+    // that broke the drain would be caught by nothing the resolver does. A
+    // skip here therefore left that constraint untested in both halves at
+    // once, which is exactly what `M26.6` was written to prevent. So the
+    // covering case now runs unconditionally and only the comparative claim
+    // is withheld.
+    let discriminating = unordered.saw_reordering();
     let covering = run_case(&mut ring, handle, FlushCoverage::CoversPrecedingOperations);
 
     drop(ring);
     drop(file);
     let _ = std::fs::remove_file(&path);
 
-    // The contract (D-23). Not "usually waits": if the flush could complete
-    // before even one preceding write, its completion would not prove those
-    // writes are durable, which is the entire reason the variant exists.
+    // RS-C-4, against the real kernel. The contract (D-23): not "usually
+    // waits". If the flush could complete before even one preceding write, its
+    // completion would not prove those writes are durable, which is the entire
+    // reason the variant exists.
     assert_eq!(
         covering.a_after_flush, 0,
-        "a covering flush must not complete before any write queued ahead of it, but {} of \
-         {PHASE_OPS} did (the unordered control saw {})",
+        "RS-C-4 violated: a covering flush must not complete before any write queued ahead of \
+         it, but {} of {PHASE_OPS} did (the unordered control saw {}). This is a finding about \
+         Windows, not about this crate -- see RESPONSE-SPACE.md, which constrains the resolver \
+         from ever producing this and names these tests as the place it would surface.",
         covering.a_after_flush, unordered.a_after_flush
     );
+
+    if !discriminating {
+        eprintln!(
+            "PARTIAL: an unordered flush produced completions in strict submission order on \
+             this machine, so there was no reordering here for a barrier to suppress. The \
+             RS-C-4 conformance assertion above still ran and still holds; what cannot be \
+             claimed from this run is that the flag is what produced the ordering."
+        );
+        return;
+    }
 
     // What D-24 used to claim, and what replaced it.
     //

@@ -17,6 +17,23 @@
 //! resolver alone. `M26.4` is where a real ring is driven across it, and
 //! `M26.5` is where the resolution is calibrated against defects this crate
 //! actually shipped.
+//!
+//! # The markers below are read by a test
+//!
+//! `M26.6` added a census ([response_space_census.rs](../../../tests/response_space_census.rs))
+//! that fails when a clause in the space is claimed by nothing. It reads these
+//! `EXERCISES:` lines rather than searching for the clause ID anywhere in the
+//! text, and the difference is not cosmetic -- the first version of that
+//! census matched any mention, so a file saying "that clause is somebody
+//! else's job" counted as checking it. A marker is a claim; a mention is not.
+//!
+//! EXERCISES: RS-P-1
+//! EXERCISES: RS-P-2
+//! EXERCISES: RS-P-3
+//! EXERCISES: RS-P-4
+//! EXERCISES: RS-P-5
+//! EXERCISES: RS-P-6
+//! EXERCISES: RS-P-7
 
 use std::ffi::c_void;
 use std::ptr;
