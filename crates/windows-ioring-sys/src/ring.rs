@@ -726,6 +726,17 @@ impl IoRing {
         if unsafe { SetEvent(event.as_raw_handle()) } == 0 {
             return Err(io::Error::last_os_error());
         }
+        // The setup signal is what a waiter attaching to a backlog depends on
+        // entirely, so M26.9's investigation needs to know it happened -- and
+        // that it happened on the ring's own handle rather than the duplicate
+        // handed back below, since only the former is what the kernel will go
+        // on signalling.
+        windows_threadpool_sys::trace_record!(
+            "delivery",
+            "setup-signalled",
+            event.as_raw_handle() as usize,
+            self.accounting.outstanding()
+        );
 
         event.try_clone()
     }

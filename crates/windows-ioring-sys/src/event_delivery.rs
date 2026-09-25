@@ -122,6 +122,11 @@ impl EventDelivery {
         // signal-once-on-attach that makes the backlog guarantee above true
         // are each stated in one place rather than restated here.
         let event = ring.completion_event()?;
+        windows_threadpool_sys::trace_record!(
+            "delivery",
+            "event-attached",
+            std::os::windows::io::AsRawHandle::as_raw_handle(&event) as usize
+        );
         // SAFETY: `completion_event` returns a duplicate of an auto-reset
         // event -- always a supported wait target, and never a mutex -- and
         // that duplicate is exclusively ours. The ring keeps its own separate
@@ -140,13 +145,16 @@ impl EventDelivery {
                 // lands, so the only gap this leaves is a completion that
                 // arrives between the last pop and the re-arm -- and the
                 // second drain closes exactly that gap (M4.2).
+                windows_threadpool_sys::trace_record!("delivery", "callback-entered");
                 drain(&ring_for_wait, on_completion.as_ref());
                 activation.rearm(None);
                 drain(&ring_for_wait, on_completion.as_ref());
+                windows_threadpool_sys::trace_record!("delivery", "callback-left");
             },
             env,
         )?;
         wait.arm(None);
+        windows_threadpool_sys::trace_record!("delivery", "armed");
 
         Ok(Self { wait, ring })
     }

@@ -116,13 +116,104 @@ impl DeliveryWatch {
              \x20 arrival times  : {:?}\n\
              \x20 inter-arrival  : [{}]\n\
              \x20 waited         : {:?} before giving up\n\
-             \x20 post-mortem    : {postmortem}",
+             \x20 post-mortem    : {postmortem}\n\
+             {}",
             self.arrivals.len(),
             self.arrivals,
             gaps.join(", "),
             DELIVERY_BOUND,
+            trace_section(),
         )
     }
+}
+
+/// Whether the default process thread pool is still running callbacks at all.
+///
+/// The discriminating probe for `M26.9`. Every captured stall shows the pool
+/// never invoking the callback for *any* ring in the process, which has two
+/// very different explanations: the whole default pool has stopped dispatching,
+/// or only its wait mechanism has. This runs one of each and says which.
+///
+/// Both use short bounds because they run inside an already-failing test; a
+/// probe that hung would replace the diagnosis with a second timeout.
+fn pool_liveness() -> String {
+    use windows_threadpool_sys::wait::{ThreadpoolWait, WaitableHandle};
+    use windows_threadpool_sys::work::ThreadpoolWork;
+
+    let probe_bound = Duration::from_secs(2);
+
+    // 1. A plain work item. If this does not run, the pool is not dispatching
+    //    anything and the wait mechanism is not the subject.
+    let (work_tx, work_rx) = mpsc::channel();
+    let work_tx = std::sync::Mutex::new(work_tx);
+    let work_ran = match ThreadpoolWork::new(
+        move || {
+            if let Ok(tx) = work_tx.lock() {
+                let _ = tx.send(());
+            }
+        },
+        None,
+    ) {
+        Ok(work) => {
+            work.submit();
+            work_rx.recv_timeout(probe_bound).is_ok()
+        }
+        Err(error) => return format!("could not create a work probe: {error}"),
+    };
+
+    // 2. A brand-new wait on a brand-new event, armed and then signalled. If
+    //    the work item ran and this does not, the fault is specific to waits
+    //    rather than to the pool as a whole.
+    let wait_ran = match WaitableHandle::event(false, false) {
+        Ok(event) => {
+            let (tx, rx) = mpsc::channel();
+            let tx = std::sync::Mutex::new(tx);
+            match ThreadpoolWait::new(
+                event,
+                move |_| {
+                    if let Ok(tx) = tx.lock() {
+                        let _ = tx.send(());
+                    }
+                },
+                None,
+            ) {
+                Ok(wait) => {
+                    wait.arm(None);
+                    // SAFETY: the wait owns the event, so the handle is open.
+                    unsafe {
+                        windows_sys::Win32::System::Threading::SetEvent(
+                            std::os::windows::io::AsRawHandle::as_raw_handle(&wait.handle()),
+                        )
+                    };
+                    rx.recv_timeout(probe_bound).is_ok()
+                }
+                Err(error) => return format!("could not create a wait probe: {error}"),
+            }
+        }
+        Err(error) => return format!("could not create a probe event: {error}"),
+    };
+
+    format!("work item ran: {work_ran}; a fresh wait ran: {wait_ran} (both within {probe_bound:?})")
+}
+
+/// The concurrency trace, when this build carries one.
+///
+/// Empty on an ordinary build, because the `trace` feature compiles the whole
+/// facility away -- which is the point: the defect this chases is timing
+/// dependent, so the instrument must be absent unless it is wanted. Enable it
+/// with `--features trace` and narrow it with `WINDOWS_THREADPOOL_TRACE`:
+///
+/// ```text
+/// $env:WINDOWS_THREADPOOL_TRACE = 'wait,delivery'
+/// cargo test -p windows-ioring-sys --features trace --test event_delivery
+/// ```
+fn trace_section() -> String {
+    let dump = windows_threadpool_sys::trace::dump();
+    if dump.trim().is_empty() {
+        return "  trace          : nothing recorded (set WINDOWS_THREADPOOL_TRACE to narrow one)"
+            .to_owned();
+    }
+    format!("  trace (oldest first):\n{dump}")
 }
 
 /// Wait for one delivery, turning a timeout into the report above.
@@ -143,13 +234,17 @@ fn recv_one(
             // describes the moment of failure rather than the moment of
             // giving up on it.
             let at_failure = outstanding();
+            // The pool-liveness probe runs first, while the process is still
+            // in the failed state -- asking afterwards would describe a
+            // different moment.
+            let liveness = pool_liveness();
             // Printed now, before waiting any longer. If this process is
             // killed during the post-mortem -- which the sabotage harness will
             // do if the suite exceeds its hang bound -- these lines are
             // already in the transcript, and losing them is losing the whole
             // reason the instrumentation exists.
             eprintln!(
-                "{}",
+                "{}\n  pool liveness  : {liveness}",
                 watch.report(
                     what,
                     expected,
@@ -165,7 +260,10 @@ fn recv_one(
                 Ok(_) => format!("it arrived, {:?} past the bound", started.elapsed()),
                 Err(_) => format!("still nothing after a further {POST_MORTEM_BOUND:?}"),
             };
-            panic!("{}", watch.report(what, expected, at_failure, &postmortem));
+            panic!(
+                "{}\n  pool liveness  : {liveness}",
+                watch.report(what, expected, at_failure, &postmortem)
+            );
         }
     }
 }

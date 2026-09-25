@@ -71,11 +71,46 @@ for ($i=1; $i -le 600; $i++) {
 
 **Where this goes next, and why it left this crate.** Both delivery tests pass `env: None` to
 `EventDelivery::new`, so both register their wait on the **default process threadpool** through
-[`windows_threadpool_sys::wait::ThreadpoolWait`](../windows-threadpool-sys/src/wait.rs). The failure
-is that one object's lifecycle appears to stop *other, unrelated* armed waits from ever firing,
-which nothing in `windows-ioring-sys` explains on its own. That crate's `Drop` was read and only
-touches its own object, so the mechanism is **not yet established** -- and this record stops there
-rather than guessing past it.
+[`windows_threadpool_sys::wait::ThreadpoolWait`](../windows-threadpool-sys/src/wait.rs).
+
+## Narrowed further 2026-09-25: the pool is alive, and the stall is permanent by design
+
+A configurable trace was added for this (see below) and the flake **still reproduces with it on**,
+which is the first thing to check for a timing-dependent fault.
+
+**The default pool is not wedged.** A probe runs at the moment of failure, before anything else: it
+submits a plain work item and separately creates, arms and signals a **brand-new** wait on a
+brand-new event. Measured at a captured stall: `work item ran: true; a fresh wait ran: true`, both
+within two seconds. So the pool dispatches, and its wait mechanism works. Whatever is broken is
+specific to the waits already registered.
+
+**Those waits were created and armed.** The trace shows, for every ring in a failing run:
+`setup-signalled` -> `event-attached` -> `wait created` -> `wait armed`, all within microseconds --
+and then `trampoline-entered` **never appears at all**, for any of them, for the rest of the process.
+
+**The ring's setup signal is raised on the ring's own handle, before the wait is armed on a
+duplicate of it.** The trace records both handle values, and in the captures examined the failing
+ring's handles were not recycled values of the dropped ring's.
+
+**Why the stall is permanent rather than merely late, which the trace explains.** The completion
+event is edge triggered ([D-19](DESIGN-NOTES.md#d-19)): it fires when the queue goes from empty to
+non-empty. A stalled ring has eight completions sitting in its queue, so the queue never returns to
+empty and **no further signal will ever be raised**. The setup signal -- the one deliberate wakeup
+that exists precisely to cover a backlog -- is therefore the only signal that ring will ever get.
+Lose it once and delivery for that ring is dead for good. That is consistent with every capture:
+zero callbacks, nothing after ten more seconds, and both rings affected together.
+
+**So the open question is narrow: why does an armed wait not observe a signal raised before it was
+armed?** An auto-reset event signalled with no waiter stays signalled, so arming afterwards should
+consume it and fire. It does, on better than 99% of runs.
+
+**What is deliberately not concluded.** A mechanism suggests itself -- the pool's internal wait
+thread multiplexes handles, and a concurrent close could plausibly disturb the set it is watching,
+which would fit a fresh wait working while existing ones do not. That is a hypothesis with no
+evidence behind it yet, and it is recorded here as one so the next person does not mistake it for a
+finding. The experiment that would settle it is whether re-arming a stalled wait recovers it;
+`EventDelivery` does not currently expose its wait, so that needs either a test-only accessor or the
+probe moved into `windows-threadpool-sys`.
 
 **Why it is worth recording despite being rare.** The sabotage harness runs the whole suite once per
 case, and the manifest currently holds 41 cases. At the measured rate that is about a **40% chance
@@ -94,6 +129,28 @@ clean or dirty from the summary table alone while this is open.
 was measured on the `event_delivery` binary, which uses neither the resolver nor any seeded sweep,
 so its behaviour is independent of those constants. Three sweeps at the previous sizes had passed
 earlier the same day, which is unsurprising at this rate rather than evidence of a change.
+
+## Turning the trace on, and narrowing it
+
+The trace is **compiled out** unless the `trace` feature is on, because the instrument for a
+timing-dependent fault must not change the schedule it is measuring. When on it is still off at run
+time until `WINDOWS_THREADPOOL_TRACE` names the targets wanted, so a session can record one
+subsystem rather than everything:
+
+```powershell
+$env:WINDOWS_THREADPOOL_TRACE = 'wait,delivery'   # or 'wait', or '*'
+cargo test -p windows-ioring-sys --features trace --test event_delivery
+```
+
+Recording does not format and does not allocate: an entry is a timestamp, a thread id, two
+`&'static str` labels and two `u64` slots, formatted only when a dump is asked for. The dump is
+included in the stall report automatically, so a captured failure carries its own trace.
+
+Targets currently emitted: `wait` (create, arm, trampoline entry, the three phases of drop) and
+`delivery` (the ring's setup signal with its outstanding count, event attach, arm, callback entry
+and exit).
+
+**The flake still reproduces with the trace on**, which was checked before drawing anything from it.
 
 ## What a stalled run now records
 

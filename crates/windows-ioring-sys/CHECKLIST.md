@@ -321,6 +321,21 @@ reviewable artifact rather than a recording.
   policy, the fix belongs in that layer. `ThreadpoolWait`'s `Drop` has been read and only touches
   its own object, so the mechanism is **not yet established** -- do not start from a guess about it.
 
+  **Narrowed further the same day, with a configurable trace.** The default pool is **not** wedged:
+  a probe at the moment of failure runs a plain work item and a brand-new armed wait, and measured,
+  both ran. The stalled waits were created and armed -- the trace shows it -- and the trampoline
+  never fires for any of them. **The stall is permanent by design**: the completion event is edge
+  triggered ([D-19](DESIGN-NOTES.md#d-19)), a stalled ring's queue never returns to empty, so the
+  setup signal is the only wakeup that ring will ever receive and losing it once ends delivery for
+  good. The open question is now narrow -- why an armed wait does not observe a signal raised just
+  before it was armed -- and a plausible mechanism is recorded in
+  [UNRESOLVED-TEST-FAILURES.md](UNRESOLVED-TEST-FAILURES.md) **as a hypothesis with no evidence
+  behind it**, together with the experiment that would settle it.
+
+  **The trace is compiled out unless `--features trace` is on**, and narrowed at run time by
+  `WINDOWS_THREADPOOL_TRACE`, because the instrument for a timing-dependent fault must not change
+  the schedule it measures. The flake still reproduces with it on, which was checked first.
+
   **A cheaper interim mitigation exists and is a separate decision:** the harness could treat a
   failure in these two tests as *inconclusive* rather than as `caught`, which would stop the false
   clean bills without pretending the behaviour is understood.
