@@ -20,7 +20,7 @@
 //!    Text is produced only when a dump is asked for, which happens after the
 //!    interesting moment has passed.
 //! 3. **It is off at runtime even when compiled in**, and when on it is
-//!    *narrowed* rather than global -- see [`enabled`]. A trace that records
+//!    *narrowed* rather than global -- see [`crate::trace::enabled`]. A trace that records
 //!    everything is a trace that changes the schedule of everything.
 //!
 //! # Narrowing to one scenario

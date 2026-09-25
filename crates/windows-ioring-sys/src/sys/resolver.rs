@@ -60,7 +60,7 @@
 //! reach for.
 //!
 //! **A ring under a resolver is answered per thread**, as
-//! [`super::installed`] explains. Moving such a ring to a thread with nothing
+//! the seam's `installed` module explains. Moving such a ring to a thread with nothing
 //! installed hands its operations straight to a kernel that never received
 //! them.
 
@@ -255,7 +255,7 @@ pub struct ResolverStats {
 /// A live view of [`ResolverStats`] for an installed resolver.
 ///
 /// `Rc` rather than `Arc` because a responder is thread-local
-/// ([`super::installed`]), so sharing it across threads is already
+/// (the seam's `installed` module), so sharing it across threads is already
 /// meaningless.
 #[derive(Debug, Clone)]
 pub struct ResolverWatch(Rc<RefCell<ResolverStats>>);

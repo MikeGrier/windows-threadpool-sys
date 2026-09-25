@@ -753,8 +753,7 @@ impl IoRing {
     /// second wakeup coming: the loss is permanent, not late.
     ///
     /// The remedy needs nothing this method does not already give you --
-    /// after arming the wait, signal your own duplicate yourself:
-    ///
+    /// after arming the wait, signal your own duplicate yourself:    ///
     /// ```no_run
     /// # use windows_ioring_sys::IoRing;
     /// # use std::os::windows::io::AsRawHandle;
@@ -768,7 +767,14 @@ impl IoRing {
     /// # }
     /// ```
     ///
-    /// [`EventDelivery`](crate::EventDelivery) already does this for you and
+    #[cfg_attr(
+        feature = "threadpool",
+        doc = "[`EventDelivery`](crate::EventDelivery) already does this for you and"
+    )]
+    #[cfg_attr(
+        not(feature = "threadpool"),
+        doc = "`EventDelivery` (the default `threadpool` feature) already does this for you and"
+    )]
     /// is the better answer if you do not need the handle itself.
     ///
     /// `examples/model_b_multiplexed.rs` is this whole shape worked end to
@@ -1417,7 +1423,14 @@ pub trait CompletionWait {
 /// one that could submit would queue entries the caller never asked for --
 /// both of which a bare `&mut IoRing` would permit. This is the same
 /// narrowing, for the same reason, as
-/// [`RingScope`](crate::RingScope) under [D-43](../DESIGN-NOTES.md#d-43).
+#[cfg_attr(
+    feature = "threadpool",
+    doc = "[`RingScope`](crate::RingScope) under [D-43](../DESIGN-NOTES.md#d-43)."
+)]
+#[cfg_attr(
+    not(feature = "threadpool"),
+    doc = "`RingScope` (the default `threadpool` feature) under [D-43](../DESIGN-NOTES.md#d-43)."
+)]
 pub struct RingWait<'ring> {
     ring: &'ring mut IoRing,
 }

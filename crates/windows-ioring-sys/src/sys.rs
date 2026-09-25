@@ -6,7 +6,7 @@
 //! feature off -- which is the published configuration and the default -- each
 //! wrapper is an `#[inline(always)]` forward to the same call the crate made
 //! before, and nothing in this module exists at all. With the feature on, a
-//! test may install a [`Responses`] implementation that answers instead.
+//! test may install a `Responses` implementation that answers instead.
 //!
 //! # Why a module of wrappers rather than a generic `IoRing<K>`
 //!
@@ -42,7 +42,7 @@
 //! [RS-P-6](../RESPONSE-SPACE.md) -- a completion posted behind another need
 //! produce no signal -- is a clause about this call. A resolver that could not
 //! make it does not satisfy RS-P-6 vacuously; it never signals at all, which
-//! hangs every [`crate::EventDelivery`] consumer rather than testing one.
+//! hangs every `EventDelivery` consumer rather than testing one.
 //!
 //! # The trait mirrors the FFI exactly, on purpose
 //!
@@ -74,7 +74,7 @@ pub use resolver::{
     Resolver, ResolverConfig, ResolverStats, ResolverWatch, SEED_VAR as RESOLVER_SEED_VAR,
 };
 
-/// Dispatch to an installed [`Responses`], or fall through to the real call.
+/// Dispatch to an installed `Responses`, or fall through to the real call.
 ///
 /// The feature-off arm expands to the real call and nothing else, so a
 /// published build has no branch, no thread-local access, and no trait object
