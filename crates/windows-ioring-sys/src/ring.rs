@@ -4,42 +4,21 @@
 use std::ffi::c_void;
 use std::io;
 use std::os::windows::io::{AsRawHandle, FromRawHandle, OwnedHandle};
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::{Duration, Instant};
 
 use windows_sys::Win32::Storage::FileSystem::{
     CloseIoRing, CreateIoRing, GetIoRingInfo, IORING_BUFFER_INFO, IORING_CQE,
     IORING_CREATE_ADVISORY_FLAGS_NONE, IORING_CREATE_FLAGS, IORING_CREATE_REQUIRED_FLAGS_NONE,
     IORING_INFO, IORING_OP_CANCEL, IORING_OP_CODE, IORING_OP_FLUSH, IORING_OP_NOP, IORING_OP_READ,
     IORING_OP_REGISTER_BUFFERS, IORING_OP_REGISTER_FILES, IORING_OP_WRITE, IsIoRingOpSupported,
-    PopIoRingCompletion, SetIoRingCompletionEvent, SubmitIoRing,
 };
 use windows_sys::Win32::System::Threading::{CreateEventW, SetEvent};
 
+use crate::accounting::Accounting;
 use crate::capability::{RingVersion, capabilities};
 use crate::error::check;
 
-/// A ring's identity, unique for the process's lifetime (PR #20 review
-/// response): every value a ring hands out that later gets checked back
-/// against it -- a [`crate::Token`], a [`crate::RegisteredFile`], a
-/// [`crate::RegisteredBuffers`] -- carries the id of the ring that minted
-/// it, and every [`Completion`] carries the id of the ring that popped it.
-///
-/// A monotonic counter rather than the ring's own `HANDLE`: a `HANDLE` is
-/// only unique while the object it names is still open, and Windows is free
-/// to hand a closed ring's numeric value to the *next* object created --
-/// which would let a stale identity from a closed ring collide with a
-/// brand-new one. This counter never repeats within one process run
-/// (`u64` overflow is not a practical concern), so a mismatch always means
-/// a genuine cross-ring mixup, never a false negative from handle reuse.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub(crate) struct RingId(u64);
-
-impl RingId {
-    fn next() -> Self {
-        static NEXT: AtomicU64 = AtomicU64::new(1);
-        Self(NEXT.fetch_add(1, Ordering::Relaxed))
-    }
-}
+pub(crate) use crate::accounting::RingId;
 
 /// One `IoRing` operation.
 ///
@@ -238,6 +217,29 @@ impl Completion {
     /// op-specific value in `IORING_CQE::Information`, once `ResultCode`
     /// says success.
     ///
+    /// # The count may be short, and the remainder is yours
+    ///
+    /// A successful read or write may report **fewer bytes than were
+    /// requested**, including zero (`RS-P-8` in
+    /// [RESPONSE-SPACE.md](../RESPONSE-SPACE.md)). `WriteFile` documents this
+    /// for non-blocking byte-mode pipes; sockets report a short send when the
+    /// transmit buffer is full, and reads are short at end of file. This crate
+    /// takes a handle and does not constrain what kind it is, so a consumer
+    /// must compare this count against the length it submitted rather than
+    /// assume they are equal.
+    ///
+    /// Nothing here reissues the remainder. Whether to submit another
+    /// operation for it, how many times, and when to give up are the caller's
+    /// (D-67), and a consumer that loops must tolerate a completion that makes
+    /// no progress.
+    ///
+    /// A consumer that has narrowed its *own* handle type can rely on more --
+    /// for an ordinary file on a local volume a successful completion is
+    /// expected to carry the full length, and a full volume is an error rather
+    /// than a short success. That is a guarantee such a consumer earns by
+    /// constraining the handle, and it belongs in its contract rather than
+    /// being assumed from this one.
+    ///
     /// # Errors
     ///
     /// Returns the wrapped [`crate::IoRingError`] if `ResultCode` is a
@@ -345,6 +347,55 @@ impl Completion {
         }
     }
 
+    /// Report a **successful** transfer of `transferred` bytes instead of what
+    /// this operation actually reported (M26.11).
+    ///
+    /// # What this is for, and why the failure seam cannot do it
+    ///
+    /// [`Completion::with_injected_failure`] models an operation that failed.
+    /// `RS-P-8` describes something different and stranger: an operation that
+    /// **succeeded** while moving fewer bytes than were asked for. Windows
+    /// documents that for non-blocking byte-mode pipes and it happens on
+    /// sockets, but an ordinary file on a local volume does not do it -- so a
+    /// consumer's handling of a short count is written once against the
+    /// documentation and then never executed again, which is exactly the class
+    /// of path the failure seam was introduced for.
+    ///
+    /// A consumer that *narrows* its handle type may legitimately require
+    /// complete transfers. This seam is how such a consumer tests that its
+    /// requirement is enforced rather than merely stated -- `epoch_log`'s
+    /// appender uses it for precisely that.
+    ///
+    /// # Why this one is inert
+    ///
+    /// The result code is left successful and only the byte count moves, so
+    /// every claim path behaves exactly as it would for the real completion:
+    /// [`crate::Token::claim_if`] returns the buffer, and no path keys memory
+    /// ownership off the transferred count. That makes this seam free of the
+    /// registration hazard documented on
+    /// [`Completion::with_injected_failure`], which arises only because a
+    /// *failed* registration is taken as proof the kernel retained nothing.
+    ///
+    /// # Example
+    ///
+    /// ```ignore
+    /// // A handle whose successful writes are complete is a requirement this
+    /// // consumer states; here we hand it one that violates the requirement.
+    /// let completion = completion.with_injected_transfer(RECORD_STRIDE - 1);
+    /// assert_eq!(completion.result().expect("still a success"), RECORD_STRIDE - 1);
+    /// ```
+    #[cfg(any(test, feature = "fault-injection"))]
+    #[must_use]
+    pub fn with_injected_transfer(self, transferred: usize) -> Self {
+        Self {
+            // Deliberately *not* touched: a short transfer under `RS-P-8` is a
+            // success, and turning it into a failure would model the one thing
+            // this seam exists to distinguish it from.
+            information: transferred,
+            ..self
+        }
+    }
+
     /// Build a `Completion` without popping a real one, for tests that
     /// exercise [`crate::Token::claim_if`] without real I/O.
     ///
@@ -379,6 +430,73 @@ const S_FALSE: windows_sys::core::HRESULT = 1;
 /// waits are bounded and rechecked, not unbounded").
 const RUN_DOWN_POLL_MS: u32 = 50;
 
+/// `IORING_E_WAIT_TIMEOUT`: `SubmitIoRing` submitted every entry successfully
+/// and the subsequent wait then timed out.
+///
+/// **This is the documented code, not an observed one.** `SubmitIoRing`'s
+/// reference page gives it its own row and states the consequence that matters
+/// here: *"All operations were submitted without error and the subsequent wait
+/// timed out."* Its Remarks then draw the line this crate depends on -- *"If
+/// this function returns an error other than IORING_E_WAIT_TIMEOUT, then all
+/// entries remain in the submission queue."* So this value is the difference
+/// between "the work went in" and "the work is still queued", which is why it
+/// is classified rather than passed to [`check`](crate::error::check).
+///
+/// **Spelled by derivation because the bindings do not carry the name.**
+/// `IORING_E_WAIT_TIMEOUT` is a macro over `HRESULT_FROM_WIN32(ERROR_TIMEOUT)`
+/// rather than a `FACILITY_IORING` code -- that facility defines only
+/// `0x8046_0001` through `0x8046_0008`, none of them a timeout -- so
+/// `windows-sys` emits no constant for it and there is nothing to import. The
+/// derivation below is therefore the name, and is written out so the next
+/// reader does not re-derive it from a run. The `0x8007_0000` is
+/// `HRESULT_FROM_WIN32`'s severity-plus-`FACILITY_WIN32` prefix, which that
+/// macro ors onto any code of `0xFFFF` or less.
+const IORING_E_WAIT_TIMEOUT: windows_sys::core::HRESULT =
+    (0x8007_0000_u32 | windows_sys::Win32::Foundation::ERROR_TIMEOUT) as windows_sys::core::HRESULT;
+
+/// The largest `timeout_ms` a [`CompletionWait`] is ever handed: one below
+/// `u32::MAX`, because `u32::MAX` is Win32's `INFINITE`.
+///
+/// A waiter built on `WaitForSingleObject` or `WaitForMultipleObjects` -- both
+/// of which [`CompletionWait`] explicitly invites -- reads that value as "no
+/// timeout", so saturating onto it would convert a long but finite bound into
+/// an unbounded block, with the pop loop unable to re-check its own deadline
+/// until the wait returned.
+const MAX_WAIT_MS: u32 = u32::MAX - 1;
+
+/// Whether a `SubmitIoRing` result means every entry was submitted.
+///
+/// `S_OK` and `IORING_E_WAIT_TIMEOUT` both do, per that call's documented
+/// return values; every other error means the opposite, and its Remarks say
+/// so in as many words -- the entries remain in the submission queue.
+///
+/// Exposed as one predicate because three callers need the same answer and a
+/// fourth got it wrong for a year: [`IoRing::pop_within`] reported a timeout
+/// as a failure until `M21.6`, and [`crate::Batch::submit_and_wait`] still did
+/// until `M26.8`, because that fix swept two of the three sites.
+pub(crate) fn every_entry_was_submitted(hr: windows_sys::core::HRESULT) -> bool {
+    hr == IORING_E_WAIT_TIMEOUT || check(hr).is_ok()
+}
+
+/// Classify the result of a `SubmitIoRing` call made **only** to wait.
+///
+/// An expired wait is the ordinary outcome of asking to block for a bounded
+/// time, not a failure -- so it is `Ok`, and the caller re-checks whatever it
+/// was waiting for. Everything else is a real error.
+///
+/// This exists because getting it wrong is silent and was: `check(hr)`
+/// straight through turns every timed-out wait into an `Err`, which made
+/// [`IoRing::pop_within`] report a timeout as a failure rather than as the
+/// `Ok(None)` it documents, and made [`IoRing::run_down`] treat any operation
+/// slower than [`RUN_DOWN_POLL_MS`] as fatal. One classification, two callers,
+/// so they cannot disagree again.
+fn wait_outcome(hr: windows_sys::core::HRESULT) -> io::Result<()> {
+    if hr == IORING_E_WAIT_TIMEOUT {
+        return Ok(());
+    }
+    check(hr)
+}
+
 /// An owned `IoRing`, closed with `CloseIoRing` on drop.
 ///
 /// Not `Clone`: cloning would give two owners of the same native ring, and
@@ -394,18 +512,10 @@ pub struct IoRing {
     handle: *mut c_void,
     version: RingVersion,
     supported_ops: OpSupport,
-    /// This ring's own identity (PR #20 review response); see [`RingId`].
-    ring_id: RingId,
-    /// The next `UserData` value [`IoRing::reserve_user_data`] will hand out.
-    next_user_data: usize,
-    /// Operations minted but not yet observed to have completed (M2.4).
-    outstanding: usize,
-    /// How many file handles are registered so far, across every confirmed
-    /// `BuildIoRingRegisterFileHandles` (M5.1). The base index of the next
-    /// registration.
-    registered_files: u32,
-    /// As `registered_files`, for `BuildIoRingRegisterBuffers` (M5.2).
-    registered_buffers: u32,
+    /// The half of this ring that never touches the kernel: identity,
+    /// operation identities, and the counts (M24.2). Split out so those rules
+    /// can be tested without opening a ring -- see [`crate::accounting`].
+    accounting: Accounting,
     /// The `IORING_BUFFER_INFO` array handed to `BuildIoRingRegisterBuffers`,
     /// kept alive because the kernel reads it when the registration op
     /// *runs*, not when the `Build*` call returns (D-32, measured).
@@ -437,11 +547,11 @@ impl std::fmt::Debug for IoRing {
             .field("handle", &self.handle)
             .field("version", &self.version)
             .field("supported_ops", &self.supported_ops)
-            .field("ring_id", &self.ring_id)
-            .field("next_user_data", &self.next_user_data)
-            .field("outstanding", &self.outstanding)
-            .field("registered_files", &self.registered_files)
-            .field("registered_buffers", &self.registered_buffers)
+            // One field rather than five, because the ledger derives `Debug`
+            // and prints its own. Keeping the five spelled out here would be a
+            // second copy of the field list, drifting the moment either side
+            // gains a field.
+            .field("accounting", &self.accounting)
             .field(
                 "registered_buffer_infos",
                 &self.registered_buffer_infos.len(),
@@ -507,11 +617,7 @@ impl IoRing {
             handle,
             version,
             supported_ops,
-            ring_id: RingId::next(),
-            next_user_data: 0,
-            outstanding: 0,
-            registered_files: 0,
-            registered_buffers: 0,
+            accounting: Accounting::new(),
             registered_buffer_infos: Vec::new(),
             completion_event: None,
         })
@@ -633,6 +739,44 @@ impl IoRing {
     /// re-arms the edge, must run to empty exactly once. Two threads waiting
     /// on one ring's event cannot be made correct.
     ///
+    /// # If you are arming a thread-pool wait on this handle
+    ///
+    /// `SetThreadpoolWait` documents that "you must re-register the event
+    /// with the wait object before signaling it each time to trigger the wait
+    /// callback". This method signals the event *before* it returns (rule 2
+    /// above), so by the time you have a handle to build a wait object
+    /// around, that setup signal has already happened -- in the order the
+    /// rule forbids. It is not guaranteed to run your callback, and because
+    /// the event is auto-reset the signal is *consumed* rather than left
+    /// pending, so a later arming has nothing to observe. Combined with the
+    /// edge rule above, a ring whose queue never returns to empty has no
+    /// second wakeup coming: the loss is permanent, not late.
+    ///
+    /// The remedy needs nothing this method does not already give you --
+    /// after arming the wait, signal your own duplicate yourself:    ///
+    /// ```no_run
+    /// # use windows_ioring_sys::IoRing;
+    /// # use std::os::windows::io::AsRawHandle;
+    /// # fn f(ring: &mut IoRing) -> std::io::Result<()> {
+    /// let event = ring.completion_event()?;
+    /// // ... build the wait object around `event`, then arm it ...
+    /// // Only now raise the wakeup, in the documented order. A wake with
+    /// // nothing to pop is normal (rule 2), so this is always safe.
+    /// unsafe { windows_sys::Win32::System::Threading::SetEvent(event.as_raw_handle()) };
+    /// # Ok(())
+    /// # }
+    /// ```
+    ///
+    #[cfg_attr(
+        feature = "threadpool",
+        doc = "[`EventDelivery`](crate::EventDelivery) already does this for you and"
+    )]
+    #[cfg_attr(
+        not(feature = "threadpool"),
+        doc = "`EventDelivery` (the default `threadpool` feature) already does this for you and"
+    )]
+    /// is the better answer if you do not need the handle itself.
+    ///
     /// `examples/model_b_multiplexed.rs` is this whole shape worked end to
     /// end -- a caller-owned ring waited on alongside a shutdown latch, with
     /// the quiesce that shutdown-while-outstanding requires (M11.6).
@@ -646,12 +790,37 @@ impl IoRing {
     /// returns any error from `CreateEventW`,
     /// `SetIoRingCompletionEvent`, `SetEvent`, or duplicating the handle.
     pub fn completion_event(&mut self) -> io::Result<OwnedHandle> {
+        let (event, owes_setup_signal) = self.attach_completion_event_unsignalled()?;
+        if owes_setup_signal {
+            self.raise_setup_signal()?;
+        }
+        Ok(event)
+    }
+
+    /// Attach the ring's completion event *without* raising the setup signal,
+    /// reporting whether that signal is still owed.
+    ///
+    /// `SetThreadpoolWait` documents that "you must re-register the event with
+    /// the wait object before signaling it each time to trigger the wait
+    /// callback". A caller that is about to arm a threadpool wait on this
+    /// event therefore needs the attachment and the signal as two steps, so
+    /// that arming can be sequenced between them; handing back an
+    /// already-signalled event leaves that caller no way to obey the rule.
+    /// [`IoRing::completion_event`] is these two composed, for a caller who
+    /// does its own waiting and is not bound by that rule.
+    ///
+    /// The flag is false when the ring already had an event attached, which
+    /// matches [`IoRing::completion_event`]: the setup signal belongs to the
+    /// call that performs the attachment.
+    pub(crate) fn attach_completion_event_unsignalled(
+        &mut self,
+    ) -> io::Result<(OwnedHandle, bool)> {
         // Already attached: hand back another duplicate rather than
         // attaching a second event, which would silently detach the first
         // (`SetIoRingCompletionEvent` replaces rather than adds). The
         // capability was necessarily verified on the call that attached it.
         if let Some(event) = &self.completion_event {
-            return event.try_clone();
+            return Ok((event.try_clone()?, false));
         }
 
         if !capabilities()?.supports_completion_event {
@@ -662,8 +831,10 @@ impl IoRing {
         }
 
         // Auto-reset (manual_reset = FALSE) per D-21, initially unsignalled
-        // -- the deliberate setup signal is raised below, after the event is
-        // attached and owned, so it cannot be missed or lost.
+        // -- the deliberate setup signal is raised by `raise_setup_signal`,
+        // after the event is attached and owned, so it cannot be lost, and
+        // after any threadpool wait has been armed, so the arm-before-signal
+        // rule `SetThreadpoolWait` documents is obeyed.
         // SAFETY: null attributes and name are documented defaults.
         let raw = unsafe { CreateEventW(std::ptr::null(), 0, 0, std::ptr::null()) };
         if raw.is_null() {
@@ -675,25 +846,56 @@ impl IoRing {
 
         // SAFETY: `self.handle` is a live ring; `event` is a live event that
         // this ring will own for the rest of its life once stored below.
-        let hr = unsafe { SetIoRingCompletionEvent(self.handle, event.as_raw_handle()) };
+        let hr = unsafe { crate::sys::set_completion_event(self.handle, event.as_raw_handle()) };
         // On failure `event` drops here, closing a handle the ring never
         // successfully referenced.
         check(hr)?;
 
-        // Stored *before* signalling: from this point the ring owns the
-        // event, so no later failure can drop it and leave the ring
-        // signalling a closed (possibly recycled) handle.
-        let event = self.completion_event.insert(event);
+        // Stored *before* the setup signal can be raised: from this point the
+        // ring owns the event, so no later failure can drop it and leave the
+        // ring signalling a closed (possibly recycled) handle.
+        self.completion_event
+            .insert(event)
+            .try_clone()
+            .map(|dup| (dup, true))
+    }
 
-        // The one deliberate spurious wakeup (rule 2 above): a caller who
-        // submitted before attaching would otherwise never be woken for that
-        // backlog, since the queue never returns to empty to re-arm the edge.
+    /// Raise the one deliberate setup signal on the attached completion event.
+    ///
+    /// This is the single spurious wakeup the event's contract allows for: a
+    /// caller who submitted before attaching would otherwise never be woken
+    /// for that backlog, since the queue never returns to empty and so never
+    /// re-arms the edge (D-19).
+    ///
+    /// Separated from the attachment so that a caller arming a threadpool wait
+    /// can obey `SetThreadpoolWait`'s documented ordering -- register first,
+    /// signal second. Does nothing if no event is attached, which cannot
+    /// happen on the paths that call it.
+    pub(crate) fn raise_setup_signal(&self) -> io::Result<()> {
+        let Some(event) = &self.completion_event else {
+            return Ok(());
+        };
         // SAFETY: `event` is a live event handle this ring owns.
         if unsafe { SetEvent(event.as_raw_handle()) } == 0 {
             return Err(io::Error::last_os_error());
         }
-
-        event.try_clone()
+        // The setup signal is what a waiter attaching to a backlog depends on
+        // entirely, so M26.9's investigation needs to know it happened -- and
+        // that it happened on the ring's own handle rather than a duplicate
+        // handed to a caller, since only the former is what the kernel will go
+        // on signalling.
+        //
+        // Gated because `windows-threadpool-sys` is optional (D-22): this
+        // method is on the always-present path, unlike the delivery module,
+        // so an ungated reference breaks `--no-default-features`.
+        #[cfg(feature = "threadpool")]
+        windows_threadpool_sys::trace_record!(
+            "delivery",
+            "setup-signalled",
+            event.as_raw_handle() as usize,
+            self.accounting.outstanding()
+        );
+        Ok(())
     }
 
     /// Whether this ring supports a raw op code, including one this crate
@@ -737,7 +939,7 @@ impl IoRing {
     /// index for.
     #[must_use]
     pub fn registered_file_count(&self) -> u32 {
-        self.registered_files
+        self.accounting.registered_file_count()
     }
 
     /// As [`IoRing::registered_file_count`], for registered buffers (M5.2) --
@@ -745,7 +947,7 @@ impl IoRing {
     /// consequences (M10.3, D-31).
     #[must_use]
     pub fn registered_buffer_count(&self) -> u32 {
-        self.registered_buffers
+        self.accounting.registered_buffer_count()
     }
 
     /// Advance the registered-file base index by `count`, the instant a
@@ -768,12 +970,12 @@ impl IoRing {
     /// which is a different thing from when it claims the *indices*. The
     /// latter remains unmeasured, and dissolved rather than resolved.
     pub(crate) fn reserve_registered_files(&mut self, count: u32) {
-        self.registered_files = self.registered_files.saturating_add(count);
+        self.accounting.reserve_registered_files(count);
     }
 
     /// As [`IoRing::reserve_registered_files`], for registered buffers.
     pub(crate) fn reserve_registered_buffers(&mut self, count: u32) {
-        self.registered_buffers = self.registered_buffers.saturating_add(count);
+        self.accounting.reserve_registered_buffers(count);
     }
 
     /// Take ownership of the `IORING_BUFFER_INFO` array a
@@ -808,7 +1010,7 @@ impl IoRing {
     /// `record_completion`).
     #[must_use]
     pub fn outstanding(&self) -> usize {
-        self.outstanding
+        self.accounting.outstanding()
     }
 
     /// Mint a fresh `UserData` identity for a new operation, and account for
@@ -826,19 +1028,14 @@ impl IoRing {
     /// is ever exhausted, mirroring `windows-threadpool-sys`'s own
     /// "exhausting the generation sequence fails rather than wraps."
     pub(crate) fn reserve_user_data(&mut self) -> io::Result<usize> {
-        let id = self.next_user_data;
-        self.next_user_data = id
-            .checked_add(1)
-            .ok_or_else(|| io::Error::other("IoRing operation identity space exhausted"))?;
-        self.outstanding += 1;
-        Ok(id)
+        self.accounting.reserve_user_data()
     }
 
     /// Record that one outstanding operation's completion has been observed
     /// (a real `IORING_CQE` was popped for it), whether or not a live
     /// [`crate::Token`] was still around to claim it.
     pub(crate) fn record_completion(&mut self) {
-        self.outstanding = self.outstanding.saturating_sub(1);
+        self.accounting.record_completion();
     }
 
     /// Release a reservation for an operation that was never actually
@@ -850,7 +1047,16 @@ impl IoRing {
     /// the op never entered the queue, so it must not count against
     /// [`IoRing::run_down`] either.
     pub(crate) fn cancel_reservation(&mut self) {
-        self.outstanding = self.outstanding.saturating_sub(1);
+        self.accounting.cancel_reservation();
+    }
+
+    /// This ring's ledger, for the crate's own minting paths (M24.2).
+    ///
+    /// Handed out rather than proxied so that a `Token` can be minted from
+    /// the bookkeeping alone -- which is what lets `token.rs`'s tests run
+    /// without a kernel ring, since minting is all they ever needed one for.
+    pub(crate) fn accounting_mut(&mut self) -> &mut Accounting {
+        &mut self.accounting
     }
 
     /// This ring's native handle, for `batch.rs`'s `Build*`/`Submit` calls.
@@ -862,7 +1068,7 @@ impl IoRing {
     /// registration it mints and checking against on use (PR #20 review
     /// response); see [`RingId`].
     pub(crate) fn ring_id(&self) -> RingId {
-        self.ring_id
+        self.accounting.ring_id()
     }
 
     /// Queue a raw, not-yet-wrapped SQE via a caller-supplied `Build*` call
@@ -913,20 +1119,112 @@ impl IoRing {
     /// add the typed completion path `Token` consumes. Idempotent: calling it
     /// again once `outstanding() == 0` is a no-op.
     ///
+    /// # A poll that expires is not a failure
+    ///
+    /// Each poll blocks for `RUN_DOWN_POLL_MS` and then reports
+    /// `ERROR_TIMEOUT` if nothing finished in that window, which is the
+    /// ordinary outcome for any operation slower than 50ms. Treating that as
+    /// an error -- which this did until M21.6 -- made `run_down` return `Err`
+    /// with the operation still outstanding, so `Drop` asserted and then
+    /// called `CloseIoRing` anyway: exactly the "the kernel may still be
+    /// writing through a token's buffer" hazard this function exists to
+    /// prevent.
+    ///
+    /// This loop therefore has no overall bound, and that is deliberate.
+    /// **Every SQE that successfully queues produces exactly one completion**
+    /// (M10.2), so it terminates. Blocking until that holds is the safe
+    /// failure mode; closing the ring early is not.
+    ///
+    /// # Choosing an unbounded wait is the caller's to make
+    ///
+    /// This spelling waits until rundown finishes, however long that takes,
+    /// and calling it is how a caller elects that. A caller who wants to
+    /// decide for themselves -- a deadline, a backoff, a number of attempts
+    /// before giving up -- calls [`IoRing::run_down_within`] instead and owns
+    /// the policy entirely. **This crate does not implement retry policy**
+    /// (M26.8): it supplies a bounded primitive and reports what happened.
+    ///
+    /// Note the difference from [`IoRing::pop_within`], which also waits in
+    /// segments: there the segments sit *inside a period the caller supplied*,
+    /// which is a bounded wait implemented properly rather than a policy. This
+    /// method had segments and no such period, which is what made it the one
+    /// waiting API in this crate shaped wrongly.
+    ///
     /// # Errors
     ///
-    /// Returns any error from `SubmitIoRing` or `PopIoRingCompletion`.
+    /// Returns any error from `SubmitIoRing` other than an expired wait, or
+    /// from `PopIoRingCompletion`. **An error leaves the ring resumable**: see
+    /// [`IoRing::run_down_within`] for what is guaranteed about the operations
+    /// still queued.
     pub fn run_down(&mut self) -> io::Result<()> {
-        while self.outstanding > 0 {
+        while !self.run_down_within(Duration::MAX)? {}
+        Ok(())
+    }
+
+    /// Run down for at most `bound`, reporting whether it finished.
+    ///
+    /// `Ok(true)` means nothing is outstanding and the ring is safe to drop.
+    /// `Ok(false)` means the bound elapsed with work still in flight -- call
+    /// again when your own policy says to. [`IoRing::outstanding`] says how
+    /// much is left.
+    ///
+    /// # Why this exists, and why it returns rather than retries
+    ///
+    /// Rundown can fail for a reason that a later attempt would survive, and
+    /// **deciding whether to make that attempt is not this crate's business**.
+    /// A caller running under a deadline, a supervisor with a backoff, and a
+    /// test that wants to fail fast all want different answers, and a policy
+    /// baked in here would be wrong for two of the three. So this waits for
+    /// exactly as long as it is told and then reports.
+    ///
+    /// # What an error guarantees, which is what makes retrying safe
+    ///
+    /// `SubmitIoRing` documents that *"If this function returns an error other
+    /// than IORING_E_WAIT_TIMEOUT, then all entries remain in the submission
+    /// queue."* So a failure here has **not** lost the operations and has not
+    /// rewound them ([D-5](../DESIGN-NOTES.md#d-5)); they are still ring state,
+    /// a later submit is what runs them, and their buffers must stay alive
+    /// until they complete.
+    ///
+    /// The consequence worth stating plainly: after an `Err`, **do not drop
+    /// this ring**. Dropping it closes a ring the kernel may still write
+    /// through, which is the hazard rundown exists to prevent. Call again.
+    ///
+    /// # Errors
+    ///
+    /// Returns any error from `SubmitIoRing` other than an expired wait, or
+    /// from `PopIoRingCompletion`.
+    pub fn run_down_within(&mut self, bound: Duration) -> io::Result<bool> {
+        let deadline = Instant::now().checked_add(bound);
+        loop {
+            if self.accounting.outstanding() == 0 {
+                return Ok(true);
+            }
+            // `checked_add` rather than `+`, for the reason `pop_within_with`
+            // records: `Instant + Duration` panics on overflow, so
+            // `Duration::MAX` -- the honest spelling of "no deadline" -- would
+            // take down the process. A deadline the clock cannot represent is
+            // one that never arrives, which is what was asked for.
+            let remaining = match deadline {
+                Some(deadline) => deadline.saturating_duration_since(Instant::now()),
+                None => Duration::MAX,
+            };
+            if remaining.is_zero() {
+                return Ok(false);
+            }
+            // Segments sit inside the caller's period, never outside it: the
+            // poll is the shorter of the rundown step and what is left.
+            let poll_ms = u32::try_from(remaining.as_millis())
+                .unwrap_or(u32::MAX)
+                .clamp(1, RUN_DOWN_POLL_MS);
             let mut submitted = 0_u32;
             // SAFETY: `self.handle` is a live ring; valid out-pointer. Zero
             // new SQEs are queued -- this call's only purpose is to wait for
             // and reap already-outstanding completions.
-            let hr = unsafe { SubmitIoRing(self.handle, 1, RUN_DOWN_POLL_MS, &raw mut submitted) };
-            check(hr)?;
+            let hr = unsafe { crate::sys::submit(self.handle, 1, poll_ms, &raw mut submitted) };
+            wait_outcome(hr)?;
             self.drain_for_rundown()?;
         }
-        Ok(())
     }
 
     /// Pop every currently available completion, recording each -- without
@@ -972,7 +1270,7 @@ impl IoRing {
             Information: 0,
         };
         // SAFETY: `self.handle` is a live ring; valid out-pointer.
-        let hr = unsafe { PopIoRingCompletion(self.handle, &raw mut cqe) };
+        let hr = unsafe { crate::sys::pop(self.handle, &raw mut cqe) };
         if hr == S_FALSE {
             return Ok(None);
         }
@@ -982,8 +1280,253 @@ impl IoRing {
             user_data: cqe.UserData,
             result_code: cqe.ResultCode,
             information: cqe.Information,
-            ring_id: self.ring_id,
+            ring_id: self.accounting.ring_id(),
         }))
+    }
+
+    /// Pop one completion, blocking in the ring's own wait until one is
+    /// available or `timeout` elapses (M21.2).
+    ///
+    /// This is the join between [`IoRing::try_pop`], whose `None` means
+    /// "empty at this instant", and [`crate::Batch::submit_and_wait`], whose
+    /// return deliberately promises nothing about poppability because its
+    /// timeout may have expired. Neither one alone answers "give me the
+    /// completion I just caused", and before this existed every caller wrote
+    /// that loop again -- four different ways across five sites, two of them
+    /// unbounded spins.
+    ///
+    /// `Ok(None)` means the timeout elapsed, or that **nothing can arrive**:
+    /// with no operation outstanding and an empty queue, no completion is
+    /// possible, so this returns immediately rather than sleeping out the
+    /// full `timeout`. That early return is what turns "you forgot to submit"
+    /// from a timeout into an instant answer.
+    ///
+    /// A zero `timeout` is exactly one [`IoRing::try_pop`], which is the
+    /// honest reading of "wait no time at all".
+    ///
+    /// Uses [`SubmitWait`], which blocks inside `SubmitIoRing` with no new
+    /// entries queued. It does **not** touch the ring's completion event, so
+    /// it cannot disturb a caller who owns that event under
+    /// [D-21](../DESIGN-NOTES.md#d-21). Use
+    /// [`IoRing::pop_within_with`] to supply a different wait.
+    ///
+    /// # Errors
+    ///
+    /// Any error from `SubmitIoRing` or `PopIoRingCompletion`.
+    pub fn pop_within(&mut self, timeout: Duration) -> io::Result<Option<Completion>> {
+        self.pop_within_with(&mut SubmitWait, timeout)
+    }
+
+    /// [`IoRing::pop_within`] with a caller-chosen wait.
+    ///
+    /// The crate cannot pick the wait for you, and that is a contract rather
+    /// than a shrug: the completion event is auto-reset with exactly one
+    /// waiter per ring ([D-21](../DESIGN-NOTES.md#d-21)), so a wait this crate
+    /// chose could consume an edge the caller's own loop was entitled to. The
+    /// owner of the ring is the only party who can discharge that obligation,
+    /// which is why the choice is a parameter.
+    ///
+    /// # Errors
+    ///
+    /// Any error from the wait or from `PopIoRingCompletion`.
+    pub fn pop_within_with<W: CompletionWait + ?Sized>(
+        &mut self,
+        wait: &mut W,
+        timeout: Duration,
+    ) -> io::Result<Option<Completion>> {
+        let deadline = Instant::now().checked_add(timeout);
+        loop {
+            if let Some(completion) = self.try_pop()? {
+                return Ok(Some(completion));
+            }
+            // Checked *after* the pop, never before: `record_completion` runs
+            // during `try_pop`, so reading it first would race the very
+            // completion being drained.
+            if self.outstanding() == 0 {
+                return Ok(None);
+            }
+            // `checked_add` rather than `+`: `Instant + Duration` panics on
+            // overflow, so a caller passing `Duration::MAX` -- a reasonable
+            // spelling of "no deadline" -- would take down the process. A
+            // deadline the clock cannot represent is treated as one that
+            // never arrives, which is what the caller asked for.
+            let remaining = match deadline {
+                Some(deadline) => deadline.saturating_duration_since(Instant::now()),
+                None => Duration::MAX,
+            };
+            if remaining.is_zero() {
+                return Ok(None);
+            }
+            // Clamped into `1..=MAX_WAIT_MS`. The low end stops a
+            // sub-millisecond remainder becoming a zero timeout, which
+            // `SubmitIoRing` reads as "poll and return" and would turn the
+            // tail of every wait into a spin. The high end keeps the waiter
+            // from ever being handed `u32::MAX`, which is Win32's `INFINITE`
+            // -- a `WaitForMultipleObjects`-based waiter would block forever
+            // on a bound its caller believed was finite.
+            let ms = u32::try_from(remaining.as_millis())
+                .unwrap_or(MAX_WAIT_MS)
+                .clamp(1, MAX_WAIT_MS);
+            wait.wait(&mut RingWait { ring: self }, ms)?;
+        }
+    }
+}
+
+/// How [`IoRing::pop_within_with`] blocks between checks of the completion
+/// queue (M21.2).
+///
+/// Implement this to drive a bounded pop from a wait this crate does not own
+/// -- a completion event the caller already holds, a multiplexed
+/// `WaitForMultipleObjects`, or a pure spin on a thread that must not block
+/// in the kernel.
+pub trait CompletionWait {
+    /// Block until a completion *may* be available, or `timeout_ms` elapses.
+    ///
+    /// **Returning early or spuriously is always permitted**, and requires no
+    /// apology: [D-19](../DESIGN-NOTES.md#d-19) makes a wake with nothing to
+    /// pop a normal event, so the caller re-checks the queue either way. An
+    /// implementation therefore cannot be subtly wrong about *when* to
+    /// return; it can only waste time or burn CPU.
+    ///
+    /// What it must not do is block past `timeout_ms`, because that is the
+    /// only thing standing between a stuck ring and a hung process.
+    ///
+    /// # An expired wait is `Ok(())`, never an error
+    ///
+    /// This is the one part of the contract an implementation can get wrong
+    /// silently, and the crate's own [`SubmitWait`] got it wrong first: Win32
+    /// reports an expired wait as a *failure* code (`ERROR_TIMEOUT` from
+    /// `SubmitIoRing`, `WAIT_TIMEOUT` from the `WaitFor*` family), so
+    /// forwarding the underlying result verbatim turns every ordinary timeout
+    /// into an `Err`. [`IoRing::pop_within`] then reports a timeout as a
+    /// failure rather than as the `Ok(None)` it promises, and every caller
+    /// that matches on `Ok(None)` to detect a timeout stops working.
+    ///
+    /// So: the bound running out is a **successful** wait that happened to
+    /// observe nothing. Report the error only when the wait itself failed.
+    ///
+    /// `timeout_ms` is never zero and never `u32::MAX`, so it can be passed
+    /// straight to a Win32 wait without being mistaken for "poll and return"
+    /// or for `INFINITE`.
+    ///
+    /// # Errors
+    ///
+    /// Whatever the underlying wait reports as a genuine failure. An error
+    /// ends the pop.
+    fn wait(&mut self, ring: &mut RingWait<'_>, timeout_ms: u32) -> io::Result<()>;
+}
+
+/// The ring, narrowed to what a [`CompletionWait`] needs (M21.2).
+///
+/// Deliberately exposes no way to pop and no way to submit work. A waiter that
+/// could pop would consume the completion its own caller is waiting for, and
+/// one that could submit would queue entries the caller never asked for --
+/// both of which a bare `&mut IoRing` would permit. This is the same
+/// narrowing, for the same reason, as
+#[cfg_attr(
+    feature = "threadpool",
+    doc = "[`RingScope`](crate::RingScope) under [D-43](../DESIGN-NOTES.md#d-43)."
+)]
+#[cfg_attr(
+    not(feature = "threadpool"),
+    doc = "`RingScope` (the default `threadpool` feature) under [D-43](../DESIGN-NOTES.md#d-43)."
+)]
+pub struct RingWait<'ring> {
+    ring: &'ring mut IoRing,
+}
+
+impl RingWait<'_> {
+    /// Block in the ring's own wait for up to `timeout_ms`, queueing nothing.
+    ///
+    /// With no new entries of its own, `SubmitIoRing`'s effect here is to
+    /// submit whatever is already queued and wait for an outstanding
+    /// operation to complete -- the same call [`IoRing::run_down`] uses to
+    /// quiesce. Note *submit*: a `Build*` that has queued an SQE but not yet
+    /// submitted it will be submitted by this call, which is why the
+    /// narrowing below is about not letting a waiter **build** work, not
+    /// about suppressing submission.
+    ///
+    /// **An expired wait is `Ok`, not an error.** Returning therefore does
+    /// not mean a completion is poppable -- the bound may simply have run out
+    /// -- which is why the loop that calls this re-checks either way.
+    ///
+    /// # At least one operation must really be outstanding
+    ///
+    /// Measured while building this: `SubmitIoRing` answers
+    /// `E_INVALIDARG` (`0x80070057`) -- not a timeout -- when asked to wait
+    /// for a completion the kernel has no pending operation for. A `RingWait`
+    /// is only ever constructed by [`IoRing::pop_within_with`], which checks
+    /// [`IoRing::outstanding`] before consulting the wait, so that
+    /// precondition holds structurally rather than by the caller remembering
+    /// it. A waiter that wants to block some other way is free to ignore this
+    /// method entirely.
+    ///
+    /// # Errors
+    ///
+    /// Any error from `SubmitIoRing` other than an expired wait.
+    pub fn block(&mut self, timeout_ms: u32) -> io::Result<()> {
+        let mut submitted = 0_u32;
+        // SAFETY: the ring handle is live for the borrow, and the out-pointer
+        // is valid. Zero new SQEs are queued, so this call's only effect is
+        // to wait for and reap what is already outstanding.
+        let hr = unsafe { crate::sys::submit(self.ring.handle, 1, timeout_ms, &raw mut submitted) };
+        wait_outcome(hr)
+    }
+
+    /// Operations submitted but not yet observed complete, as
+    /// [`IoRing::outstanding`].
+    ///
+    /// A waiter that multiplexes several sources can use this to decide
+    /// whether blocking on this ring is worth a slot at all.
+    #[must_use]
+    pub fn outstanding(&self) -> usize {
+        self.ring.outstanding()
+    }
+}
+
+/// The default [`CompletionWait`]: block inside the ring's own
+/// `SubmitIoRing` wait (M21.2).
+///
+/// Costs no kernel object and touches no event, so it composes with a caller
+/// who owns the ring's completion event under
+/// [D-21](../DESIGN-NOTES.md#d-21).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct SubmitWait;
+
+impl CompletionWait for SubmitWait {
+    fn wait(&mut self, ring: &mut RingWait<'_>, timeout_ms: u32) -> io::Result<()> {
+        ring.block(timeout_ms)
+    }
+}
+
+#[cfg(test)]
+impl IoRing {
+    /// An `IoRing` that owns no kernel ring, for driving `Drop`'s two error
+    /// paths (M23.5).
+    ///
+    /// The handle is null **deliberately and specifically**. Measured:
+    /// `CloseIoRing(null)` and `crate::sys::submit(null, ..)` both return
+    /// `0x80070006` -- `HRESULT_FROM_WIN32(ERROR_INVALID_HANDLE)` -- so both
+    /// of `Drop`'s failure branches can be reached without a fault-injection
+    /// seam over the raw HRESULTs, which is what M23.5 was opened to price.
+    ///
+    /// A *non-null* fabricated handle is not a substitute and must never be
+    /// swapped in: `CloseIoRing` on a plausible-looking `0xDEAD_0000` raises
+    /// `STATUS_ACCESS_VIOLATION`, because a ring handle is a pointer the
+    /// kernel dereferences rather than an index into a handle table.
+    ///
+    /// Nothing here opens a ring, so the tests built on it are not part of the
+    /// ring-opening population `tools/check-ring-tests.ps1` tracks (D-49) --
+    /// they need the kernel only to refuse them, which costs no ring.
+    fn refused_by_the_kernel() -> Self {
+        Self {
+            handle: std::ptr::null_mut(),
+            version: RingVersion::V1,
+            supported_ops: OpSupport::default(),
+            accounting: Accounting::new(),
+            registered_buffer_infos: Vec::new(),
+            completion_event: None,
+        }
     }
 }
 
@@ -1003,14 +1546,42 @@ impl Drop for IoRing {
         // avoid it), but Drop cannot propagate the error, so this asserts in
         // debug builds rather than silently closing a ring the kernel may
         // still be writing through.
+        //
+        // Both asserts here are silent while already panicking (M23.4): a
+        // second panic during unwind aborts, replacing whatever failure
+        // started the unwind with `STATUS_STACK_BUFFER_OVERRUN`. A ring is
+        // dropped on the way out of almost every failing test in this crate,
+        // so an unguarded assert here would convert a readable assertion
+        // message into a crash in the common case rather than a rare one.
+        //
+        // Both are covered, and neither needed a fault-injection seam to get
+        // there (M23.5). `a_ring_whose_rundown_the_kernel_refuses_..` and
+        // `a_ring_whose_close_the_kernel_refuses_..` put a null handle in the
+        // field and let this body run for real: measured, `CloseIoRing(null)`
+        // and `crate::sys::submit(null, ..)` both return `0x80070006`
+        // (`ERROR_INVALID_HANDLE`). Whether `run_down` submits at all is what
+        // selects between the two, since it loops only while something is
+        // outstanding.
+        //
+        // A *non-null* bad handle is not equivalent and must never be
+        // substituted: `CloseIoRing(0xDEAD_0000)` raises
+        // `STATUS_ACCESS_VIOLATION`, because a ring handle is a pointer the
+        // kernel dereferences rather than an index into a handle table.
         if let Err(error) = self.run_down() {
-            debug_assert!(false, "IoRing rundown failed before close: {error}");
+            debug_assert!(
+                std::thread::panicking(),
+                "IoRing rundown failed before close: {error}"
+            );
         }
         // SAFETY: `self.handle` is a live ring this `IoRing` exclusively
         // owns, and `run_down` just established that nothing is outstanding
         // (or made a best-effort attempt to, above).
         let hr = unsafe { CloseIoRing(self.handle) };
-        debug_assert!(hr >= 0, "CloseIoRing failed: 0x{:08X}", hr as u32);
+        debug_assert!(
+            hr >= 0 || std::thread::panicking(),
+            "CloseIoRing failed: 0x{:08X}",
+            hr as u32
+        );
     }
 }
 
@@ -1049,22 +1620,20 @@ thread_local! {
 /// Thirty seconds matches the deadline the crate's own `failure_paths`
 /// integration test already uses; it is a hang bound, not a latency
 /// expectation, so it is far above any real completion time.
+///
+/// Since M21.2 this is a thin panicking wrapper over the public
+/// [`IoRing::pop_within`] rather than its own loop. The panic is the only
+/// thing left that is specific to tests: a test wants the name of what it
+/// waited for in the failure message, where a consumer wants an `Option` it
+/// can act on.
 #[cfg(test)]
 pub(crate) fn pop_within(ring: &mut IoRing, what: &str) -> Completion {
     // Named once so the bound and the message it reports cannot drift apart.
     const BOUND: std::time::Duration = std::time::Duration::from_secs(30);
 
-    let deadline = std::time::Instant::now() + BOUND;
-    loop {
-        if let Some(completion) = ring.try_pop().expect("pop") {
-            return completion;
-        }
-        assert!(
-            std::time::Instant::now() < deadline,
-            "timed out after {BOUND:?} waiting for {what}"
-        );
-        std::thread::yield_now();
-    }
+    ring.pop_within(BOUND)
+        .expect("pop")
+        .unwrap_or_else(|| panic!("timed out after {BOUND:?} waiting for {what}"))
 }
 
 #[cfg(test)]

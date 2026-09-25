@@ -35,3 +35,66 @@ EP-D-4 intentionally left several follow-ups unresolved:
 These are tracked as checklist work in [CHECKLIST.md](CHECKLIST.md) as `EP-1.4` (not-observed
 behavior), `EP-1+.3` (planner/model/adapter naming), and `EP-1+.4` (measurement ownership), rather
 than as canonical decisions.
+
+## Why the goal turned out to be a dataflow description, and the answer plural
+
+[DESIGN-NOTES.md](DESIGN-NOTES.md#ep-d-6) records `EP-D-6`. This is how it was reached.
+
+The goal's shape had been deferred since `EP-D-4` (2026-09-03) and the deferral was **named**, which
+is what made it survivable: `COMPONENT.md`, the checklist status table and the decision body all said
+"deferred for litigation" rather than quietly omitting the input, so nothing was built on a guess in
+the meantime.
+
+**That is the smaller half of what the deferral was worth, and the larger half is easy to state
+backwards.** The answer was not sitting formed on 2026-09-03 waiting to be asked for. It did not
+exist. What produced it was the work done in the interval -- the building blocks, then the
+measurement tools, then the experiments that used those tools to infer things -- and the clarity
+arrived as an *output* of that sequence. The deferral's real value was buying the interval, not
+merely guarding it. Writing this up as "the shape was withheld until 2026-09-23" would invert the
+causality and quietly teach that asking earlier and harder would have worked; it would not have, and
+a specific question put to a general sense would have manufactured a lower-confidence answer that
+then got recorded as a decision. (That failure mode is the subject of RESOLUTION GRADIENT in
+[copilot-instructions.md](../../.github/copilot-instructions.md).)
+
+It was stated on 2026-09-23 by the engineer describing the component's purpose, in the course of
+correcting a milestone that had been written in the wrong crate.
+
+**Two candidate shapes had been implicitly in play, and neither was what was chosen.** `EP-1+.1`
+framed the input as a *scenario* -- "what the caller intends to run" -- with a minimum bar of
+distinguishing small-message handoff from large-buffer streaming. That framing is a set of workload
+*characteristics*, and it would have made the planner's input a bag of tuning hints. The other
+implicit shape was a *goal* in the literal sense, some statement of what to optimize (latency,
+throughput, footprint), which would have made the planner a solver over an objective function.
+
+What was chosen is neither: the input describes **the application's own structure** -- its inputs,
+its outputs, and the processing paths between them. The characteristics `EP-1+.1` named do not
+disappear, but they demote from being the scenario to being **attributes of an edge** in that
+structure, which is a strictly more informative place for them: "large buffers" is not a property of
+a workload, it is a property of a particular flow within it, and a real application has several
+flows that differ.
+
+**The two-stage split was not stated as a separate decision and follows from the input's shape.**
+Once the input is the application's structure rather than a set of hints, the connectivity implied by
+that structure can be derived with no machine present at all -- and a derivation that does not need a
+machine should not be entangled with one. That yields an intermediate artifact that is stable for the
+life of the application, where only the second stage is redone per machine. The alternative, deriving
+connectivity and placement together, would make the application's own shape re-derivable only in the
+presence of a machine, which is the coupling the
+[adoption thesis](../../DESIGN-NOTES.md#the-adoption-thesis) exists to object to.
+
+**The plural answer is the part most likely to be eroded later, so the reason is recorded here.** A
+single returned plan is easier to consume, easier to test, and easier to document, and every one of
+those pressures argues for collapsing the set at some future convenient moment. The reason not to is
+that ranking candidates requires knowing what the developer values, which is the one thing this
+component structurally does not know -- it was given a description of an application, not a statement
+of preference. A planner that returns one arrangement has either acquired a preference it was not
+given or hidden a choice it was not entitled to make. That is the same argument as OPTION INTEGRITY
+in [copilot-instructions.md](../../.github/copilot-instructions.md), arriving at component scale
+rather than at documentation scale.
+
+**What was deliberately not decided**, and is queued instead: where the two new types live.
+`EP-D-5`'s placement rule points at `topology-model` for both, and the argument is recorded in
+`EP-D-6` as an argument. Taking it in the same breath as the decision it follows from would have made
+one decision carry two, and the placement question has a consequence -- whether a caller can hold a
+dataflow description without depending on planning policy -- that deserves to be litigated on its
+own. It is `EP-1+.5`.

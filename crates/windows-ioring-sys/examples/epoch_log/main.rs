@@ -76,10 +76,15 @@ mod checkpoint;
 mod commit;
 mod contract;
 mod event_loop;
+mod logfile;
+mod placement;
 mod reclaim;
 mod record;
 mod replay;
 mod strategy;
+
+#[cfg(test)]
+mod tests;
 
 use std::io;
 use std::os::windows::io::AsRawHandle;
@@ -92,6 +97,7 @@ use commit::{Committer, Epoch};
 use contract::{CONTRACT, Clause};
 use event_loop::{EventLoop, Woken};
 use reclaim::Reclaimer;
+use strategy::CommitTiming;
 use windows_ioring_sys::{Batch, IoRing};
 
 /// How many records this demonstration appends into committed epochs.
@@ -116,6 +122,21 @@ const QUIESCE_ATTEMPTS: usize = 64;
 /// whole segments, and reclaims them once the epoch that superseded them is
 /// durable.
 const RETIRED_LEN: u64 = 64 * 1024;
+
+/// Blocks pre-allocated beyond what a run will actually write (M25.3).
+///
+/// A real write-ahead log pre-allocates *ahead* of its writer rather than
+/// exactly to it, because an append that reaches the end of the extent becomes
+/// an extending write -- the configuration the spike measured as behaving like
+/// a buffered handle, whatever flags the handle carries. Sizing to the exact
+/// record count would put this log one record away from that.
+///
+/// It also means a clean log now ends in zeros rather than at EOF, so replay
+/// stops with `NeverWritten` where it previously ran out of bytes. That is the
+/// ordinary shape of a pre-allocated log, it is not a violation, and it is the
+/// path `M25.2` taught replay to tolerate -- so the sample exercises it rather
+/// than leaving it to be met first by a reader of a real log.
+const SLACK_BLOCKS: usize = 8;
 
 /// The byte the retired segment is filled with, so "was it reclaimed?" has an
 /// answer that does not depend on what happened to be there.
@@ -203,14 +224,24 @@ fn run_log<O: io::Write, E: io::Write>(
     retired: &std::path::Path,
     checkpoint_path: &std::path::Path,
 ) -> io::Result<LogRun> {
-    let file = std::fs::OpenOptions::new()
-        .create(true)
-        .write(true)
-        .truncate(true)
-        .open(path)?;
+    // Pre-allocated and opened NO_BUFFERING | OVERLAPPED (M25.3). Sized for
+    // every record this run will write plus slack: an append past the extent
+    // would be an extending write, which is the configuration the spike
+    // measured as behaving like a buffered one, and a log that pre-allocates
+    // exactly what it needs is one record away from being that log.
+    let file = logfile::create_preallocated(path, RECORDS + TAIL_RECORDS + SLACK_BLOCKS)?;
     let handle = file.as_raw_handle();
 
+    // `RETIRED_LEN` is 64 KiB, which sits exactly at the threshold this
+    // repository treats as the point to ask whether an allocation needs to be
+    // contiguous, and not past it (M25.7). Left whole on that basis. A reader
+    // who grows this segment should revisit it: the write has the same shape
+    // as `logfile`'s zero-fill and chunks the same way, and the check further
+    // down is a fold over the bytes that never needs them all at once.
     std::fs::write(retired, vec![RETIRED_FILL; RETIRED_LEN as usize])?;
+    // Ordinary and buffered, deliberately: a checkpoint record is sixteen
+    // bytes from a `Vec` at offset 0, which satisfies none of NO_BUFFERING's
+    // three alignment rules. See `logfile`'s module docs.
     let checkpoint_file = std::fs::OpenOptions::new()
         .create(true)
         .write(true)
@@ -218,7 +249,11 @@ fn run_log<O: io::Write, E: io::Write>(
         .open(checkpoint_path)?;
 
     let mut ring = IoRing::new(64, 128)?;
-    let mut appender = Appender::new(&mut ring)?;
+    // Decided from the log's own handle, before the arena exists: the
+    // documented FSCTL takes a file handle directly, so the node the arena
+    // should prefer is answerable without a device-tree walk.
+    let placement = placement::Placement::decide(handle);
+    let mut appender = Appender::new(&mut ring, &placement)?;
     let mut committer = Committer::new();
 
     // The reclaim worker is shared: the log thread waits on its handle, and a
@@ -245,6 +280,7 @@ fn run_log<O: io::Write, E: io::Write>(
         "arena registered: {SLOTS} slots of {SLOT_LEN} bytes; \
          waiting on the ring's completion event alongside a reclaim event and a shutdown latch"
     ));
+    report.line(format_args!("{}", placement.describe()));
 
     // Something outside the I/O loop decides when to stop -- which is the only
     // reason a second handle is in the wait at all.
@@ -263,19 +299,29 @@ fn run_log<O: io::Write, E: io::Write>(
     let mut collected = 0usize;
     while appended < RECORDS {
         let epoch = committer.open_epoch();
-        let payload = payload_for(appended);
-        match appender.append(&mut ring, handle, epoch, &payload) {
-            Ok(_sequence) => appended += 1,
+        // Offer the rest of this epoch in one call. The arena decides how many
+        // of them are actually taken, which is why the count comes back rather
+        // than being assumed.
+        let wanted = (EPOCH_SIZE - (appended % EPOCH_SIZE)).min(RECORDS - appended);
+        let payloads: Vec<Vec<u8>> = (appended..appended + wanted).map(payload_for).collect();
+
+        let accepted = appender.append_batch(&mut ring, handle, epoch, &payloads)?;
+        if accepted == 0 {
             // Every slot is in flight. This is the arena working as intended,
             // not an error: pump once to drain and try again.
-            Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
-                let (_, popped) =
-                    events.pump(WAIT_MS, || drain(&mut ring, &mut appender, &mut committer))?;
-                empty_wakes += usize::from(popped == 0);
-            }
-            Err(error) => return Err(error),
+            //
+            // `continue` is what keeps the epoch trigger below honest -- it is
+            // reachable only on a pass that appended something, so it cannot
+            // fire on a retry that made no progress. That was M21.3's point,
+            // and batching must not quietly undo it.
+            let (_, popped) =
+                events.pump(WAIT_MS, || drain(&mut ring, &mut appender, &mut committer))?;
+            empty_wakes += usize::from(popped == 0);
+            continue;
         }
+        appended += accepted;
 
+        // Reached only when an append landed, per the `continue` above.
         if appended % EPOCH_SIZE == 0 {
             let closed = committer.commit(&mut ring, handle)?;
             // Before the commit's completion is observed, the honest answer is
@@ -330,18 +376,17 @@ fn run_log<O: io::Write, E: io::Write>(
     // The uncommitted tail: appended, so their writes complete, but no commit
     // ever closes their epoch. The contract therefore promises nothing about
     // them, and the replay pass below is what proves the reader tolerates that.
-    for index in RECORDS..RECORDS + TAIL_RECORDS {
-        let epoch = committer.open_epoch();
-        let payload = payload_for(index);
-        loop {
-            match appender.append(&mut ring, handle, epoch, &payload) {
-                Ok(_) => break,
-                Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
-                    events.pump(WAIT_MS, || drain(&mut ring, &mut appender, &mut committer))?;
-                }
-                Err(error) => return Err(error),
-            }
+    let tail_epoch = committer.open_epoch();
+    let tail: Vec<Vec<u8>> = (RECORDS..RECORDS + TAIL_RECORDS).map(payload_for).collect();
+    let mut tail_appended = 0;
+    while tail_appended < tail.len() {
+        let accepted =
+            appender.append_batch(&mut ring, handle, tail_epoch, &tail[tail_appended..])?;
+        if accepted == 0 {
+            events.pump(WAIT_MS, || drain(&mut ring, &mut appender, &mut committer))?;
+            continue;
         }
+        tail_appended += accepted;
     }
     report.line(format_args!(
         "appended {TAIL_RECORDS} more records into epoch {} and deliberately never committed it",
@@ -555,6 +600,12 @@ fn verify<O: io::Write, E: io::Write>(
     path: &std::path::Path,
     run: &LogRun,
 ) -> io::Result<()> {
+    // Read whole rather than streamed, and the size is stated because it is
+    // paid here: this log is `RECORDS + TAIL_RECORDS + SLACK_BLOCKS` blocks,
+    // so a few hundred kilobytes. `replay` explains why it takes a slice
+    // (M25.7) -- the short version is that a streaming reader would have to
+    // return `io::Error` alongside `Violation`, and keeping those apart is
+    // this verifier's whole purpose.
     let bytes = std::fs::read(path)?;
 
     // 1. The log as written. Everything committed must be intact, and the
@@ -581,11 +632,33 @@ fn verify<O: io::Write, E: io::Write>(
     assert_eq!(clean.durable_verified, run.durable_records);
     assert_eq!(clean.tail_records, run.tail_records);
 
+    // What the stride costs, reported rather than left to a doc comment
+    // (M25.1). Records are variable-length but occupy a whole block each, so
+    // the file is far larger than the data in it. The figures are given and
+    // the reader draws their own conclusion -- what is acceptable here depends
+    // entirely on a log's record size, which is a caller's question.
+    report.line(format_args!(
+        "layout: {} bytes of records in {} bytes of file, one record per {}-byte block",
+        clean.record_bytes,
+        bytes.len(),
+        record::RECORD_STRIDE
+    ));
+
     // 2. A torn tail, which is what a crash actually leaves behind. Cutting
     //    the file mid-record simulates a write that did not land whole. The
     //    contract says the reader must tolerate this, so a violation here
     //    would mean the reader is stricter than the contract allows.
-    let torn_at = bytes.len() - (record::HEADER_LEN + 4);
+    //
+    //    Derived from the last record's own block rather than from the file
+    //    length (M25.2). Records are strided now, so trimming a fixed number
+    //    of bytes off the end of the file lands in the final record's zeroed
+    //    remainder and tears nothing at all -- the replay would pass while
+    //    demonstrating the opposite of what it claims. This cuts partway
+    //    through the last record's payload, where `decode` reports `Truncated`.
+    //    It also survives M25.3's pre-allocation, which decouples the file's
+    //    length from the number of records in it entirely.
+    let last_record_start = (run.durable_records + run.tail_records - 1) * record::RECORD_STRIDE;
+    let torn_at = last_record_start + record::HEADER_LEN + 4;
     let torn = replay::replay(
         &bytes[..torn_at],
         run.durable_through,
@@ -605,6 +678,31 @@ fn verify<O: io::Write, E: io::Write>(
     assert_eq!(
         torn.durable_verified, run.durable_records,
         "tearing the tail must not cost a single durable record"
+    );
+    // And the tear must have actually torn something. Without this the case
+    // can quietly stop testing what it claims: a cut that lands in a zeroed
+    // block tail -- or in M25.3's pre-allocated slack -- leaves every record
+    // whole, so `is_clean` and the durable count both pass while nothing has
+    // been demonstrated about tolerating a partial record.
+    //
+    // The hazard was described in the comment above from the moment the cut
+    // was rewritten, and describing it did not catch it: reverting that cut to
+    // the old file-length form left this whole function passing. Measured
+    // during M25.1b, which is what turned the description into an assertion.
+    //
+    // `Truncated` specifically, not merely "stopped": a cut landing past the
+    // last record reports `NeverWritten`, which is the unwritten extent rather
+    // than a torn record and would mean the case had stopped tearing.
+    assert_eq!(
+        torn.tail_stopped,
+        Some(record::Torn::Truncated),
+        "the torn-tail case must actually tear a record, or it demonstrates nothing"
+    );
+    assert!(
+        torn.tail_records < clean.tail_records,
+        "tearing the last record must cost a tail record: clean saw {}, torn saw {}",
+        clean.tail_records,
+        torn.tail_records
     );
 
     // 3. The negative control. A verifier that cannot fail proves nothing, so
@@ -747,11 +845,7 @@ fn report_contract<O: io::Write, E: io::Write>(report: &mut Report<O, E>) {
     report.line(format_args!("epoch-log durability contract"));
     report.line(format_args!("=============================="));
 
-    for clause in [
-        Clause::Guarantees,
-        Clause::DoesNotGuarantee,
-        Clause::Assumes,
-    ] {
+    for clause in Clause::ALL {
         report.line(format_args!(""));
         report.line(format_args!("This log {}:", clause.heading()));
         for statement in CONTRACT.iter().filter(|s| s.clause == clause) {
@@ -787,9 +881,27 @@ fn compare_strategies<O: io::Write, E: io::Write>(
         "  these numbers describe THIS machine and THIS device. They are printed rather than \
          quoted in the docs because quoting ours would be misleading."
     ));
+    report.line(format_args!(
+        "  'commit' is what committing costs the strategy: preparing for the flush, submitting \
+         it, and waiting for it. The three are shown beside it because which one holds the cost \
+         is what tells the strategies apart -- host-sequenced spends it in 'prep', waiting for \
+         every write in userspace, where the covering strategies spend it in 'submit'."
+    ));
+    report.line(format_args!(
+        "  a zero 'block' beside a large 'deferral' does NOT establish that the operation \
+         completed inline: it may equally have pended and then finished while this program was \
+         busy elsewhere. The two are indistinguishable from here, and saying so is the point -- \
+         reading 'block' alone is how the old single number came to mean something it did not."
+    ));
+    report.line(format_args!(
+        "  'deferral' is NOT part of the commit. It is how long this program went on doing other \
+         work before asking, so a design that defers further grows it while being no slower. It \
+         is shown because the column here used to be exactly this number, labelled as commit \
+         latency (M20.6). Compare rec/s for which strategy to pay for."
+    ));
 
     let payload = b"strategy comparison record payload";
-    let mut reference: Option<(&'static str, Vec<u8>)> = None;
+    let mut reference: Option<(&'static str, u32)> = None;
     let mut throughputs: Vec<f64> = Vec::new();
     for strategy in strategy::CommitStrategy::ALL {
         let path = directory.join(format!(
@@ -797,13 +909,24 @@ fn compare_strategies<O: io::Write, E: io::Write>(
             std::process::id(),
             strategy.name()
         ));
-        let file = std::fs::OpenOptions::new()
-            .create(true)
-            .write(true)
-            .truncate(true)
-            .open(&path)?;
+        // Pre-allocated and opened NO_BUFFERING | OVERLAPPED, the same shape
+        // the log itself uses (M25.3) -- the harness exists to measure the log,
+        // so measuring it through a differently-opened handle would compare the
+        // strategies on a configuration the log does not run.
+        let file = logfile::create_preallocated(&path, EPOCHS * PER_EPOCH + SLACK_BLOCKS)?;
 
-        let outcome = strategy::run(strategy, file.as_raw_handle(), EPOCHS, PER_EPOCH, payload);
+        // Each strategy's arena is placed the same way the log's own is, and
+        // on that strategy's own file -- so the comparison holds placement
+        // constant instead of adding it to what the strategies differ in.
+        let placement = placement::Placement::decide(file.as_raw_handle());
+        let outcome = strategy::run(
+            strategy,
+            file.as_raw_handle(),
+            EPOCHS,
+            PER_EPOCH,
+            payload,
+            placement.node(),
+        );
         drop(file);
         let outcome = match outcome {
             Ok(outcome) => outcome,
@@ -815,14 +938,35 @@ fn compare_strategies<O: io::Write, E: io::Write>(
 
         // Replayed with the same verifier the log itself uses, because a
         // strategy that is fast and wrong is not a strategy.
+        //
+        // This is the sample's largest allocation: `EPOCHS * PER_EPOCH`
+        // blocks, so about 8 MiB per strategy (M25.7). It is one buffer at a
+        // time now rather than two -- the cross-strategy comparison below
+        // keeps a digest instead of a reference copy -- and it stays whole for
+        // the reason `replay` gives. A harness that needed to compare logs
+        // this program had not just written, or logs too large to read, would
+        // want the streaming verifier described there.
         let bytes = std::fs::read(&path)?;
+        // Accounting against the *layout rule*, not against the file's length.
+        // This compared the two until M25.3, and pre-allocation is what made
+        // that comparison stop meaning anything: the file now spans its whole
+        // extent from the moment it is created, whatever the harness went on to
+        // write into it, so an equality against `bytes.len()` would have held
+        // just as well for a run that wrote nothing at all.
         assert_eq!(
             outcome.bytes as usize,
-            bytes.len(),
-            "{} wrote {} bytes but accounted for {}",
+            outcome.records * record::RECORD_STRIDE,
+            "{} accounted for {} bytes across {} records, which is not one block each",
             strategy.name(),
-            bytes.len(),
-            outcome.bytes
+            outcome.bytes,
+            outcome.records
+        );
+        assert!(
+            bytes.len() >= outcome.bytes as usize,
+            "{} wrote {} bytes into an extent of only {}",
+            strategy.name(),
+            outcome.bytes,
+            bytes.len()
         );
         let outcome_replay =
             replay::replay(&bytes, outcome.durable_through, outcome.records, |index| {
@@ -843,31 +987,44 @@ fn compare_strategies<O: io::Write, E: io::Write>(
         // The cross-strategy invariant, and the one with real teeth. Replay
         // checks a log against itself; this checks the three strategies
         // against *each other*, so a dropped record, a wrong offset, or an
-        // epoch tagged to the wrong commit shows up as a byte difference
-        // rather than passing three times independently.
+        // epoch tagged to the wrong commit shows up as a difference rather
+        // than passing three times independently.
+        //
+        // Compared by digest rather than by keeping a reference copy (M25.7).
+        // The copy was the second of two multi-megabyte buffers alive at once
+        // -- this loop held the first strategy's whole log for the length of
+        // the comparison while reading each later one beside it. A digest
+        // retains thirty-two bytes instead, and loses nothing a reader had:
+        // the assertion could already only say *that* two logs differed, never
+        // where.
         //
         // What it cannot check is the thing the strategies actually differ
         // about: whether the ordering held on the *device*. That is only
         // observable across a power cut, and no in-process check substitutes
         // for it -- which is why the strategies are argued from D-23 and D-24
         // rather than from this run passing.
+        let digest = record::digest(&bytes);
         match &reference {
-            None => reference = Some((strategy.name(), bytes)),
+            None => reference = Some((strategy.name(), digest)),
             Some((first, expected)) => assert_eq!(
-                &bytes,
-                expected,
+                digest,
+                *expected,
                 "{} produced a different log than {first}; all three must write the same bytes",
                 strategy.name()
             ),
         }
         report.line(format_args!(
-            "  {:<18} {:>8.0} rec/s  commit p50 {:>7}  p99 {:>7}  max {:>7}  \
+            "  {:<18} {:>8.0} rec/s  commit p50 {:>7}  p99 {:>7}  \
+             (prep {:>7} / submit {:>7} / block {:>7})  deferral p50 {:>7}  \
              append stall {:>7}  -- pays {}",
             outcome.strategy.name(),
             outcome.throughput(),
-            micros(outcome.commit_quantile(0.50)),
-            micros(outcome.commit_quantile(0.99)),
-            micros(outcome.commit_quantile(1.0)),
+            micros(outcome.commit_quantile(CommitTiming::flush, 0.50)),
+            micros(outcome.commit_quantile(CommitTiming::flush, 0.99)),
+            micros(outcome.commit_quantile(|t| t.prepare, 0.50)),
+            micros(outcome.commit_quantile(|t| t.submit, 0.50)),
+            micros(outcome.commit_quantile(|t| t.blocking, 0.50)),
+            micros(outcome.commit_quantile(|t| t.deferral, 0.50)),
             micros(outcome.append_stall),
             outcome.strategy.cost()
         ));
@@ -879,13 +1036,21 @@ fn compare_strategies<O: io::Write, E: io::Write>(
     // The spread across strategies is only meaningful next to the spread the
     // *same* strategy shows between runs, so the program says so instead of
     // declaring a winner. On the machine this was written on the two are the
-    // same size, and the reason is visible in the numbers above: every
-    // strategy pays exactly one device flush per epoch, that flush is hundreds
-    // of microseconds, and everything the strategies actually differ about --
-    // how long the flush itself waits, an extra host round trip -- lands in
-    // the tens. The
-    // distinction D-24 draws is real; on this device it is two orders of
-    // magnitude below the dominant term.
+    // same size.
+    //
+    // The reason given here used to be that every strategy pays one device
+    // flush per epoch and the things they differ about land two orders of
+    // magnitude below it. The first half is true. The second was not reachable
+    // while this sample ran on a synchronous handle: a ring operation completed
+    // inline during submit, nothing was ever outstanding across a submit
+    // boundary, and there was no overlap for the strategies to differ in at all
+    // (M20.6). D-24's distinction was still real; the harness simply could not
+    // put it under load.
+    //
+    // M25.3 has moved every strategy onto a pre-allocated NO_BUFFERING |
+    // OVERLAPPED file, which removes that cause. Whether the strategies are
+    // distinguishable *now* is not settled by that and is not claimed here --
+    // M25.5 re-runs the comparison and reads it.
     //
     // That is not a licence to pick the cheapest-looking one. A device with a
     // fast flush, a log that commits far more often, or an arena under real
@@ -896,8 +1061,11 @@ fn compare_strategies<O: io::Write, E: io::Write>(
     if low > 0.0 {
         report.line(format_args!(
             "  spread across strategies: {:.2}x. Run this twice: if the run-to-run spread of one \
-             strategy is the same size, the choice is dominated by the device flush that all \
-             three pay once per epoch.",
+             strategy is the same size, the strategies are not distinguishable on this workload. \
+             All three pay one device flush per epoch. The second reason they were previously \
+             indistinguishable -- a synchronous handle leaving no overlap to differ in -- was \
+             removed by M25.3, which put every strategy on a pre-allocated unbuffered overlapped \
+             file. Whether that changed this number is what M25.5 reads.",
             high / low
         ));
     }

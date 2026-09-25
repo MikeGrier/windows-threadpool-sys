@@ -1,0 +1,130 @@
+# `set_len` against a zero-fill -- 2026-09-24
+
+Sixteen runs of the `write-pending-spike` with a fifth condition added, kept so
+the question can be re-read without paying for the runs again.
+
+## The question
+
+`M25.3` opens the log over an extent that has been **zero-filled** -- a real
+write of zeros -- and its documentation asserted that using
+[`std::fs::File::set_len`] instead would be a silent regression, on the grounds
+that only a write advances NTFS's valid data length.
+
+**That was asserted from documentation, not measured**, and it was challenged in
+review with a specific counter-hypothesis: that one of these combinations
+already does the right thing and zero-fills on the caller's behalf without
+requiring the write. The spike is the apparatus that can answer it, so a
+condition E was added to it rather than the claim being argued.
+
+## What was run
+
+`design-sessions/spikes/write-pending-spike.rs`, built `--release` in a scratch
+crate the way `tools/run-numa-spikes.ps1` builds the NUMA spikes, and run
+sixteen times back to back on an otherwise idle machine. Each run is 500 trials
+per condition; each trial is 8 writes of 4096 bytes plus a flush, submitted as
+one batch, and counts as "pended" if fewer than 9 completions were queued when
+`SubmitIoRing` returned.
+
+The conditions, unchanged except for the new one:
+
+- **A** buffered, no `OVERLAPPED`
+- **B** buffered + `OVERLAPPED`
+- **C** `NO_BUFFERING` + `OVERLAPPED`, extending the file
+- **D** `NO_BUFFERING` + `OVERLAPPED`, over a zero-filled extent
+- **E** `NO_BUFFERING` + `OVERLAPPED`, over a `set_len` extent *(new)*
+
+Per-run counts are in [runs.tsv](runs.tsv). Summary over the sixteen:
+
+| condition | min | median | max | runs >= 250/500 |
+|---|---|---|---|---|
+| A buffered sync | 0 | 0 | 0 | 0/16 |
+| B buffered overlapped | 0 | 0 | 1 | 0/16 |
+| C nobuffer extending | 1 | 268 | 446 | 9/16 |
+| D nobuffer zero-filled | 121 | 471.5 | 500 | 12/16 |
+| E nobuffer set_len | 1 | 268 | 494 | 9/16 |
+
+## What the numbers say, and what they do not
+
+**Buffering is the separation that replicates.** A and B pended once in sixteen
+runs between them, over 16,000 trials. Every `NO_BUFFERING` condition pended in
+most runs. That is the one distinction in this table large enough to survive the
+run-to-run variance.
+
+**C and E have identical medians and overlapping ranges, and neither is
+consistently above the other** -- run 7 has C at 269 and E at 3, run 8 has C at
+1 and E at 469. Nothing in this data separates them.
+
+**D is higher than C and E, and much less than the earlier record implies.** Its
+median is around 470 against 268, and its floor over sixteen runs is 121 where
+theirs is 1. But D's own range reaches down to 121, C reaches up to 446, and E
+to 494, so the distributions overlap substantially and a single run of either
+can land anywhere in the other's range.
+
+## The correction this forced
+
+The `M25` checklist preamble says condition D "pended reliably", and the spike's
+own prose says D "was the only condition that pends". **Neither replicates.**
+Both descend from a single run in which D reported 500/500 and C reported
+5/500; the spike's own header already warned that two runs minutes apart gave C
+as 5/500 and then 271/500. Over sixteen runs, C pends in most of them, with a
+median of 268/500 against D's 471.5.
+
+This does not undo `M25.3`. The log is opened `NO_BUFFERING | OVERLAPPED` over a
+zero-filled extent, and that configuration has the highest observed pending rate
+and the highest floor of the five. What changes is the confidence the prose may
+express: the original reading of "only D pends at all" is an artifact of one
+run, and the honest statement is that buffering is what decides whether
+operations pend here at all, while the extent's preparation shifts a rate that
+varies enormously run to run for reasons outside this program.
+
+**And none of it is a contract.** Windows specifies nothing about when a ring
+operation completes relative to `SubmitIoRing`. The log is required to be
+correct whichever way it goes, which is why `M25`'s standing constraint forbids
+anything depending on an operation pending -- a constraint this measurement
+makes more rather than less important.
+
+## A follow-up question, and the answer
+
+Review asked the obvious next thing: since a write past the valid data length
+forces the fill anyway, can that be *triggered on purpose* -- `set_len` to the
+final size, then write one sector at the very end -- so the filesystem does the
+zeroing and the caller never allocates a buffer?
+
+**Yes.** That is condition F, added after the runs above. Sixteen runs of all
+six conditions are in [runs-with-touch-end.tsv](runs-with-touch-end.tsv):
+
+| condition | min | median | max | runs >= 250/500 |
+|---|---|---|---|---|
+| A buffered sync | 0 | 0 | 0 | 0/16 |
+| B buffered overlapped | 0 | 0 | 0 | 0/16 |
+| C nobuffer extending | 2 | 256.5 | 492 | 8/16 |
+| D nobuffer zero-filled | 65 | 396.5 | 500 | 11/16 |
+| E nobuffer set_len | 1 | 105 | 497 | 6/16 |
+| F nobuffer set_len + touch end | 147 | 381 | 500 | 12/16 |
+
+F reaches the same end state the zero-fill reaches -- comparable median, and the
+**highest floor of any condition measured** (147 against the zero-fill's 65).
+`set_len` alone (E) remains clearly the worst of the unbuffered group, which is
+what makes F interesting: the difference between E and F is one small write.
+
+The trade, with the cost figures from
+[2026-09-24-set-len-zero-fill-cost/](../2026-09-24-set-len-zero-fill-cost/README.md):
+
+- F needs **no buffer at all**, two syscalls, whatever the extent's size.
+- F costs about **eight times the wall time** of an explicit sequential fill for
+  a large extent, because the filesystem's own zeroing is much slower than
+  writing the same bytes.
+
+`logfile::create_preallocated` keeps the explicit fill, now chunked so its
+memory is bounded rather than the size of the extent. A caller pre-allocating
+tens of gigabytes who would rather spend wall time than write the loop has a
+measured alternative.
+
+## Provenance
+
+- Host: the development machine this repository is worked on; single NUMA node,
+  NTFS, ARM64 Windows.
+- Date: 2026-09-24.
+- Spike: `design-sessions/spikes/write-pending-spike.rs` at the commit that
+  added condition E.
+- Files written to `%TEMP%`, one per condition, recreated per run.

@@ -8,14 +8,14 @@ use std::ops::Range;
 use std::ptr;
 use std::time::{Duration, Instant};
 
+use win_numa_sys::NumaNode;
 use windows_ioring_sys::{
-    Batch, IoRing, PushOptions, RegisteredBuffers, RegisteredSpan, Token, WriteCaching,
+    Batch, IoRing, NumaBuffer, PushOptions, RegisteredBuffers, RegisteredSpan, Token, WriteCaching,
 };
 use windows_sys::Win32::Foundation::HANDLE;
 use windows_sys::Win32::System::SystemInformation::GROUP_AFFINITY;
 use windows_sys::Win32::System::Threading::{GetCurrentThread, SetThreadGroupAffinity};
 
-use crate::buffer::NumaBuffer;
 use crate::plan::DomainPlan;
 
 /// How long a single push-and-wait may block before this sample gives up on
@@ -43,7 +43,7 @@ pub fn copy_domain(
     destination: HANDLE,
     byte_range: Range<u64>,
     chunk_len: usize,
-    numa_node: Option<u32>,
+    numa_node: Option<NumaNode>,
 ) -> io::Result<DomainReport> {
     affinitize(plan.group, plan.mask)?;
 

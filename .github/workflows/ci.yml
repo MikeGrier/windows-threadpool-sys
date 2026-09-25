@@ -153,6 +153,23 @@ jobs:
         shell: pwsh
         run: ./tools/check-borrow-surface.ps1
 
+  # The same mechanism, for a different population that also grew unnoticed:
+  # lib tests that open a real kernel ring. D-49 found 63 of them, which made
+  # `cargo test --lib` an integration suite wearing a unit suite's name. M24 took
+  # it to 41 and none of those is movable without M26.2, so a zero-check would
+  # fail on day one -- hence an inventory, which fails when the SET changes. An
+  # addition obliges the question "does this need the kernel, or only a
+  # ring-shaped thing?"; a removal is progress and needs only regeneration.
+  # Needs no toolchain -- it only reads files.
+  ring-test-population:
+    name: ioring ring-opening lib tests
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: Run check-ring-tests.ps1
+        shell: pwsh
+        run: ./tools/check-ring-tests.ps1
+
   build-test:
     name: build + test
     runs-on: windows-latest
@@ -512,6 +529,35 @@ jobs:
           RUST_BACKTRACE: 1
           RUST_LIB_BACKTRACE: 1
         run: cargo test -p windows-ioring-sys --locked --no-fail-fast
+      # `kernel-seam` (M26.2) is orthogonal to `threadpool`, so the two gates
+      # multiply: `--all-features` above builds the seam only alongside the
+      # threadpool, and every step in this job so far builds the no-threadpool
+      # path only with the seam off. The combination is a published
+      # configuration nothing else selects, which is the same argument that
+      # bought this job -- paid here rather than assumed.
+      - name: cargo clippy (kernel-seam, no threadpool)
+        run: cargo clippy -p windows-ioring-sys --all-targets --no-default-features --features kernel-seam --locked -- -D warnings
+      - name: cargo test (kernel-seam, no threadpool)
+        env:
+          RUST_BACKTRACE: 1
+          RUST_LIB_BACKTRACE: 1
+        run: cargo test -p windows-ioring-sys --no-default-features --features kernel-seam --locked --no-fail-fast
+      # `cargo test` compiles the epoch-log sample as a test harness and never
+      # calls `main`, so until M25.1b nothing ran the program itself. That was
+      # not theoretical: M25.1 converted the log's writer to a strided layout
+      # without the reader, which left the log unreadable while every one of
+      # the example's tests passed.
+      #
+      # M25.1b put the contract checks in tests, which is the rung that runs on
+      # every developer's machine. What a test cannot reach is `main` itself --
+      # its path setup, its error plumbing, and its exit code -- and that is a
+      # published example a consumer runs, so a panic on startup is exactly the
+      # failure worth catching. Release, because the sample takes about a second
+      # there against several in debug.
+      - name: cargo run (epoch-log sample, end to end)
+        env:
+          RUST_BACKTRACE: 1
+        run: cargo run -p windows-ioring-sys --example epoch_log --release --locked
 
   placement-probe-no-serde:
     name: windows-placement-probe (no serde feature)

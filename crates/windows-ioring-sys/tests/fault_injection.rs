@@ -46,12 +46,11 @@ fn real_read(
     let token =
         unsafe { batch.read_raw(file.as_raw_handle(), vec![0_u8; 5], 0, PushOptions::new()) }
             .expect("queue a read");
-    batch.submit_and_wait(1, 30_000).expect("submit and wait");
-    let completion = loop {
-        if let Some(completion) = ring.try_pop().expect("pop") {
-            break completion;
-        }
-    };
+    batch.submit().expect("submit the read");
+    let completion = ring
+        .pop_within(std::time::Duration::from_secs(30))
+        .expect("pop")
+        .expect("the read never completed");
     (token, completion)
 }
 

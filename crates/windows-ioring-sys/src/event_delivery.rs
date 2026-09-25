@@ -88,15 +88,29 @@ impl EventDelivery {
     /// completion signals either, because the queue never returns to empty to
     /// re-arm the edge. Such a backlog is stranded permanently.
     ///
-    /// What closes that gap is the deliberate signal
-    /// [`IoRing::completion_event`] raises as it attaches: the first callback
-    /// then drains the backlog exactly as it would any other wakeup.
+    /// What closes that gap is a deliberate signal raised on the event once
+    /// it has been attached: the first callback then drains the backlog
+    /// exactly as it would any other wakeup.
+    ///
+    /// That signal is raised *after* the wait has been armed, which is the
+    /// order `SetThreadpoolWait` documents -- "you must re-register the event
+    /// with the wait object before signaling it each time to trigger the wait
+    /// callback". Signalling first and arming afterwards is not guaranteed to
+    /// run the callback, and since the event is auto-reset the signal is
+    /// consumed rather than left pending for the arming to find. For a ring
+    /// whose queue never returns to empty there is no second wakeup coming,
+    /// so that loss strands the backlog permanently instead of merely
+    /// delaying it. This method therefore attaches the event unsignalled and
+    /// raises the signal itself, rather than going through
+    /// [`IoRing::completion_event`], which signals as it attaches and so
+    /// leaves a caller no way to arm in between.
     ///
     /// This was false in the implementation, and asserted anyway in this
     /// rustdoc, before M11.3 -- every test until then handed over a fresh
     /// ring, so nothing contradicted it. A caller on an earlier version
     /// cannot rely on the guarantee; `tests/event_delivery.rs` keeps the
-    /// repro that now holds it.
+    /// repro that now holds it. The ordering above was wrong until M26.9, in
+    /// a way that stranded the backlog in roughly one run in a hundred.
     ///
     /// # Errors
     ///
@@ -105,8 +119,9 @@ impl EventDelivery {
     /// [`IoRing::completion_event`] is what decides. This crate refuses to
     /// silently substitute a thread-based polling loop instead -- a caller
     /// who asked for event-driven delivery and got a spun-up thread has been
-    /// told something false. Also returns any other error from
-    /// [`IoRing::completion_event`] or from `ThreadpoolWait::new`.
+    /// told something false. Also returns any other error from attaching the
+    /// ring's completion event, from `ThreadpoolWait::new`, or from raising
+    /// the setup signal.
     pub fn new<F>(
         mut ring: IoRing,
         on_completion: F,
@@ -118,10 +133,20 @@ impl EventDelivery {
         // The ring creates, owns, and attaches its own event and hands back a
         // duplicate (D-20), which leaves exactly one
         // `SetIoRingCompletionEvent` call site in this crate. Delegating also
-        // means the capability check, the `Unsupported` error, and the
-        // signal-once-on-attach that makes the backlog guarantee above true
-        // are each stated in one place rather than restated here.
-        let event = ring.completion_event()?;
+        // means the capability check and the `Unsupported` error are each
+        // stated in one place rather than restated here.
+        //
+        // The attachment is taken *unsignalled*, and the setup signal raised
+        // only after `wait.arm` below, because `SetThreadpoolWait` documents
+        // that "you must re-register the event with the wait object before
+        // signaling it each time to trigger the wait callback". Signalling
+        // first and arming afterwards is the order that rule forbids.
+        let (event, owes_setup_signal) = ring.attach_completion_event_unsignalled()?;
+        windows_threadpool_sys::trace_record!(
+            "delivery",
+            "event-attached",
+            std::os::windows::io::AsRawHandle::as_raw_handle(&event) as usize
+        );
         // SAFETY: `completion_event` returns a duplicate of an auto-reset
         // event -- always a supported wait target, and never a mutex -- and
         // that duplicate is exclusively ours. The ring keeps its own separate
@@ -140,13 +165,34 @@ impl EventDelivery {
                 // lands, so the only gap this leaves is a completion that
                 // arrives between the last pop and the re-arm -- and the
                 // second drain closes exactly that gap (M4.2).
+                windows_threadpool_sys::trace_record!("delivery", "callback-entered");
                 drain(&ring_for_wait, on_completion.as_ref());
                 activation.rearm(None);
                 drain(&ring_for_wait, on_completion.as_ref());
+                windows_threadpool_sys::trace_record!("delivery", "callback-left");
             },
             env,
         )?;
         wait.arm(None);
+        windows_threadpool_sys::trace_record!("delivery", "armed");
+
+        // Only now, with the wait registered, is the setup signal raised --
+        // the order `SetThreadpoolWait` documents. This is what makes the
+        // backlog guarantee above true, so a failure to raise it is a failure
+        // to construct.
+        //
+        // Signalled only when this call attached the event. A caller that
+        // attached it earlier and consumed the signal reaches this with a
+        // non-empty queue and no wakeup owing, which review raised and
+        // `M26.12` is investigating -- the obvious repair, signalling
+        // unconditionally, was tried and does **not** fix it, so it is not
+        // applied here. See the ignored reproducer in
+        // `tests/event_delivery.rs` and UNRESOLVED-TEST-FAILURES.md.
+        if owes_setup_signal {
+            ring.lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .raise_setup_signal()?;
+        }
 
         Ok(Self { wait, ring })
     }

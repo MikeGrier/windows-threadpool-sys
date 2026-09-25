@@ -7,7 +7,6 @@
 //! partitioning policy (D-8 in its `DESIGN-NOTES.md`), so the policy lives
 //! here instead, giving M6's guidance something executable behind it.
 
-mod buffer;
 mod engine;
 mod plan;
 mod policy;
@@ -77,7 +76,7 @@ struct Args {
 
 fn parse_args() -> Result<Args, String> {
     let mut positional = Vec::new();
-    let mut policy = Policy::ByL3;
+    let mut policy = Policy::ByCache;
     let mut remote_placement = false;
     let mut topology_path = None;
     let mut chunk_len = DEFAULT_CHUNK_LEN;

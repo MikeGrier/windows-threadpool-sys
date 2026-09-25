@@ -66,6 +66,14 @@ pub struct Outcome {
     /// Why decoding stopped, if it stopped before the end of the file. Past
     /// the watermark this is expected rather than exceptional.
     pub tail_stopped: Option<Torn>,
+    /// Bytes the records themselves occupy, padding excluded.
+    ///
+    /// Against the length of the file this is the log's write amplification,
+    /// which the stride (M25.1) makes large and which the sample reports rather
+    /// than leaves to a doc comment. A reader who only saw the file size would
+    /// have no way to tell a log holding a lot of data from one holding very
+    /// little in a lot of blocks.
+    pub record_bytes: usize,
     /// Contract failures. Empty means the log kept every promise it made.
     pub violations: Vec<Violation>,
 }
@@ -83,6 +91,35 @@ impl Outcome {
 /// `expected_durable` how many records it reported durable. `payload_for`
 /// reproduces what record *n* should contain, so a payload that came back
 /// altered is caught rather than merely present.
+///
+/// # Why this takes a slice and not a reader (M25.7)
+///
+/// The walk is strictly forward, one [`record::RECORD_STRIDE`] block at a
+/// time, and never looks back -- so it has no need of the whole file at once,
+/// and a caller with a log larger than memory cannot give it one. A real log
+/// is larger than memory. Reading the whole file is therefore the wrong
+/// reflex to teach at exactly the point a reader is learning how to verify
+/// one, and the slice is kept anyway, for a reason that is about this
+/// function's *vocabulary*:
+///
+/// **It returns an [`Outcome`], not a `Result`.** Every way it can end is a
+/// statement about the log -- verified, tolerated, or a [`Violation`]. A
+/// reader that streams introduces a third kind of ending, `io::Error`, into
+/// the one component whose entire job is to distinguish "the log broke its
+/// promise" from "the log kept it". Those two failures want different
+/// responses from a caller, and a signature that returns both through one
+/// channel invites exactly the conflation this file exists to prevent: an
+/// unreadable file reported as a missing durable record.
+///
+/// So the streaming version is a **different interface**, not a smaller
+/// allocation, and this sample keeps the one whose failure vocabulary is
+/// closed. The cost is bounded and stated rather than hidden: `main` reads a
+/// 140 KiB log here, and its harness reads 8 MiB per strategy.
+///
+/// A consumer building a real verifier wants the other shape, and wants
+/// `io::Error` and `Violation` kept apart in it -- a `Result<Outcome>` whose
+/// `Err` means "could not read" and whose `Ok` still carries every violation
+/// found before the read failed.
 pub fn replay(
     bytes: &[u8],
     durable_through: Epoch,
@@ -93,6 +130,7 @@ pub fn replay(
         durable_verified: 0,
         tail_records: 0,
         tail_stopped: None,
+        record_bytes: 0,
         violations: Vec::new(),
     };
 
@@ -101,9 +139,30 @@ pub fn replay(
     let mut past_watermark = false;
 
     while cursor < bytes.len() {
-        match record::decode(&bytes[cursor..]) {
+        // Hand `decode` this record's own block, not the rest of the file
+        // (M25.2). Without the stride there was no block to confine it to, so
+        // a corrupted `payload_len` was bounded only by the file's length and
+        // a record could claim bytes belonging to its successors -- caught,
+        // but by the checksum failing rather than structurally. `min` keeps
+        // the last block correct when the file ends inside it, which is
+        // exactly the torn tail the contract requires a reader to tolerate.
+        let block_end = (cursor + record::RECORD_STRIDE).min(bytes.len());
+        match record::decode(&bytes[cursor..block_end]) {
             Ok(found) => {
-                cursor += found.total_len;
+                // Advance by the stride, not by the record's own extent
+                // (M25.2). Records land one per fixed-size block with a zeroed
+                // remainder, so a record's extent says where it *ends* and the
+                // stride says where the next one *starts*; they stopped being
+                // the same number when the log gained sector atomicity.
+                // Walking by the extent lands in the zero tail and decodes as
+                // `NeverWritten`, which replay would report -- correctly, given
+                // what it was told -- as a durable record having gone missing.
+                cursor += record::RECORD_STRIDE;
+
+                // Counted for every whole record, durable or tail, because
+                // amplification is a property of the file rather than of the
+                // durable region.
+                outcome.record_bytes += found.extent();
 
                 if found.epoch > durable_through {
                     // The tail. Nothing is promised about it, so nothing is

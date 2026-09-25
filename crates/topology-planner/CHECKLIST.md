@@ -1,9 +1,10 @@
 # Checklist: the topology planner
 
-Plans an arrangement of execution domains from a stated **goal** plus an **abstracted idealized**
-description of a machine. See [COMPONENT.md](COMPONENT.md) for what this crate is and why it is
-separate from both the topology crate and the runtime, and
-[EP-D-4](DESIGN-NOTES.md#ep-d-4) for the architecture it now sits in.
+Plans arrangements of execution domains from a **dataflow description of an application** -- its
+input, output, and processing code paths -- plus an **abstracted idealized** description of a
+machine. See [COMPONENT.md](COMPONENT.md) for what this crate is and why it is separate from both
+the topology crate and the runtime, [EP-D-4](DESIGN-NOTES.md#ep-d-4) for the architecture it now
+sits in, and [EP-D-6](DESIGN-NOTES.md#ep-d-6) for the two-stage shape and the plural answer.
 
 **The component has been re-scoped**, per [EP-D-4](DESIGN-NOTES.md#ep-d-4) and
 [EP-D-5](DESIGN-NOTES.md#ep-d-5). It is named `topology-planner` and the directory now matches; it
@@ -33,7 +34,7 @@ prerequisites rather than on someone else's decision.
 | Milestone | State | What it is waiting on |
 |---|---|---|
 | M1 the input contract | 3 done, 2 open | `EP-1.4` and `EP-1.5`'s coverage half, which want a settled model |
-| M1+ scenario and naming | **partly answered** | the name is settled (EP-D-4); the goal input is deferred for litigation, by direction |
+| M1+ scenario and naming | **partly answered** | the name is settled (EP-D-4); the goal input's *shape* is settled as a dataflow description (EP-D-6), and its concrete vocabulary is `EP-1+.1`'s remaining work |
 | M2+ the plan as a value | parked, **and needs re-cutting** | re-cut against EP-D-4/EP-D-5, then the topology reshape landing |
 | M3+ the policies | parked | M2+ |
 | M-inf parked | ungated | not scheduled, deliberately |
@@ -141,31 +142,63 @@ Raised when the engineer described this component's function, which turned out t
 "takes a topology, applies policy". Both are gated on the locality-model session, but neither is a
 model question -- they are this component's own.
 
-- [ ] **EP-1+.1** -- **Describe the scenario input.** The synthesizer takes *two* inputs and only one
-  is described anywhere. The scenario says what the caller intends to run, and it is what makes a
-  measurement meaningful: [EP-D-3](DESIGN-NOTES.md#ep-d-3) established that a measured number means
-  nothing without knowing what it measured, so at minimum the scenario must distinguish small-message
-  handoff from large-buffer streaming. Its absence is why "what is most useful for consumers" was
-  hard to answer in the abstract for so long.
+**Re-planned 2026-09-23 by [EP-D-6](DESIGN-NOTES.md#ep-d-6)**, which settled the input's shape and
+in doing so added work this milestone did not anticipate: the two-stage split means stage 1 has an
+output that is a value in its own right, and the plural answer means stage 2 returns a set rather
+than a plan. `EP-1+.1` is narrowed accordingly and `EP-1+.5` / `EP-1+.6` are new.
+
+- [ ] **EP-1+.1** -- **Give the dataflow description a concrete vocabulary.** Its *shape* is settled
+  by [EP-D-6](DESIGN-NOTES.md#ep-d-6) -- a sufficiently abstract definition of the application's
+  input, output, and processing code paths -- so what remains is the types: how a caller names a
+  source, a sink and a processing step, and how they express an edge's characteristics. That last
+  part is what makes a measurement meaningful, since [EP-D-3](DESIGN-NOTES.md#ep-d-3) established
+  that a measured number means nothing without knowing what it measured; at minimum an edge must
+  distinguish small-message handoff from large-buffer streaming. **Note the correction EP-D-6
+  carried:** that distinction is an attribute *of an edge*, not the whole scenario, which is how
+  this item originally framed it.
 
 - [ ] **EP-1+.2** -- **Decide what the caller-callback traits ask.** Planning is a negotiation: the
   component may call back for clarification the scenario did not settle. Enumerating those questions
   is what decides whether this is one trait or several, and it cannot be done before EP-1+.1 says
   what the scenario already answers.
 
-- [ ] **EP-1+.3** -- **Settle the naming, before any type is written.** Both inputs and the output
-  are graphs of processors and their relations, so "topology" fits all of them and distinguishes
-  none -- and a reader seeing the word twice will eventually take one for the other. Decide whether
-  the observed machine keeps the bare name (qualified only by its crate), gains a qualifier, or is
-  renamed outright; what the synthesized arrangement is called; and whether the inward/outward
-  adapters keep those role names or gain more specific crate/type names. Cheap now; expensive once
-  any of those names are public. This one blocks nothing but should not be settled by whoever writes
-  the first type.
+- [ ] **EP-1+.3** -- **Settle the naming, before any type is written.** There are now **four** graphs
+  in play and "topology" fits several of them while distinguishing none -- a reader meeting the word
+  twice will eventually take one for the other. They are: the **machine** (processors and their
+  relations), the **application's dataflow description** (sources, sinks and processing steps), the
+  **connectivity graph** stage 1 infers from it (the same nodes, with directed flow), and each
+  **realization** stage 2 emits (threads on processor groups, with queues between them). Note that
+  only two of the four are graphs of *processors*, which is itself a correction:
+  [EP-D-6](DESIGN-NOTES.md#ep-d-6) made the input an application-shaped graph, where this item
+  previously assumed every graph was machine-shaped. Decide whether the observed machine keeps the
+  bare name (qualified only by its crate), gains a qualifier, or is renamed outright; what each of
+  the other three is called; and whether the inward/outward adapters keep those role names or gain
+  more specific crate/type names. Cheap now; expensive once any of those names are public. This one
+  blocks nothing but should not be settled by whoever writes the first type. **The connectivity
+  graph is the one with no name at all today.**
 
 - [ ] **EP-1+.4** -- **Assign measurement ownership for directed residency cost in the four-part
   architecture.** [EP-D-3](DESIGN-NOTES.md#ep-d-3) requires directed cross-domain cost input with
   measurement context. Record which layer owns collecting, validating, and supplying that measurement
   context to `topology-model` through the inward adapter/synthesizer path.
+
+- [ ] **EP-1+.5** -- **Give stage 1's output a type, and decide which crate holds it.**
+  [EP-D-6](DESIGN-NOTES.md#ep-d-6) establishes that the connectivity graph with its directed flow is
+  derived before any machine exists, which makes it a value that can be inspected and reviewed
+  without even a synthetic machine -- a stronger version of the argument
+  [EP-D-5](DESIGN-NOTES.md#ep-d-5) used to make the plan a value. EP-D-5's placement rule points at
+  `topology-model` for both this type and the dataflow description, on the grounds that a component
+  which only describes or realizes must not depend on planning policy. **EP-D-6 recorded that as an
+  argument and deliberately did not take it as a decision**; this item takes it, either way, and says
+  what depends on the answer.
+
+- [ ] **EP-1+.6** -- **Make the plural answer explicit in the plan vocabulary.** The planner returns
+  *one or more* suggested realizations ([EP-D-6](DESIGN-NOTES.md#ep-d-6)), so the type a caller
+  receives is a set and the thing `M2+.2` renders is a set. Decide what a candidate carries beyond
+  the arrangement itself -- at minimum, enough for a developer to tell two candidates apart and say
+  why they would pick one, which is the whole purpose of returning more than one. Ranking is
+  explicitly *not* in scope here: the planner declines to rank because it cannot know what the
+  developer values, and `M3+` owns whether that ever changes.
 
 ## M2+: the plan as a value
 

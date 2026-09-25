@@ -21,6 +21,12 @@ path = "src/lib.rs"
 [features]
 default = ["threadpool"]
 
+# Propagates windows-threadpool-sys's concurrency trace. Off by default and
+# absent from the compiled output when off: the defects it exists for are
+# timing-dependent, so the instrument must not change the schedule it is
+# measuring. Narrow it with WINDOWS_THREADPOOL_TRACE at run time.
+trace = ["windows-threadpool-sys/trace"]
+
 # A test-support seam that makes a *real* completion report a failure it did
 # not actually have (M16.3). Off by default: it is for testing failure
 # handling, and nothing in production has a use for it.
@@ -31,6 +37,15 @@ default = ["threadpool"]
 # whole design and is argued in full on `Completion::with_injected_failure`.
 # Fabrication stays `#[cfg(test)] pub(crate)` and is not reachable from here.
 fault-injection = []
+
+# The indirection the M26 kernel-response resolver plugs into (M26.2). Off by
+# default: with it off, every wrapper in `sys` is an inline forward to the same
+# `windows-sys` call this crate made before, and the install point does not
+# exist at all.
+#
+# A feature rather than `cfg(test)` because the integration suite in tests/
+# cannot see `cfg(test)` items -- the same reason `fault-injection` is one.
+kernel-seam = []
 # Model A delivery (`EventDelivery`) is the only thing in this crate that needs
 # a thread pool, so a Model B consumer -- a pinned thread parked in
 # `Batch::submit_and_wait`, owning its own ring -- otherwise links a dependency
@@ -59,6 +74,21 @@ required-features = ["threadpool"]
 name = "epoch_log"
 path = "examples/epoch_log/main.rs"
 required-features = ["threadpool"]
+# M21.4 gives the sample's durability accounting unit tests -- the failed-commit
+# case cannot be reached by running the sample, because it needs a completion
+# whose result is an injected failure. Examples are not test targets by default,
+# so `cargo test` would compile this and run nothing.
+test = true
+
+# `ring_copy` was auto-discovered until M20.3, which needed it to be a test
+# target for the same reason `epoch_log` is: the degraded-fallback branch in
+# `Policy::select` is the one every zero-relation machine takes, and it cannot
+# be reached by *running* the sample on a machine that reports its relations.
+# A synthetic topology reaches it; a test target is what lets one run.
+[[example]]
+name = "ring_copy"
+path = "examples/ring_copy/main.rs"
+test = true
 
 # The crate is Windows-only, so docs.rs must build on a Windows target or it
 # would render an almost-empty crate.
@@ -72,6 +102,11 @@ targets = ["x86_64-pc-windows-msvc"]
 # under `Win32_System_IO` as their subject matter might suggest.
 # `Win32_System_Threading` supplies the event primitives the Model A delivery
 # path (M4) waits on.
+#
+# `Win32_System_Memory` is gone from this list, and its absence is the check
+# that `NumaBuffer` really left: the allocator was the only thing here that
+# reached for it, so a build that still needed it would mean something had been
+# missed. It now belongs to `win-numa-sys`.
 windows-sys = { version = "0.61.2", default-features = false, features = [
 	"Win32_Foundation",
 	"Win32_Security",
@@ -83,6 +118,13 @@ windows-sys = { version = "0.61.2", default-features = false, features = [
 # event. Optional behind the default-on `threadpool` feature (D-22); nothing
 # else in the crate references it.
 windows-threadpool-sys = { version = "0.1.3", path = "../windows-threadpool-sys", optional = true }
+# NumaBuffer moved here in M22.3 and out again when win-numa-sys was created:
+# the buffer has nothing to do with a ring, and windows-placement-probe had
+# independently written the same VirtualAllocExNuma call. This crate keeps
+# re-exporting the type, so windows_ioring_sys::NumaBuffer still resolves for
+# anyone who bound to it, and supplies the IoBuf/IoBufMut impls that the
+# allocator crate deliberately does not define.
+win-numa-sys = { version = "0.1.0", path = "../win-numa-sys" }
 
 [dev-dependencies]
 # M6.3's topology-guidance example enumerates L3 cache domains with this
@@ -111,13 +153,18 @@ windows-topology-sys = { path = "../windows-topology-sys", features = [
 ] }
 # M7's ring-copy sample deserializes a fed-in topology description (--topology).
 serde_json = "1.0"
-# M7's ring-copy sample additionally needs `VirtualAllocExNuma` (buffer
-# placement) and `GROUP_AFFINITY` (pinned-thread affinity); M14.1's epoch-log
-# sample needs `Win32_System_Ioctl` for the `FSCTL_SET_ZERO_DATA` reclamation
-# it orders against ring epochs. The library itself needs none of them.
+# M7's ring-copy sample additionally needs `GROUP_AFFINITY` (pinned-thread
+# affinity); M14.1's epoch-log sample needs `Win32_System_Ioctl` for the
+# `FSCTL_SET_ZERO_DATA` reclamation it orders against ring epochs, and for the
+# `FSCTL_QUERY_VOLUME_NUMA_INFO` its arena placement asks (M22.3).
+#
+# `Win32_System_Memory` is deliberately NOT here: buffer placement moved into
+# the library as `NumaBuffer` (M22.3), so the feature is a *library* one now
+# and listing it again would wrongly suggest a sample reaches for
+# `VirtualAllocExNuma` on its own.
 windows-sys = { version = "0.61.2", default-features = false, features = [
 	"Win32_System_Ioctl",
-	"Win32_System_Memory",
+	"Win32_System_Pipes",
 	"Win32_System_SystemInformation",
 ] }
 # M14.1's epoch-log sample orders a non-ring `FSCTL` against ring epochs, which

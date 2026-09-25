@@ -345,6 +345,7 @@ impl WaitContext {
         let mut suppressed = self.suppression();
         *suppressed = suppressed.saturating_add(1);
         let wait = self.wait.load(Ordering::Acquire);
+        crate::trace_record!("wait", "suppress-and-disarm", wait, *suppressed);
         if wait != 0 {
             // SAFETY: `wait` is this object's live PTP_WAIT, published before any
             // callback could run and valid until Drop closes it.
@@ -454,6 +455,21 @@ impl WaitActivation<'_> {
     ///
     /// [`TimerFiring::rearm_after`]: crate::timer::TimerFiring::rearm_after
     ///
+    /// # Re-arm before the next signal
+    ///
+    /// The ordering rule described on [`ThreadpoolWait::arm`] applies to
+    /// every arming, not just the first -- `SetThreadpoolWait` says the event
+    /// must be re-registered "before signaling it each time". A producer that
+    /// signals in the window after an activation consumed the arming but
+    /// before this call re-establishes it may not get a callback for that
+    /// signal.
+    ///
+    /// Re-arming *before* draining closes that window, at the cost of
+    /// callbacks that find nothing to do; draining first and re-arming after
+    /// leaves it open. A caller who cannot order the two can drain, re-arm,
+    /// then drain again, so that anything which landed in the window is
+    /// picked up by the second pass rather than waited for.
+    ///
     /// # Teardown
     ///
     /// Re-arming after the object has begun tearing down does nothing, so a
@@ -524,6 +540,7 @@ unsafe fn arm_raw(wait: PTP_WAIT, handle: HANDLE, timeout: Option<Duration>) {
         // SAFETY: forwarded; a null timeout means "wait indefinitely".
         None => unsafe { SetThreadpoolWait(wait, handle, ptr::null()) },
     }
+    crate::trace_record!("wait", "armed", wait, handle as usize);
 }
 
 /// Trampoline from the raw `PTP_WAIT_CALLBACK` ABI into the boxed closure.
@@ -537,6 +554,7 @@ unsafe extern "system" fn wait_trampoline(
     _wait: PTP_WAIT,
     wait_result: u32,
 ) {
+    crate::trace_record!("wait", "trampoline-entered", _wait, wait_result);
     // SAFETY: context is a valid *mut WaitContext for the full callback duration.
     let ctx = unsafe { &*(context as *const WaitContext) };
     let activation = WaitActivation {
@@ -688,6 +706,7 @@ impl ThreadpoolWait {
         // so no callback can observe the unpublished value.
         // SAFETY: context is live and exclusively ours until the first arming.
         unsafe { (*context).wait.store(wait, Ordering::Release) };
+        crate::trace_record!("wait", "created", wait, target.raw() as usize);
 
         Ok(Self {
             wait,
@@ -708,6 +727,25 @@ impl ThreadpoolWait {
     /// arming rather than adding to it, and an activation consumes the arming --
     /// rearm from inside the callback with [`WaitActivation::rearm`] to keep
     /// watching.
+    ///
+    /// # Arm before you signal
+    ///
+    /// `SetThreadpoolWait` documents that "you must re-register the event with
+    /// the wait object before signaling it each time to trigger the wait
+    /// callback". Signal a handle that is not currently armed -- including in
+    /// the window between constructing a [`ThreadpoolWait`] and this call --
+    /// and the callback is not guaranteed to run for that signal.
+    ///
+    /// An auto-reset event makes a dropped signal permanent rather than merely
+    /// late, because the signal is consumed and there is nothing left for a
+    /// subsequent arming to observe. If the handle is only ever signalled once,
+    /// as a wakeup for state that is already present, that lost signal is the
+    /// last one the waiter will ever get.
+    ///
+    /// Every example in this module arms first for that reason; so does every
+    /// caller in this workspace. A caller who cannot control the ordering
+    /// should watch a manual-reset event kept in agreement with the state it
+    /// reports, which is level-triggered and so has no signal to lose.
     pub fn arm(&self, timeout: Option<Duration>) {
         // SAFETY: `wait` is valid for the lifetime of self, and the handle is
         // owned by self so it is still open.
@@ -847,10 +885,12 @@ impl Drop for ThreadpoolWait {
         let ctx = unsafe { &*self.context };
         // Raised and never released: unlike `stop_and_drain`, there is no
         // afterwards for this object.
+        crate::trace_record!("wait", "drop-begin", self.wait);
         ctx.suppress_and_disarm();
         // The lock is released before draining: a callback blocked on it would
         // otherwise never finish, and this wait would never return.
         self.cancel_pending();
+        crate::trace_record!("wait", "drop-drained", self.wait);
 
         // SAFETY: no callback can be queued or executing, so the object can be
         // closed and the context freed exactly once. `target` is dropped after
@@ -861,6 +901,7 @@ impl Drop for ThreadpoolWait {
             CloseThreadpoolWait(self.wait);
             drop(Box::from_raw(self.context));
         }
+        crate::trace_record!("wait", "drop-closed", self.wait);
     }
 }
 

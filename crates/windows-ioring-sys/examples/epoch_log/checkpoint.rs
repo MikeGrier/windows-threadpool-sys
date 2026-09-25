@@ -25,6 +25,18 @@
 //! available on one ring. The choice is per ring, and a program that wants both
 //! shapes buys both rings.
 //!
+//! **There is a second, independent reason for the separation, and it survives
+//! any change to the delivery model.** A covering flush's barrier waits for
+//! every operation outstanding on the ring it is pushed to, so putting
+//! checkpoint writes on the log's ring would drag them into every commit's
+//! barrier and couple the log's commit latency to control-plane work. That is a
+//! cost coupling rather than a correctness one -- the flush names a *file*, so
+//! the log's own durability guarantee would survive the sharing -- but the cost
+//! model the log is built around would not. See [`crate::contract`] -> "One ring
+//! per log, because the barrier is ring-wide". Stated here because the delivery
+//! argument above is the one a reader meets at this point of use: if it ever
+//! stops applying, the rings must still not be collapsed.
+//!
 //! # The ordering chain, and where it crosses threads
 //!
 //! 1. The **log thread** observes epoch *N* durable and submits a checkpoint:

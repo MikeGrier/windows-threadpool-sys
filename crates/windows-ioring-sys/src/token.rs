@@ -29,17 +29,25 @@ pub struct Token<T: Send + 'static> {
 }
 
 impl<T: Send + 'static> Token<T> {
-    /// Wrap `value` under a fresh identity reserved from `ring`.
+    /// Wrap `value` under a fresh identity reserved from `accounting`.
+    ///
+    /// Takes the ring's **ledger** rather than the ring (M24.7). Minting
+    /// needs an identity and the ring's id, both of which are bookkeeping --
+    /// no handle is involved -- and narrowing the parameter to what is
+    /// actually used is what lets this be exercised without opening a ring.
     ///
     /// # Errors
     ///
-    /// Returns any error from [`crate::IoRing::reserve_user_data`] (in
-    /// practice, only if the identity space is exhausted).
-    pub(crate) fn new(ring: &mut crate::IoRing, value: T) -> std::io::Result<Self> {
-        let id = ring.reserve_user_data()?;
+    /// Returns any error from [`crate::accounting::Accounting::reserve_user_data`]
+    /// (in practice, only if the identity space is exhausted).
+    pub(crate) fn new(
+        accounting: &mut crate::accounting::Accounting,
+        value: T,
+    ) -> std::io::Result<Self> {
+        let id = accounting.reserve_user_data()?;
         Ok(Self {
             id,
-            ring_id: ring.ring_id(),
+            ring_id: accounting.ring_id(),
             value: ManuallyDrop::new(value),
         })
     }

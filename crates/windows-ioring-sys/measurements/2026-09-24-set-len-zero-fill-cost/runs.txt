@@ -1,0 +1,46 @@
+
+=== run 1 ===
+set_len vs zero-fill: is the zeroing avoided, or moved?
+
+    size       set_len     zero-fill      set_len+head      set_len+tail  set_len+sequential
+    64 MiB           0 ms          19 ms               0 ms              67 ms                20 ms
+   256 MiB           0 ms          88 ms               0 ms             347 ms                76 ms
+  1024 MiB           0 ms         315 ms               0 ms            2304 ms               287 ms
+
+Read case 4 against case 3. Both begin from an identical set_len'd file and
+write one sector. The only difference is how much unwritten extent lies between
+the valid data length and the write.
+
+Read case 5 against case 2. Both end with the whole extent written; case 5 had
+its length set first. That is a log's pattern, where every write lands at the
+valid data length and no write ever has a gap in front of it.
+=== run 2 ===
+set_len vs zero-fill: is the zeroing avoided, or moved?
+
+    size       set_len     zero-fill      set_len+head      set_len+tail  set_len+sequential
+    64 MiB           0 ms          20 ms               0 ms              64 ms                18 ms
+   256 MiB           0 ms          77 ms               0 ms             370 ms                72 ms
+  1024 MiB           2 ms         303 ms               0 ms            2312 ms               272 ms
+
+Read case 4 against case 3. Both begin from an identical set_len'd file and
+write one sector. The only difference is how much unwritten extent lies between
+the valid data length and the write.
+
+Read case 5 against case 2. Both end with the whole extent written; case 5 had
+its length set first. That is a log's pattern, where every write lands at the
+valid data length and no write ever has a gap in front of it.
+=== run 3 ===
+set_len vs zero-fill: is the zeroing avoided, or moved?
+
+    size       set_len     zero-fill      set_len+head      set_len+tail  set_len+sequential
+    64 MiB           0 ms          19 ms               0 ms              60 ms                19 ms
+   256 MiB           0 ms          73 ms               0 ms             364 ms                79 ms
+  1024 MiB           0 ms         301 ms               0 ms            2646 ms               274 ms
+
+Read case 4 against case 3. Both begin from an identical set_len'd file and
+write one sector. The only difference is how much unwritten extent lies between
+the valid data length and the write.
+
+Read case 5 against case 2. Both end with the whole extent written; case 5 had
+its length set first. That is a log's pattern, where every write lands at the
+valid data length and no write ever has a gap in front of it.

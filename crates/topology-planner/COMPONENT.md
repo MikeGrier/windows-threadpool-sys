@@ -10,22 +10,37 @@ emits a platform-neutral plan, so nothing in it is Windows-specific. See
 
 ## What it is
 
-A **planner**. It takes two inputs and produces a third thing:
+A **planner**. It takes a description of an application and produces arrangements for running it.
 
-- **a stated goal** -- what the caller intends the arrangement to achieve. Its shape is deliberately
-  **deferred for litigation**; that is a named deferral, not an omission.
-- **an abstracted idealized description of a machine** -- processors, memory, storage, interconnects,
-  distances and bottlenecks. Not Windows-shaped, and richer than any single platform reports. It is
-  **mockable by construction**: a description of a machine nobody has is an ordinary input, which is
-  what makes this component testable without the hardware it plans for.
+**The input is a dataflow description** -- a sufficiently abstract definition of the application's
+**input, output, and processing code paths**. It says what the application *is*, not how it should
+be arranged: no domain counts, no queue selections, no topology preferences. See
+[DESIGN-NOTES.md](DESIGN-NOTES.md) -> `EP-D-6`.
 
-From those it produces **a plan**: which processors host domains, where each thread pins, which
-memory node each allocates from, what channel connects each pair, and where each channel's buffer
-lives. The plan **serializes to JSON** and stays abstracted from Windows.
+**Planning happens in two stages**, and the split is load-bearing rather than incidental:
+
+1. **Connectivity, with no machine in hand.** From the dataflow description, infer the general
+   connectivity and the **directed flow of data** needed to realize that graph. This stage depends
+   only on the application, so its result holds for every machine the application will ever run on.
+2. **Realization, given an abstracted idealized description of a machine** -- processors, memory,
+   storage, interconnects, distances and bottlenecks. Not Windows-shaped, and richer than any single
+   platform reports. It is **mockable by construction**: a description of a machine nobody has is an
+   ordinary input, which is what makes this component testable without the hardware it plans for.
+
+The second stage produces **one or more suggested realizations**: which processors host domains,
+where each thread pins, which memory node each allocates from, how many queues of which types, what
+channel connects each pair, and where each channel's buffer lives. Realizations **serialize to
+JSON** and stay abstracted from Windows.
+
+**The answer is plural on purpose.** Several arrangements are usually defensible on a given machine,
+they differ in ways the planner cannot rank without knowing what the developer values, and
+presenting them as candidates is what lets the developer choose. The planner proposes; it does not
+return the one true arrangement.
 
 **It may ask.** Planning is a negotiation, not a pure function: the component may call back to its
-caller through traits for clarifying information the goal did not settle. Which questions those are
-is not yet known, and knowing them is what decides whether that is one trait or several.
+caller through traits for clarifying information the dataflow description did not settle. Which
+questions those are is not yet known, and knowing them is what decides whether that is one trait or
+several.
 
 ## The four components, and which way the arrows point
 

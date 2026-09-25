@@ -1,0 +1,738 @@
+{
+  "package": "windows-ioring-sys",
+  "testArgs": ["test", "-p", "windows-ioring-sys", "--locked", "--all-features"],
+  "whyTestArgs": "--all-features, and the reason is measured rather than precautionary. The M22.2 regression case below is caught by a test gated behind `fault-injection`, which is off by default. Without the flag the harness compiled that test out, the sabotage landed in code nothing exercised, and the sweep reported SURVIVED for a defect that is in fact caught -- the same trap this repository already documents for cargo-mutants, arriving through a different tool. A feature-gated guard and an absent guard are indistinguishable to a runner that does not enable the feature.",
+  "description": "Sabotages for the epoch-log sample's durability contract as the program presents it (M23.1). The prose in examples/epoch_log/contract.rs is the authoritative contract; CONTRACT is its presentable reduction, and main.rs prints that reduction through Clause::ALL. These cases verify the guards over that path -- that no clause loses its section, no statement becomes unreachable, and no statement renders ragged. Run with tools/run-sabotage.ps1; see tools/README-sabotage.md for the format and for why the results are read the way they are.",
+  "notCoveredHere": "No sabotage here asserts that any particular *rule* is stated -- nothing looks for the word `ring`, or counts assumptions. That is deliberate and is the same reason the tests decline to: a check that the statement list still contains a given sentence is a check of the copy, not of the contract, and it passes exactly when two hand-written copies agree. The claim that the contract says the right things is carried by review of the module prose, which is the authoritative form. Also uncovered: that a new Clause variant reaches Clause::ALL. The exhaustive `match` in Clause::heading forces a new variant to be *handled* at compile time, but nothing forces it into ALL; the `a clause vanishes from the report` case below is the closest reachable proxy, since it exercises the same omission from the other direction.",
+  "sabotages": [
+    {
+      "name": "a clause vanishes from the report",
+      "file": "examples/epoch_log/contract.rs",
+      "expect": "caught",
+      "why": "Clause::ALL drives the report's sections, so a clause dropped from it is never printed. The statements still exist, still compile, and the sample still runs -- it just silently stops telling a reader what it does not guarantee, which for a durability program is the most dangerous section to lose. This is the failure the list exists to make impossible to introduce quietly, and the one main.rs's hand-written array would have allowed.",
+      "find": [
+        "        Self::DoesNotGuarantee,"
+      ],
+      "replace": [
+        "        Self::Assumes,"
+      ]
+    },
+    {
+      "name": "a clause is listed twice",
+      "file": "examples/epoch_log/contract.rs",
+      "expect": "caught",
+      "why": "A repeat in Clause::ALL prints a whole section twice. Harmless-looking and easy to introduce by editing the array rather than replacing it, and the duplicate section reads as though the contract were emphasising something.",
+      "find": [
+        "        Self::DoesNotGuarantee,"
+      ],
+      "replace": [
+        "        Self::Guarantees,"
+      ]
+    },
+    {
+      "name": "two clauses print under one heading",
+      "file": "examples/epoch_log/contract.rs",
+      "expect": "caught",
+      "why": "The worst available failure for this particular program: a caller reading the `guarantees` section would be shown the things the log explicitly does NOT guarantee. Nothing about the statements changes, so every other test stays green and the output is confidently wrong.",
+      "find": [
+        "            Self::DoesNotGuarantee => \"does NOT guarantee\","
+      ],
+      "replace": [
+        "            Self::DoesNotGuarantee => \"guarantees\","
+      ]
+    },
+    {
+      "name": "a statement renders ragged",
+      "file": "examples/epoch_log/contract.rs",
+      "expect": "caught",
+      "why": "The report prints each statement as `  - {text}`, so stray leading whitespace shows up as a misaligned bullet. The statement sources are wrapped across several lines with trailing backslashes, which is exactly the shape where a continuation edit adds or drops a space without anyone noticing.",
+      "find": [
+        "        text: \"durability is monotonic: if epoch N is durable, every earlier epoch is durable too\","
+      ],
+      "replace": [
+        "        text: \" durability is monotonic: if epoch N is durable, every earlier epoch is durable too\","
+      ]
+    },
+    {
+      "name": "a statement is emptied",
+      "file": "examples/epoch_log/contract.rs",
+      "expect": "caught",
+      "why": "An empty statement prints as a bare dash under its heading -- a bullet that says nothing, in a list a reader is told to trust. Catches the case where a statement is gutted rather than removed.",
+      "find": [
+        "        text: \"a record reported durable is present and intact when the log is replayed\","
+      ],
+      "replace": [
+        "        text: \"\","
+      ]
+    },
+    {
+      "name": "M23.3 spike: the unclaimed-token Drop guard is removed",
+      "file": "src/pending.rs",
+      "expect": "caught",
+      "why": "The whole claim of the M23.3 spike. A token dropped unclaimed leaks its buffer on purpose -- Token forgets the value rather than freeing it, because the kernel may still be writing -- so the state is invisible at runtime: the program keeps working and loses memory. A raw HashMap cannot notice. If this guard can be removed without a test objecting, the type is a convenience and not a safety improvement.",
+      "find": [
+        "        if self.entries.is_empty() || std::thread::panicking() {"
+      ],
+      "replace": [
+        "        if true || self.entries.is_empty() || std::thread::panicking() {"
+      ]
+    },
+    {
+      "name": "M23.3 spike: push stops telling the oracle",
+      "file": "src/pending.rs",
+      "expect": "caught",
+      "why": "The other half of the spike: that one call site keeps the map and the conservation oracle in step. Twelve consumers currently drive the two by hand, which is a restatement that can drift in both directions. If the wiring can be cut without a test noticing, the map is not actually driving the oracle and the argument for the type collapses.",
+      "find": [
+        "            contract.observe_push(user_data);"
+      ],
+      "replace": [
+        "            let _ = user_data;"
+      ]
+    },
+    {
+      "name": "M22.2 regression: the write result is checked before the claim",
+      "file": "examples/epoch_log/append.rs",
+      "expect": "caught",
+      "why": "The exact defect M22.2 found. Returning early on a failed write without claiming leaves the token unclaimed, which Token treats as still outstanding, so the arena slot is never returned -- and after SLOTS failures every append returns WouldBlock forever, somewhere else entirely and with no trace of the cause. This case was measured SURVIVING before append/tests.rs existed: the inversion compiled and every test passed, because nothing produced a failed write. It is recorded now because the injection seam makes the failure reachable, which is the difference between the leak being found in CI and being found in production. This case is also the standing evidence for M23.4, so read its failure mode and not only its verdict: the assertion in a_failed_write_still_releases_its_arena_slot fires first, names the leak, and the run ends in a clean FAILED. Before M23.4 it did not -- RegisteredBuffers Drop then fired an unguarded debug_assert during the unwind, and that second panic aborted the process, so the run ended in STATUS_STACK_BUFFER_OVERRUN with the assertion message replaced by a crash code. The defect was caught either way; what the abort destroyed was the diagnosis. A regression in either direction -- no longer caught, or caught but crashing -- is visible in this one case.",
+      "find": [
+        "        let Some((released, slot)) = self.pending.claim(completion) else {"
+      ],
+      "replace": [
+        "        let _written_early = completion.result()?;",
+        "        let Some((released, slot)) = self.pending.claim(completion) else {"
+      ]
+    },
+    {
+      "name": "M23.5: the rundown guard stops distinguishing an unwind",
+      "file": "src/ring.rs",
+      "expect": "caught",
+      "why": "IoRing::drop's rundown assert fires only outside an unwind (M23.4). Forcing the condition true makes it fire unconditionally, which is the pre-M23.4 behaviour that turns a failing test into STATUS_STACK_BUFFER_OVERRUN. Until M23.5 nothing caught this: suppressing both guards in IoRing::drop entirely left every test in the crate green, because no test reached either assert. a_ring_whose_rundown_the_kernel_refuses_reports_the_rundown_failure now does, by putting a null handle in the field -- measured, SubmitIoRing(null, ..) returns 0x80070006 (ERROR_INVALID_HANDLE) rather than crashing, so the failure the assert reports is a real refusal from the kernel and not a fabrication.",
+      "find": [
+        "                std::thread::panicking(),",
+        "                \"IoRing rundown failed before close: {error}\""
+      ],
+      "replace": [
+        "                true,",
+        "                \"IoRing rundown failed before close: {error}\""
+      ]
+    },
+    {
+      "name": "M23.5: the close guard stops distinguishing an unwind",
+      "file": "src/ring.rs",
+      "expect": "caught",
+      "why": "The sibling of the case above, for the second of IoRing::drop's two asserts. Both are listed because they are separate conditions on separate lines and a change can reach one without the other -- measured: suppressing the rundown guard leaves the close test green and vice versa, so a single case would have declared the pair covered while half of it was not. The two tests are told apart by their should_panic expected strings, and that selection is itself sabotaged below.",
+      "find": [
+        "            hr >= 0 || std::thread::panicking(),"
+      ],
+      "replace": [
+        "            true,"
+      ]
+    },
+    {
+      "name": "M23.5: the rundown test stops reaching the rundown assert",
+      "file": "src/ring/tests.rs",
+      "expect": "caught",
+      "why": "A sabotage of the test rather than of the code, because the thing at risk is which assert the test arrives at. run_down submits only while something is outstanding, so without the reservation the ring falls straight through to CloseIoRing and panics with 'CloseIoRing failed: 0x80070006' -- a panic, from the same Drop body, in a test that expects one. What refuses it is should_panic's expected substring, and this case is what shows that substring is load-bearing rather than decorative. Measured before being recorded: with the reservation removed the test reports `panic message: \"CloseIoRing failed: 0x80070006\"` against `expected substring: \"IoRing rundown failed before close\"`. Note the replacement also removes the outstanding==1 assertion, deliberately: leaving it in place catches the sabotage one line earlier and would prove only that the test guards its own preconditions, not that it lands on the right assert.",
+      "find": [
+        "    ring.accounting",
+        "        .reserve_user_data()",
+        "        .expect(\"a fresh ring's identity space is not exhausted\");",
+        "    assert_eq!(",
+        "        ring.accounting.outstanding(),",
+        "        1,",
+        "        \"rundown must have a reason to submit, or it cannot fail\"",
+        "    );"
+      ],
+      "replace": [
+        "    // nothing outstanding: rundown cannot fail, so Drop reaches the close"
+      ]
+    },
+    {
+      "name": "M25.1: encode_block stops zeroing the block tail",
+      "file": "examples/epoch_log/record.rs",
+      "expect": "caught",
+      "why": "Records are variable-length but occupy a whole RECORD_STRIDE block each, and slots are reused for the log's whole life -- a NumaBuffer arrives zeroed, but only once. Without this fill the bytes past a short record are whatever the previous, longer record left there, and the write puts them on disk. Replay cannot catch it: it decodes only at block starts and takes a record's extent from its own header, so a stale fragment past a short record's end is never read. That is why the guard asserts on the file's bytes rather than on a replay outcome. The composition lives in one function for both writers precisely so this case covers the harness lane as well as the log's appender; before encode_block existed the two carried the step separately.",
+      "find": [
+        "    slot[total..RECORD_STRIDE].fill(0);"
+      ],
+      "replace": [
+        "    // zeroing removed"
+      ]
+    },
+    {
+      "name": "M25.2: replay walks by the record extent instead of the stride",
+      "file": "examples/epoch_log/replay.rs",
+      "expect": "caught",
+      "why": "The reader half of the stride, and the exact defect that sat in the tree between M25.1 and M25.2. A strided writer with an unstrided reader lands the cursor in a zeroed block tail, decodes NeverWritten, and reports every record after the first as a missing durable record -- the log looks catastrophically broken while being perfectly fine. Measured: with the writer converted and the reader not, all 21 example tests still passed and only running the sample caught it. No CI job runs the sample, which is why the end-to-end tests this case fires were added rather than relying on that.",
+      "find": [
+        "                cursor += record::RECORD_STRIDE;"
+      ],
+      "replace": [
+        "                cursor += found.extent();"
+      ]
+    },
+    {
+      "name": "M25.1: the harness lane packs its record offsets",
+      "file": "examples/epoch_log/strategy.rs",
+      "expect": "caught",
+      "why": "The sample has two writers over one on-disk format, and this is the second. Listed separately from the appender's offset advance below because they are genuinely separate facts at separate sites: measured, reverting this one leaves every appender test green and vice versa, so a single case would have reported the pair covered while half of it was not. This case was SURVIVING when the stride was first introduced -- nothing tested the harness lane at all, and the end-to-end test in strategy/tests.rs exists because this sabotage said so.",
+      "find": [
+        "            written += record::RECORD_STRIDE as u64;"
+      ],
+      "replace": [
+        "            written += record::HEADER_LEN as u64;"
+      ]
+    },
+    {
+      "name": "M25.1: the appender packs its record offsets",
+      "file": "examples/epoch_log/append.rs",
+      "expect": "caught",
+      "why": "The log's own writer, the sibling of the harness case above. Advancing by less than a stride makes consecutive records overlap inside one block, so the guards fire for two independent reasons at once -- the layout assertion and the zeroed-tail assertion both go red -- which is worth knowing when reading the result: this case being caught does not on its own establish that the stride is what caught it. The narrower evidence for that is the reader case above, which moves only one number. The replacement uses HEADER_LEN rather than the record's own length because this call site no longer binds one: M25.1 ended by removing the `total` binding to clear an unused-variable warning, which broke this case's patch and was reported by the harness as MANIFEST DOES NOT COMPILE. A manifest is a restatement site like any other and has to be swept when the code it patches moves.",
+      "find": [
+        "            self.next_offset += record::RECORD_STRIDE as u64;"
+      ],
+      "replace": [
+        "            self.next_offset += record::HEADER_LEN as u64;"
+      ]
+    },
+    {
+      "name": "M25.3: the extent is not pre-allocated",
+      "file": "examples/epoch_log/logfile.rs",
+      "expect": "caught",
+      "why": "Pre-allocation is the whole point of the item: the spike measured six configurations and the zero-filled extent has both the highest central tendency and a floor far above the unfilled ones, because the filesystem serialises writes past the valid-data length. An extending write is therefore the configuration that looks like it works and measures like a buffered one, which is exactly the failure mode that needed a guard rather than a comment. The patch seeds the fill loop as already-complete, so the file is created and left empty; it used to replace a single std::fs::write and was updated when that became a chunked loop.",
+      "find": [
+        "        let mut written = 0;"
+      ],
+      "replace": [
+        "        let mut written = len;"
+      ]
+    },
+    {
+      "name": "M25.3: FILE_FLAG_NO_BUFFERING is dropped",
+      "file": "examples/epoch_log/logfile.rs",
+      "expect": "caught",
+      "why": "Dropping this flag changes nothing a caller can observe except the thing the item exists for, which is why it needs a guard that is not a measurement. The test pushes an aligned write and an unaligned one through a real ring -- the way production reaches this handle -- and requires the first to be accepted and the second refused. Both directions are asserted deliberately: a guard that only showed the aligned write succeeding would pass just as happily against a buffered handle. Note the unaligned case breaks two of NO_BUFFERING's three rules at once, since a Vec guarantees neither a sector address nor a sector length, so it establishes that the handle has rules a buffered one does not rather than which rule refused it.",
+      "find": [
+        "        .custom_flags(FILE_FLAG_NO_BUFFERING | FILE_FLAG_OVERLAPPED)"
+      ],
+      "replace": [
+        "        .custom_flags(FILE_FLAG_OVERLAPPED)"
+      ]
+    },
+    {
+      "name": "M25.3: FILE_FLAG_OVERLAPPED is dropped",
+      "file": "examples/epoch_log/logfile.rs",
+      "expect": "caught",
+      "why": "Listed separately from the NO_BUFFERING case because they are separate flags with separate guards: measured, dropping either leaves the other's test green. This one is caught by a synchronous write_all being refused, which is the only property of the handle's mode reachable from here -- GetFileInformationByHandleEx does not report it, and the ring works on synchronous and asynchronous handles alike. That test began as an attempt to check alignment through std::io::Write and failed on the *aligned* write, which is how the discriminator was found rather than designed.",
+      "find": [
+        "        .custom_flags(FILE_FLAG_NO_BUFFERING | FILE_FLAG_OVERLAPPED)"
+      ],
+      "replace": [
+        "        .custom_flags(FILE_FLAG_NO_BUFFERING)"
+      ]
+    },
+    {
+      "name": "DECLARED BLIND SPOT: set_len replaces the zero-fill",
+      "file": "examples/epoch_log/logfile.rs",
+      "expect": "survives",
+      "why": "This is NOT an inert change and must not be read as one -- it is a real regression that nothing in this workspace detects, recorded here so the gap is tracked rather than invisible. set_len and a zero-fill both produce a file of the right size whose bytes read back as zero, because reads past the valid data length are answered with zeros the filesystem synthesises without touching the disk -- so the two are indistinguishable to every assertion available here. The difference is measured rather than argued, in measurements/2026-09-24-set-len-vs-zero-fill: over sixteen runs the zero-filled extent pended at a median of 471/500 against set_len's 268/500, with a floor of 121 against 1. Read that capture before trusting this note, because it also corrects a stronger claim this repository had been repeating -- that the zero-filled extent was the only condition that pended at all, which descends from one run and does not replicate. Note what is NOT the reason: the zeroing cost is identical for a sequential writer, measured in measurements/2026-09-24-set-len-zero-fill-cost. This case stays untested because the difference is a RATE that varies enormously run to run, and a test asserting it would assert an observation about one machine as though it were a contract, which M25's standing constraint forbids.",
+      "find": [
+        "        let mut file = File::create(path)?;",
+        "        let chunk = vec![0_u8; FILL_CHUNK.min(len.max(1))];",
+        "        let mut written = 0;",
+        "        while written < len {",
+        "            let take = chunk.len().min(len - written);",
+        "            file.write_all(&chunk[..take])?;",
+        "            written += take;",
+        "        }",
+        "        file.flush()?;"
+      ],
+      "replace": [
+        "        let file = File::create(path)?;",
+        "        file.set_len(len as u64)?;"
+      ]
+    },
+    {
+      "name": "M25.1b: the torn-tail case stops tearing anything",
+      "file": "examples/epoch_log/main.rs",
+      "expect": "caught",
+      "why": "The sample's torn-tail replay exists to show the reader tolerates a partial record, which the contract requires. Reverting the cut to the old file-length form makes it land in a zeroed block tail -- or, since M25.3, in the pre-allocated slack -- so every record is whole and the case demonstrates the opposite of what it claims while still passing is_clean and the durable count. This was measured SURVIVING even after M25.1b's end-to-end test was added: the hazard had been written into the comment above the cut and describing it caught nothing. The assertions on tail_stopped and tail_records are what turned the description into a check, and this case is what shows they are load-bearing. Only the end-to-end test catches it; the M25.1 layout tests all stay green.",
+      "find": [
+        "    let last_record_start = (run.durable_records + run.tail_records - 1) * record::RECORD_STRIDE;",
+        "    let torn_at = last_record_start + record::HEADER_LEN + 4;"
+      ],
+      "replace": [
+        "    let torn_at = bytes.len() - (record::HEADER_LEN + 4);"
+      ]
+    },
+    {
+      "name": "M25.1b: the negative control stops corrupting the durable region",
+      "file": "examples/epoch_log/main.rs",
+      "expect": "caught",
+      "why": "The negative control is what makes the other two replay passes mean anything: it corrupts one byte INSIDE the durable region and requires replay to report it. Moving the victim byte into the file's unwritten tail leaves the durable region intact, so replay correctly finds no violation and the control silently stops controlling -- a verifier that cannot fail, which is exactly the thing replay.rs's own module docs say would make the whole sample decoration. Caught only by the end-to-end test, because nothing else in the suite runs the sample's verify().",
+      "find": [
+        "    let victim = record::HEADER_LEN + 2;"
+      ],
+      "replace": [
+        "    let victim = bytes.len() - 1;"
+      ]
+    },
+    {
+      "name": "M25.4: flush() folds the deferral back in",
+      "file": "examples/epoch_log/strategy.rs",
+      "expect": "caught",
+      "why": "The exact defect M20.6 found, re-expressible in one line once the parts exist. A commit's reported cost is its submit plus its wait; adding the deferral back produces a number that grows when a design defers further while being no slower, which is what the harness published for months and what a reader took for commit latency. The guard is an identity rather than a value, because which part carries the cost is a property of the machine and M25's standing constraint forbids depending on it.",
+      "find": [
+        "        self.prepare + self.submit + self.blocking",
+        "    }"
+      ],
+      "replace": [
+        "        self.prepare + self.submit + self.blocking + self.deferral",
+        "    }"
+      ]
+    },
+    {
+      "name": "M25.4: the deferral stops being measured",
+      "file": "examples/epoch_log/strategy.rs",
+      "expect": "caught",
+      "why": "A part that always reads zero satisfies every identity the split can assert while making the decomposition a rename. Measured SURVIVING against the identity assertions alone, which is why the test also requires some sample of deferral and of submit to be non-zero. Stated as 'some sample is non-zero' rather than a lower bound on a duration: this harness defers by construction, pushing the next epoch's appends before settling the previous commit, so a run in which nothing deferred means the clock is not running rather than that the machine was fast. `blocking` deliberately gets no such guard -- zero is a legitimate and frequently observed reading for it.",
+      "find": [
+        "    let deferral = submitted_at.elapsed();"
+      ],
+      "replace": [
+        "    let deferral = Duration::ZERO;"
+      ]
+    },
+    {
+      "name": "M25.4: the submit stops being timed",
+      "file": "examples/epoch_log/strategy.rs",
+      "expect": "caught",
+      "why": "The sibling of the case above, for the other part that must not silently read zero. Listed separately because they are measured at different sites -- the submit around the commit call, the deferral at the settle -- and one can be lost without the other. This is the part that matters most on a handle where the operation completes inline, since the device round trip lands here and nowhere else.",
+      "find": [
+        "        deferred[lane_index] = Some((user_data, prepare, submitting.elapsed(), Instant::now()));"
+      ],
+      "replace": [
+        "        deferred[lane_index] = Some((user_data, prepare, Duration::ZERO, Instant::now()));"
+      ]
+    },
+    {
+      "name": "M25.5: the host round trip falls outside the commit's measured cost",
+      "file": "examples/epoch_log/strategy.rs",
+      "expect": "caught",
+      "why": "The defect M25.5 found in M25.4's own numbers. HostSequenced waits for every write in userspace before pushing an unordered flush; starting the commit clock at the submit puts that round trip outside every measured part, and the strategy then reports a commit roughly six times cheaper than the covering ones while doing the same work where nothing is looking. A reader comparing the published figures would have drawn the opposite of the right conclusion -- the same failure mode M20.6 found, one layer down. The patch moves the clock back to after the preparation, which is exactly the shape the defect had. The guard asserts only that a non-zero prepare is observed, because what is pinned is the measurement boundary and not how expensive any strategy is on a given machine.",
+      "find": [
+        "        let prepare = preparing.elapsed();"
+      ],
+      "replace": [
+        "        let prepare = Duration::ZERO;"
+      ]
+    },
+    {
+      "name": "M25.7: the log digest stops reading the bytes",
+      "file": "examples/epoch_log/record.rs",
+      "expect": "caught",
+      "why": "M25.7 replaced the cross-strategy byte comparison with a digest, which retains thirty-two bits instead of eight megabytes and is a WEAKER check -- two different logs can in principle share a digest where two different byte arrays cannot share their bytes. This sabotages the weakening directly: a digest that folds only the length still distinguishes logs of different sizes, so a guard that tested only 'a dropped record changes it' would pass. The flipped-byte test is what fails, and the two length-based tests deliberately do not, which is the separation worth having -- each guard covers a different way the digest could stop discriminating. What none of them establish is that no two logs collide; FNV-1a over 32 bits has collisions and the definition says so.",
+      "find": [
+        "        hash ^= u32::from(byte);",
+        "        hash = hash.wrapping_mul(PRIME);",
+        "    }",
+        "    hash",
+        "}"
+      ],
+      "replace": [
+        "        let _ = byte;",
+        "        hash = hash.wrapping_mul(PRIME);",
+        "    }",
+        "    hash",
+        "}"
+      ]
+    },
+    {
+      "name": "M26.2: the seam consults the responder but ignores its answer",
+      "file": "src/sys.rs",
+      "expect": "caught",
+      "why": "The seam's whole purpose is that an installed responder answers INSTEAD of the kernel. A version that consults it and then makes the real call anyway would look right in every review -- the responder is called, its state advances, a counting test still passes -- while the resolver M26.3 builds on it would silently measure the kernel rather than the space. The guard is that the seam returns what the responder said. Note the sabotage fails safely rather than crashing, and for a reason M23.5 measured: the test passes a null ring handle, and SubmitIoRing(null) returns 0x80070006 rather than dereferencing it, so the fall-through reaches Win32 and is refused instead of faulting. The tests that only count calls stay green under this patch, which is why the assertion is on the returned HRESULT and not on the count.",
+      "testArgs": ["test", "-p", "windows-ioring-sys", "--locked", "--all-features"],
+      "find": [
+        "            if let Some(answer) = $crate::sys::installed::with(|r| unsafe { r.$method($($arg),*) })",
+        "            {",
+        "                return answer;",
+        "            }"
+      ],
+      "replace": [
+        "            let _ = $crate::sys::installed::with(|r| unsafe { r.$method($($arg),*) });"
+      ]
+    },
+    {
+      "name": "M26.3: the resolver stops enforcing RS-C-4's drain half",
+      "file": "src/sys/resolver.rs",
+      "expect": "caught",
+      "why": "RS-C-4 is the one place RESPONSE-SPACE.md is narrower than 'anything may happen', and it is the clause this crate's entire durability story rests on. A resolver that quietly dropped it would be WIDER than the specification -- which reads like rigour, so a reviewer is unlikely to object -- and every consumer written against it would be hardened for a platform that cannot exist while the real guarantee went untested. The guard is that a barrier is eligible only as the oldest unresolved operation; this patch makes every operation eligible always.",
+      "testArgs": ["test", "-p", "windows-ioring-sys", "--locked", "--all-features"],
+      "find": [
+          "            .filter(|&i| i == 0 || !self.pool[i].barrier)"
+      ],
+      "replace": [
+          "            .filter(|&_i| true)"
+      ]
+    },
+    {
+      "name": "M26.3: the resolver stops honouring RS-C-2's operation identity",
+      "file": "src/sys/resolver.rs",
+      "expect": "caught",
+      "why": "RS-C-2 says a completion carries back exactly the user data its operation was built with, and D-4 records that this crate's whole accounting model rests on it. A resolver that returned a plausible-but-wrong identity -- here, the value one operation later -- would still conserve completions, still satisfy every count, and still pass any test that only asks how many arrived. The guard is that the identity is echoed rather than computed.",
+      "testArgs": ["test", "-p", "windows-ioring-sys", "--locked", "--all-features"],
+      "find": [
+          "                UserData: user_data,"
+      ],
+      "replace": [
+          "                UserData: user_data.wrapping_add(1),"
+      ]
+    },
+    {
+      "name": "M26.3: the resolver lets an unsubmitted operation complete (RS-C-3)",
+      "file": "src/sys/resolver.rs",
+      "expect": "caught",
+      "why": "RS-C-3 is implemented by exactly one thing -- only the submitted pool is ever eligible to post -- so it is the constraint most easily lost to an edit that looks like a simplification. A resolver that posted from the staging area would make the Build*/Submit boundary meaningless, which is the reason the clause exists at all. This patch resolves the staged operations on a pop, before any submit has carried them.",
+      "testArgs": ["test", "-p", "windows-ioring-sys", "--locked", "--all-features"],
+      "find": [
+          "        if self.posted.is_empty() {",
+          "            // Starvation rescue only: no coins. See the module's note on the",
+          "            // two clocks -- flipping here would make `RS-P-1`'s pending case",
+          "            // unobservable to a polling consumer.",
+          "            self.tick(false);"
+      ],
+      "replace": [
+          "        if self.posted.is_empty() {",
+          "            self.pool.append(&mut self.staged);",
+          "            self.tick(false);"
+      ]
+    },
+    {
+      "name": "M26.3: the resolver permits RS-P-2 but never exercises it",
+      "file": "src/sys/resolver.rs",
+      "expect": "caught",
+      "why": "The failure this whole file is built to avoid, and the one a green suite hides best: a permission that is configurable, documented, cited, and never taken. Such a resolver passes every test written against what it MAY do, and the defect class RS-P-2 exists for -- D-47's, where operations queued after a drained flush completed before it -- goes unswept. The guard is a test asserting that reordering actually HAPPENED across a majority of seeds, not merely that it was allowed.",
+      "testArgs": ["test", "-p", "windows-ioring-sys", "--locked", "--all-features"],
+      "find": [
+          "            let draw = self.next() % eligible.len() as u64;",
+          "            eligible[usize::try_from(draw).expect(\"a modulus of a usize length fits a usize\")]"
+      ],
+      "replace": [
+          "            let _ = self.next();",
+          "            eligible[0]"
+      ]
+    },
+    {
+      "name": "M26.3: the completion signal becomes level- rather than edge-triggered (RS-P-6)",
+      "file": "src/sys/resolver.rs",
+      "expect": "caught",
+      "why": "RS-P-6 carries no over-provision: it IS D-19's measurement, that the completion event fires on the empty-to-non-empty edge. Signalling every post is strictly more generous, so no consumer would fail against it -- which is exactly why it must be caught here. A resolver that over-signalled would let a consumer depend on one wakeup per completion, and D-21's auto-reset, one-waiter-per-ring design was drawn from the opposite fact.",
+      "testArgs": ["test", "-p", "windows-ioring-sys", "--locked", "--all-features"],
+      "find": [
+          "        if !self.event.is_null() && (was_empty || !self.config.edge_triggered_signal) {"
+      ],
+      "replace": [
+          "        if !self.event.is_null() {"
+      ]
+    },
+    {
+      "name": "M26.3: the barrier-hold counter stops counting",
+      "file": "src/sys/resolver.rs",
+      "expect": "caught",
+      "why": "Sabotaging the CLAIM rather than the symptom. RS-C-4's test could pass vacuously -- a barrier with nothing in front of it satisfies the constraint trivially -- so there is a second test asserting the constraint actually BIT, and it reads this counter. A counter that silently stopped incrementing would turn that guard into a tautology while leaving the reassuring test name in place. This is the instrument-checking-the-instrument case the sabotage harness exists for.",
+      "testArgs": ["test", "-p", "windows-ioring-sys", "--locked", "--all-features"],
+      "find": [
+          "        if held > 0 {",
+          "            self.record(|s| s.barrier_holds += 1);",
+          "        }"
+      ],
+      "replace": [
+          "        let _ = held;"
+      ]
+    },
+    {
+      "name": "M26.3: set_completion_event is forwarded to the kernel instead of captured",
+      "file": "src/sys/resolver.rs",
+      "expect": "caught",
+      "why": "M26.3 moved this call behind the seam specifically so RS-P-6 could be implemented; before that the resolver had no event to signal and every EventDelivery consumer would have parked forever. A version that forwards to the real ring restores exactly that state, and does it in the most plausible-looking way available -- forwarding is what every other default method does. The failure it produces is a hang rather than an assertion, which is why the guard counts signals rather than waiting for one.",
+      "testArgs": ["test", "-p", "windows-ioring-sys", "--locked", "--all-features"],
+      "find": [
+          "        self.event = event;",
+          "        S_OK"
+      ],
+      "replace": [
+          "        let _ = event;",
+          "        S_OK"
+      ]
+    },
+    {
+      "name": "DECLARED BLIND SPOT: the resolver's failure-code draw narrows to one facility",
+      "file": "src/sys/resolver.rs",
+      "expect": "survives",
+      "why": "RS-P-3 permits any error code and enumerates none, warning that a consumer must not depend on the set being small. There is a test that the set is not small -- it demands many more than a handful of distinct codes across the whole sweep -- but it cannot check the codes are DISTRIBUTED sensibly, because the space deliberately specifies no distribution and inventing one here would be the recording the document exists to avoid. Masking to 15 bits instead of 16 halves the range and still clears the threshold, so this survives. It is recorded rather than left invisible: if a later change makes the distribution observable, this case reports the discrepancy.",
+      "testArgs": ["test", "-p", "windows-ioring-sys", "--locked", "--all-features"],
+      "find": [
+          "            let code = self.next() & 0xFFFF;"
+      ],
+      "replace": [
+          "            let code = self.next() & 0x7FFF;"
+      ]
+    },
+    {
+      "name": "M26.4: the ring stops decrementing its outstanding count",
+      "file": "src/accounting.rs",
+      "expect": "caught",
+      "why": "P-4 says IoRing::outstanding is accurate, and P-2 says every loop terminates. A count that never comes down breaks both at once -- a consumer sizing a wait or deciding whether blocking is worthwhile reads a number that only grows, and run_down never finishes. Scoped to the property suite on purpose: this mutation is caught by a great many tests in this crate, and 'something went red' would not show that THESE properties are the ones watching it.",
+      "testArgs": ["test", "-p", "windows-ioring-sys", "--locked", "--all-features", "--test", "properties_under_every_resolution"],
+      "find": [
+          "    pub(crate) fn record_completion(&mut self) {",
+          "        self.outstanding = self.outstanding.saturating_sub(1);"
+      ],
+      "replace": [
+          "    pub(crate) fn record_completion(&mut self) {"
+      ]
+    },
+    {
+      "name": "M26.4: operation identities stop being unique",
+      "file": "src/accounting.rs",
+      "expect": "caught",
+      "why": "D-4 rests this crate's whole accounting model on a completion identifying its operation. An identity that repeats makes two operations indistinguishable, which is exactly the conservation failure RingContract reports as a duplicate completion. THIS IS ALSO THE EVIDENCE THAT P-1'S VERDICT IS READ rather than merely computed: measured, the suite fails with the oracle's own wording -- 'completed more than once, but every queued SQE produces exactly one completion' -- so the path from the crate through RingContract to a red test is traversed end to end. A separate case patching the verdict check was tried and removed as unsound: disabling an assertion that does not fire on a green baseline cannot fail, so it measured nothing. Scoped to the property suite on purpose, because this mutation is caught by a great many tests in this crate and 'something went red' would not show that THESE properties are watching it.",
+      "testArgs": ["test", "-p", "windows-ioring-sys", "--locked", "--all-features", "--test", "properties_under_every_resolution"],
+      "find": [
+          "        self.next_user_data = id",
+          "            .checked_add(1)",
+          "            .ok_or_else(|| io::Error::other(\"IoRing operation identity space exhausted\"))?;"
+      ],
+      "replace": [
+          "        self.next_user_data = id;"
+      ]
+    },
+    {
+      "name": "M26.4: coverage stops accumulating, so the suite can pass vacuously",
+      "file": "tests/properties_under_every_resolution.rs",
+      "expect": "caught",
+      "why": "Sabotaging the CLAIM rather than a symptom. This suite's five properties are all satisfied trivially by a run that does nothing, so the coverage counters are what separate 'the properties held' from 'nothing reached the states they are about'. A fold that silently stopped accumulating would leave every property assertion in place and turn the whole file into a tautology -- the instrument-checking-the-instrument case, and the reason the counters are asserted rather than merely printed.",
+      "testArgs": ["test", "-p", "windows-ioring-sys", "--locked", "--all-features", "--test", "properties_under_every_resolution"],
+      "find": [
+          "        self.pushes += other.pushes;"
+      ],
+      "replace": [
+          "        let _ = other.pushes;"
+      ]
+    },
+    {
+      "name": "M26.5: M21.6's defect re-injected -- an expired wait is a failure again",
+      "file": "src/ring.rs",
+      "expect": "caught",
+      "why": "The historical defect this crate actually shipped, restored. Until M21.6, wait_outcome passed IORING_E_WAIT_TIMEOUT to check() like any other HRESULT, so pop_within returned Err on every ordinary timeout and run_down treated any operation slower than its poll as fatal -- which M21.6's own doc comment records as the shape that made run_down return with the operation still outstanding, after which Drop asserted and closed the ring anyway. This is one half of M26.5's calibration and it is the half that matters most, because a resolver nobody has shown can go red on a real defect is not evidence. Measured: the calibration fails naming the seed and 0x800705B4. Scoped to the calibration target so 'caught' means THAT suite caught it, not the several others that would also notice.",
+      "testArgs": ["test", "-p", "windows-ioring-sys", "--locked", "--all-features", "--test", "calibration"],
+      "find": [
+          "fn wait_outcome(hr: windows_sys::core::HRESULT) -> io::Result<()> {",
+          "    if hr == IORING_E_WAIT_TIMEOUT {",
+          "        return Ok(());",
+          "    }",
+          "    check(hr)"
+      ],
+      "replace": [
+          "fn wait_outcome(hr: windows_sys::core::HRESULT) -> io::Result<()> {",
+          "    check(hr)"
+      ]
+    },
+    {
+      "name": "M26.5: the resolver enforces the hold-back D-47 withdrew",
+      "file": "src/sys/resolver.rs",
+      "expect": "caught",
+      "why": "The other half of M26.5's calibration, and it runs the opposite way to every other case here: it does not break the crate, it makes the INSTRUMENT go narrow. D-24 claimed a covering flush holds back what follows and D-47 withdrew that over roughly 4,500 trials, so a resolver that enforced both halves of the barrier would be narrower than the space and would report green on exactly the defect class the one-sidedness exists to expose. That is the M17.4 failure mode -- a suite sampling the right state while being insensitive to the defect living in it -- and nothing detects it except a test that demands the sensitivity. Measured: the calibration fails reporting that no seed in its sweep broke a consumer that assumes a covering flush holds back what follows it -- the count is left out of this sentence deliberately, since the sweep size is a constant that has already moved once. Note this patches the same line as M26.3's RS-C-4 case but in the opposite direction: that one removes the constraint, this one over-applies it.",
+      "testArgs": ["test", "-p", "windows-ioring-sys", "--locked", "--all-features", "--test", "calibration"],
+      "find": [
+          "            .filter(|&i| i == 0 || !self.pool[i].barrier)"
+      ],
+      "replace": [
+          "            .filter(|&i| i == 0 || !self.pool[..=i].iter().any(|op| op.barrier))"
+      ]
+    },
+    {
+      "name": "M26.6: a constraint loses its CONFIRMS marker",
+      "file": "tests/flush_barrier.rs",
+      "expect": "caught",
+      "why": "RESPONSE-SPACE.md justifies forbidding the resolver from ever violating RS-C-4 on the grounds that the kernel tests cover it. If the only test claiming that clause stops claiming it, the constraint is untested on both sides at once -- the resolver cannot produce it and nothing watches for it -- and the document's justification silently becomes false. This is the hole M26.6 exists to close, and the census is what closes it.",
+      "testArgs": ["test", "-p", "windows-ioring-sys", "--locked", "--all-features", "--test", "response_space_census"],
+      "find": [
+          "//! CONFIRMS: RS-C-4"
+      ],
+      "replace": [
+          "//! The drain clause is confirmed below."
+      ]
+    },
+    {
+      "name": "M26.6: the census counts a mention as a claim",
+      "file": "tests/response_space_census.rs",
+      "expect": "caught",
+      "why": "THE DEFECT THIS CENSUS SHIPPED WITH, AND THE REASON IT WAS REBUILT. The first version searched each file for the clause ID anywhere in its text. Measured: removing RS-C-4's check from the only test performing it did NOT turn it red, because a second file mentioned that clause only to say the check was somebody else's -- and under a substring search a disclaimer is indistinguishable from a claim. That is the same trap this repository recorded once before, where a bare substring matched a probe whose only mention of a tag was a comment. A marker is a claim; a mention is not, and this patch collapses the distinction again.",
+      "testArgs": ["test", "-p", "windows-ioring-sys", "--locked", "--all-features", "--test", "response_space_census"],
+      "find": [
+          "            let at = line.find(marker)?;",
+          "            let id = line[at + marker.len()..].trim();"
+      ],
+      "replace": [
+          "            let at = line.find(marker).unwrap_or(0);",
+          "            let id = line[at..].trim().trim_start_matches(marker).trim();"
+      ]
+    },
+    {
+      "name": "DECLARED BLIND SPOT: the RS-C-4 assertion is made vacuous while its marker stays",
+      "file": "tests/flush_barrier.rs",
+      "expect": "survives",
+      "why": "The honest limit of a source census, recorded rather than left invisible. The census proves a clause is CLAIMED by a file; it cannot prove the file's assertion still runs or still means anything. Comparing a constant against itself leaves the CONFIRMS marker in place and the test green, so nothing here notices. Closing this would need the assertion's execution to be observable from outside the test process, which is machinery this milestone judged disproportionate -- and the calibration discipline covers the same ground from the other direction, since M26.5 shows the instruments go red on real defects. If a cheap way to observe it appears, this case reports the discrepancy.",
+      "testArgs": ["test", "-p", "windows-ioring-sys", "--locked", "--all-features", "--test", "flush_barrier"],
+      "find": [
+          "        covering.a_after_flush, 0,"
+      ],
+      "replace": [
+          "        0, 0,"
+      ]
+    },
+    {
+      "name": "DECLARED BLIND SPOT: dropping the covering flag does not fire RS-C-4 on this machine",
+      "file": "tests/flush_barrier.rs",
+      "expect": "survives",
+      "why": "A hardware-dependent limit on the conformance assertion's SENSITIVITY, measured rather than assumed. Running the treatment case with FlushCoverage::Unordered removes the barrier entirely, and on a machine where the device stack orders a flush behind that file's outstanding writes by itself -- which this file's own header documents, and which is the case here -- no preceding write completes after the flush even unflagged, so the assertion stays green. It is therefore NOT a portable demonstration that the assertion can go red: on the spike's machine it would be caught, on this one it survives. Recorded because a reader would otherwise reasonably expect this to be the calibration for RS-C-4, and it cannot be. What the assertion still does everywhere is report a violation if one occurs, which is the conformance job; what it cannot do everywhere is prove it would notice.",
+      "testArgs": ["test", "-p", "windows-ioring-sys", "--locked", "--all-features", "--test", "flush_barrier"],
+      "find": [
+          "    let covering = run_case(&mut ring, handle, FlushCoverage::CoversPrecedingOperations);"
+      ],
+      "replace": [
+          "    let covering = run_case(&mut ring, handle, FlushCoverage::Unordered);"
+      ]
+    },
+    {
+      "name": "M26.7: a kernel test goes back to asserting a completion is already poppable",
+      "file": "tests/ring_lifecycle.rs",
+      "expect": "caught",
+      "why": "The audited defect class, guarded at the source because no run can be relied on to object to it. `try_pop()` straight after a submit, with the Option unwrapped, asserts the kernel has ALREADY queued the completion -- which RS-P-5 permits it not to have, and which pop_within's own documentation denies in this crate's words. Thirty-one of these passed for years because D-40 measured that a buffered read completes inside the submit in 80 of 80 attempts; an unbuffered one pends, and the same assertion then gives the opposite answer. That is why the guard is a census and not a test run: on the handles these tests open, the frozen observation is simply true.",
+      "testArgs": ["test", "-p", "windows-ioring-sys", "--locked", "--all-features", "--test", "response_space_census"],
+      "find": [
+          "fn run_down_is_a_no_op_when_nothing_is_outstanding() {",
+          "    let mut ring = IoRing::new(64, 128).expect(\"create ring\");"
+      ],
+      "replace": [
+          "fn run_down_is_a_no_op_when_nothing_is_outstanding() {",
+          "    let mut ring = IoRing::new(64, 128).expect(\"create ring\");",
+          "    let _ = || ring.try_pop().expect(\"pop\").expect(\"ready\");"
+      ]
+    },
+    {
+      "name": "M26.7: the already-poppable scanner stops recognising the shape",
+      "file": "tests/response_space_census.rs",
+      "expect": "caught",
+      "why": "Sabotaging the instrument rather than the code it watches. The scanner decides what the census above means, so a scanner that matched nothing would leave that census permanently and silently green while the shape it refuses crept back in -- the exact failure mode the first version of this file's clause census actually shipped with. The guard is a pair of assertions that the scanner recognises both spellings of the refused shape and neither of the two honest ones.",
+      "testArgs": ["test", "-p", "windows-ioring-sys", "--locked", "--all-features", "--test", "response_space_census"],
+      "find": [
+          "        if unwraps(first) && unwraps(second) {",
+          "            count += 1;",
+          "        }"
+      ],
+      "replace": [
+          "        let _ = (first, second);"
+      ]
+    },
+    {
+      "name": "M26.7: pop_within is reverted to try_pop at a restated site",
+      "file": "tests/registration.rs",
+      "expect": "caught",
+      "why": "Whether the restatement itself is load-bearing, and the answer is instructive: reverting one site does NOT make that test fail on this machine, because the completion really is ready there -- which is the whole reason thirty-one of them survived review. What does catch it is the census, so this case is scoped to the census target and demonstrates that the guard covers the restatement rather than merely describing it. A reader tempted to check this by re-running registration.rs would find it green and conclude the change was cosmetic.",
+      "testArgs": ["test", "-p", "windows-ioring-sys", "--locked", "--all-features", "--test", "response_space_census"],
+      "find": [
+          "    let completion = ring",
+          "        .pop_within(POP_BOUND)",
+          "        .expect(\"pop completion\")",
+          "        .expect(\"a completion arrives within the bound\");",
+          "    let registered_files = files_pending"
+      ],
+      "replace": [
+          "    let completion = ring",
+          "        .try_pop()",
+          "        .expect(\"pop completion\")",
+          "        .expect(\"a completion arrives within the bound\");",
+          "    let registered_files = files_pending"
+      ]
+    },
+    {
+      "name": "M26.8: a timed-out wait is reported as a failed submit again",
+      "file": "src/ring.rs",
+      "expect": "caught",
+      "why": "M21.6's defect, at the site that sweep missed. SubmitIoRing documents IORING_E_WAIT_TIMEOUT as 'All operations were submitted without error and the subsequent wait timed out' -- a positive guarantee about the submission half, not merely a non-failure. Folding it back in with every other error does more than flip a sign: its Remarks say that any OTHER error leaves all entries in the submission queue, so an Err from a submit means the buffers are still owed to the kernel. A caller who cannot tell the two apart and frees on Err hands the kernel freed memory at the next submit, which is the hazard D-5 exists to prevent.",
+      "testArgs": ["test", "-p", "windows-ioring-sys", "--locked", "--all-features", "--test", "resolver_over_a_real_ring"],
+      "find": [
+          "    hr == IORING_E_WAIT_TIMEOUT || check(hr).is_ok()"
+      ],
+      "replace": [
+          "    check(hr).is_ok()"
+      ]
+    },
+    {
+      "name": "M26.8: run_down_within reports finished without checking",
+      "file": "src/ring.rs",
+      "expect": "caught",
+      "why": "The bounded rundown's entire value is that its answer is trustworthy: Ok(true) is what tells a caller the ring is safe to drop. A version that says so without looking would let every caller close a ring the kernel may still be writing through -- the exact hazard rundown exists to prevent, reintroduced while every call site still reads correctly. Note this also covers the unbounded run_down, which is now implemented over this one, so a single wrong answer here would propagate to both spellings.",
+      "testArgs": ["test", "-p", "windows-ioring-sys", "--locked", "--all-features", "--test", "resolver_over_a_real_ring"],
+      "find": [
+          "            if self.accounting.outstanding() == 0 {",
+          "                return Ok(true);",
+          "            }"
+      ],
+      "replace": [
+          "            return Ok(true);"
+      ]
+    },
+    {
+      "name": "M26.10: the resolver never reports a short transfer",
+      "file": "src/sys/resolver.rs",
+      "expect": "caught",
+      "why": "RS-P-8 is a permission, so the resolver must be able to exercise it. With the switch ignored every transfer reports its full length and the clause becomes unobservable to every consumer written against it -- which is exactly the state the space was in before M26.10 decided the question. The RS-P-8 test's 'no seed reported a short transfer' half must catch this.",
+      "find": [
+        "                if self.config.may_transfer_partially && requested > 0 && self.chance(8) {"
+      ],
+      "replace": [
+        "                if false && self.config.may_transfer_partially && requested > 0 && self.chance(8) {"
+      ]
+    },
+    {
+      "name": "M26.10: a transfer reports more bytes than were requested",
+      "file": "src/sys/resolver.rs",
+      "expect": "caught",
+      "why": "RS-P-8 permits a count below the request and says nothing that would allow one above it. Over-delivery is not a tolerated response but a defect, and a consumer sizing a buffer from the count would read past its own allocation. The bound assertion in the RS-P-8 test is what stands between the two readings.",
+      "find": [
+        "                    let short = self.next() % u64::from(requested);"
+      ],
+      "replace": [
+        "                    let short = u64::from(requested) + 1 + self.next() % 8;"
+      ]
+    },
+    {
+      "name": "M26.11: the appender stops checking that a write was complete",
+      "file": "examples/epoch_log/append.rs",
+      "expect": "caught",
+      "why": "The log's contract requires a handle whose successful writes are complete, and this comparison is the only thing that enforces it rather than merely stating it. The ring permits a short count (RS-P-8) because it never asks what kind of handle it was given, so with this check suppressed a short write is accepted silently and the log carries a hole no replay would attribute to its cause. The count used to be bound to `_written` and discarded, which is the state this restores.",
+      "find": [
+        "        if written != record::RECORD_STRIDE {"
+      ],
+      "replace": [
+        "        if false && written != record::RECORD_STRIDE {"
+      ]
+    },
+    {
+      "name": "CONTROL: rewording a statement changes nothing",
+      "file": "examples/epoch_log/contract.rs",
+      "expect": "survives",
+      "why": "The control that makes the cases above meaningful. These guards check that the reduction survives being *printed* -- they are deliberately indifferent to what any statement says, because asserting a particular sentence would be checking the copy rather than the contract. A suite that caught this would have bound itself to the wording, and every future correction to the contract's prose would arrive as a red test. It must survive.",
+      "find": [
+        "        text: \"a record reported durable is present and intact when the log is replayed\","
+      ],
+      "replace": [
+        "        text: \"a record reported durable is present and intact when the log is read back\","
+      ]
+    }
+  ]
+}

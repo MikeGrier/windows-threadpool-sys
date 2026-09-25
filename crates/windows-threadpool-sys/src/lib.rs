@@ -143,6 +143,17 @@ pub mod io;
 pub mod pool;
 #[cfg(windows)]
 pub mod timer;
+
+/// A trace for defects that only appear under concurrency, compiled out
+/// unless the `trace` feature is on and narrowed by environment variable when
+/// it is. See the module documentation for why an `eprintln!` is the wrong
+/// instrument for that class of problem.
+///
+/// Gated on Windows like every other Win32-backed module here: the traced
+/// build calls `GetCurrentThreadId`, so leaving it ungated would let
+/// `--features trace` break this crate's empty-on-other-targets behaviour.
+#[cfg(windows)]
+pub mod trace;
 #[cfg(windows)]
 pub mod wait;
 #[cfg(windows)]

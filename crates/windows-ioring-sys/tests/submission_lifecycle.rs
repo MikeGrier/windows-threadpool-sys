@@ -10,11 +10,23 @@ use std::path::PathBuf;
 
 use windows_ioring_sys::contract::RingContract;
 use windows_ioring_sys::{
-    Batch, FlushCoverage, FlushMode, IoRing, IoRingErrorExt, PushOptions, RingCondition,
-    SharedFile, Token,
+    Batch, FlushCoverage, FlushMode, IoBuf, IoBufMut, IoRing, IoRingErrorExt, PushOptions,
+    RingCondition, SharedFile, Token, WriteCaching,
 };
-use windows_sys::Win32::Foundation::ERROR_NOT_FOUND;
+use windows_sys::Win32::Foundation::{ERROR_NOT_FOUND, HANDLE};
 
+/// How long a completion this test caused is allowed to take to arrive.
+///
+/// M26.7 replaced a `try_pop` here that asserted the completion was *already*
+/// queued when `submit_and_wait` returned. That is not something this crate
+/// promises -- `pop_within`'s own documentation says a submit-side wait's
+/// return "promises nothing about poppability", and `RESPONSE-SPACE.md` states
+/// it as `RS-P-5`. It was true on the handle this test happens to use and is
+/// false on others, which is the definition of a frozen observation.
+///
+/// Stated as this crate's own contract instead: the completion arrives within
+/// a bound we choose. Generous, because the bound is not what is under test.
+const POP_BOUND: std::time::Duration = std::time::Duration::from_secs(10);
 const CHUNKS: usize = 8;
 const CHUNK_LEN: usize = 512;
 
@@ -93,6 +105,10 @@ fn many_reads_round_trip_every_user_data_and_buffer() {
             .claim_if(&completion)
             .expect("a token claims its own completion");
         contract.observe_claim(user_data);
+        // CONFIRMS: RS-P-8 -- a full count here is a property of the handle
+        // this test chose (an ordinary file on a local volume, where a
+        // successful completion carries the whole length and a full volume is
+        // an error instead), not of the space, which permits a short one.
         assert_eq!(transferred, CHUNK_LEN);
         assert_eq!(
             buffer,
@@ -186,9 +202,9 @@ fn pushing_past_submission_queue_capacity_reports_backpressure_and_the_ring_stay
     contract.observe_tokenless_push(user_data);
     batch.submit_and_wait(1, 5_000).expect("submit and wait");
     let completion = ring
-        .try_pop()
+        .pop_within(POP_BOUND)
         .expect("pop completion")
-        .expect("a completion is ready");
+        .expect("a completion arrives within the bound");
     assert_eq!(completion.user_data(), user_data);
     contract.observe_completion(completion.user_data());
     completion.result().expect("flush succeeded");
@@ -225,9 +241,9 @@ fn a_dropped_batch_still_submits_its_queued_operations() {
         .expect("submit and wait");
 
     let completion = ring
-        .try_pop()
+        .pop_within(POP_BOUND)
         .expect("pop completion")
-        .expect("a completion is ready");
+        .expect("a completion arrives within the bound");
     assert_eq!(completion.user_data(), user_data);
     assert_eq!(completion.result().expect("read succeeded"), content.len());
     let buffer = token
@@ -257,9 +273,9 @@ fn cancelling_a_target_that_is_not_outstanding_reports_error_not_found_through_c
     };
 
     let completion = ring
-        .try_pop()
+        .pop_within(POP_BOUND)
         .expect("pop completion")
-        .expect("a completion is ready");
+        .expect("a completion arrives within the bound");
     assert_eq!(completion.user_data(), cancel_user_data);
     let error = completion
         .result()
@@ -302,9 +318,9 @@ fn dropping_the_callers_own_sharedfile_clone_does_not_close_a_still_outstanding_
         .submit_and_wait(1, 5_000)
         .expect("submit and wait");
     let completion = ring
-        .try_pop()
+        .pop_within(POP_BOUND)
         .expect("pop completion")
-        .expect("a completion is ready");
+        .expect("a completion arrives within the bound");
     assert_eq!(
         completion
             .result()
@@ -315,4 +331,78 @@ fn dropping_the_callers_own_sharedfile_clone_does_not_close_a_still_outstanding_
         .claim_if(&completion)
         .expect("token claims its own completion");
     assert_eq!(buffer, content);
+}
+
+// ------------------------------------------------------------------------
+// Relocated from `src/batch/tests.rs` at 9bc0350e (M24.3). `HugeBuffer` and
+// `NULL_FILE` came with them: they were used by these two tests and
+// nothing else.
+
+/// A buffer that claims a length no real allocation could ever have, to
+/// exercise `checked_len`'s rejection without needing a real file: the
+/// rejection must happen before the buffer's pointer is ever read.
+struct HugeBuffer;
+
+// SAFETY: `stable_ptr`/`stable_mut_ptr` are never dereferenced in the tests
+// that use this type -- `checked_len` rejects the operation first.
+unsafe impl IoBuf for HugeBuffer {
+    fn stable_ptr(&self) -> *const u8 {
+        std::ptr::NonNull::dangling().as_ptr()
+    }
+
+    fn bytes_len(&self) -> usize {
+        usize::MAX
+    }
+}
+
+// SAFETY: see the `IoBuf` impl above.
+unsafe impl IoBufMut for HugeBuffer {
+    fn stable_mut_ptr(&mut self) -> *mut u8 {
+        std::ptr::NonNull::dangling().as_ptr()
+    }
+}
+
+const NULL_FILE: HANDLE = std::ptr::null_mut();
+
+#[test]
+fn read_rejects_a_buffer_longer_than_u32_max_without_touching_the_ring() {
+    let mut ring = IoRing::new(8, 8).expect("create ring");
+    let outstanding_before = ring.outstanding();
+    let mut batch = Batch::new(&mut ring);
+    // SAFETY: NULL_FILE is never dereferenced -- the oversized buffer is
+    // rejected before the handle would be used.
+    let error = unsafe { batch.read_raw(NULL_FILE, HugeBuffer, 0, PushOptions::new()) }
+        .expect_err("an oversized buffer must be rejected");
+    assert_eq!(error.kind(), std::io::ErrorKind::InvalidInput);
+    drop(batch);
+    assert_eq!(
+        ring.outstanding(),
+        outstanding_before,
+        "a rejected push must not reserve an identity"
+    );
+}
+
+#[test]
+fn write_rejects_a_buffer_longer_than_u32_max_without_touching_the_ring() {
+    let mut ring = IoRing::new(8, 8).expect("create ring");
+    let outstanding_before = ring.outstanding();
+    let mut batch = Batch::new(&mut ring);
+    // SAFETY: as above.
+    let error = unsafe {
+        batch.write_raw(
+            NULL_FILE,
+            HugeBuffer,
+            0,
+            PushOptions::new(),
+            WriteCaching::Cached,
+        )
+    }
+    .expect_err("an oversized buffer must be rejected");
+    assert_eq!(error.kind(), std::io::ErrorKind::InvalidInput);
+    drop(batch);
+    assert_eq!(
+        ring.outstanding(),
+        outstanding_before,
+        "a rejected push must not reserve an identity"
+    );
 }

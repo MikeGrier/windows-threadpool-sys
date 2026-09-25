@@ -159,6 +159,11 @@ writes -- observed at 17 and 23 of 32 writes completing after it) and
 [D-24](../DESIGN-NOTES.md#d-24) (the barrier is a full, ring-wide stall that spans submissions and
 holds operations against unrelated files).
 
+*Recorded as it was concluded on this date. D-24's "holds operations" half was withdrawn on
+2026-09-06 by [D-47](../DESIGN-NOTES.md#d-47), which measured operations queued behind a drained
+flush completing ahead of it; the drain half -- that nothing queued before it completes after it --
+stands.*
+
 ## Round 4 -- what belongs where
 
 The closing question was whether this crate should provide the emulation a consumer needs on top of

@@ -70,6 +70,155 @@ wants to avoid contributing to it. The Windows threadpool types are inherently m
 choices up to the developer. The `windows-sys` crate published by Microsoft helps with the basics of the FFI
 to the APIs, but does little to help turn the alphabet and phrasebook into a useful programming model.
 
+## <a id="the-adoption-thesis"></a>The adoption thesis: why locality and queues are built together, and why nothing is foreclosed early
+
+This is the engineer's strategic intent for the ring, queue, topology and durability
+work. It is a **thesis, not a measurement** -- it is stated here because it decides
+questions that would otherwise be decided by an instinct to prune, and because a reader
+who does not have it will mistake deliberate breadth for indecision. The faithful record
+of how it was framed is
+[DESIGN-SESSION-2026-09-23-adoption-thesis.md](design-sessions/DESIGN-SESSION-2026-09-23-adoption-thesis.md).
+
+### The hardware is moving and the programming model is not
+
+Non-uniform memory has been relegated to very expensive machines. Meanwhile Moore's law
+has plateaued, so the way to more performance is wider multiprocessors, and wider
+multiprocessors are arriving much closer to consumers. **A uniform memory architecture
+only scales so far.** Consumer AMD parts are already non-uniform with a uniform facade in
+front of them -- chiplets, core complexes, and a fabric between them -- and the same
+argument is available for Intel. The non-uniformity is present; what is absent is any
+obligation, or any convenient means, to program for it.
+
+This repository has already met the facade twice, and both observations are measured
+rather than argued:
+
+- A shipping ARM consumer laptop reports **no L3 at all** and **zero** NUMA nodes, with
+  its natural cluster boundary at L2
+  ([D-48](crates/windows-ioring-sys/DESIGN-NOTES.md#d-48)).
+- The machine this workspace is developed on reports an **L3 spanning all 16 processors**
+  above a real 8-way L2 partition. `examples/cache_domains.rs` prints it: `L1: 8`,
+  `L2: 8`, `L3: 1`.
+
+In both cases the coarse, advertised boundary is the one that tells you least.
+
+### Why the concept stayed in the datacenter
+
+NUMA is difficult to program for, and its benefits are difficult to measure against
+whatever you would have written otherwise -- you are comparing against a program you did
+not write. But the barrier that matters most is neither of those. **Today, taking
+advantage of non-uniformity is a significant architectural decision made at the very
+beginning of a system's design.** Who makes that commitment unless they are already
+targeting datacenter-class hardware? The commitment is the gate, and it is placed at the
+moment when the least is known.
+
+Queues and rings have a related but distinct problem. The techniques are of general
+purpose utility and the building blocks exist in quantity, but outside a few small
+domains they are not readily graspable *as a way to structure a system from the
+beginning*. That is the same failure
+[The value is existence, not cleverness](#the-value-is-existence-not-cleverness)
+describes: the correct construction is not within reach, so capable people reach for what
+is.
+
+### The thesis: couple them, and a cycle may start
+
+The proposition is that there is a **virtuous cycle** available here, and that it is
+opened by coupling the two problems rather than solving either alone.
+
+Make rings and queues -- and the Windows `IoRing` -- a reachable way to structure an
+application, and let locality benefits arrive **adaptively out of that structure** rather
+than out of a separate up-front architectural bet. Then, in order:
+
+1. Ordinary application writers adopt the structure because it is a good way to organise
+   work, not because they set out to be NUMA-aware.
+2. I/O-bound writers get what `IoRing` and the epoch durability idiom are worth, which
+   they cannot easily get today.
+3. Designers who genuinely do target NUMA systems get a substrate to build on instead of
+   starting from primitives.
+4. If adoption follows, systems designers have a reason to expose more locality facts at
+   the consumer hardware level.
+5. Which closes the loop: lower-capability hardware becomes able to deliver the same kind
+   of benefit.
+
+Step 4 is the payoff and also the part furthest outside our control. It is named because
+it is the reason the earlier steps are worth doing in this order.
+
+### The honest position today
+
+**Expect low benefit to anything but server-class hardware, and say so.** This is not
+pessimism to be edited out later; it is the current state of the evidence.
+
+The machine this is developed on is logically server-class and is nonetheless **just a
+slice**, which does not exhibit non-uniform memory characteristics at all. So the central
+claim of the thesis is not one we can currently measure. The consequences of that gap --
+what is blocked, what is not, and what to run when a real multi-node machine is available
+-- are worked out in
+[DESIGN-SESSION-2026-08-30-numa-sharded-io-execution-domains.md](design-sessions/DESIGN-SESSION-2026-08-30-numa-sharded-io-execution-domains.md)
+under "Working under a hardware gap", and that analysis is unchanged by this section.
+
+### The mechanism: describe the application, not the machine
+
+**The component that removes the up-front commitment is
+[topology-planner](crates/topology-planner/COMPONENT.md)**, and its shape is the thesis made
+concrete. The developer supplies a sufficiently abstract definition of the application's **input,
+output, and processing code paths** -- a dataflow description, which is a statement about their own
+program and something they must know anyway. From it the planner infers the connectivity and
+directed flow needed to realize that graph, with no machine in hand; then, given a physical machine
+model, it returns **one or more suggested realizations** as specific threads pinned to specific
+processor groups, with a stated number of queues of stated types
+([EP-D-6](crates/topology-planner/DESIGN-NOTES.md#ep-d-6)).
+
+Three properties of that arrangement are what make it answer the barrier named above, rather than
+relocating it:
+
+- **The developer never makes a topology decision.** They describe an application; the locality
+  reasoning happens against a machine model, at a point where the machine is actually known, rather
+  than as a bet taken at design time.
+- **The first stage does not involve a machine at all**, so the application's own structure is
+  stable across every machine it will ever run on, and only the second stage is redone when the
+  machine changes.
+- **The answer is plural.** Several arrangements are usually defensible and they differ in ways the
+  planner cannot rank without knowing what the developer values, so it presents candidates and
+  supplies the means to tell them apart. That is OPTION INTEGRITY at component scale -- the same
+  refusal to convert an absence of evidence into a verdict.
+
+### What follows: no early foreclosure
+
+**Avoid all early foreclosure of techniques that may yield benefits to application
+authors.** Two reasons, each independently sufficient:
+
+1. **We are not the application authors.** We do not know what they will want to do, and
+   a design option removed here is one they cannot reach no matter how well it would have
+   suited them.
+2. **We do not have the hardware.** Significant analysis of performance tradeoffs on real
+   NUMA hardware is not available to us, so a tradeoff we "settle" is settled on a machine
+   that cannot exhibit the phenomenon.
+
+Either reason alone forbids pruning an option on the strength of a local measurement. Both
+together make it the repository's standing posture, stated operationally as **OPTION
+INTEGRITY** in [copilot-instructions.md](.github/copilot-instructions.md) -- which is the
+rule, where this section is the reason for it. The corollary that a consumer must be
+handed *data* rather than a verdict is the same thesis seen from the client's side: an
+application author on hardware we have never seen is exactly the person best placed to
+decide, and they can only do it if we give them the means to measure.
+
+**This section does schedule work**, and so differs from
+[The value is existence, not cleverness](#the-value-is-existence-not-cleverness), which
+deliberately schedules none. The mechanism above is the bulk of it, and it is queued in
+that component's own [CHECKLIST.md](crates/topology-planner/CHECKLIST.md) -- `EP-1+.1` for
+the dataflow description's vocabulary, `EP-1+.5` for the connectivity graph's type, and
+`EP-1+.6` for the plural answer.
+
+What the runtime crates owe is the other end: being **realizable from** a plan they did
+not choose. That is `M27` in
+[windows-ioring-sys/CHECKLIST.md](crates/windows-ioring-sys/CHECKLIST.md), which was first
+written as an adaptivity question for that crate and **re-planned the same day it was
+authored**, because the adaptivity has an owner and it is not there. Answering it in the
+ring crate would have grown a second policy surface beside the planner's -- the
+`outermost_partitioning_cache` defect again, a policy answer landing in a crate whose job
+is something else. [D-8](crates/windows-ioring-sys/DESIGN-NOTES.md#d-8) is untouched by any
+of this: being constructible from a policy decision made elsewhere is the opposite of
+taking one.
+
 ## <a id="the-value-is-existence-not-cleverness"></a>The value is existence, not cleverness: "it is only a SMOP" is why it is missing, not a reason to skip it
 
 A governing principle for the whole repository, stated because it decides
@@ -205,6 +354,30 @@ and close routines. The new crate inherits an established concept rather than in
 **"Ring" was considered and is wrong for the family.** It is accurate for the array shapes and
 false for the intrusive-linked one, which is genuinely not a ring. `queues` covers both.
 
+## <a id="new-crates-take-the-win-prefix"></a>New crates take the `win-` prefix, not `windows-`
+
+**The engineer's decision, 2026-09-23, taken when `win-numa-sys` was proposed.** Crates created
+from now on use a `win-` prefix. The reason is namespace collision: `windows` is Microsoft's, and
+a crate published as `windows-numa-sys` today is a name Microsoft may reasonably want tomorrow.
+Abdicating the prefix costs nothing and removes the risk entirely.
+
+**The `-sys` half is unchanged and is still earned rather than assumed.** It means thin-over-Win32:
+memory-safe over an existing API, adding no policy, per
+[the waitable-queues naming decision](#the-waitable-queues-crate-is-named-plural-and-carries-no-sys-suffix).
+A `win-*` crate that decides something on a consumer's behalf drops the suffix exactly as a
+`windows-*` one would.
+
+**The existing fourteen migrate eventually, and the cost is not uniform.** Eleven of them are
+published to crates.io, and a published name cannot be renamed -- a rename is a *new* crate plus a
+final release of the old name, and the old name persists forever. Three are unpublished
+(`windows-guard-alloc`, `windows-placement-probe`, `windows-platform-probes`) and are nearly free to
+move. One further wrinkle: `windows-threadpool-sys` is also the **repository's** name, so renaming
+that crate either diverges the two or drags the repository rename along with it.
+
+The migration is therefore queued at the horizon rather than scheduled, as `M-inf.3` in
+[CHECKLIST.md](CHECKLIST.md). **This decision schedules no rename now**; what it settles is the
+prefix every *new* crate uses, so the divergence stops growing while the question of the existing
+ones stays open.
 ## Windows SDK model and constraints
 
 This crate targets the object-based thread pool API (introduced in Windows Vista) rather than the legacy

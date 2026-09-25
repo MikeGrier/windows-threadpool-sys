@@ -3,7 +3,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use super::Token;
-use crate::IoRing;
+use crate::accounting::Accounting;
 use crate::buf::IoBuf;
 use crate::ring::Completion;
 
@@ -45,23 +45,21 @@ fn tracked_buffer() -> (DropTracking, Arc<AtomicBool>) {
     )
 }
 
-/// None of these tests ever actually submits anything to `ring` (M3 has not
-/// been built yet), so a token minted here never gets a real completion.
-/// `IoRing::run_down` -- which its `Drop` calls -- waits for exactly that, so
-/// every test must call `record_completion` once per token it minted before
-/// letting `ring` drop, or teardown would hang waiting for a completion that
-/// will never arrive.
-fn settle(ring: &mut IoRing) {
-    while ring.outstanding() > 0 {
-        ring.record_completion();
-    }
-}
-
+/// Until M24.7 these tests each opened a real `IoRing`, and the ring was
+/// purely a liability. None of them ever submitted anything, so a token minted
+/// here never got a real completion -- and `IoRing::run_down`, which `Drop`
+/// calls, waits for exactly that. Every test therefore had to call
+/// `record_completion` once per token through a `settle` helper, or teardown
+/// would hang waiting for a completion that was never coming.
+///
+/// `Token::new` now takes the ring's ledger rather than the ring, because an
+/// identity and a ring id are all it ever needed. The helper is gone with the
+/// hazard it existed to work around, and these tests open nothing.
 #[test]
 fn dropping_an_unclaimed_token_never_runs_the_buffers_destructor() {
-    let mut ring = IoRing::new(64, 128).expect("create ring");
+    let mut ledger = Accounting::new();
     let (buffer, dropped) = tracked_buffer();
-    let token = Token::new(&mut ring, buffer).expect("mint token");
+    let token = Token::new(&mut ledger, buffer).expect("mint token");
 
     drop(token);
 
@@ -71,8 +69,6 @@ fn dropping_an_unclaimed_token_never_runs_the_buffers_destructor() {
          a real IoRing may still be writing through it"
     );
 
-    settle(&mut ring);
-    drop(ring);
     // The leak is real and permanent: nothing later runs the destructor
     // either, including the ring's own teardown.
     assert!(!dropped.load(Ordering::SeqCst));
@@ -80,12 +76,12 @@ fn dropping_an_unclaimed_token_never_runs_the_buffers_destructor() {
 
 #[test]
 fn claiming_a_token_returns_the_buffer_for_normal_disposal() {
-    let mut ring = IoRing::new(64, 128).expect("create ring");
+    let mut ledger = Accounting::new();
     let (buffer, dropped) = tracked_buffer();
-    let token = Token::new(&mut ring, buffer).expect("mint token");
+    let token = Token::new(&mut ledger, buffer).expect("mint token");
     let id = token.id();
 
-    let completion = Completion::synthetic(id, 0, ring.ring_id());
+    let completion = Completion::synthetic(id, 0, ledger.ring_id());
     let claimed = token.claim_if(&completion).expect("id matches itself");
     assert!(
         !dropped.load(Ordering::SeqCst),
@@ -97,18 +93,16 @@ fn claiming_a_token_returns_the_buffer_for_normal_disposal() {
         dropped.load(Ordering::SeqCst),
         "the caller's own drop of the returned buffer must run normally"
     );
-
-    settle(&mut ring);
 }
 
 #[test]
 fn claim_if_rejects_a_mismatched_user_data_and_returns_the_token_unchanged() {
-    let mut ring = IoRing::new(64, 128).expect("create ring");
+    let mut ledger = Accounting::new();
     let (buffer, dropped) = tracked_buffer();
-    let token = Token::new(&mut ring, buffer).expect("mint token");
+    let token = Token::new(&mut ledger, buffer).expect("mint token");
     let real_id = token.id();
 
-    let mismatched = Completion::synthetic(real_id.wrapping_add(1), 0, ring.ring_id());
+    let mismatched = Completion::synthetic(real_id.wrapping_add(1), 0, ledger.ring_id());
     let token = token
         .claim_if(&mismatched)
         .expect_err("a stale id must not claim this token");
@@ -120,77 +114,71 @@ fn claim_if_rejects_a_mismatched_user_data_and_returns_the_token_unchanged() {
     assert!(!dropped.load(Ordering::SeqCst));
 
     // It can still be claimed correctly afterwards.
-    let matching = Completion::synthetic(real_id, 0, ring.ring_id());
+    let matching = Completion::synthetic(real_id, 0, ledger.ring_id());
     let claimed = token.claim_if(&matching).expect("the real id still works");
     drop(claimed);
     assert!(dropped.load(Ordering::SeqCst));
-
-    settle(&mut ring);
 }
 
 #[test]
 fn each_token_on_a_ring_gets_a_distinct_id() {
-    let mut ring = IoRing::new(64, 128).expect("create ring");
+    let mut ledger = Accounting::new();
     let (a, _) = tracked_buffer();
     let (b, _) = tracked_buffer();
-    let token_a = Token::new(&mut ring, a).expect("mint token a");
-    let token_b = Token::new(&mut ring, b).expect("mint token b");
+    let token_a = Token::new(&mut ledger, a).expect("mint token a");
+    let token_b = Token::new(&mut ledger, b).expect("mint token b");
     assert_ne!(token_a.id(), token_b.id());
 
     drop(token_a);
     drop(token_b);
-    settle(&mut ring);
 }
 
 #[test]
-fn minting_a_token_increments_the_rings_outstanding_count() {
-    let mut ring = IoRing::new(64, 128).expect("create ring");
-    assert_eq!(ring.outstanding(), 0);
+fn minting_a_token_increments_the_ledgers_outstanding_count() {
+    let mut ledger = Accounting::new();
+    assert_eq!(ledger.outstanding(), 0);
     let (buffer, _dropped) = tracked_buffer();
-    let token = Token::new(&mut ring, buffer).expect("mint token");
-    assert_eq!(ring.outstanding(), 1);
+    let token = Token::new(&mut ledger, buffer).expect("mint token");
+    assert_eq!(ledger.outstanding(), 1);
 
-    // Dropping the token does not, by itself, tell the ring the operation is
+    // Dropping the token does not, by itself, tell the ledger the operation is
     // done -- only observing a real completion does (M2.4); this token was
     // never actually submitted to anything, so nothing ever will.
     drop(token);
     assert_eq!(
-        ring.outstanding(),
+        ledger.outstanding(),
         1,
         "outstanding tracks completions observed, not tokens dropped"
     );
 
-    ring.record_completion();
-    assert_eq!(ring.outstanding(), 0);
+    ledger.record_completion();
+    assert_eq!(ledger.outstanding(), 0);
 }
 
 #[test]
 fn claim_if_rejects_a_matching_user_data_from_a_different_ring() {
-    let mut ring_a = IoRing::new(64, 128).expect("create ring a");
-    let mut ring_b = IoRing::new(64, 128).expect("create ring b");
+    let mut ledger_a = Accounting::new();
+    let ledger_b = Accounting::new();
     let (buffer, dropped) = tracked_buffer();
-    let token = Token::new(&mut ring_a, buffer).expect("mint token on ring a");
+    let token = Token::new(&mut ledger_a, buffer).expect("mint token on ring a");
     let id = token.id();
 
     // Both rings mint `UserData` from their own counter starting at zero, so
     // this is a real coincidence a naive `id`-only check would miss (PR #20
     // review response): the completion carries the *same* `UserData` value
     // as `token`, but from `ring_b`, not `ring_a`.
-    let wrong_ring = Completion::synthetic(id, 0, ring_b.ring_id());
+    let wrong_ring = Completion::synthetic(id, 0, ledger_b.ring_id());
     let token = token
         .claim_if(&wrong_ring)
         .expect_err("a completion from a different ring must not claim this token");
     assert!(!dropped.load(Ordering::SeqCst));
 
-    let right_ring = Completion::synthetic(id, 0, ring_a.ring_id());
+    let right_ring = Completion::synthetic(id, 0, ledger_a.ring_id());
     let claimed = token
         .claim_if(&right_ring)
         .expect("the same ring's completion still claims it");
     drop(claimed);
     assert!(dropped.load(Ordering::SeqCst));
-
-    settle(&mut ring_a);
-    settle(&mut ring_b);
 }
 
 #[test]
@@ -199,7 +187,7 @@ fn a_tokens_debug_names_its_operation() {
     // would demand `T: Debug` from a caller's buffer type, and the id is the
     // only part worth printing (D-4). M18.3 showed nothing asserted either
     // half of that choice: the impl could return an empty string unnoticed.
-    let mut ring = IoRing::new(8, 8).expect("create ring");
+    let mut ledger = Accounting::new();
 
     // A buffer type that is deliberately *not* `Debug`, which is the constraint
     // that forced the hand-written impl in the first place.
@@ -215,7 +203,7 @@ fn a_tokens_debug_names_its_operation() {
         }
     }
 
-    let token = Token::new(&mut ring, NotDebug(vec![0_u8; 8])).expect("mint a token");
+    let token = Token::new(&mut ledger, NotDebug(vec![0_u8; 8])).expect("mint a token");
     let id = token.id();
     let rendered = format!("{token:?}");
 
@@ -229,5 +217,4 @@ fn a_tokens_debug_names_its_operation() {
     );
 
     drop(token);
-    settle(&mut ring);
 }

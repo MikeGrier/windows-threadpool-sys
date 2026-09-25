@@ -2,6 +2,7 @@
 
 [workspace]
 members = [
+	"crates/win-numa-sys",
 	"crates/windows-file-enumeration-sys",
 	"crates/windows-file-watcher",
 	"crates/windows-file-watcher-example-test-harness",

@@ -1565,3 +1565,2259 @@ the API whose breaking change 0.2.0 is being cut for, and it is reachable with n
   and D-45 is added to its table of shipped defects of this shape.
   **Swept the count restatements too:** that file said "three defects" in four places and is now four, which
   is the restatement drift the repository's own conventions warn about.
+
+## Moved 2026-09-19 22:40:58 -07:00 -- M20.4: the file-handle NUMA mechanism correction
+
+### <a id="m204"></a>M20.4 -- Correct "What is not reachable" in [DESIGN-NOTES.md](DESIGN-NOTES.md): the file-handle-to-storage-node mapping is reachable on mechanism, and the conclusion it supported now rests on volume granularity, absence, and spanned volumes instead. *(completed 2026-09-19 22:40:58 -07:00)*
+
+The authoritative text is the rewritten "What is not reachable" section in
+[DESIGN-NOTES.md](DESIGN-NOTES.md); the research behind it is `F-1` in
+[DESIGN-SESSION-2026-08-30-numa-sharded-io-execution-domains.md](../../design-sessions/DESIGN-SESSION-2026-08-30-numa-sharded-io-execution-domains.md).
+
+Two things the item's own text had wrong, corrected while doing it rather than copied forward:
+
+- It said to cite [file-handle-numa-spike.rs](design-sessions/spikes/file-handle-numa-spike.rs) as the
+  **unrun** instrument, and to state that no measurement of either call succeeding on an ordinary NTFS
+  data file could be found. `F-1a` of the same session had already smoke-run it: both calls succeed on an
+  ordinary NTFS data file and on a directory handle, and agree. The item was written from `F-1` without
+  `F-1a`. What remains unmeasured is narrower -- whether either call ever names a node that distinguishes
+  one device from another, which needs a multi-node host with storage whose PDO advertises a proximity
+  domain.
+
+- The spikes [README.md](design-sessions/spikes/README.md) carried the same staleness, each instance
+  contradicted by its own body a few paragraphs later. Swept: 3 phrasings in 1 file, plus the sentence
+  promising that a multi-node run "would correct a claim DESIGN-NOTES.md currently makes", which this item
+  has now made false -- it settles an open question instead.
+
+The heading stays "What is not reachable". What is not reachable is the *answer* a ring consumer wants,
+which is still true; renaming it would dangle the pointers in the 2026-09-19 review session.
+
+## Moved 2026-09-19 22:49:09 -07:00 -- M20.2: the ARM no-L3 measurement recorded as D-48
+
+### <a id="m202"></a>M20.2 -- Record the 2026-08-30 ARM measurement as a decision, beside the zero-NUMA-node observation it is the sibling of. *(completed 2026-09-19 22:49:09 -07:00)*
+
+Landed as [D-48](DESIGN-NOTES.md#d-48) in the decision index, plus a sibling paragraph in
+"Why the NUMA node is the wrong key" where the existing zero-node observation lives, which is where the
+item asked for it.
+
+Two choices worth recording, because both were places this could have gone wrong:
+
+- **The measurement is cited, not re-transcribed.** The capture is Measurement M-1 in
+  [DESIGN-SESSION-2026-08-30-numa-sharded-io-execution-domains.md](../../design-sessions/DESIGN-SESSION-2026-08-30-numa-sharded-io-execution-domains.md),
+  and D-48 links it rather than copying the probe output into a third place. Pasting the block would have
+  created exactly the restatement the repository conventions warn about.
+
+- **The false clause it falsifies is marked, but not rewritten.** D-48 sits two paragraphs from the
+  sentence saying the last-level-cache domain "is meaningful on Intel and ARM too", which this
+  measurement shows is false on a shipping part -- so leaving it unmarked would have made the document
+  contradict itself. A one-line adjacent marker says so and points at `M20.1`. The restatement of the
+  rule and the sweep across the README, `lib.rs` and `policy.rs` remain `M20.1`, which is coupled to
+  `SH-4.12` and must follow it.
+
+## Moved 2026-09-20 23:16:19 -04:00 -- M21.1: the last site asserting D-24's withdrawn half
+
+### <a id="m211"></a>M21.1 -- Correct the last site that still asserts [D-24](DESIGN-NOTES.md#d-24)'s withdrawn half: the epoch-order assertion in the epoch-log committer, whose justification cited the hold-back claim [D-47](DESIGN-NOTES.md#d-47) removed. *(completed 2026-09-20 23:16:19 -04:00)*
+
+The assertion is unchanged, because it was always sound -- just for the other reason. Every commit
+carries `FlushCoverage::CoversPrecedingOperations`, so commit *N* is outstanding when commit *N+1* is
+reached, and D-47's *surviving* half -- no operation queued before a drained flush was ever observed
+completing after it -- is what orders them. The comment now says that, and says explicitly what it does
+not rest on, so a later reader does not "restore" the withdrawn reasoning.
+
+Sweep re-run before committing, as the item required. **21 matches across 14 files**, disposed as:
+
+- **1 violation**, fixed: the justification in [commit.rs](examples/epoch_log/commit.rs).
+- **1 historical site**, marked rather than rewritten:
+  [DESIGN-SESSION-2026-08-28-external-consumer-correspondence.md](design-sessions/DESIGN-SESSION-2026-08-28-external-consumer-correspondence.md)
+  records what the findings became on that date, and glossed D-24 as a stall that "holds operations
+  against unrelated files". A session is a faithful record of its moment, so the gloss stays and a
+  one-line note beside it says which half was later withdrawn.
+- **2 false positives**, left alone: the spikes README ("checked in deliberately rather than held back",
+  about an instrument) and [fault_injection.rs](tests/fault_injection.rs) ("holds it until the completion
+  is claimed", about a token).
+- **17 already correct** -- the decision index, both sides of the crate docs, the README, the stress
+  tests, strategy.rs, and the item's own text.
+
+The item quoted the original sweep as "17 matches across 10 files". Re-running it found more of both,
+and the file count needed care: `rg` groups the two design-session files under a single header, so the
+first reading of its output undercounted by one. Counted with a command rather than by eye.
+
+Verified by running the example in a debug build, where the `debug_assert` is live: it completed, the
+negative control still caught the corrupted record, and all four epochs reported durable in order.
+
+## Moved 2026-09-21 00:23:49 -04:00 -- M21.2: a bounded pop, generic over the wait
+
+### <a id="m212"></a>M21.2 -- Publish a bounded pop and the wait it is generic over, then remove the two unbounded spins. *(completed 2026-09-21 00:23:49 -04:00)*
+
+**Decided: the trait, plus a default impl and a convenience.** The crate cannot choose the wait for a
+caller, and that is a contract rather than a shrug -- the completion event is auto-reset with exactly one
+waiter per ring ([D-21](DESIGN-NOTES.md#d-21)), so a wait this crate picked could consume an edge the
+caller's own loop was entitled to. Making it a parameter moves the obligation to the only party who can
+discharge it.
+
+The surface added to [ring.rs](src/ring.rs):
+
+- `IoRing::pop_within(timeout)` -- the convenience, using `SubmitWait`.
+- `IoRing::pop_within_with(wait, timeout)` -- the same loop over a caller-chosen wait; `?Sized`, so a
+  trait object works.
+- `CompletionWait` -- one method, whose contract is deliberately weak: returning early or spuriously is
+  always permitted, because [D-19](DESIGN-NOTES.md#d-19) already makes a wake with nothing to pop normal.
+  An implementation cannot be subtly wrong about *when* to return, only wasteful.
+- `RingWait` -- the ring narrowed to `block` and `outstanding`, so a waiter cannot pop the completion
+  its own caller is waiting for, nor submit work nobody asked for. Same narrowing, same reason, as
+  `RingScope` under [D-43](DESIGN-NOTES.md#d-43).
+- `SubmitWait` -- blocks inside `SubmitIoRing` with nothing queued, touching no event, so it composes
+  with a caller who owns the completion event.
+
+**The borrow question, answered even though the check says the surface is unchanged.** `RingWait` is only
+ever passed *in*, never returned, so [BORROW-SURFACE.txt](BORROW-SURFACE.txt) is untouched (verified: 7
+entries, unchanged). Asked anyway, since it is a lifetime-carrying wrapper: safe code reaching it can call
+`block` and `outstanding` and nothing else; the ring it borrows is held exclusively for the call, so
+nothing it could invalidate is live elsewhere; and the narrow type is the point rather than an accident,
+because a bare mutable reference to the ring would have permitted exactly the two things a waiter must
+not do.
+
+**Measured while building it, and now documented on `RingWait::block`:** `SubmitIoRing` answers
+`E_INVALIDARG` (`0x80070057`) -- not a timeout -- when asked to wait for a completion the kernel has no
+pending operation for. Found by a test that drove the loop with a reservation having no real SQE behind
+it. The precondition holds structurally: `pop_within_with` checks `outstanding()` before consulting the
+wait, so `block` is unreachable with nothing pending.
+
+**An early return that is not an optimisation.** With nothing outstanding and an empty queue no completion
+is possible, so the loop answers immediately rather than sleeping out the bound. That turns "you forgot to
+submit" from a timeout into an instant answer, and it is what the sabotage below pins.
+
+**A panic path found and closed before it shipped.** The first draft computed an instant plus the caller
+timeout directly, which panics on overflow -- so `Duration::MAX`, a reasonable spelling of "no deadline",
+would have taken down the process. Now `checked_add`, with an unrepresentable deadline treated as one that
+never arrives. Two tests cover it: one where the early return answers first, one where an operation is
+outstanding so the overflow branch is actually reached.
+
+**Sabotage-verified**, because a test that cannot go red proves nothing:
+
+- Removing the clamp that keeps the wait timeout above zero turns `the_wait_is_never_handed_a_zero_timeout`
+  red.
+- Removing the nothing-can-arrive early return turns two tests red, and the run takes the full 30-second
+  bound instead of finishing instantly -- which is the behaviour the early return exists to remove.
+
+**Call sites converted:** the two unbounded spins in
+[append.rs](examples/epoch_log/append.rs) and [fault_injection.rs](tests/fault_injection.rs), and the
+test-only `pop_within` helper, which is now a thin panicking wrapper over the public API rather than a
+fourth copy of the loop. The panic is the only test-specific part left: a test wants the name of what it
+waited for, a consumer wants an `Option` it can act on.
+
+## Moved 2026-09-21 02:23:34 -04:00 -- M21.3: the epoch trigger, and a review claim the measurement disproved
+
+### <a id="m213"></a>M21.3 -- Key the epoch commit off a completed append rather than off the counter, so the trigger cannot fire on a pass that appended nothing. *(completed 2026-09-21 02:23:34 -04:00)*
+
+The match in [main.rs](examples/epoch_log/main.rs) now yields a `closed_an_epoch` value that every arm
+must produce, rather than a `appended % EPOCH_SIZE == 0` test written after it. Closing an epoch is a
+fact about an append that landed, and making each arm answer the question keeps that local -- a new arm
+added later cannot fall through into a commit.
+
+**The item predicted this was a latent bug. It is not, and the measurement is what settled it.**
+The retry path was instrumented to report when the old shape would have committed, and run at
+`EPOCH_SIZE` of 6, 8, 12, 16 and 24. It fired **zero** times -- including at every value past `SLOTS`,
+which both the item and finding `C-3` predicted would arm it.
+
+The reason is an invariant three blocks from the trigger: `appended % EPOCH_SIZE == 0` is true at exactly
+two moments -- before the first append, and immediately after a commit -- and the arena is empty at both,
+because the commit waits for a covering flush that retires every outstanding write. An append is
+therefore never refused at an epoch boundary, at any constants.
+
+**So this is a coupling change, not a bug fix**, and the distinction is the useful part. The old trigger
+was safe because of something nothing stated, three blocks away; the new one cannot fire because of where
+it is written. The second survives a reader who changes the commit path. The first is what made the
+question take a measurement to answer at all.
+
+Swept the claim rather than only fixing the code: finding `C-3` in
+[DESIGN-SESSION-2026-09-19-epoch-log-review.md](design-sessions/DESIGN-SESSION-2026-09-19-epoch-log-review.md)
+carried the same wrong prediction and now carries the correction beside it. The review lesson recorded
+there is the narrow one: "unreachable today, armed tomorrow" is a claim about a program's reachable
+states, and reading the code is not how to settle one.
+
+## Moved 2026-09-21 16:06:19 -04:00 -- M21.4: what a failed commit means, and the sample's first tests
+
+### <a id="m214"></a>M21.4 -- State what a failed commit does to durable_through, and bind it with tests in both directions. *(completed 2026-09-21 16:06:19 -04:00)*
+
+The doc on `Committer::claim` said "A failed commit advances nothing", which reads as a permanent verdict.
+It is not. Every commit here is a **covering** flush, so commit *N+1* reaches epoch *N*'s writes -- queued
+before it -- and observing *N+1* makes *N* durable after all. What makes a record durable is a flush that
+covered it, not the identity of the flush named for its epoch. The doc now says that, and says what a
+caller must not read into a failure: not "epoch *N* is lost", but "not yet".
+
+**The sample had no tests at all.** Examples are not test targets by default, so `cargo test` compiled
+this one and ran nothing. Binding the claim meant adding `test = true` to the `[[example]]` entry first;
+that is the change that makes any of the sample's policy testable, not just this item's part of it.
+
+**The failure path is unreachable by running the sample**, because a flush against a healthy temp file
+does not fail. The crate's fault-injection seam is the only way in, so four of the six tests are gated on
+`fault-injection` and the other two run by default. That follows the precedent and the reasoning already
+written down in [fault_injection.rs](tests/fault_injection.rs), including that CI's
+`cargo test --workspace --all-features` job is what stops gated tests from being tests that never run.
+
+**An assumption caught by asserting it.** The test first asserted that an injected `ERROR_ACCESS_DENIED`
+would surface as `io::ErrorKind::PermissionDenied`. It surfaces as `Other`: the crate preserves the
+HRESULT in an `IoRingError` rather than classifying it. Corrected to assert the Win32 code, which is the
+assertion `tests/fault_injection.rs` already makes one layer down.
+
+**Sabotage-verified in both directions, and the two produce different failure sets** -- which is what
+shows the tests discriminate rather than all keying on one fact:
+
+- `is_durable` returning `true` unconditionally: **4 of 6 fail**, caught by the assertions that an epoch
+  is *not* yet durable.
+- `is_durable` requiring an exact match with the watermark: **2 of 6 fail**, caught by the covering and
+  monotonicity tests.
+
+**Leverage from earlier in this milestone:** `commit_and_pop` is three lines because `M21.2` published
+`IoRing::pop_within`. Without it every test here would have carried its own bounded wait, which is the
+duplication `M21.2` existed to remove.
+
+## Moved 2026-09-21 18:18:52 -04:00 -- M21.5: every unbounded wait in the crate, not the two that were named
+
+### <a id="m215"></a>M21.5 -- Give the harness's wait loops a bound, and collapse the hand-written waits onto the bounded pop. *(completed 2026-09-21 18:18:52 -04:00)*
+
+`await_flush` and `await_writes` in [strategy.rs](examples/epoch_log/strategy.rs) blocked in
+`submit_and_wait` for `WAIT_MS`, ignored that it had returned without a completion, and went round
+again forever. Both now carry a deadline and raise `TimedOut`, which is the policy
+[event_loop.rs](examples/epoch_log/event_loop.rs) already documented: a measurement harness that hangs
+reports nothing, which is strictly worse than one that fails.
+
+**The item named two loops. A census found four, and two more of a related shape.** Counted by command
+over every `.rs` outside `target/` and the spikes:
+
+- [strategy.rs](examples/epoch_log/strategy.rs) `await_flush` and `await_writes` -- the two named.
+- [failure_paths.rs](tests/failure_paths.rs) and [kernel_span.rs](tests/kernel_span.rs), each with a
+  helper **called `await_one`**, byte-identical to the other, neither named by the item.
+- [batch/tests.rs](src/batch/tests.rs), where two registration waits were a single `try_pop` -- the
+  flake shape `pop_within` documents -- in a file whose *third* such wait already used the helper.
+  One predicate, three sites, half-converted, which is FAIL FAST rule 1 exactly.
+
+**Sabotage-verified, and it revealed the milestone compounding.** Making `classify` stop filing flush
+results leaves `await_flush` looking for a completion that is never recorded -- an unbounded loop would
+hang forever. It failed with `timed out after 30s waiting for a commit's flush`, and it did so in **two
+seconds**, not thirty: `pop_within`'s nothing-can-arrive early return (`M21.2`) answers immediately once
+the ring is quiesced. The bound is what makes the failure possible; the early return is what makes it
+quick.
+
+A `remaining` helper and a single `timed_out` constructor keep the two waits from describing the same
+condition two ways, and `WAIT` is derived from `WAIT_MS` rather than written twice.
+
+Factoring `Lane::classify` out of `Lane::drain` is what let the bounded waits file a completion they
+blocked for without a second copy of the claim-then-check logic.
+
+## Moved 2026-09-21 21:15:12 -04:00 -- M21.6: the API review's four defects
+
+### <a id="m216"></a>M21.6 -- Fix the four defects an independent review of the M21.2 surface found: the timeout mapping, its victim in `run_down`, the INFINITE collision, and the test hole that hid all of them. *(completed 2026-09-21 21:15:12 -04:00)*
+
+Queued and closed in one item because the first two share a root cause and the fourth is the reason
+neither was caught. The surface is unreleased and on a branch, so none of this is a breaking change.
+
+**The defect.** `SubmitIoRing` reports an expired wait as `ERROR_TIMEOUT` (`0x800705B4`), a *failure*
+HRESULT. `RingWait::block` passed it through `check`, so `pop_within` returned `Err` on every real
+timeout and never the `Ok(None)` it documents. All six converted call sites treat `Err` as fatal and
+`Ok(None)` as the timeout signal, so the `ErrorKind::TimedOut` mapping they document was dead code on
+the only path that produces it.
+
+**Its second victim, pre-existing.** `run_down` polls in 50 ms steps with the same `check`, so any
+operation slower than 50 ms made rundown return `Err` with work still outstanding -- and `Drop` then
+asserted and called `CloseIoRing` anyway, which is precisely the "the kernel may still be writing
+through a token's buffer" hazard the function exists to prevent. One `wait_outcome` helper now
+classifies a wait-only `SubmitIoRing` result for both callers, so they cannot disagree again.
+
+The rundown loop is deliberately left unbounded. Every SQE that queues produces exactly one completion
+(M10.2), so it terminates; blocking until that holds is the safe failure, and closing the ring early is
+not.
+
+**The `INFINITE` collision.** A finite bound above ~49.7 days saturated onto `u32::MAX`, which is Win32's
+`INFINITE` -- and `CompletionWait` explicitly invites implementations built on `WaitForMultipleObjects`.
+Clamped to `MAX_WAIT_MS` (one below), and the trait now states that `timeout_ms` is never zero and never
+`INFINITE`, so it can be passed straight to a Win32 wait.
+
+**The contract gap that would have propagated it.** `CompletionWait` never said how to report an expired
+wait, and every Win32 wait reports one as an error -- so any third-party implementation forwarding its
+underlying result would have reproduced the defect exactly. The trait now says an expired bound is
+`Ok(())`, and says why.
+
+**Why no test caught it, which is the finding worth keeping.** The M21.2 tests drive the loop with a wait
+that never enters the kernel. Deterministic, and it leaves the Win32 interaction untested: replacing
+`RingWait::block`'s entire body with an unconditional error left **the whole suite green**.
+
+Closing that needed an operation still pending when the bound expires, and three attempts failed before
+one worked -- each measured, not assumed:
+
+| Attempt | Result |
+|---|---|
+| Buffered read, up to 256 MiB | completion already poppable, 3-5 us |
+| Flush over 512 MiB of dirty cache | 3 us -- the lazy writer had already written it back |
+| Unbuffered read, 256 MiB | 3 us -- **a handle without `FILE_FLAG_OVERLAPPED` is synchronous**, so the read completes inline during submit |
+| Unbuffered **and** overlapped, 64 MiB+ | genuinely pending; the bound expires |
+
+That third row is the general finding: **the crate's existing tests all use synchronous handles**, so
+ring operations complete inline during submit and asynchronous completion is never exercised. That is why
+a counting waiter over the existing flush pattern was reached in 0 of 50 trials.
+
+[tests/bounded_pop.rs](tests/bounded_pop.rs) now covers it with five tests over a 128 MiB unbuffered,
+overlapped read. Each asserts `outstanding() > 0` alongside the expected answer, so a machine fast enough
+to finish the read early fails loudly instead of passing vacuously. Nothing asserts an upper bound on
+elapsed time: Windows' default timer resolution is ~15.6 ms, so a 5 ms bound routinely takes 14-19 ms.
+
+**Sabotage-verified, twice.** Reverting the timeout mapping turns **all five** red. Reproducing the
+review's original mutation -- `block` always failing -- now turns three red, where before it turned none.
+
+The review's fifth finding, that `check-borrow-surface.ps1` is blind to trait methods and to borrows in
+parameter position, is queued as `M21+.1` rather than fixed here: it is a process gap, not a runtime
+defect, and widening the check obliges a borrow-question answer for every entry it newly reports.
+
+## Moved 2026-09-21 21:23:24 -04:00 -- M21+.1: the borrow-surface check learns two shapes
+
+### <a id="m21plus1"></a>M21+.1 -- Teach [check-borrow-surface.ps1](../../tools/check-borrow-surface.ps1) the two shapes it was blind to: methods of a \pub trait\, and borrows in parameter position. *(completed 2026-09-21 21:23:24 -04:00)*
+
+The check inspected only the text after the last `->` on lines matching `pub fn`. Trait items are
+declared `fn`, not `pub fn`, so nothing inside any `pub trait` was ever examined; and a borrow-carrying
+type in *parameter* position was invisible in any function. `CompletionWait::wait` is both at once.
+
+**Four entries appeared, and one of them predates the widening by months.**
+`IoRingErrorExt::as_ioring_error` returns `Option<&IoRingError>` and had simply never been inventoried --
+the blind spot made concrete rather than a new risk. The other three are `CompletionWait::wait`,
+`Batch::new` and `EventDelivery::new`, the last two carrying an explicit lifetime in a parameter.
+The borrow question is answered for all four in
+[DESIGN-NOTES.md](DESIGN-NOTES.md#borrow-surface-audit-m21plus1), before the inventory was regenerated,
+as [DESIGN-INSTRUCTIONS.md](DESIGN-INSTRUCTIONS.md) requires. None is a hole.
+
+**A plain `&T` parameter is deliberately not reported.** Reporting every method that borrows something
+would list the whole crate and mean nothing. Only an *explicit lifetime* in parameter position counts --
+the borrow-carrying wrapper whose lifetime the crate chose, not a reference the caller lent us. That is a
+heuristic, and the archived audit says so: it would miss a `&dyn Trait` parameter carrying no named
+lifetime.
+
+**Verified by five probes, restored afterwards** -- and the negative control is the one that matters,
+because a check that fires on everything is as useless as one that fires on nothing:
+
+| Probe | Expected | Result |
+|---|---|---|
+| `pub fn` returning `&[u8]` (control, the old rule) | caught | caught |
+| `pub trait` method returning `&[u8]` | **now caught** | caught |
+| `pub fn` taking `&mut RingWait<->` | **now caught** | caught |
+| `pub fn` taking a plain `&Completion` | **silent** | silent, exit 0 |
+| `pub trait` with a default body plus a borrow-returning sibling | only the sibling | only the sibling |
+
+**The probes found a latent bug in the checker itself**, which is the argument for running them rather
+than reasoning about the regex. A one-line body -- `pub fn f() -> &[u8] { &[] }` -- never satisfied the
+"line ends with `{`" test, so the signature accumulator ran past the end of the file. The old script did
+not crash on it only because it never indexed the lines again afterwards; it silently swallowed the
+following lines instead. Signature termination is now "the accumulated text contains a `{`", and the
+return type is truncated at that brace.
+
+Also swept while here: the script header and its failure message both said **three** shipped defects of
+this shape and listed D-35, D-36, D-43. It is four, and has been since D-45.
+[M19.3](COMPLETED-CHECKLIST.md) swept that count through `DESIGN-INSTRUCTIONS.md` and missed this file,
+which is the restatement-drift pattern landing on the very tool built to stop a different one.
+
+## Moved 2026-09-21 22:08:52 -04:00 -- M22+.1: a pending operation that owes nothing to a device
+
+### <a id="m22plus1"></a>M22+.1 -- Make [bounded_pop.rs](tests/bounded_pop.rs) independent of how fast a device is, by reading from an overlapped pipe nobody has written to. *(completed 2026-09-21 22:08:52 -04:00)*
+
+**Queued and completed within the hour, and the queueing was the error.** It was filed as `M22+.1` with
+an entry in `UNRESOLVED-TEST-FAILURES.md` on the grounds that the fix did not belong in a push of
+finished milestones. That is a scheduling preference, not a blocker, and the repository's PRIME
+DIRECTIVE is explicit that only a genuine blocking factor justifies deferral. The mechanism was
+understood when it was filed; the two open questions were each one probe away.
+
+**Both probes answered, and neither was safe to assume.** `IoRing` does accept a pipe handle for
+`read_raw`; and `pop_within(20ms)` against an unwritten overlapped pipe returns `Ok(None)` with
+`outstanding == 1`. `Win32_System_Pipes` was added to the dev-dependency feature set; `PIPE_ACCESS_INBOUND`
+is not re-exported where the module name suggests, so it is a named local constant, as
+`FILE_FLAG_NO_BUFFERING` already was in this file.
+
+**The substance of the change is the question the test asks.** A 128 MiB unbuffered read asks "will this
+device take longer than 5 ms?" -- a question about someone else's hardware, which may answer differently
+on two runs of the same machine. A pipe with no writer asks nothing: the read is pending because no byte
+exists to satisfy it, and it completes exactly when the test writes one.
+
+Where a delay is still needed -- `run_down` polls in 50 ms steps, so forcing it to observe an expired poll
+means releasing the read later than that -- it comes from a `thread::sleep`, whose guarantee runs the safe
+way round: a sleep may overshoot, never undershoot. No assertion depends on an operation *finishing*
+within any bound.
+
+**Verified:** 25 consecutive runs of the target and 3 full `--all-features` suite runs, all green; both
+feature configurations green. **Both sabotages still bite exactly as before the rewrite** -- reverting the
+timeout mapping turns all 5 red, making `RingWait::block` always fail turns 3 red -- which is the
+assertion that matters, because a deterministic test that had lost its discriminating power would be a
+worse outcome than the flake.
+
+Also 11x faster (0.20s against 2.26s), with no 128 MiB fixtures.
+
+The `UNRESOLVED-TEST-FAILURES.md` entry moved to
+[RESOLVED-TEST-FAILURES.md](RESOLVED-TEST-FAILURES.md) in this commit, per the append-only rule.
+
+## Moved 2026-09-22 15:54:53 -04:00 -- M22.1: batching the appends, and the confound it was meant to test
+
+### <a id="m221"></a>M22.1 -- Batch an epoch's appends into one submission in both append paths, and measure whether the per-record submission cost was flattening the strategy comparison. *(completed 2026-09-22 15:54:53 -04:00)*
+
+`Appender::append_batch` and `Lane::append_batch` replace the single-record pushes. Both compose as
+many records as there are free arena slots and submit once, so the arena rather than the caller's
+list decides the batch size -- which is what keeps the two halves of an append honest, since a slot
+is composed into only while the kernel is not reading it. With eight slots, an epoch of 64 records
+goes from 64 submissions to 8.
+
+**The teaching defect is the smaller half.** A sample whose job is to teach `Batch` was paying one
+`SubmitIoRing` per record, which is the one thing `Batch` exists to avoid.
+
+**The measurement was the point, and it returned a negative result.** Finding `E-1` raised the
+possibility that the per-record cost was a term every strategy paid equally, and therefore a shared
+constant capable of flattening the three-way comparison into "indistinguishable" without that being
+true. Twenty runs -- ten each side, taken in one sitting by stashing the change so both sets came
+from the same machine and build -- are kept in
+[measurements/2026-09-22-append-batching/](measurements/2026-09-22-append-batching/).
+
+Throughput did not move in a way that can be distinguished from noise: median records/sec shifted by
+1-5% while a single strategy's run-to-run range spans 1.17x to 1.57x. The cross-strategy spread did
+not shrink, and stayed at or below one strategy's own range -- which is the sample's own stated test.
+**So `E-1`'s hypothesis is not supported, and the existing conclusion survives a confound raised
+specifically against it.**
+
+What did move is commit p50, and it is the one figure here that separates: for `covering-flush` the
+ten before-values and ten after-values barely overlap. That is the expected shape rather than a
+surprise -- batching removes seven of every eight submissions from the append path, shortening the
+interval between the last append and the flush being reached. Throughput is bound by the device
+flush and does not move; latency is not, and does.
+
+The figures live in the capture and are **linked** from `strategy.rs` and from `M20.6` rather than
+pasted into either, per the rule that a measurement has one home.
+
+**`M21.3`'s property was preserved deliberately.** Batching changes the append loop, and the naive
+rewrite would have reintroduced a commit trigger reachable on a pass that appended nothing. The loop
+`continue`s when zero records are accepted, so the epoch check is reachable only after progress --
+the same structural guarantee, stated in the same place.
+
+**Unblocks `M20.6`**, whose remaining question is the part no number speaks to: whether alternating
+rings earns its cost on correctness and blast-radius grounds.
+
+### <a id="m222"></a>M22.2 -- Collapse the two free-slot implementations to one, derived from the arena's own outstanding counts rather than tracked beside them. The item called both correct; one was not -- the tracked free list leaked a slot on every refused append. *(completed 2026-09-22 16:21:23 -04:00)*
+
+The sample had two answers to "which arena slots are free". `Appender` asked the arena, filtering on
+`outstanding(slot) == Some(0)`. `Lane` kept a `Vec<u32>` and maintained it by hand. Both now call one
+`free_slots` in [append.rs](examples/epoch_log/append.rs); `Lane`'s field, its initialiser, and its
+push-on-claim are gone.
+
+**The item's premise was wrong in the direction that mattered.** It said "both are correct and the cost
+difference is nil ... the duplication is the defect, because the two *can* drift". They had already
+drifted. The free list took its slot *before* composing into it, so an append refused between the two --
+a record too long for a slot is the reachable path -- returned with the slot popped and no operation ever
+issued. The arena considered that slot quiet forever; the list never offered it again. `SLOTS` such
+refusals and the harness reports a full arena while the kernel holds nothing.
+
+So this was not a tidying exercise with a correctness footnote: **deriving the fact removed a live bug**,
+and it removed it by construction rather than by fixing the copy -- a slot nothing was pushed against
+never stopped being free.
+
+**Verified by sabotage, in both directions.**
+
+- *Does each caller really bind to the one definition?* Breaking `free_slots` to offer busy slots failed
+  the `Lane` path with the arena's own refusal (`buffer 0 still has 1 operation(s) outstanding`), while
+  the appender ran clean -- so that run proved only half of it. A second sabotage (`take(0)`) starved the
+  appender, which then failed before the strategy section was reached. Both halves bind; one sabotage was
+  not enough to show it, which is the point of running the second.
+- *Was the leak real, or argued from the source?* Re-injecting the free list and failing eight appends
+  left the lane reporting **0** of 8 slots free with the arena entirely idle.
+
+**What the new tests do not catch, stated in the tests.** [strategy/tests.rs](examples/epoch_log/strategy/tests.rs)
+asserts the property from the arena's side, so a re-introduced free list would *not* fail it -- under the
+re-injection above it passed, and only a temporary assertion against the list itself went red. What keeps
+a second definition from returning is that there is one function and both callers call it. Claiming the
+test covers that would be the cosmetic binding the repository's own rules warn about, so the module says
+so plainly instead.
+
+Two harness defects were themselves caught by sabotage discipline and are worth recording, because both
+produce a *false green*: a `.Replace` that matched nothing reported success and ran an unmodified tree,
+and a PowerShell helper that logged with `Write-Output` returned its log line into the patched text. Per-site
+match-count assertions caught the first; the second surfaced as a run with no output at all. The repository
+already requires the match-count check for exactly this reason.
+
+**Raised a layer-placement question rather than answering it silently:** `outstanding()`'s rustdoc names
+this use case, and both in-repo consumers hand-rolled it anyway. Queued as `M22+.2` with its blocker named
+(a public API addition needs a lib test, and that test opens a real ring -- the `M24` pile).
+
+### <a id="m223"></a>M22.3 -- Give the registered arena a stated placement: the epoch-log arena is placed on the NUMA node its own log file's volume reports, and the allocator moved into the library as `NumaBuffer` rather than being copied a second time. The sample says plainly that the placement cannot pay at this workload. *(completed 2026-09-22 17:41:01 -04:00)*
+
+The item offered a choice -- adopt `ring_copy`'s allocator, or write down why a durability sample makes no
+locality decision. Both halves turned out to be needed, and a third thing fell out of doing them.
+
+**The decision.** [placement.rs](examples/epoch_log/placement.rs) asks the log's own handle through
+`FSCTL_QUERY_VOLUME_NUMA_INFO` -- the documented call [What is not reachable](DESIGN-NOTES.md) already
+established, which takes a file or directory handle directly and needs no device-tree walk -- and the arena
+is allocated preferring whatever comes back. A volume that names no node yields no preference and the log
+runs on; the report line says which happened and why.
+
+**No benefit is claimed, and the sample says so in its own output.** The arena is eight slots of four
+kilobytes against a workload bound by a per-epoch device flush costing hundreds of microseconds, which
+`M22.1` measured directly. So this demonstrates how the decision is made and reported, not that it was
+worth making; `examples/ring_copy` remains where placement meets a load that could show it. The report is
+also qualified by `GetNumaHighestNodeNumber`, because on a one-node machine "placed on node 0" is true and
+misleading -- the line instead says the choice was never available. Two unit tests hold that in **both**
+directions: the disclaimer must appear for a single-node machine and must **not** appear for a multi-node
+one, since a disclaimer that shows up everywhere trains a reader to ignore it.
+
+**The allocator moved into the library ([D-51](DESIGN-NOTES.md#d-51)), by the engineer's call on a
+question raised before any code was written.** The crate's front page names this allocation as the
+highest-leverage locality decision available and then supplied nothing, so the first consumer wrote it in a
+sample and this item was about to write the second. `git mv` carried the history; `ring_copy` lost its
+local module and binds to the library type.
+
+**That move surfaced a packaging defect that would have reached a consumer.** `cargo check --all-targets`
+unifies dev-dependency features into the build, so the library's newly-required `Win32_System_Memory` was
+being supplied by the dev-dependency list and the lib target compiled clean. `cargo doc` -- which does not
+get dev-dependencies -- failed immediately, and `cargo check --lib` confirmed it: **anyone depending on
+this crate alone would not have compiled it.** The manifest now carries the feature on the library
+dependency, and the stale comment asserting "the library itself needs none of them" is corrected rather
+than left to mislead.
+
+**Verified by sabotage, in both directions.** Forcing the FSCTL to report a node the machine does not have
+failed the run at arena allocation with `ERROR_INVALID_PARAMETER`, which is what proves the queried node
+actually reaches the allocator rather than being reported decoratively. Forcing the FSCTL to fail produced
+the `Unplaced` line, the stated reason, and a log that still kept its contract -- the path that will not
+otherwise execute on a machine where the query succeeds.
+
+**Swept the claim rather than the one site.** `VirtualAllocExNuma` and the arena's old `Vec` allocation
+were stated in six places; [README.md](README.md), [lib.rs](src/lib.rs), two DESIGN-NOTES sections and the
+manifest comment were updated, and the design-session and archive copies were left alone as historical
+record. `M23.2` was **narrowed** in the same pass: its option (a) is no longer "should a sample do this"
+but the residual library question, because the sample half is now done.
+
+Gate: fmt, clippy, the full suite (14 new `NumaBuffer` tests, 9 new placement tests), `cargo doc` clean,
+lib-only and `--no-default-features` builds, the borrow-surface, encoding and publishable checks, and the
+example end to end.
+
+### <a id="m203"></a>M20.3 -- Make `ring_copy`'s degraded-fallback path observable in a test, asserting both that an absent relation degrades and that a present one does not. *(completed 2026-09-22 20:11:18 -04:00)*
+
+The whole-machine fallback in `Policy::select` is the branch every zero-relation machine takes -- the
+shape [D-48](DESIGN-NOTES.md#d-48) records as ordinary rather than exotic -- and it cannot be reached
+by *running* the sample on a machine that reports its relations. A synthetic topology reaches it.
+Fifteen tests in [examples/ring_copy/policy/tests.rs](examples/ring_copy/policy/tests.rs).
+
+**The item's reason for demanding both halves was verified rather than trusted.** It argued that a
+test of the absent case alone "would pass against a function that always degrades". Sabotaging
+`select` to degrade unconditionally showed exactly that: `a_policy_whose_relation_is_absent_...`
+**still passed**, while four present-case tests failed. The reverse sabotage -- never degrade -- failed
+five absent-case tests. Neither half is redundant, and that is now a measured statement.
+
+One test, `degrading_unconditionally_would_fail_a_test_here`, exists to put that dependency in code
+rather than in a comment, so a future edit that deletes the present-case coverage has something named
+to delete.
+
+**Done without waiting on `SH-4.12`, and the coupling was narrowed rather than ignored.** The recorded
+callout said that item "rewrites the selection arm this test would assert against". That is true only
+of a test asserting through `ByL3`. The fallback tail is shared by all five policies and is not what
+`SH-4.12` changes -- it changes which domains `ByL3` matches -- so exercising it through `ByNode` and
+`ByPackage` pins nothing. Both checklists now say so, and `SH-4.12` inherited the one assertion that is
+genuinely its own: `ByL3`'s degradation condition, under whichever rule replaces the `level: 3` match.
+
+Beyond the two halves, the cases cover what the fallback must get right and what it must not claim: a
+memory domain with no processors is not a usable node; degradation is per-policy rather than a property
+of the machine; `Single` returns the whole machine **undegraded**, because degrading is a statement
+about not getting what was asked for and `Single` asked for exactly this; the fallback covers every
+online processor, excludes reserved-but-offline slots, and spans processor groups; and it carries no
+observations, because nothing observed it.
+
+The synthetic memory domain uses `Observed::NotObserved` for its size rather than `Known(0)`, which the
+type's own documentation calls the variant "a hand-written description leaves behind". `Known(0)` would
+have asserted a measurement nobody made -- in a test whose subject is honest reporting.
+
+`ring_copy` was auto-discovered and therefore **not a test target**, so `cargo test` would have compiled
+these and run nothing. It now has an explicit `[[example]]` entry with `test = true`, the same reason
+`epoch_log` has one.
+
+### <a id="m201"></a>M20.1 -- Restate the cache heuristic as "the outermost cache level that actually partitions the machine", sweep every restatement, and replace the consumer that bound to the level number. *(completed 2026-09-22 20:27:15 -04:00)*
+
+**Done together with `SH-4.12`, because they are one change.** That coupling was real, unlike `M20.3`'s:
+this item's sweep reaches `policy.rs`'s doc comments, and rewriting those to describe the new rule while
+the code still filtered `level: 3` is exactly the contradiction the blast-radius convention exists to
+prevent. Splitting them would have produced a commit whose documentation lied.
+
+**The item's evidence was a shipping ARM part with no L3. Measuring the consumer found a second shape,
+on this workspace's own development machine, that nobody had anticipated.** It reports an L3 spanning
+**all 16 processors** above a real **8-way L2** partition. So the old filter did not fail the way the
+item assumed:
+
+| | domains selected | reported degraded? |
+|---|---|---|
+| old `level: 3` filter | **1**, mask `0xffff` | **no** |
+| `outermost_partitioning_cache()` | **8**, at L2 | no |
+
+The old code *matched something*, so it did not degrade -- it reported success while collapsing an
+eight-domain machine to a single ring. A silent wrong answer, not a visible fallback, and live on the
+machine this repository is developed on rather than on hardware nobody here owns.
+
+Three consumers restated the rule, not the two the items named. `ring_copy`'s `policy.rs` and the prose
+were known; `examples/l3_domains.rs` also hardcoded `cache.level == 3` and was named after the
+assumption. It is now `examples/cache_domains.rs`, asks the same primitive, and reports the level it
+found -- `git mv` kept its history.
+
+**`byl3` and `l3` are rejected rather than aliased.** They named a rule the sample no longer implements;
+mapping them onto `ByCache` would let a script keep asking for L3 and keep believing it got L3, which on
+an L2-partitioned machine is a wrong answer delivered quietly. An unknown policy prints the usage line,
+which is a question rather than a wrong answer.
+
+Five tests were added to the file `M20.3` created two hours earlier -- the assertion `SH-4.12` had
+inherited. Re-injecting the `level: 3` filter fails three of them, including the one that pins the
+measured shape above. The swept sites: `DESIGN-NOTES.md` (the heuristic section, the sizing note, the
+policy list, D-27's pointer, and D-48's own "restating the rule is M20.1" reference, which was itself a
+restatement that would have gone stale), `README.md`, `src/lib.rs`, both examples, and both checklists.
+
+### <a id="m241"></a>M24.1 -- Settle whether a co-tested fake escapes the mock objection. Answered: the fake was the wrong instrument. *(completed 2026-09-22 21:18:30 -04:00)*
+
+The item predicted two outcomes and both held -- a wrong **accounting** model was caught by the shared
+suite, a wrong **Windows belief** slipped through. Two further cases changed the answer.
+
+**Case 3, which the item did not predict, is the argument *for* co-testing.** Run an assertion written
+from the *wrong* belief against both peers: the kernel goes red and refutes us, the fake goes green and
+confirms us. That is the manufactured-evidence mechanism made visible, and also the escape -- a
+mock-only world never performs that experiment.
+
+**Case 4 invalidated the line the first three cases suggested.** Raised in review: kernel behaviour is an
+observation at a point in time, not objective truth, and we must not over-index on a record of how it
+runs. Demonstrated: "after submitting, the completion is already queued" reads like a contract and gave
+**opposite answers on two handles of the same API**. So the axis is not "accounting versus Windows
+behaviour" -- it is **our specified contract versus the platform's incidental behaviour**.
+
+**Case 5 replaced the technique.** Also from review: model what the platform is *permitted* to do and
+let a seed pick a resolution, so the assertions are about this crate rather than about the kernel. That
+dissolves the mock objection instead of working around it, because there is no belief to be wrong about.
+A minimal resolver broke a FIFO-assuming consumer under 189 of 200 seeds -- and passed under the other
+11, which is the point: a fixed fake reports whichever single answer it encoded.
+
+**Two apparatus failures in one session, both caught, both the same shape.** The first spike draft ran
+each condition once and printed a verdict -- exactly `D-47`'s error; rewritten to 500 trials it
+immediately found a condition that pends about 1% of the time and would have been called "never". The
+case-4 harness used a bare flush, which completes inline on every handle, so it could not discriminate
+until it was rebuilt around sector-aligned writes. Both are recorded because the repository's rule is
+that an instrument nobody has shown can go red is not evidence.
+
+Outcome: the rejection **stands** with its scope sharpened ([D-52](DESIGN-NOTES.md#d-52)), `M24.4` is
+**withdrawn**, `M24` becomes unconditional, and the technique that actually answers the question is
+`M26`. The apparatus is kept as
+[kernel-response-space-probe.rs](design-sessions/kernel-response-space-probe.rs); the reasoning is
+[DESIGN-SESSION-2026-09-22-kernel-response-space.md](design-sessions/DESIGN-SESSION-2026-09-22-kernel-response-space.md).
+
+### <a id="m242"></a>M24.2 -- Extract the handle-free accounting into its own type, composed by `IoRing`. *(completed 2026-09-22 21:29:07 -04:00)*
+
+The item named five fields as handle-free and five as carrying kernel state. **Checked before acting,
+and it was exactly right** -- `ring_id`, `next_user_data`, `outstanding`, `registered_files` and
+`registered_buffers` against `handle`, `version`, `supported_ops`, `registered_buffer_infos` and
+`completion_event`. Nine methods touch only the first five; they moved with the fields, and `IoRing`
+delegates. `RingId` moved too, since the identity counter is part of the ledger rather than of the
+handle. The public surface did not move.
+
+**19 hermetic tests, and they are the first in `src/` for which [D-49](DESIGN-NOTES.md#d-49)'s
+complaint does not apply.** They open no ring, because every rule they check is this crate's own
+specification: an identity is never reused, a refused reservation costs nothing, the counters saturate
+rather than wrap, the two registration indices are independent, and two ledgers never share an
+identity. The last of those used to need two live kernel objects.
+
+**The tests found an off-by-one in their own author's assumptions.** Two of them asserted that the
+last identity handed out is `usize::MAX`, and failed: `checked_add` runs *before* the value is
+returned, so a reservation made at `usize::MAX` fails rather than handing it out, and the identity
+space is `0..=usize::MAX - 1`. Not a defect -- one value out of 2^64, and "fails rather than wraps" is
+the property that matters -- but invisible from the source, so
+`the_last_identity_is_max_minus_one_not_max` records it rather than leaving the next reader to make
+the same wrong assumption.
+
+**Sabotage, four ways, all caught:** a no-op `record_completion` (2 red), a recycled identity (6 red),
+`wrapping_sub` in place of `saturating_sub` (1 red), and the buffer-registration count advancing the
+file counter (4 red). The recycled-identity sabotage first produced *no output at all* rather than a
+red suite -- an ambiguous-integer compile error -- which is the silent-failure shape the repository's
+rules warn about, and was rerun with an explicit type before being believed.
+
+**The payoff was deliberately not taken here.** The item's motivation said most of the ring-opening
+lib tests "become hermetic *in place*". That is 71 tests across four files, which is a different item
+wearing this one's name; it is queued as `M24.7` with the measured per-file census, and with a warning
+that the census must be recounted because the first attempt at it produced false positives by matching
+`to_string()`.
+
+### <a id="m247"></a>M24.7 -- Convert the lib tests that construct a ring only to exercise bookkeeping. *(completed 2026-09-22 21:43:29 -04:00)*
+
+**The recount the item demanded was right to demand.** Its figure of 71 was a per-*file*
+`IoRing::new` count. A per-*test* census gives **61**, and the difference is not rounding -- a file
+with 40 tests and 35 constructions has five tests that never touch a ring.
+
+**61 -> 52.** Two changes, one structural and one an excision.
+
+**`Token::new` now takes the ring's ledger rather than the ring.** It only ever used
+`reserve_user_data()` and `ring_id()`, both bookkeeping, so the wide parameter was the only reason
+`token`'s tests opened a ring at all -- **all seven of them, to mint a token and nothing else.** The
+ring was actively a liability there: none of those tests ever submitted, so `Drop`'s run-down would
+wait for completions that were never coming, and a `settle` helper existed purely to stop teardown
+hanging. The helper is gone with the hazard it worked around. `token` is now 7 hermetic, 0 opening.
+
+**Two `ring` tests were removed rather than converted**, being duplicates of what `M24.2`'s hermetic
+tests now cover: `reserve_user_data_increments_outstanding_and_never_repeats_an_id` and
+`record_completion_saturates_rather_than_underflowing`. Deleting them loses no delegation coverage --
+`run_down_returns_once_a_recorded_completion_zeroes_the_count` already drives reserve, `outstanding`
+and `record_completion` through `IoRing`, and must keep a ring for its own sake.
+
+**The remaining 52 are not convertible, and the reason is structural rather than effort.** Recorded
+here so the next reader does not re-derive it:
+
+- `event_delivery` (6) needs a real ring and the thread pool. There is nothing to narrow.
+- `ring`'s injected-failure cluster **looks** convertible by name and is not. It uses a real
+  completion on purpose -- one test says so in an assertion message, "the flush really did succeed,
+  or this test proves nothing" -- because `with_injected_failure` *transforms* a real completion, and
+  fabricating one is precisely the unsoundness the seam exists to avoid.
+- `batch` (13) needs a `Batch`, which needs the handle for its `Build*` calls. Narrowing that
+  parameter is not possible the way `Token`'s was; it becomes reachable only under `M26.2`'s FFI
+  seam, which is a far larger change.
+
+So **relocation, not conversion, is the remedy for the rest**, which is `M24.3` -- updated with this
+finding and with a warning to recount its own stale figure of 25.
+
+### <a id="m243"></a>M24.3 -- Relocate the lib tests that open a ring but use only public API into `tests/`. *(completed 2026-09-22 22:43:39 -04:00)*
+
+**52 -> 41.** Eleven tests moved into `tests/ring_lifecycle.rs` (new), `bounded_pop.rs`,
+`event_delivery.rs`, `registration.rs` and `submission_lifecycle.rs`. Totals conserved: 162 lib + 68
+integration before, 151 + 79 after.
+
+**The item predicted 25 and that was never achievable.** Its figure predated two milestones of test
+growth, and more importantly it assumed the constraint was *which* tests had been looked at rather
+than what they reach. `M24.7` had already found the structural version of this; relocation hits the
+same wall from the other side.
+
+**A regex census got the classification wrong, and the compiler caught it.** The scan excluded
+`pop_within` from the blocking list because it is a public method on `IoRing` -- but `ring.rs` also
+has a `#[cfg(test)] pub(crate) fn pop_within(ring, what)` free function, and
+`windows_refuses_an_empty_buffer_registration` uses *that*. It was moved, failed to compile, and was
+returned. A second miss was structural rather than nominal: the scan only looked at `fn` definitions,
+so it did not see that `a_supplied_wait_is_not_consulted_when_nothing_can_arrive` depends on a
+`RecordingWait` **struct** shared with eight other call sites. That one was caught before moving, by
+a second pass that looked for local `struct`/`const` definitions too.
+
+The method that worked was **moving the candidates and letting the compiler rule**, rather than
+trusting the census. Two milestones running, a crude census has produced false classifications here;
+the compiler produced none.
+
+`HugeBuffer` and `NULL_FILE` travelled with the two tests that used them, having no other call sites.
+
+**`M24.5` needed re-planning as a result, and that is the more consequential outcome.** It assumed
+that after `M24.2` and `M24.3` the lib tests would "construct no ring at all", so a zero-check would
+do. Forty-one remain and none is movable, so a zero-check would fail on day one and could only be
+satisfied by deleting real coverage. The item now asks what the rung should actually assert -- a
+ratchet, an allow-list, or nothing until `M26.2` -- rather than presuming the answer.
+
+### <a id="m245"></a>M24.5 -- Put the rule on a rung, so it cannot regress. *(completed 2026-09-22 23:44:37 -04:00)*
+
+**The rule the item assumed was false, and that is the decision this item really made**
+([D-53](DESIGN-NOTES.md#d-53)). It expected a zero-check -- "the lib tests should construct no ring at
+all" -- which would have failed on day one and could only ever be satisfied by deleting real coverage.
+Forty-one remain and none is movable without `M26.2`.
+
+So the rung is an **inventory**: [RING-OPENING-LIB-TESTS.txt](RING-OPENING-LIB-TESTS.txt), regenerated
+from source by [check-ring-tests.ps1](../../tools/check-ring-tests.ps1), failing when the two
+disagree. Deliberately the same mechanism as the borrow-surface check, so there is nothing new to
+explain. Per-test rather than per-file, because two thirds of the 41 live in `ring/tests.rs` and a
+file-level allow-list would let exactly that file grow. An inventory rather than a count, because
+add-one-remove-one nets to zero and a bare number is derived data nobody can check by reading.
+
+**The bidirectional verification found a defect in the guard, which is the whole reason the rule
+demands it.** Direction 3 -- a test that reaches a ring only through a helper -- reported the expected
+test *and an innocent one*. The body extraction ended at the next `#[`, so a plain helper defined
+after the last test in a file was swallowed into that test's body, and a helper containing
+`IoRing::new` made the test above it look ring-opening. The body now ends at a column-0 `}`, which
+`cargo fmt` guarantees is a function end. Had only the "must fire" direction been run, the check would
+have shipped with a false positive that fires on innocent changes -- the fastest way to train people
+to ignore it.
+
+Four directions verified after the fix: fires on a direct `IoRing::new`, fires on a ring reached only
+through a helper, stays silent on a new hermetic test, and reports removals as progress needing only
+regeneration. Wired into CI as its own job beside `borrow-surface`; needs no toolchain.
+
+### <a id="m246"></a>M24.6 -- Sweep what this milestone makes false. *(completed 2026-09-23 11:49:58 -04:00)*
+
+The item named three sites. **Two were false alarms and the third was false for a different and more
+serious reason than the item gave** -- which is the argument for running the census rather than
+editing the named list.
+
+**Named, and genuinely stale: [D-49](DESIGN-NOTES.md#d-49).** Its "63 of 131" is the figure `M24`
+*started* from; measured after, **41 of 151 open a ring and 110 do not**. It also still said the mock
+rejection "stands until `M24.1` settles it" and that the remedy choice was "gated on one unresolved
+question", both of which `M24.1` closed. Corrected, with pointers to [D-52](DESIGN-NOTES.md#d-52) and
+[D-53](DESIGN-NOTES.md#d-53).
+
+**Named, false alarm: the testing-strategy section.** The item expected it to be stale because it was
+"written when every lib test opened a ring". Reading it, nothing in it turns on hermeticity -- it
+classifies *defect populations* and *techniques*, and `M24` added or removed neither. Its "all five
+techniques" framing is also correctly left alone: the resolver is a sixth *when `M26` builds it*, and
+`M26.6` already owns that edit. Claiming six today would be the opposite error.
+
+**Named, false alarm: `M21.6`'s archive entry.** The item said its "a wait that never enters the
+kernel" clause "stops being the notable exception once the suite is hermetic". Hermeticity does not
+bear on that sentence, and the archive is append-only history describing what was true when written.
+
+**Named, and false -- but not because of `M24`: `F-13`.** Its headline says "Every fixture in this
+crate's tests, examples and samples opens its handle that way [synchronous]". Three do not:
+`flush_barrier.rs`, `handover.rs` and `flush_barrier_stress.rs` open
+`FILE_FLAG_OVERLAPPED | FILE_FLAG_NO_BUFFERING`, dated 2026-08-28, 08-29 and 09-06 -- **weeks before
+F-13 was recorded on 09-21**. So it was false when written, not made false by this milestone.
+
+That matters because the entry's carry-forward escalated from the false half: it says every claim
+about ordering, draining, the completion event and the barrier "was measured against operations that
+may have completed inline" and names D-19, D-23, D-24 and D-47 for re-reading. But D-23, D-24 and
+D-47 were measured by `flush_barrier.rs` -- one of the three overlapped fixtures. The entry even
+hedged correctly ("the drain-ordering spike used `NO_BUFFERING` ... so it is probably fine") and then
+checked only the spike, not the tests sharing its shape. A dated correction was added rather than a
+rewrite, so the record of what was believed survives.
+
+**Unnamed, and found by the sweep: [bounded_pop.rs](tests/bounded_pop.rs) named the wrong gap.** It
+said "every other test of `pop_within` drives the loop with a wait that never enters the kernel".
+Several do enter it through `SubmitWait`. The real gap is narrower and more interesting: the tests
+using the kernel wait drive operations that *complete*, and the one test that lets a bound expire
+fakes both halves -- a `RecordingWait` instead of the kernel and a bare `reserve_user_data` instead of
+a pending operation. **No test had a real operation pending when a real bound expired**, which is
+exactly the state the `ERROR_TIMEOUT` path needs. Corrected in place.
+
+**Unnamed, and found by the sweep: this milestone's own header** still carried the 63-of-131 opening
+figure and a "recount before starting" caution that had been acted on.
+
+**The transferable part.** Three of the five corrections were over-generalisations from a single
+observation -- one fixture becoming "every fixture", one wait shape becoming "every other test". Each
+was a census away from being right, and each then had an alarm built on top of it. That is the same
+shape as the spike that ran one trial per condition, in the same crate, two days earlier.
+
+### <a id="m206"></a>M20.6 -- Re-evaluate `CommitStrategy::AlternatingRings` and the epoch-log benchmark's conclusion against D-47. *(completed 2026-09-23 12:06:40 -04:00)*
+
+**Question 1 -- does alternating rings still earn its cost? Answered on its stated grounds: no.**
+`S-2` argued that because a covering flush reaches every operation outstanding on its ring, two rings
+bound what a commit's barrier can be dragged into. That is structurally false for this sample and
+needs no measurement: `RegisteredBuffers::get_mut` refuses a busy slot and there are `SLOTS` slots, so
+at most `SLOTS` appends are outstanding on a ring **by construction** -- and each alternating lane
+registers its own arena of the same size. The arena bounds the blast radius, not the ring topology.
+Probing agreed (8 and 8); the argument does not rest on it and holds whatever the platform does about
+pending. The argument survives against genuinely unrelated traffic from another component; this sample
+has none.
+
+**The strategy is deliberately NOT removed.** The item said that if it no longer earns its place, that
+is an API change to a published example -- and the temptation was to make it. What two rings could
+*also* buy is **overlap**, and overlap is precisely what this harness cannot exhibit: its handle is
+synchronous, so a ring operation completes inline during submit and nothing is ever outstanding across
+a submit boundary. Deleting a strategy on the strength of a measurement that could not have shown it
+working would be the same error as the measurements this item exists to correct. `M25.5` answers it on
+a harness where operations genuinely pend.
+
+**Question 2 -- re-read, re-run, or annotate the numbers?** The investigation concluded "none of
+those": the column measures deferral rather than a commit, and prose cannot fix a measurement.
+**That conclusion was right about the measurement and wrong about the output.** Leaving a column
+labelled `commit p50` in a published sample until `M25` lands is shipping a false claim for the sake
+of a purist position on annotation. The column is now `ack lag`, with a caveat line naming the p99 = 0
+blocking measurement, and pointing at `M25`.
+
+**The rustdoc already knew, which is the finding worth keeping.** `Outcome::commit_latencies` already
+said the figure is "not device flush time", that deferral inflates it, and that alternating rings
+"reports the highest latency of the three while matching them on throughput". A previous pass had
+diagnosed the artifact correctly **and only in the rustdoc** -- the printed output never got the same
+treatment, and the M20.6 investigation re-derived from scratch what was already written one file away.
+What the investigation genuinely added is the extent: blocking is not merely a component of the figure,
+it is **0 us at p99**, so the number is entirely deferral; and underneath that, no pipeline exists at
+all.
+
+**Swept the mechanism, not just the label.** The explanation "the strategies differ about how long the
+flush itself waits and the extra host round trip, and those land in the tens" appears in the module
+docs, in a `main.rs` code comment, and in the printed summary line. It is wrong in the same way at all
+three: those differences cannot occur on a synchronous handle. The three are indistinguishable because
+they do the same serialized work -- both readings give the same ranking and only one is true. All three
+corrected, plus the "a real log keeps appending while a commit is outstanding" claim, which describes
+a state this program has never reached.
+
+### <a id="m206-correction"></a>M20.6 -- correction, same day *(recorded 2026-09-23 13:03:35 -04:00)*
+
+**The entry above declared `AlternatingRings`' blast-radius justification "dead on structural grounds".
+That over-reached, and the over-reach is the kind this repository now has a rule against** -- see
+OPTION INTEGRITY in the repository instructions, added by this correction.
+
+What the structural argument actually establishes is that **this harness** cannot exhibit a
+blast-radius difference, because each lane registers its own arena of `SLOTS` slots and the arena is
+the limiter rather than the ring topology. That is a statement about the apparatus. Generalising it to
+"the justification is dead" converted a fact about one sample's configuration into a verdict on a
+design option.
+
+**It also contradicted the crate's own recorded position.** [D-27](DESIGN-NOTES.md#d-27) is this
+crate's decision that one ring per thread is userspace's proxy for one ring per CPU, and records the
+hardware reason: NVMe queue pairs are per-CPU with each pair's completion interrupt routed by its own
+vector. Two rings on two pinned threads *is* that architecture. Declaring a multi-ring strategy's
+justification dead on the strength of one sample's arena sizing sits directly against a decision the
+crate already made on stronger grounds.
+
+The conditions under which alternating rings would pay are now written at
+`CommitStrategy::AlternatingRings`, and they are ordinary rather than exotic: a ring shared with any
+other component, arenas sized asymmetrically from the lanes, real overlap (where the same covered
+count is not the same wait), and per-CPU queue affinity. The sample's job is restated as giving a
+consumer the means to answer this on their own hardware, not handing them a verdict from ours.
+
+Nothing about the measurement corrections in the entry above changes: the ack-lag relabel, the p99 = 0
+blocking finding, and the swept mechanism claim all stand. What changed is the conclusion drawn from
+them.
+
+### <a id="m231"></a>M23.1 -- State in the epoch-log contract that the barrier is ring-wide while the flush names a file, so one ring per log is a precondition of the cost model. *(completed 2026-09-23 17:03:35 -04:00)*
+
+*Queued from finding `S-1` of the 2026-09-19 epoch-log review.*
+
+**The item was right that the contract was silent, and wrong about what it was silent on.**
+`S-1` reasoned from [D-47](DESIGN-NOTES.md#d-47)'s surviving half -- the barrier reaches every
+operation outstanding on the ring, not only the current submission batch -- and concluded that
+"one ring per log" is a precondition of the sample's *durability contract*.
+[contract.rs](examples/epoch_log/contract.rs), written before the code precisely so it would state
+preconditions, said nothing about it.
+
+**Writing it found two scopes conflated, and the first draft shipped the conflation.**
+`IOSQE_FLAGS_DRAIN_PRECEDING_OPS` is a flag on the **ring**; `BuildIoRingFlushFile` names a
+**file**. So the barrier bounds what a commit *waits for* and the flush bounds what it *makes
+durable*, and completion is not durability -- a claim the same file already made three paragraphs
+earlier, about a record's own write. The corrected reading: a shared ring does **not** endanger the
+guarantee, which the flush's own file target secures. It endangers the **cost model**, because the
+barrier waits for unrelated traffic unconditionally.
+
+**Three commits, because the first two were not right.** `d845bb28` added the section, an
+assumption, a non-guarantee, `Clause::ALL` -- replacing a hand-written variant list in `main.rs`
+that would have printed one section short had a fourth clause ever been added -- five tests over the
+report's own properties, and the crate's first [sabotage.json](sabotage.json): five injected defects
+caught, plus a control that rewords a statement and survives, so the guards are sensitive to the
+report degrading without being bound to the contract's wording. `4adea675` corrected the
+conflation. `48dc99d3` right-sized what the correction had grown into -- a title giving the device
+equal billing with the ring, plus a bullet and a milestone pointer about multi-device reach, in a
+sample that runs one log file on one ring.
+
+**The conflation was caught by a question, not by the gate**, which stayed green across all three:
+every test passed, the sabotage sweep reported all six cases as declared, and the two contradictory
+sentences sat a screen apart in one file. The tests check that the report *prints* correctly and
+deliberately not what it *says*, so nothing built here could have found it.
+
+**Two things this work left elsewhere.** The primitive-level half moved to the library under
+[D-54](DESIGN-NOTES.md#d-54): the barrier/flush scope distinction is a fact about one flush, so it
+belongs on `FlushCoverage` rather than only in a sample's contract. And
+[checkpoint.rs](examples/epoch_log/checkpoint.rs) gained the reciprocal note -- it already took its
+own ring, for an unrelated *delivery* reason (D-21), so the structure was right twice over with only
+one reason written down. Both sites now point at each other, so collapsing the rings cannot look
+harmless from either end.
+
+### <a id="m232"></a>M23.2 -- Decide how a caller arrives at a NUMA node: `win-numa-sys` offers declaring and discovering, and refuses the shortcut that does both at once. *(completed 2026-09-23 19:57:34 -04:00)*
+
+*Queued from finding `S-3` of the 2026-09-19 epoch-log review.*
+
+**The item was narrowed three times before it was answered, and the last narrowing moved it out of
+this crate entirely.** `M22.3` settled its sample half by making the allocator library surface.
+[D-54](DESIGN-NOTES.md#d-54) removed its other half -- sharding by backing device needs the concept
+of a set of operations that commit together, which this crate does not have -- and handed that to
+the durability layer, where it was sharpened from device identity to *flush equivalence*. Then
+`win-numa-sys` was created and `NumaBuffer` moved into it, so "this crate" in the item text stopped
+naming the crate that had to answer.
+
+**What remained was answered by building that crate, so this item's deliverable was the recorded
+decision rather than code.** It is
+[N-D-1](../win-numa-sys/DESIGN-NOTES.md#n-d-1): a caller may *declare* a node
+(`NumaBuffer::new`), *discover* one (`volume_numa_node`), or *qualify* what a discovered answer is
+worth (`highest_numa_node`); what is refused is a `NumaBuffer::for_file` that would query and
+allocate in one step.
+
+Four reasons for the refusal, of which the first is the one that generalises: such a call **hides
+the answer**, and on a single-node machine "placed on the node the volume named" and "no preference"
+are the same allocation, so a caller could not tell whether the query found anything. It also fuses
+two failure domains, withholds an answer useful beyond one buffer, and saves exactly one line,
+since `NumaBuffer::new(len, volume_numa_node(h).ok())` already type-checks.
+
+**A fifth argument was dropped rather than kept, and the decision says so.** When this was first
+argued, a `for_file` constructor would have dragged `Win32_System_Ioctl` into a crate that
+otherwise touched only memory. That was true of `windows-ioring-sys` and is not true of
+`win-numa-sys`, where the query already lives. Recording a void argument as void is cheaper than
+having someone re-make it.
+
+**Neither path is speculative.** `examples/epoch_log` discovers from its log file's volume;
+`examples/ring_copy` declares a node it computed from the processor topology. Both were already
+written against this shape before the decision recorded it.
+
+[D-8](DESIGN-NOTES.md#d-8) is intact, which was the item's stated constraint: locality stays the
+consumer's decision, and the crate supplies a fact and an allocator rather than a choice.
+
+### <a id="m233"></a>M23.3 -- Decide what this crate offers for holding a token between push and completion: the ring owns the inventory, `IoRing` becomes generic, and the break is accepted. *(completed 2026-09-23 23:09:13 -04:00)*
+
+*Recorded as [D-55](DESIGN-NOTES.md#d-55). Implementation is `M28`. The exploration, including
+everything it falsified, is in
+[DESIGN-SESSION-2026-09-23-pending-inventory.md](design-sessions/DESIGN-SESSION-2026-09-23-pending-inventory.md).*
+
+**The item was decided against a different argument than the one it was written on.** It argued
+from duplication -- nine sites keeping the same map. A census found ~12 sites of which only a
+third keep the map described, so duplication was both mis-counted and the wrong frame. The
+mechanism is that this crate **mandates** the construct and does not provide it:
+`Batch::write` returns a `Token`, `IoRing::pop_within` returns a `Completion`, and nothing
+connects them but caller-supplied storage -- which the crate's own rustdoc instructs callers to
+build, twice. That follows from [D-4](DESIGN-NOTES.md#d-4) splitting ring-side counting from
+caller-side identity, which is right; what was missing is the half it left to prose.
+
+**A working spike was built and is why the decision is informed rather than argued.**
+`Pending<T, X>` fits a real consumer -- converting `append.rs` removed its `InFlight` struct and
+its hand-driven oracle calls -- and sabotage established that removing its drop guard or cutting
+its oracle wiring is caught. A test driving a failed write through the injection seam turned
+`M22.2`'s ordering defect from undetected into caught by assertion.
+
+**But the spike also showed why offering it beside the ring is not enough.** Nothing forces a
+minted token into it, so the ring-to-inventory drift survives -- and `Pending::checked()` owning
+an oracle made the converted consumer's existing `RingContract` a decoy, passing
+`assert_quiescent()` vacuously with nothing in the suite catching it. A generic `IoRing<T>`
+owning the map removes the class, because the consumer never holds a token to lose.
+
+**The objection that had ruled that out was false, and checking it was what settled the item.**
+Per-ring monomorphisation holds for every real consumer; `tests/generated_sequences.rs` already
+carries eight token types on one ring behind a closed `enum Held` with no runtime type check;
+and [D-4](DESIGN-NOTES.md#d-4) rules type erasure out in as many words. The dismissal had
+contradicted a decision already on the books, in the opposite direction from the one it assumed.
+
+**Two findings the decision rests on that were not in the item.** `RingContract` never prunes --
+one retained entry per operation for the process's life, undocumented, invisible in a sample that
+appends 24 records -- which rules out checking by default and is `M28.2`. And `epoch_log`'s
+commits are tokenless because a flush has no buffer and a *borrowed* `RawHandle` leaves its token
+nothing to guard, which is `M28.5` and may dissolve when `M25.3` changes how the log is opened.
+
+**What it refuses**, unchanged by the shape: batching, ordering and which slot to pick stay caller
+questions. The sharper refusal is that the inventory does not decide whether a caller is checked.
+
+### <a id="m234"></a>M23.4 -- A failing test that left registered buffers outstanding aborted the process instead of reporting; the drop guards now stay silent during unwind. *(completed 2026-09-23 23:16:48 -04:00)*
+
+`RegisteredBuffers::drop` refused to free while an operation was outstanding (M5.3, correctly) and
+said so with a bare `debug_assert!(false, ...)`. Nothing checked `std::thread::panicking()`, so a
+test that failed *because* a slot leaked panicked, unwound, dropped the arena, panicked a second
+time inside `Drop`, and aborted -- replacing its own assertion message with
+`STATUS_STACK_BUFFER_OVERRUN`. The detection was never weakened; what the abort destroyed was the
+diagnosis.
+
+**The item named one site and there were three.** It said "the fix is presumably the same one line
+here", and a sweep of every `impl Drop` in the crate found the assert it named plus **two more** in
+`IoRing::drop` -- the rundown failure and the `CloseIoRing` failure. That second impl is the worse
+of the two: a ring is dropped on the way out of almost every failing test in this crate, so an
+unguarded assert there converts a readable failure into a crash in the *common* case rather than a
+rare one. The reported site was a sample of the population, which is what CONTRACT INTEGRITY rule 3
+says to expect.
+
+**The sweep also produced two false positives worth naming**, because the pattern that produced
+them is the obvious one to reach for. A grep for `impl.*Drop for` matched cargo-mutants-style
+comment text (`<impl Drop for RegisteredBuffers>::drop -> ()`) inside test files, which read as two
+further unguarded sites. Anchoring the pattern at line start reduced eight candidate impls to the
+three real asserts. A loose grep over a crate that documents its own mutants will find its
+documentation.
+
+**`Pending::drop` was already correct** and is what the fix copies -- it returns early when
+`std::thread::panicking()`, which is why the M23.3 spike never exhibited this.
+
+**Verified by sabotage, as the item required, and the verdict alone would not have shown it.** The
+`M22.2 regression` case in [sabotage.json](sabotage.json) was `caught` before the fix and `caught`
+after; what changed is that it ended in `exit 101` -- a clean `FAILED` naming
+`a_failed_write_still_releases_its_arena_slot` and its message -- instead of `exit -1073740791`.
+That case's `why` text, which had documented the abort as expected behaviour, now carries the
+post-fix failure mode and says a regression in *either* direction (no longer caught, or caught but
+crashing) is visible there. The full sweep stayed at 9-of-9 as declared with the `CONTROL` still
+surviving.
+
+**Only one of the guards has a test that depends on it firing, and the sabotage that established
+that also falsified the first draft of this entry.** Suppressing both guards unconditionally
+(`true` in place of `std::thread::panicking()`) turned
+`batch::tests::dropping_a_registration_with_work_outstanding_is_refused` red, which is the check
+that the fix *narrowed* the guard rather than removing it -- that test drops deliberately, not
+during an unwind, so `thread::panicking()` is false and the assert still fires. But
+`ring::tests::dropping_a_ring_actually_runs_its_drop_body` stayed green under the same sabotage.
+It is not a `#[should_panic]` test and it does not reach either assert; this entry had claimed it
+did, on the strength of its name, until the sabotage said otherwise.
+
+**`IoRing::drop`'s two asserts are therefore unreachable from any test on a healthy host**, and
+that is recorded at the definition rather than left to be rediscovered. `run_down` fails only when
+`SubmitIoRing` or `PopIoCompletion` returns a kernel error HRESULT, and `CloseIoRing` fails only
+when the kernel refuses the close; the crate's `fault-injection` seam sits at the
+*completion-result* level (`Completion::with_injected_failure`) and cannot produce either. Reaching
+them needs a seam over the raw HRESULTs, which is `M23.5` -- spawned rather than assumed, per the
+move-or-spawn rule, because "no test can reach it" is a blocker to name and not a reason to check
+the box and move on. The fix still lands there on its merits: it is precisely the `IoRing` case
+that turns a readable failure into a crash most often, since a ring is dropped on the way out of
+almost every failing test in this crate.
+
+> **The paragraph above was wrong about the remedy, and [M23.5](#m235) overturned it the same
+> evening.** Both asserts are reachable, no seam was built, and no production line changed: the
+> kernel rejects a *null* ring handle cleanly, and `ring::tests` is a child module that can put one
+> in the field. What the paragraph got right is the finding that prompted it -- the guards were
+> genuinely uncovered. It is left standing rather than rewritten because the archive is history,
+> and because the error in it is instructive: it priced a seam it never checked was necessary.
+### <a id="m235"></a>M23.5 -- Both asserts in `IoRing::drop` are now reached by tests, and the seam the item priced turned out not to be needed. *(completed 2026-09-23 23:20:27 -04:00)*
+
+M23.4 left both asserts in `IoRing::drop` uncovered: suppressing them entirely left every test in
+the crate green. This item asked whether to build a fault-injection seam over the raw HRESULTs the
+ring's Win32 calls return, or to accept the asserts as documented-unreachable. **Neither. The item's
+premise was false**, and one probe falsified it.
+
+**What the probe measured.** `CloseIoRing(null)` and `SubmitIoRing(null, ..)` both return
+`0x80070006` -- `HRESULT_FROM_WIN32(ERROR_INVALID_HANDLE)` -- a clean refusal. `CloseIoRing` on a
+plausible-looking `0xDEAD_0000` raises `STATUS_ACCESS_VIOLATION`. So a ring handle is **a pointer
+the kernel dereferences, not an index into a handle table**, and null is the one bad value that is
+refused rather than followed. That asymmetry is the whole finding, and it is recorded at the
+definition and in both tests, because a later cleanup that "tidies" the null into a non-null
+sentinel converts two passing tests into a process crash.
+
+**Why no seam was needed.** `mod tests` is a *child* of `ring`, so it already sees the private
+`handle` and `accounting` fields -- a child module can see its ancestors' private items. A
+`#[cfg(test)]` constructor, `IoRing::refused_by_the_kernel`, assembles a whole `IoRing` around a
+null handle, and the tests let the real `Drop` body run against it. Whether `run_down` submits at
+all is what selects between the two asserts, since it loops only while something is outstanding.
+Production code was not touched: the blast radius the item worried about was zero, because the
+change is entirely in test-only code.
+
+**The D-49 ring-test gate improved the design, which is what it is for.** The first working version
+opened a real ring, closed it by hand, and put a null in the field -- and
+[tools/check-ring-tests.ps1](../../tools/check-ring-tests.ps1) flagged two `ADDED` entries and
+asked its standing question: *does this test need the kernel, or only a ring-shaped thing?* Only
+the latter. `RingVersion::V1` is a public const and `OpSupport` derives `Default`, so every one of
+`IoRing`'s six fields is constructible without opening anything. Answering the gate rather than
+re-baselining it removed the real ring, the hand-close, two `unsafe` blocks and their safety
+arguments from both tests, and left the ring-opening population unchanged at 41. These tests need
+the kernel only to *refuse* them, and refusing costs no ring.
+
+**Three sabotages recorded in [sabotage.json](sabotage.json), not one.** Suppressing the rundown
+guard leaves the close test green and vice versa, so the two asserts are independent conditions and
+a single case would have declared the pair covered while half of it was not. The third sabotage is
+of the *test* rather than the code: removing the reservation makes the ring fall through to the
+close, and the panic message becomes `CloseIoRing failed: 0x80070006` against an expected substring
+of `IoRing rundown failed before close`. That is what shows `should_panic`'s `expected` string is
+load-bearing in selecting the assert rather than decorative. The full sweep is 12-of-12 as declared
+with the `CONTROL` still surviving.
+
+**The methodological point, which is the same one this crate keeps paying for.** The item was
+written an hour earlier, by me, and it reasoned from the shape of the code to "this needs a seam"
+without ever asking the kernel what it does with a bad handle. It then priced that seam's blast
+radius and proposed accepting a permanent coverage gap as the alternative. Both options were
+answers to a question that a single `eprintln!` dissolved. The repository's standing instruction is
+never to report that something cannot be done on the basis of reading it; that applies to "no test
+can reach this" exactly as it applies to "this will not compile".
+
+**A note on release builds, swept but deliberately not changed.** These are `#[should_panic]` tests
+over `debug_assert!`, so they would fail under `cargo test --release`, where the assert compiles
+out. That is a pre-existing property of the crate --
+`batch::tests::dropping_a_registration_with_work_outstanding_is_refused` has the same shape and is
+ungated -- and no CI job runs tests in release. Matching the existing precedent was preferred over
+introducing a `cfg(debug_assertions)` gate on two of the three, which would have left the crate
+inconsistent with itself. If release-mode testing is ever added, all three need the gate together.
+
+### <a id="m251"></a>M25.1 + M25.2 -- Records gained a fixed sector stride with a zeroed block tail, and replay learned to walk it. *(completed 2026-09-23 23:36:23 -04:00)*
+
+**These two items could not land separately, and that is a defect in how they were written rather
+than a discovery about the code.** A strided writer and an unstrided reader do not describe the same
+file. The checklist sequenced M25.1 (writer) before M25.2 (reader), so the tree between them holds a
+log nothing can read. They are recorded here as one entry, citing both IDs, per the checklist rule
+for acknowledged coupling; the alternative -- restructuring them into independent items -- is not
+available, because the writer and the reader of one format are not independent.
+
+**What the coupling actually cost was nearly a silent break.** With M25.1 applied alone, the log was
+unreadable: replay advanced by a record's own length, landed in a zeroed block tail, decoded
+`NeverWritten`, and reported every record after the first as a missing durable record. And **all 21
+of the example's tests passed anyway.** The only thing that caught it was
+`cargo run --example epoch_log`, which asserts and exits 101 -- and no CI job runs the sample. That
+is the more important finding of the two, and it is queued as `M25.1b` rather than left in this
+entry, because a finding recorded only in an archive is a finding nobody is obliged to act on.
+
+**Three end-to-end tests were added to close the specific hole**, each binding one writer to the
+real reader through a real file: `records_land_one_per_stride_and_replay_walks_them_back` over the
+log's own `Appender`, `a_run_lays_its_records_out_one_per_stride` over the harness's `Lane`, and
+`a_reused_slot_does_not_write_the_previous_records_tail` over the zeroing. The harness test exists
+because a sabotage said it had to: reverting `Lane` to a packed layout was **caught by nothing**
+until it was written.
+
+**The zeroing is not observable through replay, and the comment says so rather than inventing a
+failure mode for it.** Replay decodes only at block starts and takes a record's extent from its own
+header, so a stale fragment past a short record's end is never read. A first draft of the comment
+claimed a stale fragment "would be decoded as a record", which is false for exactly that reason.
+What zeroing actually prevents is the log carrying fragments of unrelated records -- a hygiene
+defect in a format whose purpose is reconstructing what happened after a crash -- so the test
+asserts on the file's bytes rather than on a replay outcome.
+
+**Two duplications were collapsed rather than converted twice.** The sample has two writers over one
+on-disk format, and both carried a packed layout *and* a verbatim copy of the comment justifying it.
+Converting each in place would have turned one duplicated decision into one duplicated rule, so the
+stride moved to `record`, beside the format it describes, and the whole composition -- encode, then
+zero the remainder -- became `record::encode_block`, which both writers call. That makes half the
+drift unrepresentable rather than merely tested for.
+
+**`Decoded::total_len` became a derived `extent()` rather than a silenced warning.** Once replay
+advanced by the stride, the field's only consumer was a test, and it was exactly
+`HEADER_LEN + payload.len()` -- a stored copy of a fact `payload` already carried. The dead-code
+warning was the signal; the fix was to delete the copy, not to `allow` it.
+
+**Replay now confines each decode to its own block.** Previously `decode` received the rest of the
+file, so a corrupted `payload_len` was bounded only by the file's length and a record could claim
+bytes belonging to its successors -- caught, but by the checksum happening to fail rather than
+structurally. The stride is what makes a block boundary exist to confine it to.
+
+**The cost is reported, not described.** M25.1 asked for the write amplification to be "a real cost
+to state rather than hide", and the first draft stated it as a ratio in a doc comment -- a
+hand-maintained copy of a number the program can compute. The sample now measures and prints it
+(`layout: N bytes of records in M bytes of file`) and the doc comment points at that line instead of
+restating it. No conclusion is drawn about whether the ratio is acceptable, because that depends
+entirely on a caller's record size.
+
+**A `const` assertion carries the sector rule**, verified load-bearing in both directions: a stride
+of 4000 fails the build with `error[E0080]: evaluation panicked: RECORD_STRIDE must be a whole
+number of sectors`, and 4096 builds clean. That is the build rung rather than a test, which matters
+because the failure it prevents -- `ERROR_INVALID_PARAMETER` from a `NO_BUFFERING` write in M25.3 --
+would otherwise appear only on 4K-native storage, on somebody else's machine.
+
+**Four sabotages recorded, not one.** The writers' offset advances are separate facts at separate
+sites: measured, reverting the harness lane leaves every appender test green and vice versa, so a
+single case would have declared the pair covered while half of it was not. The full sweep is
+16-of-16 as declared with the `CONTROL` still surviving. Note what the appender case does *not*
+establish: packing its offsets makes records overlap inside a block, so two guards fire at once for
+two different reasons -- the narrower evidence that the stride itself is what is caught is the
+reader case, which moves only one number.
+
+**All three replay paths report the same numbers as before the change**, which is the check that the
+layout moved and the contract did not: 24 durable records verified, 3 tail records tolerated, the
+torn tail still stopping at `Truncated`, and the negative control still catching a corrupted byte.
+The torn-tail simulation needed its arithmetic rewritten to keep meaning that -- it trimmed a fixed
+count of bytes off the end of the file, which after striding lands in the final record's zero
+padding and tears nothing at all. It now derives the cut from the last record's own block, which
+also survives M25.3's pre-allocation.
+
+### <a id="m253"></a>M25.3 -- The log and every strategy file are pre-allocated and opened `NO_BUFFERING | OVERLAPPED`. *(completed 2026-09-24 12:45:57 -04:00)*
+
+Two steps in `logfile::create_preallocated`, neither interchangeable with the other: write the
+extent with an ordinary handle and drop it, then reopen `OPEN_EXISTING` with both flags. This is
+[the spike](design-sessions/spikes/write-pending-spike.rs)'s condition D, the only one of four it
+measured as behaving differently from a buffered handle.
+
+**What this buys is an opportunity, not a guarantee, and nothing here claims otherwise.** Per the
+standing constraint on M25, Windows specifies nothing about when a ring operation completes relative
+to `SubmitIoRing`. The log is correct either way; what changes is whether a commit is separately
+*measurable*, which is M25.4's problem and M25.5's to read.
+
+**The sweep found four live sites, and the item named two of them.** It predicted two statements in
+[strategy.rs](examples/epoch_log/strategy.rs) reasoning from a synchronous handle. There were also
+two in [main.rs](examples/epoch_log/main.rs) -- one an internal comment, one **printed to the user**
+as part of the strategy comparison's own narrative. All four were corrected the same way: the
+historical finding is preserved in the past tense, since it was true when written and is how M20.6
+reached its conclusion, and what follows is that the cause has been removed *without* asserting the
+consequence. Whether the strategies are now distinguishable is not settled by changing a flag.
+
+**The third site the item named no longer exists, and that is the right outcome rather than a
+miss.** `placement.rs`'s `volume_numa_node` documented that it could not use
+`windows-overlapped-io-sys`'s typed `BlockingEndpoint::ioctl` partly because the handle was
+synchronous. Earlier this session, `947b252b` moved that function into `win-numa-sys`, and the
+comment went with the move -- correctly, because `win-numa-sys` depends only on `windows-sys` and
+has no occasion to explain why it is not using a crate it does not reference. The item was written
+before that move; its prediction of "a narrowed comment, not a refactor" was answered by the
+comment's home changing.
+
+**The `NO_BUFFERING` alignment rule could not be tested the obvious way, and finding that out is
+what produced the better test.** The first attempt wrote through [`std::io::Write`] and failed on
+the *aligned* write: `write_all` issues `WriteFile` with a null `OVERLAPPED`, which an asynchronous
+handle refuses however well-aligned the transfer is. That is now its own test -- it is the only
+property of the handle's *mode* reachable from here, since `GetFileInformationByHandleEx` does not
+report it and the ring works on synchronous and asynchronous handles alike. The alignment rule is
+tested through a real ring instead, which is also how production reaches this handle, with both
+directions asserted: an aligned write accepted and an unaligned one refused. Each test has a control
+using an ordinary handle, so the refusals are attributable to the flags rather than to anything else
+about the file.
+
+**A blind spot is recorded in [sabotage.json](sabotage.json) as a declared survivor rather than left
+invisible.** Replacing the zero-fill with `set_len` is a **real regression that nothing here
+detects**: both produce a file of the right size whose bytes read back as zero, because reads past
+the valid data length are answered with zeros the filesystem synthesises without touching the disk.
+Only the zero-fill advances that valid data length -- which is the thing that decides whether a
+later write is extending. A `set_len` extent silently returns the log to the configuration measured
+as behaving like a buffered handle. The only user-mode way to read a valid-data length back is
+`FSCTL_QUERY_FILE_REGIONS`, and adding it to a sample purely to check a property the sample does not
+otherwise use was judged machinery for its own sake. Recording it as `expect: "survives"` means a
+future change that makes it observable will show up as a discrepancy in the sweep.
+
+> **Corrected 2026-09-24, the same day, after review challenged the claim rather than the code.**
+> The paragraph above asserts from documentation that `set_len` is a regression, and the reasoning
+> it gives is the wrong mechanism. Two measurements settled it:
+> [2026-09-24-set-len-zero-fill-cost/](measurements/2026-09-24-set-len-zero-fill-cost/README.md)
+> shows the zeroing cost is **identical** for a sequential writer, so that is not the reason; and
+> [2026-09-24-set-len-vs-zero-fill/](measurements/2026-09-24-set-len-vs-zero-fill/README.md) shows
+> the zero-filled extent pends at a median of 471/500 against `set_len`'s 268/500, which is. The
+> blind spot is real and the conclusion survives; the argument for it did not. The second capture
+> also corrects this entry's own framing of the spike, which repeated "only the pre-written extent
+> pended" from a single run that does not replicate.
+
+**The harness caught a stale case in its own manifest, which is worth more than the case was.** The
+`M25.1: the appender packs its record offsets` sabotage stopped compiling, because M25.1 ended by
+removing the `total` binding its patch referenced in order to clear an unused-variable warning --
+so a sabotage that was correct when written was broken by a later edit in the same session. The
+harness reported `MANIFEST DOES NOT COMPILE (tests never ran)` rather than scoring it as caught or
+survived. **A manifest is a restatement site like any other**, and has to be swept when the code it
+patches moves; nothing else would have noticed.
+
+**One assertion had to change because pre-allocation made it vacuous.** The strategy harness
+compared `outcome.bytes` against the file's length to check its own accounting. A pre-allocated file
+spans its whole extent from the moment it is created, whatever was written into it, so that equality
+would have held just as well for a run that wrote nothing. It now checks the accounting against the
+layout rule -- one block per record -- and separately that the extent covers what was written.
+
+**Deliberately left buffered, and said so at the definition.** The checkpoint file's records are
+sixteen bytes from a `Vec` at offset 0, which satisfies none of `NO_BUFFERING`'s three alignment
+rules; the retired segment is written once with `std::fs::write` and never goes through a ring. The
+control plane's correctness comes from its covering flush, not from how its bytes are cached.
+
+**The log is pre-allocated with slack rather than to its exact record count.** A real write-ahead log
+pre-allocates ahead of its writer, because an append that reaches the end of the extent becomes an
+extending write again. It also means a clean log now ends in zeros rather than at EOF, so replay
+stops with `NeverWritten` -- the path M25.2 taught it to tolerate, now actually exercised by the
+sample rather than left for a reader of a real log to meet first.
+
+### <a id="m251b"></a>M25.1b -- The sample's own verification now runs under `cargo test`, and `main` itself under CI. *(completed 2026-09-24 15:20:02 -04:00)*
+
+The item asked where this belonged: a CI job running the binary, or a `#[test]` calling the sample's
+functions. **Both, because they carry different facts**, and the split follows the FAIL FAST ladder
+rather than splitting the difference.
+
+**Everything the sample asserts is now a test.** `run_log` and `verify` are ordinary functions over
+a generic `Report`, so `tests.rs` drives the real log against a real ring and a real file and then
+runs the real verifier -- the same code path `main` takes. That is not a proxy for running the
+sample; it *is* running it, minus the strategy comparison. It costs nothing measurable: the example
+suite still finishes in well under a second.
+
+**The comparison's strongest assertion had no test, and now does.** `compare_strategies` requires
+all three strategies to write **byte-identical** logs -- replay checks a log against itself, where
+this checks the three against each other, so a dropped record or a wrong offset in any one shows up
+as a difference from the other two. `M25.1`'s harness test runs `CoveringFlush` alone, so this was
+the one assertion only `cargo run` could reach. `every_strategy_writes_the_same_log` runs all three
+at two epochs of three records instead of thirty-two of sixty-four. The expectation survives the
+ring count because a record's offset is its position in the global sequence times the stride, and a
+strategy decides which *ring* submits a write, never where it lands.
+
+**CI runs the binary for what a test cannot reach**: `main` itself -- its path setup, its error
+plumbing, its exit code. This is a published example a consumer runs, so a panic on startup is
+exactly the failure worth catching, and it is the rung that fits because nothing smaller executes
+`main`. Release, where the sample takes about a second.
+
+**The sabotage found a real hole, and it was in the thing this item exists to protect.** Reverting
+`M25.2`'s torn-tail cut to the old file-length form was **survived** by the new end-to-end test.
+With the extent pre-allocated, trimming a fixed count of bytes off the file lands in the slack, so
+every record stays whole -- and `is_clean()` and the durable count both pass while the case
+demonstrates the opposite of what it claims. A verifier that had quietly stopped verifying.
+
+What makes that worth recording is where the hazard already was: **written out in full, in the
+comment directly above the cut**, since `M25.2`. Describing it caught nothing. Two assertions now
+carry it -- that `tail_stopped` is `Truncated` specifically, not merely present, since a cut past
+the last record reports `NeverWritten` and would mean the case had stopped tearing; and that a tail
+record was actually lost. Prose is not a rung, stated once more by a file that had the prose.
+
+**What each guard is load-bearing for**, measured:
+
+| sabotage | end-to-end test | M25.1's layout tests |
+|---|---|---|
+| replay walks by extent (the `M25.1` defect) | red | red |
+| torn cut taken from the file length | **red** | green |
+| negative control moved out of the durable region | **red** | green |
+
+So the end-to-end test would have caught the defect that motivated the item, and it is the only
+thing covering two failures that make the sample's evidence vacuous rather than wrong. Both are
+recorded in [sabotage.json](sabotage.json).
+
+**What is deliberately still only in CI**: the strategy comparison end to end. Running it in a test
+would multiply the suite's cost to re-check a layout and a replay that `M25.1` already covers, and
+what the full run adds beyond the invariant above is a *measurement* -- which is not a contract this
+crate may assert.
+
+### <a id="m254"></a>M25.4 -- The commit is measured as submit / blocking / deferral, so the flush's own cost and the deferral window cannot be confused again. *(completed 2026-09-24 16:32:56 -04:00)*
+
+`CommitTiming` replaces the single `Duration` the harness used to publish. The three parts sum to
+that old number, and `flush()` is `submit + blocking` -- the deferral excluded, which is the whole
+point.
+
+**The split satisfies M25's standing constraint by construction rather than by assumption.** Windows
+specifies nothing about when a ring operation completes relative to `SubmitIoRing`, so the harness
+must be meaningful either way: if the flush completes inline the device round trip lands in `submit`
+and `blocking` is zero; if it pends, `submit` is short and the wait appears in `blocking`. Nothing
+has to know which case it got.
+
+**The strategies were always distinguishable on the commit, and the blended number hid it
+completely.** They now separate by roughly sixfold on the flush, where the old figure ranked them in
+the opposite order -- alternating-rings reported the *worst* commit latency while being the fastest,
+because its deferral is about twice the others'. That is not a new finding so much as `M20.6`'s
+finding finally visible in the program's own output. Figures are not quoted here; the sample prints
+them and `M25.5` is where they are read.
+
+**`blocking` reads zero for all three, and the output says plainly that this proves nothing.** A
+zero beside a large deferral is ambiguous: the operation may have completed inline, or it may have
+pended and finished while the program was busy elsewhere. Those are indistinguishable from here.
+Recording that is the point -- reading `blocking` alone would be the same error as before in the
+opposite direction, and the temptation is real now that `M25.3` has given the handle the shape the
+spike measured as pending.
+
+**The settle logic became one function rather than two copies.** Both sites -- the loop's and the
+drain after it -- applied the same rule about where deferral ends and blocking begins, and a rule
+stated twice can be half-corrected. `settle` states it once.
+
+**A sabotage found the guard that the obvious assertions miss.** Asserting the identity
+`flush() == submit + blocking` catches deferral being folded back in, and is **survived** by a part
+that is never measured at all: replacing the deferral measurement with zero satisfies every identity
+while making the decomposition a rename. The test therefore also requires some sample of `deferral`
+and of `submit` to be non-zero -- phrased as "some sample" rather than a lower bound on a duration,
+because this harness defers by construction, so a run in which nothing deferred means the clock is
+not running rather than that the machine was fast. `blocking` deliberately gets no such guard, since
+zero is a legitimate and frequently observed reading for it.
+
+Three cases in [sabotage.json](sabotage.json): the fold, and the two parts that can silently read
+zero. They are listed separately because `submit` and `deferral` are measured at different sites and
+one can be lost without the other.
+
+**What this does not do** is assert any value. Which part carries the cost is a property of the
+machine and the handle, not of this crate.
+
+### <a id="m255"></a>M25.5 -- The comparison was re-run over fifteen runs and `M20.6` answered: no other ground found for `AlternatingRings`, and the accounting defect that would have inverted the reading was fixed first. *(completed 2026-09-24 17:19:59 -04:00)*
+
+The capture is [measurements/2026-09-24-commit-decomposed/](measurements/2026-09-24-commit-decomposed/README.md)
+and the figures live there rather than here.
+
+**The measurement had a defect that had to be found before it could answer anything.** `M25.4`'s
+first numbers showed `HostSequenced` committing roughly **six times cheaper** than the other two.
+That was where the clock started: it waits for every write in userspace before pushing an unordered
+flush, and the commit clock began at the *submit*, so its host round trip fell outside every
+measured part. The cost had not gone anywhere; nothing was looking at it.
+
+A fourth part, `prepare`, now covers whatever a strategy must do before its flush can be pushed.
+With it, `HostSequenced` is within noise of the others rather than six times cheaper. **A reader of
+the uncorrected figures would have drawn the opposite of the right conclusion** -- which is the same
+failure mode `M20.6` was opened to fix, one layer down, found by reading the very numbers the fix
+for it produced.
+
+**What fifteen runs show.** The three are **not distinguishable** on throughput or on total commit
+cost: medians within a few percent, every range overlapping every other, and run-to-run spread
+within a single strategy larger than the spread across them -- which is the condition the sample's
+own output tells a reader to check. What *is* structural, and never inverts across fifteen runs, is
+where each spends its commit: `HostSequenced` in `prepare` and almost nothing in `submit`, the
+covering strategies the reverse. That difference is invisible in any blended number, which is what
+`M25.4` was for.
+
+**The open question, answered as far as this can answer it.** `AlternatingRings` shows no advantage
+this harness can measure -- its throughput and commit medians sit inside the others' ranges, its
+deferral is consistently about twice theirs, and the single worst commit p99 in the capture is its
+outlier -- against a doubled arena registration it pays for the life of the run.
+
+**That is not a finding against the strategy**, and the entry says so where a reader will meet it.
+The ground it was built on is blast radius, and `M20.6` established that this harness **cannot
+exhibit that difference at all**, because each lane registers its own arena of the same size so the
+per-ring bound is identical by construction. What this capture could answer is whether some *other*
+ground appears, and none did. Whether that changes the strategy's status is the engineer's decision;
+the conditions under which it would pay are already written in
+[strategy.rs](examples/epoch_log/strategy.rs).
+
+**`block` reads zero at the median in every run**, and the capture records that this establishes
+nothing: an operation that pended and finished during a deferral of several milliseconds is
+indistinguishable from one that completed inline.
+
+**The harness caught stale manifest patches for the third time today.** Adding `prepare` changed
+both `flush()` and the deferred tuple, invalidating two `M25.4` cases that had been correct when
+written hours earlier. Each time the code moved, the manifest's patches stopped applying and only
+`run-sabotage.ps1` noticed -- `MANIFEST STALE: pattern found 0 times`. The note that a manifest is a
+restatement site like any other is now load-bearing three times over, which is enough to call it a
+standing hazard rather than an incident.
+
+### <a id="m256"></a>M25.6 -- Swept what this milestone made false, and recorded the two findings as `D-56` and `D-57`. *(completed 2026-09-24 18:03:24 -04:00)*
+
+**Four named sites, and the sweep found two more.** The item listed the "keeps appending while a
+commit is outstanding" rationale, `strategy.rs`'s "what the measurement found" section, the `M22.1`
+capture's commit-p50 claim, and any DESIGN-NOTES text calling the sample's I/O buffered. Grepping
+the falsified *claims* rather than the listed files also turned up the spike's premise that
+`epoch_log` "writes variable-length records at packed offsets", and a second copy of the "two orders
+of magnitude" mechanism inside the `M22.1` capture's `Settles` paragraph. As usual the reported
+sites were a sample of the population.
+
+**One named site turned out not to exist.** No DESIGN-NOTES text describes the sample's I/O as
+buffered. The three near-matches are about other things -- `D-40` is a cached *read* in the handover
+tests, `D-49` is the unit suite's hermeticity, and the note that a ring handle "does not need
+`FILE_FLAG_OVERLAPPED`" is a fact about rings that `M25` did not touch. Recorded because a sweep
+that quietly finds nothing at a named site is indistinguishable from one that did not look.
+
+**The `M22.1` correction is the sharpest of them, and it is not that the number was wrong.** That
+capture reported a commit-p50 reduction as "the one finding here that separates", beside a
+throughput result reported as unmoved. The reduction is real and its stated mechanism is correct as
+written -- batching shortened the interval between the last append and the flush being reached. What
+is wrong is the label: `M20.6` established that figure was **entirely deferral**, so it measured the
+*append path* getting faster. And that makes it not an independent finding at all. Both lines are
+the same fact seen twice -- the appends got faster, the run is flush-bound, so the change appears in
+the metric that is not flush-bound and not in the one that is. Reporting them as two results
+overstates the evidence by exactly one result.
+
+**One figure is now measured and is not what it said.** The old explanation had the strategies
+differing by amounts "two orders of magnitude below" the flush, "in the tens" of microseconds.
+`M25.5` measured hundreds. The conclusion is unchanged, because they remain smaller than the
+run-to-run spread -- but "below the noise" and "two orders of magnitude below the flush" are
+different claims and only the first held, so both copies of the stronger one were corrected rather
+than left standing beside a note.
+
+**`strategy.rs`'s top section was restructured rather than annotated.** It had accumulated a true
+current claim, a superseded mechanism, and two correction sections underneath, so a reader met the
+false explanation first and the correction several paragraphs later. It now states what is measured,
+links the capture instead of quoting figures, and keeps both superseded explanations compactly below
+under a heading that says they are superseded -- which is what CONTRACT INTEGRITY asks for and what
+the file was violating.
+
+**The spike's prediction is left in the past tense rather than deleted**, because the reasoning is
+the reusable part: it said that if only the pre-written condition pends, "the harness fix is not a
+flag change -- it is a change to the log's on-disk format." That is exactly what happened, and it is
+now `D-57`.
+
+**Two decisions recorded.** `D-56`: a benchmark that defers its await measures the deferral, and the
+number survived three rounds of correction because every round re-read the conclusion instead of the
+instrument -- with the generalisation that "the conclusion still holds" is not evidence that the
+instrument does. `D-57`: a flag whose requirements reach into the caller's data layout is not a flag
+change, and costing it as one underestimates it by the size of a format migration.
+
+### <a id="m257"></a>M25.7 -- Replay keeps its slice for a reason about failure vocabulary, recorded as `D-58`; the second multi-megabyte buffer became a digest. *(completed 2026-09-24 19:07:31 -04:00)*
+
+The item offered two acceptable answers -- stream the verifier, or stay legible -- and required only
+that an 8 MiB `fs::read` not sit unremarked in a teaching sample.
+
+**The decision is to keep `replay(&[u8])`, and the reason is not simplicity.** The walk is strictly
+forward one block at a time and never looks back, so it genuinely has no need of the whole file, and
+a real log is larger than memory -- which makes reading the whole file the wrong reflex to teach at
+exactly the point a reader is learning to verify one. That argument is real and it lost to a
+stronger one.
+
+**`replay` returns an `Outcome`, not a `Result`.** Every way it can end is a statement about the
+log: verified, tolerated, or a `Violation`. A streaming reader introduces a third kind of ending --
+`io::Error` -- into the one component whose entire job is to distinguish *the log broke its promise*
+from *the log kept it*. Those want different responses from a caller, and a signature returning both
+through one channel invites precisely the conflation this file exists to prevent: an unreadable file
+reported as a missing durable record. **So the streaming version is a different interface, not a
+smaller allocation** -- which is what the item suspected, and the suspicion is what turned out to
+decide it.
+
+The cost of declining it is stated where it is paid rather than hidden: 140 KiB at the log's own
+`fs::read`, 8 MiB per strategy at the harness's, each with a comment saying so. `D-58` records the
+decision and what a consumer building a real verifier should want instead -- the streaming shape,
+*with* the two failure kinds kept apart inside it.
+
+**What was reducible without touching that interface was reduced.** The cross-strategy comparison
+held a whole reference log in memory for the length of the comparison, so two multi-megabyte buffers
+were alive at once. It now keeps a 32-bit digest, which halves the peak and loses nothing a reader
+had: the assertion could already only say *that* two logs differed, never where.
+
+**The digest is a weaker check than the byte comparison it replaced**, and the weakening is guarded
+rather than assumed away. Two different logs can in principle share a digest where two byte arrays
+cannot share their bytes, so `record/tests.rs` -- a test module `record.rs` did not previously have
+-- pins that a flipped byte, a dropped record, and a trailing zeroed block each change it. The
+sabotage confirms the separation is real: a digest folding only the length still distinguishes logs
+of different sizes, so the two length-based tests stay green and only the flipped-byte one fails.
+What none of them establish, and the definition says so, is that no two logs collide.
+
+**The two 64 KiB sites were left with a note rather than churned.** `RETIRED_LEN` is exactly 64 KiB
+-- at the threshold this repository treats as the point to ask the question, not past it -- so both
+the fill that writes it and the read that checks it are within the rule. The note says what a reader
+growing that segment should do: the write has the same shape as `logfile`'s zero-fill, and the check
+is a fold that never needs the bytes all at once.
+
+## Moved 2026-09-24 19:17:17 -04:00 -- M25: the epoch-log sample's I/O became a shape where a commit is observable
+
+The milestone's eight items are archived individually above; what follows is the context the
+section carried, kept because it records what M20.6 found and the constraint every item was
+held to.
+
+## M25 -- Make the epoch-log sample's I/O a shape where a commit is observable
+
+Queued by the `M20.6` investigation, which found three things the item did not anticipate.
+
+**The harness measures the wrong quantity.** Decomposing its commit latency into *deferral* (flush
+pushed -> harness next looked) and *blocking* (time actually waiting) gave blocking p50 **and p99 of
+0 us for all three strategies**. The published `commit p50/p99/max` column is entirely deferral: it
+reports how long the next epoch's appends took, not anything about the commit.
+
+**There is no pipeline to measure.** The commit's `SubmitIoRing` took 289-555 us and returned with
+all 9 completions already queued. The handle has no `FILE_FLAG_OVERLAPPED`, so the batch ran inline,
+and the comment in [strategy.rs](examples/epoch_log/strategy.rs) reading "a real log keeps appending
+while a commit is outstanding" describes something that cannot happen there.
+
+**`AlternatingRings`' blast-radius claim is answered structurally, and needs no run.**
+`RegisteredBuffers::get_mut` refuses a slot with an operation outstanding and there are `SLOTS`
+slots, so at most `SLOTS` appends are outstanding on a ring **by construction** -- and each
+alternating lane registers its own arena of the same size. The per-ring bound is identical either
+way. Measured at 8 and 8, but the argument does not rest on the measurement, and it holds whatever
+the platform does about pending.
+
+[write-pending-spike.rs](design-sessions/spikes/write-pending-spike.rs) then established which
+configurations pend at all. `FILE_FLAG_OVERLAPPED` alone changed nothing (0/500). Only
+`NO_BUFFERING` over a **pre-written extent** pended reliably, and its submit p50 fell from ~500 us to
+116 us -- the flush's cost leaving the submit path is what makes a commit separately observable for
+the first time.
+
+> **Corrected 2026-09-24, after `M25.3` landed: the paragraph above overstates what replicates.**
+> Sixteen runs with a fifth condition added are in
+> [measurements/2026-09-24-set-len-vs-zero-fill/](measurements/2026-09-24-set-len-vs-zero-fill/README.md).
+> What holds is that a **buffered** handle essentially never pends while every `NO_BUFFERING` one
+> pends in most runs. What does not hold is "only the pre-written extent pended": the extending
+> condition has a median of 268/500 over those runs. The zero-filled extent is still the best of
+> the five -- median 471/500, floor 121 against 1 -- so `M25.3`'s choice stands, but as a
+> difference of degree rather than of kind. The single-run reading came from a pair of numbers the
+> spike's own header already warned was unstable. `M25.4` and `M25.5` must be read with that
+> variance in mind rather than against the original framing.
+
+**A standing constraint on every item below.** That 500/500 is an observation, not a contract:
+Windows specifies nothing about when a ring operation completes relative to `SubmitIoRing`. So the
+sample may *adopt* this shape -- it is what real write-ahead logs do, and it is the only shape where
+the measurement means anything -- but **nothing here may depend on an operation pending.** Every item
+must leave the log correct if the platform completes inline tomorrow.
+
+- [x] **M25.1** -- Records gained a fixed sector stride with a zeroed block tail, in both writers. -> [completed 2026-09-23](COMPLETED-CHECKLIST.md#m251)
+
+- [x] **M25.2** -- Replay walks by the stride and confines each decode to its own block. Landed with `M25.1`: a strided writer and an unstrided reader cannot coexist. -> [completed 2026-09-23](COMPLETED-CHECKLIST.md#m251)
+
+- [x] **M25.1b** -- The sample's own verification now runs under `cargo test`, and `main` itself under CI. -> [completed 2026-09-24](COMPLETED-CHECKLIST.md#m251b)
+
+- [x] **M25.3** -- The log and every strategy file are pre-allocated and opened `NO_BUFFERING | OVERLAPPED`. -> [completed 2026-09-24](COMPLETED-CHECKLIST.md#m253)
+
+- [x] **M25.4** -- The commit is measured as submit / blocking / deferral, so the flush's own cost and the deferral window cannot be confused again. -> [completed 2026-09-24](COMPLETED-CHECKLIST.md#m254)
+
+- [x] **M25.5** -- The comparison was re-run over fifteen runs and `M20.6` answered: no other ground found for `AlternatingRings`, and the accounting defect that would have inverted the reading was fixed first. -> [completed 2026-09-24](COMPLETED-CHECKLIST.md#m255)
+
+- [x] **M25.6** -- Swept what this milestone made false, and recorded the two findings as `D-56` and `D-57`. -> [completed 2026-09-24](COMPLETED-CHECKLIST.md#m256)
+
+- [x] **M25.7** -- Replay keeps its slice for a reason about failure vocabulary, recorded as `D-58`; the second multi-megabyte buffer became a digest. -> [completed 2026-09-24](COMPLETED-CHECKLIST.md#m257)
+
+### <a id="m261"></a>M26.1 -- The permitted space is specified in [RESPONSE-SPACE.md](RESPONSE-SPACE.md) as eleven cited clauses, and recorded as `D-59`. *(completed 2026-09-24 19:30:19 -04:00)*
+
+**Eleven clauses: seven permissions and four constraints**, each with an ID, a source, and a
+provenance tag. The IDs exist so `M26.3`'s resolver, `M26.4`'s properties and `M26.6`'s kernel tests
+can cite a clause rather than restate it -- and so a clause no code cites is visible as
+unimplemented.
+
+**The provenance tag is what makes it a specification rather than a recording.** Every clause is
+`Observed`, `Over-provision`, or `Decided`, and where a clause is wider than its own observation the
+two parts are split so they can be argued separately. `RS-P-1` is the clearest case: that an
+operation may complete inline or pend is measured, but that operations within one batch resolve
+**independently** is not, and the space permits it anyway -- because a consumer depending on them
+resolving together depends on something Windows never promised.
+
+**The call the item demanded, made rather than defaulted: `RS-C-4` constrains the resolver to
+honour the drain half of `DRAIN_PRECEDING_OPS`.** [D-47](DESIGN-NOTES.md#d-47) measured roughly
+4,500 trials without a single violation; the drain is what this crate's durability story rests on;
+and a resolver permitted to break it would require every consumer to re-verify durability some other
+way, which is to say it would make the primitive useless. The cost is stated plainly: a Windows that
+broke the drain would not be caught by the resolver at all. That is why `M26.6` gained a line
+requiring at least one kernel test to exercise the clause -- otherwise the one constraint the space
+takes on faith is untested in both halves at once.
+
+**The hold-back half stays unconstrained**, since `D-24` claimed it and `D-47` withdrew it. `RS-P-2`
+applies in full to anything queued after a drained flush, which is the defect class that campaign
+found.
+
+**Three citations were checked and one was wrong.** The draft attributed `M22.2`'s defect to the
+checkpoint control plane; it was on the *append* path, and the checkpoint module merely documents
+the same case. Both now appear, distinguished. The other two -- `pop_within`'s "promises nothing
+about poppability" and `D-47`'s trial count -- were verified against the files rather than recalled.
+
+**A working artifact was found rather than assumed missing.**
+[kernel-response-space-probe.rs](design-sessions/kernel-response-space-probe.rs) already contains a
+seeded `Resolver` exercising `RS-P-2`, which broke a FIFO-assuming consumer under 189 of 200 seeds.
+`M26.3` now points at it as a starting point, with the note that the probe marks itself throwaway --
+so promoting it is a deliberate decision rather than a default.
+
+**Four things are listed as deliberately undecided** -- rates, partial transfers, failure-code sets,
+and timing -- so that a later reader can tell an omission from a choice. Rates in particular are
+excluded on principle: a space carrying observed probabilities would be the recording this milestone
+exists to avoid.
+
+## Moved 2026-09-24 20:36:46 -04:00 -- M26.2: the kernel-call seam
+
+### <a id="m262"></a>M26.2 -- Build the seam that makes the `windows-sys` calls indirect, so `M26.3`'s resolver can answer them. *(completed 2026-09-24 20:36:46 -04:00)*
+
+The shape is recorded as [D-60](DESIGN-NOTES.md#d-60); what follows is what the work found.
+
+Eight calls became indirect -- `SubmitIoRing`, `PopIoRingCompletion`, and the six `Build*` entry
+points the crate uses -- across 27 call sites in [batch.rs](src/batch.rs) and [ring.rs](src/ring.rs).
+Each now goes through a `pub(crate) unsafe fn` in [sys.rs](src/sys.rs) that is `#[inline(always)]`
+and dispatches through a `through_seam!` macro. With the `kernel-seam` feature off, the macro
+expands to the bare FFI call and nothing else; with it on, the call first asks the installed
+responder.
+
+**The shape was decided by a constraint already on the books, not by taste.** The obvious
+alternative -- parameterising the ring as `IoRing<K>` over a kernel -- is unavailable because
+[D-55](DESIGN-NOTES.md#d-55) has already spent `IoRing`'s type parameter on `M28.3`'s token
+inventory. A kernel generic would publish `IoRing<T, K>`, which is a two-parameter public type on a
+shipped crate, and the second parameter exists only so the crate can test itself. Module
+indirection costs the public surface nothing.
+
+**The responder is thread-local, for the reason `DROP_RUNS` is.** `cargo test` runs tests as
+threads in one process ([DESIGN-NOTES.md](DESIGN-NOTES.md) records this as the reason this
+workspace is not on nextest), so a process-global responder would let one test answer another
+test's kernel calls. `with()` uses `try_borrow_mut` rather than `borrow_mut`, so a re-entrant call
+from inside a responder falls through to the kernel instead of panicking; `Installed::drop` uses
+`try_with`, so teardown during TLS destruction cannot abort the process ([M23.4](#m234)).
+
+**Five lifecycle calls were deliberately left direct** -- `CreateIoRing`, `CloseIoRing`,
+`GetIoRingInfo`, `IsIoRingOpSupported`, `SetIoRingCompletionEvent`. `M26` is justified by the
+*response space*: what the kernel may answer to submitted work. Routing ring construction and
+teardown through the seam as well would be hermeticity for its own sake, and hermeticity is
+[M24](#m242)'s subject, not this one. The line is recorded so a later reader can tell a boundary
+from an oversight.
+
+**The seam's transparency is measured, not argued.** The full suite passes with the feature off
+(153 lib tests) and on (159 -- the six new ones), and the crate builds clean with zero warnings in
+five configurations: default, `--all-features`, `--no-default-features`, `--features kernel-seam`,
+and release. The sabotage case *`M26.2: the seam consults the responder but ignores its answer`*
+turns `an_installed_responder_answers_instead_of_the_kernel` red, which is what shows the
+consultation is load-bearing rather than decorative -- a seam that asks and discards would pass
+every other test in the crate. The full sweep is 28-of-28 as declared, with the `CONTROL` and the
+`set_len` blind spot both still surviving.
+
+**Two type signatures were wrong on the first attempt and the compiler caught both**, which is
+worth recording because they are the kind of thing a hand-written trait gets wrong silently if it
+is ever allowed to diverge: `BuildIoRingWriteFile`'s caching flag is `i32`, not `u32`, and
+`BuildIoRingRegisterFileHandles` takes `*const *mut c_void`, not `*const isize`. The `real`
+submodule re-exports the `windows-sys` items so the trait's default methods call them directly,
+which is what keeps the two in step -- there is one spelling of each signature, not two.
+
+**`kernel-seam` crossed with `--no-default-features` is a published configuration nothing built.**
+The gate multiplies with `threadpool`: the workspace `--all-features` steps build the seam only
+alongside the threadpool, and the existing `ioring-no-threadpool` job built the no-threadpool path
+only with the seam off. Two steps were added to that job rather than a new job, on the same
+argument that bought the job in the first place. Verified locally before committing: clippy clean
+and 155 lib tests green in that combination.
+
+**A borrow-surface row was owed and was three items late.** `./tools/check-borrow-surface.ps1`
+failed on `Pending::contract -> Option<&RingContract>`, added by `M23.3`'s spike, because that
+change did not run the gate -- so it reported on the next run instead, against unrelated work. The
+row is now in [DESIGN-NOTES.md](DESIGN-NOTES.md)'s audit table: `RingContract` is a pure
+observation record owning no handle, buffer, or registration index, so there is nothing the kernel
+could invalidate, and the borrow is a plain `&self` borrow that blocks submission through that
+`Pending` for its duration. The lateness is recorded in the row itself.
+
+**A tooling mistake destroyed two source files and is worth the warning.** A PowerShell
+`.Replace()` bound the wrong overload and rewrote [batch.rs](src/batch.rs) and [ring.rs](src/ring.rs)
+one character per line. `git checkout --` recovered both, and the conversion was redone with
+`[regex]::Replace` anchored on `(?<![\w:])Name\(` so it matched call positions only. This is the
+fifth time in this session that driving a source edit through PowerShell string handling has
+corrupted a file.
+
+## Moved 2026-09-24 21:15:16 -04:00 -- M26.3: the response-space resolver
+
+### <a id="m263"></a>M26.3 -- Build the resolver over the space `M26.1` specifies, bound to its clause IDs and seeded on its own axis. *(completed 2026-09-24 21:15:16 -04:00)*
+
+The shape is recorded as [D-61](DESIGN-NOTES.md#d-61); what follows is what the work found.
+
+**The resolver is in [resolver.rs](src/sys/resolver.rs), implementing `M26.2`'s `Responses`.** It
+answers the eight submission-path calls itself, so operations the kernel never received still flow
+through this crate's ordinary accounting. Every freedom cites the `RS-P-n` permitting it and every
+restriction cites the `RS-C-n` requiring it, which is what lets a reader check the resolver against
+[RESPONSE-SPACE.md](RESPONSE-SPACE.md) mechanically rather than by reading both and hoping.
+
+**The asymmetry is the design.** `ResolverConfig` has a switch per permission and none for any
+constraint. Narrowing a freedom is how a test isolates another -- a test about ordering does not
+want arbitrary operation failures on top -- while a knob relaxing a constraint would let a test
+assert against a platform that cannot exist. The default is the widest point, so a test that does
+not choose gets every freedom and fails loudly under one it did not handle. A test asserts the
+count: seven fields, seven `RS-P-n`, and it reads them off `Debug` so a field added without a clause
+fails there rather than passing unnoticed.
+
+**Where a permission and a constraint collide, the constraint wins, and that had to be decided
+rather than discovered.** `RS-C-4` holds a drain-flagged operation back even on a tick where
+`RS-P-1`'s coin said complete it now; `RS-C-1` forces a post an operation's coin kept deferring.
+Two bounds exist solely to make `RS-C-1` finite -- per-operation deferrals, and consecutive declined
+submits -- and both are properties of the resolver rather than of the space, which carries no rates
+deliberately.
+
+**A submit resolves; a pop only rescues.** The split is not tidiness. A pop that flipped coins would
+resolve a consumer's work on its first `try_pop`, so "the operation pended" -- the thing `RS-P-1`
+exists to let a test observe -- would be unobservable to exactly the consumer most likely to care.
+The freedom would have been implemented and untestable.
+
+**`SetIoRingCompletionEvent` moved behind the seam, which `M26.2` had left it outside of.** It looks
+like lifecycle and is not: it is how a completion becomes *observable*, so `RS-P-6` is a clause
+about that call. A resolver unable to make it would not satisfy `RS-P-6` vacuously -- it would never
+signal at all, parking every [`EventDelivery`](src/event_delivery.rs) consumer rather than testing
+one. The checklist item had authorised exactly this ("if a clause turns out to need ... extending
+the seam is part of this item"), and this is the clause that needed it.
+
+**`RS-C-4` is decided by position, and the invariant that makes that sound is now asserted.** The
+pool is held in build order, so the set queued before `pool[i]` is exactly `pool[..i]` and a barrier
+is eligible only as the oldest unresolved operation. That reduction is the whole of the constraint's
+implementation and it holds only while the pool stays sorted -- an edit that sorted or reshuffled it
+would relax `RS-C-4` to nothing while every line around it still read as though it applied. A
+`debug_assert!` now says so at the point of use, rather than a comment saying so nearby.
+
+**The first contact with a real ring found a live defect, queued as `M26.8` rather than fixed
+here.** A submit declined under `RS-P-7` propagates out of `IoRing::run_down` as an error with
+`outstanding() > 0`, after which `Drop` asserts and calls `CloseIoRing` anyway -- `M21.6`'s hazard,
+reachable again through a different `HRESULT`. Measured by narrowing one permission at a time: 32
+seeds pass with `may_fail_submits` off, seed `0x1A` fails at `0x80070008` with it on. It is queued
+rather than corrected because `run_down`'s own documentation argues that blocking is the safe
+failure mode while "no hang" is one of the properties `M26.4` is about to write, and the two pull
+opposite ways -- a decision, not a correction. The narrowing is declared in the test that takes it,
+and the current behaviour is pinned by its own test so that whichever way `M26.8` is settled, a test
+has to change.
+
+**The integration test is where it is for the gate's own reason.** `check-ring-tests.ps1` asks
+whether a test needs the kernel or only a ring-shaped thing; a resolver test needs a real ring
+because [D-60](DESIGN-NOTES.md#d-60) deliberately left lifecycle real, which makes it an
+operating-system boundary and therefore `tests/`. The ring-opening lib population is unchanged at
+41.
+
+**Sabotage found a defect in the tests, which is what it is for.** `RS-C-3`'s case survived: the
+test asserted that nothing pops *right now*, which a resolver that had wrongly made staged
+operations eligible also satisfies, because the starvation rescue posts only what has run out of
+deferrals and a fresh operation has not. The test now polls past the bound and asserts the counters,
+so it checks the claim -- unsubmitted work is never eligible -- rather than the symptom. Eight cases
+added, one of them a declared blind spot; the full sweep is 36-of-36 as declared with both blind
+spots and the `CONTROL` surviving.
+
+**The harness caught stale patches a sixth time, and the cause was new.** Four cases reported
+`pattern found 0 times` while every line of each pattern was present individually. The cause is that
+the built-in file-creation tool writes **CRLF** on Windows, so the multi-line patterns could not
+match a file whose line endings were not LF -- and single-line patterns matched fine, which is why
+three of the eight cases passed and hid it. The repository's own instructions warn about this tool;
+`M26.2`'s files escaped it only because git normalised them on commit before that sweep ran. The
+three new files were converted to LF before proceeding.
+
+## Moved 2026-09-24 21:48:36 -04:00 -- M26.4: the properties that must hold under every resolution
+
+### <a id="m264"></a>M26.4 -- Write the properties that must hold under every resolution, with `RingContract` as the definition rather than a second copy. *(completed 2026-09-24 21:48:36 -04:00)*
+
+The shape is recorded as [D-62](DESIGN-NOTES.md#d-62); what follows is what the work found.
+
+**Five properties, in
+[properties_under_every_resolution.rs](tests/properties_under_every_resolution.rs).** Conservation
+(P-1), no hang (P-2), `pop_within` honours its bound (P-3), `outstanding` is accurate (P-4), no
+use-after-free (P-5) -- driven over generated plans, each under its own resolution drawn from
+`M26.3`'s resolver at the widest point in the space.
+
+**Only two of the five needed anything new, and that is the item's main point.** P-1 is already
+this crate's own oracle, so the harness reports to [`RingContract`](src/contract.rs) and asks it for
+the verdict. P-4 follows the same rule rather than counting for itself: the expected outstanding
+count is read back out of the contract through its own `Outstanding` violation, because a counter in
+the harness would be a third party to the disagreement and, when the two disagreed, the harness is
+what would get "fixed". P-5 is [`windows_guard_alloc::GuardAlloc`], already the established
+detector.
+
+**Two weaknesses are declared in the file rather than papered over.** `pop_within`'s upper bound is
+nearly free under an ordinary resolution, because the resolver answers a wait immediately and the
+call rarely approaches its deadline -- so the non-vacuous case needs a resolution in which *nothing
+completes during the window*. That is supplied by a separate degenerate responder, and what it is
+matters: not an `RS-C-1` violation, since no finite observation can distinguish "eventually" from
+"never", but the prefix of a satisfying resolution in which the eventually has not happened yet.
+And P-5 covers this crate's memory handling rather than the kernel's, since under a resolver nothing
+external writes into a buffer at all; the kernel-side half stays with
+[generated_sequences.rs](tests/generated_sequences.rs), against a real ring.
+
+**A third seed axis, kept separate.** This file carries the plan seed, the resolver seed and the
+guard allocator's. They are independent on purpose -- pinning the plan alone reproduces the same
+operations against different resolutions, which is what a suspicious plan calls for -- and a failure
+prints all three, because only all three replay the whole run.
+
+**The harness's own first defect was treating a declined submit as a property failure.** Under
+`RS-P-7` a submit may be declined, and `pop_within` surfaces that as an `Err` -- which is *within
+its documented contract*, since it says it returns any error from `SubmitIoRing`. A correct consumer
+retries; a harness that panicked was asserting a contract the crate never offered. It now retries,
+and recognises a refusal by **asking the resolver** whether its decline counter moved rather than by
+matching an `HRESULT`, because a hard-coded code here would be a second copy of a choice the
+resolver owns. Retrying is bounded by P-2's budget in every caller, so a resolution that declined
+forever is still caught.
+
+**That finding extended `M26.8` rather than creating a second item, and the extension is about the
+document.** `RS-P-7` is written as a *consequence* clause -- "if `SubmitIoRing` fails, operations
+already built remain queued" -- citing `D-5`, which establishes the no-rewind consequence and
+nothing about submits failing spontaneously. `M26.3`'s resolver read it as a permission, and the
+space nowhere states that a submit may fail at all. That is a gap rather than a decision, since
+submits demonstrably can fail, so `M26.8` now has to settle both halves together.
+
+**Coverage counters are asserted, not printed, and that is what makes a green run evidence.** All
+five properties are satisfied trivially by a run that does nothing: an empty plan, a resolution that
+completes everything inside its submit, or a harness that quietly stopped reporting would each pass
+every assertion. The counters are what separate "the properties held" from "nothing reached the
+states they are about", and one sabotage exists purely to show they are load-bearing. Their
+thresholds were set from a measured spread across eight fresh seeds rather than guessed; the
+declined-submit count is the thinnest signal and its threshold is only "more than none" for that
+reason, since tightening it would buy a flake rather than a guarantee.
+
+**The integration test is where it is for the gate's own reason**, as in `M26.3`: it needs a real
+ring, because `D-60` deliberately left lifecycle real. The ring-opening lib population is unchanged
+at 41.
+
+**A sabotage case was written, measured, and removed as unsound.** It disabled the P-1 verdict
+check, and it survived -- correctly, because disabling an assertion that does not fire on a green
+baseline cannot fail anything. What actually establishes that the verdict is read is the
+identity-reuse case: measured, the suite fails carrying the oracle's own wording, so the path from
+the crate through `RingContract` to a red test is traversed end to end. That evidence now lives in
+that case's reasoning, and the removal is recorded here because "sabotage a check" is an appealing
+and empty move worth recognising next time. Three cases added, all scoped to this test target on
+purpose -- these mutations are caught by many tests in the crate, and "something went red" would not
+have shown that *these* properties are the ones watching. Full sweep 39-of-39 as declared.
+
+## Moved 2026-09-24 22:13:02 -04:00 -- M26.5: calibrating the resolver
+
+### <a id="m265"></a>M26.5 -- Re-inject the two historical defects and confirm the resolver turns red. *(completed 2026-09-24 22:13:02 -04:00)*
+
+The shape is recorded as [D-63](DESIGN-NOTES.md#d-63); what follows is what the work found.
+
+**The two defects are calibrated differently because they live in different places**, and noticing
+that was most of the item. `M21.6`'s -- an expired wait reported as a failure -- was in this crate,
+so re-injecting it means mutating the crate, which a test cannot do; it is a case in
+[sabotage.json](sabotage.json). [D-47](DESIGN-NOTES.md#d-47)'s -- a consumer believing a covering
+flush holds back what follows -- is in a **consumer**, so there is nothing here to mutate and the
+defective consumer had to be written out. It is, in
+[calibration.rs](tests/calibration.rs), as a `HoldBackBeliever` that records when its assumption
+fails; the test asserts that the resolver breaks it.
+
+**What the calibration file adds on the `M21.6` side is the precondition, not the detection.** A
+sabotage of code the suite never executes is caught for some unrelated reason or not at all, and
+either way measures nothing -- so there is a test asserting that `RS-P-4` actually reaches
+`pop_within`, read off the resolver's own counter rather than inferred from a timing, because "the
+call took a while" is not evidence that a wait expired.
+
+**Both directions were verified by execution before being written into the manifest.** Reverting
+`wait_outcome`'s `WAIT_EXPIRED` arm fails the calibration naming the seed and `0x800705B4`. Making
+the resolver enforce the hold-back fails it with "no seed of 64 broke a consumer that assumes a
+covering flush holds back what follows it".
+
+**The second of those runs the opposite way to every other sabotage in this crate**, and the
+manifest says so: it does not break the code, it makes the **instrument** go narrow. That is the
+`M17.4` failure mode -- a suite sampling the right state while being insensitive to the defect
+living in it -- and nothing detects it except a test that demands the sensitivity.
+
+**The two suites' sensitivities were measured and are not equivalent.** `M21.6`'s defect is caught
+by the calibration *and* by `M26.4`'s property suite; the latter only because that suite
+distinguishes a declined submit from a genuine error, so the detection is deliberate rather than
+lucky. A narrowed resolver is caught by the calibration **alone**, and the property suite correctly
+stays green -- a narrower resolution is still a valid one and conservation holds under it. That
+measured gap is the argument for a calibration file rather than a calibration assertion bolted onto
+the property suite, and it is an argument from data rather than from taste.
+
+**The D-47 calibration breaks its believer on every seed, which needs saying rather than
+celebrating.** `D-47` measured the overtake on real hardware at well under one trial in a hundred;
+the resolver does it constantly. That is not the resolver being unfaithful:
+[RESPONSE-SPACE.md](RESPONSE-SPACE.md) carries no rates deliberately, because a resolver
+reproducing an observed frequency would be a model of Windows and therefore the trap
+[D-52](DESIGN-NOTES.md#d-52) was opened to escape. A defect class that is rare on hardware is
+precisely the one a rate-free resolver earns its keep on. The figures are printed by the tests so a
+reader can judge the instrument's strength rather than take "more than none" on trust.
+
+**Seeds here are fixed rather than clock-derived**, unlike the generated suites. A calibration that
+could sometimes fail to demonstrate its own sensitivity would be the exact failure it exists to
+prevent, arriving as a flake.
+
+## Moved 2026-09-24 23:54:45 -04:00 -- M26.6: the kernel tests' new job
+
+### <a id="m266"></a>M26.6 -- Point the kernel tests at confirming reality stays inside the declared space. *(completed 2026-09-24 23:54:45 -04:00)*
+
+The shape is recorded as [D-65](DESIGN-NOTES.md#d-65); what follows is what the work found.
+
+**A hole was found exactly where the split is load-bearing.**
+[flush_barrier.rs](tests/flush_barrier.rs) already asserted `RS-C-4` against a real ring -- but the
+assertion sat behind an early return taken whenever its control could not discriminate. On such a
+machine the constraint was untested on **both** sides at once: the resolver is forbidden to produce
+a violation, and the only test that would notice had skipped. That is precisely the condition the
+item was written to prevent, and it was live.
+
+**The fix separates two questions one gate had been answering together.** *Is the barrier doing
+work* is a comparative claim and genuinely meaningless when the control shows no reordering -- the
+covering case would match a control that did nothing. *Did the kernel stay inside `RS-C-4`* is a
+conformance question, where skipping can only ever hide a violation; observing none is weak
+evidence when nothing could have reordered, but observing one is a finding on any machine. The
+conformance assertion now runs everywhere and only the comparative claim is withheld, with the
+output saying `PARTIAL` rather than `SKIP` so the difference is visible in a log.
+
+**The census was green and useless on its first build, and only trying to make it go red found
+that.** It searched each file for the clause ID anywhere in its text. Removing `RS-C-4`'s check
+from the only test performing it did **not** turn it red, because
+[generated_sequences.rs](tests/generated_sequences.rs) mentioned that clause solely to *disclaim*
+it -- "`RS-C-4` is flush_barrier's" -- and under a substring search a disclaimer reads exactly like
+a claim. This repository had already recorded that trap once, for a probe whose only mention of a
+tag was a comment, and it was walked into again anyway.
+
+**So a claim is now a structured marker.** `CONFIRMS:` for a constraint checked against a real
+kernel, `EXERCISES:` for a permission the resolver takes, each naming a clause and nothing else --
+a hedged `CONFIRMS: RS-C-4 eventually` does not parse as a claim, and that case is asserted. The
+rebuilt census was verified to go red in three directions before being trusted: a removed marker, a
+marker naming a clause the document does not declare, and a prose mention standing in for a marker.
+
+**Two blind spots are declared rather than left invisible.** A census over source proves a clause is
+*claimed*, never that the file's assertion still runs or still means anything -- comparing a
+constant against itself leaves the marker in place and the suite green. And dropping the covering
+flag does **not** fire the `RS-C-4` assertion on every machine: measured here, a device stack that
+orders a flush behind its file's outstanding writes by itself produces no violation to see, so that
+sabotage demonstrates nothing portable. The assertion's conformance value -- reporting a violation
+if one occurs -- is separate from its sensitivity, and only the first is claimed.
+
+**The sweep found a stale site from two milestones back.**
+[D-60](DESIGN-NOTES.md#d-60) still listed `SetIoRingCompletionEvent` among the five lifecycle calls
+left outside the seam, which `M26.3` had moved behind it. The correction is recorded in that row
+rather than only in `D-61`, since a reader arriving there would otherwise take the superseded list
+as current.
+
+**The "five techniques" framing becomes six, and the sixth is different in kind.** The other five
+check this crate against its own stated contract and cannot tell you that contract is wrong -- which
+is what happened in the two most expensive defects. The resolver checks the crate against a written
+specification of what the platform may do, and the kernel tests check the platform against that same
+specification. `M26`'s row also joins defect population A, on the observation that the kernel's
+*response* is a precondition and was never varied either.
+
+## Moved 2026-09-25 10:48:58 -04:00 -- M26.7: auditing the suite for frozen observations
+
+### <a id="m267"></a>M26.7 -- Audit the existing suite for assertions that are frozen observations rather than contracts. *(completed 2026-09-25 10:48:58 -04:00)*
+
+The shape is recorded as [D-66](DESIGN-NOTES.md#d-66); what follows is what the work found.
+
+**The census came from a command, and it was not the file anyone guessed.** The item named
+[flush_barrier.rs](tests/flush_barrier.rs) as the obvious candidate and said plainly that the
+candidate was a guess. It was: that file turned out to be one of the better-behaved ones, since its
+transfer assertion is explicitly framed as its own precondition and its ordering counter is
+*reported* rather than asserted. The census started from the whole assertion population, narrowed to
+assertions in tests that touch a real ring -- reusing `RING-OPENING-LIB-TESTS.txt` as the classifier
+rather than inventing a second one -- and then to four candidate shapes.
+
+**One class, 31 assertions wide, across five files.** `try_pop()` straight after `submit_and_wait`
+with the `Option` unwrapped, asserting the kernel had **already** queued the completion. That is
+`D-52`'s demonstrated failure exactly -- an assertion that gives opposite answers on two handles of
+the same API -- and this crate's own documentation denies it: a submit-side wait's return "promises
+nothing about poppability". `RESPONSE-SPACE.md` states it as `RS-P-5`. They passed for the reason
+[D-40](DESIGN-NOTES.md#d-40) measured: a buffered read completes inside the submit in 80 of 80
+attempts, while an unbuffered one genuinely pends.
+
+**Restated as the contract `D-52` prescribed** -- ask for the completion within a bound this crate
+chooses -- which holds on every handle rather than on the one a test happens to open. The same sweep
+found an unbounded `try_pop` spin loop in `registration.rs`, which is the shape `pop_within` was
+introduced to replace, and it went the same way.
+
+**Nothing catches a regression by running, and that is the part worth keeping.** Reverting a site
+leaves its test green on any machine where the observation is true, which is precisely why 31 of
+them survived years of review. So the guard is a **census that refuses the shape at the source**,
+plus a resolver-driven test that makes the pending case reachable on demand and shows `try_pop`
+failing where `pop_within` succeeds. One of the three sabotages exists to make that point: reverting
+a restated site is caught by the census and by nothing else, and a reader who checked by re-running
+the test would find it green and conclude the change was cosmetic.
+
+**A second, narrower class was found and deliberately not settled.** Five assertions require a
+complete transfer. `Completion::result` promises only "the transferred byte count", and the space
+lists partial transfers as *deliberately undecided* with the instruction to decide them before a
+resolver relies on either answer. So the suite silently answers a question the specification leaves
+open -- and the two are not yet in conflict only because the resolver reports `Information: 0` and
+no resolver-driven test reads a transfer count. Queued as `M26.10`. One of the five is already in
+the honest form and is left alone.
+
+**What the audit did not find is worth stating too.** The `outstanding() == 0` assertions after a
+rundown are the crate's own contract, not observations. `flush_barrier_stress.rs`'s assertion that
+reordering *happened* is a control verifying its own precondition, with a message explaining why --
+the correct pattern. And the handover tests rest on `D-40`'s synchronous-completion measurement but
+verify that precondition rather than assuming it, which is what a frozen observation fails to do.
+
+## Moved 2026-09-25 12:34:02 -04:00 -- M26.8: retry policy belongs to the caller
+
+### <a id="m268"></a>M26.8 -- Decide what `IoRing::run_down` should do when a submit it makes is refused. *(completed 2026-09-25 12:34:02 -04:00)*
+
+The shape is recorded as [D-67](DESIGN-NOTES.md#d-67); what follows is what the work found.
+
+**The item was framed as a decision and was mostly a reading.** It asked which way to resolve a
+tension between "blocking is the safe failure mode" and "no hang". The tension was real but the
+question had an authority nobody had consulted: `SubmitIoRing`'s reference page. The correction that
+made the difference came from the engineer -- **no amount of measurement constitutes a contract** --
+and it was needed, because the session had spent the previous hour measuring and had drawn a
+confident conclusion from it.
+
+**What the documentation settles.** A return-value row gives `IORING_E_WAIT_TIMEOUT` the meaning
+*"All operations were submitted without error and the subsequent wait timed out"*, and the Remarks
+add *"If this function returns an error other than IORING_E_WAIT_TIMEOUT, then all entries remain in
+the submission queue"* and that a per-entry failure arrives as a completion rather than as a submit
+failure.
+
+**A measurement had been read backwards, and the documentation is what caught it.** A probe showed
+an operation completing after a submit reported `E_INVALIDARG`, which was taken to mean the work had
+gone in despite the error. It had not: the entry stayed in the submission queue exactly as
+documented, and what pushed it through was `pop_within`'s *own* internal submit. The observation was
+right and the attribution was wrong -- which is precisely the failure mode a contract prevents and a
+measurement invites.
+
+**`Batch::submit_and_wait` carried `M21.6`'s defect** at the one site that sweep did not reach.
+`do_submit` passed a timed-out wait to `check`, so a fully successful submission was reported as an
+error. The damage is worse than a wrong sign: because any *other* error means the entries are still
+queued, an `Err` was ambiguous between "your buffers are free" and "the kernel still owns them",
+which is [D-5](DESIGN-NOTES.md#d-5)'s hazard with the sign hidden.
+
+**`run_down` was the only waiting API in this crate shaped wrongly**, and the engineer named the
+principle that identifies it: *never implement a retry policy ourselves -- the caller keeps their
+own backoff, counts before giving up, and whatever else they want.* Waiting in segments inside a
+period the caller supplied is fine; `run_down` had the segments and no such period, which made "how
+long to keep trying" this crate's policy. [`IoRing::run_down_within`](src/ring.rs) is the primitive
+the caller bounds; `run_down` is now that with an unbounded period, which is a choice made by
+calling it. Checked against the rest of the surface rather than assumed: `pop_within` and
+`submit_and_wait` were already correctly shaped, so `run_down` really was the sole outlier.
+
+**An error from rundown is no longer terminal, and did not need to be.** The entries remain queued,
+the ring is resumable, and the documentation is what makes that safe to say. The one thing a caller
+must not do after an error is drop the ring.
+
+**`RS-P-7` and `RS-P-3` moved from inference to citation.** `M26.1` wrote `RS-P-7` as a consequence
+clause -- "if a submit fails, entries remain queued" -- citing a decision that established the
+consequence and nothing about submits failing at all, and `M26.3`'s resolver read it as a permission
+regardless. The space now carries a **`Documented`** tag that explicitly outranks `Observed`, since
+a measurement describes one run of one build.
+
+**The manifest drifted and the harness caught it, for the seventh time this session.** Renaming
+`WAIT_EXPIRED` to `IORING_E_WAIT_TIMEOUT` -- so the constant carries the documented name rather than
+a derivation -- left `M26.5`'s sabotage patching text that no longer existed. The sweep that
+followed found four more live sites; the archive was left alone. A per-case uniqueness check now
+runs before the sweep, which would have caught this in seconds rather than in a five-minute run.
+
+## Moved 2026-09-25 14:19:35 -04:00 -- M26.9, the event_delivery stall
+
+### <a id="m269"></a>M26.9 -- The `event_delivery` stall: the wait was armed after the event was signalled, which `SetThreadpoolWait` forbids. *(completed 2026-09-25 14:19:35 -04:00)*
+
+Cause, fix and before/after figures are in [DESIGN-NOTES.md](DESIGN-NOTES.md) -> D-68; the
+investigation as it stood when the cause was found is in
+[RESOLVED-TEST-FAILURES.md](RESOLVED-TEST-FAILURES.md). The item as it read when it closed:
+
+- [x] **M26.9** -- Find and fix the intermittent `Timeout` in
+  [event_delivery.rs](tests/event_delivery.rs)'s two threadpool-delivery tests, recorded in
+  [UNRESOLVED-TEST-FAILURES.md](UNRESOLVED-TEST-FAILURES.md).
+
+  **Why this is not merely a flaky test to re-run.** Measured at 1 failure in 80 runs of the
+  compiled binary. The sabotage harness runs the whole suite once per case and the manifest holds
+  41, so that rate gives roughly a **40% chance of a corrupted sweep** -- and the corruption falsely
+  reports `caught`, which is a sabotage the suite did not catch being recorded as a clean bill of
+  health. The harness is this repository's mechanism for keeping earlier guarantees checked; a 40%
+  chance of a silent false pass undermines every conclusion drawn from it.
+
+  **What has already been ruled out, so it is not re-tried:** ring-resource pressure (zero failures
+  after roughly 18,000 ring create/close cycles), the widened seeded sweeps (zero after repeated
+  property-suite and calibration runs), and CPU starvation (zero under a concurrent `cargo build`
+  saturating the machine).
+
+  **Narrowed 2026-09-25 to a minimal reproducer, and the investigation now leaves this crate.**
+  Measured: 0 failures in 1000 serial runs against 7 in 1000 parallel; every occurrence identical,
+  with **both** delivery tests failing together and `callbacks run: 0` -- the pool never invokes the
+  callback at all, for either ring, and nothing arrives ten seconds later. The two delivery tests
+  alone do not reproduce it (0 in 1000); a third test has to be co-running, and the two that trigger
+  it both create an `EventDelivery` over a ring with nothing outstanding and drop it promptly.
+  Full figures, the reproducer, and what remains unestablished are in
+  [UNRESOLVED-TEST-FAILURES.md](UNRESOLVED-TEST-FAILURES.md).
+
+  **The next step is in [`windows-threadpool-sys`](../windows-threadpool-sys/src/wait.rs)**, not
+  here: both waits are registered on the default process threadpool, and one object's lifecycle
+  appears to stop other, unrelated armed waits from ever firing. Per the repository's mono-repo bug
+  policy, the fix belongs in that layer. `ThreadpoolWait`'s `Drop` has been read and only touches
+  its own object, so the mechanism is **not yet established** -- do not start from a guess about it.
+
+  **Narrowed further the same day, with a configurable trace.** The default pool is **not** wedged:
+  a probe at the moment of failure runs a plain work item and a brand-new armed wait, and measured,
+  both ran. The stalled waits were created and armed -- the trace shows it -- and the trampoline
+  never fires for any of them. **The stall is permanent by design**: the completion event is edge
+  triggered ([D-19](DESIGN-NOTES.md#d-19)), a stalled ring's queue never returns to empty, so the
+  setup signal is the only wakeup that ring will ever receive and losing it once ends delivery for
+  good. The open question is now narrow -- why an armed wait does not observe a signal raised just
+  before it was armed -- and a plausible mechanism is recorded in
+  [UNRESOLVED-TEST-FAILURES.md](UNRESOLVED-TEST-FAILURES.md) **as a hypothesis with no evidence
+  behind it**, together with the experiment that would settle it.
+
+  **The trace is compiled out unless `--features trace` is on**, and narrowed at run time by
+  `WINDOWS_THREADPOOL_TRACE`, because the instrument for a timing-dependent fault must not change
+  the schedule it measures. The flake still reproduces with it on, which was checked first.
+
+  **A cheaper interim mitigation exists and is a separate decision:** the harness could treat a
+  failure in these two tests as *inconclusive* rather than as `caught`, which would stop the false
+  clean bills without pretending the behaviour is understood.
+
+## Moved 2026-09-25 15:02:00 -04:00 -- M26.10, the partial-transfer decision
+
+### <a id="m2610"></a>M26.10 -- Decided: a completion may report fewer bytes than requested, so `RS-P-8` permits it and the caller owns the remainder. *(completed 2026-09-25 15:02:00 -04:00)*
+
+The decision and its two-layer shape are in [DESIGN-NOTES.md](DESIGN-NOTES.md) -> D-69; the clause
+itself is `RS-P-8` in [RESPONSE-SPACE.md](RESPONSE-SPACE.md). The durability half it spawned is
+`M26.11`. The item as it read when it closed:
+
+- [x] **M26.10** -- Decide whether a completion may report **fewer bytes than requested**, which
+  [RESPONSE-SPACE.md](RESPONSE-SPACE.md) currently lists as deliberately undecided. Found by
+  `M26.7`'s audit, and queued rather than settled there because the space's own instruction is to
+  "decide it before a resolver relies on either answer" -- which is a call about what this crate
+  tolerates, not a correction.
+
+  **The observation.** Five kernel assertions require a full transfer (`assert_eq!(transferred,
+  LEN)`), so the suite already answers the question by assuming one. `Completion::result` promises
+  only "the transferred byte count" and never a complete one, so nothing in the crate backs that
+  assumption up. The two are not in conflict today only because `M26.3`'s resolver reports
+  `Information: 0` for every operation and no resolver-driven test reads a transfer count -- so a
+  resolver and a kernel test would disagree about the same field and nothing would notice.
+
+  **Note one of the five is already right and should be left alone.**
+  [flush_barrier.rs](tests/flush_barrier.rs) checks the transfer explicitly as its *own
+  precondition* -- a short write would make every count in that test meaningless -- and says so.
+  That is the honest form of the assertion whichever way this is decided.
+
+  **What deciding it costs.** Permitting partial transfers widens what every consumer must handle
+  and would make the resolver able to produce them, which the properties in
+  [properties_under_every_resolution.rs](tests/properties_under_every_resolution.rs) would then
+  have to survive. Requiring complete transfers is a `Decided` constraint of the kind `RS-C-1`
+  already is, and would need a `CONFIRMS:` marker on whichever kernel test carries it -- the census
+  added in `M26.6` will then hold the two halves together.
+
+## Moved 2026-09-25 16:21:00 -04:00 -- M26.11, the epoch log's handle requirements
+
+### <a id="m2611"></a>M26.11 -- The epoch log states the capabilities it requires of a handle; the transfer requirement is checked, the durability requirement is a caller warranty. *(completed 2026-09-25 16:21:00 -04:00)*
+
+The contract gained a fourth clause, `Requires`, beside `Guarantees`,
+`DoesNotGuarantee` and `Assumes` -- the growth the module's own `Clause::ALL`
+doc had anticipated, and its exhaustive `heading()` match is what forced the
+edit. The decision not to gate the handle is [D-70](DESIGN-NOTES.md#d-70). The
+item as it read when it closed:
+
+- [x] **M26.11** -- Document the capability requirements [examples/epoch_log](examples/epoch_log) places on
+  the handle it is given, and let an unmet one surface at the operation that needs it. **No pre-flight
+  handle check** ([D-70](DESIGN-NOTES.md#d-70)).
+
+  **Why no check, which is the part worth not relitigating.** `M26.10` established that the ring permits a
+  short transfer because it never asks what kind of handle it was given ([RS-P-8](RESPONSE-SPACE.md),
+  [D-69](DESIGN-NOTES.md#d-69)), and the obvious next move is for the log to police what the ring does
+  not. It was examined and rejected: the check points the wrong way. A console handle, a pipe or a closed
+  handle is caught by `GetFileType`, but every one of those already fails loudly at the first positioned
+  write -- the check buys a better message. A RAM disk, a remote share, or a volume whose write cache is
+  not power-protected succeeds at every API call and silently fails to be durable, and no probe catches
+  the last of those at all. So the gate guards the failures that were already loud and misses every
+  failure that is silent, while implying a validation that did not happen.
+
+  **What to write instead.** The log's own contract, stated by the log rather than inherited from the
+  ring, listing what the handle must support: positioned I/O at explicit offsets; `FILE_FLAG_OVERLAPPED`;
+  `FILE_FLAG_NO_BUFFERING` together with the sector-aligned buffer, offset and length it requires; a
+  preallocated extent; that a successful write of `N` bytes transfers `N`; and that a completed flush
+  reaches stable media.
+
+  **Mark the last two for what they are.** The transfer requirement is the `RS-P-8` narrowing this log
+  earns by constraining its input -- it is checkable, and the log already compares transferred against
+  requested, so a mismatch is a contract violation to report loudly rather than a case to absorb. The
+  durability requirement is **a warranty the caller gives**, not a property this code can verify;
+  say so in those words, because a contract that merely sounds confident about it is how a silent
+  failure gets built on.
+
+  **Guard what is guardable, and do not pretend about the rest.** The transferred-against-requested
+  comparison is a real assertion and gets a sabotage case: suppress the comparison and the suite must go
+  red. There is no guard for the durability warranty, and the item is complete with that stated rather
+  than papered over. If the contract carries runnable examples they are compiled as doctests, per the
+  repository's rule that prose containing code must compile.
+
+## Moved 2026-09-25 16:24:00 -04:00 -- M26 complete, all eleven items
+
+Every item was archived individually as it closed, so what migrates here is the milestone's own
+framing -- why a resolver over a permitted space was worth building, and the standing constraint
+that the space must be wider than anything observed. The per-item stubs are dropped, carrying
+nothing the entries above do not already hold.
+
+## M26 -- Test against the space of kernel responses, not one observation of it
+
+Queued by
+[DESIGN-SESSION-2026-09-22-kernel-response-space.md](design-sessions/DESIGN-SESSION-2026-09-22-kernel-response-space.md),
+which set out to answer `M24.1` and found a different technique instead.
+
+**The idea.** A fake that models *what Windows does* freezes one run's testimony. A **resolver**
+models what Windows is *permitted* to do, and a seed picks one resolution out of that space: which
+operations finish inside `SubmitIoRing` and which pend, in what order completions are posted, which
+fail. The assertions are then about **us** -- does this crate behave correctly under that resolution
+-- and never about the kernel. There is no belief to be wrong about, which is why this dissolves the
+mock objection rather than working around it.
+
+**Justified by what it catches, not by hermeticity.** `M24` reaches a hermetic lib suite without it,
+so this milestone has to earn its place on the defect class it detects: code that is brittle to
+platform variation *inside* the permitted space. Nothing in the toolkit that preceded it detected
+that -- [DESIGN-NOTES.md](DESIGN-NOTES.md#what-none-of-them-cover) records that the five techniques
+which existed before `M26` all check this crate against *its own stated contract*. The resolver is
+the sixth, added by this milestone.
+
+**The standing constraint, inherited from the session.** The permitted space must be **wider than
+anything observed**, and must not be derived from observation -- deriving it from what we have seen
+closes the trap again. It is a deliberate specification of what we will tolerate, and therefore a
+reviewable artifact rather than a recording.

@@ -119,13 +119,22 @@
 //! sizing a Model B execution domain to the caller. Three pointers, not a
 //! partitioning policy:
 //!
-//! - **Size a domain by last-level (L3) cache, not by NUMA node.** Node count
-//!   is a firmware setting a process cannot see (AMD NPS, Intel Sub-NUMA
-//!   Clustering), and most real deployments are virtualized, where NUMA
-//!   topology is often invisible entirely. `GetLogicalProcessorInformationEx`
-//!   filtered to `RelationCache` / `CacheLevel == 3` degrades sanely instead:
-//!   one reported domain on a VM is correct. See `examples/l3_domains.rs` for
-//!   a runnable enumeration (M6.3), built on the safe wrapper in
+//! - **Size a domain by the outermost cache level that partitions the
+//!   machine, not by NUMA node.** Node count is a firmware setting a process
+//!   cannot see (AMD NPS, Intel Sub-NUMA Clustering), and most real
+//!   deployments are virtualized, where NUMA topology is often invisible
+//!   entirely. A cache partition degrades sanely instead: a machine whose
+//!   caches partition nothing yields one ring, which is correct.
+//!
+//!   **Ask which level partitions; do not filter on `CacheLevel == 3`.**
+//!   `MachineMemoryTopology::outermost_partitioning_cache` is the one
+//!   definition, and it is not a convenience wrapper over that filter: a
+//!   shipping ARM part reports no L3 at all, and a machine can report an L3
+//!   spanning every processor above a real L2 partition -- where filtering on
+//!   level 3 does not even degrade, because it matched something. It returns
+//!   one whole-machine domain and calls it a cache-aware partition. See
+//!   `examples/cache_domains.rs` for a runnable enumeration (M6.3), built on
+//!   the safe wrapper in
 //!   [`windows-topology-sys`](https://docs.rs/windows-topology-sys).
 //! - **Processor groups are a hard floor.** A thread's affinity is a
 //!   `GROUP_AFFINITY` and a ring's waiter lives in exactly one group, so above
@@ -137,16 +146,20 @@
 //!   happens to run is a one-time cache-warmth question by comparison.
 //!   `VirtualAllocExNuma`, on the node closest to the device, registered once
 //!   into that domain's ring (see [`Batch::register_buffers`]), is very
-//!   likely the highest-leverage locality decision available.
+//!   likely the highest-leverage locality decision available. [`NumaBuffer`]
+//!   is that allocation; *which* node is a question about a caller's storage
+//!   layout, and this crate does not answer it for them.
 //!
-//! # Status
+//! # Where the design lives
 //!
-//! Under construction. The design, including the delivery-architecture guidance
-//! this crate exists to make usable, is recorded in `DESIGN-NOTES.md` beside the
-//! source; the build-out is tracked in `CHECKLIST.md`.
+//! The design, including the delivery-architecture guidance this crate exists
+//! to make usable, is recorded in `DESIGN-NOTES.md` beside the source, and the
+//! work still open against it is tracked in `CHECKLIST.md`.
 
 #![warn(missing_docs)]
 
+#[cfg(windows)]
+mod accounting;
 #[cfg(windows)]
 mod batch;
 #[cfg(windows)]
@@ -165,7 +178,23 @@ mod error;
 #[cfg(all(windows, feature = "threadpool"))]
 mod event_delivery;
 #[cfg(windows)]
+mod numa_buffer_io;
+// M23.3 SPIKE -- exported so a real consumer can be converted, which is the
+// only way to validate whether one type fits the twelve hand-rolled shapes.
+// Whether it stays public is the decision M23.3 has not yet taken.
+#[cfg(windows)]
+mod pending;
+#[cfg(windows)]
 mod ring;
+/// The seam the kernel-response resolver sits under (M26.2).
+///
+/// Private without the `kernel-seam` feature, where it is nothing but
+/// `#[inline(always)]` forwards to the same `windows-sys` calls this crate
+/// made before. With the feature on it additionally publishes
+/// `sys::Responses` and `sys::install`, so a test can answer the calls
+/// that carry an operation instead of the kernel.
+#[cfg(windows)]
+pub mod sys;
 #[cfg(windows)]
 mod token;
 
@@ -183,6 +212,12 @@ pub use capability::{Capabilities, RingVersion, capabilities};
 pub use error::{IoRingError, IoRingErrorExt, RingCondition};
 #[cfg(all(windows, feature = "threadpool"))]
 pub use event_delivery::{EventDelivery, RingScope};
+// Re-exported rather than defined here: the allocator moved to `win-numa-sys`,
+// and re-exporting keeps `windows_ioring_sys::NumaBuffer` resolving for anyone
+// who already bound to it. The `IoBuf`/`IoBufMut` impls live in
+// `numa_buffer_io`, which explains there why they are separated from the type.
+#[cfg(windows)]
+pub use pending::Pending;
 /// The fault-injection seam (M16.3), for exercising failure paths a healthy
 /// machine will not produce on demand. See
 /// [`Completion::with_injected_failure`] for why transforming a real
@@ -190,9 +225,10 @@ pub use event_delivery::{EventDelivery, RingScope};
 #[cfg(all(windows, any(test, feature = "fault-injection")))]
 pub use ring::InjectedFailure;
 #[cfg(windows)]
-pub use ring::{Completion, IoRing, Op, RingInfo};
-#[cfg(windows)]
+pub use ring::{Completion, CompletionWait, IoRing, Op, RingInfo, RingWait, SubmitWait};
 pub use token::Token;
+#[cfg(windows)]
+pub use win_numa_sys::NumaBuffer;
 
 // The crate's markdown documentation is compiled as doctests, so an example that
 // a contract change invalidates breaks the build instead of quietly teaching the

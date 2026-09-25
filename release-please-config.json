@@ -21,7 +21,11 @@
             "component": "windows-platform-probes",
             "versioning": "probe-calver"
         },
-        "crates/windows-file-enumeration-sys": {
+        "crates/win-numa-sys": {
+      "package-name": "win-numa-sys",
+      "component": "win-numa-sys"
+    },
+    "crates/windows-file-enumeration-sys": {
             "package-name": "windows-file-enumeration-sys",
             "component": "windows-file-enumeration-sys"
         },

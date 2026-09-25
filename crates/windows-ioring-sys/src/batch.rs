@@ -10,13 +10,11 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 
 use windows_sys::Win32::Foundation::HANDLE;
 use windows_sys::Win32::Storage::FileSystem::{
-    BuildIoRingCancelRequest, BuildIoRingFlushFile, BuildIoRingReadFile,
-    BuildIoRingRegisterBuffers, BuildIoRingRegisterFileHandles, BuildIoRingWriteFile,
     FILE_FLUSH_DATA, FILE_FLUSH_DEFAULT, FILE_FLUSH_MIN_METADATA, FILE_FLUSH_MODE,
     FILE_FLUSH_NO_SYNC, FILE_WRITE_FLAGS, FILE_WRITE_FLAGS_NONE, FILE_WRITE_FLAGS_WRITE_THROUGH,
     IORING_BUFFER_INFO, IORING_BUFFER_REF, IORING_BUFFER_REF_0, IORING_HANDLE_REF,
     IORING_HANDLE_REF_0, IORING_REF_RAW, IORING_REF_REGISTERED, IORING_REGISTERED_BUFFER,
-    IORING_SQE_FLAGS, IOSQE_FLAGS_DRAIN_PRECEDING_OPS, IOSQE_FLAGS_NONE, SubmitIoRing,
+    IORING_SQE_FLAGS, IOSQE_FLAGS_DRAIN_PRECEDING_OPS, IOSQE_FLAGS_NONE,
 };
 
 use crate::buf::{IoBuf, IoBufMut};
@@ -122,6 +120,31 @@ impl PushOptions {
 /// It is an enum rather than a `bool` for the same reason: `flush(&file,
 /// true)` does not say what the `true` decides, and this is not a parameter
 /// anyone should have to look up.
+///
+/// # The barrier's scope is the ring; the flush's is the file
+///
+/// One call sets both, which makes them easy to merge, and merging them is a
+/// mistake about durability rather than about style:
+///
+/// - **This flag is ring-wide.** [`Self::CoversPrecedingOperations`] means the
+///   flush does not execute until every operation outstanding *on the ring*
+///   when it was reached has **completed** -- whatever file each one targets,
+///   and whoever queued it (D-47, measured over roughly 4,500 trials).
+/// - **The flush names one file.** [`Batch::flush`] takes a [`FileTarget`], so
+///   what a syncing [`FlushMode`] pushes to stable media is that file's data
+///   and the device cache behind it.
+///
+/// **Completion is not durability.** A write completing means the kernel took
+/// the bytes, not that they reached non-volatile media. So the barrier bounds
+/// what a flush **waits for**, and the flush itself bounds what is **made
+/// durable**, and those are different sets whenever a ring carries operations
+/// against more than one file.
+///
+/// The practical consequence for a caller is cost rather than correctness:
+/// operations this flush will never make durable can still make it wait. A
+/// caller who cares about that bounds it by controlling what shares the ring;
+/// this crate does not decide that (D-8), and the flush's own target is what
+/// secures the durability of the file named.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum FlushCoverage {
     /// Wait for every operation already outstanding on the ring, then flush.
@@ -1053,8 +1076,17 @@ impl<B: IoBufMut> Drop for RegisteredBuffers<B> {
             // simply never reclaimed rather than freed out from under a
             // still-outstanding op. Any one buffer still in use holds the
             // whole registration, because they are freed together.
+            //
+            // Silent while already panicking (M23.4). A second panic during
+            // unwind aborts the process, which *replaces* the failure that
+            // started the unwind: a test asserting on a leaked slot reports
+            // `STATUS_STACK_BUFFER_OVERRUN` instead of its own message, so
+            // the diagnosis is destroyed by the guard meant to aid it. The
+            // leak is still refused -- the early `return` below is what makes
+            // leaking rather than freeing the failure mode, and it happens
+            // either way.
             debug_assert!(
-                false,
+                std::thread::panicking(),
                 "RegisteredBuffers dropped while an operation still references it"
             );
             return;
@@ -1241,14 +1273,14 @@ impl<'ring> Batch<'ring> {
         let len = checked_len(buffer.bytes_len())?;
         let address = buffer.stable_mut_ptr().cast::<c_void>();
         let target = handle_ref(file.into(), self.ring.ring_id())?;
-        let token = Token::new(self.ring, buffer)?;
+        let token = Token::new(self.ring.accounting_mut(), buffer)?;
         let user_data = token.id();
         // SAFETY: `self.ring`'s handle is live; `address` is `IoBufMut`'s
         // promised stable, exclusively-owned pointer, valid for `len` bytes
         // until `token` is claimed; `file` is the caller's to keep alive,
         // forwarded from this function's own contract.
         let hr = unsafe {
-            BuildIoRingReadFile(
+            crate::sys::build_read(
                 self.ring.raw_handle(),
                 target,
                 raw_buffer_ref(address),
@@ -1281,7 +1313,7 @@ impl<'ring> Batch<'ring> {
         let len = checked_len(buffer.bytes_len())?;
         let address = buffer.stable_mut_ptr().cast::<c_void>();
         let target = handle_ref(file.as_file_ref(), self.ring.ring_id())?;
-        let token = Token::new(self.ring, (buffer, file.guard()))?;
+        let token = Token::new(self.ring.accounting_mut(), (buffer, file.guard()))?;
         let user_data = token.id();
         // SAFETY: `self.ring`'s handle is live; `address` is `IoBufMut`'s
         // promised stable, exclusively-owned pointer, valid for `len` bytes
@@ -1290,7 +1322,7 @@ impl<'ring> Batch<'ring> {
         // for a `SharedFile`, and nothing needing to be kept alive at all for
         // a `RegisteredFile`, whose index names the ring's own table.
         let hr = unsafe {
-            BuildIoRingReadFile(
+            crate::sys::build_read(
                 self.ring.raw_handle(),
                 target,
                 raw_buffer_ref(address),
@@ -1332,14 +1364,14 @@ impl<'ring> Batch<'ring> {
         let len = checked_len(buffer.bytes_len())?;
         let address = buffer.stable_ptr().cast_mut().cast::<c_void>();
         let target = handle_ref(file.into(), self.ring.ring_id())?;
-        let token = Token::new(self.ring, buffer)?;
+        let token = Token::new(self.ring.accounting_mut(), buffer)?;
         let user_data = token.id();
         // SAFETY: `address` is `IoBuf`'s promised stable pointer, valid for
         // `len` bytes until `token` is claimed; the kernel only reads
         // through it for a write, so the cast away from `const` does not
         // authorize mutation. `file` is the caller's to keep alive.
         let hr = unsafe {
-            BuildIoRingWriteFile(
+            crate::sys::build_write(
                 self.ring.raw_handle(),
                 target,
                 raw_buffer_ref(address),
@@ -1373,12 +1405,12 @@ impl<'ring> Batch<'ring> {
         let len = checked_len(buffer.bytes_len())?;
         let address = buffer.stable_ptr().cast_mut().cast::<c_void>();
         let target = handle_ref(file.as_file_ref(), self.ring.ring_id())?;
-        let token = Token::new(self.ring, (buffer, file.guard()))?;
+        let token = Token::new(self.ring.accounting_mut(), (buffer, file.guard()))?;
         let user_data = token.id();
         // SAFETY: as `write_raw`'s; `target` stays valid at least as long as
         // `token`'s hold on `file`'s guard does (see `Batch::read`).
         let hr = unsafe {
-            BuildIoRingWriteFile(
+            crate::sys::build_write(
                 self.ring.raw_handle(),
                 target,
                 raw_buffer_ref(address),
@@ -1507,7 +1539,7 @@ impl<'ring> Batch<'ring> {
         // keep alive, forwarded from this function's own contract; there is
         // no buffer.
         let hr = unsafe {
-            BuildIoRingFlushFile(
+            crate::sys::build_flush(
                 self.ring.raw_handle(),
                 target,
                 mode.raw(),
@@ -1545,12 +1577,12 @@ impl<'ring> Batch<'ring> {
     ) -> io::Result<Token<F::Guard>> {
         self.require(Op::Flush)?;
         let target = handle_ref(file.as_file_ref(), self.ring.ring_id())?;
-        let token = Token::new(self.ring, file.guard())?;
+        let token = Token::new(self.ring.accounting_mut(), file.guard())?;
         let user_data = token.id();
         // SAFETY: `target` stays valid at least as long as `token`'s hold on
         // `file`'s guard does (see `Batch::read`); there is no buffer.
         let hr = unsafe {
-            BuildIoRingFlushFile(
+            crate::sys::build_flush(
                 self.ring.raw_handle(),
                 target,
                 mode.raw(),
@@ -1594,7 +1626,7 @@ impl<'ring> Batch<'ring> {
         // keep alive, forwarded from this function's own contract;
         // `BuildIoRingCancelRequest` takes no SQE-flags parameter.
         let hr =
-            unsafe { BuildIoRingCancelRequest(self.ring.raw_handle(), handle, target, user_data) };
+            unsafe { crate::sys::build_cancel(self.ring.raw_handle(), handle, target, user_data) };
         if let Err(error) = check(hr) {
             self.ring.cancel_reservation();
             return Err(error);
@@ -1623,13 +1655,13 @@ impl<'ring> Batch<'ring> {
     ) -> io::Result<Token<F::Guard>> {
         self.require(Op::Cancel)?;
         let handle = handle_ref(file.as_file_ref(), self.ring.ring_id())?;
-        let token = Token::new(self.ring, file.guard())?;
+        let token = Token::new(self.ring.accounting_mut(), file.guard())?;
         let user_data = token.id();
         // SAFETY: `handle` stays valid at least as long as `token`'s hold on
         // `file`'s guard does (see `Batch::read`);
         // `BuildIoRingCancelRequest` takes no SQE-flags parameter.
         let hr =
-            unsafe { BuildIoRingCancelRequest(self.ring.raw_handle(), handle, target, user_data) };
+            unsafe { crate::sys::build_cancel(self.ring.raw_handle(), handle, target, user_data) };
         self.finish_push(hr, token)
     }
 
@@ -1706,7 +1738,7 @@ impl<'ring> Batch<'ring> {
         // measurement (D-32), not inherited from the sibling registration,
         // which behaves the opposite way.
         let hr = unsafe {
-            BuildIoRingRegisterFileHandles(
+            crate::sys::build_register_files(
                 self.ring.raw_handle(),
                 count,
                 handles.as_ptr(),
@@ -1795,7 +1827,7 @@ impl<'ring> Batch<'ring> {
         // keeps alive via the returned `PendingBufferRegistration` and, once
         // claimed, `RegisteredBuffers`.
         let hr = unsafe {
-            BuildIoRingRegisterBuffers(self.ring.raw_handle(), count, infos_ptr, user_data)
+            crate::sys::build_register_buffers(self.ring.raw_handle(), count, infos_ptr, user_data)
         };
         if let Err(error) = check(hr) {
             self.ring.cancel_reservation();
@@ -1844,7 +1876,7 @@ impl<'ring> Batch<'ring> {
         let target = handle_ref(file.into(), self.ring.ring_id())?;
         let index = registration.checked_span(span)?;
         let token = Token::new(
-            self.ring,
+            self.ring.accounting_mut(),
             registration.begin_use(span, KernelAccess::WritesBuffer),
         )?;
         let user_data = token.id();
@@ -1853,7 +1885,7 @@ impl<'ring> Batch<'ring> {
         // `file` is the caller's to keep alive, forwarded from this
         // function's own contract.
         let hr = unsafe {
-            BuildIoRingReadFile(
+            crate::sys::build_read(
                 self.ring.raw_handle(),
                 target,
                 registered_buffer_ref(index, span.offset),
@@ -1893,7 +1925,7 @@ impl<'ring> Batch<'ring> {
         let target = handle_ref(file.as_file_ref(), self.ring.ring_id())?;
         let index = registration.checked_span(span)?;
         let token = Token::new(
-            self.ring,
+            self.ring.accounting_mut(),
             (
                 registration.begin_use(span, KernelAccess::WritesBuffer),
                 file.guard(),
@@ -1904,7 +1936,7 @@ impl<'ring> Batch<'ring> {
         // buffer stays put until it drops; `target` stays valid at least as
         // long as `token`'s hold on `file`'s guard does (see `Batch::read`).
         let hr = unsafe {
-            BuildIoRingReadFile(
+            crate::sys::build_read(
                 self.ring.raw_handle(),
                 target,
                 registered_buffer_ref(index, span.offset),
@@ -1946,14 +1978,14 @@ impl<'ring> Batch<'ring> {
         let target = handle_ref(file.into(), self.ring.ring_id())?;
         let index = registration.checked_span(span)?;
         let token = Token::new(
-            self.ring,
+            self.ring.accounting_mut(),
             registration.begin_use(span, KernelAccess::ReadsBuffer),
         )?;
         let user_data = token.id();
         // SAFETY: as `read_registered_raw`; the kernel only reads through
         // this reference for a write.
         let hr = unsafe {
-            BuildIoRingWriteFile(
+            crate::sys::build_write(
                 self.ring.raw_handle(),
                 target,
                 registered_buffer_ref(index, span.offset),
@@ -1993,7 +2025,7 @@ impl<'ring> Batch<'ring> {
         let target = handle_ref(file.as_file_ref(), self.ring.ring_id())?;
         let index = registration.checked_span(span)?;
         let token = Token::new(
-            self.ring,
+            self.ring.accounting_mut(),
             (
                 registration.begin_use(span, KernelAccess::ReadsBuffer),
                 file.guard(),
@@ -2003,7 +2035,7 @@ impl<'ring> Batch<'ring> {
         // SAFETY: as `read_registered`'s; the kernel only reads through
         // this reference for a write.
         let hr = unsafe {
-            BuildIoRingWriteFile(
+            crate::sys::build_write(
                 self.ring.raw_handle(),
                 target,
                 registered_buffer_ref(index, span.offset),
@@ -2025,7 +2057,14 @@ impl<'ring> Batch<'ring> {
     ///
     /// # Errors
     ///
-    /// Returns any error from `SubmitIoRing`.
+    /// Returns any error from `SubmitIoRing`. **An error means the entries
+    /// were not submitted and remain in the submission queue**, which is the
+    /// documented behaviour of that call: *"If this function returns an error
+    /// other than IORING_E_WAIT_TIMEOUT, then all entries remain in the
+    /// submission queue."* They are not lost and they are not rewound
+    /// ([D-5](../DESIGN-NOTES.md#d-5)) -- a later submit on this ring is what
+    /// runs them, so **the buffers they reference must stay alive**. Whether
+    /// and when to submit again is the caller's policy, not this crate's.
     pub fn submit(self) -> io::Result<u32> {
         self.submit_and_wait(0, 0)
     }
@@ -2040,9 +2079,22 @@ impl<'ring> Batch<'ring> {
     /// submitted rather than completed (M10.2). Drain with
     /// [`crate::IoRing::try_pop`] and count for yourself.
     ///
+    /// **A wait that expires is success, not failure** (M26.8). `SubmitIoRing`
+    /// answers `IORING_E_WAIT_TIMEOUT` in that case, and its documented
+    /// meaning is *"All operations were submitted without error and the
+    /// subsequent wait timed out"* -- so the submission half did everything it
+    /// was asked to. Reporting that as an `Err` is the defect `M21.6` fixed
+    /// for [`crate::IoRing::pop_within`]; this site was missed by that sweep
+    /// and kept it until `M26.8`. The distinction is not cosmetic: an `Err`
+    /// here means the entries are **still queued**, and a caller who frees
+    /// their buffers on seeing one would hand the kernel freed memory on the
+    /// next submit.
+    ///
     /// # Errors
     ///
-    /// Returns any error from `SubmitIoRing`.
+    /// Returns any error from `SubmitIoRing` **other than an expired wait**.
+    /// As [`Batch::submit`], an error means the entries remain in the
+    /// submission queue and their buffers must stay alive.
     pub fn submit_and_wait(mut self, wait_operations: u32, timeout_ms: u32) -> io::Result<u32> {
         self.do_submit(wait_operations, timeout_ms)
     }
@@ -2051,7 +2103,7 @@ impl<'ring> Batch<'ring> {
         let mut submitted = 0_u32;
         // SAFETY: `self.ring`'s handle is live.
         let hr = unsafe {
-            SubmitIoRing(
+            crate::sys::submit(
                 self.ring.raw_handle(),
                 wait_operations,
                 timeout_ms,
@@ -2066,7 +2118,16 @@ impl<'ring> Batch<'ring> {
         // succeed on the retry, submitting operations the caller's `Err`
         // never told them about.
         self.submitted = true;
-        check(hr)?;
+        // `IORING_E_WAIT_TIMEOUT` is not a submission failure: the documented
+        // meaning of that code is that every entry went in and only the wait
+        // ran out (M26.8). Passing it to `check` reported a successful submit
+        // as an error, which is `M21.6`'s defect at the one site that sweep
+        // did not reach -- and the worse half is that it made an `Err` here
+        // ambiguous between "still queued" and "submitted, wait expired",
+        // which have opposite consequences for buffer ownership.
+        if !crate::ring::every_entry_was_submitted(hr) {
+            check(hr)?;
+        }
         Ok(submitted)
     }
 }

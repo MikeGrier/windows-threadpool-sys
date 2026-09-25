@@ -33,6 +33,11 @@ targets = ["x86_64-pc-windows-msvc"]
 # the core completion machinery, not any operation-family adapter (fs, socket, device).
 windows-overlapped-io-sys = { version = "0.1.3", path = "../windows-overlapped-io-sys", default-features = false }
 
+[features]
+# A trace for defects that only appear under concurrency. Off by default and
+# absent from the compiled output when off, because the instrument for that
+# class of problem must not change the schedule it is measuring.
+trace = []
 [dependencies.windows-sys]
 version = "0.61.2"
 default-features = false

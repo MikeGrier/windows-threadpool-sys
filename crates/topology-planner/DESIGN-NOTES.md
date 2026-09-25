@@ -22,8 +22,9 @@ renamed to match.
 | <a id="ep-d-1"></a>EP-D-1 | **The shard-set query**: what the planner must know to choose which processors host a domain, and what today's model cannot tell it. |
 | <a id="ep-d-2"></a>EP-D-2 | **The proximity query**: how close two processors are, which selects the channel between their domains. Takes an **unordered** pair; the model has no answer today. |
 | <a id="ep-d-3"></a>EP-D-3 | **The residency query**: where a domain's pool lives, and which side of a cross-domain pair should host a shared ring. **Ordered**, with directed cost entering through the abstract model/adapter path under [D-20](../windows-topology-sys/DESIGN-NOTES.md#d-20). |
-| <a id="ep-d-4"></a>EP-D-4 | **The four-part architecture, and the planner's name.** The engineer's position: the planner is **`topology-planner`** (no `windows-` prefix); it takes a **goal** description (shape deferred for litigation), queries an **abstracted idealized** model covering processors, memory, storage, interconnects, distances and bottlenecks, and emits a **JSON-serializable, platform-neutral** plan. Two kinds of **adapter** bracket it: one exposing the planner's traits over the Windows topology objects, one **realizing** a plan as buffers, rings and threads with the user's code inserted at the right steps. Settles `MMT-1.5` (the facts crate keeps its `-sys` name), the "two graphs, one word" ambiguity, and where distance lives -- the attributed interconnect shape D-9 sketched goes in the abstract model, so D-9's deferral in the facts crate stands unreopened. |
+| <a id="ep-d-4"></a>EP-D-4 | **The four-part architecture, and the planner's name.** The engineer's position: the planner is **`topology-planner`** (no `windows-` prefix); it takes a **goal** description (shape settled by [EP-D-6](#ep-d-6)), queries an **abstracted idealized** model covering processors, memory, storage, interconnects, distances and bottlenecks, and emits a **JSON-serializable, platform-neutral** plan. Two kinds of **adapter** bracket it: one exposing the planner's traits over the Windows topology objects, one **realizing** a plan as buffers, rings and threads with the user's code inserted at the right steps. Settles `MMT-1.5` (the facts crate keeps its `-sys` name), the "two graphs, one word" ambiguity (widened to four graphs by [EP-D-6](#ep-d-6)), and where distance lives -- the attributed interconnect shape D-9 sketched goes in the abstract model, so D-9's deferral in the facts crate stands unreopened. |
 | <a id="ep-d-5"></a>EP-D-5 | **The component layout: `topology-model` is its own crate, and dependencies point one way.** The abstract model and the traits the planner queries live in `topology-model`, which the planner and both adapters depend on; non-planner components do not depend on `topology-planner`. Putting the traits in the planner would make a crate whose job is to *describe a machine* depend on one that applies *policy* -- the same defect as `outermost_partitioning_cache`, arriving as a dependency edge instead of an API. Two consequences derived from the same rule rather than decided separately: **the plan type also lives in `topology-model`** (otherwise the realizer depends on the planner), and the inward adapter and the realizer are **separate crates** (their dependency sets barely overlap, and fusing them would make reading a topology pull in the whole runtime). |
+| <a id="ep-d-6"></a>EP-D-6 | **The goal's shape, and planning as two stages with a plural answer.** Discharges the deferral [EP-D-4](#ep-d-4) named. The caller supplies **a sufficiently abstract definition of the application's input, output, and processing code paths** -- a dataflow description, not a topology preference. From it the planner performs **two inferences in sequence**: first, with no machine in hand, the **general connectivity and directed flow of data** needed to realize that graph; then, given a physical machine model, **one or more suggested realizations** of the graph as specific execution threads pinned to specific processor groups, with a stated number of queues of stated types. The answer is **plural by construction**: the planner proposes candidates for the developer to choose between, and does not return the one true arrangement. |
 
 ## EP-D-1: the shard-set query
 
@@ -264,6 +265,8 @@ Detailed trigger analysis and prior framing are recorded in
 
 ## EP-D-4: the four-part architecture, and the planner's name
 
+**The goal's deferred shape is now settled by [EP-D-6](#ep-d-6).** The rest of this decision stands.
+
 *The engineer's position, 2026-09-03. This is a **choice**, not one of M1's queries, and it
 re-scopes the component that records it.*
 
@@ -272,8 +275,9 @@ re-scopes the component that records it.*
 **The planner is `topology-planner`** -- deliberately with no `windows-` prefix.
 
 - **Input**: a description of the **goal** of the topology -- what the caller intends the
-  arrangement to achieve. Its shape is **explicitly deferred for litigation**, which is a named
-  deferral rather than an omission.
+  arrangement to achieve. Its shape was **explicitly deferred for litigation** when this decision
+  was written, which was a named deferral rather than an omission; it has since been settled as a
+  dataflow description by [EP-D-6](#ep-d-6).
 - **What it queries**: an **abstracted, idealized** description of the machine, covering
   **processors, memory, storage (NVMe), interconnects, distances, and bottlenecks**. Not
   Windows-shaped, and materially richer than what any one platform reports.
@@ -391,3 +395,85 @@ the caller did not ask for" rule that decided the layout in the first place.
 - **Whether `topology-model` is one crate or eventually two.** The machine description and the plan
   vocabulary are different enough that they might separate later. They are together now because
   splitting on speculation costs more than merging on evidence.
+
+## EP-D-6: the goal's shape, and planning as two stages with a plural answer
+
+*Recorded 2026-09-23, from the engineer's statement of the component's purpose. Discharges the
+deferral [EP-D-4](#ep-d-4) named as "shape deferred for litigation". Supplies the input half that
+[CHECKLIST.md](CHECKLIST.md) `EP-1+.1` was opened to describe.*
+
+### The decision
+
+The caller supplies **a sufficiently abstract definition of the application's input, output, and
+processing code paths**. That is a **dataflow description**: what comes in, what goes out, and what
+the code does between them. It is deliberately not a topology preference, not a domain count, and
+not a queue selection -- the caller states what their application *is*, not how it should be
+arranged.
+
+From that the planner performs **two inferences, in sequence**:
+
+1. **Connectivity, with no machine in hand.** Infer the general connectivity and the **directed flow
+   of data** needed to realize the described graph. This stage answers what must connect to what,
+   and in which direction, and it is complete before any machine is considered.
+
+2. **Realization, given a physical machine model.** Respond with **one or more suggested
+   realizations** of that graph: specific execution threads pinned to specific processor groups, a
+   stated number of queues of stated types, and the placements the plan already covers under
+   [EP-D-5](#ep-d-5).
+
+### What it settles that was previously open
+
+**The goal is a dataflow description.** [EP-D-4](#ep-d-4) recorded the goal as an input whose shape
+was deferred, and [EP-D-3](#ep-d-3) established that a measured number means nothing without knowing
+what it measured. The dataflow description is what makes a measurement meaningful, because an edge
+in the graph carries what is flowing along it. The small-message-handoff versus large-buffer-
+streaming distinction that `EP-1+.1` named as a minimum bar is therefore **an attribute of an edge**,
+not the scenario in its entirety.
+
+**There is an intermediate artifact, and it is machine-independent.** Stage 1's output -- the
+connectivity graph with its directed flow -- is a thing in its own right, derived before any machine
+exists. [EP-D-5](#ep-d-5) argued the plan should be a *value* so it can be inspected, compared and
+reviewed before anything is pinned or allocated; the same argument applies one stage earlier and
+more strongly, because this artifact can be examined without even a synthetic machine. It follows
+that the graph has a type rather than being an internal step.
+
+**The answer is plural.** The planner returns *one or more* suggested realizations, not the
+arrangement. This is not hedging: on a given machine several arrangements are defensible, they
+differ in ways the planner cannot rank without knowing what the developer values, and presenting
+them as candidates is what lets the developer choose. It is the component-level form of OPTION
+INTEGRITY in [copilot-instructions.md](../../.github/copilot-instructions.md) -- propose options and
+supply the data to choose between them, rather than returning a verdict. A consequence to hold onto:
+whatever renders a plan for a human (`M2+.2`) is rendering a *set*, and the difference between
+candidates is the part a reader needs most.
+
+### Why this is the mechanism the adoption thesis needs
+
+[The adoption thesis](../../DESIGN-NOTES.md#the-adoption-thesis) holds that the principal barrier to
+non-uniformity being exploited outside the datacenter is that exploiting it is an architectural
+commitment demanded at the beginning of a design, when the least is known. **This component is how
+that commitment is removed.** The developer describes their own dataflow -- which they must know
+anyway, and which is a statement about their application rather than about any machine -- and never
+makes a topology decision at all. The locality reasoning happens here, against a machine model, at a
+point where the machine is actually known.
+
+That is also why the two stages are separated rather than fused. Stage 1 depends only on the
+application, so it is stable across every machine the application will ever run on; stage 2 is where
+a machine enters, and is the only part that must be redone when the machine changes. Fusing them
+would make the application's own structure re-derivable only in the presence of a machine, which is
+precisely the coupling the thesis objects to.
+
+### What this does not settle
+
+- **The concrete vocabulary of the dataflow description.** "Input, output, and processing code
+  paths" states the *shape*; the types, and how a caller expresses an edge's characteristics, are
+  `EP-1+.1`'s remaining work.
+- **Where the two new types live.** [EP-D-5](#ep-d-5)'s rule -- a component that only describes or
+  realizes must not depend on planning policy -- applies to both the dataflow description and the
+  connectivity graph, and points at `topology-model` for the same reason it placed the plan type
+  there. That is an argument, not yet a decision, and it is queued rather than taken here.
+- **How many candidates, and how they are ordered.** "One or more" is the contract; whether the
+  planner bounds the set, and whether it orders candidates at all given that ranking is what it
+  declines to do, is `M3+` policy work.
+- **Whether stage 1 can fail.** A description whose connectivity cannot be realized is possible, and
+  nothing here says what happens then. Related to `EP-1.4`, which asks the same question for an
+  unanswered model query.

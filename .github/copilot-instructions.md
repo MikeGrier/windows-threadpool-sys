@@ -115,6 +115,52 @@ baseline truly unaffordable, that is a **decision for the engineer driving the w
 raised explicitly per the PRIME DIRECTIVE's blocker protocol — never a shortcut an
 assistant takes unilaterally in the name of efficiency.
 
+## OPTION INTEGRITY — enable choices; foreclose only on analytic grounds
+
+**Our job is to enable options.** Unless an option can be shown to have *no possible
+value*, expose it, and give clients the tools to choose it when it applies and to gather
+the data that makes the choice well-founded. The default posture toward a design
+alternative is to keep it and instrument it, not to rank it.
+
+**The reason this repository needs the rule more than most is recorded separately**, in
+[DESIGN-NOTES.md](../DESIGN-NOTES.md) → [The adoption thesis](../DESIGN-NOTES.md#the-adoption-thesis):
+the hardware that would make these tradeoffs measurable is not available here, and the
+people best placed to judge the options are application authors we have not met. Read it
+before arguing that a particular option is safe to drop — the two conditions it names are
+temporary in principle and are not temporary in practice.
+
+**A measurement that failed to realise an option's value is not a finding against the
+option.** It may mean the hardware, the workload, the software configuration, or the
+apparatus could not reach the conditions where the value appears. Saying "we measured it
+and it did not help" is a statement about the *measurement*; converting it into "it does
+not help" is a category error, and it is the one this rule exists to stop.
+
+**This binds hardest where there is literature or prior art suggesting conditional
+applicability.** Queue and ring topologies, cache and NUMA placement, batching strategies,
+and scheduling disciplines all have regimes where each choice wins. An in-repo measurement
+on one machine cannot settle a question the field treats as workload-dependent, and this
+repository's own decisions (for example that one ring per thread is userspace's proxy for
+one ring per CPU, with NVMe queue pairs as the hardware reason) frequently *are* that prior
+art. Contradicting a recorded decision on the strength of one sample's configuration is a
+defect, not a finding.
+
+**What does justify removing or narrowing an option** is a clear analytic result, of the
+kind that can be argued from the code rather than from a run:
+
+- fewer instructions, fewer allocations, fewer I/Os issued;
+- better locality of reference, argued structurally;
+- a smaller support burden or a clearer programming model;
+- a demonstrated *wrong answer* — an option that binds to incidental behaviour, produces
+  overlapping domains, or silently reports success while doing the wrong thing.
+
+The last is the honest ground for most removals here: not "it measured slower" but "it
+computes the wrong thing."
+
+**When an option stays but cannot be shown to pay, say exactly that**, and say what would
+change the answer: which conditions the apparatus could not reach, and what a consumer
+would need to measure on their own hardware. Foreclosing costs a client a choice they may
+have needed; keeping an unproven option costs a paragraph.
+
 ## Line endings in tool parameters
 
 All text content passed to tpu tools (`content`, `replacement`, `data` in edit ops) is
@@ -661,7 +707,7 @@ When executing checklist items (CHECKLIST.md files):
 - **If items must be done together, say so and do it; don't tease apart.** Once you have decided (and recorded in the checklist if the structure is wrong) that two items must land together, commit them together in one commit citing both IDs. Do **not** try to "unthread" a coupled implementation into per-item commits after the fact — that is fiction, not history.
 - **Commit immediately after each item.** In mode b (implementing forward), the commit must happen before moving to the next item. In mode a (recording already-finished work), a single commit citing all the item IDs satisfies this.
 - **Commit message format: a Conventional Commits subject line, with the checklist trailer in the body.**
-  `release-please` (see "Release process" in [DEVELOPMENT.md](DEVELOPMENT.md)) drives every crate's version
+  `release-please` (see "Release process" in [DEVELOPMENT.md](../DEVELOPMENT.md)) drives every crate's version
   bump and CHANGELOG **only** from Conventional Commits subject lines (`type(scope)!: summary`); a subject
   that doesn't match that grammar is invisible to it, no matter how much checklist work the commit records.
   The mandatory `Completed item:` provenance is therefore never the subject line — it moves to the body, and
@@ -1142,6 +1188,65 @@ If a plan exceeds roughly 10 work items or 3 levels of grouping/nesting, checkpo
 into a CHECKLIST.md file in the repository before continuing. The goal is that the plan
 survives a lost session — if the plan only exists in the chat, it will be lost.
 
+## RESOLUTION GRADIENT — sharp at the front, deliberately coarse behind, and never manufacture certainty
+
+**A plan is written at decreasing resolution with distance from the present.** The current
+milestone has great resolution. Later milestones are progressively coarser, and that
+coarseness is **correct** — it is not an omission to be closed, and an audit or review pass
+must not treat it as one.
+
+**Why it cannot be otherwise here.** Some work has the shape *build the blocks → build the
+measurement tools → experiment with those tools to infer things*. On such a project the
+later milestones are not merely unwritten, they are **unwritable**: the experiments that
+would resolve them have not happened. The clarity is an **output** of the work, not an
+input being withheld from it. A project small enough to plan end-to-end before
+implementing is a different case, and the distinction is worth making explicitly before
+planning begins.
+
+**The failure mode this exists to stop.** An assistant asks a *very specific* question of
+someone who holds a *general sense* of the direction. The specificity of the question
+implies an answer of matching precision is available, so one is produced — at low
+confidence. It is then recorded as a decision, and it lands in the wrong milestone, or in
+the wrong order, and later work binds to it. **A low-confidence answer recorded as a
+decision is worse than no answer**, because the uncertainty that surrounded it is now
+invisible to everyone downstream.
+
+Four rules follow:
+
+1. **Calibrate the question to the resolution actually available.** Ask whether the general
+   direction is right before asking which of five options to take. If a question would only
+   be answerable *after* work that has not been done, it is not yet a question — it is a
+   description of that work.
+2. **Make "too early to say" a first-class, explicitly offered answer.** When presenting
+   options, say plainly that leaving it coarse is among them. A question posed without that
+   option is a question that forces a choice, and the person answering may not notice they
+   have been forced.
+3. **When an answer arrives hedged, record the hedge.** A direction that is not settled is a
+   **working position, not a decision**: it gets no decision ID, it lives in Tier 2 or Tier 3
+   or a heading that says so, and nothing binds to it. The worked example already in the tree
+   is "Working position on domain counts (not a decision)" in
+   [DESIGN-SESSION-2026-08-30-numa-sharded-io-execution-domains.md](../design-sessions/DESIGN-SESSION-2026-08-30-numa-sharded-io-execution-domains.md).
+4. **Prefer questions that unblock the current milestone.** If the answer would not change
+   what happens next, asking now mostly converts uncertainty into a record of false
+   precision.
+
+**A deferral is productive, not merely protective.** Naming a deferral is usually read as
+"we avoided building on a guess", which is true and is the smaller half. The larger half is
+that it **buys the interval in which the answer becomes derivable** — the blocks get built,
+the instruments get written, the experiments get run, and the answer that was unavailable
+becomes obvious. So when a deferral discharges, do **not** write it up as though the answer
+existed all along and was waiting to be stated. Say what in the interval produced it. The
+difference matters because the first framing quietly teaches that asking earlier and harder
+would have worked, which is exactly the behaviour rule 1 forbids.
+
+**This does not soften the PRIME DIRECTIVE, and the two must not be confused.** They govern
+different objects. The PRIME DIRECTIVE forbids deferring **work** because no consumer for it
+is currently visible; this rule forbids manufacturing **decisions** the work has not yet made
+available. Building a capability nothing calls yet is required; inventing a specific answer to
+a question the experiments have not reached is not. When they appear to collide, the test is
+whether the thing being deferred is *work you could do now* — if it is, do it, and the
+gradient has nothing to say about it.
+
 ## Design notes are not a work queue
 
 Design notes (DESIGN-NOTES.md, DESIGN-RATIONALE.md, and related files) record *decisions*
@@ -1304,7 +1409,7 @@ sites in three wordings.
 
 **This is the data-side twin of rule 1.** Rule 1 says define a fact once in code and have everything
 ask. This says the same of measurements: hold the number once, and have prose point rather than
-paraphrase.
+paraphrase. Rule 6 extends it once more, to facts that are *derived* rather than measured.
 
 ### 5. Present what was observed; never write the conclusion
 
@@ -1350,6 +1455,57 @@ This is **not a new rule** — it is [D-no-client-prescriptions](../crates/windo
 crate that happens to publish measurements. Every instance found so far has been a violation of that
 existing decision rather than a gap in it. Apply it while writing: no checker can find these,
 because nothing is inconsistent.
+
+### 6. Never store a fact another artifact already owns
+
+Rule 4 governs *measured* numbers. This governs every **derived** fact -- anything a reader could get
+from an artifact that is already authoritative for it. Release or publication status, version numbers,
+which milestones are done, whether a branch has landed, how many crates or tests or files there are.
+Writing one into prose creates a second copy whose only maintenance mechanism is somebody remembering,
+and remembering is what fails.
+
+The tell is that **the copy cannot be wrong at the moment it is written.** It is accurate -- that is why
+it gets written -- and nothing will ever say when it stopped being. A wrong decision gets argued with; a
+stale derived fact is simply believed.
+
+- **Delete rather than update.** When you find a stale derived fact, correcting it is almost never the
+  fix: it re-arms the identical hazard with a fresh date on it. Remove the claim and link the artifact
+  that owns the answer.
+- **Removing the digits is not enough.** "Published at 0.3.1" and "is published" are both copies of the
+  release state; only the first is obviously one. Rule 4's "write the claim, not the digits" shrinks the
+  drift surface of a *measurement whose claim is itself the finding*. It does not license storing a
+  derived fact in words.
+- **An absence may be worth one sentence, once.** Where a reader would expect a status section and find
+  none, say the omission is deliberate and name the artifact that answers it -- otherwise somebody
+  helpfully adds it back.
+- **A characterisation of a sibling item is a derived fact too, and this is the clause that was
+  missing.** "`M22` is a testing-heavy milestone", "`M23.1` touches the crate's contract surface",
+  "those tests only use public API" -- each summarises an artifact that already says what it is, and
+  each is wrong the moment that artifact changes or was misread in the first place. **Link the item;
+  do not describe it.** Measured cost of the omission: both examples above are real, both were
+  written into a milestone's rationale in one session, and both were false when checked -- `M22` is
+  example-only and `M23.1` names the *sample's* `contract.rs`, not the crate's.
+  This is the harder half of the rule to apply, because such a claim arrives as a *subordinate
+  clause supporting an argument* rather than as a statement of fact. "X, because Y is Z" reads as
+  connective tissue; `Y is Z` is nonetheless an assertion about the tree, and the reflex that fires
+  on "I am about to write a version number" does not fire on it. Treat the word **because**,
+  followed by anything about another file, item or milestone, as the tell.
+- **This does not reach the primary record.** Decisions, measurements, rationale, design intent, and a
+  checklist's own contents are owned here and belong here. The test is simply whether some other
+  artifact is already authoritative: if yes, point at it; if no, this *is* the artifact.
+
+**FAIL FAST rule 6 is the sibling, not a contradiction.** That rule says a claim that counts or
+enumerates repository artifacts must come from a command rather than from recollection. This is the
+prior question -- prefer not to state it at all. Bind it to a command only when the claim must exist
+anyway, such as a test asserting a property of the tree.
+
+Worked example, and the reason this is written down: `windows-ioring-sys`' design notes opened with
+"This crate does not exist yet as compiled code", and its published rustdoc said "Under construction",
+several releases after the first one shipped. The first attempt at a fix replaced both with a carefully
+drift-minimised status paragraph -- no version number, linking `CHANGELOG.md` and the checklists -- and
+that was still wrong, because "is published" is itself a copy of the release state. What the crate's
+status is, is a question `CHANGELOG.md` and the git tags answer. The notes now record that they
+deliberately do not answer it.
 
 ## FAIL FAST — push every rule to the earliest rung that can enforce it
 

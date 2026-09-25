@@ -142,8 +142,30 @@ impl Committer {
     /// # Errors
     ///
     /// The flush's own failure, if it failed. A failed commit advances
-    /// nothing: the epoch it was closing is *not* durable, and saying so is
-    /// the whole point of checking.
+    /// nothing: the epoch it was closing is *not* durable when this returns,
+    /// and saying so is the whole point of checking.
+    ///
+    /// # A failed commit is not permanent, and that is not a loophole
+    ///
+    /// Epoch *N* stays un-durable only until some later commit succeeds.
+    /// Every commit here is a **covering** flush, so commit *N+1* reaches
+    /// every operation outstanding when it runs -- which includes epoch *N*'s
+    /// writes, queued before it. When *N+1*'s completion is observed,
+    /// `durable_through` advances to *N+1*, and [`Committer::is_durable`]
+    /// begins answering `true` for *N* as well.
+    ///
+    /// That is the truthful answer rather than an over-claim. What makes a
+    /// record durable is a flush that covered it, not the identity of the
+    /// flush that happened to be *named* for its epoch. Holding *N*
+    /// un-durable forever on the strength of one failed call would under-report
+    /// a record whose bytes the device already has -- and this module's whole
+    /// posture is that reporting less than reality is safe only while it stays
+    /// *reachable*, not as a permanent verdict.
+    ///
+    /// So the monotonicity [`Committer::is_durable`] promises survives a
+    /// failed commit rather than being suspended by it. What a caller must not
+    /// read into a failure is "epoch *N* is lost": it means *not yet*, and the
+    /// next successful commit is what settles it.
     pub fn claim(&mut self, completion: &Completion) -> io::Result<Option<Epoch>> {
         let Some(epoch) = self.in_flight.remove(&completion.user_data()) else {
             return Ok(None);
@@ -153,11 +175,21 @@ impl Committer {
         // that epoch keeps getting `false` -- which is the truthful answer.
         completion.result()?;
 
-        // Commits are barrier-ordered against each other (D-24 holds an
-        // operation pushed after a drained one until it completes), so
-        // completions should arrive in epoch order. `max` rather than plain
-        // assignment anyway: if that expectation is ever wrong, the reported
-        // answer stays correct and only the assertion is noisy.
+        // Commits arrive in epoch order because each one carries the drain
+        // flag *itself*: commit N is still outstanding when commit N+1 is
+        // reached, and D-47's surviving half -- no operation queued before a
+        // drained flush was ever observed completing after it -- is what puts
+        // N first.
+        //
+        // Note what this deliberately does not rest on. D-24 originally
+        // claimed a drained operation holds back what is pushed behind it, and
+        // D-47 withdrew that (see this module's header). The ordering here is
+        // bought by the *later* flush's own flag, never by the earlier one
+        // holding anything, so it survives the withdrawal intact.
+        //
+        // `max` rather than plain assignment anyway: if that expectation is
+        // ever wrong, the reported answer stays correct and only the assertion
+        // is noisy.
         debug_assert!(
             self.durable_through.is_none_or(|through| through < epoch),
             "commit completions should arrive in epoch order"
@@ -166,3 +198,6 @@ impl Committer {
         Ok(Some(Epoch(epoch)))
     }
 }
+
+#[cfg(test)]
+mod tests;

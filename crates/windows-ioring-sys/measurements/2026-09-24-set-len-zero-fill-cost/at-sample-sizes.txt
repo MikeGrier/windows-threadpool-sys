@@ -1,0 +1,28 @@
+
+=== run 1 ===
+What the epoch-log sample's zero-fill actually costs
+
+case                                      bytes      median us         max us
+log (35 blocks)                          143360           8502          54093
+one strategy file (2056 blocks)         8421376           3746          16185
+
+One whole run of the sample pre-allocates 25407488 bytes (24.2 MiB) across four files,
+for about 19740 us (19.7 ms) of zero-filling in total.
+=== run 2 ===
+What the epoch-log sample's zero-fill actually costs
+
+case                                      bytes      median us         max us
+log (35 blocks)                          143360           9503          13973
+one strategy file (2056 blocks)         8421376           8842          11506
+
+One whole run of the sample pre-allocates 25407488 bytes (24.2 MiB) across four files,
+for about 36029 us (36.0 ms) of zero-filling in total.
+=== run 3 ===
+What the epoch-log sample's zero-fill actually costs
+
+case                                      bytes      median us         max us
+log (35 blocks)                          143360           8406           9954
+one strategy file (2056 blocks)         8421376           3197          12358
+
+One whole run of the sample pre-allocates 25407488 bytes (24.2 MiB) across four files,
+for about 17997 us (18.0 ms) of zero-filling in total.
