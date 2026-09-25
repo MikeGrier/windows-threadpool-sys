@@ -304,14 +304,44 @@ reviewable artifact rather than a recording.
   record landed" silently rather than loudly. Its accounting already depends on a complete transfer and
   nothing establishes that it will get one.
 
-  **What to do.** Decide which handle types the log accepts -- at minimum a regular file on a local
-  volume, opened with the flags [append.rs](examples/epoch_log/append.rs) already requires -- state that
-  in the log's own contract rather than inheriting it from the ring, and reject anything else where the
-  handle enters. Then the completeness its epoch accounting assumes is one it has earned.
+  **How the type is determined: `GetFileType`, accepting only `FILE_TYPE_DISK`.** One call, total, and
+  already linkable under the `Win32_Storage_FileSystem` feature this crate enables. Its documented table
+  lands almost exactly on the classes `RS-P-8` cites: `FILE_TYPE_PIPE` is *"a socket, a named pipe, or an
+  anonymous pipe"*, so one value covers both short-transfer cases, and `FILE_TYPE_CHAR` covers the
+  console/LPT/serial class.
+
+  **Encode the ambiguity, or the check is worse than none.** `FILE_TYPE_UNKNOWN` is `0` and means *either*
+  an unknown type *or that the call failed*. Clear the last error before calling and read it after;
+  otherwise an invalid handle reads as a benign "unknown" and is waved through.
+
+  **State what `GetFileType` does not establish, beside the check itself.** It does not separate local
+  from remote -- `FILE_TYPE_REMOTE` is documented "Unused" and an SMB file reports `FILE_TYPE_DISK`, so a
+  claim needing a local volume wants `GetFileInformationByHandleEx(FileRemoteProtocolInfo)`, which
+  succeeds for remote and fails for local. It says nothing about write-cache or FUA behaviour either:
+  that is a device property (`IOCTL_STORAGE_QUERY_PROPERTY`), so a `FILE_TYPE_DISK` handle on a volume
+  with an unprotected write cache passes the type check and still cannot back the durability claim.
+  Whether to probe that too is part of this item's decision, not a given.
+
+  **Take the second check only because it pays for itself.**
+  `GetFileInformationByHandleEx(FileStorageInfo)` yields logical and physical sector size, which the
+  appender already needs for `FILE_FLAG_NO_BUFFERING` alignment, and succeeds only on a volume-backed
+  handle. It replaces an assumption rather than adding a gate.
+
+  **Prefer the build rung to a runtime check.** `RawHandle` is currently threaded through `Appender`,
+  [commit.rs](examples/epoch_log/commit.rs), `Placement::decide` and [strategy.rs](examples/epoch_log/strategy.rs),
+  so every interior signature can represent a socket. A newtype with exactly two constructors -- the log's
+  own opener, and a checked `try_new` running the above -- makes that unrepresentable and runs the check
+  once at the boundary instead of at each use. Detectable is the weaker form of impossible.
+
+  **The check does not replace reading the count.** After narrowing, still compare transferred against
+  requested; what changes is that a mismatch becomes a loud error at write time rather than silent
+  corruption discovered at replay.
 
   **A guard is part of this, not a follow-up.** A constraint that is only documented is enforced by
   whoever remembers it. Verify the rejection by sabotage, and check both directions: that an
-  unacceptable handle is refused, and that the acceptable one is not.
+  unacceptable handle is refused, and that the acceptable one is not. Both sides are reachable on an
+  ordinary developer machine -- a named pipe and a console handle for the reject side, a temp file for
+  the accept side -- so there is no excuse for leaving either untraversed.
 
 ## M27 -- What this crate owes the topology planner
 
