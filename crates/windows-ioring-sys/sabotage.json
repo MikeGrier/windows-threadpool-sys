@@ -11,10 +11,10 @@
       "expect": "caught",
       "why": "Clause::ALL drives the report's sections, so a clause dropped from it is never printed. The statements still exist, still compile, and the sample still runs -- it just silently stops telling a reader what it does not guarantee, which for a durability program is the most dangerous section to lose. This is the failure the list exists to make impossible to introduce quietly, and the one main.rs's hand-written array would have allowed.",
       "find": [
-        "    pub const ALL: [Self; 3] = [Self::Guarantees, Self::DoesNotGuarantee, Self::Assumes];"
+        "        Self::DoesNotGuarantee,"
       ],
       "replace": [
-        "    pub const ALL: [Self; 3] = [Self::Guarantees, Self::Assumes, Self::Assumes];"
+        "        Self::Assumes,"
       ]
     },
     {
@@ -23,10 +23,10 @@
       "expect": "caught",
       "why": "A repeat in Clause::ALL prints a whole section twice. Harmless-looking and easy to introduce by editing the array rather than replacing it, and the duplicate section reads as though the contract were emphasising something.",
       "find": [
-        "    pub const ALL: [Self; 3] = [Self::Guarantees, Self::DoesNotGuarantee, Self::Assumes];"
+        "        Self::DoesNotGuarantee,"
       ],
       "replace": [
-        "    pub const ALL: [Self; 3] = [Self::Guarantees, Self::Guarantees, Self::Assumes];"
+        "        Self::Guarantees,"
       ]
     },
     {
@@ -708,6 +708,18 @@
       ],
       "replace": [
         "                    let short = u64::from(requested) + 1 + self.next() % 8;"
+      ]
+    },
+    {
+      "name": "M26.11: the appender stops checking that a write was complete",
+      "file": "examples/epoch_log/append.rs",
+      "expect": "caught",
+      "why": "The log's contract requires a handle whose successful writes are complete, and this comparison is the only thing that enforces it rather than merely stating it. The ring permits a short count (RS-P-8) because it never asks what kind of handle it was given, so with this check suppressed a short write is accepted silently and the log carries a hole no replay would attribute to its cause. The count used to be bound to `_written` and discarded, which is the state this restores.",
+      "find": [
+        "        if written != record::RECORD_STRIDE {"
+      ],
+      "replace": [
+        "        if false && written != record::RECORD_STRIDE {"
       ]
     },
     {

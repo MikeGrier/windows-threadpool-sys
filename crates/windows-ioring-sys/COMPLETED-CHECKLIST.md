@@ -3746,3 +3746,78 @@ itself is `RS-P-8` in [RESPONSE-SPACE.md](RESPONSE-SPACE.md). The durability hal
   have to survive. Requiring complete transfers is a `Decided` constraint of the kind `RS-C-1`
   already is, and would need a `CONFIRMS:` marker on whichever kernel test carries it -- the census
   added in `M26.6` will then hold the two halves together.
+
+## Moved 2026-09-25 16:21:00 -04:00 -- M26.11, the epoch log's handle requirements
+
+### <a id="m2611"></a>M26.11 -- The epoch log states the capabilities it requires of a handle; the transfer requirement is checked, the durability requirement is a caller warranty. *(completed 2026-09-25 16:21:00 -04:00)*
+
+The contract gained a fourth clause, `Requires`, beside `Guarantees`,
+`DoesNotGuarantee` and `Assumes` -- the growth the module's own `Clause::ALL`
+doc had anticipated, and its exhaustive `heading()` match is what forced the
+edit. The decision not to gate the handle is [D-70](DESIGN-NOTES.md#d-70). The
+item as it read when it closed:
+
+- [x] **M26.11** -- Document the capability requirements [examples/epoch_log](examples/epoch_log) places on
+  the handle it is given, and let an unmet one surface at the operation that needs it. **No pre-flight
+  handle check** ([D-70](DESIGN-NOTES.md#d-70)).
+
+  **Why no check, which is the part worth not relitigating.** `M26.10` established that the ring permits a
+  short transfer because it never asks what kind of handle it was given ([RS-P-8](RESPONSE-SPACE.md),
+  [D-69](DESIGN-NOTES.md#d-69)), and the obvious next move is for the log to police what the ring does
+  not. It was examined and rejected: the check points the wrong way. A console handle, a pipe or a closed
+  handle is caught by `GetFileType`, but every one of those already fails loudly at the first positioned
+  write -- the check buys a better message. A RAM disk, a remote share, or a volume whose write cache is
+  not power-protected succeeds at every API call and silently fails to be durable, and no probe catches
+  the last of those at all. So the gate guards the failures that were already loud and misses every
+  failure that is silent, while implying a validation that did not happen.
+
+  **What to write instead.** The log's own contract, stated by the log rather than inherited from the
+  ring, listing what the handle must support: positioned I/O at explicit offsets; `FILE_FLAG_OVERLAPPED`;
+  `FILE_FLAG_NO_BUFFERING` together with the sector-aligned buffer, offset and length it requires; a
+  preallocated extent; that a successful write of `N` bytes transfers `N`; and that a completed flush
+  reaches stable media.
+
+  **Mark the last two for what they are.** The transfer requirement is the `RS-P-8` narrowing this log
+  earns by constraining its input -- it is checkable, and the log already compares transferred against
+  requested, so a mismatch is a contract violation to report loudly rather than a case to absorb. The
+  durability requirement is **a warranty the caller gives**, not a property this code can verify;
+  say so in those words, because a contract that merely sounds confident about it is how a silent
+  failure gets built on.
+
+  **Guard what is guardable, and do not pretend about the rest.** The transferred-against-requested
+  comparison is a real assertion and gets a sabotage case: suppress the comparison and the suite must go
+  red. There is no guard for the durability warranty, and the item is complete with that stated rather
+  than papered over. If the contract carries runnable examples they are compiled as doctests, per the
+  repository's rule that prose containing code must compile.
+
+## Moved 2026-09-25 16:24:00 -04:00 -- M26 complete, all eleven items
+
+Every item was archived individually as it closed, so what migrates here is the milestone's own
+framing -- why a resolver over a permitted space was worth building, and the standing constraint
+that the space must be wider than anything observed. The per-item stubs are dropped, carrying
+nothing the entries above do not already hold.
+
+## M26 -- Test against the space of kernel responses, not one observation of it
+
+Queued by
+[DESIGN-SESSION-2026-09-22-kernel-response-space.md](design-sessions/DESIGN-SESSION-2026-09-22-kernel-response-space.md),
+which set out to answer `M24.1` and found a different technique instead.
+
+**The idea.** A fake that models *what Windows does* freezes one run's testimony. A **resolver**
+models what Windows is *permitted* to do, and a seed picks one resolution out of that space: which
+operations finish inside `SubmitIoRing` and which pend, in what order completions are posted, which
+fail. The assertions are then about **us** -- does this crate behave correctly under that resolution
+-- and never about the kernel. There is no belief to be wrong about, which is why this dissolves the
+mock objection rather than working around it.
+
+**Justified by what it catches, not by hermeticity.** `M24` reaches a hermetic lib suite without it,
+so this milestone has to earn its place on the defect class it detects: code that is brittle to
+platform variation *inside* the permitted space. Nothing in the toolkit that preceded it detected
+that -- [DESIGN-NOTES.md](DESIGN-NOTES.md#what-none-of-them-cover) records that the five techniques
+which existed before `M26` all check this crate against *its own stated contract*. The resolver is
+the sixth, added by this milestone.
+
+**The standing constraint, inherited from the session.** The permitted space must be **wider than
+anything observed**, and must not be derived from observation -- deriving it from what we have seen
+closes the trap again. It is a deliberate specification of what we will tolerate, and therefore a
+reviewable artifact rather than a recording.

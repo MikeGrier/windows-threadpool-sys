@@ -78,6 +78,61 @@
 //!   read as one: a record is durable when **its own** epoch's commit
 //!   completes, which is the guarantee above and the only one.
 //!
+//! # What this contract requires of the handle
+//!
+//! The log is handed an open handle and never opens one itself, so everything
+//! above rests on that handle being able to sustain the operations this
+//! program issues. Those requirements are stated here and **not checked**.
+//!
+//! - **Positioned I/O at explicit offsets.** Every write names its own offset;
+//!   the log never relies on a file pointer.
+//! - **Opened with `FILE_FLAG_OVERLAPPED`.** The ring's operations are
+//!   asynchronous.
+//! - **Opened with `FILE_FLAG_NO_BUFFERING`**, together with the alignment
+//!   that flag imposes: the buffer address, the file offset and the length are
+//!   each a multiple of the volume's sector size. [`crate::logfile`] records
+//!   why the log wants unbuffered I/O rather than merely tolerating it.
+//! - **A preallocated extent** large enough for the log. This program does not
+//!   extend the file as it appends.
+//! - **A successful write of `N` bytes transferred `N` bytes.** The ring
+//!   permits a short count -- it never asks what kind of handle it was given
+//!   -- so this is a narrowing the log requires rather than something it
+//!   inherits.
+//! - **A completed flush has reached stable media.**
+//!
+//! The last two are different in kind from each other, and the difference is
+//! the point of listing them separately.
+//!
+//! **The transfer requirement is checked.** [`crate::append`] compares the
+//! transferred count against the length it asked for and fails the append if
+//! they differ, so a handle that does not meet this requirement is reported
+//! rather than silently producing a log with holes in it.
+//!
+//! **The durability requirement is a warranty the caller gives.** Nothing in
+//! this program can verify it, and no amount of inspecting the handle would.
+//! It is stated in those words deliberately: a contract that merely sounds
+//! confident about durability is how a silent failure gets built on.
+//!
+//! ## Why there is no pre-flight check on the handle
+//!
+//! A gate was designed and rejected, and the reasoning is recorded so it is
+//! not re-proposed as a fresh idea. Sort the ways a handle can fail to meet
+//! the requirements above by how they present:
+//!
+//! - A pipe, a socket, a character device or a closed handle **fails loudly**
+//!   at the first positioned write. A check identifies it earlier and buys a
+//!   clearer message, nothing more.
+//! - A RAM disk, a remote share, or a volume whose write cache is not
+//!   power-protected **succeeds at every operation this program issues** and
+//!   silently fails to be durable. Nothing reachable from a handle settles the
+//!   last of those, because write-cache state belongs to the device.
+//!
+//! So a gate guards the failures that were already loud and misses every
+//! failure that is silent, which is the inverse of what a durability layer
+//! needs. Its real cost is not the call but the claim: a check that cannot
+//! establish the property still reads, to a later maintainer, as though the
+//! property had been established -- and so discourages them from asking.
+//!
 //! # What this contract assumes
 //!
 //! - **The device honors the flush.** Everything above rests on the device
@@ -154,6 +209,17 @@ pub enum Clause {
     /// Something a caller must not assume, stated so the omission is explicit
     /// rather than left to be inferred from silence.
     DoesNotGuarantee,
+    /// Something the caller must provide, and which this program does not
+    /// check for (M26.11, [D-70]).
+    ///
+    /// Distinct from [`Self::Assumes`] by who can act on it. A requirement is
+    /// something the caller *chooses* -- how the handle is opened, what it
+    /// refers to -- so naming it tells them what to do. An assumption is about
+    /// the world, and the only response to it is to pick different hardware.
+    /// Merging the two would bury the actionable in the unverifiable.
+    ///
+    /// [D-70]: ../DESIGN-NOTES.md
+    Requires,
     /// Something outside this program's control that the guarantees rest on.
     Assumes,
 }
@@ -172,13 +238,19 @@ impl Clause {
     /// attention is [`Self::heading`] below, whose `match` is exhaustive and
     /// will not compile until the new variant is handled; this array sits
     /// beside it so the two are edited together.
-    pub const ALL: [Self; 3] = [Self::Guarantees, Self::DoesNotGuarantee, Self::Assumes];
+    pub const ALL: [Self; 4] = [
+        Self::Guarantees,
+        Self::DoesNotGuarantee,
+        Self::Requires,
+        Self::Assumes,
+    ];
 
     /// The heading this clause is printed under.
     pub fn heading(self) -> &'static str {
         match self {
             Self::Guarantees => "guarantees",
             Self::DoesNotGuarantee => "does NOT guarantee",
+            Self::Requires => "requires of the handle it is given",
             Self::Assumes => "assumes",
         }
     }
@@ -236,6 +308,40 @@ pub const CONTRACT: &[Statement] = &[
                every operation outstanding on the ring when it is reached, so records already \
                accepted into the next epoch are often covered incidentally, which promises \
                nothing about them",
+    },
+    Statement {
+        clause: Clause::Requires,
+        text: "positioned I/O at explicit offsets -- every write names its own offset and this log \
+               never relies on a file pointer",
+    },
+    Statement {
+        clause: Clause::Requires,
+        text: "a handle opened with FILE_FLAG_OVERLAPPED, because the ring's operations are \
+               asynchronous",
+    },
+    Statement {
+        clause: Clause::Requires,
+        text: "a handle opened with FILE_FLAG_NO_BUFFERING, and the alignment that imposes: the \
+               buffer address, the file offset and the length are each a multiple of the volume's \
+               sector size",
+    },
+    Statement {
+        clause: Clause::Requires,
+        text: "a preallocated extent large enough for the log, because this program does not \
+               extend the file as it appends",
+    },
+    Statement {
+        clause: Clause::Requires,
+        text: "that a successful write of N bytes transferred N bytes -- the ring permits a short \
+               count because it never asks what kind of handle it was given, so this is a \
+               narrowing this log requires rather than one it inherits; it is the one requirement \
+               here that is checked, and a violation fails the append",
+    },
+    Statement {
+        clause: Clause::Requires,
+        text: "that a completed flush has reached stable media -- a warranty the caller gives, \
+               which nothing in this program can verify and no inspection of the handle would \
+               establish",
     },
     Statement {
         clause: Clause::Assumes,

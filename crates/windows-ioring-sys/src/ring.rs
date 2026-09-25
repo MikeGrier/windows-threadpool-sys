@@ -347,6 +347,55 @@ impl Completion {
         }
     }
 
+    /// Report a **successful** transfer of `transferred` bytes instead of what
+    /// this operation actually reported (M26.11).
+    ///
+    /// # What this is for, and why the failure seam cannot do it
+    ///
+    /// [`Completion::with_injected_failure`] models an operation that failed.
+    /// `RS-P-8` describes something different and stranger: an operation that
+    /// **succeeded** while moving fewer bytes than were asked for. Windows
+    /// documents that for non-blocking byte-mode pipes and it happens on
+    /// sockets, but an ordinary file on a local volume does not do it -- so a
+    /// consumer's handling of a short count is written once against the
+    /// documentation and then never executed again, which is exactly the class
+    /// of path the failure seam was introduced for.
+    ///
+    /// A consumer that *narrows* its handle type may legitimately require
+    /// complete transfers. This seam is how such a consumer tests that its
+    /// requirement is enforced rather than merely stated -- `epoch_log`'s
+    /// appender uses it for precisely that.
+    ///
+    /// # Why this one is inert
+    ///
+    /// The result code is left successful and only the byte count moves, so
+    /// every claim path behaves exactly as it would for the real completion:
+    /// [`crate::Token::claim_if`] returns the buffer, and no path keys memory
+    /// ownership off the transferred count. That makes this seam free of the
+    /// registration hazard documented on
+    /// [`Completion::with_injected_failure`], which arises only because a
+    /// *failed* registration is taken as proof the kernel retained nothing.
+    ///
+    /// # Example
+    ///
+    /// ```ignore
+    /// // A handle whose successful writes are complete is a requirement this
+    /// // consumer states; here we hand it one that violates the requirement.
+    /// let completion = completion.with_injected_transfer(RECORD_STRIDE - 1);
+    /// assert_eq!(completion.result().expect("still a success"), RECORD_STRIDE - 1);
+    /// ```
+    #[cfg(any(test, feature = "fault-injection"))]
+    #[must_use]
+    pub fn with_injected_transfer(self, transferred: usize) -> Self {
+        Self {
+            // Deliberately *not* touched: a short transfer under `RS-P-8` is a
+            // success, and turning it into a failure would model the one thing
+            // this seam exists to distinguish it from.
+            information: transferred,
+            ..self
+        }
+    }
+
     /// Build a `Completion` without popping a real one, for tests that
     /// exercise [`crate::Token::claim_if`] without real I/O.
     ///

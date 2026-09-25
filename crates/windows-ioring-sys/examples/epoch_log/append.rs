@@ -337,7 +337,31 @@ impl Appender {
             "claiming the token must release the slot"
         );
 
-        let _written = completion.result()?;
+        // The contract requires that a successful write of N bytes transferred
+        // N bytes (see `crate::contract`, `Clause::Requires`), and this is
+        // where that requirement is checked rather than assumed. Every record
+        // write asks for exactly `RECORD_STRIDE`, so the comparison needs no
+        // per-slot bookkeeping.
+        //
+        // The ring itself permits a short count -- `RS-P-8` in the crate's
+        // RESPONSE-SPACE.md -- because it never asks what kind of handle it was
+        // given. This log narrows that by requiring a handle which does not do
+        // it, so a short count here is a violation of the contract's
+        // requirement rather than a case to absorb, and is reported as one. The
+        // count was previously bound to `_written` and discarded, which left
+        // the requirement stated nowhere and checked nowhere.
+        let written = completion.result()?;
+        if written != record::RECORD_STRIDE {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!(
+                    "a successful write transferred {written} of {} bytes; this log requires a \
+                     handle whose successful writes are complete (see the contract's Requires \
+                     clause), and this handle does not meet that requirement",
+                    record::RECORD_STRIDE
+                ),
+            ));
+        }
         Ok(true)
     }
 }

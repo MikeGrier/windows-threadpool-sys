@@ -64,6 +64,83 @@ fn scratch(tag: &str) -> (std::path::PathBuf, std::fs::File) {
     (path, file)
 }
 
+/// **The contract's transfer requirement, enforced rather than merely stated
+/// (M26.11).**
+///
+/// `epoch_log`'s contract requires a handle whose successful writes are
+/// complete. The ring itself permits the opposite -- `RS-P-8` -- because it
+/// never asks what kind of handle it was given, so this narrowing is the log's
+/// own and has to be checked by the log.
+///
+/// **No real handle this sample opens will produce a short write**, which is
+/// precisely why the check needs a seam to reach it: the branch would otherwise
+/// be written once against the documentation and never executed again. That is
+/// the same argument `M16.3` made for the failure seam, and
+/// [`Completion::with_injected_transfer`] is its counterpart for a *successful*
+/// short count, which a failure cannot model.
+///
+/// Both directions are asserted here, because a test that only shows the
+/// rejection would pass just as well against a check that rejected everything.
+/// The two cases differ in the injected count and in nothing else.
+#[cfg(feature = "fault-injection")]
+#[test]
+fn a_short_write_violates_the_contracts_transfer_requirement() {
+    let complete = record::RECORD_STRIDE;
+
+    for (transferred, expect_accepted) in [(complete, true), (complete - 1, false)] {
+        let mut ring = IoRing::new(16, 16).expect("create ring");
+        let (path, file) = scratch(&format!("short-write-{transferred}"));
+        let mut appender =
+            Appender::new(&mut ring, &Placement::decide(file.as_raw_handle())).expect("appender");
+
+        let pushed = appender
+            .append_batch(
+                &mut ring,
+                file.as_raw_handle(),
+                Epoch(0),
+                &[b"a record whose write will be reported short".to_vec()],
+            )
+            .expect("push one append");
+        assert_eq!(pushed, 1, "a fresh arena always has a slot");
+
+        let completion = ring
+            .pop_within(WAIT)
+            .expect("pop_within")
+            .expect("the append's completion arrives well inside the bound");
+        let reported = completion.with_injected_transfer(transferred);
+
+        match appender.claim(&reported) {
+            Ok(accepted) => {
+                assert!(
+                    expect_accepted,
+                    "a write reporting {transferred} of {complete} bytes was accepted; the \
+                     contract requires complete transfers and this one is short"
+                );
+                assert!(accepted, "the completion is the append's own");
+            }
+            Err(error) => {
+                assert!(
+                    !expect_accepted,
+                    "a write reporting the full {complete} bytes was rejected: {error}"
+                );
+                assert_eq!(
+                    error.kind(),
+                    std::io::ErrorKind::InvalidData,
+                    "a handle that breaks a stated requirement is bad input, not an I/O failure"
+                );
+                let text = error.to_string();
+                assert!(
+                    text.contains(&transferred.to_string()) && text.contains(&complete.to_string()),
+                    "the error must report both counts so the handle can be diagnosed, got: {text}"
+                );
+            }
+        }
+
+        drop(file);
+        let _ = std::fs::remove_file(&path);
+    }
+}
+
 /// **The regression guard `M22.2` earned and this consumer never had.**
 ///
 /// A write that fails must still release its arena slot. The assertion is on
