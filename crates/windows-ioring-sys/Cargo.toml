@@ -2,7 +2,7 @@
 
 [package]
 name = "windows-ioring-sys"
-version = "0.3.1" # x-release-please-version
+version = "0.4.0" # x-release-please-version
 authors.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -117,7 +117,7 @@ windows-sys = { version = "0.61.2", default-features = false, features = [
 # The Model A delivery path (M4): a `ThreadpoolWait` on the ring's completion
 # event. Optional behind the default-on `threadpool` feature (D-22); nothing
 # else in the crate references it.
-windows-threadpool-sys = { version = "0.1.3", path = "../windows-threadpool-sys", optional = true }
+windows-threadpool-sys = { version = "0.1.4", path = "../windows-threadpool-sys", optional = true }
 # NumaBuffer moved here in M22.3 and out again when win-numa-sys was created:
 # the buffer has nothing to do with a ring, and windows-placement-probe had
 # independently written the same VirtualAllocExNuma call. This crate keeps
