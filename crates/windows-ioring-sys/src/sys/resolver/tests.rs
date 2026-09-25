@@ -35,13 +35,34 @@ use crate::sys::Responses;
 /// an announcement (the repository's standing rule on random sampling). The
 /// *environment* seed exists for the generated suites, which announce it;
 /// here a fixed sweep is what makes a failure mean the same thing twice.
-const SEEDS: std::ops::Range<u64> = 0..64;
+///
+/// Raised from 64 to 2048 for breadth. The cost is a property of the sweep and
+/// not of the seed count alone -- measured, a seed here is tens of
+/// microseconds, so the whole file stays far inside the sub-second budget this
+/// repository sets for a submodule's unit tests.
+const SEEDS: std::ops::Range<u64> = 0..2048;
 
 /// How many seeds [`SEEDS`] covers.
 ///
 /// Spelled out because `Range<u64>` is not an `ExactSizeIterator` -- 64-bit
 /// ranges can exceed `usize` -- so there is no `len()` to ask for.
-const SEED_COUNT: usize = 64;
+const SEED_COUNT: usize = 2048;
+
+/// Distinct orders six independently-resolving operations can be posted in.
+///
+/// `6!`. This is the ceiling on what
+/// [`different_seeds_reach_different_resolutions`] can observe, and it is
+/// *below* [`SEED_COUNT`] -- which is exactly the trap that assertion fell
+/// into when the sweep was widened. A threshold phrased as a fraction of the
+/// seed count silently becomes unsatisfiable once the seeds outnumber the
+/// outcomes, so the bound is stated against the space the test can actually
+/// reach.
+///
+/// Measured over the resolver's own mixer: 64 seeds reach 64 of these, 1024
+/// reach 539, 2048 reach 670, and 8192 are needed for all 720. So the sweep is
+/// still gaining breadth at its current size rather than re-drawing orders it
+/// has already seen.
+const DISTINCT_ORDERS_OF_SIX: usize = 720;
 
 /// A handle reference that is never dereferenced.
 ///
@@ -436,7 +457,7 @@ fn failure_codes_are_not_drawn_from_a_small_fixed_set() {
     // satisfy the clause's letter while teaching every consumer built against
     // it to match on that one code.
     let mut codes = std::collections::BTreeSet::new();
-    for seed in 0..256_u64 {
+    for seed in SEEDS {
         let mut resolver = Resolver::with_config(
             seed,
             ResolverConfig {
@@ -456,8 +477,8 @@ fn failure_codes_are_not_drawn_from_a_small_fixed_set() {
     }
     assert!(
         codes.len() > 16,
-        "only {} distinct failure codes across 256 seeds, which is a small fixed set in all \
-         but name",
+        "only {} distinct failure codes across {SEED_COUNT} seeds, which is a small fixed set \
+         in all but name",
         codes.len()
     );
 }
@@ -658,6 +679,12 @@ fn one_seed_replays_a_whole_resolution() {
 fn different_seeds_reach_different_resolutions() {
     // The converse, and not a formality: a resolver whose seed did nothing
     // would pass every replay test above while exploring one point forever.
+    //
+    // The bound is a fraction of [`DISTINCT_ORDERS_OF_SIX`], not of the seed
+    // count, and the difference is load-bearing rather than pedantic: six
+    // operations admit 720 orders, so a threshold of `SEED_COUNT / 2` becomes
+    // arithmetically unsatisfiable the moment the sweep exceeds 1440 seeds --
+    // the test would fail without anything having regressed.
     let orders: std::collections::BTreeSet<Vec<usize>> = SEEDS
         .map(|seed| {
             let mut resolver = Resolver::with_config(
@@ -678,8 +705,8 @@ fn different_seeds_reach_different_resolutions() {
         })
         .collect();
     assert!(
-        orders.len() > SEED_COUNT / 2,
-        "only {} distinct orders across {SEED_COUNT} seeds",
+        orders.len() > DISTINCT_ORDERS_OF_SIX / 2,
+        "only {} of {DISTINCT_ORDERS_OF_SIX} possible orders across {SEED_COUNT} seeds",
         orders.len()
     );
 }

@@ -58,8 +58,8 @@ use windows_ioring_sys::{
 /// Fixed rather than clock-derived, unlike the generated suites: a calibration
 /// that sometimes could not demonstrate its own sensitivity would be the exact
 /// failure it exists to prevent, arriving as a flake.
-const SEEDS: std::ops::Range<u64> = 0..64;
-const SEED_COUNT: usize = 64;
+const SEEDS: std::ops::Range<u64> = 0..2048;
+const SEED_COUNT: usize = 2048;
 
 /// Bytes per write.
 const BUF_LEN: usize = 256;

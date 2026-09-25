@@ -89,11 +89,11 @@ const PLAN_SEED_VAR: &str = "WINDOWS_IORING_PROPERTY_SEED";
 
 /// Plans per run, and the longest plan generated.
 ///
-/// Sized so that every step kind and every operation shape appears many times
-/// over, while the whole file stays quick enough that nobody is tempted to
-/// skip it. No real I/O happens under a resolver, so the cost is almost
-/// entirely the ring handles.
-const PLANS: usize = 240;
+/// Each plan draws its own resolution, so this is the resolver seed count for
+/// this file and moves with the repository's standard sweep size. Raised from
+/// 240 to 2048 for breadth: no real I/O happens under a resolver, so the cost
+/// is almost entirely the ring handles.
+const PLANS: usize = 2048;
 /// Steps in the longest plan.
 const MAX_STEPS: usize = 10;
 /// Operations in the largest single batch.
@@ -232,8 +232,8 @@ struct Run {
     ///
     /// The thinnest of the coverage signals, because a decline has to fall on
     /// a plan that then reaches a `pop_within` -- a decline absorbed by the
-    /// ignored `batch.submit()` is never counted here. Its threshold is only
-    /// "more than none" for that reason, and tightening it would buy a flake
+    /// ignored `batch.submit()` is never counted here. Its threshold is set
+    /// well below the rest for that reason; tightening it would buy a flake
     /// rather than a guarantee.
     declined: usize,
     /// Plans print their steps only on failure, so this costs nothing until
@@ -629,37 +629,49 @@ fn the_properties_hold_under_every_resolution() {
     // be zero for a generator that produced empty plans, a resolution that
     // resolved everything inside its submit, or a harness that quietly stopped
     // reporting -- all of which pass every assertion above.
+    //
+    // The thresholds are fractions of `PLANS` rather than fixed counts, so
+    // that widening the sweep cannot quietly turn a guard into a formality:
+    // an absolute floor set for a 240-plan run is a 12x margin at 2048, which
+    // would let the suite lose most of its work without complaint. Each is
+    // roughly half the minimum observed over six runs, since the plan and
+    // resolver seeds are clock-derived and these counts therefore vary.
     eprintln!("coverage: {coverage:?}");
-    assert!(coverage.pushes > 500, "too few operations: {coverage:?}");
+    assert!(
+        coverage.pushes > PLANS * 4,
+        "too few operations: {coverage:?}"
+    );
     assert_eq!(
         coverage.completions, coverage.pushes,
         "every pushed operation must have completed exactly once for the run to have finished \
          at all -- {coverage:?}"
     );
     assert!(
-        coverage.writes > 100 && coverage.flushes > 100,
+        coverage.writes > PLANS * 2 && coverage.flushes > PLANS * 2,
         "both operation shapes must appear: {coverage:?}"
     );
     assert!(
-        coverage.barriers > 50,
+        coverage.barriers > PLANS,
         "too few drain-flagged operations, so RS-C-4 barely applied: {coverage:?}"
     );
     assert!(
-        coverage.claims > 100 && coverage.deliberate_leaks > 10,
+        coverage.claims > PLANS * 3 && coverage.deliberate_leaks > PLANS / 2,
         "both of the contract's settled states must be reached: {coverage:?}"
     );
     assert!(
-        coverage.declined_submits > 0,
-        "no resolution ever declined a submit, so RS-P-7 never reached the crate: {coverage:?}"
-    );
-    assert!(
-        coverage.outstanding_checks_with_work > 25,
-        "P-4 was only ever checked with an empty ring, where it cannot catch a disagreement: \
+        coverage.declined_submits > PLANS / 128,
+        "too few resolutions declined a submit, so RS-P-7 barely reached the crate: \
          {coverage:?}"
     );
     assert!(
-        coverage.empty_pop_withins > 10,
-        "pop_within always found something, so its bound never had anything to do: {coverage:?}"
+        coverage.outstanding_checks_with_work > PLANS / 8,
+        "P-4 was rarely checked with a non-empty ring, where it cannot catch a disagreement: \
+         {coverage:?}"
+    );
+    assert!(
+        coverage.empty_pop_withins > PLANS / 8,
+        "pop_within almost always found something, so its bound rarely had anything to do: \
+         {coverage:?}"
     );
 }
 

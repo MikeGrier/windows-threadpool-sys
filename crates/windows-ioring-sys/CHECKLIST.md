@@ -348,6 +348,28 @@ reviewable artifact rather than a recording.
   that and recognises a refusal by asking the resolver rather than by matching a code.
   `run_down` is the one with no recovery route, which is what makes it the item.
 
+- [ ] **M26.9** -- Find and fix the intermittent `Timeout` in
+  [event_delivery.rs](tests/event_delivery.rs)'s two threadpool-delivery tests, recorded in
+  [UNRESOLVED-TEST-FAILURES.md](UNRESOLVED-TEST-FAILURES.md).
+
+  **Why this is not merely a flaky test to re-run.** Measured at 1 failure in 80 runs of the
+  compiled binary. The sabotage harness runs the whole suite once per case and the manifest holds
+  41, so that rate gives roughly a **40% chance of a corrupted sweep** -- and the corruption falsely
+  reports `caught`, which is a sabotage the suite did not catch being recorded as a clean bill of
+  health. The harness is this repository's mechanism for keeping earlier guarantees checked; a 40%
+  chance of a silent false pass undermines every conclusion drawn from it.
+
+  **What has already been ruled out, so it is not re-tried:** ring-resource pressure (zero failures
+  after roughly 18,000 ring create/close cycles), the widened seeded sweeps (zero after repeated
+  property-suite and calibration runs), and CPU starvation (zero under a concurrent `cargo build`
+  saturating the machine). The cause is genuinely unknown, which is why this is an investigation
+  rather than a one-line timeout bump -- raising the five-second bound would hide it, and the
+  question worth answering is whether a real consumer's completion can be delayed this way.
+
+  **A cheaper interim mitigation exists and is a separate decision:** the harness could treat a
+  failure in these two tests as *inconclusive* rather than as `caught`, which would stop the false
+  clean bills without pretending the behaviour is understood.
+
 ## M27 -- What this crate owes the topology planner
 
 **Re-planned 2026-09-23, the same day it was written.** M27 was originally "Adaptivity: the benefit
