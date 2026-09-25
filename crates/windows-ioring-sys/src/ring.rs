@@ -667,6 +667,38 @@ impl IoRing {
     /// re-arms the edge, must run to empty exactly once. Two threads waiting
     /// on one ring's event cannot be made correct.
     ///
+    /// # If you are arming a thread-pool wait on this handle
+    ///
+    /// `SetThreadpoolWait` documents that "you must re-register the event
+    /// with the wait object before signaling it each time to trigger the wait
+    /// callback". This method signals the event *before* it returns (rule 2
+    /// above), so by the time you have a handle to build a wait object
+    /// around, that setup signal has already happened -- in the order the
+    /// rule forbids. It is not guaranteed to run your callback, and because
+    /// the event is auto-reset the signal is *consumed* rather than left
+    /// pending, so a later arming has nothing to observe. Combined with the
+    /// edge rule above, a ring whose queue never returns to empty has no
+    /// second wakeup coming: the loss is permanent, not late.
+    ///
+    /// The remedy needs nothing this method does not already give you --
+    /// after arming the wait, signal your own duplicate yourself:
+    ///
+    /// ```no_run
+    /// # use windows_ioring_sys::IoRing;
+    /// # use std::os::windows::io::AsRawHandle;
+    /// # fn f(ring: &mut IoRing) -> std::io::Result<()> {
+    /// let event = ring.completion_event()?;
+    /// // ... build the wait object around `event`, then arm it ...
+    /// // Only now raise the wakeup, in the documented order. A wake with
+    /// // nothing to pop is normal (rule 2), so this is always safe.
+    /// unsafe { windows_sys::Win32::System::Threading::SetEvent(event.as_raw_handle()) };
+    /// # Ok(())
+    /// # }
+    /// ```
+    ///
+    /// [`EventDelivery`](crate::EventDelivery) already does this for you and
+    /// is the better answer if you do not need the handle itself.
+    ///
     /// `examples/model_b_multiplexed.rs` is this whole shape worked end to
     /// end -- a caller-owned ring waited on alongside a shutdown latch, with
     /// the quiesce that shutdown-while-outstanding requires (M11.6).
@@ -680,12 +712,37 @@ impl IoRing {
     /// returns any error from `CreateEventW`,
     /// `SetIoRingCompletionEvent`, `SetEvent`, or duplicating the handle.
     pub fn completion_event(&mut self) -> io::Result<OwnedHandle> {
+        let (event, owes_setup_signal) = self.attach_completion_event_unsignalled()?;
+        if owes_setup_signal {
+            self.raise_setup_signal()?;
+        }
+        Ok(event)
+    }
+
+    /// Attach the ring's completion event *without* raising the setup signal,
+    /// reporting whether that signal is still owed.
+    ///
+    /// `SetThreadpoolWait` documents that "you must re-register the event with
+    /// the wait object before signaling it each time to trigger the wait
+    /// callback". A caller that is about to arm a threadpool wait on this
+    /// event therefore needs the attachment and the signal as two steps, so
+    /// that arming can be sequenced between them; handing back an
+    /// already-signalled event leaves that caller no way to obey the rule.
+    /// [`IoRing::completion_event`] is these two composed, for a caller who
+    /// does its own waiting and is not bound by that rule.
+    ///
+    /// The flag is false when the ring already had an event attached, which
+    /// matches [`IoRing::completion_event`]: the setup signal belongs to the
+    /// call that performs the attachment.
+    pub(crate) fn attach_completion_event_unsignalled(
+        &mut self,
+    ) -> io::Result<(OwnedHandle, bool)> {
         // Already attached: hand back another duplicate rather than
         // attaching a second event, which would silently detach the first
         // (`SetIoRingCompletionEvent` replaces rather than adds). The
         // capability was necessarily verified on the call that attached it.
         if let Some(event) = &self.completion_event {
-            return event.try_clone();
+            return Ok((event.try_clone()?, false));
         }
 
         if !capabilities()?.supports_completion_event {
@@ -696,8 +753,10 @@ impl IoRing {
         }
 
         // Auto-reset (manual_reset = FALSE) per D-21, initially unsignalled
-        // -- the deliberate setup signal is raised below, after the event is
-        // attached and owned, so it cannot be missed or lost.
+        // -- the deliberate setup signal is raised by `raise_setup_signal`,
+        // after the event is attached and owned, so it cannot be lost, and
+        // after any threadpool wait has been armed, so the arm-before-signal
+        // rule `SetThreadpoolWait` documents is obeyed.
         // SAFETY: null attributes and name are documented defaults.
         let raw = unsafe { CreateEventW(std::ptr::null(), 0, 0, std::ptr::null()) };
         if raw.is_null() {
@@ -714,31 +773,51 @@ impl IoRing {
         // successfully referenced.
         check(hr)?;
 
-        // Stored *before* signalling: from this point the ring owns the
-        // event, so no later failure can drop it and leave the ring
-        // signalling a closed (possibly recycled) handle.
-        let event = self.completion_event.insert(event);
+        // Stored *before* the setup signal can be raised: from this point the
+        // ring owns the event, so no later failure can drop it and leave the
+        // ring signalling a closed (possibly recycled) handle.
+        self.completion_event
+            .insert(event)
+            .try_clone()
+            .map(|dup| (dup, true))
+    }
 
-        // The one deliberate spurious wakeup (rule 2 above): a caller who
-        // submitted before attaching would otherwise never be woken for that
-        // backlog, since the queue never returns to empty to re-arm the edge.
+    /// Raise the one deliberate setup signal on the attached completion event.
+    ///
+    /// This is the single spurious wakeup the event's contract allows for: a
+    /// caller who submitted before attaching would otherwise never be woken
+    /// for that backlog, since the queue never returns to empty and so never
+    /// re-arms the edge (D-19).
+    ///
+    /// Separated from the attachment so that a caller arming a threadpool wait
+    /// can obey `SetThreadpoolWait`'s documented ordering -- register first,
+    /// signal second. Does nothing if no event is attached, which cannot
+    /// happen on the paths that call it.
+    pub(crate) fn raise_setup_signal(&self) -> io::Result<()> {
+        let Some(event) = &self.completion_event else {
+            return Ok(());
+        };
         // SAFETY: `event` is a live event handle this ring owns.
         if unsafe { SetEvent(event.as_raw_handle()) } == 0 {
             return Err(io::Error::last_os_error());
         }
         // The setup signal is what a waiter attaching to a backlog depends on
         // entirely, so M26.9's investigation needs to know it happened -- and
-        // that it happened on the ring's own handle rather than the duplicate
-        // handed back below, since only the former is what the kernel will go
+        // that it happened on the ring's own handle rather than a duplicate
+        // handed to a caller, since only the former is what the kernel will go
         // on signalling.
+        //
+        // Gated because `windows-threadpool-sys` is optional (D-22): this
+        // method is on the always-present path, unlike the delivery module,
+        // so an ungated reference breaks `--no-default-features`.
+        #[cfg(feature = "threadpool")]
         windows_threadpool_sys::trace_record!(
             "delivery",
             "setup-signalled",
             event.as_raw_handle() as usize,
             self.accounting.outstanding()
         );
-
-        event.try_clone()
+        Ok(())
     }
 
     /// Whether this ring supports a raw op code, including one this crate

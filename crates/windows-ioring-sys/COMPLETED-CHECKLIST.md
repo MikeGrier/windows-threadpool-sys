@@ -3655,3 +3655,61 @@ a measurement describes one run of one build.
 a derivation -- left `M26.5`'s sabotage patching text that no longer existed. The sweep that
 followed found four more live sites; the archive was left alone. A per-case uniqueness check now
 runs before the sweep, which would have caught this in seconds rather than in a five-minute run.
+
+## Moved 2026-09-25 14:19:35 -04:00 -- M26.9, the event_delivery stall
+
+### <a id="m269"></a>M26.9 -- The `event_delivery` stall: the wait was armed after the event was signalled, which `SetThreadpoolWait` forbids. *(completed 2026-09-25 14:19:35 -04:00)*
+
+Cause, fix and before/after figures are in [DESIGN-NOTES.md](DESIGN-NOTES.md) -> D-68; the
+investigation as it stood when the cause was found is in
+[RESOLVED-TEST-FAILURES.md](RESOLVED-TEST-FAILURES.md). The item as it read when it closed:
+
+- [x] **M26.9** -- Find and fix the intermittent `Timeout` in
+  [event_delivery.rs](tests/event_delivery.rs)'s two threadpool-delivery tests, recorded in
+  [UNRESOLVED-TEST-FAILURES.md](UNRESOLVED-TEST-FAILURES.md).
+
+  **Why this is not merely a flaky test to re-run.** Measured at 1 failure in 80 runs of the
+  compiled binary. The sabotage harness runs the whole suite once per case and the manifest holds
+  41, so that rate gives roughly a **40% chance of a corrupted sweep** -- and the corruption falsely
+  reports `caught`, which is a sabotage the suite did not catch being recorded as a clean bill of
+  health. The harness is this repository's mechanism for keeping earlier guarantees checked; a 40%
+  chance of a silent false pass undermines every conclusion drawn from it.
+
+  **What has already been ruled out, so it is not re-tried:** ring-resource pressure (zero failures
+  after roughly 18,000 ring create/close cycles), the widened seeded sweeps (zero after repeated
+  property-suite and calibration runs), and CPU starvation (zero under a concurrent `cargo build`
+  saturating the machine).
+
+  **Narrowed 2026-09-25 to a minimal reproducer, and the investigation now leaves this crate.**
+  Measured: 0 failures in 1000 serial runs against 7 in 1000 parallel; every occurrence identical,
+  with **both** delivery tests failing together and `callbacks run: 0` -- the pool never invokes the
+  callback at all, for either ring, and nothing arrives ten seconds later. The two delivery tests
+  alone do not reproduce it (0 in 1000); a third test has to be co-running, and the two that trigger
+  it both create an `EventDelivery` over a ring with nothing outstanding and drop it promptly.
+  Full figures, the reproducer, and what remains unestablished are in
+  [UNRESOLVED-TEST-FAILURES.md](UNRESOLVED-TEST-FAILURES.md).
+
+  **The next step is in [`windows-threadpool-sys`](../windows-threadpool-sys/src/wait.rs)**, not
+  here: both waits are registered on the default process threadpool, and one object's lifecycle
+  appears to stop other, unrelated armed waits from ever firing. Per the repository's mono-repo bug
+  policy, the fix belongs in that layer. `ThreadpoolWait`'s `Drop` has been read and only touches
+  its own object, so the mechanism is **not yet established** -- do not start from a guess about it.
+
+  **Narrowed further the same day, with a configurable trace.** The default pool is **not** wedged:
+  a probe at the moment of failure runs a plain work item and a brand-new armed wait, and measured,
+  both ran. The stalled waits were created and armed -- the trace shows it -- and the trampoline
+  never fires for any of them. **The stall is permanent by design**: the completion event is edge
+  triggered ([D-19](DESIGN-NOTES.md#d-19)), a stalled ring's queue never returns to empty, so the
+  setup signal is the only wakeup that ring will ever receive and losing it once ends delivery for
+  good. The open question is now narrow -- why an armed wait does not observe a signal raised just
+  before it was armed -- and a plausible mechanism is recorded in
+  [UNRESOLVED-TEST-FAILURES.md](UNRESOLVED-TEST-FAILURES.md) **as a hypothesis with no evidence
+  behind it**, together with the experiment that would settle it.
+
+  **The trace is compiled out unless `--features trace` is on**, and narrowed at run time by
+  `WINDOWS_THREADPOOL_TRACE`, because the instrument for a timing-dependent fault must not change
+  the schedule it measures. The flake still reproduces with it on, which was checked first.
+
+  **A cheaper interim mitigation exists and is a separate decision:** the harness could treat a
+  failure in these two tests as *inconclusive* rather than as `caught`, which would stop the false
+  clean bills without pretending the behaviour is understood.
