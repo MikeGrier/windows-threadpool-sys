@@ -308,6 +308,15 @@ reviewable artifact rather than a recording.
   rather than a one-line timeout bump -- raising the five-second bound would hide it, and the
   question worth answering is whether a real consumer's completion can be delayed this way.
 
+  **The next occurrence will say much more than the last one did.** Both tests now print a stall
+  report -- delivered count, pool-callback count, the ring's outstanding count, arrival gaps, and a
+  post-mortem saying whether the delivery arrived late or never came -- into stderr and the panic
+  message, so it lands in `cargo test`'s captured output and in the sabotage harness's per-case
+  transcript. [UNRESOLVED-TEST-FAILURES.md](UNRESOLVED-TEST-FAILURES.md) describes each field and
+  what it distinguishes. **Read one real occurrence before theorising further**: the counters were
+  chosen to separate hypotheses that the previous bare `Timeout` could not, and a single captured
+  instance may settle it.
+
   **A cheaper interim mitigation exists and is a separate decision:** the harness could treat a
   failure in these two tests as *inconclusive* rather than as `caught`, which would stop the false
   clean bills without pretending the behaviour is understood.

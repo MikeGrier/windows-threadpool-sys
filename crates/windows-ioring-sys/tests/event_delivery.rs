@@ -34,6 +34,142 @@ fn filled_content() -> Vec<u8> {
     content
 }
 
+/// How long a delivery is allowed to take before the test calls it stalled.
+const DELIVERY_BOUND: Duration = Duration::from_secs(5);
+
+/// How much longer to wait, **only after a failure**, to learn whether the
+/// delivery was lost or merely late.
+///
+/// This costs nothing on a passing run because it is never reached. On a
+/// failing one it is the single most discriminating fact available: a delivery
+/// that arrives at nine seconds is a stall to be explained, while one that
+/// never arrives is a lost wakeup, and those have entirely different causes.
+///
+/// **Kept short enough that the report survives being killed.** The sabotage
+/// harness bounds a suite at three times its baseline -- around thirty seconds
+/// here -- and kills the process when that is exceeded. A post-mortem long
+/// enough to push a failing run past that bound would trade the diagnosis for
+/// the thing it was added to diagnose. The immediate facts are printed
+/// *before* this wait for the same reason, so they survive even if it is.
+const POST_MORTEM_BOUND: Duration = Duration::from_secs(10);
+
+/// What the delivery path did, captured so a timeout is a diagnosis rather
+/// than a word.
+///
+/// `M26.9` exists because these two tests time out at roughly one run in
+/// eighty, and the message they produced -- `Timeout` -- ruled nothing out.
+/// Every field below was chosen to separate hypotheses that message could not:
+/// whether the pool ever ran the callback, whether the kernel ever finished
+/// the I/O, whether deliveries were steady and then stopped, and whether the
+/// missing one was lost or late.
+struct DeliveryWatch {
+    started: std::time::Instant,
+    /// When each completion reached the test thread, relative to `started`.
+    arrivals: Vec<Duration>,
+    /// How many times the pool actually invoked the callback.
+    callbacks: Arc<AtomicUsize>,
+}
+
+impl DeliveryWatch {
+    fn new(callbacks: Arc<AtomicUsize>) -> Self {
+        Self {
+            started: std::time::Instant::now(),
+            arrivals: Vec::new(),
+            callbacks,
+        }
+    }
+
+    fn record_arrival(&mut self) {
+        self.arrivals.push(self.started.elapsed());
+    }
+
+    /// Everything known at the moment a wait gave up.
+    ///
+    /// Written to stderr as well as into the panic message: `cargo test`
+    /// replays a failing test's captured output, and the sabotage harness
+    /// writes that transcript to `.scratch/sabotage/<case>.txt`, so this is
+    /// what a later reader actually has to work from.
+    ///
+    /// **States what was observed and what each number means mechanically;
+    /// does not say what caused it.** An earlier draft ended each report with
+    /// a verdict, and a forced-failure run showed the verdict was wrong -- it
+    /// blamed something upstream of the channel when the injected fault was in
+    /// the callback body, which the counters it printed had already ruled out.
+    /// A diagnosis nobody asked for is worse than none, because it is the part
+    /// a tired reader will believe.
+    fn report(&self, what: &str, expected: usize, outstanding: usize, postmortem: &str) -> String {
+        let gaps: Vec<String> = self
+            .arrivals
+            .windows(2)
+            .map(|pair| format!("{:?}", pair[1] - pair[0]))
+            .collect();
+        let callbacks = self.callbacks.load(Ordering::SeqCst);
+        format!(
+            "M26.9 delivery stalled: {what}\n\
+             \x20 delivered      : {} of {expected}\n\
+             \x20 callbacks run  : {callbacks} -- times the pool invoked the callback. Equal to \
+             delivered means everything the callback received reached this thread; greater \
+             means the gap is between the callback and the channel.\n\
+             \x20 outstanding    : {outstanding} -- the ring's own count, which decrements on \
+             pop, and the pop happens inside the callback. So it cannot on its own separate \
+             'the kernel has not finished' from 'the callback never ran'.\n\
+             \x20 arrival times  : {:?}\n\
+             \x20 inter-arrival  : [{}]\n\
+             \x20 waited         : {:?} before giving up\n\
+             \x20 post-mortem    : {postmortem}",
+            self.arrivals.len(),
+            self.arrivals,
+            gaps.join(", "),
+            DELIVERY_BOUND,
+        )
+    }
+}
+
+/// Wait for one delivery, turning a timeout into the report above.
+fn recv_one(
+    rx: &mpsc::Receiver<windows_ioring_sys::Completion>,
+    watch: &mut DeliveryWatch,
+    what: &str,
+    expected: usize,
+    outstanding: impl Fn() -> usize,
+) -> windows_ioring_sys::Completion {
+    match rx.recv_timeout(DELIVERY_BOUND) {
+        Ok(completion) => {
+            watch.record_arrival();
+            completion
+        }
+        Err(_) => {
+            // Read the ring's own count *before* the second wait, so it
+            // describes the moment of failure rather than the moment of
+            // giving up on it.
+            let at_failure = outstanding();
+            // Printed now, before waiting any longer. If this process is
+            // killed during the post-mortem -- which the sabotage harness will
+            // do if the suite exceeds its hang bound -- these lines are
+            // already in the transcript, and losing them is losing the whole
+            // reason the instrumentation exists.
+            eprintln!(
+                "{}",
+                watch.report(
+                    what,
+                    expected,
+                    at_failure,
+                    &format!(
+                        "waiting a further {POST_MORTEM_BOUND:?} to see whether it is late \
+                              rather than lost; the line below is the answer"
+                    )
+                )
+            );
+            let started = std::time::Instant::now();
+            let postmortem = match rx.recv_timeout(POST_MORTEM_BOUND) {
+                Ok(_) => format!("it arrived, {:?} past the bound", started.elapsed()),
+                Err(_) => format!("still nothing after a further {POST_MORTEM_BOUND:?}"),
+            };
+            panic!("{}", watch.report(what, expected, at_failure, &postmortem));
+        }
+    }
+}
+
 #[test]
 fn completions_are_delivered_on_pool_threads_without_the_submitting_thread_waiting() {
     let path = temp_file("delivery");
@@ -49,11 +185,16 @@ fn completions_are_delivered_on_pool_threads_without_the_submitting_thread_waiti
     let submitting_thread = std::thread::current().id();
     let saw_foreign_thread = Arc::new(AtomicBool::new(false));
     let saw_foreign_thread_for_callback = Arc::clone(&saw_foreign_thread);
+    // Counted in the callback itself, so a stalled run can say whether the
+    // pool ever ran it -- which is the first fork in diagnosing M26.9.
+    let callbacks = Arc::new(AtomicUsize::new(0));
+    let callbacks_for_callback = Arc::clone(&callbacks);
 
     let ring = IoRing::new(64, 64).expect("create ring");
     let delivery = EventDelivery::new(
         ring,
         move |completion| {
+            callbacks_for_callback.fetch_add(1, Ordering::SeqCst);
             if std::thread::current().id() != submitting_thread {
                 saw_foreign_thread_for_callback.store(true, Ordering::SeqCst);
             }
@@ -82,11 +223,16 @@ fn completions_are_delivered_on_pool_threads_without_the_submitting_thread_waiti
         batch.submit_and_wait(0, 0).expect("submit without waiting");
     }
 
+    let mut watch = DeliveryWatch::new(Arc::clone(&callbacks));
     let mut received = 0;
     while received < CHUNKS {
-        let completion = rx
-            .recv_timeout(Duration::from_secs(5))
-            .expect("completion delivered via the pool");
+        let completion = recv_one(
+            &rx,
+            &mut watch,
+            "completions_are_delivered_on_pool_threads_without_the_submitting_thread_waiting",
+            CHUNKS,
+            || delivery.scope().outstanding(),
+        );
         completion.result().expect("read succeeded");
         received += 1;
     }
@@ -195,9 +341,12 @@ fn completions_queued_before_handover_are_still_delivered() {
     }
 
     let (tx, rx) = mpsc::channel();
+    let callbacks = Arc::new(AtomicUsize::new(0));
+    let callbacks_for_callback = Arc::clone(&callbacks);
     let delivery = EventDelivery::new(
         ring,
         move |completion| {
+            callbacks_for_callback.fetch_add(1, Ordering::SeqCst);
             let _ = tx.send(completion);
         },
         None,
@@ -207,10 +356,22 @@ fn completions_queued_before_handover_are_still_delivered() {
     // Claim on this thread rather than in the callback, so a delivered
     // completion is checked against the token that minted it -- a delivery
     // that reported the wrong `UserData` would fail here rather than pass.
+    //
+    // Note what a stall means *here* specifically, and why the report says
+    // `outstanding` is not self-explanatory: every completion was already in
+    // the queue before the handover, so the kernel has nothing left to do.
+    // A timeout in this test therefore cannot be the device being slow.
+    let mut watch = DeliveryWatch::new(Arc::clone(&callbacks));
     for _ in 0..CHUNKS {
-        let completion = rx
-            .recv_timeout(Duration::from_secs(5))
-            .expect("a completion queued before handover must still be delivered");
+        let completion = recv_one(
+            &rx,
+            &mut watch,
+            "completions_queued_before_handover_are_still_delivered (every completion was \
+             already queued before the handover, so the kernel had nothing left to do -- a \
+             stall here is in the signal or the pool, never in the device)",
+            CHUNKS,
+            || delivery.scope().outstanding(),
+        );
         let transferred = completion.result().expect("read succeeded");
         let (chunk_index, token) = pending
             .remove(&completion.user_data())
@@ -230,6 +391,52 @@ fn completions_queued_before_handover_are_still_delivered() {
     );
 
     drop(delivery);
+}
+
+#[test]
+fn the_stall_report_carries_what_a_diagnosis_needs() {
+    // `M26.9`'s instrumentation, guarded without paying for it.
+    //
+    // The report is what a future reader of a flaked run has to work from, so
+    // it is worth knowing it still says something. Driving a real stall to
+    // find out would cost every suite run the delivery bound plus the
+    // post-mortem, which is why this exercises the formatting directly: the
+    // failure path's only other job is to call it, and that was verified once
+    // by forcing a stall by hand (measured: five of eight delivered, eight
+    // callbacks run, which localised the injected fault to between the
+    // callback and the channel exactly as the counters promise).
+    let callbacks = Arc::new(AtomicUsize::new(8));
+    let mut watch = DeliveryWatch::new(callbacks);
+    watch.record_arrival();
+    watch.record_arrival();
+
+    let report = watch.report("a_test_name", 8, 3, "still nothing");
+    for needle in [
+        "a_test_name",
+        "delivered",
+        "2 of 8",
+        "callbacks run",
+        "outstanding",
+        "arrival times",
+        "inter-arrival",
+        "post-mortem",
+        "still nothing",
+    ] {
+        assert!(
+            report.contains(needle),
+            "the stall report must carry {needle:?}, or a flaked run says less than it could \
+             -- got:\n{report}"
+        );
+    }
+
+    // The counter that separates "the pool stopped calling us" from "the
+    // callback got it and the channel did not" is the one worth pinning by
+    // value rather than by name: a report that printed the delivered count
+    // twice would satisfy every check above.
+    assert!(
+        report.contains("callbacks run  : 8"),
+        "the callback count must be the pool's, not the delivered count -- got:\n{report}"
+    );
 }
 
 // ------------------------------------------------------------------------
