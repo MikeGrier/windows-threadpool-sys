@@ -312,15 +312,33 @@ reviewable artifact rather than a recording.
 
   **Encode the ambiguity, or the check is worse than none.** `FILE_TYPE_UNKNOWN` is `0` and means *either*
   an unknown type *or that the call failed*. Clear the last error before calling and read it after;
-  otherwise an invalid handle reads as a benign "unknown" and is waved through.
+  otherwise an invalid handle reads as a benign "unknown" and is waved through. Do not read a successful
+  `FILE_TYPE_UNKNOWN` as exotic: the reduction to three buckets has no answer for some device classes, so
+  it is a real response rather than a near-failure.
 
-  **State what `GetFileType` does not establish, beside the check itself.** It does not separate local
-  from remote -- `FILE_TYPE_REMOTE` is documented "Unused" and an SMB file reports `FILE_TYPE_DISK`, so a
-  claim needing a local volume wants `GetFileInformationByHandleEx(FileRemoteProtocolInfo)`, which
-  succeeds for remote and fails for local. It says nothing about write-cache or FUA behaviour either:
-  that is a device property (`IOCTL_STORAGE_QUERY_PROPERTY`), so a `FILE_TYPE_DISK` handle on a volume
-  with an unprotected write cache passes the type check and still cannot back the durability claim.
-  Whether to probe that too is part of this item's decision, not a given.
+  **`FILE_TYPE_DISK` is a type gate, not a durability gate, and the difference is the whole point.** The
+  documented table gives three buckets and does **not** enumerate which device classes land in each, so
+  `FILE_TYPE_DISK` must not be read as "a fixed local volume" -- only as "not a pipe, socket, or
+  character device". It is necessary and nowhere near sufficient.
+
+  **An earlier revision of this item asserted that an SMB file reports `FILE_TYPE_DISK`. That was
+  recollection, not a citation, and it is withdrawn** -- exactly the failure `M26.8` corrected. Nothing
+  public says how a network path classifies, and `GetDriveType`'s own page notes "SMB does not support
+  volume management functions", so treat the question as open and answer it by probing rather than by
+  assuming.
+
+  **So the distinctions the claim actually turns on need a second, explicit probe.** `GetDriveType`
+  separates them by name: `DRIVE_FIXED` (3), `DRIVE_REMOTE` (4), `DRIVE_CDROM` (5), `DRIVE_RAMDISK` (6),
+  `DRIVE_REMOVABLE` (2). Reaching it from a handle costs a round trip --
+  `GetFinalPathNameByHandleW` -> `GetVolumePathNameW` -> `GetDriveTypeW` -- so weigh that against the
+  handle-based `GetFileInformationByHandleEx(FileRemoteProtocolInfo)`, which answers only the remote
+  question but answers it without touching paths. `DRIVE_RAMDISK` is the one that should be uncontroversial
+  to refuse: durability over a RAM disk is not a weaker guarantee, it is no guarantee.
+
+  **And none of these establish that a flush reaches stable media.** That is write-cache state
+  (`IOCTL_STORAGE_QUERY_PROPERTY`), a property of the device rather than of the handle, so every check
+  above can pass while the durability claim remains unbacked. Whether to probe it is part of this item's
+  decision, not a given -- but the contract must not imply it has been checked when it has not.
 
   **Take the second check only because it pays for itself.**
   `GetFileInformationByHandleEx(FileStorageInfo)` yields logical and physical sector size, which the
