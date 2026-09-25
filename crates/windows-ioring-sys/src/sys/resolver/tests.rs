@@ -34,13 +34,14 @@
 //! EXERCISES: RS-P-5
 //! EXERCISES: RS-P-6
 //! EXERCISES: RS-P-7
+//! EXERCISES: RS-P-8
 
 use std::ffi::c_void;
 use std::ptr;
 
 use windows_sys::Win32::Storage::FileSystem::{
-    IORING_CQE, IORING_HANDLE_REF, IORING_HANDLE_REF_0, IORING_REF_RAW,
-    IOSQE_FLAGS_DRAIN_PRECEDING_OPS,
+    IORING_BUFFER_REF, IORING_BUFFER_REF_0, IORING_CQE, IORING_HANDLE_REF, IORING_HANDLE_REF_0,
+    IORING_REF_RAW, IOSQE_FLAGS_DRAIN_PRECEDING_OPS,
 };
 
 use super::{Resolver, ResolverConfig, ResolverStats};
@@ -97,6 +98,29 @@ fn handle() -> IORING_HANDLE_REF {
     }
 }
 
+/// Drive a read build, the cheapest operation that carries a requested length
+/// and so the only shape `RS-P-8` is stated over.
+fn build_read(resolver: &mut Resolver, user_data: usize, bytes: u32) {
+    // SAFETY: the resolver dereferences none of these; see `handle`.
+    let hr = unsafe {
+        resolver.build_read(
+            ptr::null_mut(),
+            handle(),
+            IORING_BUFFER_REF {
+                Kind: IORING_REF_RAW,
+                Buffer: IORING_BUFFER_REF_0 {
+                    Address: ptr::null_mut(),
+                },
+            },
+            bytes,
+            0,
+            user_data,
+            0,
+        )
+    };
+    assert_eq!(hr, 0, "a build should report success");
+}
+
 /// Drive a flush build, which is the cheapest operation to synthesise and the
 /// only one that can carry a barrier through this crate's public surface.
 fn build_flush(resolver: &mut Resolver, user_data: usize, barrier: bool) {
@@ -125,6 +149,25 @@ fn submit_waiting(resolver: &mut Resolver) -> i32 {
 }
 
 /// Pop one completion, or `None` when the queue is empty.
+/// Pop carrying the transferred count, which `pop` discards.
+fn pop_full(resolver: &mut Resolver) -> Option<(usize, i32, usize)> {
+    let mut cqe = IORING_CQE {
+        UserData: 0,
+        ResultCode: 0,
+        Information: 0,
+    };
+    // SAFETY: `cqe` is a valid out-pointer.
+    let hr = unsafe { resolver.pop(ptr::null_mut(), &raw mut cqe) };
+    if hr == 1 {
+        return None;
+    }
+    assert_eq!(
+        hr, 0,
+        "a pop should either succeed or report an empty queue"
+    );
+    Some((cqe.UserData, cqe.ResultCode, cqe.Information))
+}
+
 fn pop(resolver: &mut Resolver) -> Option<(usize, i32)> {
     let mut cqe = IORING_CQE {
         UserData: 0,
@@ -803,19 +846,82 @@ fn the_default_configuration_is_the_widest_point_in_the_space() {
 }
 
 #[test]
+fn a_successful_transfer_may_report_fewer_bytes_than_requested() {
+    // RS-P-8. Both directions, because a permission tested one way only says
+    // half of what it means: with the switch on some seed must report short,
+    // and with it off none may -- otherwise the switch is not what decides it.
+    const LEN: u32 = 4096;
+
+    let mut short_seen = 0_usize;
+    let mut full_seen = 0_usize;
+    for seed in SEEDS {
+        let mut resolver = Resolver::with_config(
+            seed,
+            ResolverConfig {
+                may_transfer_partially: true,
+                ..ResolverConfig::narrowest()
+            },
+        );
+        for id in 1..=8_usize {
+            build_read(&mut resolver, id, LEN);
+        }
+        submit(&mut resolver);
+        while let Some((_, result, information)) = pop_full(&mut resolver) {
+            assert_eq!(result, 0, "narrowest() forbids a failed operation");
+            assert!(
+                information <= LEN as usize,
+                "a transfer reported {information} bytes for a {LEN}-byte request, \
+                 which is over-delivery rather than a short count; seed {seed:#x}"
+            );
+            if information == LEN as usize {
+                full_seen += 1;
+            } else {
+                short_seen += 1;
+            }
+        }
+    }
+    assert!(
+        short_seen > 0,
+        "no seed reported a short transfer, so RS-P-8 is unexercised"
+    );
+    assert!(
+        full_seen > 0,
+        "every transfer was short, so the clause is being applied unconditionally \
+         rather than as a permission"
+    );
+
+    // The other direction: with the permission withdrawn, a short count is a
+    // defect rather than a tolerated response.
+    for seed in SEEDS {
+        let mut resolver = Resolver::with_config(seed, ResolverConfig::narrowest());
+        for id in 1..=8_usize {
+            build_read(&mut resolver, id, LEN);
+        }
+        submit(&mut resolver);
+        while let Some((_, _, information)) = pop_full(&mut resolver) {
+            assert_eq!(
+                information, LEN as usize,
+                "a resolver with may_transfer_partially off reported a short \
+                 transfer; seed {seed:#x}"
+            );
+        }
+    }
+}
+
+#[test]
 fn the_configuration_has_a_switch_for_every_permission_and_none_for_any_constraint() {
     // The asymmetry the module documents, asserted rather than described. A
     // switch that relaxed an `RS-C-n` would let a test quietly assert against
-    // a platform that cannot exist, so the count is pinned: seven permissions
-    // in RESPONSE-SPACE.md, seven fields, and no eighth for a constraint.
+    // a platform that cannot exist, so the count is pinned: eight permissions
+    // in RESPONSE-SPACE.md, eight fields, and no ninth for a constraint.
     //
     // Counted through `Debug`, which lists exactly the struct's fields, so a
     // field added without a clause fails here rather than passing unnoticed.
     let rendered = format!("{:?}", ResolverConfig::default());
     let fields = rendered.matches(": ").count();
     assert_eq!(
-        fields, 7,
-        "ResolverConfig has {fields} fields; RESPONSE-SPACE.md specifies seven permissions \
-         (RS-P-1..7), and a constraint must never become a switch -- {rendered}"
+        fields, 8,
+        "ResolverConfig has {fields} fields; RESPONSE-SPACE.md specifies eight permissions \
+         (RS-P-1..8), and a constraint must never become a switch -- {rendered}"
     );
 }

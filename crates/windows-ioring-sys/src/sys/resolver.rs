@@ -164,6 +164,14 @@ pub struct ResolverConfig {
     /// `RS-P-7`: a submit may fail, leaving built operations queued for a
     /// later one.
     pub may_fail_submits: bool,
+    /// `RS-P-8`: a successful transfer may report fewer bytes than requested.
+    ///
+    /// With this off every successful read or write reports the full
+    /// requested length. That is the behaviour of an ordinary file on a local
+    /// volume, and so the narrowing a test wants when its subject is
+    /// something else -- but it is *narrower* than the platform, because this
+    /// crate does not constrain what kind of handle a caller registers.
+    pub may_transfer_partially: bool,
 }
 
 impl Default for ResolverConfig {
@@ -176,6 +184,7 @@ impl Default for ResolverConfig {
             may_wake_empty: true,
             edge_triggered_signal: true,
             may_fail_submits: true,
+            may_transfer_partially: true,
         }
     }
 }
@@ -197,6 +206,7 @@ impl ResolverConfig {
             may_wake_empty: false,
             edge_triggered_signal: true,
             may_fail_submits: false,
+            may_transfer_partially: false,
         }
     }
 }
@@ -238,6 +248,8 @@ pub struct ResolverStats {
     /// before it was still unresolved (`RS-C-4` actually bit, as distinct from
     /// having been vacuously satisfied).
     pub barrier_holds: usize,
+    /// Successful transfers reported short under `RS-P-8`.
+    pub partial_transfers: usize,
 }
 
 /// A live view of [`ResolverStats`] for an installed resolver.
@@ -267,6 +279,10 @@ struct Op {
     barrier: bool,
     /// Consultations survived without being posted.
     deferrals: u32,
+    /// Bytes asked for, when this operation is a transfer. `None` for flush
+    /// and cancel, whose `Information` is not a byte count at all -- which is
+    /// why `RS-P-8` is stated over transfers rather than over completions.
+    requested: Option<u32>,
 }
 
 /// A resolver over [RESPONSE-SPACE.md](../RESPONSE-SPACE.md).
@@ -283,8 +299,9 @@ pub struct Resolver {
     /// Submitted, not yet posted. Held in build order, which is what lets
     /// `RS-C-4` be decided by position.
     pool: Vec<Op>,
-    /// Posted, not yet popped. The completion queue.
-    posted: VecDeque<(usize, HRESULT)>,
+    /// Posted, not yet popped. The completion queue: identity, result code,
+    /// and the `Information` the completion will carry (`RS-P-8`).
+    posted: VecDeque<(usize, HRESULT, usize)>,
     next_seq: u64,
     consecutive_submit_failures: u32,
     /// The ring's completion event, if one has been attached. Borrowed, never
@@ -426,7 +443,7 @@ impl Resolver {
 
     /// Record a built operation and return the success every `Build*` call
     /// returns when it queues an SQE.
-    fn build(&mut self, user_data: usize, flags: i32) -> HRESULT {
+    fn build(&mut self, user_data: usize, flags: i32, requested: Option<u32>) -> HRESULT {
         let seq = self.next_seq;
         self.next_seq += 1;
         self.staged.push(Op {
@@ -434,6 +451,7 @@ impl Resolver {
             seq,
             barrier: flags & IOSQE_FLAGS_DRAIN_PRECEDING_OPS != 0,
             deferrals: 0,
+            requested,
         });
         self.record(|s| s.built += 1);
         S_OK
@@ -505,7 +523,28 @@ impl Resolver {
         };
 
         let was_empty = self.posted.is_empty();
-        self.posted.push_back((op.user_data, result));
+        // `RS-P-8`: a successful transfer may report fewer bytes than were
+        // asked for. Documented for non-blocking byte-mode pipes -- and this
+        // crate constrains the handle type not at all -- so a consumer must
+        // read the count rather than assume it. A failed operation transfers
+        // nothing, and flush and cancel carry no byte count, so neither is
+        // eligible.
+        let information = match (result == S_OK, op.requested) {
+            (true, Some(requested)) => {
+                if self.config.may_transfer_partially && requested > 0 && self.chance(8) {
+                    self.record(|s| s.partial_transfers += 1);
+                    // Strictly short, including zero: a caller who loops on
+                    // the remainder must tolerate making no progress rather
+                    // than assuming every completion advances it.
+                    let short = self.next() % u64::from(requested);
+                    usize::try_from(short).expect("short count fits, it is below a u32")
+                } else {
+                    usize::try_from(requested).expect("a u32 fits a usize on this target")
+                }
+            }
+            _ => 0,
+        };
+        self.posted.push_back((op.user_data, result, information));
         self.record(|s| s.posted += 1);
 
         // `RS-P-6`: the completion event fires on the empty-to-non-empty
@@ -628,7 +667,7 @@ impl Responses for Resolver {
             self.tick(false);
         }
 
-        let Some((user_data, result)) = self.posted.pop_front() else {
+        let Some((user_data, result, information)) = self.posted.pop_front() else {
             return S_FALSE;
         };
         self.record(|s| s.popped += 1);
@@ -641,7 +680,7 @@ impl Responses for Resolver {
                 // when it was built.
                 UserData: user_data,
                 ResultCode: result,
-                Information: 0,
+                Information: information,
             });
         }
         S_OK
@@ -652,12 +691,12 @@ impl Responses for Resolver {
         _ring: *mut c_void,
         _file: IORING_HANDLE_REF,
         _buffer: IORING_BUFFER_REF,
-        _bytes: u32,
+        bytes: u32,
         _offset: u64,
         user_data: usize,
         flags: i32,
     ) -> HRESULT {
-        self.build(user_data, flags)
+        self.build(user_data, flags, Some(bytes))
     }
 
     unsafe fn build_write(
@@ -665,13 +704,13 @@ impl Responses for Resolver {
         _ring: *mut c_void,
         _file: IORING_HANDLE_REF,
         _buffer: IORING_BUFFER_REF,
-        _bytes: u32,
+        bytes: u32,
         _offset: u64,
         _caching: i32,
         user_data: usize,
         flags: i32,
     ) -> HRESULT {
-        self.build(user_data, flags)
+        self.build(user_data, flags, Some(bytes))
     }
 
     unsafe fn build_flush(
@@ -682,7 +721,7 @@ impl Responses for Resolver {
         user_data: usize,
         flags: i32,
     ) -> HRESULT {
-        self.build(user_data, flags)
+        self.build(user_data, flags, None)
     }
 
     unsafe fn build_cancel(
@@ -695,7 +734,7 @@ impl Responses for Resolver {
         // A cancel carries no SQE flags of its own in this crate's surface, so
         // it is never a barrier. It is still an operation and still completes
         // exactly once under `RS-C-1`.
-        self.build(user_data, 0)
+        self.build(user_data, 0, None)
     }
 
     unsafe fn build_register_files(
@@ -705,7 +744,7 @@ impl Responses for Resolver {
         _handles: *const *mut c_void,
         user_data: usize,
     ) -> HRESULT {
-        self.build(user_data, 0)
+        self.build(user_data, 0, None)
     }
 
     unsafe fn build_register_buffers(
@@ -715,7 +754,7 @@ impl Responses for Resolver {
         _buffers: *const IORING_BUFFER_INFO,
         user_data: usize,
     ) -> HRESULT {
-        self.build(user_data, 0)
+        self.build(user_data, 0, None)
     }
 
     unsafe fn set_completion_event(&mut self, _ring: *mut c_void, event: *mut c_void) -> HRESULT {

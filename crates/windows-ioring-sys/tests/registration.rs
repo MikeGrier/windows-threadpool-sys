@@ -126,6 +126,10 @@ fn a_read_addressing_a_registered_file_and_a_registered_buffer_round_trips() {
         .expect("pop completion")
         .expect("a completion arrives within the bound");
     let transferred = completion.result().expect("registered read succeeded");
+    // CONFIRMS: RS-P-8 -- a full count here is a property of the handle
+    // this test chose (an ordinary file on a local volume, where a
+    // successful completion carries the whole length and a full volume is
+    // an error instead), not of the space, which permits a short one.
     assert_eq!(transferred, 256);
     let _ = token
         .claim_if(&completion)

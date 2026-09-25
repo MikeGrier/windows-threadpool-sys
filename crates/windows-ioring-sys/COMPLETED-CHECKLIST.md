@@ -3713,3 +3713,36 @@ investigation as it stood when the cause was found is in
   **A cheaper interim mitigation exists and is a separate decision:** the harness could treat a
   failure in these two tests as *inconclusive* rather than as `caught`, which would stop the false
   clean bills without pretending the behaviour is understood.
+
+## Moved 2026-09-25 15:02:00 -04:00 -- M26.10, the partial-transfer decision
+
+### <a id="m2610"></a>M26.10 -- Decided: a completion may report fewer bytes than requested, so `RS-P-8` permits it and the caller owns the remainder. *(completed 2026-09-25 15:02:00 -04:00)*
+
+The decision and its two-layer shape are in [DESIGN-NOTES.md](DESIGN-NOTES.md) -> D-69; the clause
+itself is `RS-P-8` in [RESPONSE-SPACE.md](RESPONSE-SPACE.md). The durability half it spawned is
+`M26.11`. The item as it read when it closed:
+
+- [x] **M26.10** -- Decide whether a completion may report **fewer bytes than requested**, which
+  [RESPONSE-SPACE.md](RESPONSE-SPACE.md) currently lists as deliberately undecided. Found by
+  `M26.7`'s audit, and queued rather than settled there because the space's own instruction is to
+  "decide it before a resolver relies on either answer" -- which is a call about what this crate
+  tolerates, not a correction.
+
+  **The observation.** Five kernel assertions require a full transfer (`assert_eq!(transferred,
+  LEN)`), so the suite already answers the question by assuming one. `Completion::result` promises
+  only "the transferred byte count" and never a complete one, so nothing in the crate backs that
+  assumption up. The two are not in conflict today only because `M26.3`'s resolver reports
+  `Information: 0` for every operation and no resolver-driven test reads a transfer count -- so a
+  resolver and a kernel test would disagree about the same field and nothing would notice.
+
+  **Note one of the five is already right and should be left alone.**
+  [flush_barrier.rs](tests/flush_barrier.rs) checks the transfer explicitly as its *own
+  precondition* -- a short write would make every count in that test meaningless -- and says so.
+  That is the honest form of the assertion whichever way this is decided.
+
+  **What deciding it costs.** Permitting partial transfers widens what every consumer must handle
+  and would make the resolver able to produce them, which the properties in
+  [properties_under_every_resolution.rs](tests/properties_under_every_resolution.rs) would then
+  have to survive. Requiring complete transfers is a `Decided` constraint of the kind `RS-C-1`
+  already is, and would need a `CONFIRMS:` marker on whichever kernel test carries it -- the census
+  added in `M26.6` will then hold the two halves together.

@@ -193,6 +193,37 @@ These exist because a resolver free to violate everything makes this crate
 defend against a platform that does not exist, and code written against an
 impossible kernel is untestable and unreviewable. Each is a call.
 
+### RS-P-8 -- A successful transfer may report fewer bytes than requested
+
+A read or write that completes successfully may report an `Information` below
+the length it was given. The remainder is not transferred, and nothing in this
+crate reissues it.
+
+- **Documented, for the handle types that do it.** `WriteFile`'s Remarks state
+  that *"when writing to a non-blocking, byte-mode pipe handle with
+  insufficient buffer space, WriteFile returns TRUE with
+  \*lpNumberOfBytesWritten < nNumberOfBytesToWrite"*. Sockets report a short
+  send when the transmit buffer cannot take the whole buffer, and a
+  communications handle with a write timeout set by `SetCommTimeouts` can
+  report a partial count when the timeout fires after some data has gone out.
+  Reads are shorter still by nature: end of file, a pipe with less buffered
+  than asked for.
+- **Why it is a permission of this space and not a property of a file.** For an
+  ordinary file on a local volume a successful completion is expected to carry
+  the full requested length, and a full volume is an error
+  (`ERROR_DISK_FULL`) rather than a short success. But **this crate does not
+  constrain what a caller registers** -- `IoRing` takes a handle, and a pipe, a
+  socket and a serial port are all handles. A consumer of this crate therefore
+  has to read the count. A consumer that has *also* narrowed its handle type
+  can rely on more, and the place to say so is that consumer's own contract,
+  not this space.
+- **The continuation is the caller's.** This crate reports the count and stops
+  there. Whether to reissue the remainder, how many times, and when to give up
+  are policy, and [D-67](DESIGN-NOTES.md#d-67) keeps policy with the caller.
+- **A short count may be zero.** A consumer looping on the remainder must
+  tolerate a completion that makes no progress rather than assuming each one
+  advances it.
+- Flush and cancel carry no byte count, so this clause does not reach them.
 ### RS-C-1 -- Every submitted operation eventually completes exactly once
 
 No completion is lost, none is duplicated, and every successfully submitted
@@ -257,10 +288,6 @@ Stated so that a later reader can tell an omission from a choice:
 - **Rates.** No clause carries a probability. A resolver weights its choices by
   seed, and any weighting is a property of the resolver rather than of this
   space. Recording observed rates here would make the space a recording.
-- **Partial transfers.** Whether a completion may report fewer bytes than
-  requested is not specified, because nothing in this repository has measured
-  it and the over-provision would change what every consumer must handle.
-  Decide it before a resolver relies on either answer.
 - **Failure code sets.** RS-P-3 permits any code and enumerates none.
 - **Timing.** Nothing here constrains how long anything takes. `M25`'s standing
   constraint already forbids this crate from depending on an operation pending,

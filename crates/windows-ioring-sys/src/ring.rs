@@ -217,6 +217,29 @@ impl Completion {
     /// op-specific value in `IORING_CQE::Information`, once `ResultCode`
     /// says success.
     ///
+    /// # The count may be short, and the remainder is yours
+    ///
+    /// A successful read or write may report **fewer bytes than were
+    /// requested**, including zero (`RS-P-8` in
+    /// [RESPONSE-SPACE.md](../RESPONSE-SPACE.md)). `WriteFile` documents this
+    /// for non-blocking byte-mode pipes; sockets report a short send when the
+    /// transmit buffer is full, and reads are short at end of file. This crate
+    /// takes a handle and does not constrain what kind it is, so a consumer
+    /// must compare this count against the length it submitted rather than
+    /// assume they are equal.
+    ///
+    /// Nothing here reissues the remainder. Whether to submit another
+    /// operation for it, how many times, and when to give up are the caller's
+    /// (D-67), and a consumer that loops must tolerate a completion that makes
+    /// no progress.
+    ///
+    /// A consumer that has narrowed its *own* handle type can rely on more --
+    /// for an ordinary file on a local volume a successful completion is
+    /// expected to carry the full length, and a full volume is an error rather
+    /// than a short success. That is a guarantee such a consumer earns by
+    /// constraining the handle, and it belongs in its contract rather than
+    /// being assumed from this one.
+    ///
     /// # Errors
     ///
     /// Returns the wrapped [`crate::IoRingError`] if `ResultCode` is a

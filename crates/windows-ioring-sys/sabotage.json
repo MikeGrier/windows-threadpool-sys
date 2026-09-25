@@ -687,6 +687,30 @@
       ]
     },
     {
+      "name": "M26.10: the resolver never reports a short transfer",
+      "file": "src/sys/resolver.rs",
+      "expect": "caught",
+      "why": "RS-P-8 is a permission, so the resolver must be able to exercise it. With the switch ignored every transfer reports its full length and the clause becomes unobservable to every consumer written against it -- which is exactly the state the space was in before M26.10 decided the question. The RS-P-8 test's 'no seed reported a short transfer' half must catch this.",
+      "find": [
+        "                if self.config.may_transfer_partially && requested > 0 && self.chance(8) {"
+      ],
+      "replace": [
+        "                if false && self.config.may_transfer_partially && requested > 0 && self.chance(8) {"
+      ]
+    },
+    {
+      "name": "M26.10: a transfer reports more bytes than were requested",
+      "file": "src/sys/resolver.rs",
+      "expect": "caught",
+      "why": "RS-P-8 permits a count below the request and says nothing that would allow one above it. Over-delivery is not a tolerated response but a defect, and a consumer sizing a buffer from the count would read past its own allocation. The bound assertion in the RS-P-8 test is what stands between the two readings.",
+      "find": [
+        "                    let short = self.next() % u64::from(requested);"
+      ],
+      "replace": [
+        "                    let short = u64::from(requested) + 1 + self.next() % 8;"
+      ]
+    },
+    {
       "name": "CONTROL: rewording a statement changes nothing",
       "file": "examples/epoch_log/contract.rs",
       "expect": "survives",

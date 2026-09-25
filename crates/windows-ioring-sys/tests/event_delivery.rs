@@ -477,6 +477,10 @@ fn completions_queued_before_handover_are_still_delivered() {
         let buffer = token
             .claim_if(&completion)
             .expect("a token claims its own completion");
+        // CONFIRMS: RS-P-8 -- a full count here is a property of the handle
+        // this test chose (an ordinary file on a local volume, where a
+        // successful completion carries the whole length and a full volume is
+        // an error instead), not of the space, which permits a short one.
         assert_eq!(transferred, CHUNK_LEN);
         assert_eq!(
             buffer,
