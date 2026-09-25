@@ -33,6 +33,18 @@ use windows_sys::Win32::System::Threading::{
     CreateEventW, SetEvent, WaitForMultipleObjects, WaitForSingleObject,
 };
 
+/// How long a completion this test caused is allowed to take to arrive.
+///
+/// M26.7 replaced a `try_pop` here that asserted the completion was *already*
+/// queued when `submit_and_wait` returned. That is not something this crate
+/// promises -- `pop_within`'s own documentation says a submit-side wait's
+/// return "promises nothing about poppability", and `RESPONSE-SPACE.md` states
+/// it as `RS-P-5`. It was true on the handle this test happens to use and is
+/// false on others, which is the definition of a frozen observation.
+///
+/// Stated as this crate's own contract instead: the completion arrives within
+/// a bound we choose. Generous, because the bound is not what is under test.
+const POP_BOUND: std::time::Duration = std::time::Duration::from_secs(10);
 const CHUNKS: usize = 8;
 const CHUNK_LEN: usize = 512;
 
@@ -532,9 +544,9 @@ fn the_ring_still_wakes_after_an_unrelated_handle_fires_in_a_multiplexed_wait() 
         "round 4: the batch's first completion must wake the wait"
     );
     let stranded = ring
-        .try_pop()
+        .pop_within(POP_BOUND)
         .expect("pop one")
-        .expect("the batch left completions queued");
+        .expect("the batch's remaining completion arrives within the bound");
     let _buffer = pending
         .remove(&stranded.user_data())
         .expect("the popped completion matches a held token")

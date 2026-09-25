@@ -12,6 +12,18 @@ use windows_ioring_sys::{
     Batch, IoBuf, IoBufMut, IoRing, PushOptions, RegisteredSpan, SharedFile, WriteCaching,
 };
 
+/// How long a completion this test caused is allowed to take to arrive.
+///
+/// M26.7 replaced a `try_pop` here that asserted the completion was *already*
+/// queued when `submit_and_wait` returned. That is not something this crate
+/// promises -- `pop_within`'s own documentation says a submit-side wait's
+/// return "promises nothing about poppability", and `RESPONSE-SPACE.md` states
+/// it as `RS-P-5`. It was true on the handle this test happens to use and is
+/// false on others, which is the definition of a frozen observation.
+///
+/// Stated as this crate's own contract instead: the completion arrives within
+/// a bound we choose. Generous, because the bound is not what is under test.
+const POP_BOUND: std::time::Duration = std::time::Duration::from_secs(10);
 /// Registration is the path where this crate hands the kernel a pointer and
 /// the kernel dereferences it *later* -- which is precisely how
 /// [D-32](../DESIGN-NOTES.md#d-32) shipped a use-after-free that surfaced as a
@@ -66,9 +78,9 @@ fn a_read_addressing_a_registered_file_and_a_registered_buffer_round_trips() {
         unsafe { batch.register_files(&[handle]) }.expect("queue file registration");
     batch.submit_and_wait(1, 5_000).expect("submit and wait");
     let completion = ring
-        .try_pop()
+        .pop_within(POP_BOUND)
         .expect("pop completion")
-        .expect("a completion is ready");
+        .expect("a completion arrives within the bound");
     let registered_files = files_pending
         .claim_if(&completion)
         .expect("id matches")
@@ -82,9 +94,9 @@ fn a_read_addressing_a_registered_file_and_a_registered_buffer_round_trips() {
         .expect("queue buffer registration");
     batch.submit_and_wait(1, 5_000).expect("submit and wait");
     let completion = ring
-        .try_pop()
+        .pop_within(POP_BOUND)
         .expect("pop completion")
-        .expect("a completion is ready");
+        .expect("a completion arrives within the bound");
     let mut registered_buffers = buffers_pending
         .claim_if(&completion)
         .expect("id matches")
@@ -110,9 +122,9 @@ fn a_read_addressing_a_registered_file_and_a_registered_buffer_round_trips() {
     batch.submit_and_wait(1, 5_000).expect("submit and wait");
 
     let completion = ring
-        .try_pop()
+        .pop_within(POP_BOUND)
         .expect("pop completion")
-        .expect("a completion is ready");
+        .expect("a completion arrives within the bound");
     let transferred = completion.result().expect("registered read succeeded");
     assert_eq!(transferred, 256);
     let _ = token
@@ -140,9 +152,9 @@ fn a_read_addressing_a_registered_file_and_a_registered_buffer_round_trips() {
         .expect("queue another registered read");
         batch.submit_and_wait(1, 5_000).expect("submit and wait");
         let completion = ring
-            .try_pop()
+            .pop_within(POP_BOUND)
             .expect("pop completion")
-            .expect("a completion is ready");
+            .expect("a completion arrives within the bound");
         completion.result().expect("registered read succeeded");
         let _ = token
             .claim_if(&completion)
@@ -174,9 +186,9 @@ fn a_second_file_or_buffer_registration_on_the_same_ring_is_refused() {
         unsafe { batch.register_files(&[handle]) }.expect("queue first file registration");
     batch.submit_and_wait(1, 5_000).expect("submit and wait");
     let completion = ring
-        .try_pop()
+        .pop_within(POP_BOUND)
         .expect("pop completion")
-        .expect("a completion is ready");
+        .expect("a completion arrives within the bound");
     let _registered_files = files_pending
         .claim_if(&completion)
         .expect("id matches")
@@ -196,9 +208,9 @@ fn a_second_file_or_buffer_registration_on_the_same_ring_is_refused() {
         .expect("queue first buffer registration");
     batch.submit_and_wait(1, 5_000).expect("submit and wait");
     let completion = ring
-        .try_pop()
+        .pop_within(POP_BOUND)
         .expect("pop completion")
-        .expect("a completion is ready");
+        .expect("a completion arrives within the bound");
     let registered_buffers = buffers_pending
         .claim_if(&completion)
         .expect("id matches")
@@ -252,9 +264,9 @@ fn a_buffer_registration_survives_heap_churn_between_the_push_and_the_submit() {
 
     batch.submit_and_wait(1, 5_000).expect("submit and wait");
     let completion = ring
-        .try_pop()
+        .pop_within(POP_BOUND)
         .expect("pop completion")
-        .expect("a completion is ready");
+        .expect("a completion arrives within the bound");
     let mut registered_buffers = pending
         .claim_if(&completion)
         .expect("id matches")
@@ -273,9 +285,9 @@ fn a_buffer_registration_survives_heap_churn_between_the_push_and_the_submit() {
         .expect("queue read against the registered buffer");
     batch.submit_and_wait(1, 5_000).expect("submit and wait");
     let completion = ring
-        .try_pop()
+        .pop_within(POP_BOUND)
         .expect("pop completion")
-        .expect("a completion is ready");
+        .expect("a completion arrives within the bound");
     let bytes = completion.result().expect("read succeeded");
     assert_eq!(bytes, 256);
     let _ = token.claim_if(&completion);
@@ -361,9 +373,9 @@ fn a_zero_length_registration_does_not_spend_the_ring_s_one_registration() {
         .expect("a real registration must still be accepted after a zero-length one");
     batch.submit_and_wait(1, 5_000).expect("submit and wait");
     let completion = ring
-        .try_pop()
+        .pop_within(POP_BOUND)
         .expect("pop completion")
-        .expect("a completion is ready");
+        .expect("a completion arrives within the bound");
     let registered = pending
         .claim_if(&completion)
         .expect("id matches")
@@ -431,9 +443,9 @@ fn dropping_a_registration_with_an_operation_in_flight_leaks_rather_than_frees()
         .expect("queue buffer registration");
     batch.submit_and_wait(1, 5_000).expect("submit and wait");
     let completion = ring
-        .try_pop()
+        .pop_within(POP_BOUND)
         .expect("pop completion")
-        .expect("a completion is ready");
+        .expect("a completion arrives within the bound");
     let registered_buffers = buffers_pending
         .claim_if(&completion)
         .expect("id matches")
@@ -492,9 +504,9 @@ fn a_registered_file_from_a_different_ring_is_rejected() {
         unsafe { batch.register_files(&[handle]) }.expect("queue file registration on ring a");
     batch.submit_and_wait(1, 5_000).expect("submit and wait");
     let completion = ring_a
-        .try_pop()
+        .pop_within(POP_BOUND)
         .expect("pop completion")
-        .expect("a completion is ready");
+        .expect("a completion arrives within the bound");
     let registered_files = files_pending
         .claim_if(&completion)
         .expect("id matches")
@@ -539,9 +551,9 @@ fn a_registered_file_is_readable_through_the_safe_api_without_unsafe() {
         unsafe { batch.register_files(&[handle]) }.expect("queue file registration");
     batch.submit_and_wait(1, 5_000).expect("submit and wait");
     let completion = ring
-        .try_pop()
+        .pop_within(POP_BOUND)
         .expect("pop completion")
-        .expect("a completion is ready");
+        .expect("a completion arrives within the bound");
     let registered_file = files_pending
         .claim_if(&completion)
         .expect("id matches")
@@ -555,9 +567,9 @@ fn a_registered_file_is_readable_through_the_safe_api_without_unsafe() {
         .expect("queue a safe read against the registered file");
     batch.submit_and_wait(1, 5_000).expect("submit and wait");
     let completion = ring
-        .try_pop()
+        .pop_within(POP_BOUND)
         .expect("pop completion")
-        .expect("a completion is ready");
+        .expect("a completion arrives within the bound");
     assert_eq!(completion.result().expect("read succeeded"), 128);
     let (buffer, returned_file) = token
         .claim_if(&completion)
@@ -592,9 +604,9 @@ fn a_registered_file_and_a_registered_buffer_compose_through_the_safe_api() {
         unsafe { batch.register_files(&[handle]) }.expect("queue file registration");
     batch.submit_and_wait(1, 5_000).expect("submit and wait");
     let completion = ring
-        .try_pop()
+        .pop_within(POP_BOUND)
         .expect("pop completion")
-        .expect("a completion is ready");
+        .expect("a completion arrives within the bound");
     let registered_file = files_pending
         .claim_if(&completion)
         .expect("id matches")
@@ -608,9 +620,9 @@ fn a_registered_file_and_a_registered_buffer_compose_through_the_safe_api() {
         .expect("queue buffer registration");
     batch.submit_and_wait(1, 5_000).expect("submit and wait");
     let completion = ring
-        .try_pop()
+        .pop_within(POP_BOUND)
         .expect("pop completion")
-        .expect("a completion is ready");
+        .expect("a completion arrives within the bound");
     let mut registered_buffers = buffers_pending
         .claim_if(&completion)
         .expect("id matches")
@@ -633,9 +645,9 @@ fn a_registered_file_and_a_registered_buffer_compose_through_the_safe_api() {
         .expect("queue a safe fully-registered read");
     batch.submit_and_wait(1, 5_000).expect("submit and wait");
     let completion = ring
-        .try_pop()
+        .pop_within(POP_BOUND)
         .expect("pop completion")
-        .expect("a completion is ready");
+        .expect("a completion arrives within the bound");
     assert_eq!(completion.result().expect("read succeeded"), 64);
     let (registered_use, returned_file) = token
         .claim_if(&completion)
@@ -674,9 +686,9 @@ fn the_safe_api_rejects_a_registered_file_from_a_different_ring() {
         unsafe { batch.register_files(&[handle]) }.expect("queue file registration on ring a");
     batch.submit_and_wait(1, 5_000).expect("submit and wait");
     let completion = ring_a
-        .try_pop()
+        .pop_within(POP_BOUND)
         .expect("pop completion")
-        .expect("a completion is ready");
+        .expect("a completion arrives within the bound");
     let registered_file = files_pending
         .claim_if(&completion)
         .expect("id matches")
@@ -718,9 +730,9 @@ fn a_registered_buffers_from_a_different_ring_is_rejected() {
         .expect("queue buffer registration on ring a");
     batch.submit_and_wait(1, 5_000).expect("submit and wait");
     let completion = ring_a
-        .try_pop()
+        .pop_within(POP_BOUND)
         .expect("pop completion")
-        .expect("a completion is ready");
+        .expect("a completion arrives within the bound");
     let registered_buffers = buffers_pending
         .claim_if(&completion)
         .expect("id matches")
@@ -834,9 +846,9 @@ fn a_registered_buffer_can_be_filled_and_written_back_out() {
         .expect("queue buffer registration");
     batch.submit_and_wait(1, 5_000).expect("submit and wait");
     let completion = ring
-        .try_pop()
+        .pop_within(POP_BOUND)
         .expect("pop completion")
-        .expect("a completion is ready");
+        .expect("a completion arrives within the bound");
     let mut buffers = pending
         .claim_if(&completion)
         .expect("id matches")
@@ -866,9 +878,9 @@ fn a_registered_buffer_can_be_filled_and_written_back_out() {
     .expect("queue registered write");
     batch.submit_and_wait(1, 5_000).expect("submit and wait");
     let completion = ring
-        .try_pop()
+        .pop_within(POP_BOUND)
         .expect("pop completion")
-        .expect("a completion is ready");
+        .expect("a completion arrives within the bound");
     assert_eq!(
         completion.result().expect("registered write succeeded"),
         record.len()
@@ -907,9 +919,9 @@ fn get_mut_refuses_a_buffer_with_an_operation_outstanding_but_allows_its_neighbo
         .expect("queue buffer registration");
     batch.submit_and_wait(1, 5_000).expect("submit and wait");
     let completion = ring
-        .try_pop()
+        .pop_within(POP_BOUND)
         .expect("pop completion")
-        .expect("a completion is ready");
+        .expect("a completion arrives within the bound");
     let mut buffers = pending
         .claim_if(&completion)
         .expect("id matches")
@@ -959,11 +971,15 @@ fn get_mut_refuses_a_buffer_with_an_operation_outstanding_but_allows_its_neighbo
 
     // Drain, claim, and the buffer becomes fillable again -- the count only
     // returns to zero against a real popped completion.
-    let mut popped = None;
-    while popped.is_none() {
-        popped = ring.try_pop().expect("pop completion");
-    }
-    let completion = popped.expect("a completion is ready");
+    //
+    // Bounded rather than spun (M26.7). This was an unbounded `try_pop` loop,
+    // which is the shape `IoRing::pop_within` was introduced to replace: it
+    // never states how long the operation is allowed to take, so a kernel that
+    // stopped completing turns a failing test into a hung one.
+    let completion = ring
+        .pop_within(POP_BOUND)
+        .expect("pop completion")
+        .expect("a completion arrives within the bound");
     completion.result().expect("registered write succeeded");
     let _ = token
         .claim_if(&completion)
@@ -1005,9 +1021,9 @@ fn get_mut_yields_only_the_registered_bytes_and_cannot_move_the_allocation() {
         .expect("queue buffer registration");
     batch.submit_and_wait(1, 5_000).expect("submit and wait");
     let completion = ring
-        .try_pop()
+        .pop_within(POP_BOUND)
         .expect("pop completion")
-        .expect("a completion is ready");
+        .expect("a completion arrives within the bound");
     let mut buffers = pending
         .claim_if(&completion)
         .expect("id matches")
@@ -1104,9 +1120,9 @@ fn get_refuses_a_buffer_a_read_is_landing_into_but_allows_one_a_write_is_reading
         .expect("queue buffer registration");
     batch.submit_and_wait(1, 5_000).expect("submit and wait");
     let completion = ring
-        .try_pop()
+        .pop_within(POP_BOUND)
         .expect("pop completion")
-        .expect("a completion is ready");
+        .expect("a completion arrives within the bound");
     let mut buffers = pending
         .claim_if(&completion)
         .expect("id matches")

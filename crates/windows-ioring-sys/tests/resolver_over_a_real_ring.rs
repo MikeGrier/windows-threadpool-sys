@@ -233,6 +233,77 @@ fn a_declined_submit_reaches_run_down_as_an_error() {
 }
 
 #[test]
+fn a_pending_completion_defeats_try_pop_and_not_pop_within() {
+    // The defect class M26.7 audited, demonstrated rather than described.
+    //
+    // Thirty-one assertions across five kernel tests read `try_pop()` straight
+    // after `submit_and_wait` and expected a completion to be *there*. That is
+    // not something this crate promises -- `pop_within`'s own documentation
+    // says a submit-side wait's return "promises nothing about poppability",
+    // and RS-P-5 states it as a permission the platform holds. The assertions
+    // passed anyway, because on a buffered handle the operation completes
+    // inside the submit; D-40 measured that at 80 of 80 attempts. Change the
+    // handle and the same assertion gives the opposite answer, which is what
+    // makes it a frozen observation rather than a contract.
+    //
+    // A resolver makes the pending case reachable on demand, so the difference
+    // between the two spellings is a test rather than an argument. This is the
+    // guard for the restatement: if `try_pop` ever starts satisfying this, the
+    // premise of the audit was wrong and this test says so.
+    let resolver = Resolver::with_config(
+        0x9,
+        ResolverConfig {
+            may_pend: true,
+            ..ResolverConfig::narrowest()
+        },
+    );
+    let replay = resolver.replay_hint();
+
+    let path = resolver.scoped(|_| {
+        let mut ring = IoRing::new(64, 128).expect("a ring");
+        let (file, path) = scratch("pending");
+
+        let token = {
+            let mut batch = Batch::new(&mut ring);
+            let token = batch
+                .flush(&file, FlushCoverage::Unordered, FlushMode::Default)
+                .expect("a flush builds");
+            batch.submit().expect("the submit is answered");
+            token
+        };
+
+        // The frozen-observation spelling. Under a resolution that pends, the
+        // completion is not there yet -- so a test written this way would have
+        // failed here rather than at anything it meant to check.
+        assert!(
+            ring.try_pop().expect("try_pop").is_none(),
+            "{replay}: this resolution pends, so nothing is poppable the instant the submit \
+             returns -- if that changed, this test's premise is gone"
+        );
+        assert_eq!(
+            ring.outstanding(),
+            1,
+            "{replay}: the operation is outstanding, not lost"
+        );
+
+        // The restated spelling: this crate's own contract, which holds under
+        // every resolution rather than on one kind of handle.
+        let completion = ring
+            .pop_within(std::time::Duration::from_secs(5))
+            .expect("pop_within")
+            .expect("a completion arrives within the bound");
+        assert!(
+            token.claim_if(&completion).is_ok(),
+            "{replay}: the completion identifies its operation"
+        );
+
+        ring.run_down().expect("rundown");
+        path
+    });
+    let _ = std::fs::remove_file(path);
+}
+
+#[test]
 fn a_thread_with_nothing_installed_still_talks_to_the_kernel() {
     // The seam's transparency, asserted from the far side. This is the same
     // property `M26.2` verified by running its suite both ways, restated here

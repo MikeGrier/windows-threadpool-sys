@@ -44,6 +44,18 @@ use windows_ioring_sys::{
     Batch, IoRing, PushOptions, RegisteredBuffers, RegisteredSpan, SharedFile, WriteCaching,
 };
 
+/// How long a completion this test caused is allowed to take to arrive.
+///
+/// M26.7 replaced a `try_pop` here that asserted the completion was *already*
+/// queued when `submit_and_wait` returned. That is not something this crate
+/// promises -- `pop_within`'s own documentation says a submit-side wait's
+/// return "promises nothing about poppability", and `RESPONSE-SPACE.md` states
+/// it as `RS-P-5`. It was true on the handle this test happens to use and is
+/// false on others, which is the definition of a frozen observation.
+///
+/// Stated as this crate's own contract instead: the completion arrives within
+/// a bound we choose. Generous, because the bound is not what is under test.
+const POP_BOUND: std::time::Duration = std::time::Duration::from_secs(10);
 #[global_allocator]
 static ALLOC: windows_guard_alloc::GuardAlloc = windows_guard_alloc::GuardAlloc::new();
 
@@ -94,9 +106,9 @@ fn registered_arena(ring: &mut IoRing, count: u32, seed: u64) -> RegisteredBuffe
         .submit_and_wait(1, WAIT_MS)
         .expect("submit the registration");
     let completion = ring
-        .try_pop()
+        .pop_within(POP_BOUND)
         .expect("pop the registration completion")
-        .expect("a completion is ready");
+        .expect("a completion arrives within the bound");
     let mut registered = pending
         .claim_if(&completion)
         .expect("the registration token claims its own completion")

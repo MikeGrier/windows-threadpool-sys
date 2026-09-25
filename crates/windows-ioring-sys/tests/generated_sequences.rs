@@ -82,6 +82,18 @@ use windows_ioring_sys::{
 use windows_sys::Win32::Foundation::{WAIT_OBJECT_0, WAIT_TIMEOUT};
 use windows_sys::Win32::System::Threading::WaitForSingleObject;
 
+/// How long a completion this test caused is allowed to take to arrive.
+///
+/// M26.7 replaced a `try_pop` here that asserted the completion was *already*
+/// queued when `submit_and_wait` returned. That is not something this crate
+/// promises -- `pop_within`'s own documentation says a submit-side wait's
+/// return "promises nothing about poppability", and `RESPONSE-SPACE.md` states
+/// it as `RS-P-5`. It was true on the handle this test happens to use and is
+/// false on others, which is the definition of a frozen observation.
+///
+/// Stated as this crate's own contract instead: the completion arrives within
+/// a bound we choose. Generous, because the bound is not what is under test.
+const POP_BOUND: std::time::Duration = std::time::Duration::from_secs(10);
 /// A use-after-free in a generated sequence must fault rather than read stale
 /// bytes, or the generator is only testing that nothing happened to crash.
 #[global_allocator]
@@ -427,9 +439,9 @@ fn run_plan(
         let pending = unsafe { batch.register_files(&[handle]) }.expect("queue file registration");
         batch.submit_and_wait(1, 5_000).expect("submit");
         let completion = ring
-            .try_pop()
+            .pop_within(POP_BOUND)
             .expect("pop")
-            .expect("a registration completion is ready");
+            .expect("a registration completion arrives within the bound");
         pending
             .claim_if(&completion)
             .expect("registration token claims its own completion")
@@ -448,9 +460,9 @@ fn run_plan(
             .expect("queue buffer registration");
         batch.submit_and_wait(1, 5_000).expect("submit");
         let completion = ring
-            .try_pop()
+            .pop_within(POP_BOUND)
             .expect("pop")
-            .expect("a registration completion is ready");
+            .expect("a registration completion arrives within the bound");
         pending
             .claim_if(&completion)
             .expect("registration token claims its own completion")

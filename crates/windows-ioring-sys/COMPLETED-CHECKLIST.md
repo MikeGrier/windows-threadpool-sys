@@ -3549,3 +3549,52 @@ is what happened in the two most expensive defects. The resolver checks the crat
 specification of what the platform may do, and the kernel tests check the platform against that same
 specification. `M26`'s row also joins defect population A, on the observation that the kernel's
 *response* is a precondition and was never varied either.
+
+## Moved 2026-09-25 10:48:58 -04:00 -- M26.7: auditing the suite for frozen observations
+
+### <a id="m267"></a>M26.7 -- Audit the existing suite for assertions that are frozen observations rather than contracts. *(completed 2026-09-25 10:48:58 -04:00)*
+
+The shape is recorded as [D-66](DESIGN-NOTES.md#d-66); what follows is what the work found.
+
+**The census came from a command, and it was not the file anyone guessed.** The item named
+[flush_barrier.rs](tests/flush_barrier.rs) as the obvious candidate and said plainly that the
+candidate was a guess. It was: that file turned out to be one of the better-behaved ones, since its
+transfer assertion is explicitly framed as its own precondition and its ordering counter is
+*reported* rather than asserted. The census started from the whole assertion population, narrowed to
+assertions in tests that touch a real ring -- reusing `RING-OPENING-LIB-TESTS.txt` as the classifier
+rather than inventing a second one -- and then to four candidate shapes.
+
+**One class, 31 assertions wide, across five files.** `try_pop()` straight after `submit_and_wait`
+with the `Option` unwrapped, asserting the kernel had **already** queued the completion. That is
+`D-52`'s demonstrated failure exactly -- an assertion that gives opposite answers on two handles of
+the same API -- and this crate's own documentation denies it: a submit-side wait's return "promises
+nothing about poppability". `RESPONSE-SPACE.md` states it as `RS-P-5`. They passed for the reason
+[D-40](DESIGN-NOTES.md#d-40) measured: a buffered read completes inside the submit in 80 of 80
+attempts, while an unbuffered one genuinely pends.
+
+**Restated as the contract `D-52` prescribed** -- ask for the completion within a bound this crate
+chooses -- which holds on every handle rather than on the one a test happens to open. The same sweep
+found an unbounded `try_pop` spin loop in `registration.rs`, which is the shape `pop_within` was
+introduced to replace, and it went the same way.
+
+**Nothing catches a regression by running, and that is the part worth keeping.** Reverting a site
+leaves its test green on any machine where the observation is true, which is precisely why 31 of
+them survived years of review. So the guard is a **census that refuses the shape at the source**,
+plus a resolver-driven test that makes the pending case reachable on demand and shows `try_pop`
+failing where `pop_within` succeeds. One of the three sabotages exists to make that point: reverting
+a restated site is caught by the census and by nothing else, and a reader who checked by re-running
+the test would find it green and conclude the change was cosmetic.
+
+**A second, narrower class was found and deliberately not settled.** Five assertions require a
+complete transfer. `Completion::result` promises only "the transferred byte count", and the space
+lists partial transfers as *deliberately undecided* with the instruction to decide them before a
+resolver relies on either answer. So the suite silently answers a question the specification leaves
+open -- and the two are not yet in conflict only because the resolver reports `Information: 0` and
+no resolver-driven test reads a transfer count. Queued as `M26.10`. One of the five is already in
+the honest form and is left alone.
+
+**What the audit did not find is worth stating too.** The `outstanding() == 0` assertions after a
+rundown are the crate's own contract, not observations. `flush_barrier_stress.rs`'s assertion that
+reordering *happened* is a control verifying its own precondition, with a message explaining why --
+the correct pattern. And the handover tests rest on `D-40`'s synchronous-completion measurement but
+verify that precondition rather than assuming it, which is what a frozen observation fails to do.

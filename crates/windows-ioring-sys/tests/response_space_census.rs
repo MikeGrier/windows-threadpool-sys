@@ -245,6 +245,107 @@ fn a_marker_is_a_claim_and_a_mention_is_not() {
 }
 
 #[test]
+fn no_kernel_test_asserts_a_completion_is_already_poppable() {
+    // The defect class M26.7 audited, guarded so it cannot return.
+    //
+    // `try_pop()` immediately after a submit, with the `Option` unwrapped,
+    // asserts that the kernel has *already* queued the completion. RS-P-5
+    // permits it not to have, and `pop_within`'s documentation says the same
+    // in this crate's own words -- so the assertion is about one kind of
+    // handle rather than about anything promised. D-40 measured why it passed
+    // regardless: a buffered read completes inside the submit in 80 of 80
+    // attempts, while an unbuffered one genuinely pends.
+    //
+    // Thirty-one of these were restated as `pop_within` in M26.7. Nothing
+    // prevented them being written, and nothing would prevent the next one,
+    // because on the handles these tests use the assertion is simply true.
+    // That is what this census is for: the shape is refused at the source,
+    // since no run can be relied on to object to it.
+    //
+    // Resolver-driven tests are exempt, and one of them uses the shape on
+    // purpose -- `a_pending_completion_defeats_try_pop_and_not_pop_within`
+    // demonstrates the failure this rule exists to prevent, which it can only
+    // do by writing it.
+    let shape = regex_lite_matches;
+    let mut offenders = Vec::new();
+    for (name, text) in test_files() {
+        if name.as_str() == SELF || text.contains("Resolver") {
+            continue;
+        }
+        let hits = shape(&text);
+        if hits > 0 {
+            offenders.push(format!("{name}: {hits}"));
+        }
+    }
+
+    assert!(
+        offenders.is_empty(),
+        "these kernel tests assert a completion is poppable the instant a submit returns: \
+         {offenders:?}\n\
+         That is RS-P-5's freedom being treated as a guarantee. State it as this crate's own \
+         contract instead -- `pop_within(bound)` -- which holds on every handle rather than on \
+         the one the test happens to open."
+    );
+}
+
+/// Count `try_pop()` occurrences whose `Option` is unwrapped, which is the
+/// "already poppable" assertion.
+///
+/// Hand-rolled rather than pulled in as a dependency: the shape is two method
+/// calls in sequence, and a scanner for it is shorter than the argument for
+/// adding a regex crate to a test.
+fn regex_lite_matches(text: &str) -> usize {
+    let mut count = 0;
+    let mut rest = text;
+    while let Some(at) = rest.find("try_pop()") {
+        rest = &rest[at + "try_pop()".len()..];
+        // Look at the next two chained calls, skipping whitespace and dots.
+        let tail: String = rest.chars().take(200).collect();
+        let mut calls = tail
+            .split('.')
+            .skip(1)
+            .map(|piece| piece.trim_start())
+            .filter(|piece| !piece.is_empty());
+        let first = calls.next().unwrap_or_default();
+        let second = calls.next().unwrap_or_default();
+        let unwraps = |call: &str| call.starts_with("expect(") || call.starts_with("unwrap()");
+        if unwraps(first) && unwraps(second) {
+            count += 1;
+        }
+    }
+    count
+}
+
+#[test]
+fn the_already_poppable_scanner_recognises_the_shape_and_nothing_else() {
+    // The scanner decides what the census above means, so it is checked in
+    // both directions. A scanner that matched nothing would leave that test
+    // permanently, silently green.
+    assert_eq!(
+        regex_lite_matches("let c = ring.try_pop().expect(\"pop\").expect(\"ready\");"),
+        1,
+        "the two-unwrap shape is the assertion being refused"
+    );
+    assert_eq!(
+        regex_lite_matches("let c = ring.try_pop().unwrap().unwrap();"),
+        1,
+        "unwrap spells the same assertion as expect"
+    );
+    // One unwrap is the honest form: it takes the `Result` and leaves the
+    // `Option` for the caller to handle, which is what "empty at this instant"
+    // means.
+    assert_eq!(
+        regex_lite_matches("while let Some(c) = ring.try_pop().expect(\"pop\") { }"),
+        0,
+        "handling the Option rather than unwrapping it is not the refused shape"
+    );
+    assert_eq!(
+        regex_lite_matches("let maybe = ring.try_pop()?;"),
+        0,
+        "propagating the Result is not the refused shape either"
+    );
+}
+#[test]
 fn every_marker_names_a_clause_the_space_declares() {
     // A clause renamed in the document and not in the markers would leave the
     // two censuses above checking a clause that no longer exists, and passing.

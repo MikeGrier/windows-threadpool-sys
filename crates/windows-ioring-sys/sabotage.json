@@ -607,6 +607,58 @@
       ]
     },
     {
+      "name": "M26.7: a kernel test goes back to asserting a completion is already poppable",
+      "file": "tests/ring_lifecycle.rs",
+      "expect": "caught",
+      "why": "The audited defect class, guarded at the source because no run can be relied on to object to it. `try_pop()` straight after a submit, with the Option unwrapped, asserts the kernel has ALREADY queued the completion -- which RS-P-5 permits it not to have, and which pop_within's own documentation denies in this crate's words. Thirty-one of these passed for years because D-40 measured that a buffered read completes inside the submit in 80 of 80 attempts; an unbuffered one pends, and the same assertion then gives the opposite answer. That is why the guard is a census and not a test run: on the handles these tests open, the frozen observation is simply true.",
+      "testArgs": ["test", "-p", "windows-ioring-sys", "--locked", "--all-features", "--test", "response_space_census"],
+      "find": [
+          "fn run_down_is_a_no_op_when_nothing_is_outstanding() {",
+          "    let mut ring = IoRing::new(64, 128).expect(\"create ring\");"
+      ],
+      "replace": [
+          "fn run_down_is_a_no_op_when_nothing_is_outstanding() {",
+          "    let mut ring = IoRing::new(64, 128).expect(\"create ring\");",
+          "    let _ = || ring.try_pop().expect(\"pop\").expect(\"ready\");"
+      ]
+    },
+    {
+      "name": "M26.7: the already-poppable scanner stops recognising the shape",
+      "file": "tests/response_space_census.rs",
+      "expect": "caught",
+      "why": "Sabotaging the instrument rather than the code it watches. The scanner decides what the census above means, so a scanner that matched nothing would leave that census permanently and silently green while the shape it refuses crept back in -- the exact failure mode the first version of this file's clause census actually shipped with. The guard is a pair of assertions that the scanner recognises both spellings of the refused shape and neither of the two honest ones.",
+      "testArgs": ["test", "-p", "windows-ioring-sys", "--locked", "--all-features", "--test", "response_space_census"],
+      "find": [
+          "        if unwraps(first) && unwraps(second) {",
+          "            count += 1;",
+          "        }"
+      ],
+      "replace": [
+          "        let _ = (first, second);"
+      ]
+    },
+    {
+      "name": "M26.7: pop_within is reverted to try_pop at a restated site",
+      "file": "tests/registration.rs",
+      "expect": "caught",
+      "why": "Whether the restatement itself is load-bearing, and the answer is instructive: reverting one site does NOT make that test fail on this machine, because the completion really is ready there -- which is the whole reason thirty-one of them survived review. What does catch it is the census, so this case is scoped to the census target and demonstrates that the guard covers the restatement rather than merely describing it. A reader tempted to check this by re-running registration.rs would find it green and conclude the change was cosmetic.",
+      "testArgs": ["test", "-p", "windows-ioring-sys", "--locked", "--all-features", "--test", "response_space_census"],
+      "find": [
+          "    let completion = ring",
+          "        .pop_within(POP_BOUND)",
+          "        .expect(\"pop completion\")",
+          "        .expect(\"a completion arrives within the bound\");",
+          "    let registered_files = files_pending"
+      ],
+      "replace": [
+          "    let completion = ring",
+          "        .try_pop()",
+          "        .expect(\"pop completion\")",
+          "        .expect(\"a completion arrives within the bound\");",
+          "    let registered_files = files_pending"
+      ]
+    },
+    {
       "name": "CONTROL: rewording a statement changes nothing",
       "file": "examples/epoch_log/contract.rs",
       "expect": "survives",

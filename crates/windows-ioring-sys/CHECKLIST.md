@@ -286,13 +286,7 @@ reviewable artifact rather than a recording.
 
 - [x] **M26.6** -- The kernel tests confirm reality stays inside the space, enforced by [response_space_census.rs](tests/response_space_census.rs); `RS-C-4`'s conformance assertion no longer sits behind a skip. Recorded as [D-65](DESIGN-NOTES.md#d-65). -> [completed 2026-09-25](COMPLETED-CHECKLIST.md#m266)
 
-- [ ] **M26.7** -- Audit the existing suite for assertions that are **frozen observations rather
-  than contracts** -- the failure case 4 of the session demonstrated, where one assertion gave
-  opposite answers on two handles of the same API. [flush_barrier.rs](tests/flush_barrier.rs) is the
-  obvious first candidate, being the direct descendant of `D-47`, but the audit is the point and not
-  that file. For each, decide: restate as this crate's own contract, move to a spike with a rate and
-  a date, or delete. **Not yet started, and not yet even sampled** -- the candidate above is a guess,
-  and the census must come from a command.
+- [x] **M26.7** -- The audit's census came from a command and found one class 31 assertions wide, restated as [`IoRing::pop_within`](src/ring.rs) and guarded by [response_space_census.rs](tests/response_space_census.rs); recorded as [D-66](DESIGN-NOTES.md#d-66). -> [completed 2026-09-25](COMPLETED-CHECKLIST.md#m267)
 
 - [ ] **M26.8** -- Decide what [`IoRing::run_down`](src/ring.rs) should do when a submit it makes is
   **refused**. Found by `M26.3`'s resolver on its first contact with a real ring, and queued rather
@@ -359,6 +353,31 @@ reviewable artifact rather than a recording.
   **A cheaper interim mitigation exists and is a separate decision:** the harness could treat a
   failure in these two tests as *inconclusive* rather than as `caught`, which would stop the false
   clean bills without pretending the behaviour is understood.
+
+- [ ] **M26.10** -- Decide whether a completion may report **fewer bytes than requested**, which
+  [RESPONSE-SPACE.md](RESPONSE-SPACE.md) currently lists as deliberately undecided. Found by
+  `M26.7`'s audit, and queued rather than settled there because the space's own instruction is to
+  "decide it before a resolver relies on either answer" -- which is a call about what this crate
+  tolerates, not a correction.
+
+  **The observation.** Five kernel assertions require a full transfer (`assert_eq!(transferred,
+  LEN)`), so the suite already answers the question by assuming one. `Completion::result` promises
+  only "the transferred byte count" and never a complete one, so nothing in the crate backs that
+  assumption up. The two are not in conflict today only because `M26.3`'s resolver reports
+  `Information: 0` for every operation and no resolver-driven test reads a transfer count -- so a
+  resolver and a kernel test would disagree about the same field and nothing would notice.
+
+  **Note one of the five is already right and should be left alone.**
+  [flush_barrier.rs](tests/flush_barrier.rs) checks the transfer explicitly as its *own
+  precondition* -- a short write would make every count in that test meaningless -- and says so.
+  That is the honest form of the assertion whichever way this is decided.
+
+  **What deciding it costs.** Permitting partial transfers widens what every consumer must handle
+  and would make the resolver able to produce them, which the properties in
+  [properties_under_every_resolution.rs](tests/properties_under_every_resolution.rs) would then
+  have to survive. Requiring complete transfers is a `Decided` constraint of the kind `RS-C-1`
+  already is, and would need a `CONFIRMS:` marker on whichever kernel test carries it -- the census
+  added in `M26.6` will then hold the two halves together.
 
 ## M27 -- What this crate owes the topology planner
 
