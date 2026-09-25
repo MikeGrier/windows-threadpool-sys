@@ -1,5 +1,55 @@
 # Changelog
 
+## [0.5.0](https://github.com/MikeGrier/windows-threadpool-sys/compare/windows-ioring-sys-v0.4.0...windows-ioring-sys-v0.5.0) (2026-09-25)
+
+
+### ⚠ BREAKING CHANGES
+
+* **ioring:** IoRing will become generic over the token payload, so every consumer names the type. Not in this commit -- this records the decision and the plan; M28.3 makes the change.
+* NumaBuffer::new takes Option<NumaNode> rather than Option<u32>. windows_ioring_sys::NumaBuffer still resolves -- the type is re-exported, so a path binding is unaffected -- but a call site passing a bare integer must wrap it. That is the newtype doing its job at the one boundary where a wrong u32 silently allocates on the wrong node, which windows-placement-probe documents as a real defect it had.
+* **ioring:** ask which cache level partitions the machine, never filter on L3
+
+### Features
+
+* create win-numa-sys and move NumaBuffer into it ([947b252](https://github.com/MikeGrier/windows-threadpool-sys/commit/947b252b065629352b7eeaa1a2000209112ccbac))
+* **ioring:** add a bounded pop, generic over the wait the caller supplies ([c6703f3](https://github.com/MikeGrier/windows-threadpool-sys/commit/c6703f3bc22b52f8f14a2f5532ab8a077623d3df))
+* **ioring:** build the seeded resolver over the kernel response space ([6e53bbe](https://github.com/MikeGrier/windows-threadpool-sys/commit/6e53bbe23be57d08c0f0e6f08298fb6bd1a59682))
+* **ioring:** D-54 -- this crate owns one flush, not durability groups ([4319688](https://github.com/MikeGrier/windows-threadpool-sys/commit/4319688af60af2b4d0e6287a9606e3861deeebc4))
+* **ioring:** D-55 -- the ring owns the pending inventory ([fdc3f7f](https://github.com/MikeGrier/windows-threadpool-sys/commit/fdc3f7f8f28f7f68e6928ac26b3560ff7aa9a377))
+* **ioring:** decide RS-P-8, a completion may report fewer bytes than requested ([f4d4f0e](https://github.com/MikeGrier/windows-threadpool-sys/commit/f4d4f0e35ae57ba77513986cfa6b32a9ca06216d))
+* **ioring:** give epoch-log records a sector stride, both ends ([a8a2a3e](https://github.com/MikeGrier/windows-threadpool-sys/commit/a8a2a3e3f810e0f9fe7e741bdab5bceb5b573f1b))
+* **ioring:** hand rundown's retry policy to the caller, and fix an expired wait reported as a failed submit ([2585180](https://github.com/MikeGrier/windows-threadpool-sys/commit/2585180b47e48a7ad3880d6336150d6c79a518eb))
+* **ioring:** measure a commit as submit / blocking / deferral ([2b2e75c](https://github.com/MikeGrier/windows-threadpool-sys/commit/2b2e75c74009c4d0263f595f627a07d70ffb2f95))
+* **ioring:** open the epoch log NO_BUFFERING | OVERLAPPED over a written extent ([e75a9d7](https://github.com/MikeGrier/windows-threadpool-sys/commit/e75a9d7a80105bcca874854daa9bfe649e887024))
+* **ioring:** provide NumaBuffer, and place the epoch-log arena deliberately ([896252e](https://github.com/MikeGrier/windows-threadpool-sys/commit/896252ec650d4b515b183dd28452c185157a167e))
+* **ioring:** route the submission-path kernel calls through a seam ([73b60c9](https://github.com/MikeGrier/windows-threadpool-sys/commit/73b60c99202854932785d6f5d6de42f2214374a2))
+* **ioring:** spike Pending&lt;T, X&gt; for M23.3, and report what it cannot do ([bc856bd](https://github.com/MikeGrier/windows-threadpool-sys/commit/bc856bde2756738ad73ef46c165a7b53274692e8))
+* **ioring:** state that the ring, not the log, is the durability unit ([d845bb2](https://github.com/MikeGrier/windows-threadpool-sys/commit/d845bb28579fdc57da1ff14dba575522c3d331e2))
+* **ioring:** state the epoch log's handle requirements and enforce the checkable one ([1b975af](https://github.com/MikeGrier/windows-threadpool-sys/commit/1b975af1ac1c5f2b0bcb29cfeb569232bcdb4521))
+* **ioring:** trace the delivery path, and prove the pool is alive when it stalls ([ef3ada4](https://github.com/MikeGrier/windows-threadpool-sys/commit/ef3ada4ef51bb7bd16b78270a6214cbe43ba27a8))
+
+
+### Bug Fixes
+
+* **ioring:** address PR [#108](https://github.com/MikeGrier/windows-threadpool-sys/issues/108) review, and record what one finding uncovered ([04c329b](https://github.com/MikeGrier/windows-threadpool-sys/commit/04c329b3622dd0191e8103984def6f25ee7f65bb))
+* **ioring:** address the two findings Copilot raised without a thread ([95fc3e3](https://github.com/MikeGrier/windows-threadpool-sys/commit/95fc3e3328a8d485fa95678533d0840b4bcb9bf7))
+* **ioring:** an expired wait is a result, not an error ([9c9c5ff](https://github.com/MikeGrier/windows-threadpool-sys/commit/9c9c5ff72578c97a345c6cc31836b0e0562db08c))
+* **ioring:** arm the delivery wait before signalling the completion event ([6d6956d](https://github.com/MikeGrier/windows-threadpool-sys/commit/6d6956d2a458498531011d7fd6cd9d25cc744bfe))
+* **ioring:** ask which cache level partitions the machine, never filter on L3 ([3433fe0](https://github.com/MikeGrier/windows-threadpool-sys/commit/3433fe0cd67dfd07beaf27e307705dbb482b611d))
+* **ioring:** bound every wait that could hang, not the two that were named ([665edab](https://github.com/MikeGrier/windows-threadpool-sys/commit/665edab61502791676da300edfcea717f3708190))
+* **ioring:** count a strategy's preparation as part of its commit, and re-run M20.6 ([6c012e6](https://github.com/MikeGrier/windows-threadpool-sys/commit/6c012e63dfb921bf0889adf4a598809258fee89e))
+* **ioring:** derive the epoch-log sample's free slots instead of tracking them ([834c7af](https://github.com/MikeGrier/windows-threadpool-sys/commit/834c7afab45df7b8344030274d2a0881b72c08e9))
+* **ioring:** keep Drop guards silent while already panicking ([74022a3](https://github.com/MikeGrier/windows-threadpool-sys/commit/74022a3900664a705ae756d758d9700d08eef440))
+* **ioring:** make bounded_pop wait on a pipe, not on a fast enough device ([8f079ca](https://github.com/MikeGrier/windows-threadpool-sys/commit/8f079cac45d333325774f31451c0258e09dc4c9e))
+* **ioring:** resolve the intra-doc links this branch broke ([02bb88f](https://github.com/MikeGrier/windows-threadpool-sys/commit/02bb88fbdcc463a3913e9ee06e4b359312b9d4ee))
+* **ioring:** separate the barrier's scope from the flush's in the contract ([4adea67](https://github.com/MikeGrier/windows-threadpool-sys/commit/4adea675b93409026f02ac2b6d3ced98397cc7f6))
+
+
+### Performance Improvements
+
+* **ioring:** batch an epoch's appends into one submission, and measure the claim ([7c12708](https://github.com/MikeGrier/windows-threadpool-sys/commit/7c12708e1cfc39ecbeff74418f19d45b63e8d35d))
+* **ioring:** size the zero-fill chunk from measurement, not habit ([c7bf651](https://github.com/MikeGrier/windows-threadpool-sys/commit/c7bf6510010eed933eff9746055f0f6c028ce210))
+
 ## [0.4.0](https://github.com/MikeGrier/windows-threadpool-sys/compare/windows-ioring-sys-v0.3.1...windows-ioring-sys-v0.4.0) (2026-09-25)
 
 
