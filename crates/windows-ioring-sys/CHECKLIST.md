@@ -275,11 +275,7 @@ reviewable artifact rather than a recording.
 
 - [x] **M26.1** -- The permitted space is specified in [RESPONSE-SPACE.md](RESPONSE-SPACE.md) as eleven cited clauses, and recorded as [D-59](DESIGN-NOTES.md#d-59). -> [completed 2026-09-24](COMPLETED-CHECKLIST.md#m261)
 
-- [ ] **M26.2** -- Build the seam. The resolver sits under the `windows-sys` calls -- `SubmitIoRing`,
-  `PopIoRingCompletion`, the `Build*` family -- so those become indirect. **This is the expensive
-  item and the one that touches a published crate's internals**; it is substantially more than
-  `M24.2`'s field split. Do `M24.2` first: it is smaller, independently useful, and will show how
-  much of `IoRing` separates cleanly before this commits to a shape.
+- [x] **M26.2** -- The eight submission-path `windows-sys` calls are indirect through [sys.rs](src/sys.rs), answerable by a thread-local responder behind the `kernel-seam` feature; the shape is recorded as [D-60](DESIGN-NOTES.md#d-60). -> [completed 2026-09-24](COMPLETED-CHECKLIST.md#m262)
 
 - [ ] **M26.3** -- Build the resolver over the space `M26.1` specifies, seeded the way
   [generated_sequences.rs](tests/generated_sequences.rs) already is ([D-41](DESIGN-NOTES.md#d-41)):
@@ -293,6 +289,11 @@ reviewable artifact rather than a recording.
   unimplemented. [kernel-response-space-probe.rs](design-sessions/kernel-response-space-probe.rs)
   already has a working `Resolver` over `RS-P-2` alone; start from it rather than from nothing, and
   note that it is marked throwaway, so promoting it is a decision to make deliberately.
+
+  **The plug point is `M26.2`'s `Responses` trait** in [installed.rs](src/sys/installed.rs): the
+  resolver implements it and is installed for the duration of a test. Note that `M26.2` left the
+  five lifecycle calls direct, so the resolver answers submission and completion only -- if a clause
+  turns out to need `CreateIoRing` or `GetIoRingInfo`, extending the seam is part of this item.
 
 - [ ] **M26.4** -- Write the properties that must hold under **every** resolution: conservation (no
   lost, duplicated or unclaimed completion), no hang, `pop_within` honours its bound, `outstanding`

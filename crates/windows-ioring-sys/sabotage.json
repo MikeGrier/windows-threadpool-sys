@@ -348,6 +348,22 @@
       ]
     },
     {
+      "name": "M26.2: the seam consults the responder but ignores its answer",
+      "file": "src/sys.rs",
+      "expect": "caught",
+      "why": "The seam's whole purpose is that an installed responder answers INSTEAD of the kernel. A version that consults it and then makes the real call anyway would look right in every review -- the responder is called, its state advances, a counting test still passes -- while the resolver M26.3 builds on it would silently measure the kernel rather than the space. The guard is that the seam returns what the responder said. Note the sabotage fails safely rather than crashing, and for a reason M23.5 measured: the test passes a null ring handle, and SubmitIoRing(null) returns 0x80070006 rather than dereferencing it, so the fall-through reaches Win32 and is refused instead of faulting. The tests that only count calls stay green under this patch, which is why the assertion is on the returned HRESULT and not on the count.",
+      "testArgs": ["test", "-p", "windows-ioring-sys", "--locked", "--all-features"],
+      "find": [
+        "            if let Some(answer) = $crate::sys::installed::with(|r| unsafe { r.$method($($arg),*) })",
+        "            {",
+        "                return answer;",
+        "            }"
+      ],
+      "replace": [
+        "            let _ = $crate::sys::installed::with(|r| unsafe { r.$method($($arg),*) });"
+      ]
+    },
+    {
       "name": "CONTROL: rewording a statement changes nothing",
       "file": "examples/epoch_log/contract.rs",
       "expect": "survives",

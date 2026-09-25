@@ -31,6 +31,15 @@ default = ["threadpool"]
 # whole design and is argued in full on `Completion::with_injected_failure`.
 # Fabrication stays `#[cfg(test)] pub(crate)` and is not reachable from here.
 fault-injection = []
+
+# The indirection the M26 kernel-response resolver plugs into (M26.2). Off by
+# default: with it off, every wrapper in `sys` is an inline forward to the same
+# `windows-sys` call this crate made before, and the install point does not
+# exist at all.
+#
+# A feature rather than `cfg(test)` because the integration suite in tests/
+# cannot see `cfg(test)` items -- the same reason `fault-injection` is one.
+kernel-seam = []
 # Model A delivery (`EventDelivery`) is the only thing in this crate that needs
 # a thread pool, so a Model B consumer -- a pinned thread parked in
 # `Batch::submit_and_wait`, owning its own ring -- otherwise links a dependency

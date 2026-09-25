@@ -10,13 +10,11 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 
 use windows_sys::Win32::Foundation::HANDLE;
 use windows_sys::Win32::Storage::FileSystem::{
-    BuildIoRingCancelRequest, BuildIoRingFlushFile, BuildIoRingReadFile,
-    BuildIoRingRegisterBuffers, BuildIoRingRegisterFileHandles, BuildIoRingWriteFile,
     FILE_FLUSH_DATA, FILE_FLUSH_DEFAULT, FILE_FLUSH_MIN_METADATA, FILE_FLUSH_MODE,
     FILE_FLUSH_NO_SYNC, FILE_WRITE_FLAGS, FILE_WRITE_FLAGS_NONE, FILE_WRITE_FLAGS_WRITE_THROUGH,
     IORING_BUFFER_INFO, IORING_BUFFER_REF, IORING_BUFFER_REF_0, IORING_HANDLE_REF,
     IORING_HANDLE_REF_0, IORING_REF_RAW, IORING_REF_REGISTERED, IORING_REGISTERED_BUFFER,
-    IORING_SQE_FLAGS, IOSQE_FLAGS_DRAIN_PRECEDING_OPS, IOSQE_FLAGS_NONE, SubmitIoRing,
+    IORING_SQE_FLAGS, IOSQE_FLAGS_DRAIN_PRECEDING_OPS, IOSQE_FLAGS_NONE,
 };
 
 use crate::buf::{IoBuf, IoBufMut};
@@ -1282,7 +1280,7 @@ impl<'ring> Batch<'ring> {
         // until `token` is claimed; `file` is the caller's to keep alive,
         // forwarded from this function's own contract.
         let hr = unsafe {
-            BuildIoRingReadFile(
+            crate::sys::build_read(
                 self.ring.raw_handle(),
                 target,
                 raw_buffer_ref(address),
@@ -1324,7 +1322,7 @@ impl<'ring> Batch<'ring> {
         // for a `SharedFile`, and nothing needing to be kept alive at all for
         // a `RegisteredFile`, whose index names the ring's own table.
         let hr = unsafe {
-            BuildIoRingReadFile(
+            crate::sys::build_read(
                 self.ring.raw_handle(),
                 target,
                 raw_buffer_ref(address),
@@ -1373,7 +1371,7 @@ impl<'ring> Batch<'ring> {
         // through it for a write, so the cast away from `const` does not
         // authorize mutation. `file` is the caller's to keep alive.
         let hr = unsafe {
-            BuildIoRingWriteFile(
+            crate::sys::build_write(
                 self.ring.raw_handle(),
                 target,
                 raw_buffer_ref(address),
@@ -1412,7 +1410,7 @@ impl<'ring> Batch<'ring> {
         // SAFETY: as `write_raw`'s; `target` stays valid at least as long as
         // `token`'s hold on `file`'s guard does (see `Batch::read`).
         let hr = unsafe {
-            BuildIoRingWriteFile(
+            crate::sys::build_write(
                 self.ring.raw_handle(),
                 target,
                 raw_buffer_ref(address),
@@ -1541,7 +1539,7 @@ impl<'ring> Batch<'ring> {
         // keep alive, forwarded from this function's own contract; there is
         // no buffer.
         let hr = unsafe {
-            BuildIoRingFlushFile(
+            crate::sys::build_flush(
                 self.ring.raw_handle(),
                 target,
                 mode.raw(),
@@ -1584,7 +1582,7 @@ impl<'ring> Batch<'ring> {
         // SAFETY: `target` stays valid at least as long as `token`'s hold on
         // `file`'s guard does (see `Batch::read`); there is no buffer.
         let hr = unsafe {
-            BuildIoRingFlushFile(
+            crate::sys::build_flush(
                 self.ring.raw_handle(),
                 target,
                 mode.raw(),
@@ -1628,7 +1626,7 @@ impl<'ring> Batch<'ring> {
         // keep alive, forwarded from this function's own contract;
         // `BuildIoRingCancelRequest` takes no SQE-flags parameter.
         let hr =
-            unsafe { BuildIoRingCancelRequest(self.ring.raw_handle(), handle, target, user_data) };
+            unsafe { crate::sys::build_cancel(self.ring.raw_handle(), handle, target, user_data) };
         if let Err(error) = check(hr) {
             self.ring.cancel_reservation();
             return Err(error);
@@ -1663,7 +1661,7 @@ impl<'ring> Batch<'ring> {
         // `file`'s guard does (see `Batch::read`);
         // `BuildIoRingCancelRequest` takes no SQE-flags parameter.
         let hr =
-            unsafe { BuildIoRingCancelRequest(self.ring.raw_handle(), handle, target, user_data) };
+            unsafe { crate::sys::build_cancel(self.ring.raw_handle(), handle, target, user_data) };
         self.finish_push(hr, token)
     }
 
@@ -1740,7 +1738,7 @@ impl<'ring> Batch<'ring> {
         // measurement (D-32), not inherited from the sibling registration,
         // which behaves the opposite way.
         let hr = unsafe {
-            BuildIoRingRegisterFileHandles(
+            crate::sys::build_register_files(
                 self.ring.raw_handle(),
                 count,
                 handles.as_ptr(),
@@ -1829,7 +1827,7 @@ impl<'ring> Batch<'ring> {
         // keeps alive via the returned `PendingBufferRegistration` and, once
         // claimed, `RegisteredBuffers`.
         let hr = unsafe {
-            BuildIoRingRegisterBuffers(self.ring.raw_handle(), count, infos_ptr, user_data)
+            crate::sys::build_register_buffers(self.ring.raw_handle(), count, infos_ptr, user_data)
         };
         if let Err(error) = check(hr) {
             self.ring.cancel_reservation();
@@ -1887,7 +1885,7 @@ impl<'ring> Batch<'ring> {
         // `file` is the caller's to keep alive, forwarded from this
         // function's own contract.
         let hr = unsafe {
-            BuildIoRingReadFile(
+            crate::sys::build_read(
                 self.ring.raw_handle(),
                 target,
                 registered_buffer_ref(index, span.offset),
@@ -1938,7 +1936,7 @@ impl<'ring> Batch<'ring> {
         // buffer stays put until it drops; `target` stays valid at least as
         // long as `token`'s hold on `file`'s guard does (see `Batch::read`).
         let hr = unsafe {
-            BuildIoRingReadFile(
+            crate::sys::build_read(
                 self.ring.raw_handle(),
                 target,
                 registered_buffer_ref(index, span.offset),
@@ -1987,7 +1985,7 @@ impl<'ring> Batch<'ring> {
         // SAFETY: as `read_registered_raw`; the kernel only reads through
         // this reference for a write.
         let hr = unsafe {
-            BuildIoRingWriteFile(
+            crate::sys::build_write(
                 self.ring.raw_handle(),
                 target,
                 registered_buffer_ref(index, span.offset),
@@ -2037,7 +2035,7 @@ impl<'ring> Batch<'ring> {
         // SAFETY: as `read_registered`'s; the kernel only reads through
         // this reference for a write.
         let hr = unsafe {
-            BuildIoRingWriteFile(
+            crate::sys::build_write(
                 self.ring.raw_handle(),
                 target,
                 registered_buffer_ref(index, span.offset),
@@ -2085,7 +2083,7 @@ impl<'ring> Batch<'ring> {
         let mut submitted = 0_u32;
         // SAFETY: `self.ring`'s handle is live.
         let hr = unsafe {
-            SubmitIoRing(
+            crate::sys::submit(
                 self.ring.raw_handle(),
                 wait_operations,
                 timeout_ms,

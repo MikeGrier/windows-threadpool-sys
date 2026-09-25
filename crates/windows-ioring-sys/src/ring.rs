@@ -11,7 +11,7 @@ use windows_sys::Win32::Storage::FileSystem::{
     IORING_CREATE_ADVISORY_FLAGS_NONE, IORING_CREATE_FLAGS, IORING_CREATE_REQUIRED_FLAGS_NONE,
     IORING_INFO, IORING_OP_CANCEL, IORING_OP_CODE, IORING_OP_FLUSH, IORING_OP_NOP, IORING_OP_READ,
     IORING_OP_REGISTER_BUFFERS, IORING_OP_REGISTER_FILES, IORING_OP_WRITE, IsIoRingOpSupported,
-    PopIoRingCompletion, SetIoRingCompletionEvent, SubmitIoRing,
+    SetIoRingCompletionEvent,
 };
 use windows_sys::Win32::System::Threading::{CreateEventW, SetEvent};
 
@@ -949,7 +949,8 @@ impl IoRing {
             // SAFETY: `self.handle` is a live ring; valid out-pointer. Zero
             // new SQEs are queued -- this call's only purpose is to wait for
             // and reap already-outstanding completions.
-            let hr = unsafe { SubmitIoRing(self.handle, 1, RUN_DOWN_POLL_MS, &raw mut submitted) };
+            let hr =
+                unsafe { crate::sys::submit(self.handle, 1, RUN_DOWN_POLL_MS, &raw mut submitted) };
             wait_outcome(hr)?;
             self.drain_for_rundown()?;
         }
@@ -999,7 +1000,7 @@ impl IoRing {
             Information: 0,
         };
         // SAFETY: `self.handle` is a live ring; valid out-pointer.
-        let hr = unsafe { PopIoRingCompletion(self.handle, &raw mut cqe) };
+        let hr = unsafe { crate::sys::pop(self.handle, &raw mut cqe) };
         if hr == S_FALSE {
             return Ok(None);
         }
@@ -1191,7 +1192,7 @@ impl RingWait<'_> {
         // SAFETY: the ring handle is live for the borrow, and the out-pointer
         // is valid. Zero new SQEs are queued, so this call's only effect is
         // to wait for and reap what is already outstanding.
-        let hr = unsafe { SubmitIoRing(self.ring.handle, 1, timeout_ms, &raw mut submitted) };
+        let hr = unsafe { crate::sys::submit(self.ring.handle, 1, timeout_ms, &raw mut submitted) };
         wait_outcome(hr)
     }
 
@@ -1227,7 +1228,7 @@ impl IoRing {
     /// paths (M23.5).
     ///
     /// The handle is null **deliberately and specifically**. Measured:
-    /// `CloseIoRing(null)` and `SubmitIoRing(null, ..)` both return
+    /// `CloseIoRing(null)` and `crate::sys::submit(null, ..)` both return
     /// `0x80070006` -- `HRESULT_FROM_WIN32(ERROR_INVALID_HANDLE)` -- so both
     /// of `Drop`'s failure branches can be reached without a fault-injection
     /// seam over the raw HRESULTs, which is what M23.5 was opened to price.
@@ -1280,7 +1281,7 @@ impl Drop for IoRing {
         // there (M23.5). `a_ring_whose_rundown_the_kernel_refuses_..` and
         // `a_ring_whose_close_the_kernel_refuses_..` put a null handle in the
         // field and let this body run for real: measured, `CloseIoRing(null)`
-        // and `SubmitIoRing(null, ..)` both return `0x80070006`
+        // and `crate::sys::submit(null, ..)` both return `0x80070006`
         // (`ERROR_INVALID_HANDLE`). Whether `run_down` submits at all is what
         // selects between the two, since it loops only while something is
         // outstanding.

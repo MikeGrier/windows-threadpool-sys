@@ -3216,3 +3216,75 @@ so promoting it is a deliberate decision rather than a default.
 and timing -- so that a later reader can tell an omission from a choice. Rates in particular are
 excluded on principle: a space carrying observed probabilities would be the recording this milestone
 exists to avoid.
+
+## Moved 2026-09-24 20:36:46 -04:00 -- M26.2: the kernel-call seam
+
+### <a id="m262"></a>M26.2 -- Build the seam that makes the `windows-sys` calls indirect, so `M26.3`'s resolver can answer them. *(completed 2026-09-24 20:36:46 -04:00)*
+
+The shape is recorded as [D-60](DESIGN-NOTES.md#d-60); what follows is what the work found.
+
+Eight calls became indirect -- `SubmitIoRing`, `PopIoRingCompletion`, and the six `Build*` entry
+points the crate uses -- across 27 call sites in [batch.rs](src/batch.rs) and [ring.rs](src/ring.rs).
+Each now goes through a `pub(crate) unsafe fn` in [sys.rs](src/sys.rs) that is `#[inline(always)]`
+and dispatches through a `through_seam!` macro. With the `kernel-seam` feature off, the macro
+expands to the bare FFI call and nothing else; with it on, the call first asks the installed
+responder.
+
+**The shape was decided by a constraint already on the books, not by taste.** The obvious
+alternative -- parameterising the ring as `IoRing<K>` over a kernel -- is unavailable because
+[D-55](DESIGN-NOTES.md#d-55) has already spent `IoRing`'s type parameter on `M28.3`'s token
+inventory. A kernel generic would publish `IoRing<T, K>`, which is a two-parameter public type on a
+shipped crate, and the second parameter exists only so the crate can test itself. Module
+indirection costs the public surface nothing.
+
+**The responder is thread-local, for the reason `DROP_RUNS` is.** `cargo test` runs tests as
+threads in one process ([DESIGN-NOTES.md](DESIGN-NOTES.md) records this as the reason this
+workspace is not on nextest), so a process-global responder would let one test answer another
+test's kernel calls. `with()` uses `try_borrow_mut` rather than `borrow_mut`, so a re-entrant call
+from inside a responder falls through to the kernel instead of panicking; `Installed::drop` uses
+`try_with`, so teardown during TLS destruction cannot abort the process ([M23.4](#m234)).
+
+**Five lifecycle calls were deliberately left direct** -- `CreateIoRing`, `CloseIoRing`,
+`GetIoRingInfo`, `IsIoRingOpSupported`, `SetIoRingCompletionEvent`. `M26` is justified by the
+*response space*: what the kernel may answer to submitted work. Routing ring construction and
+teardown through the seam as well would be hermeticity for its own sake, and hermeticity is
+[M24](#m242)'s subject, not this one. The line is recorded so a later reader can tell a boundary
+from an oversight.
+
+**The seam's transparency is measured, not argued.** The full suite passes with the feature off
+(153 lib tests) and on (159 -- the six new ones), and the crate builds clean with zero warnings in
+five configurations: default, `--all-features`, `--no-default-features`, `--features kernel-seam`,
+and release. The sabotage case *`M26.2: the seam consults the responder but ignores its answer`*
+turns `an_installed_responder_answers_instead_of_the_kernel` red, which is what shows the
+consultation is load-bearing rather than decorative -- a seam that asks and discards would pass
+every other test in the crate. The full sweep is 28-of-28 as declared, with the `CONTROL` and the
+`set_len` blind spot both still surviving.
+
+**Two type signatures were wrong on the first attempt and the compiler caught both**, which is
+worth recording because they are the kind of thing a hand-written trait gets wrong silently if it
+is ever allowed to diverge: `BuildIoRingWriteFile`'s caching flag is `i32`, not `u32`, and
+`BuildIoRingRegisterFileHandles` takes `*const *mut c_void`, not `*const isize`. The `real`
+submodule re-exports the `windows-sys` items so the trait's default methods call them directly,
+which is what keeps the two in step -- there is one spelling of each signature, not two.
+
+**`kernel-seam` crossed with `--no-default-features` is a published configuration nothing built.**
+The gate multiplies with `threadpool`: the workspace `--all-features` steps build the seam only
+alongside the threadpool, and the existing `ioring-no-threadpool` job built the no-threadpool path
+only with the seam off. Two steps were added to that job rather than a new job, on the same
+argument that bought the job in the first place. Verified locally before committing: clippy clean
+and 155 lib tests green in that combination.
+
+**A borrow-surface row was owed and was three items late.** `./tools/check-borrow-surface.ps1`
+failed on `Pending::contract -> Option<&RingContract>`, added by `M23.3`'s spike, because that
+change did not run the gate -- so it reported on the next run instead, against unrelated work. The
+row is now in [DESIGN-NOTES.md](DESIGN-NOTES.md)'s audit table: `RingContract` is a pure
+observation record owning no handle, buffer, or registration index, so there is nothing the kernel
+could invalidate, and the borrow is a plain `&self` borrow that blocks submission through that
+`Pending` for its duration. The lateness is recorded in the row itself.
+
+**A tooling mistake destroyed two source files and is worth the warning.** A PowerShell
+`.Replace()` bound the wrong overload and rewrote [batch.rs](src/batch.rs) and [ring.rs](src/ring.rs)
+one character per line. `git checkout --` recovered both, and the conversion was redone with
+`[regex]::Replace` anchored on `(?<![\w:])Name\(` so it matched call positions only. This is the
+fifth time in this session that driving a source edit through PowerShell string handling has
+corrupted a file.

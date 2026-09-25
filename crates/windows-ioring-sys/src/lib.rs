@@ -186,6 +186,15 @@ mod numa_buffer_io;
 mod pending;
 #[cfg(windows)]
 mod ring;
+/// The seam the kernel-response resolver sits under (M26.2).
+///
+/// Private without the `kernel-seam` feature, where it is nothing but
+/// `#[inline(always)]` forwards to the same `windows-sys` calls this crate
+/// made before. With the feature on it additionally publishes
+/// [`sys::Responses`] and [`sys::install`], so a test can answer the calls
+/// that carry an operation instead of the kernel.
+#[cfg(windows)]
+pub mod sys;
 #[cfg(windows)]
 mod token;
 
