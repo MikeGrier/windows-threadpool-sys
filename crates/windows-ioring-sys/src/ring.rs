@@ -358,13 +358,28 @@ const S_FALSE: windows_sys::core::HRESULT = 1;
 /// waits are bounded and rechecked, not unbounded").
 const RUN_DOWN_POLL_MS: u32 = 50;
 
-/// `HRESULT_FROM_WIN32(ERROR_TIMEOUT)`, which is how `SubmitIoRing` reports
-/// that its wait expired.
+/// `IORING_E_WAIT_TIMEOUT`: `SubmitIoRing` submitted every entry successfully
+/// and the subsequent wait then timed out.
 ///
-/// Derived from the named Win32 code rather than written as a literal. The
-/// `0x8007_0000` is `HRESULT_FROM_WIN32`'s severity-plus-FACILITY_WIN32
-/// prefix, which that macro ors onto any code of `0xFFFF` or less.
-const WAIT_EXPIRED: windows_sys::core::HRESULT =
+/// **This is the documented code, not an observed one.** `SubmitIoRing`'s
+/// reference page gives it its own row and states the consequence that matters
+/// here: *"All operations were submitted without error and the subsequent wait
+/// timed out."* Its Remarks then draw the line this crate depends on -- *"If
+/// this function returns an error other than IORING_E_WAIT_TIMEOUT, then all
+/// entries remain in the submission queue."* So this value is the difference
+/// between "the work went in" and "the work is still queued", which is why it
+/// is classified rather than passed to [`check`](crate::error::check).
+///
+/// **Spelled by derivation because the bindings do not carry the name.**
+/// `IORING_E_WAIT_TIMEOUT` is a macro over `HRESULT_FROM_WIN32(ERROR_TIMEOUT)`
+/// rather than a `FACILITY_IORING` code -- that facility defines only
+/// `0x8046_0001` through `0x8046_0008`, none of them a timeout -- so
+/// `windows-sys` emits no constant for it and there is nothing to import. The
+/// derivation below is therefore the name, and is written out so the next
+/// reader does not re-derive it from a run. The `0x8007_0000` is
+/// `HRESULT_FROM_WIN32`'s severity-plus-`FACILITY_WIN32` prefix, which that
+/// macro ors onto any code of `0xFFFF` or less.
+const IORING_E_WAIT_TIMEOUT: windows_sys::core::HRESULT =
     (0x8007_0000_u32 | windows_sys::Win32::Foundation::ERROR_TIMEOUT) as windows_sys::core::HRESULT;
 
 /// The largest `timeout_ms` a [`CompletionWait`] is ever handed: one below
@@ -376,6 +391,20 @@ const WAIT_EXPIRED: windows_sys::core::HRESULT =
 /// an unbounded block, with the pop loop unable to re-check its own deadline
 /// until the wait returned.
 const MAX_WAIT_MS: u32 = u32::MAX - 1;
+
+/// Whether a `SubmitIoRing` result means every entry was submitted.
+///
+/// `S_OK` and `IORING_E_WAIT_TIMEOUT` both do, per that call's documented
+/// return values; every other error means the opposite, and its Remarks say
+/// so in as many words -- the entries remain in the submission queue.
+///
+/// Exposed as one predicate because three callers need the same answer and a
+/// fourth got it wrong for a year: [`IoRing::pop_within`] reported a timeout
+/// as a failure until `M21.6`, and [`crate::Batch::submit_and_wait`] still did
+/// until `M26.8`, because that fix swept two of the three sites.
+pub(crate) fn every_entry_was_submitted(hr: windows_sys::core::HRESULT) -> bool {
+    hr == IORING_E_WAIT_TIMEOUT || check(hr).is_ok()
+}
 
 /// Classify the result of a `SubmitIoRing` call made **only** to wait.
 ///
@@ -390,7 +419,7 @@ const MAX_WAIT_MS: u32 = u32::MAX - 1;
 /// slower than [`RUN_DOWN_POLL_MS`] as fatal. One classification, two callers,
 /// so they cannot disagree again.
 fn wait_outcome(hr: windows_sys::core::HRESULT) -> io::Result<()> {
-    if hr == WAIT_EXPIRED {
+    if hr == IORING_E_WAIT_TIMEOUT {
         return Ok(());
     }
     check(hr)
@@ -938,22 +967,96 @@ impl IoRing {
     /// (M10.2), so it terminates. Blocking until that holds is the safe
     /// failure mode; closing the ring early is not.
     ///
+    /// # Choosing an unbounded wait is the caller's to make
+    ///
+    /// This spelling waits until rundown finishes, however long that takes,
+    /// and calling it is how a caller elects that. A caller who wants to
+    /// decide for themselves -- a deadline, a backoff, a number of attempts
+    /// before giving up -- calls [`IoRing::run_down_within`] instead and owns
+    /// the policy entirely. **This crate does not implement retry policy**
+    /// (M26.8): it supplies a bounded primitive and reports what happened.
+    ///
+    /// Note the difference from [`IoRing::pop_within`], which also waits in
+    /// segments: there the segments sit *inside a period the caller supplied*,
+    /// which is a bounded wait implemented properly rather than a policy. This
+    /// method had segments and no such period, which is what made it the one
+    /// waiting API in this crate shaped wrongly.
+    ///
+    /// # Errors
+    ///
+    /// Returns any error from `SubmitIoRing` other than an expired wait, or
+    /// from `PopIoRingCompletion`. **An error leaves the ring resumable**: see
+    /// [`IoRing::run_down_within`] for what is guaranteed about the operations
+    /// still queued.
+    pub fn run_down(&mut self) -> io::Result<()> {
+        while !self.run_down_within(Duration::MAX)? {}
+        Ok(())
+    }
+
+    /// Run down for at most `bound`, reporting whether it finished.
+    ///
+    /// `Ok(true)` means nothing is outstanding and the ring is safe to drop.
+    /// `Ok(false)` means the bound elapsed with work still in flight -- call
+    /// again when your own policy says to. [`IoRing::outstanding`] says how
+    /// much is left.
+    ///
+    /// # Why this exists, and why it returns rather than retries
+    ///
+    /// Rundown can fail for a reason that a later attempt would survive, and
+    /// **deciding whether to make that attempt is not this crate's business**.
+    /// A caller running under a deadline, a supervisor with a backoff, and a
+    /// test that wants to fail fast all want different answers, and a policy
+    /// baked in here would be wrong for two of the three. So this waits for
+    /// exactly as long as it is told and then reports.
+    ///
+    /// # What an error guarantees, which is what makes retrying safe
+    ///
+    /// `SubmitIoRing` documents that *"If this function returns an error other
+    /// than IORING_E_WAIT_TIMEOUT, then all entries remain in the submission
+    /// queue."* So a failure here has **not** lost the operations and has not
+    /// rewound them ([D-5](../DESIGN-NOTES.md#d-5)); they are still ring state,
+    /// a later submit is what runs them, and their buffers must stay alive
+    /// until they complete.
+    ///
+    /// The consequence worth stating plainly: after an `Err`, **do not drop
+    /// this ring**. Dropping it closes a ring the kernel may still write
+    /// through, which is the hazard rundown exists to prevent. Call again.
+    ///
     /// # Errors
     ///
     /// Returns any error from `SubmitIoRing` other than an expired wait, or
     /// from `PopIoRingCompletion`.
-    pub fn run_down(&mut self) -> io::Result<()> {
-        while self.accounting.outstanding() > 0 {
+    pub fn run_down_within(&mut self, bound: Duration) -> io::Result<bool> {
+        let deadline = Instant::now().checked_add(bound);
+        loop {
+            if self.accounting.outstanding() == 0 {
+                return Ok(true);
+            }
+            // `checked_add` rather than `+`, for the reason `pop_within_with`
+            // records: `Instant + Duration` panics on overflow, so
+            // `Duration::MAX` -- the honest spelling of "no deadline" -- would
+            // take down the process. A deadline the clock cannot represent is
+            // one that never arrives, which is what was asked for.
+            let remaining = match deadline {
+                Some(deadline) => deadline.saturating_duration_since(Instant::now()),
+                None => Duration::MAX,
+            };
+            if remaining.is_zero() {
+                return Ok(false);
+            }
+            // Segments sit inside the caller's period, never outside it: the
+            // poll is the shorter of the rundown step and what is left.
+            let poll_ms = u32::try_from(remaining.as_millis())
+                .unwrap_or(u32::MAX)
+                .clamp(1, RUN_DOWN_POLL_MS);
             let mut submitted = 0_u32;
             // SAFETY: `self.handle` is a live ring; valid out-pointer. Zero
             // new SQEs are queued -- this call's only purpose is to wait for
             // and reap already-outstanding completions.
-            let hr =
-                unsafe { crate::sys::submit(self.handle, 1, RUN_DOWN_POLL_MS, &raw mut submitted) };
+            let hr = unsafe { crate::sys::submit(self.handle, 1, poll_ms, &raw mut submitted) };
             wait_outcome(hr)?;
             self.drain_for_rundown()?;
         }
-        Ok(())
     }
 
     /// Pop every currently available completion, recording each -- without

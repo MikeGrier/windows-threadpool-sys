@@ -29,7 +29,7 @@
 //!
 //! **`M21.6`: an expired wait treated as a failure.** That one was in this
 //! crate: `pop_within` returned `Err` on every ordinary timeout until
-//! `wait_outcome` was given its `WAIT_EXPIRED` arm. Re-injecting it means
+//! `wait_outcome` was given its `IORING_E_WAIT_TIMEOUT` arm. Re-injecting it means
 //! mutating the crate, which a test cannot do, so it lives in
 //! [sabotage.json](../sabotage.json) instead and is swept with everything
 //! else. What *this* file contributes is the precondition that sabotage needs
@@ -302,7 +302,7 @@ fn the_resolver_breaks_a_consumer_that_believes_the_drain_flag_holds_back() {
 #[test]
 fn an_expired_wait_reaches_pop_within() {
     // The precondition `M21.6`'s sabotage needs. That case reverts
-    // `wait_outcome`'s WAIT_EXPIRED arm, which only means something if an
+    // `wait_outcome`'s IORING_E_WAIT_TIMEOUT arm, which only means something if an
     // expired wait actually arrives there -- a mutation to code the suite
     // never executes is caught for an unrelated reason or not at all, and
     // either way measures nothing.

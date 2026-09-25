@@ -36,6 +36,11 @@ Every clause has an ID, a statement, a source, and a provenance tag:
 
 - **Observed** -- a spike or a measurement in this repository saw it happen.
   The citation says which.
+- **Documented** -- Microsoft states it on the API's reference page. This is
+  the strongest tag, and it outranks the others: a measurement describes one
+  run of one build, while a documented return value is what the platform
+  commits to. Where a clause carries both, the documentation is the reason and
+  the measurement is corroboration.
 - **Over-provision** -- wider than anything observed here, allowed
   deliberately. These are the clauses that make the space a specification
   rather than a recording.
@@ -92,6 +97,13 @@ submission order.
 Any single operation may complete with a failure result while others submitted
 beside it succeed.
 
+- **Documented.** `SubmitIoRing`'s Remarks state the mechanism: *"Any errors
+  processing a single submission queue entry results in a synchronous
+  completion of that entry posted to the completion queue with an error status
+  code for that operation."* So a per-entry failure is **not** a submit
+  failure; it arrives as an ordinary completion carrying an error. That is the
+  contract, and the two observations below are consistent with it rather than
+  the basis for it.
 - **Observed.** Two independent places in this repository are built around it.
   [`checkpoint.rs`](examples/epoch_log/checkpoint.rs) documents the case
   directly -- a record write failing with `ERROR_DISK_FULL` followed by a flush
@@ -111,8 +123,16 @@ A submit-and-wait may return `HRESULT_FROM_WIN32(ERROR_TIMEOUT)` having waited
 its full timeout, and this is **not** a failure of the ring.
 
 - **Observed.** `M21.6` fixed a defect in this crate that treated an expired
-  wait as an operation failure; `ring.rs`'s `WAIT_EXPIRED` handling is the
-  correction, and it maps the code to `Ok(())`.
+  wait as an operation failure; `ring.rs`'s `IORING_E_WAIT_TIMEOUT` handling is
+  the correction, and it maps the code to `Ok(())`. `M26.8` found the same
+  defect surviving in [`Batch::submit_and_wait`](src/batch.rs), which that
+  sweep had not reached.
+- **Documented, and the documentation says more than "not a failure".**
+  `SubmitIoRing` gives this code its own return-value row: *"All operations
+  were submitted without error and the subsequent wait timed out."* So it
+  carries a positive guarantee about the submission half, not merely the
+  absence of a failure -- which is why it is classified separately from every
+  other error rather than folded in with them.
 - **Over-provision:** a wait may expire even when completions are available,
   and may expire on any call including the first.
 
@@ -140,15 +160,32 @@ arriving behind another need not produce its own signal.
   auto-reset, exactly one waiter per ring.
 - **Over-provision:** none. This clause is the measurement.
 
-### RS-P-7 -- A submit may leave already-built operations queued for a later submit
+### RS-P-7 -- A submit may fail, leaving already-built operations queued for a later submit
 
-If `SubmitIoRing` fails, operations already built into the submission queue
-remain queued, and a later, unrelated submit may be what runs them.
+`SubmitIoRing` may fail, and when it does every entry it was asked to submit
+remains in the submission queue. A later, unrelated submit is what runs them.
 
-- **Observed.** [D-5](DESIGN-NOTES.md#d-5) -- the submission queue is ring
-  state, not batch state, and there is no rewind once `Build*` returns.
+- **Documented, which `M26.8` established and `M26.1` had not.** This clause
+  was originally written as a *consequence* -- "if a submit fails, entries
+  remain queued" -- citing [D-5](DESIGN-NOTES.md#d-5), which establishes the
+  no-rewind consequence and nothing about submits failing at all. `M26.3`'s
+  resolver read it as a permission to fail submits, and the space had no
+  authority for that. It does now: `SubmitIoRing`'s return-value table lists
+  *"Any other error value: Failure to process the submission queue in its
+  entirety"*, and its Remarks state *"If this function returns an error other
+  than IORING_E_WAIT_TIMEOUT, then all entries remain in the submission
+  queue."* Both halves of this clause are therefore Microsoft's, not an
+  inference from a run.
+- **The `IORING_E_WAIT_TIMEOUT` carve-out is part of the clause**, because it
+  is the case where the entries did *not* remain queued: that code means every
+  operation was submitted and only the wait expired. A consumer that cannot
+  tell the two apart cannot know whether its buffers are still owed to the
+  kernel, which is the defect `M26.8` fixed in
+  [`Batch::submit_and_wait`](src/batch.rs).
 - **Over-provision:** the resolver may defer an operation across any number of
-  submits, not only across a failed one.
+  submits, not only across a failed one. It currently declines a submit only
+  when something is staged, which is *narrower* than this clause -- nothing
+  says a submit carrying no new work cannot fail.
 
 ## Constrained: what a resolver may not do
 

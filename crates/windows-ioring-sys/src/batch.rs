@@ -2057,7 +2057,14 @@ impl<'ring> Batch<'ring> {
     ///
     /// # Errors
     ///
-    /// Returns any error from `SubmitIoRing`.
+    /// Returns any error from `SubmitIoRing`. **An error means the entries
+    /// were not submitted and remain in the submission queue**, which is the
+    /// documented behaviour of that call: *"If this function returns an error
+    /// other than IORING_E_WAIT_TIMEOUT, then all entries remain in the
+    /// submission queue."* They are not lost and they are not rewound
+    /// ([D-5](../DESIGN-NOTES.md#d-5)) -- a later submit on this ring is what
+    /// runs them, so **the buffers they reference must stay alive**. Whether
+    /// and when to submit again is the caller's policy, not this crate's.
     pub fn submit(self) -> io::Result<u32> {
         self.submit_and_wait(0, 0)
     }
@@ -2072,9 +2079,22 @@ impl<'ring> Batch<'ring> {
     /// submitted rather than completed (M10.2). Drain with
     /// [`crate::IoRing::try_pop`] and count for yourself.
     ///
+    /// **A wait that expires is success, not failure** (M26.8). `SubmitIoRing`
+    /// answers `IORING_E_WAIT_TIMEOUT` in that case, and its documented
+    /// meaning is *"All operations were submitted without error and the
+    /// subsequent wait timed out"* -- so the submission half did everything it
+    /// was asked to. Reporting that as an `Err` is the defect `M21.6` fixed
+    /// for [`crate::IoRing::pop_within`]; this site was missed by that sweep
+    /// and kept it until `M26.8`. The distinction is not cosmetic: an `Err`
+    /// here means the entries are **still queued**, and a caller who frees
+    /// their buffers on seeing one would hand the kernel freed memory on the
+    /// next submit.
+    ///
     /// # Errors
     ///
-    /// Returns any error from `SubmitIoRing`.
+    /// Returns any error from `SubmitIoRing` **other than an expired wait**.
+    /// As [`Batch::submit`], an error means the entries remain in the
+    /// submission queue and their buffers must stay alive.
     pub fn submit_and_wait(mut self, wait_operations: u32, timeout_ms: u32) -> io::Result<u32> {
         self.do_submit(wait_operations, timeout_ms)
     }
@@ -2098,7 +2118,16 @@ impl<'ring> Batch<'ring> {
         // succeed on the retry, submitting operations the caller's `Err`
         // never told them about.
         self.submitted = true;
-        check(hr)?;
+        // `IORING_E_WAIT_TIMEOUT` is not a submission failure: the documented
+        // meaning of that code is that every entry went in and only the wait
+        // ran out (M26.8). Passing it to `check` reported a successful submit
+        // as an error, which is `M21.6`'s defect at the one site that sweep
+        // did not reach -- and the worse half is that it made an `Err` here
+        // ambiguous between "still queued" and "submitted, wait expired",
+        // which have opposite consequences for buffer ownership.
+        if !crate::ring::every_entry_was_submitted(hr) {
+            check(hr)?;
+        }
         Ok(submitted)
     }
 }

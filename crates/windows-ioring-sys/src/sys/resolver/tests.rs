@@ -504,7 +504,7 @@ fn failure_codes_are_not_drawn_from_a_small_fixed_set() {
 
 #[test]
 fn a_wait_may_expire() {
-    // RS-P-4. `WAIT_EXPIRED` is not a ring failure -- M21.6 fixed a defect in
+    // RS-P-4. `IORING_E_WAIT_TIMEOUT` is not a ring failure -- M21.6 fixed a defect in
     // this crate that read it as one -- so a resolver that never produced it
     // would leave that correction untested.
     let expired = SEEDS
@@ -518,7 +518,7 @@ fn a_wait_may_expire() {
             );
             build_flush(&mut resolver, 1, false);
             let hr = submit_waiting(&mut resolver);
-            let expired = hr == super::WAIT_EXPIRED;
+            let expired = hr == super::IORING_E_WAIT_TIMEOUT;
             drain(&mut resolver, 1);
             expired
         })
@@ -548,7 +548,7 @@ fn a_wait_may_expire_even_when_a_completion_is_available() {
             let hr = submit_waiting(&mut resolver);
             let available = !resolver.posted.is_empty();
             drain(&mut resolver, 1);
-            hr == super::WAIT_EXPIRED && available
+            hr == super::IORING_E_WAIT_TIMEOUT && available
         })
         .count();
     assert!(

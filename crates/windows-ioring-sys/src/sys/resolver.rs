@@ -110,12 +110,20 @@ const MAX_CONSECUTIVE_SUBMIT_FAILURES: u32 = 2;
 const S_OK: HRESULT = 0;
 /// `S_FALSE`, which is how `PopIoRingCompletion` reports an empty queue.
 const S_FALSE: HRESULT = 1;
-/// `HRESULT_FROM_WIN32(ERROR_TIMEOUT)`, how `SubmitIoRing` reports an expired
-/// wait -- derived from the named code, as `ring.rs` derives its own copy.
-const WAIT_EXPIRED: HRESULT =
+/// `IORING_E_WAIT_TIMEOUT`, which `SubmitIoRing` documents as "all operations
+/// were submitted without error and the subsequent wait timed out".
+///
+/// Spelled by derivation for the reason `ring.rs` records at its own copy: the
+/// name is a macro over `HRESULT_FROM_WIN32(ERROR_TIMEOUT)` rather than a
+/// `FACILITY_IORING` code, so the bindings emit no constant to import.
+const IORING_E_WAIT_TIMEOUT: HRESULT =
     (0x8007_0000_u32 | windows_sys::Win32::Foundation::ERROR_TIMEOUT) as HRESULT;
 /// `HRESULT_FROM_WIN32(ERROR_NOT_ENOUGH_MEMORY)`, the failure this resolver
 /// reports for a submit it declines under `RS-P-7`.
+///
+/// Deliberately **not** `IORING_E_WAIT_TIMEOUT`: that code carries a positive
+/// guarantee that every entry was submitted, so using it here would make the
+/// resolver claim the work went in while holding it back.
 const SUBMIT_FAILED: HRESULT =
     (0x8007_0000_u32 | windows_sys::Win32::Foundation::ERROR_NOT_ENOUGH_MEMORY) as HRESULT;
 
@@ -599,7 +607,7 @@ impl Responses for Resolver {
         // M21.6 fixed a defect in this crate that read it as one.
         if self.config.may_expire_waits && self.chance(25) {
             self.record(|s| s.expired_waits += 1);
-            return WAIT_EXPIRED;
+            return IORING_E_WAIT_TIMEOUT;
         }
 
         // `RS-P-5`: a wait returning success promises nothing about

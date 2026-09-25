@@ -191,18 +191,24 @@ fn a_ring_runs_down_under_the_widest_resolution() {
 }
 
 #[test]
-fn a_declined_submit_reaches_run_down_as_an_error() {
-    // The finding the test above declares, pinned as its own test so it is a
-    // recorded observation rather than a comment. This asserts what the crate
-    // *does* today, not what it should do -- so when `M26.8` settles the
-    // question, this test is the one that has to change, and changing it is
-    // the signal that the behaviour did.
+fn a_declined_submit_leaves_the_ring_resumable_and_the_policy_to_the_caller() {
+    // What M26.8 settled, replacing the test that pinned the old behaviour.
     //
-    // Seed 0x1A is the one the sweep above found. Pinned rather than swept
+    // `SubmitIoRing` documents that an error other than IORING_E_WAIT_TIMEOUT
+    // leaves **all entries in the submission queue**. So a declined submit has
+    // not lost the operations, and rundown reporting the error is correct --
+    // what was missing was the guarantee that makes reporting it useful: the
+    // ring is resumable, and calling again is what runs the queued entries.
+    //
+    // Deciding *when* to call again is deliberately not this crate's business.
+    // This test therefore plays the caller: it sees the error, chooses to try
+    // again, and the work completes.
+    //
+    // Seed 0x1A is the one M26.3's sweep found. Pinned rather than swept
     // because the point is reproducing one observation exactly.
     let resolver = Resolver::new(0x1A);
     let replay = resolver.replay_hint();
-    let (path, refused) = resolver.scoped(|_| {
+    let (path, refusals, finished) = resolver.scoped(|_| {
         let mut ring = IoRing::new(64, 128).expect("a ring");
         let (file, path) = scratch("declined");
 
@@ -214,22 +220,163 @@ fn a_declined_submit_reaches_run_down_as_an_error() {
         }
         let _ = batch.submit();
 
-        let refused = ring.run_down().is_err();
-        // Drain whatever is left so the ring is not dropped mid-flight; this
-        // is the recovery a caller has no documented route to today, which is
-        // itself part of what M26.8 is about.
-        while ring.outstanding() > 0 {
-            let _ = ring.run_down();
+        // The caller's policy, which is all this crate asks of it: keep
+        // going while it chooses to. A real consumer would back off here; the
+        // point is that it is *their* loop and not ours.
+        let mut refusals = 0_usize;
+        let mut finished = false;
+        for _ in 0..64 {
+            match ring.run_down_within(std::time::Duration::from_millis(50)) {
+                Ok(true) => {
+                    finished = true;
+                    break;
+                }
+                Ok(false) => {}
+                Err(_) => refusals += 1,
+            }
         }
-        (path, refused)
+        (path, refusals, finished)
     });
     let _ = std::fs::remove_file(path);
 
     assert!(
-        refused,
-        "{replay}: this seed declines a submit under RS-P-7; if run_down no longer reports \
-         that as an error, M26.8 has been answered and this test records the old behaviour"
+        refusals > 0,
+        "{replay}: this seed declines a submit, which is the condition under test"
     );
+    assert!(
+        finished,
+        "{replay}: after a declined submit the entries remain queued, so a caller that tries \
+         again must be able to finish -- that is the guarantee SubmitIoRing's documentation \
+         gives and what makes reporting the error useful rather than terminal"
+    );
+}
+
+#[test]
+fn an_expired_wait_is_a_successful_submit() {
+    // M26.8's correction, and the reason it is not a judgement call:
+    // `SubmitIoRing` documents IORING_E_WAIT_TIMEOUT as "All operations were
+    // submitted without error and the subsequent wait timed out". Reporting
+    // that as an Err is M21.6's defect at the one site that sweep missed --
+    // and the damage is not merely a wrong sign, because an Err from a submit
+    // means the entries are still queued, so a caller who frees their buffers
+    // on seeing one hands the kernel freed memory next time.
+    //
+    // RS-P-4 makes an expired wait reachable on demand, so this is a test
+    // rather than an argument about a rare timing. Swept rather than pinned to
+    // one seed: the clause is a permission the resolver takes sometimes, and
+    // picking a seed that happens to take it would make the test a hostage to
+    // the mixer. Every seed that expires must report success.
+    let mut expiring_seeds = 0_usize;
+    for seed in 0..64_u64 {
+        let resolver = Resolver::with_config(
+            seed,
+            ResolverConfig {
+                may_expire_waits: true,
+                may_pend: true,
+                ..ResolverConfig::narrowest()
+            },
+        );
+        let replay = resolver.replay_hint();
+        let path = resolver.scoped(|watch| {
+            let mut ring = IoRing::new(64, 128).expect("a ring");
+            let (file, path) = scratch("expired-submit");
+
+            let outcome = {
+                let mut batch = Batch::new(&mut ring);
+                for _ in 0..4 {
+                    let _token = batch
+                        .flush(&file, FlushCoverage::Unordered, FlushMode::Default)
+                        .expect("a flush builds");
+                }
+                // Ask to wait, which is what lets RS-P-4 apply.
+                batch.submit_and_wait(4, 50)
+            };
+
+            if watch.stats().expired_waits > 0 {
+                expiring_seeds += 1;
+                assert!(
+                    outcome.is_ok(),
+                    "{replay}: an expired wait means every entry was submitted, so \
+                     submit_and_wait must report success -- see SubmitIoRing's documented \
+                     return values. Got {outcome:?}"
+                );
+            }
+
+            // Whatever the wait did, the operations were submitted -- so they
+            // run down normally rather than needing recovery.
+            ring.run_down().expect("rundown");
+            path
+        });
+        let _ = std::fs::remove_file(path);
+    }
+
+    assert!(
+        expiring_seeds > 0,
+        "no seed expired a wait, so this test checked nothing about IORING_E_WAIT_TIMEOUT"
+    );
+}
+
+#[test]
+fn run_down_within_honours_its_bound_and_reports_rather_than_deciding() {
+    // The shape the audit found wrong: `run_down` waited in segments with no
+    // period to sit inside, which made "how long to keep trying" this crate's
+    // policy. The bounded form hands that back.
+    //
+    // A resolution that has not completed the work yet is the case where the
+    // bound has anything to do, so RS-P-1 supplies one.
+    let resolver = Resolver::with_config(
+        11,
+        ResolverConfig {
+            may_pend: true,
+            ..ResolverConfig::narrowest()
+        },
+    );
+    let replay = resolver.replay_hint();
+    let path = resolver.scoped(|_| {
+        let mut ring = IoRing::new(64, 128).expect("a ring");
+        let (file, path) = scratch("bounded-rundown");
+        {
+            let mut batch = Batch::new(&mut ring);
+            for _ in 0..4 {
+                let _token = batch
+                    .flush(&file, FlushCoverage::Unordered, FlushMode::Default)
+                    .expect("a flush builds");
+            }
+            batch.submit().expect("the submit is answered");
+        }
+
+        // A zero bound is the honest spelling of "do not wait": it reports
+        // rather than blocking, which is the whole point of the shape.
+        let started = std::time::Instant::now();
+        let finished = ring
+            .run_down_within(std::time::Duration::ZERO)
+            .expect("a zero-bound rundown does not fail");
+        assert!(
+            started.elapsed() < std::time::Duration::from_millis(500),
+            "{replay}: a zero bound must not block"
+        );
+        assert!(
+            !finished || ring.outstanding() == 0,
+            "{replay}: reporting finished must mean nothing is outstanding"
+        );
+
+        // And the caller's own loop finishes it, because that is their policy.
+        for _ in 0..256 {
+            if ring
+                .run_down_within(std::time::Duration::from_millis(20))
+                .expect("rundown")
+            {
+                break;
+            }
+        }
+        assert_eq!(
+            ring.outstanding(),
+            0,
+            "{replay}: a caller who keeps calling reaches quiescence"
+        );
+        path
+    });
+    let _ = std::fs::remove_file(path);
 }
 
 #[test]

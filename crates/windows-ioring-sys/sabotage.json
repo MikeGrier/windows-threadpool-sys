@@ -525,11 +525,11 @@
       "name": "M26.5: M21.6's defect re-injected -- an expired wait is a failure again",
       "file": "src/ring.rs",
       "expect": "caught",
-      "why": "The historical defect this crate actually shipped, restored. Until M21.6, wait_outcome passed WAIT_EXPIRED to check() like any other HRESULT, so pop_within returned Err on every ordinary timeout and run_down treated any operation slower than its poll as fatal -- which M21.6's own doc comment records as the shape that made run_down return with the operation still outstanding, after which Drop asserted and closed the ring anyway. This is one half of M26.5's calibration and it is the half that matters most, because a resolver nobody has shown can go red on a real defect is not evidence. Measured: the calibration fails naming the seed and 0x800705B4. Scoped to the calibration target so 'caught' means THAT suite caught it, not the several others that would also notice.",
+      "why": "The historical defect this crate actually shipped, restored. Until M21.6, wait_outcome passed IORING_E_WAIT_TIMEOUT to check() like any other HRESULT, so pop_within returned Err on every ordinary timeout and run_down treated any operation slower than its poll as fatal -- which M21.6's own doc comment records as the shape that made run_down return with the operation still outstanding, after which Drop asserted and closed the ring anyway. This is one half of M26.5's calibration and it is the half that matters most, because a resolver nobody has shown can go red on a real defect is not evidence. Measured: the calibration fails naming the seed and 0x800705B4. Scoped to the calibration target so 'caught' means THAT suite caught it, not the several others that would also notice.",
       "testArgs": ["test", "-p", "windows-ioring-sys", "--locked", "--all-features", "--test", "calibration"],
       "find": [
           "fn wait_outcome(hr: windows_sys::core::HRESULT) -> io::Result<()> {",
-          "    if hr == WAIT_EXPIRED {",
+          "    if hr == IORING_E_WAIT_TIMEOUT {",
           "        return Ok(());",
           "    }",
           "    check(hr)"
@@ -656,6 +656,34 @@
           "        .expect(\"pop completion\")",
           "        .expect(\"a completion arrives within the bound\");",
           "    let registered_files = files_pending"
+      ]
+    },
+    {
+      "name": "M26.8: a timed-out wait is reported as a failed submit again",
+      "file": "src/ring.rs",
+      "expect": "caught",
+      "why": "M21.6's defect, at the site that sweep missed. SubmitIoRing documents IORING_E_WAIT_TIMEOUT as 'All operations were submitted without error and the subsequent wait timed out' -- a positive guarantee about the submission half, not merely a non-failure. Folding it back in with every other error does more than flip a sign: its Remarks say that any OTHER error leaves all entries in the submission queue, so an Err from a submit means the buffers are still owed to the kernel. A caller who cannot tell the two apart and frees on Err hands the kernel freed memory at the next submit, which is the hazard D-5 exists to prevent.",
+      "testArgs": ["test", "-p", "windows-ioring-sys", "--locked", "--all-features", "--test", "resolver_over_a_real_ring"],
+      "find": [
+          "    hr == IORING_E_WAIT_TIMEOUT || check(hr).is_ok()"
+      ],
+      "replace": [
+          "    check(hr).is_ok()"
+      ]
+    },
+    {
+      "name": "M26.8: run_down_within reports finished without checking",
+      "file": "src/ring.rs",
+      "expect": "caught",
+      "why": "The bounded rundown's entire value is that its answer is trustworthy: Ok(true) is what tells a caller the ring is safe to drop. A version that says so without looking would let every caller close a ring the kernel may still be writing through -- the exact hazard rundown exists to prevent, reintroduced while every call site still reads correctly. Note this also covers the unbounded run_down, which is now implemented over this one, so a single wrong answer here would propagate to both spellings.",
+      "testArgs": ["test", "-p", "windows-ioring-sys", "--locked", "--all-features", "--test", "resolver_over_a_real_ring"],
+      "find": [
+          "            if self.accounting.outstanding() == 0 {",
+          "                return Ok(true);",
+          "            }"
+      ],
+      "replace": [
+          "            return Ok(true);"
       ]
     },
     {

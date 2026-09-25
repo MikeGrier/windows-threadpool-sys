@@ -3598,3 +3598,60 @@ rundown are the crate's own contract, not observations. `flush_barrier_stress.rs
 reordering *happened* is a control verifying its own precondition, with a message explaining why --
 the correct pattern. And the handover tests rest on `D-40`'s synchronous-completion measurement but
 verify that precondition rather than assuming it, which is what a frozen observation fails to do.
+
+## Moved 2026-09-25 12:34:02 -04:00 -- M26.8: retry policy belongs to the caller
+
+### <a id="m268"></a>M26.8 -- Decide what `IoRing::run_down` should do when a submit it makes is refused. *(completed 2026-09-25 12:34:02 -04:00)*
+
+The shape is recorded as [D-67](DESIGN-NOTES.md#d-67); what follows is what the work found.
+
+**The item was framed as a decision and was mostly a reading.** It asked which way to resolve a
+tension between "blocking is the safe failure mode" and "no hang". The tension was real but the
+question had an authority nobody had consulted: `SubmitIoRing`'s reference page. The correction that
+made the difference came from the engineer -- **no amount of measurement constitutes a contract** --
+and it was needed, because the session had spent the previous hour measuring and had drawn a
+confident conclusion from it.
+
+**What the documentation settles.** A return-value row gives `IORING_E_WAIT_TIMEOUT` the meaning
+*"All operations were submitted without error and the subsequent wait timed out"*, and the Remarks
+add *"If this function returns an error other than IORING_E_WAIT_TIMEOUT, then all entries remain in
+the submission queue"* and that a per-entry failure arrives as a completion rather than as a submit
+failure.
+
+**A measurement had been read backwards, and the documentation is what caught it.** A probe showed
+an operation completing after a submit reported `E_INVALIDARG`, which was taken to mean the work had
+gone in despite the error. It had not: the entry stayed in the submission queue exactly as
+documented, and what pushed it through was `pop_within`'s *own* internal submit. The observation was
+right and the attribution was wrong -- which is precisely the failure mode a contract prevents and a
+measurement invites.
+
+**`Batch::submit_and_wait` carried `M21.6`'s defect** at the one site that sweep did not reach.
+`do_submit` passed a timed-out wait to `check`, so a fully successful submission was reported as an
+error. The damage is worse than a wrong sign: because any *other* error means the entries are still
+queued, an `Err` was ambiguous between "your buffers are free" and "the kernel still owns them",
+which is [D-5](DESIGN-NOTES.md#d-5)'s hazard with the sign hidden.
+
+**`run_down` was the only waiting API in this crate shaped wrongly**, and the engineer named the
+principle that identifies it: *never implement a retry policy ourselves -- the caller keeps their
+own backoff, counts before giving up, and whatever else they want.* Waiting in segments inside a
+period the caller supplied is fine; `run_down` had the segments and no such period, which made "how
+long to keep trying" this crate's policy. [`IoRing::run_down_within`](src/ring.rs) is the primitive
+the caller bounds; `run_down` is now that with an unbounded period, which is a choice made by
+calling it. Checked against the rest of the surface rather than assumed: `pop_within` and
+`submit_and_wait` were already correctly shaped, so `run_down` really was the sole outlier.
+
+**An error from rundown is no longer terminal, and did not need to be.** The entries remain queued,
+the ring is resumable, and the documentation is what makes that safe to say. The one thing a caller
+must not do after an error is drop the ring.
+
+**`RS-P-7` and `RS-P-3` moved from inference to citation.** `M26.1` wrote `RS-P-7` as a consequence
+clause -- "if a submit fails, entries remain queued" -- citing a decision that established the
+consequence and nothing about submits failing at all, and `M26.3`'s resolver read it as a permission
+regardless. The space now carries a **`Documented`** tag that explicitly outranks `Observed`, since
+a measurement describes one run of one build.
+
+**The manifest drifted and the harness caught it, for the seventh time this session.** Renaming
+`WAIT_EXPIRED` to `IORING_E_WAIT_TIMEOUT` -- so the constant carries the documented name rather than
+a derivation -- left `M26.5`'s sabotage patching text that no longer existed. The sweep that
+followed found four more live sites; the archive was left alone. A per-case uniqueness check now
+runs before the sweep, which would have caught this in seconds rather than in a five-minute run.

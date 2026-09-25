@@ -288,49 +288,7 @@ reviewable artifact rather than a recording.
 
 - [x] **M26.7** -- The audit's census came from a command and found one class 31 assertions wide, restated as [`IoRing::pop_within`](src/ring.rs) and guarded by [response_space_census.rs](tests/response_space_census.rs); recorded as [D-66](DESIGN-NOTES.md#d-66). -> [completed 2026-09-25](COMPLETED-CHECKLIST.md#m267)
 
-- [ ] **M26.8** -- Decide what [`IoRing::run_down`](src/ring.rs) should do when a submit it makes is
-  **refused**. Found by `M26.3`'s resolver on its first contact with a real ring, and queued rather
-  than fixed there because it is a decision and not a correction.
-
-  **The observation.** Under `RS-P-7` a submit may be declined. `run_down` passes the result through
-  `wait_outcome(hr)?`, which is `Ok` only for an expired wait, so a refusal returns `Err` with
-  `outstanding() > 0` -- and `Drop` then asserts and calls `CloseIoRing` anyway. That is the same
-  shape `M21.6` fixed for `ERROR_TIMEOUT`, reachable again through a different `HRESULT`. Measured:
-  32 seeds pass with `may_fail_submits` off; seed `0x1A` fails at `0x80070008` with it on.
-  [resolver_over_a_real_ring.rs](tests/resolver_over_a_real_ring.rs) pins the current behaviour in
-  `a_declined_submit_reaches_run_down_as_an_error`, so whichever way this is settled, that test is
-  what has to change.
-
-  **Why it is a decision.** `run_down`'s own documentation argues that blocking is the safe failure
-  mode and closing early is not, which says it should keep looping through a refusal. But a
-  permanently failing submit then hangs, and "no hang" is one of the properties `M26.4` writes.
-  The two pull opposite ways and neither is obviously right, so an engineer chooses: keep looping,
-  loop a bounded number of times, or offer the caller a documented recovery route -- today there is
-  none, since the operations stay outstanding and the ring cannot be safely dropped.
-
-  **Note one way this was narrowed and should not stay narrow.** `M26.3`'s resolver declines a
-  submit only when something is staged, which is *narrower* than the space requires -- nothing in
-  [RESPONSE-SPACE.md](RESPONSE-SPACE.md) says a submit carrying no new work cannot fail. Widening it
-  is part of answering this item, because a rundown submit with an empty staging area is exactly the
-  case a real `ERROR_NOT_ENOUGH_MEMORY` would hit.
-
-  **`M26.4` found the second face of this question, and it is about the document.**
-  [RS-P-7](RESPONSE-SPACE.md) is written as a *consequence* clause -- "**if** `SubmitIoRing` fails,
-  operations already built remain queued" -- and cites [D-5](DESIGN-NOTES.md#d-5), which establishes
-  the no-rewind consequence and nothing about submits failing spontaneously. `M26.3`'s resolver read
-  it as a *permission* to fail submits, and that reading is what produced this item. **The space
-  never states that a submit may fail at all**, which is a gap rather than a decision: submits
-  demonstrably can fail on a real system, so a space that omits it is narrower than reality in a
-  place nobody chose. Answering this item therefore means deciding both halves together -- whether
-  the space says a submit may fail, and what `run_down` does when one does -- because the second
-  cannot be settled while the first is unstated.
-
-  **What `M26.4` established in passing, so it need not be re-derived.**
-  [`IoRing::pop_within`](src/ring.rs) surfaces the same refusal as an `Err`, and that one is *within
-  its documented contract* ("returns any error from `SubmitIoRing`"), so a correct consumer retries
-  -- [properties_under_every_resolution.rs](tests/properties_under_every_resolution.rs) does exactly
-  that and recognises a refusal by asking the resolver rather than by matching a code.
-  `run_down` is the one with no recovery route, which is what makes it the item.
+- [x] **M26.8** -- Settled from `SubmitIoRing`'s documentation rather than measurement: the expired-wait defect is fixed in [`Batch::submit_and_wait`](src/batch.rs), and [`IoRing::run_down_within`](src/ring.rs) hands the retry policy to the caller. Recorded as [D-67](DESIGN-NOTES.md#d-67). -> [completed 2026-09-25](COMPLETED-CHECKLIST.md#m268)
 
 - [ ] **M26.9** -- Find and fix the intermittent `Timeout` in
   [event_delivery.rs](tests/event_delivery.rs)'s two threadpool-delivery tests, recorded in
