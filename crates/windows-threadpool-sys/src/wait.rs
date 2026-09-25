@@ -455,6 +455,21 @@ impl WaitActivation<'_> {
     ///
     /// [`TimerFiring::rearm_after`]: crate::timer::TimerFiring::rearm_after
     ///
+    /// # Re-arm before the next signal
+    ///
+    /// The ordering rule described on [`ThreadpoolWait::arm`] applies to
+    /// every arming, not just the first -- `SetThreadpoolWait` says the event
+    /// must be re-registered "before signaling it each time". A producer that
+    /// signals in the window after an activation consumed the arming but
+    /// before this call re-establishes it may not get a callback for that
+    /// signal.
+    ///
+    /// Re-arming *before* draining closes that window, at the cost of
+    /// callbacks that find nothing to do; draining first and re-arming after
+    /// leaves it open. A caller who cannot order the two can drain, re-arm,
+    /// then drain again, so that anything which landed in the window is
+    /// picked up by the second pass rather than waited for.
+    ///
     /// # Teardown
     ///
     /// Re-arming after the object has begun tearing down does nothing, so a
@@ -712,6 +727,25 @@ impl ThreadpoolWait {
     /// arming rather than adding to it, and an activation consumes the arming --
     /// rearm from inside the callback with [`WaitActivation::rearm`] to keep
     /// watching.
+    ///
+    /// # Arm before you signal
+    ///
+    /// `SetThreadpoolWait` documents that "you must re-register the event with
+    /// the wait object before signaling it each time to trigger the wait
+    /// callback". Signal a handle that is not currently armed -- including in
+    /// the window between constructing a [`ThreadpoolWait`] and this call --
+    /// and the callback is not guaranteed to run for that signal.
+    ///
+    /// An auto-reset event makes a dropped signal permanent rather than merely
+    /// late, because the signal is consumed and there is nothing left for a
+    /// subsequent arming to observe. If the handle is only ever signalled once,
+    /// as a wakeup for state that is already present, that lost signal is the
+    /// last one the waiter will ever get.
+    ///
+    /// Every example in this module arms first for that reason; so does every
+    /// caller in this workspace. A caller who cannot control the ordering
+    /// should watch a manual-reset event kept in agreement with the state it
+    /// reports, which is level-triggered and so has no signal to lose.
     pub fn arm(&self, timeout: Option<Duration>) {
         // SAFETY: `wait` is valid for the lifetime of self, and the handle is
         // owned by self so it is still open.
