@@ -2,6 +2,19 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.1.4](https://github.com/MikeGrier/windows-threadpool-sys/compare/windows-threadpool-sys-v0.1.3...windows-threadpool-sys-v0.1.4) (2026-09-25)
+
+
+### Features
+
+* **threadpool:** add a trace for defects that only appear under concurrency ([2522bbf](https://github.com/MikeGrier/windows-threadpool-sys/commit/2522bbf6e54db5d4fc592ffd6daade09ec28e852))
+
+
+### Bug Fixes
+
+* **ioring:** address PR [#108](https://github.com/MikeGrier/windows-threadpool-sys/issues/108) review, and record what one finding uncovered ([04c329b](https://github.com/MikeGrier/windows-threadpool-sys/commit/04c329b3622dd0191e8103984def6f25ee7f65bb))
+* **ioring:** resolve the intra-doc links this branch broke ([02bb88f](https://github.com/MikeGrier/windows-threadpool-sys/commit/02bb88fbdcc463a3913e9ee06e4b359312b9d4ee))
+
 ## [0.1.3](https://github.com/MikeGrier/windows-threadpool-sys/compare/windows-threadpool-sys-v0.1.2...windows-threadpool-sys-v0.1.3) (2026-08-27)
 
 
