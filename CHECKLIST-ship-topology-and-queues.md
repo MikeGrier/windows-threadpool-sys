@@ -693,6 +693,21 @@ that previously stood in the way are gone:
   > item still owes is `ByL3`'s own degradation condition** -- currently "no `level: 3` domain", after
   > this "no `outermost_partitioning_cache()`" -- which belongs in this item's verification, where the
   > rule being degraded on is the new one. `examples/ring_copy/policy/tests.rs` is where it goes.
+  >
+  > **That follow-up is now `SH-4.12.1` below, rather than a note under a checked item.** Raised by
+  > Copilot review on PR #108: leaving it here left scheduled work marked done, which the
+  > checked-means-done rule exists to prevent. `SH-4.12` stays checked for the change it did make.
+
+- [ ] **SH-4.12.1** -- **Give `ByL3` a degradation test on the new rule.** Spawned from `SH-4.12`,
+  which converted the policy from `matches!(domain.kind, DomainKind::Cache { level: 3, .. })` to
+  asking `outermost_partitioning_cache()`, and whose own completion note recorded that the
+  degradation condition still owed a test.
+
+  **What to assert.** The condition being degraded on is now "no `outermost_partitioning_cache()`",
+  not "no `level: 3` domain", so a test written against the old condition would pass while checking
+  the wrong rule. Assert both directions: a machine that reports a partitioning cache selects
+  domains from it, and one that reports none degrades rather than selecting nothing or panicking.
+  [policy/tests.rs](crates/windows-ioring-sys/examples/ring_copy/policy/tests.rs) is where it goes.
 
 - [ ] **SH-4.13** -- **`ProcessorSet` cannot represent every `u8` processor id, and the public API
   cannot uphold both "every processor" and "no abort".** Raised by Copilot across three unresolved

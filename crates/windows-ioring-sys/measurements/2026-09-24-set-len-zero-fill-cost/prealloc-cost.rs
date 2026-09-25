@@ -38,12 +38,35 @@ fn fill(path: &std::path::Path, len: usize) -> std::io::Result<()> {
     file.flush()
 }
 
-fn main() {
-    println!("What the epoch-log sample's zero-fill actually costs\n");
-    println!(
+/// The one place this program writes.
+///
+/// The repository's output rule: past the first `println!`, formatting and the
+/// destination become separable, so every line goes through one sink rather
+/// than through call sites scattered down `main`. Small enough to be honest
+/// about -- it is a writer and a `line` method -- and it is what lets the
+/// destination change without touching a single caller.
+struct Report<W: Write> {
+    out: W,
+}
+
+impl<W: Write> Report<W> {
+    fn new(out: W) -> Self {
+        Self { out }
+    }
+
+    fn line(&mut self, args: std::fmt::Arguments<'_>) {
+        writeln!(self.out, "{args}").expect("the report's destination accepts writes");
+    }
+}
+
+fn main() {    let mut report = Report::new(std::io::stdout().lock());
+    report.line(format_args!(
+        "What the epoch-log sample's zero-fill actually costs\n"
+    ));
+    report.line(format_args!(
         "{:<34} {:>12} {:>14} {:>14}",
         "case", "bytes", "median us", "max us"
-    );
+    ));
 
     let mut total_bytes = 0_usize;
     let mut total_us = 0_u128;
@@ -66,7 +89,10 @@ fn main() {
         let median = samples[samples.len() / 2];
         let max = *samples.last().expect("REPEATS is not zero");
 
-        println!("{:<34} {:>12} {:>14} {:>14}", label, len, median, max);
+        report.line(format_args!(
+            "{:<34} {:>12} {:>14} {:>14}",
+            label, len, median, max
+        ));
 
         let _ = std::fs::remove_file(&path);
 
@@ -76,12 +102,12 @@ fn main() {
         total_us += median * copies as u128;
     }
 
-    println!(
+    report.line(format_args!(
         "\nOne whole run of the sample pre-allocates {} bytes ({:.1} MiB) across four files,\n\
          for about {} us ({:.1} ms) of zero-filling in total.",
         total_bytes,
         total_bytes as f64 / (1024.0 * 1024.0),
         total_us,
         total_us as f64 / 1000.0
-    );
+    ));
 }
