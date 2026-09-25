@@ -1,3 +1,4 @@
+// Copyright (c) 2026 Mike Grier
 //! What the epoch-log sample's pre-allocation actually costs at its real sizes.
 //!
 //! The GiB figures in the cost spike answer "what does zeroing cost per unit".
@@ -9,7 +10,11 @@ use std::io::Write;
 use std::time::Instant;
 
 const STRIDE: usize = 4096;
-const FILL_CHUNK: usize = 1 << 20;
+/// Matches the sample's own fill chunk (`examples/epoch_log/logfile.rs`).
+/// The measured operation includes the write loop's chunking, so a benchmark
+/// that chunked differently would not be measuring the implementation it
+/// reports on. This was 1 MiB until review caught the mismatch.
+const FILL_CHUNK: usize = 64 * 1024;
 
 /// Sizes this sample actually asks for, derived from main.rs's constants.
 const CASES: &[(&str, usize)] = &[

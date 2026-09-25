@@ -180,6 +180,14 @@ impl EventDelivery {
         // the order `SetThreadpoolWait` documents. This is what makes the
         // backlog guarantee above true, so a failure to raise it is a failure
         // to construct.
+        //
+        // Signalled only when this call attached the event. A caller that
+        // attached it earlier and consumed the signal reaches this with a
+        // non-empty queue and no wakeup owing, which review raised and
+        // `M26.12` is investigating -- the obvious repair, signalling
+        // unconditionally, was tried and does **not** fix it, so it is not
+        // applied here. See the ignored reproducer in
+        // `tests/event_delivery.rs` and UNRESOLVED-TEST-FAILURES.md.
         if owes_setup_signal {
             ring.lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner)

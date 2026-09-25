@@ -249,6 +249,26 @@ about this crate's own surface rather than about storage at all.
 - [x] **M23.5** -- Both asserts in `IoRing::drop` are now reached by tests; the raw-HRESULT seam the item priced turned out not to be needed, because the kernel refuses a null ring handle cleanly. -> [completed 2026-09-23](COMPLETED-CHECKLIST.md#m235)
 
 
+## M26+ -- The wakeup window review opened
+
+- [ ] **M26.12** -- **Find why a signal raised just after `wait.arm` can be lost, and fix it.**
+  Raised as a narrower finding by Copilot review on PR #108 -- that `EventDelivery::new` signals
+  only when it attached the event itself -- and the investigation found something wider.
+
+  **What is measured.** The `#[ignore]`d reproducer
+  `a_backlog_is_delivered_even_when_the_caller_attached_the_event_first` in
+  [event_delivery.rs](tests/event_delivery.rs) fails 6 of 6. Signalling unconditionally, which is
+  what the review suggested, does not change that. A 50 ms sleep between `wait.arm` and the signal
+  makes it pass 3 of 3, and so does `--features trace`, which is the same perturbation by another
+  route. Full figures in [UNRESOLVED-TEST-FAILURES.md](UNRESOLVED-TEST-FAILURES.md).
+
+  **Why this is not a small follow-up.** [D-68](DESIGN-NOTES.md#d-68) fixed `M26.9`'s stall by
+  ordering the arm before the signal, measured at 0 failures in 3600 runs. This says that ordering
+  narrows the window rather than closing it, so the decision's reasoning needs revisiting once the
+  mechanism is known -- not before, because the mechanism is currently a guess.
+
+  **Do not apply the sleep.** It is a diagnostic that identified a window, not a fix, and shipping
+  it would convert a reproducible defect into a rare one.
 ## M27 -- What this crate owes the topology planner
 
 **Re-planned 2026-09-23, the same day it was written.** M27 was originally "Adaptivity: the benefit

@@ -15,6 +15,8 @@ use std::sync::mpsc;
 use std::time::Duration;
 
 use windows_ioring_sys::{Batch, EventDelivery, IoRing, PushOptions, Token};
+use windows_sys::Win32::Foundation::{HANDLE, WAIT_OBJECT_0};
+use windows_sys::Win32::System::Threading::WaitForSingleObject;
 
 const CHUNKS: usize = 8;
 const CHUNK_LEN: usize = 512;
@@ -490,6 +492,136 @@ fn completions_queued_before_handover_are_still_delivered() {
     assert!(
         pending.is_empty(),
         "every completion queued before the handover must have been delivered"
+    );
+
+    drop(delivery);
+}
+
+/// The backlog guarantee when the caller attached the event **first**.
+///
+/// [`completions_queued_before_handover_are_still_delivered`] hands over a
+/// *fresh* ring, so `EventDelivery::new` is what attaches the event and the
+/// setup signal is owed to it. That leaves a legal sequence untested: a caller
+/// may take the handle from [`IoRing::completion_event`] itself, submit work,
+/// and only then hand the ring over. The event is already attached by then.
+///
+/// A construction that signalled only when it had attached the event would arm
+/// this wait on an already-non-empty queue with nothing owing -- and the event
+/// is edge-triggered on empty-to-non-empty (D-19), so no later completion
+/// would signal either. The backlog would be stranded permanently, which is
+/// exactly what the guarantee promises against.
+///
+/// **Ignored: this reproduces a defect that is not yet fixed (`M26.12`).**
+///
+/// Raised by review on PR #108, and investigating it found something larger
+/// than the report. Signalling unconditionally -- the obvious repair, and the
+/// one the report suggests -- does **not** make this pass. What does is a
+/// 50 ms sleep between `wait.arm` and the signal, measured 3 of 3 against 0 of
+/// 6 without it, so the wakeup is lost in a window after arming rather than
+/// never being raised.
+///
+/// That matters beyond this test: `M26.9` fixed the delivery stall by ordering
+/// the arm before the signal, and this says that ordering alone is not
+/// sufficient. It is left failing-and-ignored rather than deleted, patched
+/// with a sleep, or "fixed" by a change that does not fix it.
+#[ignore = "M26.12: reproduces an unfixed wakeup race; see UNRESOLVED-TEST-FAILURES.md"]
+#[test]
+fn a_backlog_is_delivered_even_when_the_caller_attached_the_event_first() {
+    let path = temp_file("attached-before-handover");
+    let content = filled_content();
+    std::fs::write(&path, &content).expect("write fixture file");
+    let file = std::fs::OpenOptions::new()
+        .read(true)
+        .open(&path)
+        .expect("open for read");
+    let handle = file.as_raw_handle();
+
+    let mut ring = IoRing::new(64, 64).expect("create ring");
+
+    // Attach before any work exists, so the handover finds the event already
+    // in place -- and then **consume the signal that attaching raised**.
+    //
+    // Consuming it is the whole point, and the first version of this test
+    // omitted it and passed against the defect. `completion_event` signals as
+    // it attaches; on an auto-reset event that signal simply waits until
+    // something takes it. Arming a fresh wait would then have fired on the
+    // leftover signal and drained the backlog, so the test proved nothing.
+    // Taking it here leaves the state the guarantee is actually about: a
+    // non-empty queue with no wakeup pending anywhere.
+    let caller_handle = ring
+        .completion_event()
+        .expect("this system supports a completion event");
+    let taken = unsafe { WaitForSingleObject(caller_handle.as_raw_handle() as HANDLE, 5_000) };
+    assert_eq!(
+        taken, WAIT_OBJECT_0,
+        "attaching raises one signal and this consumes it"
+    );
+
+    let mut pending: HashMap<usize, (usize, Token<Vec<u8>>)> = HashMap::new();
+    {
+        let mut batch = Batch::new(&mut ring);
+        for chunk_index in 0..CHUNKS {
+            let buffer = vec![0_u8; CHUNK_LEN];
+            let offset = (chunk_index * CHUNK_LEN) as u64;
+            let token = unsafe { batch.read_raw(handle, buffer, offset, PushOptions::new()) }
+                .expect("queue read");
+            pending.insert(token.id(), (chunk_index, token));
+        }
+        batch
+            .submit_and_wait(CHUNKS as u32, 5_000)
+            .expect("submit and wait for every completion to land");
+    }
+
+    // Those completions took the queue from empty to non-empty, which signals
+    // the event again. Consume that one too, so the handover inherits a
+    // non-empty queue with nothing pending -- and because the queue never
+    // returns to empty, the edge cannot re-arm and no further signal is
+    // coming from the kernel either.
+    let taken = unsafe { WaitForSingleObject(caller_handle.as_raw_handle() as HANDLE, 5_000) };
+    assert_eq!(
+        taken, WAIT_OBJECT_0,
+        "the completions landing signal the event once"
+    );
+
+    let (tx, rx) = mpsc::channel();
+    let callbacks = Arc::new(AtomicUsize::new(0));
+    let callbacks_for_callback = Arc::clone(&callbacks);
+    let delivery = EventDelivery::new(
+        ring,
+        move |completion| {
+            callbacks_for_callback.fetch_add(1, Ordering::SeqCst);
+            let _ = tx.send(completion);
+        },
+        None,
+    )
+    .expect("wire delivery to a ring whose event the caller already attached");
+
+    let mut watch = DeliveryWatch::new(Arc::clone(&callbacks));
+    for _ in 0..CHUNKS {
+        let completion = recv_one(
+            &rx,
+            &mut watch,
+            "a_backlog_is_delivered_even_when_the_caller_attached_the_event_first (the event \
+             was attached before the work was queued, so a construction that signals only on \
+             its own attach leaves this backlog with no wakeup it will ever receive)",
+            CHUNKS,
+            || delivery.scope().outstanding(),
+        );
+        let (chunk_index, token) = pending
+            .remove(&completion.user_data())
+            .expect("completion matches a held token");
+        let buffer = token
+            .claim_if(&completion)
+            .expect("a token claims its own completion");
+        assert_eq!(
+            buffer,
+            content[chunk_index * CHUNK_LEN..(chunk_index + 1) * CHUNK_LEN]
+        );
+    }
+    assert!(
+        pending.is_empty(),
+        "every completion queued before the handover must have been delivered, even though \
+         the caller attached the event rather than the handover"
     );
 
     drop(delivery);

@@ -90,18 +90,27 @@ Measured at the sample's real sizes with
 
 | case | bytes | median |
 |---|---|---|
-| the log | 143,360 (140 KiB) | ~0.7 ms |
-| one strategy file | 8,421,376 (8.0 MiB) | 3.6-9.3 ms |
+| the log | 143,360 (140 KiB) | 8.4-9.5 ms |
+| one strategy file | 8,421,376 (8.0 MiB) | 3.2-8.8 ms |
 
 One whole run pre-allocates 24.2 MiB across four files -- the log plus one file
-per strategy -- for 11-29 ms of zero-filling, against a whole-run wall time of
-roughly 1.0-1.3 seconds.
+per strategy -- for 18-36 ms of zero-filling.
 
-**At the log's own size the cost is not the zeroing.** 140 KiB fills at about
-190 bytes per microsecond where 8 MiB fills at about 920; the small case is
-dominated by creating the file and flushing it, not by writing zeros into it.
-The maximum over fifty fills was ~10 ms for the 140 KiB case, which tracks
-filesystem variance rather than the amount written.
+**These figures supersede an earlier capture, and are not a controlled
+comparison against it.** The first capture ran a 1 MiB fill chunk where the
+sample itself uses 64 KiB, so it did not measure the chunking of the code it
+reports on; review caught that and the benchmark now matches the sample. The
+re-run also happened on a machine that was concurrently building, so **two
+things changed at once** and the difference between the two captures cannot be
+attributed to the chunk size. The superseded figures are not reproduced here,
+because a number nobody can act on is worse than no number.
+
+**At the log's own size, throughput is far below the larger case.** 140 KiB
+fills at roughly 17 bytes per microsecond against 950-2250 for 8 MiB, and the
+maxima over fifty fills ranged 10-54 ms for the 140 KiB case against 11-16 ms
+for the 8 MiB one -- a small write whose worst case exceeds a write sixty times
+its size. What the file creation and flush contribute versus the writing is not
+separated by this benchmark, which times the whole operation.
 
 **At these sizes the three approaches differ by less than that variance.**
 Explicit fill, `set_len` alone, and the touch-end trick all complete within the
