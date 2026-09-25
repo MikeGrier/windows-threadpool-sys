@@ -36,7 +36,7 @@ jobs:
           - aarch64-pc-windows-msvc
     steps:
       - uses: actions/checkout@v7
-      - uses: actions/setup-node@v6
+      - uses: actions/setup-node@v7
         with:
           node-version: '24'
       - uses: dtolnay/rust-toolchain@stable
