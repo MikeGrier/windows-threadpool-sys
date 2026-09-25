@@ -3367,3 +3367,77 @@ match a file whose line endings were not LF -- and single-line patterns matched 
 three of the eight cases passed and hid it. The repository's own instructions warn about this tool;
 `M26.2`'s files escaped it only because git normalised them on commit before that sweep ran. The
 three new files were converted to LF before proceeding.
+
+## Moved 2026-09-24 21:48:36 -04:00 -- M26.4: the properties that must hold under every resolution
+
+### <a id="m264"></a>M26.4 -- Write the properties that must hold under every resolution, with `RingContract` as the definition rather than a second copy. *(completed 2026-09-24 21:48:36 -04:00)*
+
+The shape is recorded as [D-62](DESIGN-NOTES.md#d-62); what follows is what the work found.
+
+**Five properties, in
+[properties_under_every_resolution.rs](tests/properties_under_every_resolution.rs).** Conservation
+(P-1), no hang (P-2), `pop_within` honours its bound (P-3), `outstanding` is accurate (P-4), no
+use-after-free (P-5) -- driven over generated plans, each under its own resolution drawn from
+`M26.3`'s resolver at the widest point in the space.
+
+**Only two of the five needed anything new, and that is the item's main point.** P-1 is already
+this crate's own oracle, so the harness reports to [`RingContract`](src/contract.rs) and asks it for
+the verdict. P-4 follows the same rule rather than counting for itself: the expected outstanding
+count is read back out of the contract through its own `Outstanding` violation, because a counter in
+the harness would be a third party to the disagreement and, when the two disagreed, the harness is
+what would get "fixed". P-5 is [`windows_guard_alloc::GuardAlloc`], already the established
+detector.
+
+**Two weaknesses are declared in the file rather than papered over.** `pop_within`'s upper bound is
+nearly free under an ordinary resolution, because the resolver answers a wait immediately and the
+call rarely approaches its deadline -- so the non-vacuous case needs a resolution in which *nothing
+completes during the window*. That is supplied by a separate degenerate responder, and what it is
+matters: not an `RS-C-1` violation, since no finite observation can distinguish "eventually" from
+"never", but the prefix of a satisfying resolution in which the eventually has not happened yet.
+And P-5 covers this crate's memory handling rather than the kernel's, since under a resolver nothing
+external writes into a buffer at all; the kernel-side half stays with
+[generated_sequences.rs](tests/generated_sequences.rs), against a real ring.
+
+**A third seed axis, kept separate.** This file carries the plan seed, the resolver seed and the
+guard allocator's. They are independent on purpose -- pinning the plan alone reproduces the same
+operations against different resolutions, which is what a suspicious plan calls for -- and a failure
+prints all three, because only all three replay the whole run.
+
+**The harness's own first defect was treating a declined submit as a property failure.** Under
+`RS-P-7` a submit may be declined, and `pop_within` surfaces that as an `Err` -- which is *within
+its documented contract*, since it says it returns any error from `SubmitIoRing`. A correct consumer
+retries; a harness that panicked was asserting a contract the crate never offered. It now retries,
+and recognises a refusal by **asking the resolver** whether its decline counter moved rather than by
+matching an `HRESULT`, because a hard-coded code here would be a second copy of a choice the
+resolver owns. Retrying is bounded by P-2's budget in every caller, so a resolution that declined
+forever is still caught.
+
+**That finding extended `M26.8` rather than creating a second item, and the extension is about the
+document.** `RS-P-7` is written as a *consequence* clause -- "if `SubmitIoRing` fails, operations
+already built remain queued" -- citing `D-5`, which establishes the no-rewind consequence and
+nothing about submits failing spontaneously. `M26.3`'s resolver read it as a permission, and the
+space nowhere states that a submit may fail at all. That is a gap rather than a decision, since
+submits demonstrably can fail, so `M26.8` now has to settle both halves together.
+
+**Coverage counters are asserted, not printed, and that is what makes a green run evidence.** All
+five properties are satisfied trivially by a run that does nothing: an empty plan, a resolution that
+completes everything inside its submit, or a harness that quietly stopped reporting would each pass
+every assertion. The counters are what separate "the properties held" from "nothing reached the
+states they are about", and one sabotage exists purely to show they are load-bearing. Their
+thresholds were set from a measured spread across eight fresh seeds rather than guessed; the
+declined-submit count is the thinnest signal and its threshold is only "more than none" for that
+reason, since tightening it would buy a flake rather than a guarantee.
+
+**The integration test is where it is for the gate's own reason**, as in `M26.3`: it needs a real
+ring, because `D-60` deliberately left lifecycle real. The ring-opening lib population is unchanged
+at 41.
+
+**A sabotage case was written, measured, and removed as unsound.** It disabled the P-1 verdict
+check, and it survived -- correctly, because disabling an assertion that does not fire on a green
+baseline cannot fail anything. What actually establishes that the verdict is read is the
+identity-reuse case: measured, the suite fails carrying the oracle's own wording, so the path from
+the crate through `RingContract` to a red test is traversed end to end. That evidence now lives in
+that case's reasoning, and the removal is recorded here because "sabotage a check" is an appealing
+and empty move worth recognising next time. Three cases added, all scoped to this test target on
+purpose -- these mutations are caught by many tests in the crate, and "something went red" would not
+have shown that *these* properties are the ones watching. Full sweep 39-of-39 as declared.

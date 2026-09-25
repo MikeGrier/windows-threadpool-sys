@@ -279,10 +279,7 @@ reviewable artifact rather than a recording.
 
 - [x] **M26.3** -- The resolver is built over the space's clause IDs in [resolver.rs](src/sys/resolver.rs), seeded on its own axis, with permissions configurable and constraints not; recorded as [D-61](DESIGN-NOTES.md#d-61). -> [completed 2026-09-24](COMPLETED-CHECKLIST.md#m263)
 
-- [ ] **M26.4** -- Write the properties that must hold under **every** resolution: conservation (no
-  lost, duplicated or unclaimed completion), no hang, `pop_within` honours its bound, `outstanding`
-  is accurate, no use-after-free. [`RingContract`](src/contract.rs) already states most of this as
-  an oracle over observed sequences and should be the definition rather than a second copy.
+- [x] **M26.4** -- The five properties are stated in [properties_under_every_resolution.rs](tests/properties_under_every_resolution.rs), with [`RingContract`](src/contract.rs) asked for the conservation verdict rather than copied; recorded as [D-62](DESIGN-NOTES.md#d-62). -> [completed 2026-09-24](COMPLETED-CHECKLIST.md#m264)
 
 - [ ] **M26.5** -- **Calibrate it, or it is not evidence.** Re-inject the two historical defects and
   confirm the resolver turns red: [D-47](DESIGN-NOTES.md#d-47)'s assumption that a covering flush
@@ -337,6 +334,24 @@ reviewable artifact rather than a recording.
   [RESPONSE-SPACE.md](RESPONSE-SPACE.md) says a submit carrying no new work cannot fail. Widening it
   is part of answering this item, because a rundown submit with an empty staging area is exactly the
   case a real `ERROR_NOT_ENOUGH_MEMORY` would hit.
+
+  **`M26.4` found the second face of this question, and it is about the document.**
+  [RS-P-7](RESPONSE-SPACE.md) is written as a *consequence* clause -- "**if** `SubmitIoRing` fails,
+  operations already built remain queued" -- and cites [D-5](DESIGN-NOTES.md#d-5), which establishes
+  the no-rewind consequence and nothing about submits failing spontaneously. `M26.3`'s resolver read
+  it as a *permission* to fail submits, and that reading is what produced this item. **The space
+  never states that a submit may fail at all**, which is a gap rather than a decision: submits
+  demonstrably can fail on a real system, so a space that omits it is narrower than reality in a
+  place nobody chose. Answering this item therefore means deciding both halves together -- whether
+  the space says a submit may fail, and what `run_down` does when one does -- because the second
+  cannot be settled while the first is unstated.
+
+  **What `M26.4` established in passing, so it need not be re-derived.**
+  [`IoRing::pop_within`](src/ring.rs) surfaces the same refusal as an `Err`, and that one is *within
+  its documented contract* ("returns any error from `SubmitIoRing`"), so a correct consumer retries
+  -- [properties_under_every_resolution.rs](tests/properties_under_every_resolution.rs) does exactly
+  that and recognises a refusal by asking the resolver rather than by matching a code.
+  `run_down` is the one with no recovery route, which is what makes it the item.
 
 ## M27 -- What this crate owes the topology planner
 

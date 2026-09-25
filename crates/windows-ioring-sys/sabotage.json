@@ -480,6 +480,48 @@
       ]
     },
     {
+      "name": "M26.4: the ring stops decrementing its outstanding count",
+      "file": "src/accounting.rs",
+      "expect": "caught",
+      "why": "P-4 says IoRing::outstanding is accurate, and P-2 says every loop terminates. A count that never comes down breaks both at once -- a consumer sizing a wait or deciding whether blocking is worthwhile reads a number that only grows, and run_down never finishes. Scoped to the property suite on purpose: this mutation is caught by a great many tests in this crate, and 'something went red' would not show that THESE properties are the ones watching it.",
+      "testArgs": ["test", "-p", "windows-ioring-sys", "--locked", "--all-features", "--test", "properties_under_every_resolution"],
+      "find": [
+          "    pub(crate) fn record_completion(&mut self) {",
+          "        self.outstanding = self.outstanding.saturating_sub(1);"
+      ],
+      "replace": [
+          "    pub(crate) fn record_completion(&mut self) {"
+      ]
+    },
+    {
+      "name": "M26.4: operation identities stop being unique",
+      "file": "src/accounting.rs",
+      "expect": "caught",
+      "why": "D-4 rests this crate's whole accounting model on a completion identifying its operation. An identity that repeats makes two operations indistinguishable, which is exactly the conservation failure RingContract reports as a duplicate completion. THIS IS ALSO THE EVIDENCE THAT P-1'S VERDICT IS READ rather than merely computed: measured, the suite fails with the oracle's own wording -- 'completed more than once, but every queued SQE produces exactly one completion' -- so the path from the crate through RingContract to a red test is traversed end to end. A separate case patching the verdict check was tried and removed as unsound: disabling an assertion that does not fire on a green baseline cannot fail, so it measured nothing. Scoped to the property suite on purpose, because this mutation is caught by a great many tests in this crate and 'something went red' would not show that THESE properties are watching it.",
+      "testArgs": ["test", "-p", "windows-ioring-sys", "--locked", "--all-features", "--test", "properties_under_every_resolution"],
+      "find": [
+          "        self.next_user_data = id",
+          "            .checked_add(1)",
+          "            .ok_or_else(|| io::Error::other(\"IoRing operation identity space exhausted\"))?;"
+      ],
+      "replace": [
+          "        self.next_user_data = id;"
+      ]
+    },
+    {
+      "name": "M26.4: coverage stops accumulating, so the suite can pass vacuously",
+      "file": "tests/properties_under_every_resolution.rs",
+      "expect": "caught",
+      "why": "Sabotaging the CLAIM rather than a symptom. This suite's five properties are all satisfied trivially by a run that does nothing, so the coverage counters are what separate 'the properties held' from 'nothing reached the states they are about'. A fold that silently stopped accumulating would leave every property assertion in place and turn the whole file into a tautology -- the instrument-checking-the-instrument case, and the reason the counters are asserted rather than merely printed.",
+      "testArgs": ["test", "-p", "windows-ioring-sys", "--locked", "--all-features", "--test", "properties_under_every_resolution"],
+      "find": [
+          "        self.pushes += other.pushes;"
+      ],
+      "replace": [
+          "        let _ = other.pushes;"
+      ]
+    },
+    {
       "name": "CONTROL: rewording a statement changes nothing",
       "file": "examples/epoch_log/contract.rs",
       "expect": "survives",
