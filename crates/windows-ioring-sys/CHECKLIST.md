@@ -294,72 +294,38 @@ reviewable artifact rather than a recording.
 
 - [x] **M26.10** -- Decided: a completion may report fewer bytes than requested, so `RS-P-8` permits it and the caller owns the remainder. -> [completed 2026-09-25](COMPLETED-CHECKLIST.md#m2610)
 
-- [ ] **M26.11** -- Constrain the handle types [examples/epoch_log](examples/epoch_log) will accept, so its
-  durability contract rests on a guarantee it has earned rather than one it assumes.
+- [ ] **M26.11** -- Document the capability requirements [examples/epoch_log](examples/epoch_log) places on
+  the handle it is given, and let an unmet one surface at the operation that needs it. **No pre-flight
+  handle check** ([D-70](DESIGN-NOTES.md#d-70)).
 
-  **Why this is not optional bookkeeping.** `M26.10` settled that the general ring permits a short
-  transfer ([RS-P-8](RESPONSE-SPACE.md), [D-69](DESIGN-NOTES.md#d-69)) because `IoRing` never asks what
-  kind of handle it was given. The epoch log's guarantees are not portable across that range: a flush
-  barrier means nothing on a socket, FUA is a volume concept, and a short write would break "the whole
-  record landed" silently rather than loudly. Its accounting already depends on a complete transfer and
-  nothing establishes that it will get one.
+  **Why no check, which is the part worth not relitigating.** `M26.10` established that the ring permits a
+  short transfer because it never asks what kind of handle it was given ([RS-P-8](RESPONSE-SPACE.md),
+  [D-69](DESIGN-NOTES.md#d-69)), and the obvious next move is for the log to police what the ring does
+  not. It was examined and rejected: the check points the wrong way. A console handle, a pipe or a closed
+  handle is caught by `GetFileType`, but every one of those already fails loudly at the first positioned
+  write -- the check buys a better message. A RAM disk, a remote share, or a volume whose write cache is
+  not power-protected succeeds at every API call and silently fails to be durable, and no probe catches
+  the last of those at all. So the gate guards the failures that were already loud and misses every
+  failure that is silent, while implying a validation that did not happen.
 
-  **How the type is determined: `GetFileType`, accepting only `FILE_TYPE_DISK`.** One call, total, and
-  already linkable under the `Win32_Storage_FileSystem` feature this crate enables. Its documented table
-  lands almost exactly on the classes `RS-P-8` cites: `FILE_TYPE_PIPE` is *"a socket, a named pipe, or an
-  anonymous pipe"*, so one value covers both short-transfer cases, and `FILE_TYPE_CHAR` covers the
-  console/LPT/serial class.
+  **What to write instead.** The log's own contract, stated by the log rather than inherited from the
+  ring, listing what the handle must support: positioned I/O at explicit offsets; `FILE_FLAG_OVERLAPPED`;
+  `FILE_FLAG_NO_BUFFERING` together with the sector-aligned buffer, offset and length it requires; a
+  preallocated extent; that a successful write of `N` bytes transfers `N`; and that a completed flush
+  reaches stable media.
 
-  **Encode the ambiguity, or the check is worse than none.** `FILE_TYPE_UNKNOWN` is `0` and means *either*
-  an unknown type *or that the call failed*. Clear the last error before calling and read it after;
-  otherwise an invalid handle reads as a benign "unknown" and is waved through. Do not read a successful
-  `FILE_TYPE_UNKNOWN` as exotic: the reduction to three buckets has no answer for some device classes, so
-  it is a real response rather than a near-failure.
+  **Mark the last two for what they are.** The transfer requirement is the `RS-P-8` narrowing this log
+  earns by constraining its input -- it is checkable, and the log already compares transferred against
+  requested, so a mismatch is a contract violation to report loudly rather than a case to absorb. The
+  durability requirement is **a warranty the caller gives**, not a property this code can verify;
+  say so in those words, because a contract that merely sounds confident about it is how a silent
+  failure gets built on.
 
-  **`FILE_TYPE_DISK` is a type gate, not a durability gate, and the difference is the whole point.** The
-  documented table gives three buckets and does **not** enumerate which device classes land in each, so
-  `FILE_TYPE_DISK` must not be read as "a fixed local volume" -- only as "not a pipe, socket, or
-  character device". It is necessary and nowhere near sufficient.
-
-  **An earlier revision of this item asserted that an SMB file reports `FILE_TYPE_DISK`. That was
-  recollection, not a citation, and it is withdrawn** -- exactly the failure `M26.8` corrected. Nothing
-  public says how a network path classifies, and `GetDriveType`'s own page notes "SMB does not support
-  volume management functions", so treat the question as open and answer it by probing rather than by
-  assuming.
-
-  **So the distinctions the claim actually turns on need a second, explicit probe.** `GetDriveType`
-  separates them by name: `DRIVE_FIXED` (3), `DRIVE_REMOTE` (4), `DRIVE_CDROM` (5), `DRIVE_RAMDISK` (6),
-  `DRIVE_REMOVABLE` (2). Reaching it from a handle costs a round trip --
-  `GetFinalPathNameByHandleW` -> `GetVolumePathNameW` -> `GetDriveTypeW` -- so weigh that against the
-  handle-based `GetFileInformationByHandleEx(FileRemoteProtocolInfo)`, which answers only the remote
-  question but answers it without touching paths. `DRIVE_RAMDISK` is the one that should be uncontroversial
-  to refuse: durability over a RAM disk is not a weaker guarantee, it is no guarantee.
-
-  **And none of these establish that a flush reaches stable media.** That is write-cache state
-  (`IOCTL_STORAGE_QUERY_PROPERTY`), a property of the device rather than of the handle, so every check
-  above can pass while the durability claim remains unbacked. Whether to probe it is part of this item's
-  decision, not a given -- but the contract must not imply it has been checked when it has not.
-
-  **Take the second check only because it pays for itself.**
-  `GetFileInformationByHandleEx(FileStorageInfo)` yields logical and physical sector size, which the
-  appender already needs for `FILE_FLAG_NO_BUFFERING` alignment, and succeeds only on a volume-backed
-  handle. It replaces an assumption rather than adding a gate.
-
-  **Prefer the build rung to a runtime check.** `RawHandle` is currently threaded through `Appender`,
-  [commit.rs](examples/epoch_log/commit.rs), `Placement::decide` and [strategy.rs](examples/epoch_log/strategy.rs),
-  so every interior signature can represent a socket. A newtype with exactly two constructors -- the log's
-  own opener, and a checked `try_new` running the above -- makes that unrepresentable and runs the check
-  once at the boundary instead of at each use. Detectable is the weaker form of impossible.
-
-  **The check does not replace reading the count.** After narrowing, still compare transferred against
-  requested; what changes is that a mismatch becomes a loud error at write time rather than silent
-  corruption discovered at replay.
-
-  **A guard is part of this, not a follow-up.** A constraint that is only documented is enforced by
-  whoever remembers it. Verify the rejection by sabotage, and check both directions: that an
-  unacceptable handle is refused, and that the acceptable one is not. Both sides are reachable on an
-  ordinary developer machine -- a named pipe and a console handle for the reject side, a temp file for
-  the accept side -- so there is no excuse for leaving either untraversed.
+  **Guard what is guardable, and do not pretend about the rest.** The transferred-against-requested
+  comparison is a real assertion and gets a sabotage case: suppress the comparison and the suite must go
+  red. There is no guard for the durability warranty, and the item is complete with that stated rather
+  than papered over. If the contract carries runnable examples they are compiled as doctests, per the
+  repository's rule that prose containing code must compile.
 
 ## M27 -- What this crate owes the topology planner
 
