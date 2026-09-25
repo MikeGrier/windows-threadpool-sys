@@ -18,13 +18,64 @@ and `completions_queued_before_handover_are_still_delivered` in
 Occasionally the completion does not arrive inside that bound and the test panics with `Timeout`.
 
 **Measured rather than estimated**, because the rate is the whole point: **1 failure in 80
-consecutive runs** of the compiled test binary. Not reproducible on demand -- it survived every
-targeted attempt to provoke it. Zero failures in each of: the binary alone (22 runs across two
-samples); the binary run immediately after one and after three runs of the 2048-plan property suite
-(24 runs); the same after one and after three runs of the 2048-seed calibration, which is roughly
-18,000 ring create/close cycles (24 runs); and the binary run under a concurrent `cargo build` loop
-saturating the machine (15 runs). So it is neither ring-resource pressure nor CPU load, and the
-cause is **not known**.
+consecutive runs** of the compiled test binary when first found. It resisted every targeted attempt
+to provoke it at that stage -- zero failures after roughly 18,000 ring create/close cycles, after
+repeated property-suite and calibration runs, and under a concurrent `cargo build` saturating the
+machine -- so it was neither ring-resource pressure nor CPU load. The narrowing below found what it
+actually needs.
+
+## Narrowed 2026-09-25: it requires parallel test execution, and a co-running create-and-drop
+
+The instrumentation described further down paid for itself immediately. One captured occurrence plus
+four follow-up experiments moved this from "cause unknown" to a minimal reproducer. Every figure
+here comes from running the compiled `event_delivery` binary directly.
+
+**It does not happen serially.** With `--test-threads 1`: **0 failures in 1000 runs**. In parallel:
+**7 in 1000**. At the parallel rate a thousand serial runs would expect about seven, so zero is
+evidence rather than a quiet stretch.
+
+**Every occurrence is identical**, across all seven captures:
+
+- **both** delivery tests fail in the same process, never just one;
+- `callbacks run: 0` -- the pool never invoked the callback, not once, for either ring;
+- `delivered: 0 of 8` and `outstanding: 8` -- nothing was ever popped;
+- the post-mortem finds nothing after a further ten seconds.
+
+So it is **not** a slow device and **not** a single lost wakeup. No callback runs at all, for both
+rings, from the start, and the delivery never arrives.
+
+**The two delivery tests alone do not cause it**: 0 failures in 1000 runs with a filter selecting
+only those two. A third test has to be running. Adding them one at a time, 600 runs each:
+
+| Co-running test | Failures in 600 |
+|---|---|
+| `dropping_with_nothing_outstanding_does_not_hang` | 5 |
+| `new_succeeds_and_the_ring_stays_reachable_for_pushes` | 2 |
+| `teardown_with_operations_in_flight_neither_hangs_nor_closes_the_ring_early` | 0 |
+
+The two that trigger it both create an `EventDelivery` over a ring with **nothing outstanding** and
+drop it promptly; the one that does not is the one holding operations in flight. That is a
+correlation across three tests, not a mechanism, and it is recorded as such.
+
+**Reproducer**, about half a minute:
+
+```powershell
+$ed = 'target\debug\deps\event_delivery-<hash>.exe'   # the build with 6 tests; check with --list
+$fail = 0
+for ($i=1; $i -le 600; $i++) {
+  & $ed completions_ dropping_with 2>&1 | Out-Null
+  if ($LASTEXITCODE -ne 0) { $fail++ }
+}
+"$fail failures of 600"
+```
+
+**Where this goes next, and why it left this crate.** Both delivery tests pass `env: None` to
+`EventDelivery::new`, so both register their wait on the **default process threadpool** through
+[`windows_threadpool_sys::wait::ThreadpoolWait`](../windows-threadpool-sys/src/wait.rs). The failure
+is that one object's lifecycle appears to stop *other, unrelated* armed waits from ever firing,
+which nothing in `windows-ioring-sys` explains on its own. That crate's `Drop` was read and only
+touches its own object, so the mechanism is **not yet established** -- and this record stops there
+rather than guessing past it.
 
 **Why it is worth recording despite being rare.** The sabotage harness runs the whole suite once per
 case, and the manifest currently holds 41 cases. At the measured rate that is about a **40% chance

@@ -304,18 +304,22 @@ reviewable artifact rather than a recording.
   **What has already been ruled out, so it is not re-tried:** ring-resource pressure (zero failures
   after roughly 18,000 ring create/close cycles), the widened seeded sweeps (zero after repeated
   property-suite and calibration runs), and CPU starvation (zero under a concurrent `cargo build`
-  saturating the machine). The cause is genuinely unknown, which is why this is an investigation
-  rather than a one-line timeout bump -- raising the five-second bound would hide it, and the
-  question worth answering is whether a real consumer's completion can be delayed this way.
+  saturating the machine).
 
-  **The next occurrence will say much more than the last one did.** Both tests now print a stall
-  report -- delivered count, pool-callback count, the ring's outstanding count, arrival gaps, and a
-  post-mortem saying whether the delivery arrived late or never came -- into stderr and the panic
-  message, so it lands in `cargo test`'s captured output and in the sabotage harness's per-case
-  transcript. [UNRESOLVED-TEST-FAILURES.md](UNRESOLVED-TEST-FAILURES.md) describes each field and
-  what it distinguishes. **Read one real occurrence before theorising further**: the counters were
-  chosen to separate hypotheses that the previous bare `Timeout` could not, and a single captured
-  instance may settle it.
+  **Narrowed 2026-09-25 to a minimal reproducer, and the investigation now leaves this crate.**
+  Measured: 0 failures in 1000 serial runs against 7 in 1000 parallel; every occurrence identical,
+  with **both** delivery tests failing together and `callbacks run: 0` -- the pool never invokes the
+  callback at all, for either ring, and nothing arrives ten seconds later. The two delivery tests
+  alone do not reproduce it (0 in 1000); a third test has to be co-running, and the two that trigger
+  it both create an `EventDelivery` over a ring with nothing outstanding and drop it promptly.
+  Full figures, the reproducer, and what remains unestablished are in
+  [UNRESOLVED-TEST-FAILURES.md](UNRESOLVED-TEST-FAILURES.md).
+
+  **The next step is in [`windows-threadpool-sys`](../windows-threadpool-sys/src/wait.rs)**, not
+  here: both waits are registered on the default process threadpool, and one object's lifecycle
+  appears to stop other, unrelated armed waits from ever firing. Per the repository's mono-repo bug
+  policy, the fix belongs in that layer. `ThreadpoolWait`'s `Drop` has been read and only touches
+  its own object, so the mechanism is **not yet established** -- do not start from a guess about it.
 
   **A cheaper interim mitigation exists and is a separate decision:** the harness could treat a
   failure in these two tests as *inconclusive* rather than as `caught`, which would stop the false
