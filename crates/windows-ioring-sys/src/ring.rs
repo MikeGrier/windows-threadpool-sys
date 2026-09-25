@@ -11,7 +11,6 @@ use windows_sys::Win32::Storage::FileSystem::{
     IORING_CREATE_ADVISORY_FLAGS_NONE, IORING_CREATE_FLAGS, IORING_CREATE_REQUIRED_FLAGS_NONE,
     IORING_INFO, IORING_OP_CANCEL, IORING_OP_CODE, IORING_OP_FLUSH, IORING_OP_NOP, IORING_OP_READ,
     IORING_OP_REGISTER_BUFFERS, IORING_OP_REGISTER_FILES, IORING_OP_WRITE, IsIoRingOpSupported,
-    SetIoRingCompletionEvent,
 };
 use windows_sys::Win32::System::Threading::{CreateEventW, SetEvent};
 
@@ -681,7 +680,7 @@ impl IoRing {
 
         // SAFETY: `self.handle` is a live ring; `event` is a live event that
         // this ring will own for the rest of its life once stored below.
-        let hr = unsafe { SetIoRingCompletionEvent(self.handle, event.as_raw_handle()) };
+        let hr = unsafe { crate::sys::set_completion_event(self.handle, event.as_raw_handle()) };
         // On failure `event` drops here, closing a handle the ring never
         // successfully referenced.
         check(hr)?;

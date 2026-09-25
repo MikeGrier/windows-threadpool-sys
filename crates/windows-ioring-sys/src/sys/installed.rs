@@ -178,6 +178,23 @@ pub trait Responses {
         // SAFETY: as `submit`.
         unsafe { real::BuildIoRingRegisterBuffers(ring, count, buffers, user_data) }
     }
+
+    /// `SetIoRingCompletionEvent`.
+    ///
+    /// Behind the seam because it is how a completion becomes *observable*,
+    /// which is what [RS-P-6](../RESPONSE-SPACE.md) is a clause about -- not
+    /// because it is lifecycle. An implementation that answers this call
+    /// takes on the obligation to signal, since a ring whose completions are
+    /// answered here and whose event is never set leaves every waiter parked.
+    ///
+    /// # Safety
+    ///
+    /// As `SetIoRingCompletionEvent`. An implementation that keeps `event`
+    /// must not outlive the ring that owns it.
+    unsafe fn set_completion_event(&mut self, ring: *mut c_void, event: *mut c_void) -> HRESULT {
+        // SAFETY: as `submit`.
+        unsafe { real::SetIoRingCompletionEvent(ring, event) }
+    }
 }
 
 thread_local! {

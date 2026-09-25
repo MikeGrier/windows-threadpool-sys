@@ -364,6 +364,122 @@
       ]
     },
     {
+      "name": "M26.3: the resolver stops enforcing RS-C-4's drain half",
+      "file": "src/sys/resolver.rs",
+      "expect": "caught",
+      "why": "RS-C-4 is the one place RESPONSE-SPACE.md is narrower than 'anything may happen', and it is the clause this crate's entire durability story rests on. A resolver that quietly dropped it would be WIDER than the specification -- which reads like rigour, so a reviewer is unlikely to object -- and every consumer written against it would be hardened for a platform that cannot exist while the real guarantee went untested. The guard is that a barrier is eligible only as the oldest unresolved operation; this patch makes every operation eligible always.",
+      "testArgs": ["test", "-p", "windows-ioring-sys", "--locked", "--all-features"],
+      "find": [
+          "            .filter(|&i| i == 0 || !self.pool[i].barrier)"
+      ],
+      "replace": [
+          "            .filter(|&_i| true)"
+      ]
+    },
+    {
+      "name": "M26.3: the resolver stops honouring RS-C-2's operation identity",
+      "file": "src/sys/resolver.rs",
+      "expect": "caught",
+      "why": "RS-C-2 says a completion carries back exactly the user data its operation was built with, and D-4 records that this crate's whole accounting model rests on it. A resolver that returned a plausible-but-wrong identity -- here, the value one operation later -- would still conserve completions, still satisfy every count, and still pass any test that only asks how many arrived. The guard is that the identity is echoed rather than computed.",
+      "testArgs": ["test", "-p", "windows-ioring-sys", "--locked", "--all-features"],
+      "find": [
+          "                UserData: user_data,"
+      ],
+      "replace": [
+          "                UserData: user_data.wrapping_add(1),"
+      ]
+    },
+    {
+      "name": "M26.3: the resolver lets an unsubmitted operation complete (RS-C-3)",
+      "file": "src/sys/resolver.rs",
+      "expect": "caught",
+      "why": "RS-C-3 is implemented by exactly one thing -- only the submitted pool is ever eligible to post -- so it is the constraint most easily lost to an edit that looks like a simplification. A resolver that posted from the staging area would make the Build*/Submit boundary meaningless, which is the reason the clause exists at all. This patch resolves the staged operations on a pop, before any submit has carried them.",
+      "testArgs": ["test", "-p", "windows-ioring-sys", "--locked", "--all-features"],
+      "find": [
+          "        if self.posted.is_empty() {",
+          "            // Starvation rescue only: no coins. See the module's note on the",
+          "            // two clocks -- flipping here would make `RS-P-1`'s pending case",
+          "            // unobservable to a polling consumer.",
+          "            self.tick(false);"
+      ],
+      "replace": [
+          "        if self.posted.is_empty() {",
+          "            self.pool.append(&mut self.staged);",
+          "            self.tick(false);"
+      ]
+    },
+    {
+      "name": "M26.3: the resolver permits RS-P-2 but never exercises it",
+      "file": "src/sys/resolver.rs",
+      "expect": "caught",
+      "why": "The failure this whole file is built to avoid, and the one a green suite hides best: a permission that is configurable, documented, cited, and never taken. Such a resolver passes every test written against what it MAY do, and the defect class RS-P-2 exists for -- D-47's, where operations queued after a drained flush completed before it -- goes unswept. The guard is a test asserting that reordering actually HAPPENED across a majority of seeds, not merely that it was allowed.",
+      "testArgs": ["test", "-p", "windows-ioring-sys", "--locked", "--all-features"],
+      "find": [
+          "            let draw = self.next() % eligible.len() as u64;",
+          "            eligible[usize::try_from(draw).expect(\"a modulus of a usize length fits a usize\")]"
+      ],
+      "replace": [
+          "            let _ = self.next();",
+          "            eligible[0]"
+      ]
+    },
+    {
+      "name": "M26.3: the completion signal becomes level- rather than edge-triggered (RS-P-6)",
+      "file": "src/sys/resolver.rs",
+      "expect": "caught",
+      "why": "RS-P-6 carries no over-provision: it IS D-19's measurement, that the completion event fires on the empty-to-non-empty edge. Signalling every post is strictly more generous, so no consumer would fail against it -- which is exactly why it must be caught here. A resolver that over-signalled would let a consumer depend on one wakeup per completion, and D-21's auto-reset, one-waiter-per-ring design was drawn from the opposite fact.",
+      "testArgs": ["test", "-p", "windows-ioring-sys", "--locked", "--all-features"],
+      "find": [
+          "        if !self.event.is_null() && (was_empty || !self.config.edge_triggered_signal) {"
+      ],
+      "replace": [
+          "        if !self.event.is_null() {"
+      ]
+    },
+    {
+      "name": "M26.3: the barrier-hold counter stops counting",
+      "file": "src/sys/resolver.rs",
+      "expect": "caught",
+      "why": "Sabotaging the CLAIM rather than the symptom. RS-C-4's test could pass vacuously -- a barrier with nothing in front of it satisfies the constraint trivially -- so there is a second test asserting the constraint actually BIT, and it reads this counter. A counter that silently stopped incrementing would turn that guard into a tautology while leaving the reassuring test name in place. This is the instrument-checking-the-instrument case the sabotage harness exists for.",
+      "testArgs": ["test", "-p", "windows-ioring-sys", "--locked", "--all-features"],
+      "find": [
+          "        if held > 0 {",
+          "            self.record(|s| s.barrier_holds += 1);",
+          "        }"
+      ],
+      "replace": [
+          "        let _ = held;"
+      ]
+    },
+    {
+      "name": "M26.3: set_completion_event is forwarded to the kernel instead of captured",
+      "file": "src/sys/resolver.rs",
+      "expect": "caught",
+      "why": "M26.3 moved this call behind the seam specifically so RS-P-6 could be implemented; before that the resolver had no event to signal and every EventDelivery consumer would have parked forever. A version that forwards to the real ring restores exactly that state, and does it in the most plausible-looking way available -- forwarding is what every other default method does. The failure it produces is a hang rather than an assertion, which is why the guard counts signals rather than waiting for one.",
+      "testArgs": ["test", "-p", "windows-ioring-sys", "--locked", "--all-features"],
+      "find": [
+          "        self.event = event;",
+          "        S_OK"
+      ],
+      "replace": [
+          "        let _ = event;",
+          "        S_OK"
+      ]
+    },
+    {
+      "name": "DECLARED BLIND SPOT: the resolver's failure-code draw narrows to one facility",
+      "file": "src/sys/resolver.rs",
+      "expect": "survives",
+      "why": "RS-P-3 permits any error code and enumerates none, warning that a consumer must not depend on the set being small. There is a test that the set is not small -- it demands more than sixteen distinct codes across 256 seeds -- but it cannot check the codes are DISTRIBUTED sensibly, because the space deliberately specifies no distribution and inventing one here would be the recording the document exists to avoid. Masking to 15 bits instead of 16 halves the range and still clears the threshold, so this survives. It is recorded rather than left invisible: if a later change makes the distribution observable, this case reports the discrepancy.",
+      "testArgs": ["test", "-p", "windows-ioring-sys", "--locked", "--all-features"],
+      "find": [
+          "            let code = self.next() & 0xFFFF;"
+      ],
+      "replace": [
+          "            let code = self.next() & 0x7FFF;"
+      ]
+    },
+    {
       "name": "CONTROL: rewording a statement changes nothing",
       "file": "examples/epoch_log/contract.rs",
       "expect": "survives",

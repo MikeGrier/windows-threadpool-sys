@@ -277,23 +277,7 @@ reviewable artifact rather than a recording.
 
 - [x] **M26.2** -- The eight submission-path `windows-sys` calls are indirect through [sys.rs](src/sys.rs), answerable by a thread-local responder behind the `kernel-seam` feature; the shape is recorded as [D-60](DESIGN-NOTES.md#d-60). -> [completed 2026-09-24](COMPLETED-CHECKLIST.md#m262)
 
-- [ ] **M26.3** -- Build the resolver over the space `M26.1` specifies, seeded the way
-  [generated_sequences.rs](tests/generated_sequences.rs) already is ([D-41](DESIGN-NOTES.md#d-41)):
-  one number replays a whole run, announced with the command to replay it, pinnable from the
-  environment. Keep that file's two-seed discipline in mind -- this adds a third axis, and
-  conflating them would produce a replay that reproduces some of a run and not the rest.
-
-  **Bind to the clause IDs rather than re-stating the space.** Each freedom the resolver exercises
-  cites its `RS-P-n`, and each thing it declines to do cites its `RS-C-n` -- so a reader can check
-  the resolver against the specification mechanically, and a clause that no code cites is visible as
-  unimplemented. [kernel-response-space-probe.rs](design-sessions/kernel-response-space-probe.rs)
-  already has a working `Resolver` over `RS-P-2` alone; start from it rather than from nothing, and
-  note that it is marked throwaway, so promoting it is a decision to make deliberately.
-
-  **The plug point is `M26.2`'s `Responses` trait** in [installed.rs](src/sys/installed.rs): the
-  resolver implements it and is installed for the duration of a test. Note that `M26.2` left the
-  five lifecycle calls direct, so the resolver answers submission and completion only -- if a clause
-  turns out to need `CreateIoRing` or `GetIoRingInfo`, extending the seam is part of this item.
+- [x] **M26.3** -- The resolver is built over the space's clause IDs in [resolver.rs](src/sys/resolver.rs), seeded on its own axis, with permissions configurable and constraints not; recorded as [D-61](DESIGN-NOTES.md#d-61). -> [completed 2026-09-24](COMPLETED-CHECKLIST.md#m263)
 
 - [ ] **M26.4** -- Write the properties that must hold under **every** resolution: conservation (no
   lost, duplicated or unclaimed completion), no hang, `pop_within` honours its bound, `outstanding`
@@ -327,6 +311,32 @@ reviewable artifact rather than a recording.
   that file. For each, decide: restate as this crate's own contract, move to a spike with a rate and
   a date, or delete. **Not yet started, and not yet even sampled** -- the candidate above is a guess,
   and the census must come from a command.
+
+- [ ] **M26.8** -- Decide what [`IoRing::run_down`](src/ring.rs) should do when a submit it makes is
+  **refused**. Found by `M26.3`'s resolver on its first contact with a real ring, and queued rather
+  than fixed there because it is a decision and not a correction.
+
+  **The observation.** Under `RS-P-7` a submit may be declined. `run_down` passes the result through
+  `wait_outcome(hr)?`, which is `Ok` only for an expired wait, so a refusal returns `Err` with
+  `outstanding() > 0` -- and `Drop` then asserts and calls `CloseIoRing` anyway. That is the same
+  shape `M21.6` fixed for `ERROR_TIMEOUT`, reachable again through a different `HRESULT`. Measured:
+  32 seeds pass with `may_fail_submits` off; seed `0x1A` fails at `0x80070008` with it on.
+  [resolver_over_a_real_ring.rs](tests/resolver_over_a_real_ring.rs) pins the current behaviour in
+  `a_declined_submit_reaches_run_down_as_an_error`, so whichever way this is settled, that test is
+  what has to change.
+
+  **Why it is a decision.** `run_down`'s own documentation argues that blocking is the safe failure
+  mode and closing early is not, which says it should keep looping through a refusal. But a
+  permanently failing submit then hangs, and "no hang" is one of the properties `M26.4` writes.
+  The two pull opposite ways and neither is obviously right, so an engineer chooses: keep looping,
+  loop a bounded number of times, or offer the caller a documented recovery route -- today there is
+  none, since the operations stay outstanding and the ring cannot be safely dropped.
+
+  **Note one way this was narrowed and should not stay narrow.** `M26.3`'s resolver declines a
+  submit only when something is staged, which is *narrower* than the space requires -- nothing in
+  [RESPONSE-SPACE.md](RESPONSE-SPACE.md) says a submit carrying no new work cannot fail. Widening it
+  is part of answering this item, because a rundown submit with an empty staging area is exactly the
+  case a real `ERROR_NOT_ENOUGH_MEMORY` would hit.
 
 ## M27 -- What this crate owes the topology planner
 

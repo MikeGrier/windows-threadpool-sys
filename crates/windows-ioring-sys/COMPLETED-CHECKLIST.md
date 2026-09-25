@@ -3288,3 +3288,82 @@ one character per line. `git checkout --` recovered both, and the conversion was
 `[regex]::Replace` anchored on `(?<![\w:])Name\(` so it matched call positions only. This is the
 fifth time in this session that driving a source edit through PowerShell string handling has
 corrupted a file.
+
+## Moved 2026-09-24 21:15:16 -04:00 -- M26.3: the response-space resolver
+
+### <a id="m263"></a>M26.3 -- Build the resolver over the space `M26.1` specifies, bound to its clause IDs and seeded on its own axis. *(completed 2026-09-24 21:15:16 -04:00)*
+
+The shape is recorded as [D-61](DESIGN-NOTES.md#d-61); what follows is what the work found.
+
+**The resolver is in [resolver.rs](src/sys/resolver.rs), implementing `M26.2`'s `Responses`.** It
+answers the eight submission-path calls itself, so operations the kernel never received still flow
+through this crate's ordinary accounting. Every freedom cites the `RS-P-n` permitting it and every
+restriction cites the `RS-C-n` requiring it, which is what lets a reader check the resolver against
+[RESPONSE-SPACE.md](RESPONSE-SPACE.md) mechanically rather than by reading both and hoping.
+
+**The asymmetry is the design.** `ResolverConfig` has a switch per permission and none for any
+constraint. Narrowing a freedom is how a test isolates another -- a test about ordering does not
+want arbitrary operation failures on top -- while a knob relaxing a constraint would let a test
+assert against a platform that cannot exist. The default is the widest point, so a test that does
+not choose gets every freedom and fails loudly under one it did not handle. A test asserts the
+count: seven fields, seven `RS-P-n`, and it reads them off `Debug` so a field added without a clause
+fails there rather than passing unnoticed.
+
+**Where a permission and a constraint collide, the constraint wins, and that had to be decided
+rather than discovered.** `RS-C-4` holds a drain-flagged operation back even on a tick where
+`RS-P-1`'s coin said complete it now; `RS-C-1` forces a post an operation's coin kept deferring.
+Two bounds exist solely to make `RS-C-1` finite -- per-operation deferrals, and consecutive declined
+submits -- and both are properties of the resolver rather than of the space, which carries no rates
+deliberately.
+
+**A submit resolves; a pop only rescues.** The split is not tidiness. A pop that flipped coins would
+resolve a consumer's work on its first `try_pop`, so "the operation pended" -- the thing `RS-P-1`
+exists to let a test observe -- would be unobservable to exactly the consumer most likely to care.
+The freedom would have been implemented and untestable.
+
+**`SetIoRingCompletionEvent` moved behind the seam, which `M26.2` had left it outside of.** It looks
+like lifecycle and is not: it is how a completion becomes *observable*, so `RS-P-6` is a clause
+about that call. A resolver unable to make it would not satisfy `RS-P-6` vacuously -- it would never
+signal at all, parking every [`EventDelivery`](src/event_delivery.rs) consumer rather than testing
+one. The checklist item had authorised exactly this ("if a clause turns out to need ... extending
+the seam is part of this item"), and this is the clause that needed it.
+
+**`RS-C-4` is decided by position, and the invariant that makes that sound is now asserted.** The
+pool is held in build order, so the set queued before `pool[i]` is exactly `pool[..i]` and a barrier
+is eligible only as the oldest unresolved operation. That reduction is the whole of the constraint's
+implementation and it holds only while the pool stays sorted -- an edit that sorted or reshuffled it
+would relax `RS-C-4` to nothing while every line around it still read as though it applied. A
+`debug_assert!` now says so at the point of use, rather than a comment saying so nearby.
+
+**The first contact with a real ring found a live defect, queued as `M26.8` rather than fixed
+here.** A submit declined under `RS-P-7` propagates out of `IoRing::run_down` as an error with
+`outstanding() > 0`, after which `Drop` asserts and calls `CloseIoRing` anyway -- `M21.6`'s hazard,
+reachable again through a different `HRESULT`. Measured by narrowing one permission at a time: 32
+seeds pass with `may_fail_submits` off, seed `0x1A` fails at `0x80070008` with it on. It is queued
+rather than corrected because `run_down`'s own documentation argues that blocking is the safe
+failure mode while "no hang" is one of the properties `M26.4` is about to write, and the two pull
+opposite ways -- a decision, not a correction. The narrowing is declared in the test that takes it,
+and the current behaviour is pinned by its own test so that whichever way `M26.8` is settled, a test
+has to change.
+
+**The integration test is where it is for the gate's own reason.** `check-ring-tests.ps1` asks
+whether a test needs the kernel or only a ring-shaped thing; a resolver test needs a real ring
+because [D-60](DESIGN-NOTES.md#d-60) deliberately left lifecycle real, which makes it an
+operating-system boundary and therefore `tests/`. The ring-opening lib population is unchanged at
+41.
+
+**Sabotage found a defect in the tests, which is what it is for.** `RS-C-3`'s case survived: the
+test asserted that nothing pops *right now*, which a resolver that had wrongly made staged
+operations eligible also satisfies, because the starvation rescue posts only what has run out of
+deferrals and a fresh operation has not. The test now polls past the bound and asserts the counters,
+so it checks the claim -- unsubmitted work is never eligible -- rather than the symptom. Eight cases
+added, one of them a declared blind spot; the full sweep is 36-of-36 as declared with both blind
+spots and the `CONTROL` surviving.
+
+**The harness caught stale patches a sixth time, and the cause was new.** Four cases reported
+`pattern found 0 times` while every line of each pattern was present individually. The cause is that
+the built-in file-creation tool writes **CRLF** on Windows, so the multi-line patterns could not
+match a file whose line endings were not LF -- and single-line patterns matched fine, which is why
+three of the eight cases passed and hid it. The repository's own instructions warn about this tool;
+`M26.2`'s files escaped it only because git normalised them on commit before that sweep ran. The
+three new files were converted to LF before proceeding.

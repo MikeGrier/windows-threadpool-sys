@@ -27,14 +27,22 @@
 //! `M26.1`'s [RESPONSE-SPACE.md](../RESPONSE-SPACE.md) describes.
 //!
 //! Not behind it: `CreateIoRing`, `CloseIoRing`, `GetIoRingInfo`,
-//! `IsIoRingOpSupported`, `SetIoRingCompletionEvent`. Those decide whether a
-//! ring *exists* and what it supports, not how it responds, and a resolver
-//! that replaced them would be a fake ring rather than a resolver over
-//! responses. **`M26` does not justify itself on hermeticity** -- the
-//! milestone says so in as many words, because `M24` reached a hermetic lib
-//! suite without it -- so a resolver runs against a real ring whose operations
-//! it answers for. Leaving lifecycle real is what keeps this a seam under the
-//! responses rather than a mock of the ring.
+//! `IsIoRingOpSupported`. Those decide whether a ring *exists* and what it
+//! supports, not how it responds, and a resolver that replaced them would be
+//! a fake ring rather than a resolver over responses. **`M26` does not
+//! justify itself on hermeticity** -- the milestone says so in as many words,
+//! because `M24` reached a hermetic lib suite without it -- so a resolver runs
+//! against a real ring whose operations it answers for. Leaving lifecycle real
+//! is what keeps this a seam under the responses rather than a mock of the
+//! ring.
+//!
+//! `SetIoRingCompletionEvent` was moved behind the seam by `M26.3`, and the
+//! reason is worth stating because it looks like lifecycle. It is how a
+//! completion becomes *observable* to a waiter, so
+//! [RS-P-6](../RESPONSE-SPACE.md) -- a completion posted behind another need
+//! produce no signal -- is a clause about this call. A resolver that could not
+//! make it does not satisfy RS-P-6 vacuously; it never signals at all, which
+//! hangs every [`crate::EventDelivery`] consumer rather than testing one.
 //!
 //! # The trait mirrors the FFI exactly, on purpose
 //!
@@ -51,14 +59,20 @@ use windows_sys::Win32::Storage::FileSystem::{
     BuildIoRingCancelRequest, BuildIoRingFlushFile, BuildIoRingReadFile,
     BuildIoRingRegisterBuffers, BuildIoRingRegisterFileHandles, BuildIoRingWriteFile,
     FILE_FLUSH_MODE, IORING_BUFFER_INFO, IORING_BUFFER_REF, IORING_CQE, IORING_HANDLE_REF,
-    PopIoRingCompletion, SubmitIoRing,
+    PopIoRingCompletion, SetIoRingCompletionEvent, SubmitIoRing,
 };
 use windows_sys::core::HRESULT;
 
 #[cfg(feature = "kernel-seam")]
 mod installed;
 #[cfg(feature = "kernel-seam")]
+mod resolver;
+#[cfg(feature = "kernel-seam")]
 pub use installed::{Installed, Responses, install};
+#[cfg(feature = "kernel-seam")]
+pub use resolver::{
+    Resolver, ResolverConfig, ResolverStats, ResolverWatch, SEED_VAR as RESOLVER_SEED_VAR,
+};
 
 /// Dispatch to an installed [`Responses`], or fall through to the real call.
 ///
@@ -229,6 +243,19 @@ pub(crate) unsafe fn build_register_buffers(
     )
 }
 
+/// `SetIoRingCompletionEvent`.
+///
+/// # Safety
+///
+/// `ring` must be a live ring and `event` a live event handle the ring will
+/// own for the rest of its life.
+#[inline(always)]
+pub(crate) unsafe fn set_completion_event(ring: *mut c_void, event: *mut c_void) -> HRESULT {
+    through_seam!(
+        set_completion_event(ring, event) else SetIoRingCompletionEvent(ring, event)
+    )
+}
+
 /// Re-exported for [`Responses`]' default methods, which forward to the real
 /// calls so an implementation overrides only what it varies.
 #[cfg(feature = "kernel-seam")]
@@ -236,6 +263,6 @@ pub(crate) mod real {
     pub(crate) use windows_sys::Win32::Storage::FileSystem::{
         BuildIoRingCancelRequest, BuildIoRingFlushFile, BuildIoRingReadFile,
         BuildIoRingRegisterBuffers, BuildIoRingRegisterFileHandles, BuildIoRingWriteFile,
-        PopIoRingCompletion, SubmitIoRing,
+        PopIoRingCompletion, SetIoRingCompletionEvent, SubmitIoRing,
     };
 }
