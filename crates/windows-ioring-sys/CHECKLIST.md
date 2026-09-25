@@ -281,12 +281,7 @@ reviewable artifact rather than a recording.
 
 - [x] **M26.4** -- The five properties are stated in [properties_under_every_resolution.rs](tests/properties_under_every_resolution.rs), with [`RingContract`](src/contract.rs) asked for the conservation verdict rather than copied; recorded as [D-62](DESIGN-NOTES.md#d-62). -> [completed 2026-09-24](COMPLETED-CHECKLIST.md#m264)
 
-- [ ] **M26.5** -- **Calibrate it, or it is not evidence.** Re-inject the two historical defects and
-  confirm the resolver turns red: [D-47](DESIGN-NOTES.md#d-47)'s assumption that a covering flush
-  holds back subsequent operations, and `M21.6`'s treatment of an expired wait as a failure. The
-  session argued both by analogy from a demonstration and **deliberately did not claim them as
-  measured**. `D-41`'s corollary is the rule: a green result from an instrument nobody has shown
-  can go red is not evidence. This session produced two apparatus failures of exactly that kind.
+- [x] **M26.5** -- Both historical defects are re-injected and confirmed to turn the instrument red in [calibration.rs](tests/calibration.rs) and [sabotage.json](sabotage.json); recorded as [D-63](DESIGN-NOTES.md#d-63). -> [completed 2026-09-24](COMPLETED-CHECKLIST.md#m265)
 
 - [ ] **M26.6** -- Point the kernel tests at their new job: confirming that reality stays **inside**
   the declared space, rather than re-checking behaviour the resolver already sweeps. A real kernel

@@ -3441,3 +3441,55 @@ that case's reasoning, and the removal is recorded here because "sabotage a chec
 and empty move worth recognising next time. Three cases added, all scoped to this test target on
 purpose -- these mutations are caught by many tests in the crate, and "something went red" would not
 have shown that *these* properties are the ones watching. Full sweep 39-of-39 as declared.
+
+## Moved 2026-09-24 22:13:02 -04:00 -- M26.5: calibrating the resolver
+
+### <a id="m265"></a>M26.5 -- Re-inject the two historical defects and confirm the resolver turns red. *(completed 2026-09-24 22:13:02 -04:00)*
+
+The shape is recorded as [D-63](DESIGN-NOTES.md#d-63); what follows is what the work found.
+
+**The two defects are calibrated differently because they live in different places**, and noticing
+that was most of the item. `M21.6`'s -- an expired wait reported as a failure -- was in this crate,
+so re-injecting it means mutating the crate, which a test cannot do; it is a case in
+[sabotage.json](sabotage.json). [D-47](DESIGN-NOTES.md#d-47)'s -- a consumer believing a covering
+flush holds back what follows -- is in a **consumer**, so there is nothing here to mutate and the
+defective consumer had to be written out. It is, in
+[calibration.rs](tests/calibration.rs), as a `HoldBackBeliever` that records when its assumption
+fails; the test asserts that the resolver breaks it.
+
+**What the calibration file adds on the `M21.6` side is the precondition, not the detection.** A
+sabotage of code the suite never executes is caught for some unrelated reason or not at all, and
+either way measures nothing -- so there is a test asserting that `RS-P-4` actually reaches
+`pop_within`, read off the resolver's own counter rather than inferred from a timing, because "the
+call took a while" is not evidence that a wait expired.
+
+**Both directions were verified by execution before being written into the manifest.** Reverting
+`wait_outcome`'s `WAIT_EXPIRED` arm fails the calibration naming the seed and `0x800705B4`. Making
+the resolver enforce the hold-back fails it with "no seed of 64 broke a consumer that assumes a
+covering flush holds back what follows it".
+
+**The second of those runs the opposite way to every other sabotage in this crate**, and the
+manifest says so: it does not break the code, it makes the **instrument** go narrow. That is the
+`M17.4` failure mode -- a suite sampling the right state while being insensitive to the defect
+living in it -- and nothing detects it except a test that demands the sensitivity.
+
+**The two suites' sensitivities were measured and are not equivalent.** `M21.6`'s defect is caught
+by the calibration *and* by `M26.4`'s property suite; the latter only because that suite
+distinguishes a declined submit from a genuine error, so the detection is deliberate rather than
+lucky. A narrowed resolver is caught by the calibration **alone**, and the property suite correctly
+stays green -- a narrower resolution is still a valid one and conservation holds under it. That
+measured gap is the argument for a calibration file rather than a calibration assertion bolted onto
+the property suite, and it is an argument from data rather than from taste.
+
+**The D-47 calibration breaks its believer on every seed, which needs saying rather than
+celebrating.** `D-47` measured the overtake on real hardware at well under one trial in a hundred;
+the resolver does it constantly. That is not the resolver being unfaithful:
+[RESPONSE-SPACE.md](RESPONSE-SPACE.md) carries no rates deliberately, because a resolver
+reproducing an observed frequency would be a model of Windows and therefore the trap
+[D-52](DESIGN-NOTES.md#d-52) was opened to escape. A defect class that is rare on hardware is
+precisely the one a rate-free resolver earns its keep on. The figures are printed by the tests so a
+reader can judge the instrument's strength rather than take "more than none" on trust.
+
+**Seeds here are fixed rather than clock-derived**, unlike the generated suites. A calibration that
+could sometimes fail to demonstrate its own sensitivity would be the exact failure it exists to
+prevent, arriving as a flake.

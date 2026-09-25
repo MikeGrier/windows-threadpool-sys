@@ -522,6 +522,37 @@
       ]
     },
     {
+      "name": "M26.5: M21.6's defect re-injected -- an expired wait is a failure again",
+      "file": "src/ring.rs",
+      "expect": "caught",
+      "why": "The historical defect this crate actually shipped, restored. Until M21.6, wait_outcome passed WAIT_EXPIRED to check() like any other HRESULT, so pop_within returned Err on every ordinary timeout and run_down treated any operation slower than its poll as fatal -- which M21.6's own doc comment records as the shape that made run_down return with the operation still outstanding, after which Drop asserted and closed the ring anyway. This is one half of M26.5's calibration and it is the half that matters most, because a resolver nobody has shown can go red on a real defect is not evidence. Measured: the calibration fails naming the seed and 0x800705B4. Scoped to the calibration target so 'caught' means THAT suite caught it, not the several others that would also notice.",
+      "testArgs": ["test", "-p", "windows-ioring-sys", "--locked", "--all-features", "--test", "calibration"],
+      "find": [
+          "fn wait_outcome(hr: windows_sys::core::HRESULT) -> io::Result<()> {",
+          "    if hr == WAIT_EXPIRED {",
+          "        return Ok(());",
+          "    }",
+          "    check(hr)"
+      ],
+      "replace": [
+          "fn wait_outcome(hr: windows_sys::core::HRESULT) -> io::Result<()> {",
+          "    check(hr)"
+      ]
+    },
+    {
+      "name": "M26.5: the resolver enforces the hold-back D-47 withdrew",
+      "file": "src/sys/resolver.rs",
+      "expect": "caught",
+      "why": "The other half of M26.5's calibration, and it runs the opposite way to every other case here: it does not break the crate, it makes the INSTRUMENT go narrow. D-24 claimed a covering flush holds back what follows and D-47 withdrew that over roughly 4,500 trials, so a resolver that enforced both halves of the barrier would be narrower than the space and would report green on exactly the defect class the one-sidedness exists to expose. That is the M17.4 failure mode -- a suite sampling the right state while being insensitive to the defect living in it -- and nothing detects it except a test that demands the sensitivity. Measured: the calibration fails with 'no seed of 64 broke a consumer that assumes a covering flush holds back what follows it'. Note this patches the same line as M26.3's RS-C-4 case but in the opposite direction: that one removes the constraint, this one over-applies it.",
+      "testArgs": ["test", "-p", "windows-ioring-sys", "--locked", "--all-features", "--test", "calibration"],
+      "find": [
+          "            .filter(|&i| i == 0 || !self.pool[i].barrier)"
+      ],
+      "replace": [
+          "            .filter(|&i| i == 0 || !self.pool[..=i].iter().any(|op| op.barrier))"
+      ]
+    },
+    {
       "name": "CONTROL: rewording a statement changes nothing",
       "file": "examples/epoch_log/contract.rs",
       "expect": "survives",
