@@ -143,6 +143,12 @@ pub mod io;
 pub mod pool;
 #[cfg(windows)]
 pub mod timer;
+
+/// A trace for defects that only appear under concurrency, compiled out
+/// unless the `trace` feature is on and narrowed by environment variable when
+/// it is. See the module documentation for why an `eprintln!` is the wrong
+/// instrument for that class of problem.
+pub mod trace;
 #[cfg(windows)]
 pub mod wait;
 #[cfg(windows)]

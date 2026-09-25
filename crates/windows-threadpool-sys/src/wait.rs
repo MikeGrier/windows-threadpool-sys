@@ -345,6 +345,7 @@ impl WaitContext {
         let mut suppressed = self.suppression();
         *suppressed = suppressed.saturating_add(1);
         let wait = self.wait.load(Ordering::Acquire);
+        crate::trace_record!("wait", "suppress-and-disarm", wait, *suppressed);
         if wait != 0 {
             // SAFETY: `wait` is this object's live PTP_WAIT, published before any
             // callback could run and valid until Drop closes it.
@@ -524,6 +525,7 @@ unsafe fn arm_raw(wait: PTP_WAIT, handle: HANDLE, timeout: Option<Duration>) {
         // SAFETY: forwarded; a null timeout means "wait indefinitely".
         None => unsafe { SetThreadpoolWait(wait, handle, ptr::null()) },
     }
+    crate::trace_record!("wait", "armed", wait, handle as usize);
 }
 
 /// Trampoline from the raw `PTP_WAIT_CALLBACK` ABI into the boxed closure.
@@ -537,6 +539,7 @@ unsafe extern "system" fn wait_trampoline(
     _wait: PTP_WAIT,
     wait_result: u32,
 ) {
+    crate::trace_record!("wait", "trampoline-entered", _wait, wait_result);
     // SAFETY: context is a valid *mut WaitContext for the full callback duration.
     let ctx = unsafe { &*(context as *const WaitContext) };
     let activation = WaitActivation {
@@ -688,6 +691,7 @@ impl ThreadpoolWait {
         // so no callback can observe the unpublished value.
         // SAFETY: context is live and exclusively ours until the first arming.
         unsafe { (*context).wait.store(wait, Ordering::Release) };
+        crate::trace_record!("wait", "created", wait, target.raw() as usize);
 
         Ok(Self {
             wait,
@@ -847,10 +851,12 @@ impl Drop for ThreadpoolWait {
         let ctx = unsafe { &*self.context };
         // Raised and never released: unlike `stop_and_drain`, there is no
         // afterwards for this object.
+        crate::trace_record!("wait", "drop-begin", self.wait);
         ctx.suppress_and_disarm();
         // The lock is released before draining: a callback blocked on it would
         // otherwise never finish, and this wait would never return.
         self.cancel_pending();
+        crate::trace_record!("wait", "drop-drained", self.wait);
 
         // SAFETY: no callback can be queued or executing, so the object can be
         // closed and the context freed exactly once. `target` is dropped after
@@ -861,6 +867,7 @@ impl Drop for ThreadpoolWait {
             CloseThreadpoolWait(self.wait);
             drop(Box::from_raw(self.context));
         }
+        crate::trace_record!("wait", "drop-closed", self.wait);
     }
 }
 
