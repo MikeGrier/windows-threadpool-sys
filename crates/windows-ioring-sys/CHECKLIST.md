@@ -505,17 +505,36 @@ every consumer names the type -- which means the migration order matters more th
         crate's `Pending<T, X>`, so retiring that type and answering this question are the same
         piece of work.
 
-        Retire the ten `Token`-returning pushes, `Token` itself, and
+        Retire every `Token`-returning push -- there is now exactly one per `*_owned` form,
+        since `flush_raw_owned` closed the last gap -- along with `Token` itself and
         `Pending<T, X>`; apply [D-74](DESIGN-NOTES.md#d-74) in the same commit -- drop
         `Violation::LeakedToken`, `State::Leaked`, `observe_claim` and
-        `observe_deliberate_leak`, and collapse the two push states. Leaving them would describe
+        `observe_deliberate_leak`, and collapse the two push states.
+
+        **Dropping `observe_claim` reaches past the three unconverted files.** `M28.4.1d.2`
+        left its calls in place in [handover.rs](tests/handover.rs),
+        [kernel_span.rs](tests/kernel_span.rs),
+        [submission_lifecycle.rs](tests/submission_lifecycle.rs) and the converted half of
+        [failure_paths.rs](tests/failure_paths.rs) -- deliberately, because the oracle still
+        modelled a claim while both token models were live, and a converted test that stopped
+        reporting one would have looked like a leak. Those calls have nothing left to report
+        once the pop is the claim, so they go with the API rather than being rewritten.
+        [contract.rs](src/contract.rs) also carries a doctest that calls it, and
+        [pending.rs](src/pending.rs) calls both -- the latter disappears with `Pending<T, X>`. Leaving them would describe
         a hazard the API no longer has, which is worse than a gap: a reader would go looking for
         the way to leak a token and not find one. **This is the commit that ends the break.** **Convert all of them or
         none**: converting a few relocates the duplication rather than removing it, which is the
         lesson `win-numa-sys` recorded the same day when it moved one `VirtualAllocExNuma` and
         left the other. This is the step that ends with one token model.
+
   - [ ] **M28.4.2** -- Sabotage the inventory: a push that does not record, and a pop that does
         not retire, must both turn the suite red.
+
+        The pop half now has a worked precedent to follow rather than invent: `M28.4.1d.2`
+        made both public pops retire their entry, and verified it by re-injecting the
+        stranding -- five `registration.rs` tests went red, and all eighteen passed once it
+        was restored. Record that as a case in `sabotage.json` rather than leaving it as a
+        command that was run once and discarded.
 
 - [ ] **M28.5** -- **Answer the tokenless push.** `flush_raw` returns a bare `usize` and
   `epoch_log`'s commit path depends on it, because a flush has no buffer and a *borrowed*
