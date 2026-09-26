@@ -3853,3 +3853,59 @@ The decision, including why naive pruning was rejected as worse than the leak, i
   default, which is why it is here rather than filed separately: `M23.3` reached for always-on
   checking and this is what ruled it out. Decide whether completed entries are dropped, whether
   `check_quiescent` needs them, and document the answer either way.
+
+## Moved 2026-09-26 00:26:05 -04:00 -- M28.4.1d.2, the ring-owned inventory migration
+
+### <a id="m2841d2"></a>M28.4.1d.2 -- Convert every consumer that can be converted before the token API is retired. *(completed 2026-09-26 00:26:05 -04:00)*
+
+    **Converted** (each its own commit, full gate green at every one):
+    `bounded_pop.rs`, `flush_barrier.rs`, `flush_barrier_stress.rs`, `calibration.rs`,
+    `completion_event.rs`, `event_delivery.rs`, `fault_injection.rs`, `handover.rs`,
+    `resolver_over_a_real_ring.rs`, `submission_lifecycle.rs`, `kernel_span.rs`,
+    `registration.rs`, `model_a_delivery.rs`, `model_b_multiplexed.rs`,
+    `epoch_log/logfile/tests.rs`, `ring_copy/engine.rs`, and the convertible half of
+    `failure_paths.rs`.
+
+    `registration.rs` was far smaller than its 27 `claim_if` sites suggested: most are
+    `PendingBufferRegistration` / `PendingFileRegistration` handles, which are a different
+    mechanism from `Token` and not in M28.4.1's push set. Eight were real token sites.
+
+    **Re-planned after execution: the rest of d.2 cannot precede d.3.** Four files remain,
+    and every one of them is blocked on `M28.4.1d.3` rather than on conversion effort --
+    converting them first would mean writing assertions against an API in the same commit
+    that another item deletes it. This is a genuine sequencing discovery, not a deferral
+    for convenience. Three are blocked specifically by [D-74](DESIGN-NOTES.md#d-74),
+    because their subject matter *is* what it removes; the fourth is blocked by the
+    retirement of `Pending<T, X>`, which is the same item but not the same reason:
+
+    - `generated_sequences.rs` and `properties_under_every_resolution.rs` both sample a
+      **claim-or-drop axis** as a generated dimension, with their own coverage assertions
+      (`coverage.deliberate_drops > 0`, `coverage.deliberate_leaks`). Converting them
+      *removes a dimension from the generated space*, which is a change to what the oracle
+      covers and belongs in the commit that retires `observe_deliberate_leak`.
+    - `failure_paths.rs`'s leak-ordering test asserts `Violation::LeakedToken` directly. It
+      is not convertible at all -- it is d.3's to delete, alongside the variant.
+    - `epoch_log/append.rs` uses the crate's `Pending<T, X>`, which d.3 retires, and raises
+      a question d.3 must answer first: it takes `&mut IoRing` rather than owning the ring,
+      so an appender cannot reach the inventory without the ring's payload type reaching
+      its own signature. **That is the first consumer to feel `D-73`'s type parameters at
+      an API boundary**, and it should be decided rather than discovered.
+
+    **Correction, same day**: an earlier version of this list also called
+    `epoch_log/checkpoint.rs` and `epoch_log/strategy.rs` blocked -- and omitted
+    `strategy.rs` from d.3's list while doing so, which would have lost it entirely.
+    Neither was blocked: both own their rings and use the plain sidecar pattern, and
+    neither samples the claim-or-drop axis that couples the others to `D-74`. The
+    over-broad claim came from reading `checkpoint.rs`'s own `Pending` struct as the
+    crate's `Pending<T, X>`; they are unrelated types with the same name. Both are now
+    converted. The lesson is narrow and worth keeping: *"blocked" is a claim about a
+    specific dependency, and naming that dependency is what makes it checkable* -- the
+    three files that really are blocked each name the item that unblocks them.
+
+    **Two API gaps the conversion found, both now closed**: `flush_raw_owned` did not exist
+    (eleven token pushes had ten owned counterparts), and `pop_within` had no reclaiming
+    form. A third is a real defect, fixed: `HeldCompletion` collapsed `Option<(T, X)>` via
+    `entry.payload.map(..)`, which discarded the sidecar of every *bufferless* operation --
+    so a flush could never say which group of writes it belonged to. It is
+    `Option<(Option<T>, X)>` now: the outer option is whether the ring stowed anything, the
+    inner one whether what it stowed included a buffer.
