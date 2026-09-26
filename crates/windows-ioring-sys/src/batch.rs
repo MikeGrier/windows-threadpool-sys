@@ -19,7 +19,8 @@ use windows_sys::Win32::Storage::FileSystem::{
 
 use crate::buf::{IoBuf, IoBufMut};
 use crate::error::check;
-use crate::ring::{Completion, IoRing, Op, RingId};
+use crate::ring::{Completion, Entry, Held, IoRing, Op, RingId};
+use crate::token::OperationId;
 use crate::token::Token;
 
 /// Per-push options shared across every op builder (M3.2).
@@ -1214,14 +1215,14 @@ impl<B: IoBufMut> std::fmt::Debug for PendingBufferRegistration<B> {
 /// queues its SQE the instant it succeeds -- there is no rewind -- so
 /// `Batch` submits on [`Drop`] rather than leaving queued SQEs for some
 /// later, unrelated submit to discover (D-5).
-pub struct Batch<'ring, T = ()> {
-    ring: &'ring mut IoRing<T>,
+pub struct Batch<'ring, T = (), X = ()> {
+    ring: &'ring mut IoRing<T, X>,
     submitted: bool,
 }
 
-impl<'ring, T> Batch<'ring, T> {
+impl<'ring, T, X> Batch<'ring, T, X> {
     /// Open a batch over `ring`.
-    pub fn new(ring: &'ring mut IoRing<T>) -> Self {
+    pub fn new(ring: &'ring mut IoRing<T, X>) -> Self {
         Self {
             ring,
             submitted: false,
@@ -1291,6 +1292,76 @@ impl<'ring, T> Batch<'ring, T> {
             )
         };
         self.finish_push(hr, token)
+    }
+
+    /// Queue a read whose buffer the **ring** holds, returning the operation's
+    /// name (`D-71`, `D-73`).
+    ///
+    /// The inventory counterpart to [`Batch::read_raw`]. The caller hands over
+    /// the buffer and its sidecar and receives an [`OperationId`], which names
+    /// the operation and grants nothing; the buffer comes back from
+    /// [`IoRing::try_pop_held`] and from nowhere else. A consumer that never
+    /// holds a token cannot lose one, which is the whole of `D-55`.
+    ///
+    /// # Safety
+    ///
+    /// As [`Batch::read_raw`]: the caller keeps `file` valid until the
+    /// operation completes.
+    ///
+    /// # Errors
+    ///
+    /// As [`Batch::read_raw`]. On any error the buffer is returned to the
+    /// caller inside the error-free path's `Err`, rather than stowed -- the
+    /// SQE never queued, so nothing will ever complete to reclaim it.
+    pub unsafe fn read_owned(
+        &mut self,
+        file: impl Into<FileRef>,
+        mut buffer: T,
+        extra: X,
+        offset: u64,
+        options: PushOptions,
+    ) -> io::Result<OperationId>
+    where
+        T: IoBufMut,
+    {
+        self.require(Op::Read)?;
+        let len = checked_len(buffer.bytes_len())?;
+        let address = buffer.stable_mut_ptr().cast::<c_void>();
+        let target = handle_ref(file.into(), self.ring.ring_id())?;
+        let user_data = self.ring.accounting_mut().reserve_user_data()?;
+        let id = OperationId::new(user_data, self.ring.ring_id());
+        // SAFETY: as `read_raw` -- `address` is `IoBufMut`'s promised stable
+        // pointer, valid for `len` bytes, and it stays valid across the move
+        // into the inventory below because that stability is the trait's
+        // contract rather than a property of where the value lives.
+        let hr = unsafe {
+            crate::sys::build_read(
+                self.ring.raw_handle(),
+                target,
+                raw_buffer_ref(address),
+                len,
+                offset,
+                user_data,
+                options.sqe_flags(),
+            )
+        };
+        if let Err(error) = check(hr) {
+            // Never queued, so no completion will arrive to reclaim this.
+            // Releasing the reservation and dropping the buffer normally is
+            // right for exactly the reason leaking is right elsewhere: the
+            // kernel never saw the address.
+            self.ring.cancel_reservation();
+            return Err(error);
+        }
+        self.ring.stow(
+            id,
+            Entry {
+                payload: Some(buffer),
+                extra,
+                held: Held::default(),
+            },
+        );
+        Ok(id)
     }
 
     /// As [`Batch::read_raw`], but safe: `file` is a [`SharedFile`] rather
@@ -2131,7 +2202,7 @@ impl<'ring, T> Batch<'ring, T> {
         Ok(submitted)
     }
 }
-impl<T> Drop for Batch<'_, T> {
+impl<T, X> Drop for Batch<'_, T, X> {
     fn drop(&mut self) {
         if !self.submitted {
             // Best-effort: Drop cannot propagate an error, and a batch that

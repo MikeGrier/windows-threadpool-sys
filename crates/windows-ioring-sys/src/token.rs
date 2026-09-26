@@ -32,14 +32,6 @@ pub struct OperationId {
     ring_id: RingId,
 }
 
-// `expect` rather than `allow`, deliberately: nothing mints an `OperationId`
-// until `M28.3.3` wires the inventory, and when it does this attribute starts
-// warning on its own. Scaffolding that removes itself beats scaffolding that
-// needs remembering.
-#[expect(
-    dead_code,
-    reason = "minted by the inventory push that M28.3.3 adds; see M28.3 in CHECKLIST.md"
-)]
 impl OperationId {
     pub(crate) fn new(id: usize, ring_id: RingId) -> Self {
         Self { id, ring_id }

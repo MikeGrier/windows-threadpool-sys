@@ -2,6 +2,9 @@
 //! The owned `IoRing` handle (M1.2), and the op capability set (M1.4).
 
 use std::collections::HashMap;
+use std::mem::ManuallyDrop;
+
+use crate::token::OperationId;
 use std::ffi::c_void;
 use std::io;
 use std::os::windows::io::{AsRawHandle, FromRawHandle, OwnedHandle};
@@ -185,6 +188,63 @@ impl InjectedFailure {
     }
 }
 
+/// What the crate itself is holding for an in-flight operation.
+///
+/// Concrete rather than generic, and [D-73](../DESIGN-NOTES.md#d-73) explains
+/// why that is sound: `FileTarget` is sealed to `SharedFile` and
+/// `RegisteredFile`, so this set is closed and crate-owned. A caller never
+/// names it. Unsealing that trait would break the arrangement -- the
+/// alternatives are type erasure, which [D-4](../DESIGN-NOTES.md#d-4) forbids,
+/// or a third generic parameter on every consumer.
+// Populated by the guarded and registered pushes, which migrate in `M28.4.1`;
+// `read_owned` is the unguarded shape and stows `Held::default()`. `expect`
+// rather than `allow` so this stops being silent the moment that lands.
+#[expect(
+    dead_code,
+    reason = "populated by the guarded pushes M28.4.1 migrates; see M28.3+M28.4 in CHECKLIST.md"
+)]
+#[derive(Default)]
+pub(crate) struct Held {
+    /// Keeps the file valid for the operation's life.
+    pub(crate) guard: Option<FileGuard>,
+    /// Keeps a registered buffer's use counted while the kernel has it.
+    pub(crate) registration: Option<crate::batch::RegisteredUse>,
+}
+
+/// The closed set of file guards, per `D-73`.
+#[expect(
+    dead_code,
+    reason = "constructed by the guarded pushes M28.4.1 migrates; see M28.3+M28.4 in CHECKLIST.md"
+)]
+pub(crate) enum FileGuard {
+    Shared(crate::batch::SharedFile),
+    Registered(crate::batch::RegisteredFile),
+}
+
+/// A popped completion and whatever the ring was holding for it.
+///
+/// Named rather than left as a nested tuple in the signature: the outer
+/// `Option` is "was there a completion", and the inner one is "was this ring
+/// holding anything for it", and those are different questions that read
+/// badly stacked.
+pub type HeldCompletion<T, X> = (Completion, Option<(T, X)>);
+
+/// One in-flight operation's entry in the ring's inventory.
+pub(crate) struct Entry<T, X> {
+    /// What the caller handed over. `None` for a push that carries nothing to
+    /// give back -- the `_raw` flush and cancel entry points, whose shape is
+    /// `M28.5`'s to settle.
+    pub(crate) payload: Option<T>,
+    /// The caller's per-operation sidecar. Two thirds of the census sites keep
+    /// one, which is why it is a parameter rather than a convenience.
+    pub(crate) extra: X,
+    /// The crate's own half, which the caller never sees.
+    #[expect(
+        dead_code,
+        reason = "read when the guarded pushes migrate in M28.4.1; see M28.3+M28.4 in CHECKLIST.md"
+    )]
+    pub(crate) held: Held,
+}
 /// One popped completion (M3.7): the operation's identity, from
 /// `IORING_CQE::UserData`, and its result.
 #[derive(Clone, Copy, Debug)]
@@ -509,7 +569,7 @@ fn wait_outcome(hr: windows_sys::core::HRESULT) -> io::Result<()> {
 // `Debug` is hand-written rather than derived: `IORING_BUFFER_INFO` does not
 // implement it, and the array's contents (raw addresses and lengths) are not
 // useful to print anyway -- its length is.
-pub struct IoRing<T = ()> {
+pub struct IoRing<T = (), X = ()> {
     handle: *mut c_void,
     version: RingVersion,
     supported_ops: OpSupport,
@@ -551,18 +611,10 @@ pub struct IoRing<T = ()> {
     /// kernel may still be using.
     ///
     /// `T` defaults to `()` so a consumer holding nothing never names it.
-    ///
-    // `expect` rather than `allow`: nothing reads this until `M28.3.3` wires
-    // push and pop through it, and when that lands the attribute starts
-    // warning on its own rather than waiting to be remembered.
-    #[expect(
-        dead_code,
-        reason = "read by the push and pop that M28.3.3 adds; see M28.3 in CHECKLIST.md"
-    )]
-    inventory: HashMap<usize, T>,
+    inventory: ManuallyDrop<HashMap<usize, Entry<T, X>>>,
 }
 
-impl<T> std::fmt::Debug for IoRing<T> {
+impl<T, X> std::fmt::Debug for IoRing<T, X> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("IoRing")
             .field("handle", &self.handle)
@@ -587,7 +639,7 @@ impl<T> std::fmt::Debug for IoRing<T> {
 // moving ownership of one to another thread is sound. This does not imply
 // `Sync`: submitting to the ring is not thread-safe (D-5), so only `Send` is
 // implemented.
-unsafe impl<T: Send> Send for IoRing<T> {}
+unsafe impl<T: Send, X: Send> Send for IoRing<T, X> {}
 
 /// Constructors for a ring that holds nothing on a caller's behalf.
 ///
@@ -626,7 +678,7 @@ impl IoRing<()> {
     }
 }
 
-impl<T> IoRing<T> {
+impl<T, X> IoRing<T, X> {
     /// Create a ring at exactly `version`, whose inventory holds `T`.
     ///
     /// # Errors
@@ -664,13 +716,13 @@ impl<T> IoRing<T> {
             accounting: Accounting::new(),
             registered_buffer_infos: Vec::new(),
             completion_event: None,
-            inventory: HashMap::new(),
+            inventory: ManuallyDrop::new(HashMap::new()),
         })
     }
 }
 
 /// A ring that holds `T` on the caller's behalf for each in-flight operation.
-impl<T> IoRing<T> {
+impl<T, X> IoRing<T, X> {
     /// Create a ring whose inventory holds `T`, negotiating the version as
     /// [`IoRing::new`] does.
     ///
@@ -687,6 +739,71 @@ impl<T> IoRing<T> {
         let caps = capabilities()?;
         let version = RingVersion::HIGHEST_KNOWN.min(caps.max_version);
         Self::with_version_and_inventory(version, submission_queue_size, completion_queue_size)
+    }
+
+    /// Record what an operation is holding, under the identity it will
+    /// complete with.
+    ///
+    /// The other half of [`IoRing::reclaim`]. Between them they are the whole
+    /// mechanism `D-55` asked for: a consumer never holds a token, so it
+    /// cannot lose one, and the map cannot drift from the ring because the
+    /// ring *is* the map.
+    pub(crate) fn stow(&mut self, id: OperationId, entry: Entry<T, X>) {
+        debug_assert_eq!(
+            id.ring_id(),
+            self.accounting.ring_id(),
+            "an identity minted by another ring must never reach this inventory"
+        );
+        self.inventory.insert(id.user_data(), entry);
+    }
+
+    /// Take back what an operation was holding, if this ring was holding
+    /// anything for it.
+    ///
+    /// `None` covers two different situations on purpose, because the ring
+    /// cannot tell them apart and should not pretend to: a push that carried
+    /// nothing to give back (`M28.5`), and a completion for an identity this
+    /// ring never stowed. The second is a contract violation that
+    /// [`crate::contract::RingContract`] is the thing that reports.
+    pub(crate) fn reclaim(&mut self, user_data: usize) -> Option<Entry<T, X>> {
+        self.inventory.remove(&user_data)
+    }
+
+    /// Pop a completion and take back whatever this ring was holding for it.
+    ///
+    /// The replacement for popping a [`Completion`] and matching it against a
+    /// held token (`D-71`). The payload is produced **by this call and by no
+    /// other**, which is what makes a use-after-free unrepresentable rather
+    /// than merely guarded: there is no way to name an operation and be handed
+    /// the memory it may still be using. [`crate::OperationId`] deliberately
+    /// cannot do it.
+    ///
+    /// `None` for the payload means this ring was holding nothing for that
+    /// identity -- either a push that carried nothing (`M28.5`), or a
+    /// completion for something never stowed, which
+    /// [`crate::contract::RingContract`] is the thing that reports.
+    ///
+    /// # Errors
+    ///
+    /// As [`IoRing::try_pop`].
+    pub fn try_pop_held(&mut self) -> io::Result<Option<HeldCompletion<T, X>>> {
+        let Some(completion) = self.try_pop()? else {
+            return Ok(None);
+        };
+        let held = self
+            .reclaim(completion.user_data())
+            .and_then(|entry| entry.payload.map(|payload| (payload, entry.extra)));
+        Ok(Some((completion, held)))
+    }
+
+    /// How many operations this ring is currently holding something for.
+    ///
+    /// Distinct from [`IoRing::outstanding`], which counts what the *kernel*
+    /// still owes a completion for. They agree in the steady state and part
+    /// company exactly where a bug lives, which is why both exist.
+    #[must_use]
+    pub fn held(&self) -> usize {
+        self.inventory.len()
     }
 
     /// The version this ring was created at.
@@ -1605,12 +1722,12 @@ impl IoRing {
             accounting: Accounting::new(),
             registered_buffer_infos: Vec::new(),
             completion_event: None,
-            inventory: HashMap::new(),
+            inventory: ManuallyDrop::new(HashMap::new()),
         }
     }
 }
 
-impl<T> Drop for IoRing<T> {
+impl<T, X> Drop for IoRing<T, X> {
     fn drop(&mut self) {
         // A count of how many times this body has run, so a test can confirm
         // the rundown-and-close actually executes rather than trusting the
@@ -1647,11 +1764,36 @@ impl<T> Drop for IoRing<T> {
         // substituted: `CloseIoRing(0xDEAD_0000)` raises
         // `STATUS_ACCESS_VIOLATION`, because a ring handle is a pointer the
         // kernel dereferences rather than an index into a handle table.
-        if let Err(error) = self.run_down() {
-            debug_assert!(
-                std::thread::panicking(),
-                "IoRing rundown failed before close: {error}"
-            );
+        let quiesced = match self.run_down() {
+            Ok(()) => true,
+            Err(error) => {
+                debug_assert!(
+                    std::thread::panicking(),
+                    "IoRing rundown failed before close: {error}"
+                );
+                false
+            }
+        };
+
+        // The inventory is dropped only when rundown actually quiesced the
+        // ring, and **forgotten otherwise** (D-73). This is `Token`'s
+        // leak-on-unclaimed-drop, relocated: it used to be the caller's,
+        // because the caller held the buffers and could not prove the kernel
+        // was finished with them. The ring can prove it -- rundown returning
+        // `Ok` is that proof -- but only on the path where rundown succeeds,
+        // and the rundown above is deliberately best-effort. On the other path
+        // the close below runs with operations possibly still outstanding, so
+        // freeing what they point at would hand the kernel a dangling write.
+        //
+        // Leaking is the correct answer there, exactly as it is for a `Token`
+        // dropped unclaimed: memory is lost, which is finite and visible,
+        // rather than reused, which is neither.
+        if quiesced {
+            // SAFETY: nothing is outstanding, so no kernel write can still be
+            // aimed at anything this holds, and `self.inventory` is not used
+            // again -- this is `Drop`, and the field is `ManuallyDrop` so
+            // nothing drops it a second time.
+            unsafe { ManuallyDrop::drop(&mut self.inventory) };
         }
         // SAFETY: `self.handle` is a live ring this `IoRing` exclusively
         // owns, and `run_down` just established that nothing is outstanding

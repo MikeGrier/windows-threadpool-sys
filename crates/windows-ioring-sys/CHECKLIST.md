@@ -356,7 +356,7 @@ every consumer names the type -- which means the migration order matters more th
   - [x] **M28.3.1** -- `OperationId`: `Copy`, no `Drop`, a name and not a capability (`D-71`).
   - [x] **M28.3.2** -- `IoRing<T = ()>` carrying `inventory: HashMap<usize, T>`, and
         `Batch<'ring, T>` with it. A default keeps a payload-free consumer from naming `()`.
-  - [ ] **M28.3.3** -- Push stores the payload and returns an `OperationId`; pop returns the
+  - [x] **M28.3.3** -- Push stores the payload and returns an `OperationId`; pop returns the
         payload with the completion. Shape settled by [D-73](DESIGN-NOTES.md#d-73):
         `IoRing<T, X = ()>`, with the file guard held in a concrete internal `Held` rather than
         made generic, which is sound because `FileTarget` is sealed.
