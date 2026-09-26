@@ -3909,3 +3909,35 @@ The decision, including why naive pruning was rejected as worse than the leak, i
     so a flush could never say which group of writes it belonged to. It is
     `Option<(Option<T>, X)>` now: the outer option is whether the ring stowed anything, the
     inner one whether what it stowed included a buffer.
+## Moved 2026-09-26 00:31:44 -04:00 -- M28.4.1d.2b, the cost of a single payload type
+
+### <a id="m2841d2b"></a>M28.4.1d.2b -- Record what a single payload type costs a consumer holding heterogeneous buffers, and decide whether anything is owed. *(completed 2026-09-26 00:31:44 -04:00)*
+
+Record what a single payload type costs a consumer holding
+    heterogeneous buffers, and decide whether anything is owed.
+
+    Found converting [epoch_log/logfile/tests.rs](examples/epoch_log/logfile/tests.rs): one
+    test wrote a `NumaBuffer` and a `Vec<u8>` through the same ring. A ring holds one payload
+    type ([D-73](DESIGN-NOTES.md#d-73)) and [D-4](DESIGN-NOTES.md#d-4) forbids erasing it, so
+    that consumer's choices are an enum payload implementing `IoBuf`, or a ring per buffer
+    type. The test took a ring each, which was free there because its two writes were already
+    sequential -- but that will not generally be true, and a consumer multiplexing buffer
+    types over one ring has no cheap answer today.
+
+    This is not a request to relax `D-73`; the seal is load-bearing and the single type is
+    what makes the payload come back without a cast. It is a request to **state the
+    consequence where a consumer will meet it** rather than leaving them to discover it from
+    a type error, and to decide whether the crate should offer an `IoBuf` enum helper or
+    simply document the two options. Gated on `M28.4.1d.2` finishing, so the full shape of
+    the problem is visible first.
+
+**Decided: document, build nothing.** The two ways round a mixed payload -- a ring per
+buffer type, or an enum payload carrying its own `unsafe impl IoBuf` -- are now stated on
+`IoRing::with_inventory`, where a consumer meets the parameter rather than a type error,
+and the decision with its evidence is recorded in [DESIGN-NOTES.md](DESIGN-NOTES.md#d-73).
+
+The premise this item was written on did not survive the rest of the conversion. It asserted
+that a consumer multiplexing buffer types over one ring "will not generally" find a ring
+each free. Of the seventeen ring types the conversion introduced, one carried two buffer
+types through what had been a single ring, and its writes were already sequential. The
+prediction was made from a single observation and tested against sixteen more.

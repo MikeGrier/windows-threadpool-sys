@@ -748,6 +748,25 @@ impl<T, X> IoRing<T, X> {
     /// The generic counterpart to [`IoRing::new`], which exists separately
     /// only so that the common no-payload call keeps inferring its parameter.
     ///
+    /// # One `T` per ring
+    ///
+    /// `T` is a single type, and a pop returns it without a cast because of
+    /// that. A caller whose operations carry buffers of *different* types --
+    /// say a [`win_numa_sys::NumaBuffer`] arena alongside ad-hoc `Vec<u8>`
+    /// records -- therefore cannot put them through one ring as they stand.
+    /// Two ways round it:
+    ///
+    /// - **A ring per buffer type.** Each keeps its own `T`, and the operations
+    ///   are independent at the ring level.
+    /// - **An enum payload.** One type with a variant per buffer, carrying its
+    ///   own `unsafe impl IoBuf`. The obligation that impl takes on is the same
+    ///   one [`IoBuf`](crate::IoBuf) states, and it has to hold for every
+    ///   variant: the address must not move while the kernel holds it, which
+    ///   for an enum means the bytes must not live inline in the variant.
+    ///
+    /// Erasing `T` is not among them -- see
+    /// [D-4](../DESIGN-NOTES.md#d-4).
+    ///
     /// # Errors
     ///
     /// As [`IoRing::new`].

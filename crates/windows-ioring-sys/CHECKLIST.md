@@ -474,23 +474,7 @@ every consumer names the type -- which means the migration order matters more th
 
   - [x] **M28.4.1d.2** -- Every consumer that can be converted before the token API is retired now is; three plus `append.rs` are blocked on `M28.4.1d.3`. -> [completed 2026-09-26](COMPLETED-CHECKLIST.md#m2841d2)
 
-  - [ ] **M28.4.1d.2b** -- Record what a single payload type costs a consumer holding
-        heterogeneous buffers, and decide whether anything is owed.
-
-        Found converting [epoch_log/logfile/tests.rs](examples/epoch_log/logfile/tests.rs): one
-        test wrote a `NumaBuffer` and a `Vec<u8>` through the same ring. A ring holds one payload
-        type ([D-73](DESIGN-NOTES.md#d-73)) and [D-4](DESIGN-NOTES.md#d-4) forbids erasing it, so
-        that consumer's choices are an enum payload implementing `IoBuf`, or a ring per buffer
-        type. The test took a ring each, which was free there because its two writes were already
-        sequential -- but that will not generally be true, and a consumer multiplexing buffer
-        types over one ring has no cheap answer today.
-
-        This is not a request to relax `D-73`; the seal is load-bearing and the single type is
-        what makes the payload come back without a cast. It is a request to **state the
-        consequence where a consumer will meet it** rather than leaving them to discover it from
-        a type error, and to decide whether the crate should offer an `IoBuf` enum helper or
-        simply document the two options. Gated on `M28.4.1d.2` finishing, so the full shape of
-        the problem is visible first.
+  - [x] **M28.4.1d.2b** -- Documented the two ways round a mixed payload on `IoRing::with_inventory` and in `D-73`; no `IoBuf` enum helper built. -> [completed 2026-09-26](COMPLETED-CHECKLIST.md#m2841d2b)
 
   - [ ] **M28.4.1d.3** -- **Also carries the three consumers d.2 could not convert** (see
         `M28.4.1d.2`): `generated_sequences.rs` and `properties_under_every_resolution.rs`
