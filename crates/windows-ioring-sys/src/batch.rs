@@ -1214,14 +1214,14 @@ impl<B: IoBufMut> std::fmt::Debug for PendingBufferRegistration<B> {
 /// queues its SQE the instant it succeeds -- there is no rewind -- so
 /// `Batch` submits on [`Drop`] rather than leaving queued SQEs for some
 /// later, unrelated submit to discover (D-5).
-pub struct Batch<'ring> {
-    ring: &'ring mut IoRing,
+pub struct Batch<'ring, T = ()> {
+    ring: &'ring mut IoRing<T>,
     submitted: bool,
 }
 
-impl<'ring> Batch<'ring> {
+impl<'ring, T> Batch<'ring, T> {
     /// Open a batch over `ring`.
-    pub fn new(ring: &'ring mut IoRing) -> Self {
+    pub fn new(ring: &'ring mut IoRing<T>) -> Self {
         Self {
             ring,
             submitted: false,
@@ -1445,11 +1445,11 @@ impl<'ring> Batch<'ring> {
     /// Reclaim `token`'s value and release its reservation if `hr` failed,
     /// or hand `token` back unchanged on success -- the shared tail of every
     /// push in this module.
-    fn finish_push<T: Send + 'static>(
+    fn finish_push<V: Send + 'static>(
         &mut self,
         hr: windows_sys::core::HRESULT,
-        token: Token<T>,
-    ) -> io::Result<Token<T>> {
+        token: Token<V>,
+    ) -> io::Result<Token<V>> {
         match check(hr) {
             Ok(()) => Ok(token),
             Err(error) => {
@@ -2131,8 +2131,7 @@ impl<'ring> Batch<'ring> {
         Ok(submitted)
     }
 }
-
-impl Drop for Batch<'_> {
+impl<T> Drop for Batch<'_, T> {
     fn drop(&mut self) {
         if !self.submitted {
             // Best-effort: Drop cannot propagate an error, and a batch that

@@ -1,6 +1,7 @@
 // Copyright (c) 2026 Mike Grier
 //! The owned `IoRing` handle (M1.2), and the op capability set (M1.4).
 
+use std::collections::HashMap;
 use std::ffi::c_void;
 use std::io;
 use std::os::windows::io::{AsRawHandle, FromRawHandle, OwnedHandle};
@@ -508,7 +509,7 @@ fn wait_outcome(hr: windows_sys::core::HRESULT) -> io::Result<()> {
 // `Debug` is hand-written rather than derived: `IORING_BUFFER_INFO` does not
 // implement it, and the array's contents (raw addresses and lengths) are not
 // useful to print anyway -- its length is.
-pub struct IoRing {
+pub struct IoRing<T = ()> {
     handle: *mut c_void,
     version: RingVersion,
     supported_ops: OpSupport,
@@ -539,9 +540,29 @@ pub struct IoRing {
     /// body runs before its fields are dropped -- so the ring is closed, and
     /// can no longer signal, before the event it referenced goes away.
     completion_event: Option<OwnedHandle>,
+    /// What each in-flight operation is holding on the caller's behalf
+    /// (`D-71`, `M28.3`).
+    ///
+    /// The ring owns this rather than handing a caller a `Token` to keep
+    /// beside its own map, because a consumer that never holds one cannot
+    /// lose one ([D-55](../DESIGN-NOTES.md#d-55)). An entry goes in when a
+    /// push queues and comes out at the pop that observes its completion --
+    /// which is why there is no call turning an identity back into memory the
+    /// kernel may still be using.
+    ///
+    /// `T` defaults to `()` so a consumer holding nothing never names it.
+    ///
+    // `expect` rather than `allow`: nothing reads this until `M28.3.3` wires
+    // push and pop through it, and when that lands the attribute starts
+    // warning on its own rather than waiting to be remembered.
+    #[expect(
+        dead_code,
+        reason = "read by the push and pop that M28.3.3 adds; see M28.3 in CHECKLIST.md"
+    )]
+    inventory: HashMap<usize, T>,
 }
 
-impl std::fmt::Debug for IoRing {
+impl<T> std::fmt::Debug for IoRing<T> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("IoRing")
             .field("handle", &self.handle)
@@ -566,9 +587,17 @@ impl std::fmt::Debug for IoRing {
 // moving ownership of one to another thread is sound. This does not imply
 // `Sync`: submitting to the ring is not thread-safe (D-5), so only `Send` is
 // implemented.
-unsafe impl Send for IoRing {}
+unsafe impl<T: Send> Send for IoRing<T> {}
 
-impl IoRing {
+/// Constructors for a ring that holds nothing on a caller's behalf.
+///
+/// These sit on `IoRing<()>` rather than on the generic impl for a reason that
+/// is about inference, not about capability: a defaulted type parameter
+/// applies in *type* position, so `IoRing::new(..)` on a generic impl would be
+/// ambiguous and every existing call site would have to write `IoRing::<()>`.
+/// A ring that holds payloads is built with
+/// [`IoRing::with_inventory`](IoRing::with_inventory) instead.
+impl IoRing<()> {
     /// Create a ring, negotiating the version as `min(RingVersion::HIGHEST_KNOWN,
     /// capabilities()?.max_version)` (D-6).
     ///
@@ -589,6 +618,21 @@ impl IoRing {
     /// `IORING_E_VERSION_NOT_SUPPORTED` if `version` exceeds what the system
     /// supports, or any other error from `CreateIoRing`.
     pub fn with_version(
+        version: RingVersion,
+        submission_queue_size: u32,
+        completion_queue_size: u32,
+    ) -> io::Result<Self> {
+        Self::with_version_and_inventory(version, submission_queue_size, completion_queue_size)
+    }
+}
+
+impl<T> IoRing<T> {
+    /// Create a ring at exactly `version`, whose inventory holds `T`.
+    ///
+    /// # Errors
+    ///
+    /// As [`IoRing::with_version`].
+    pub fn with_version_and_inventory(
         version: RingVersion,
         submission_queue_size: u32,
         completion_queue_size: u32,
@@ -620,7 +664,29 @@ impl IoRing {
             accounting: Accounting::new(),
             registered_buffer_infos: Vec::new(),
             completion_event: None,
+            inventory: HashMap::new(),
         })
+    }
+}
+
+/// A ring that holds `T` on the caller's behalf for each in-flight operation.
+impl<T> IoRing<T> {
+    /// Create a ring whose inventory holds `T`, negotiating the version as
+    /// [`IoRing::new`] does.
+    ///
+    /// The generic counterpart to [`IoRing::new`], which exists separately
+    /// only so that the common no-payload call keeps inferring its parameter.
+    ///
+    /// # Errors
+    ///
+    /// As [`IoRing::new`].
+    pub fn with_inventory(
+        submission_queue_size: u32,
+        completion_queue_size: u32,
+    ) -> io::Result<Self> {
+        let caps = capabilities()?;
+        let version = RingVersion::HIGHEST_KNOWN.min(caps.max_version);
+        Self::with_version_and_inventory(version, submission_queue_size, completion_queue_size)
     }
 
     /// The version this ring was created at.
@@ -1367,7 +1433,13 @@ impl IoRing {
             let ms = u32::try_from(remaining.as_millis())
                 .unwrap_or(MAX_WAIT_MS)
                 .clamp(1, MAX_WAIT_MS);
-            wait.wait(&mut RingWait { ring: self }, ms)?;
+            wait.wait(
+                &mut RingWait {
+                    handle: self.handle,
+                    accounting: &self.accounting,
+                },
+                ms,
+            )?;
         }
     }
 }
@@ -1432,7 +1504,14 @@ pub trait CompletionWait {
     doc = "`RingScope` (the default `threadpool` feature) under [D-43](../DESIGN-NOTES.md#d-43)."
 )]
 pub struct RingWait<'ring> {
-    ring: &'ring mut IoRing,
+    /// Narrowed to what a wait actually uses -- the handle to submit on, and
+    /// the ledger to ask how much is outstanding -- rather than the whole
+    /// ring. That is the same narrowing `M24.7` made for `Token::new`, and
+    /// here it also keeps [`CompletionWait`] free of `IoRing`'s payload
+    /// parameter: a waiter blocks on a ring, and what the ring is holding for
+    /// its caller is none of its business.
+    handle: *mut c_void,
+    accounting: &'ring Accounting,
 }
 
 impl RingWait<'_> {
@@ -1469,7 +1548,7 @@ impl RingWait<'_> {
         // SAFETY: the ring handle is live for the borrow, and the out-pointer
         // is valid. Zero new SQEs are queued, so this call's only effect is
         // to wait for and reap what is already outstanding.
-        let hr = unsafe { crate::sys::submit(self.ring.handle, 1, timeout_ms, &raw mut submitted) };
+        let hr = unsafe { crate::sys::submit(self.handle, 1, timeout_ms, &raw mut submitted) };
         wait_outcome(hr)
     }
 
@@ -1480,7 +1559,7 @@ impl RingWait<'_> {
     /// whether blocking on this ring is worth a slot at all.
     #[must_use]
     pub fn outstanding(&self) -> usize {
-        self.ring.outstanding()
+        self.accounting.outstanding()
     }
 }
 
@@ -1526,11 +1605,12 @@ impl IoRing {
             accounting: Accounting::new(),
             registered_buffer_infos: Vec::new(),
             completion_event: None,
+            inventory: HashMap::new(),
         }
     }
 }
 
-impl Drop for IoRing {
+impl<T> Drop for IoRing<T> {
     fn drop(&mut self) {
         // A count of how many times this body has run, so a test can confirm
         // the rundown-and-close actually executes rather than trusting the
