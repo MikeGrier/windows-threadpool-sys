@@ -4135,3 +4135,52 @@ documentation needs its output read, not just its exit code.
 `MUTATION-SURVIVORS.md` and the `M18.1` borrow-surface table are dated captures and
 were **annotated, not edited** -- the record of what was measured then is the thing worth
 keeping, but a reader should not learn from a compile error that an item is gone.
+## Moved 2026-09-26 16:39:03 -04:00 -- M28.7, decided against
+
+### <a id="m287"></a>M28.7 -- Decide whether the ring should check conservation itself. *(completed 2026-09-26 16:39:03 -04:00)*
+
+**Decide whether the ring should check conservation itself, rather than a
+caller driving `RingContract`.** Raised by [D-74](DESIGN-NOTES.md#d-74) and deliberately not
+taken there. Once the inventory is the only push path, a pop already knows whether the identity
+was stowed, and `held()`/`outstanding()` are both the ring's own numbers -- so
+`UnexpectedCompletion`, `DuplicateCompletion` and `Outstanding` are all answerable without a
+caller reporting anything.
+
+**Why it is a decision and not a cleanup.** [DESIGN-SESSION-2026-09-23-pending-inventory.md](design-sessions/DESIGN-SESSION-2026-09-23-pending-inventory.md) recorded the structural
+complaint that an oracle's "value depends on being driven correctly by the very code it checks",
+and this would answer it. But `RingContract` is deliberately *not* wired into `Batch` ([its own
+rustdoc](src/contract.rs) says why): a ring driven through `push_raw` bypasses this crate's
+bookkeeping entirely, so an internal hook would cover less than it appears to, and a consumer
+validating its own harness needs to drive the same rules from outside. Moving the checking
+inward trades that away. Gated on `M28.4.1d`.
+
+**Decided: no, and it schedules no work.** Recorded as [D-76](DESIGN-NOTES.md#d-76).
+`RingContract` is unchanged.
+
+**Of the four violations, the ring can answer one.** `Outstanding` it already does --
+`run_down` waits on that number and `Drop` debug-asserts it.
+`UnexpectedCompletion` it **cannot**, because [D-75](DESIGN-NOTES.md#d-75) -- decided in
+this same milestone -- established that a `_raw` push creates no entry, so "the ring
+holds nothing for this identity" is legitimate rather than a violation.
+`DuplicateCompletion` needs a finished-identity history the ring does not keep.
+`BufferStillInUse` reads a count living in `RegisteredBuffers`, which the *caller*
+owns.
+
+**The decisive argument was the failure mode, not the coverage.** An internal check
+reporting `UnexpectedCompletion` for an entry-less completion would fire on every
+`_raw` push -- 13 call sites across 8 files, including the sample's commit path. Not a
+check that covers less than it appears to; a check that is wrong about correct code.
+
+**Two corrections to the reasoning as this item stated it.** Its `push_raw` argument
+rested on a seam with **zero** call sites; the real bypass is `flush_raw`/`cancel_raw`.
+And the structural complaint it would have answered is in this tree almost entirely a
+*test* concern: of 37 `RingContract` instances, 36 are tests and one is a consumer.
+
+**What reopens it:** `M23.3` had ruled an always-on checked inventory out because the
+oracle grew without bound, and `M28.2` removed that obstacle -- so memory is no longer
+the reason. If `_raw` pushes ever gain inventory entries, `UnexpectedCompletion`
+becomes answerable and the question is live again.
+
+**Also fixed while here:** three links to `src/pending.rs`, which `M28.4.1d.3`
+deleted -- this item's own, and one each in `D-71` and `D-74`. All now point at the
+design session that holds the material.

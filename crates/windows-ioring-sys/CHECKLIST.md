@@ -271,20 +271,8 @@ about this crate's own surface rather than about storage at all.
   it would convert a reproducible defect into a rare one.
 ## M28+ -- Opened by the inventory
 
-- [ ] **M28.7** -- **Decide whether the ring should check conservation itself, rather than a
-  caller driving `RingContract`.** Raised by [D-74](DESIGN-NOTES.md#d-74) and deliberately not
-  taken there. Once the inventory is the only push path, a pop already knows whether the identity
-  was stowed, and `held()`/`outstanding()` are both the ring's own numbers -- so
-  `UnexpectedCompletion`, `DuplicateCompletion` and `Outstanding` are all answerable without a
-  caller reporting anything.
+- [x] **M28.7** -- Decided against: the ring can answer 1 of 4 violations, and an internal check would be wrong about 13 live `_raw` push sites. -> [completed 2026-09-26](COMPLETED-CHECKLIST.md#m287)
 
-  **Why it is a decision and not a cleanup.** [pending.rs](src/pending.rs) recorded the structural
-  complaint that an oracle's "value depends on being driven correctly by the very code it checks",
-  and this would answer it. But `RingContract` is deliberately *not* wired into `Batch` ([its own
-  rustdoc](src/contract.rs) says why): a ring driven through `push_raw` bypasses this crate's
-  bookkeeping entirely, so an internal hook would cover less than it appears to, and a consumer
-  validating its own harness needs to drive the same rules from outside. Moving the checking
-  inward trades that away. Gated on `M28.4.1d`.
 ## M27 -- What this crate owes the topology planner
 
 **Re-planned 2026-09-23, the same day it was written.** M27 was originally "Adaptivity: the benefit
