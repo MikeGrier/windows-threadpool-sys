@@ -109,11 +109,12 @@ fn a_read_addressing_a_registered_file_and_a_registered_buffer_round_trips() {
         offset: 0,
         len: 256,
     };
-    let token = unsafe {
-        batch.read_registered_raw(
+    unsafe {
+        batch.read_registered_raw_owned(
             registered_file,
             &registered_buffers,
             span,
+            (),
             0,
             PushOptions::new(),
         )
@@ -131,9 +132,6 @@ fn a_read_addressing_a_registered_file_and_a_registered_buffer_round_trips() {
     // successful completion carries the whole length and a full volume is
     // an error instead), not of the space, which permits a short one.
     assert_eq!(transferred, 256);
-    let _ = token
-        .claim_if(&completion)
-        .expect("token claims its own completion");
 
     assert_eq!(
         registered_buffers.get(0).expect("buffer 0 exists"),
@@ -144,11 +142,12 @@ fn a_read_addressing_a_registered_file_and_a_registered_buffer_round_trips() {
     // more reads through the same registration.
     for _ in 0..4 {
         let mut batch = Batch::new(&mut ring);
-        let token = unsafe {
-            batch.read_registered_raw(
+        unsafe {
+            batch.read_registered_raw_owned(
                 registered_file,
                 &registered_buffers,
                 span,
+                (),
                 0,
                 PushOptions::new(),
             )
@@ -160,9 +159,6 @@ fn a_read_addressing_a_registered_file_and_a_registered_buffer_round_trips() {
             .expect("pop completion")
             .expect("a completion arrives within the bound");
         completion.result().expect("registered read succeeded");
-        let _ = token
-            .claim_if(&completion)
-            .expect("token claims its own completion");
     }
 
     drop(registered_buffers);
@@ -284,8 +280,15 @@ fn a_buffer_registration_survives_heap_churn_between_the_push_and_the_submit() {
         len: 256,
     };
     let shared = windows_ioring_sys::SharedFile::new(file.try_clone().expect("clone file").into());
-    let token = batch
-        .read_registered(&shared, &registered_buffers, span, 0, PushOptions::new())
+    batch
+        .read_registered_owned(
+            &shared,
+            &registered_buffers,
+            span,
+            (),
+            0,
+            PushOptions::new(),
+        )
         .expect("queue read against the registered buffer");
     batch.submit_and_wait(1, 5_000).expect("submit and wait");
     let completion = ring
@@ -294,7 +297,6 @@ fn a_buffer_registration_survives_heap_churn_between_the_push_and_the_submit() {
         .expect("a completion arrives within the bound");
     let bytes = completion.result().expect("read succeeded");
     assert_eq!(bytes, 256);
-    let _ = token.claim_if(&completion);
 
     assert_eq!(
         registered_buffers.get(0).expect("buffer 0 exists")[..8],
@@ -461,8 +463,15 @@ fn dropping_a_registration_with_an_operation_in_flight_leaks_rather_than_frees()
         offset: 0,
         len: 64,
     };
-    let token = unsafe {
-        batch.read_registered_raw(handle, &registered_buffers, span, 0, PushOptions::new())
+    unsafe {
+        batch.read_registered_raw_owned(
+            handle,
+            &registered_buffers,
+            span,
+            (),
+            0,
+            PushOptions::new(),
+        )
     }
     .expect("queue registered read");
     batch.submit_and_wait(0, 0).expect("submit without waiting");
@@ -484,9 +493,12 @@ fn dropping_a_registration_with_an_operation_in_flight_leaks_rather_than_frees()
 
     // Let the real, still-outstanding read finish before the ring itself
     // tears down, so `IoRing::drop`'s own rundown does not have to.
+    // The ring holds this read's registration lease, and rundown is what
+    // retires the entry that carries it (`D-73`). Under the token API this
+    // line was followed by a deliberate `drop(token)`; there is nothing left
+    // for the caller to drop.
     ring.run_down()
         .expect("run down the outstanding registered read");
-    drop(token);
 }
 
 #[test]
@@ -545,7 +557,7 @@ fn a_registered_file_is_readable_through_the_safe_api_without_unsafe() {
         .expect("open for read");
     let handle = file.as_raw_handle();
 
-    let mut ring = IoRing::new(16, 16).expect("create ring");
+    let mut ring = IoRing::<Vec<u8>>::with_inventory(16, 16).expect("create ring");
 
     let mut batch = Batch::new(&mut ring);
     // SAFETY: `handle` stays open for the whole test. (Registering is still
@@ -566,23 +578,22 @@ fn a_registered_file_is_readable_through_the_safe_api_without_unsafe() {
         .expect("index 0 exists");
 
     let mut batch = Batch::new(&mut ring);
-    let token = batch
-        .read(&registered_file, vec![0_u8; 128], 0, PushOptions::new())
+    batch
+        .read_owned(&registered_file, vec![0_u8; 128], (), 0, PushOptions::new())
         .expect("queue a safe read against the registered file");
     batch.submit_and_wait(1, 5_000).expect("submit and wait");
-    let completion = ring
-        .pop_within(POP_BOUND)
+    let (completion, held) = ring
+        .pop_within_held(POP_BOUND)
         .expect("pop completion")
         .expect("a completion arrives within the bound");
     assert_eq!(completion.result().expect("read succeeded"), 128);
-    let (buffer, returned_file) = token
-        .claim_if(&completion)
-        .expect("token claims completion");
-    assert_eq!(buffer, content);
-    assert_eq!(
-        returned_file, registered_file,
-        "the guard hands the registered file back unchanged"
-    );
+    let (buffer, ()) = held.expect("the ring was holding this read's buffer");
+    assert_eq!(buffer.expect("a read carries a buffer"), content);
+    // The guard is not handed back any more, and cannot be: the ring holds it
+    // and drops it at this pop (`D-73`), so there is no returned file to
+    // compare against. What that assertion was really pinning -- that the
+    // guard names the file the caller registered, rather than substituting
+    // something else -- is what the successful read above demonstrates.
 
     let _ = std::fs::remove_file(&path);
 }
@@ -638,26 +649,25 @@ fn a_registered_file_and_a_registered_buffer_compose_through_the_safe_api() {
         offset: 0,
         len: 64,
     };
-    let token = batch
-        .read_registered(
+    batch
+        .read_registered_owned(
             &registered_file,
             &registered_buffers,
             span,
+            (),
             0,
             PushOptions::new(),
         )
         .expect("queue a safe fully-registered read");
     batch.submit_and_wait(1, 5_000).expect("submit and wait");
-    let completion = ring
-        .pop_within(POP_BOUND)
+    // Both the registration lease and the file guard are the ring's to hold
+    // and to release, and this pop is where that happens (`D-73`).
+    let (completion, held) = ring
+        .pop_within_held(POP_BOUND)
         .expect("pop completion")
         .expect("a completion arrives within the bound");
     assert_eq!(completion.result().expect("read succeeded"), 64);
-    let (registered_use, returned_file) = token
-        .claim_if(&completion)
-        .expect("token claims completion");
-    assert_eq!(returned_file, registered_file);
-    drop(registered_use);
+    assert!(held.is_some(), "the ring was holding this operation");
 
     assert_eq!(
         registered_buffers.get(0).expect("buffer 0 exists"),
@@ -869,11 +879,12 @@ fn a_registered_buffer_can_be_filled_and_written_back_out() {
     };
     let mut batch = Batch::new(&mut ring);
     // SAFETY: `handle` stays open for the whole test.
-    let token = unsafe {
-        batch.write_registered_raw(
+    unsafe {
+        batch.write_registered_raw_owned(
             handle,
             &buffers,
             span,
+            (),
             0,
             PushOptions::new(),
             WriteCaching::Cached,
@@ -889,9 +900,6 @@ fn a_registered_buffer_can_be_filled_and_written_back_out() {
         completion.result().expect("registered write succeeded"),
         record.len()
     );
-    let _ = token
-        .claim_if(&completion)
-        .expect("token claims its own completion");
 
     drop(file);
     let written = std::fs::read(&path).expect("read the file back");
@@ -941,11 +949,12 @@ fn get_mut_refuses_a_buffer_with_an_operation_outstanding_but_allows_its_neighbo
     let mut batch = Batch::new(&mut ring);
     // SAFETY: `handle` stays open for the whole test, and the token below is
     // held until its completion is claimed.
-    let token = unsafe {
-        batch.write_registered_raw(
+    unsafe {
+        batch.write_registered_raw_owned(
             handle,
             &buffers,
             span,
+            (),
             0,
             PushOptions::new(),
             WriteCaching::Cached,
@@ -985,9 +994,6 @@ fn get_mut_refuses_a_buffer_with_an_operation_outstanding_but_allows_its_neighbo
         .expect("pop completion")
         .expect("a completion arrives within the bound");
     completion.result().expect("registered write succeeded");
-    let _ = token
-        .claim_if(&completion)
-        .expect("token claims its own completion");
 
     assert_eq!(buffers.outstanding(0), Some(0));
     buffers
@@ -1143,16 +1149,18 @@ fn get_refuses_a_buffer_a_read_is_landing_into_but_allows_one_a_write_is_reading
     let mut batch = Batch::new(&mut ring);
     // SAFETY: `handle` stays open for the whole test, and both tokens below
     // are held until their completions are claimed.
-    let read_token =
-        unsafe { batch.read_registered_raw(handle, &buffers, span(0), 0, PushOptions::new()) }
-            .expect("queue registered read");
+    unsafe {
+        batch.read_registered_raw_owned(handle, &buffers, span(0), (), 0, PushOptions::new())
+    }
+    .expect("queue registered read");
     // A write out of buffer 1: the kernel *reads* through it, so reading it
     // alongside is sound.
-    let write_token = unsafe {
-        batch.write_registered_raw(
+    unsafe {
+        batch.write_registered_raw_owned(
             handle,
             &buffers,
             span(1),
+            (),
             2048,
             PushOptions::new(),
             WriteCaching::Cached,
@@ -1182,29 +1190,18 @@ fn get_refuses_a_buffer_a_read_is_landing_into_but_allows_one_a_write_is_reading
 
     // Drain both, claim both, and buffer 0 becomes readable -- the count only
     // returns to zero against a real popped completion.
+    // One pop per completion, and no guessing. Under the token API this was
+    // a retry dance: `claim_if` handed the token back on a mismatch, so the
+    // loop tried the read's token, then the write's, to discover which
+    // completion had arrived. The ring knows, so the loop does not have to.
     let mut claimed = 0;
-    let mut read_token = Some(read_token);
-    let mut write_token = Some(write_token);
     while claimed < 2 {
-        let Some(completion) = ring.try_pop().expect("pop completion") else {
+        let Some((completion, held)) = ring.try_pop_held().expect("pop completion") else {
             continue;
         };
         completion.result().expect("operation succeeded");
-        if let Some(token) = read_token.take() {
-            match token.claim_if(&completion) {
-                Ok(_) => {
-                    claimed += 1;
-                    continue;
-                }
-                Err(token) => read_token = Some(token),
-            }
-        }
-        if let Some(token) = write_token.take() {
-            match token.claim_if(&completion) {
-                Ok(_) => claimed += 1,
-                Err(token) => write_token = Some(token),
-            }
-        }
+        assert!(held.is_some(), "the ring was holding this operation");
+        claimed += 1;
     }
 
     assert_eq!(buffers.outstanding(0), Some(0));

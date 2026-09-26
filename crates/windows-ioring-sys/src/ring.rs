@@ -808,7 +808,7 @@ impl<T, X> IoRing<T, X> {
     ///
     /// As [`IoRing::try_pop`].
     pub fn try_pop_held(&mut self) -> io::Result<Option<HeldCompletion<T, X>>> {
-        let Some(completion) = self.try_pop()? else {
+        let Some(completion) = self.pop_raw()? else {
             return Ok(None);
         };
         // The outer `Option` is whether this ring stowed anything for that
@@ -1482,6 +1482,17 @@ impl<T, X> IoRing<T, X> {
     /// Returns any error from `PopIoRingCompletion` other than its
     /// documented empty-queue result.
     pub fn try_pop(&mut self) -> io::Result<Option<Completion>> {
+        Ok(self.try_pop_held()?.map(|(completion, _held)| completion))
+    }
+
+    /// Pop a completion without touching the inventory.
+    ///
+    /// The shared body of every pop. It is deliberately private: a pop that
+    /// leaves the entry behind strands whatever the ring was holding, which is
+    /// a defect rather than a mode -- `drain_for_rundown` had exactly that bug
+    /// before `M28.4.1d.1`. Both public forms retire the entry; they differ
+    /// only in whether the caller is handed what it contained.
+    fn pop_raw(&mut self) -> io::Result<Option<Completion>> {
         let mut cqe = IORING_CQE {
             UserData: 0,
             ResultCode: 0,
@@ -1550,7 +1561,7 @@ impl<T, X> IoRing<T, X> {
         &mut self,
         timeout: Duration,
     ) -> io::Result<Option<HeldCompletion<T, X>>> {
-        let Some(completion) = self.pop_within(timeout)? else {
+        let Some(completion) = self.pop_within_raw_with(&mut SubmitWait, timeout)? else {
             return Ok(None);
         };
         let held = self
@@ -1576,9 +1587,26 @@ impl<T, X> IoRing<T, X> {
         wait: &mut W,
         timeout: Duration,
     ) -> io::Result<Option<Completion>> {
+        let Some(completion) = self.pop_within_raw_with(wait, timeout)? else {
+            return Ok(None);
+        };
+        // Retired, not stranded. See `IoRing::pop_raw`.
+        let _retired = self.reclaim(completion.user_data());
+        Ok(Some(completion))
+    }
+
+    /// [`IoRing::pop_within_with`] without touching the inventory.
+    ///
+    /// The counterpart to [`IoRing::pop_raw`], and private for the same
+    /// reason: it is the shared body, not a mode any caller should choose.
+    fn pop_within_raw_with<W: CompletionWait + ?Sized>(
+        &mut self,
+        wait: &mut W,
+        timeout: Duration,
+    ) -> io::Result<Option<Completion>> {
         let deadline = Instant::now().checked_add(timeout);
         loop {
-            if let Some(completion) = self.try_pop()? {
+            if let Some(completion) = self.pop_raw()? {
                 return Ok(Some(completion));
             }
             // Checked *after* the pop, never before: `record_completion` runs
