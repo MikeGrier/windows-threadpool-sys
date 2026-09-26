@@ -269,6 +269,22 @@ about this crate's own surface rather than about storage at all.
 
   **Do not apply the sleep.** It is a diagnostic that identified a window, not a fix, and shipping
   it would convert a reproducible defect into a rare one.
+## M28+ -- Opened by the inventory
+
+- [ ] **M28.7** -- **Decide whether the ring should check conservation itself, rather than a
+  caller driving `RingContract`.** Raised by [D-74](DESIGN-NOTES.md#d-74) and deliberately not
+  taken there. Once the inventory is the only push path, a pop already knows whether the identity
+  was stowed, and `held()`/`outstanding()` are both the ring's own numbers -- so
+  `UnexpectedCompletion`, `DuplicateCompletion` and `Outstanding` are all answerable without a
+  caller reporting anything.
+
+  **Why it is a decision and not a cleanup.** [pending.rs](src/pending.rs) recorded the structural
+  complaint that an oracle's "value depends on being driven correctly by the very code it checks",
+  and this would answer it. But `RingContract` is deliberately *not* wired into `Batch` ([its own
+  rustdoc](src/contract.rs) says why): a ring driven through `push_raw` bypasses this crate's
+  bookkeeping entirely, so an internal hook would cover less than it appears to, and a consumer
+  validating its own harness needs to drive the same rules from outside. Moving the checking
+  inward trades that away. Gated on `M28.4.1d`.
 ## M27 -- What this crate owes the topology planner
 
 **Re-planned 2026-09-23, the same day it was written.** M27 was originally "Adaptivity: the benefit
@@ -399,14 +415,19 @@ every consumer names the type -- which means the migration order matters more th
         inventory form first, populating `Held` for the guarded ones, which is what retires the
         `#[expect(dead_code)]` on `Held` and `FileGuard`.
 
-  - [ ] **M28.4.1c** -- **Decide what becomes of the oracle's leak rules.** With no token a
-        caller can hold, `Violation::LeakedToken`, `observe_deliberate_leak` and `State::Leaked`
-        are written around a hazard that changes shape ([D-73](DESIGN-NOTES.md#d-73)). Narrow
-        `RingContract` or retire part of it deliberately. Gated on `M28.4.1b`, because what the
-        rules should say depends on what the inventory pushes actually guarantee.
+  - [x] **M28.4.1c** -- Decided in [D-74](DESIGN-NOTES.md#d-74): the leak rules **retire** rather
+        than narrow, because a push that hands back only an `OperationId` leaves nothing to drop
+        unclaimed. `State::Pushed` and `State::PushedTokenless` collapse with them. The
+        conservation they approximated becomes `held() == outstanding()`, which the ring can check
+        about itself. `RingContract` keeps the four claims that are about the kernel rather than
+        about a caller's bookkeeping.
 
   - [ ] **M28.4.1d** -- Migrate all 36 test and example files onto the inventory, retire the ten
-        `Token`-returning pushes, and delete or demote `Pending<T, X>`. **Convert all of them or
+        `Token`-returning pushes, and delete or demote `Pending<T, X>`. **Apply
+        [D-74](DESIGN-NOTES.md#d-74) in the same commit**: drop `Violation::LeakedToken`,
+        `State::Leaked`, `observe_claim` and `observe_deliberate_leak`, and collapse the two push
+        states. Leaving them behind would describe a hazard the API no longer has, which is worse
+        than a gap -- a reader would go looking for the way to leak a token and not find one. **Convert all of them or
         none**: converting a few relocates the duplication rather than removing it, which is the
         lesson `win-numa-sys` recorded the same day when it moved one `VirtualAllocExNuma` and
         left the other. This is the step that ends with one token model.
