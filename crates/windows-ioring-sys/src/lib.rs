@@ -225,7 +225,9 @@ pub use pending::Pending;
 #[cfg(all(windows, any(test, feature = "fault-injection")))]
 pub use ring::InjectedFailure;
 #[cfg(windows)]
-pub use ring::{Completion, CompletionWait, IoRing, Op, RingInfo, RingWait, SubmitWait};
+pub use ring::{
+    Completion, CompletionWait, HeldCompletion, IoRing, Op, RingInfo, RingWait, SubmitWait,
+};
 pub use token::{OperationId, Token};
 #[cfg(windows)]
 pub use win_numa_sys::NumaBuffer;

@@ -59,11 +59,10 @@ fn await_one(ring: &mut IoRing) -> Completion {
 
 #[test]
 fn a_failed_read_still_hands_its_buffer_back_when_claimed() {
-    // The documented promise: `claim_if` matches on identity, not on outcome.
-    // A caller that only claims successful completions leaks the buffer of
-    // every failed one -- `Token`'s drop deliberately forgets rather than
-    // frees, which is what keeps the kernel's pointer valid and what makes the
-    // leak permanent.
+    // The documented promise: the buffer comes back on the failure path too.
+    // The ring reclaims at the pop, on identity rather than on outcome, so a
+    // caller who inspects the result first cannot skip the return -- which is
+    // what the ordering test below this one used to be about.
     let path = temp_file("read");
     std::fs::write(&path, b"hello").expect("create the fixture");
     let file = std::fs::OpenOptions::new()
@@ -71,29 +70,38 @@ fn a_failed_read_still_hands_its_buffer_back_when_claimed() {
         .open(&path)
         .expect("open the fixture");
 
-    let mut ring = IoRing::new(16, 16).expect("create a ring");
+    let mut ring = IoRing::<Vec<u8>>::with_inventory(16, 16).expect("create a ring");
     let mut contract = RingContract::new();
     let mut batch = Batch::new(&mut ring);
-    // SAFETY: `file` outlives the operation; the token is claimed below.
-    let token =
-        unsafe { batch.read_raw(file.as_raw_handle(), vec![0_u8; 5], 0, PushOptions::new()) }
-            .expect("queue a read");
-    contract.observe_push(token.id());
+    // SAFETY: `file` outlives the operation; the ring holds the buffer until
+    // the pop below hands it back.
+    let id = unsafe {
+        batch.read_raw_owned(
+            file.as_raw_handle(),
+            vec![0_u8; 5],
+            (),
+            0,
+            PushOptions::new(),
+        )
+    }
+    .expect("queue a read");
+    contract.observe_push(id.user_data());
     batch.submit_and_wait(1, 30_000).expect("submit and wait");
 
-    let completion = await_one(&mut ring);
+    let (completion, held) = ring
+        .pop_within_held(std::time::Duration::from_secs(30))
+        .expect("pop a completion")
+        .expect("a completion arrived within the bound");
     contract.observe_completion(completion.user_data());
+    let (buffer, ()) = held.expect("the ring was holding this read's buffer");
+    contract.observe_claim(completion.user_data());
     let failed = completion.with_injected_failure(InjectedFailure::Ring(RingCondition::Corrupt));
 
     assert!(failed.result().is_err(), "the failure applies");
-    let buffer = token
-        .claim_if(&failed)
-        .expect("a failed completion names its own token exactly as a successful one does");
-    contract.observe_claim(failed.user_data());
-
     assert_eq!(
-        buffer, b"hello",
-        "the buffer comes back on the failure path too -- claiming is what returns it"
+        buffer.expect("a read carries a buffer"),
+        b"hello",
+        "the buffer comes back on the failure path too -- the pop is what returns it"
     );
     contract.assert_quiescent();
 
@@ -113,34 +121,42 @@ fn a_failed_write_still_hands_its_buffer_back_when_claimed() {
         .open(&path)
         .expect("open the fixture");
 
-    let mut ring = IoRing::new(16, 16).expect("create a ring");
+    let mut ring = IoRing::<Vec<u8>>::with_inventory(16, 16).expect("create a ring");
     let mut contract = RingContract::new();
     let mut batch = Batch::new(&mut ring);
-    // SAFETY: `file` outlives the operation; the token is claimed below.
-    let token = unsafe {
-        batch.write_raw(
+    // SAFETY: `file` outlives the operation; the ring holds the buffer until
+    // the pop below hands it back.
+    let id = unsafe {
+        batch.write_raw_owned(
             file.as_raw_handle(),
             vec![7_u8; 4],
+            (),
             0,
             PushOptions::new(),
             WriteCaching::Cached,
         )
     }
     .expect("queue a write");
-    contract.observe_push(token.id());
+    contract.observe_push(id.user_data());
     batch.submit_and_wait(1, 30_000).expect("submit and wait");
 
-    let completion = await_one(&mut ring);
+    let (completion, held) = ring
+        .pop_within_held(std::time::Duration::from_secs(30))
+        .expect("pop a completion")
+        .expect("a completion arrived within the bound");
     contract.observe_completion(completion.user_data());
+    let (buffer, ()) = held.expect("the ring was holding this write's buffer");
+    contract.observe_claim(completion.user_data());
     let failed = completion.with_injected_failure(InjectedFailure::Win32(
         windows_sys::Win32::Foundation::ERROR_DISK_FULL,
     ));
 
     assert!(failed.result().is_err(), "the failure applies");
-    let buffer = token.claim_if(&failed).expect("claims its own completion");
-    contract.observe_claim(failed.user_data());
-
-    assert_eq!(buffer, vec![7_u8; 4], "the source buffer comes back");
+    assert_eq!(
+        buffer.expect("a write carries a buffer"),
+        vec![7_u8; 4],
+        "the source buffer comes back"
+    );
     contract.assert_quiescent();
 
     let _ = std::fs::remove_file(&path);
@@ -428,16 +444,19 @@ fn event_delivery_hands_a_failed_completion_to_the_callback() {
         let mut batch = scope.batch();
         // A cancel naming a `UserData` that is not outstanding: a real error,
         // reported through the completion rather than at push time.
-        let token = batch.cancel(&file, 0xDEAD_BEEF).expect("queue the cancel");
+        batch
+            .cancel_owned(&file, 0xDEAD_BEEF, ())
+            .expect("queue the cancel");
         batch.submit().expect("submit the cancel");
 
-        // Deliberately abandoned. The completion is delivered to a pool
-        // thread, so this thread never gets one to claim against -- and
-        // `Token`'s drop forgets rather than frees, which is what keeps the
-        // file guard alive for as long as the kernel might need it. The ring's
-        // own `outstanding` count is decremented at *pop*, not at claim, so
-        // nothing here blocks rundown.
-        drop(token);
+        // Nothing is abandoned here any more, and the change is worth naming
+        // because this site used to be the clearest illustration of the
+        // hazard. The completion is delivered to a pool thread, so this thread
+        // never sees it -- which under the token API meant deliberately
+        // dropping a `Token` and relying on its `Drop` to *forget* rather than
+        // free, so the file guard outlived the kernel's need for it. The ring
+        // holds that guard now (`D-73`) and releases it at the pop the callback
+        // performs, so there is no abandonment to get right.
     }
 
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);

@@ -96,7 +96,11 @@ fn poison_slot(buffers: &mut RegisteredBuffers<Vec<u8>>, slot: u32, seed: u64) {
 
 /// Register `count` buffers of [`SLOT_LEN`] bytes on `ring`, each filled with
 /// its poison pattern.
-fn registered_arena(ring: &mut IoRing, count: u32, seed: u64) -> RegisteredBuffers<Vec<u8>> {
+fn registered_arena<T, X>(
+    ring: &mut IoRing<T, X>,
+    count: u32,
+    seed: u64,
+) -> RegisteredBuffers<Vec<u8>> {
     let buffers: Vec<Vec<u8>> = (0..count).map(|_| vec![0_u8; SLOT_LEN]).collect();
     let mut batch = Batch::new(ring);
     let pending = batch
@@ -126,8 +130,8 @@ fn registered_arena(ring: &mut IoRing, count: u32, seed: u64) -> RegisteredBuffe
 /// turns a completion that never arrives into a hung harness reporting no
 /// test name at all. `IoRing::pop_within` (M21.2) is the crate's own join
 /// between the two and carries the bound.
-fn await_one(ring: &mut IoRing) -> windows_ioring_sys::Completion {
-    ring.pop_within(std::time::Duration::from_millis(u64::from(WAIT_MS)))
+fn await_one<T, X>(ring: &mut IoRing<T, X>) -> windows_ioring_sys::HeldCompletion<T, X> {
+    ring.pop_within_held(std::time::Duration::from_millis(u64::from(WAIT_MS)))
         .expect("pop a completion")
         .expect("a completion arrived within the bound")
 }
@@ -174,11 +178,12 @@ fn a_registered_write_leaves_its_source_slot_byte_identical() {
         len: u32::try_from(SLOT_LEN).expect("slot length fits u32"),
     };
     let mut batch = Batch::new(&mut ring);
-    let token = batch
-        .write_registered(
+    batch
+        .write_registered_owned(
             &file,
             &buffers,
             span,
+            (),
             0,
             PushOptions::new(),
             WriteCaching::Cached,
@@ -186,12 +191,12 @@ fn a_registered_write_leaves_its_source_slot_byte_identical() {
         .expect("queue a registered write");
     batch.submit().expect("submit the write");
 
-    let completion = await_one(&mut ring);
+    // The pop is what releases the registration lease: the ring holds it
+    // (`D-73`) and drops it as the entry retires, so the slot's outstanding
+    // count is back to zero by the time this returns.
+    let (completion, held) = await_one(&mut ring);
+    assert!(held.is_some(), "the ring was holding this operation");
     let written = completion.result().expect("the write succeeded");
-    let released = token
-        .claim_if(&completion)
-        .expect("the token claims its own completion");
-    drop(released);
 
     assert_eq!(written, SLOT_LEN, "the whole slot should have been written");
 
@@ -233,17 +238,16 @@ fn a_registered_read_writes_only_inside_the_span_it_was_given() {
         len: LEN,
     };
     let mut batch = Batch::new(&mut ring);
-    let token = batch
-        .read_registered(&file, &buffers, span, 0, PushOptions::new())
+    batch
+        .read_registered_owned(&file, &buffers, span, (), 0, PushOptions::new())
         .expect("queue a registered read");
     batch.submit().expect("submit the read");
 
-    let completion = await_one(&mut ring);
+    // The pop releases the registration lease -- see the note on the write
+    // above.
+    let (completion, held) = await_one(&mut ring);
+    assert!(held.is_some(), "the ring was holding this operation");
     let read = completion.result().expect("the read succeeded");
-    let released = token
-        .claim_if(&completion)
-        .expect("the token claims its own completion");
-    drop(released);
 
     assert_eq!(read, LEN as usize, "the whole span should have been read");
 
@@ -304,17 +308,16 @@ fn a_short_read_leaves_the_unfilled_remainder_of_the_span_untouched() {
         len: SPAN_LEN,
     };
     let mut batch = Batch::new(&mut ring);
-    let token = batch
-        .read_registered(&file, &buffers, span, 0, PushOptions::new())
+    batch
+        .read_registered_owned(&file, &buffers, span, (), 0, PushOptions::new())
         .expect("queue a registered read");
     batch.submit().expect("submit the read");
 
-    let completion = await_one(&mut ring);
+    // The pop releases the registration lease -- see the note on the write
+    // above.
+    let (completion, held) = await_one(&mut ring);
+    assert!(held.is_some(), "the ring was holding this operation");
     let read = completion.result().expect("the read succeeded");
-    let released = token
-        .claim_if(&completion)
-        .expect("the token claims its own completion");
-    drop(released);
 
     assert_eq!(read, FILE_LEN, "only the file's bytes should have arrived");
 
@@ -360,17 +363,14 @@ fn a_read_into_one_slot_leaves_its_neighbours_untouched() {
         len: LEN,
     };
     let mut batch = Batch::new(&mut ring);
-    let token = batch
-        .read_registered(&file, &buffers, span, 0, PushOptions::new())
+    batch
+        .read_registered_owned(&file, &buffers, span, (), 0, PushOptions::new())
         .expect("queue a registered read");
     batch.submit().expect("submit the read");
 
-    let completion = await_one(&mut ring);
+    let (completion, held) = await_one(&mut ring);
+    assert!(held.is_some(), "the ring was holding this operation");
     completion.result().expect("the read succeeded");
-    let released = token
-        .claim_if(&completion)
-        .expect("the token claims its own completion");
-    drop(released);
 
     for slot in [0_u32, 2] {
         let bytes = buffers.get(slot).expect("neighbour slot is quiet");
@@ -419,7 +419,7 @@ fn a_mixed_workload_leaves_every_unaccounted_byte_poisoned() {
     let read_file = open_shared(&read_path, false);
     let write_file = open_shared(&write_path, true);
 
-    let mut ring = IoRing::new(32, 64).expect("create a ring");
+    let mut ring = IoRing::<(), (u32, u32, bool)>::with_inventory(32, 64).expect("create a ring");
     let mut buffers = registered_arena(&mut ring, SLOTS, seed);
 
     let mut slots: Vec<Slot> = (0..SLOTS)
@@ -447,7 +447,7 @@ fn a_mixed_workload_leaves_every_unaccounted_byte_poisoned() {
     // every operation complete exactly once and give back what it held".
     let mut contract = RingContract::new();
 
-    let mut pending = Vec::new();
+    let mut outstanding = 0_usize;
     for (slot, offset, len) in reads {
         let span = RegisteredSpan {
             buffer_index: slot,
@@ -455,12 +455,22 @@ fn a_mixed_workload_leaves_every_unaccounted_byte_poisoned() {
             len,
         };
         let mut batch = Batch::new(&mut ring);
-        let token = batch
-            .read_registered(&read_file, &buffers, span, 0, PushOptions::new())
+        // The `(slot, offset, is_read)` triple the drain needs is the sidecar,
+        // so it travels with the operation instead of being parked in a vector
+        // the drain then has to search by identity.
+        let id = batch
+            .read_registered_owned(
+                &read_file,
+                &buffers,
+                span,
+                (slot, offset, true),
+                0,
+                PushOptions::new(),
+            )
             .expect("queue a registered read");
         batch.submit().expect("submit the read");
-        contract.observe_push(token.id());
-        pending.push((token, slot, offset, true));
+        contract.observe_push(id.user_data());
+        outstanding += 1;
     }
     for (slot, offset, len) in writes {
         let span = RegisteredSpan {
@@ -469,42 +479,37 @@ fn a_mixed_workload_leaves_every_unaccounted_byte_poisoned() {
             len,
         };
         let mut batch = Batch::new(&mut ring);
-        let token = batch
-            .write_registered(
+        let id = batch
+            .write_registered_owned(
                 &write_file,
                 &buffers,
                 span,
+                (slot, offset, false),
                 u64::from(offset),
                 PushOptions::new(),
                 WriteCaching::Cached,
             )
             .expect("queue a registered write");
         batch.submit().expect("submit the write");
-        contract.observe_push(token.id());
-        pending.push((token, slot, offset, false));
+        contract.observe_push(id.user_data());
+        outstanding += 1;
     }
 
     // Drain every completion, accounting for each as it arrives. Completions
     // come back in whatever order the ring reports them, which is why the
     // witness merges permissions rather than requiring ascending offsets.
-    while !pending.is_empty() {
-        let completion = await_one(&mut ring);
+    while outstanding > 0 {
+        let (completion, held) = await_one(&mut ring);
         contract.observe_completion(completion.user_data());
         let transferred = completion.result().expect("the operation succeeded");
-        let position = pending
-            .iter()
-            .position(|(token, ..)| token.id() == completion.user_data())
-            .expect("a completion must belong to a pushed operation");
-        let (token, slot, offset, is_read) = pending.swap_remove(position);
-        let user_data = token.id();
-        let released = token
-            .claim_if(&completion)
-            .expect("the token claims its own completion");
-        // Claimed *after* the `RegisteredUse` is dropped, since that is what
-        // returns the buffer's outstanding count to zero -- and the count is
-        // what `observe_buffer` reports below.
-        drop(released);
-        contract.observe_claim(user_data);
+        // No search: the pop returns what this operation was pushed with. The
+        // `RegisteredUse` is dropped by the same pop, which is what returns
+        // the buffer's outstanding count to zero -- and that count is what
+        // `observe_buffer` reports below.
+        let (_payload, (slot, offset, is_read)) =
+            held.expect("a completion must belong to a pushed operation");
+        contract.observe_claim(completion.user_data());
+        outstanding -= 1;
 
         if is_read {
             let entry = &mut slots[slot as usize];
