@@ -203,7 +203,7 @@ fn a_failed_flush_reports_its_error_and_leaves_the_ring_usable() {
         )
     }
     .expect("queue a flush");
-    contract.observe_tokenless_push(first);
+    contract.observe_push(first);
     batch.submit_and_wait(1, 30_000).expect("submit and wait");
 
     let completion = await_one(&mut ring);
@@ -233,7 +233,7 @@ fn a_failed_flush_reports_its_error_and_leaves_the_ring_usable() {
         )
     }
     .expect("a failed operation must not stop the ring accepting pushes");
-    contract.observe_tokenless_push(second);
+    contract.observe_push(second);
     batch.submit_and_wait(1, 30_000).expect("submit and wait");
     let completion = await_one(&mut ring);
     contract.observe_completion(completion.user_data());

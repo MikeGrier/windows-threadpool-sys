@@ -920,6 +920,18 @@
       ]
     },
     {
+      "name": "M28.5: the ring miscounts what it is holding",
+      "file": "src/ring.rs",
+      "expect": "caught",
+      "why": "D-75 says a `_raw` push creates no entry, so a ring given one owned push and one raw push holds exactly one thing. `held()` is how that is observable, and off-by-one is the shape that makes it wrong while still looking like a count: the ring claims to be holding something for the raw push, and the quiescence check at the end of every inventory test stops meaning anything.\n\nThe patch is deliberately arithmetic rather than a manufactured payload. Making the pop return a `Some` it did not have requires an `X` out of thin air, and `std::mem::zeroed()` is not that: on a ring whose sidecar is `&'static str` it produces a null reference, and the suite dies with STATUS_STACK_BUFFER_OVERRUN (0xC0000409) -- measured. That scores `caught` because the process died, which is a weaker claim than an assertion and depends on which rings the suite happens to build. This version fails by assertion on every ring.",
+      "find": [
+        "    pub fn held(&self) -> usize {\n        self.inventory.len()\n    }"
+      ],
+      "replace": [
+        "    pub fn held(&self) -> usize {\n        self.inventory.len() + 1\n    }"
+      ]
+    },
+    {
       "name": "CONTROL: rewording a statement changes nothing",
       "file": "examples/epoch_log/contract.rs",
       "expect": "survives",

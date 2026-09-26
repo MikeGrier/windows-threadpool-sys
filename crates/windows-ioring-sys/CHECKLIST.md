@@ -480,13 +480,7 @@ every consumer names the type -- which means the migration order matters more th
 
   - [x] **M28.4.2** -- Five inventory sabotages added (push, both pops, both appender halves); the sweep also found `d.3` had broken the manifest. -> [completed 2026-09-26](COMPLETED-CHECKLIST.md#m2842)
 
-- [ ] **M28.5** -- **Answer the tokenless push.** `flush_raw` returns a bare `usize` and
-  `epoch_log`'s commit path depends on it, because a flush has no buffer and a *borrowed*
-  `RawHandle` gives its token nothing to guard. An inventory the ring owns has to say what it
-  does with operations that have no token -- `RingContract` already models them separately with
-  `observe_tokenless_push`. Note this may dissolve rather than need solving: if the sample owned
-  a `SharedFile` instead of passing a `RawHandle` it could use the safe `flush` and get a token,
-  which `M25.3` reopens anyway by changing how the log is opened.
+- [x] **M28.5** -- `observe_tokenless_push` retired; the outer `None` has two causes the caller distinguishes, recorded as `D-75` and asserted both ways. -> [completed 2026-09-26](COMPLETED-CHECKLIST.md#m285)
 
 - [ ] **M28.6** -- **Sweep what the break makes false**, including the README's ring examples, the
   `D-4` detail section, and every rustdoc that tells a caller to match a completion against a

@@ -41,7 +41,7 @@
 //! Not every push carries a token: the `_raw` flush and cancel entry points
 //! return a bare `user_data`, because they own nothing a claim could hand
 //! back. Report those with
-//! [`RingContract::observe_tokenless_push`](crate::contract::RingContract::observe_tokenless_push),
+//! [`RingContract::observe_push`](crate::contract::RingContract::observe_push),
 //! or the oracle will demand a claim that cannot be made.
 //! | Nothing is outstanding at quiescence | what `IoRing::run_down`'s termination depends on |
 //!
@@ -148,8 +148,9 @@ impl fmt::Display for Violation {
 /// What one operation *still being tracked* is known to have done so far.
 ///
 /// Terminal outcomes are deliberately absent. An operation that finishes --
-/// claimed, or tokenless and completed, or deliberately abandoned -- leaves
-/// this map entirely and its identity moves to the bounded history described
+/// which since [D-74](../DESIGN-NOTES.md#d-74) means simply that its
+/// completion was popped -- leaves this map entirely and its identity moves
+/// to the bounded history described
 /// on [`RingContract`], because retaining a terminal entry per operation is
 /// what made the oracle grow without limit (M28.2).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -248,17 +249,15 @@ impl RingContract {
     /// synchronously releases its reservation and produces no completion, so
     /// reporting it would manufacture an [`Violation::Outstanding`] at
     /// teardown.
+    /// There is one push observer, as of `M28.5`. There were two:
+    /// `observe_push` recorded an SQE that carried no token to
+    /// claim -- the `_raw` flush and cancel entry points -- because reporting
+    /// one as an ordinary push produced a leak violation its caller had no
+    /// way to satisfy, there being no token to claim. [D-74](../DESIGN-NOTES.md#d-74)
+    /// removed the leak rule, which made the two identical in body as well as
+    /// in purpose, and two names for one behaviour is a restatement waiting
+    /// for the next change to reach only one of them.
     pub fn observe_push(&mut self, user_data: usize) {
-        self.operations.insert(user_data, State::Pushed);
-    }
-
-    /// Record that an SQE was queued that carries **no token** to claim.
-    ///
-    /// The `_raw` flush and cancel entry points return a bare `user_data`
-    /// rather than a token, because they owned nothing a claim could
-    /// hand back. Reporting one through [`RingContract::observe_push`] would
-    /// produce a leak violation the caller had no way to satisfy.
-    pub fn observe_tokenless_push(&mut self, user_data: usize) {
         self.operations.insert(user_data, State::Pushed);
     }
 

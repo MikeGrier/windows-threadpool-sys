@@ -798,11 +798,17 @@ impl<T, X> IoRing<T, X> {
     /// Take back what an operation was holding, if this ring was holding
     /// anything for it.
     ///
-    /// `None` covers two different situations on purpose, because the ring
-    /// cannot tell them apart and should not pretend to: a push that carried
-    /// nothing to give back (`M28.5`), and a completion for an identity this
-    /// ring never stowed. The second is a contract violation that
+    /// `None` covers two situations, and the ring genuinely cannot tell them
+    /// apart: a push that created no entry at all -- the `_raw` flush and
+    /// cancel forms, which take a borrowed handle and return a bare
+    /// `user_data` -- and a completion for an identity this ring never
+    /// stowed, which is a contract violation
     /// [`crate::contract::RingContract`] is the thing that reports.
+    ///
+    /// `M28.5` settled that this is the right place to stop. The *caller*
+    /// can tell them apart, because the distinction is which push they chose,
+    /// and pushing that knowledge into the ring would mean an entry for every
+    /// raw push -- which needs an `X` the caller never supplied.
     pub(crate) fn reclaim(&mut self, user_data: usize) -> Option<Entry<T, X>> {
         self.inventory.remove(&user_data)
     }
@@ -816,12 +822,31 @@ impl<T, X> IoRing<T, X> {
     /// the memory it may still be using. [`crate::OperationId`] deliberately
     /// cannot do it.
     ///
-    /// The outer `None` means this ring was holding nothing for that
-    /// identity -- a completion for something never stowed, which
-    /// [`crate::contract::RingContract`] is the thing that reports. A `Some`
-    /// whose payload is `None` is the different and legitimate case of an
-    /// operation that never had a buffer, such as a flush or a cancellation;
-    /// its sidecar still arrives.
+    /// # What each `None` means
+    ///
+    /// There are two, and they answer different questions.
+    ///
+    /// A `Some` whose **payload** is `None` is an operation that never had a
+    /// buffer -- a flush or a cancellation pushed through an `_owned` form.
+    /// Its sidecar still arrives, which is the point: a flush can say which
+    /// group of writes it belonged to.
+    ///
+    /// The **outer** `None` means this ring is holding nothing for that
+    /// identity, and it has two legitimate-and-not causes that the ring
+    /// cannot separate:
+    ///
+    /// - The completion belongs to a `_raw` flush or cancel. Those take a
+    ///   borrowed handle, return a bare `user_data`, and deliberately create
+    ///   no entry -- choosing one *is* choosing not to have the ring hold
+    ///   anything. Nothing is wrong.
+    /// - The completion carries an identity this ring never stowed, which is
+    ///   a contract violation. [`crate::contract::RingContract`] reports it;
+    ///   this method does not, because it cannot.
+    ///
+    /// A caller can always tell which, because it is the same caller that
+    /// chose the push. `M28.5` decided not to close the gap by giving every
+    /// raw push an entry: that would need an `X` the caller never supplied,
+    /// and the `_owned` forms already exist for a caller who wants one.
     ///
     /// # Errors
     ///

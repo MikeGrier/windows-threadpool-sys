@@ -4053,3 +4053,38 @@ one at a time, and `pop_within` went a full milestone without it.
 guarantee survived its type -- `Appender` keeps a `RingContract` and must observe both
 ends -- so it is relocated to the appender, alongside a new completion-side case that
 replaces the retired `M22.2` ordering one.
+## Moved 2026-09-26 13:05:21 -04:00 -- M28.5, the tokenless push
+
+### <a id="m285"></a>M28.5 -- Answer the tokenless push. *(completed 2026-09-26 13:05:21 -04:00)*
+
+**Answer the tokenless push.** `flush_raw` returns a bare `usize` and
+`epoch_log`'s commit path depends on it, because a flush has no buffer and a *borrowed*
+`RawHandle` gives its token nothing to guard. An inventory the ring owns has to say what it
+does with operations that have no token -- `RingContract` already models them separately with
+`observe_tokenless_push`. Note this may dissolve rather than need solving: if the sample owned
+a `SharedFile` instead of passing a `RawHandle` it could use the safe `flush` and get a token,
+which `M25.3` reopens anyway by changing how the log is opened.
+
+**Most of the question had already dissolved, but not the way this item guessed.** It
+expected the sample to stop passing a `RawHandle`. What actually happened is that
+`D-74` collapsed the two push states, which left `RingContract::observe_tokenless_push`
+**byte-identical** to `observe_push`, with a doc describing a leak violation that no
+longer exists. Two names for one behaviour is what `FAIL FAST` rule 1 is about, so the
+tokenless one retired and its eight call sites moved.
+
+**What genuinely remained was the meaning of the outer `None` from a pop**, and the
+public doc was wrong about it: it said `None` meant a contract violation, when a
+`_raw` flush legitimately produces one. Recorded as [D-75](DESIGN-NOTES.md#d-75). The
+answer is that the ring cannot separate the two causes and does not try -- the caller
+can, because it chose the push. Closing the gap was considered and rejected: an entry for
+every raw push needs an `X` the caller never supplied, which is the residue `D-73`
+named, and the `_owned` forms already serve a caller who wants one.
+
+**The contract is now asserted rather than only documented**, bidirectionally on one ring,
+because a test showing only one side would pass against a ring that answered the same way
+every time. Two things came out of verifying it by sabotage. Patching `try_pop` left the
+test green -- it pops with `pop_within` -- which is the same separation `M28.4.2`
+asserts with two cases rather than one. And the first manifest case was crash-caught
+(STATUS_STACK_BUFFER_OVERRUN): manufacturing a payload needs an `X` from nowhere, and
+`std::mem::zeroed()` on a ring whose sidecar is `&'static str` is a null reference.
+The case is arithmetic now, and fails by assertion on every ring.

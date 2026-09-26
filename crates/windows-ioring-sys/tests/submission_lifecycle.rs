@@ -136,12 +136,14 @@ fn pushing_past_submission_queue_capacity_reports_backpressure_and_the_ring_stay
         .expect("open");
     let handle = file.as_raw_handle();
 
-    // This test is the reason `observe_tokenless_push` exists (M16.2): it
-    // pushes nothing but raw flushes, which return a bare `user_data` because
-    // they own nothing a token could hand back. It also exercises the rule's
-    // other half -- the rejected push is deliberately *not* observed, because
-    // a `Build*` that fails synchronously releases its reservation and
-    // produces no completion.
+    // This test was the reason `observe_tokenless_push` existed (M16.2), and
+    // `M28.5` retired that method without retiring the case. It pushes
+    // nothing but raw flushes, which return a bare `user_data` and create no
+    // inventory entry -- the ring holds nothing for them, by the caller's own
+    // choice of push. What still needs exercising is the rule's other half:
+    // the rejected push is deliberately *not* observed, because a `Build*`
+    // that fails synchronously releases its reservation and produces no
+    // completion.
     let mut contract = RingContract::new();
     let mut queued = 0_u32;
     let overflow_error = {
@@ -150,7 +152,7 @@ fn pushing_past_submission_queue_capacity_reports_backpressure_and_the_ring_stay
             // SAFETY: `handle` stays open for the whole test.
             match unsafe { batch.flush_raw(handle, FlushCoverage::Unordered, FlushMode::Default) } {
                 Ok(user_data) => {
-                    contract.observe_tokenless_push(user_data);
+                    contract.observe_push(user_data);
                     queued += 1;
                     assert!(
                         queued <= capacity + 1,
@@ -203,7 +205,7 @@ fn pushing_past_submission_queue_capacity_reports_backpressure_and_the_ring_stay
     let user_data =
         unsafe { batch.flush_raw(handle, FlushCoverage::Unordered, FlushMode::Default) }
             .expect("ring still accepts pushes after backpressure");
-    contract.observe_tokenless_push(user_data);
+    contract.observe_push(user_data);
     batch.submit_and_wait(1, 5_000).expect("submit and wait");
     let (completion, _held) = ring
         .pop_within(POP_BOUND)

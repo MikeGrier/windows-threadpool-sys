@@ -10,7 +10,7 @@
 
 use std::io::Write;
 
-use windows_ioring_sys::{Batch, IoRing, PushOptions};
+use windows_ioring_sys::{Batch, FlushCoverage, FlushMode, IoRing, PushOptions};
 
 const LEN: usize = 4096;
 
@@ -161,5 +161,81 @@ fn a_guarded_push_keeps_the_file_alive_after_the_caller_drops_its_handle() {
         "the read completed against a file only the ring was still holding"
     );
 
+    let _ = std::fs::remove_file(&path);
+}
+
+/// A `_raw` push holds nothing; an `_owned` push holds something (`M28.5`).
+///
+/// Both directions on one ring, because the claim is about the *difference*
+/// and a test showing only one side would pass against a ring that answered
+/// the same way every time.
+///
+/// This is what `M28.5` settled. The outer `None` from a pop has two causes
+/// the ring cannot separate -- a push that created no entry, and a completion
+/// for an identity never stowed, which is a contract violation. The ring does
+/// not try: the caller can always tell, because it is the same caller that
+/// chose the push. That is a real contract with a real consequence, so it is
+/// asserted rather than only documented.
+#[test]
+fn a_raw_push_holds_nothing_and_an_owned_push_holds_its_payload() {
+    use std::os::windows::io::AsRawHandle;
+
+    let (path, file) = fixture("raw-vs-owned");
+    let handle = file.as_raw_handle();
+    let mut ring: IoRing<Vec<u8>> = IoRing::with_inventory(8, 8).expect("create ring");
+
+    let (read_id, flush_id) = {
+        let mut batch = Batch::new(&mut ring);
+        // SAFETY: `file` outlives both operations -- it is dropped at the end
+        // of this test, after both completions have been popped.
+        let read_id =
+            unsafe { batch.read_raw_owned(handle, vec![0_u8; LEN], (), 0, PushOptions::new()) }
+                .expect("queue an owned read");
+        // SAFETY: as above. This is the tokenless shape: a borrowed handle, a
+        // bare `user_data` back, and no entry in the ring.
+        let flush_id =
+            unsafe { batch.flush_raw(handle, FlushCoverage::Unordered, FlushMode::Default) }
+                .expect("queue a raw flush");
+        batch
+            .submit_and_wait(2, 30_000)
+            .expect("submit and wait for both");
+        (read_id.user_data(), flush_id)
+    };
+
+    assert_eq!(
+        ring.held(),
+        1,
+        "the ring holds the read's buffer and nothing for the raw flush"
+    );
+
+    let mut saw_read = false;
+    let mut saw_flush = false;
+    for _ in 0..2 {
+        let (completion, held) = ring
+            .pop_within(std::time::Duration::from_secs(30))
+            .expect("pop")
+            .expect("both operations complete within the bound");
+        if completion.user_data() == read_id {
+            let (buffer, ()) = held.expect("the ring was holding the read's buffer");
+            assert_eq!(
+                buffer.expect("a read carries a buffer").len(),
+                LEN,
+                "the owned push hands its payload back"
+            );
+            saw_read = true;
+        } else if completion.user_data() == flush_id {
+            assert!(
+                held.is_none(),
+                "a raw push creates no entry, so the ring holds nothing for it"
+            );
+            saw_flush = true;
+        } else {
+            panic!("a completion arrived for an operation this test never pushed");
+        }
+    }
+    assert!(saw_read && saw_flush, "both completions must be observed");
+    assert_eq!(ring.held(), 0, "nothing is left held");
+
+    drop(file);
     let _ = std::fs::remove_file(&path);
 }

@@ -253,7 +253,7 @@ fn a_tokenless_operation_is_complete_once_it_completes() {
     // Found by binding the real backpressure test in `submission_lifecycle.rs`
     // to this contract (M16.2), which pushes nothing but raw flushes.
     let mut contract = RingContract::new();
-    contract.observe_tokenless_push(1);
+    contract.observe_push(1);
     contract.observe_completion(1);
 
     assert_eq!(contract.check_quiescent(), Vec::new());
@@ -263,7 +263,7 @@ fn a_tokenless_operation_is_complete_once_it_completes() {
 fn a_tokenless_operation_that_never_completes_is_still_reported() {
     // Owning no token does not excuse it from the one-SQE-one-completion rule.
     let mut contract = RingContract::new();
-    contract.observe_tokenless_push(2);
+    contract.observe_push(2);
 
     assert_eq!(
         contract.check_quiescent(),
@@ -274,7 +274,7 @@ fn a_tokenless_operation_that_never_completes_is_still_reported() {
 #[test]
 fn a_tokenless_operation_completing_twice_is_still_a_duplicate() {
     let mut contract = RingContract::new();
-    contract.observe_tokenless_push(3);
+    contract.observe_push(3);
     contract.observe_completion(3);
     contract.observe_completion(3);
 
@@ -297,7 +297,7 @@ fn a_push_that_was_rejected_is_simply_never_observed() {
     // Nothing in the API enforces this -- it is a rule about what a caller
     // reports -- so it is written down as a test to make the intent legible.
     let mut contract = RingContract::new();
-    contract.observe_tokenless_push(1);
+    contract.observe_push(1);
     contract.observe_completion(1);
     // A second push was attempted here and rejected with queue-full. It is
     // deliberately not observed.
