@@ -273,6 +273,29 @@ about this crate's own surface rather than about storage at all.
 
 - [x] **M28.7** -- Decided against: the ring can answer 1 of 4 violations, and an internal check would be wrong about 13 live `_raw` push sites. -> [completed 2026-09-26](COMPLETED-CHECKLIST.md#m287)
 
+- [ ] **M28.8** -- **Give `RingContract` an in-flight count, and delete the counter that
+  duplicates it.** [`Appender`](examples/epoch_log/append.rs) keeps `outstanding: usize`
+  next to its `RingContract`, incremented at every push and decremented at every
+  completion -- two hand-driven lines at each of two sites. The oracle already knows that
+  number: it is what [`RingContract::check_quiescent`](src/contract.rs) computes
+  `Violation::Outstanding` from. The counter exists only because the oracle has no
+  accessor for it, and [main.rs](examples/epoch_log/main.rs) needs `in_flight() > 0` for
+  its two drain loops.
+
+  Add `RingContract::in_flight()`, have `Appender::in_flight` read it, delete
+  `Appender::outstanding`. One source of truth. Sabotage the accessor to confirm the
+  drain loops genuinely depend on it rather than terminating for another reason.
+
+  **Why this is worth an item.** It is the residue of the complaint that started
+  [D-55](DESIGN-NOTES.md#d-55): an oracle driven *beside* a consumer's own record of the
+  same event, "a restatement in the repository's own terms, and one that can drift in both
+  directions" -- see
+  [DESIGN-SESSION-2026-09-23-pending-inventory.md](design-sessions/DESIGN-SESSION-2026-09-23-pending-inventory.md).
+  `M23.3`'s `Pending<T, X>` had closed it, by making one call drive both the map and the
+  oracle. **`M28.4.1d.3` retired `Pending<T, X>` and re-opened it in a smaller form**, and
+  that went unnoticed because a `usize` counter looks nothing like the map it replaced.
+  This is not [M28.7](COMPLETED-CHECKLIST.md#m287) in another guise: nothing moves into
+  the ring, so [D-75](DESIGN-NOTES.md#d-75)'s objection does not apply.
 ## M27 -- What this crate owes the topology planner
 
 **Re-planned 2026-09-23, the same day it was written.** M27 was originally "Adaptivity: the benefit
