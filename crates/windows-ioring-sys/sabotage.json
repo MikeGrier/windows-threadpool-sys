@@ -913,10 +913,10 @@
       "expect": "caught",
       "why": "The replacement for the retired `M22.2` ordering case. The hazard M22.2 found -- checking a write's result before claiming, so a failed write leaked its arena slot -- cannot be re-injected now, because the pop releases the slot before `claim` runs. What can still go wrong is the accounting: an appender that pops but never tells its oracle leaves the operation outstanding forever, which is the same silent-until-the-arena-runs-dry shape one layer up.",
       "find": [
-        "        self.contract.observe_completion(completion.user_data());\n        self.outstanding -= 1;"
+        "        self.contract.observe_completion(completion.user_data());\n        debug_assert!("
       ],
       "replace": [
-        "        self.outstanding -= 1;"
+        "        debug_assert!("
       ]
     },
     {
