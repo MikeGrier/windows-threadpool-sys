@@ -3837,3 +3837,19 @@ the first is what `M28` moves. The item as it read when it closed:
   first is a smaller change that may not be worth breaking for. Settle it with the
   `Token::claim_if` safety argument in hand, since that is what currently makes a mismatched
   completion unclaimable.
+
+## Moved 2026-09-25 21:12:00 -04:00 -- M28.2, bounding the contract oracle
+
+### <a id="m282"></a>M28.2 -- `RingContract` is bounded by operations in flight: terminal entries are retired, and a capped history keeps a duplicate distinguishable from an unrecognised completion. *(completed 2026-09-25 21:12:00 -04:00)*
+
+The decision, including why naive pruning was rejected as worse than the leak, is
+[D-72](DESIGN-NOTES.md#d-72). The item as it read when it closed:
+
+- [x] **M28.2** -- **Bound `RingContract` before anything depends on it more heavily.**
+  `operations: HashMap<usize, State>` is never pruned -- `observe_claim` marks an entry
+  `Completed` and keeps it -- so the oracle retains one entry per operation for the process's
+  life. Undocumented, and not visible in the sample because it appends 24 records. A long-running
+  consumer following the crate's own recommendation leaks. This blocks any design that checks by
+  default, which is why it is here rather than filed separately: `M23.3` reached for always-on
+  checking and this is what ruled it out. Decide whether completed entries are dropped, whether
+  `check_quiescent` needs them, and document the answer either way.

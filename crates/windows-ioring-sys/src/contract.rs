@@ -80,7 +80,7 @@
 //! - **That a caller pushed anything sensible.** This checks conservation of
 //!   what was pushed, not that pushing it was a good idea.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::fmt;
 
 /// A conservation rule this crate promises, broken.
@@ -161,7 +161,13 @@ impl fmt::Display for Violation {
     }
 }
 
-/// What one observed operation is known to have done so far.
+/// What one operation *still being tracked* is known to have done so far.
+///
+/// Terminal outcomes are deliberately absent. An operation that finishes --
+/// claimed, or tokenless and completed, or deliberately abandoned -- leaves
+/// this map entirely and its identity moves to the bounded history described
+/// on [`RingContract`], because retaining a terminal entry per operation is
+/// what made the oracle grow without limit (M28.2).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum State {
     /// Queued with a token to claim, no completion seen.
@@ -174,13 +180,27 @@ enum State {
     /// `LeakedToken` for every one -- a violation that is not merely wrong but
     /// unfixable by the caller, since there is no token to claim.
     PushedTokenless,
-    /// Completed exactly once, and its token claimed (or none was owed).
-    Completed,
-    /// Completed, but its token was dropped unclaimed.
+    /// Completed, but its token has not been claimed.
+    ///
+    /// Provisional rather than final: [`RingContract::observe_claim`] retires
+    /// it. It stays in the map because [`RingContract::check_quiescent`] reads
+    /// it, which is exactly what distinguishes it from a terminal state.
     Leaked,
-    /// Deliberately abandoned by a caller who said so.
-    DeliberatelyLeaked,
 }
+
+/// How many finished identities the oracle remembers for duplicate diagnosis.
+///
+/// A **diagnostic window, not a correctness parameter.** Nothing is missed
+/// when a duplicate falls outside it: the completion is still reported, as
+/// [`Violation::UnexpectedCompletion`] rather than
+/// [`Violation::DuplicateCompletion`]. What the window buys is the *stronger*
+/// of the two claims, which the variants' own docs explain is worth keeping --
+/// a duplicate cannot be explained away by a caller forgetting to report a
+/// push, and an unrecognised identity can.
+///
+/// Changing it is not a breaking change. It trades a fixed amount of memory
+/// for how far back a duplicate is still named precisely.
+const FINISHED_HISTORY: usize = 1024;
 
 /// An executable form of this crate's conservation rules.
 ///
@@ -189,6 +209,27 @@ enum State {
 /// any of this crate's bookkeeping being involved at all, so an internal hook
 /// would silently cover less than it appears to. And a consumer validating its
 /// own harness needs to drive the same rules from outside.
+///
+/// # What this costs to run, which is bounded (M28.2)
+///
+/// Memory here is a function of **operations in flight**, not of operations
+/// ever performed. An operation that finishes leaves the tracking map, so a
+/// consumer that pushes and claims forever holds a map whose size follows its
+/// own concurrency rather than its uptime.
+///
+/// That was not true before M28.2: a claimed operation was marked `Completed`
+/// and kept, so the oracle retained one entry per operation for the life of
+/// the process. The sample never showed it because it appends 24 records, and
+/// nothing documented it -- so a long-running consumer following this crate's
+/// own recommendation grew without limit. It is also why an always-on checked
+/// inventory was ruled out in `M23.3`, since a check that cannot be left
+/// running is not a check.
+///
+/// Retiring an entry would lose the ability to call a later completion for it
+/// a *duplicate* rather than merely unrecognised, so the last
+/// [`FINISHED_HISTORY`] finished identities are remembered for that purpose
+/// alone. Beyond that window a duplicate is still reported, under the weaker
+/// name.
 ///
 /// # Example
 ///
@@ -203,7 +244,15 @@ enum State {
 /// ```
 #[derive(Debug, Default)]
 pub struct RingContract {
+    /// Operations still being tracked. Terminal outcomes are not kept here;
+    /// see the type's own documentation for why.
     operations: HashMap<usize, State>,
+    /// Identities that finished, most recent last, capped at
+    /// [`FINISHED_HISTORY`]. Paired with `finished_set` so the membership test
+    /// stays O(1) -- the queue exists only to know which one to evict.
+    finished: VecDeque<usize>,
+    /// Membership index over `finished`, held in step with it.
+    finished_set: HashSet<usize>,
     /// Per registered-buffer outstanding counts, as the caller reports them.
     buffers: HashMap<u32, usize>,
     violations: Vec<Violation>,
@@ -239,9 +288,18 @@ impl RingContract {
     /// Record a completion popped from the ring.
     pub fn observe_completion(&mut self, user_data: usize) {
         match self.operations.get(&user_data) {
-            None => self
-                .violations
-                .push(Violation::UnexpectedCompletion { user_data }),
+            None => {
+                // Not tracked. Either it finished already -- which the
+                // history can still prove, and which is the stronger claim --
+                // or no observed push ever produced it.
+                if self.finished_set.contains(&user_data) {
+                    self.violations
+                        .push(Violation::DuplicateCompletion { user_data });
+                } else {
+                    self.violations
+                        .push(Violation::UnexpectedCompletion { user_data });
+                }
+            }
             Some(State::Pushed) => {
                 // Provisionally leaked: a completion whose token is never
                 // claimed *is* a leak, so this is corrected by
@@ -250,9 +308,9 @@ impl RingContract {
             }
             Some(State::PushedTokenless) => {
                 // Nothing was owed, so completing is the end of the story.
-                self.operations.insert(user_data, State::Completed);
+                self.retire(user_data);
             }
-            Some(_) => self
+            Some(State::Leaked) => self
                 .violations
                 .push(Violation::DuplicateCompletion { user_data }),
         }
@@ -261,8 +319,25 @@ impl RingContract {
     /// Record that the operation's token was claimed against its completion,
     /// returning whatever it held.
     pub fn observe_claim(&mut self, user_data: usize) {
-        if let Some(state) = self.operations.get_mut(&user_data) {
-            *state = State::Completed;
+        if self.operations.contains_key(&user_data) {
+            self.retire(user_data);
+        }
+    }
+
+    /// Retire a finished identity: out of the tracking map, into the bounded
+    /// history.
+    ///
+    /// This is the one place an operation stops costing memory proportional to
+    /// how many have run, which is what `M28.2` was about.
+    fn retire(&mut self, user_data: usize) {
+        self.operations.remove(&user_data);
+        if self.finished_set.insert(user_data) {
+            self.finished.push_back(user_data);
+            if self.finished.len() > FINISHED_HISTORY
+                && let Some(evicted) = self.finished.pop_front()
+            {
+                self.finished_set.remove(&evicted);
+            }
         }
     }
 
@@ -274,7 +349,11 @@ impl RingContract {
     /// because the difference between the two is exactly the bug worth
     /// finding.
     pub fn observe_deliberate_leak(&mut self, user_data: usize) {
-        self.operations.insert(user_data, State::DeliberatelyLeaked);
+        // Terminal, like a claim: the caller has said this operation's story
+        // is over, so it stops being tracked and its identity joins the
+        // history. A later completion for it is still named a duplicate while
+        // it remains in that window.
+        self.retire(user_data);
     }
 
     /// Record a registered buffer's outstanding count, as
@@ -304,14 +383,15 @@ impl RingContract {
         let mut pending: Vec<_> = self
             .operations
             .iter()
-            .filter_map(|(user_data, state)| match state {
-                State::Pushed | State::PushedTokenless => Some(Violation::Outstanding {
+            // Not a `filter_map`: since `M28.2` retired the terminal states,
+            // every entry still tracked is a violation at quiescence.
+            .map(|(user_data, state)| match state {
+                State::Pushed | State::PushedTokenless => Violation::Outstanding {
                     user_data: *user_data,
-                }),
-                State::Leaked => Some(Violation::LeakedToken {
+                },
+                State::Leaked => Violation::LeakedToken {
                     user_data: *user_data,
-                }),
-                State::Completed | State::DeliberatelyLeaked => None,
+                },
             })
             .collect();
         pending.sort_by_key(|violation| match violation {

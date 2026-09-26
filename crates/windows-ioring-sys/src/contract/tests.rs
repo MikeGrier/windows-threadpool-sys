@@ -7,7 +7,7 @@
 //! is one its reader learns to skip. The "does not fire" cases are therefore
 //! written as deliberately as the "does fire" ones.
 
-use super::{RingContract, Violation};
+use super::{FINISHED_HISTORY, RingContract, Violation};
 
 /// A complete, legal lifecycle: pushed, completed, claimed.
 fn full_cycle(contract: &mut RingContract, user_data: usize) {
@@ -333,5 +333,107 @@ fn busy_registered_buffers_are_reported_in_index_order() {
     assert_eq!(
         reported, expected,
         "busy buffers must be reported by ascending index, and the quiet one omitted"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// M28.2: what the oracle costs to run.
+//
+// The three tests below are the only ones here that assert about *memory*
+// rather than about violations, and they exist because the defect M28.2 fixed
+// was invisible to every other test in this file: a claimed operation was kept
+// forever, and a suite that runs a handful of operations cannot tell that from
+// one that keeps none.
+// ---------------------------------------------------------------------------
+
+/// A finished operation stops being tracked at all.
+///
+/// The direct statement of the fix. Before `M28.2` a claim rewrote the entry
+/// to `Completed` and left it in the map, so this assertion would have found
+/// three.
+#[test]
+fn a_finished_operation_stops_being_tracked() {
+    let mut contract = RingContract::new();
+    full_cycle(&mut contract, 1);
+    full_cycle(&mut contract, 2);
+    full_cycle(&mut contract, 3);
+
+    assert!(
+        contract.operations.is_empty(),
+        "a claimed operation must leave the tracking map, found: {:?}",
+        contract.operations
+    );
+    // And the fix must not have been bought by weakening the oracle.
+    assert_eq!(contract.check_quiescent(), Vec::new());
+}
+
+/// Tracking follows concurrency, not uptime.
+///
+/// The property a long-running consumer actually needs, and the one the old
+/// shape broke. Ten thousand sequential operations are *one* operation's worth
+/// of concurrency, so nothing should accumulate -- while the history stays
+/// capped whatever the count.
+#[test]
+fn the_tracking_map_follows_concurrency_not_uptime() {
+    let mut contract = RingContract::new();
+    let cycles = FINISHED_HISTORY * 4;
+    for user_data in 0..cycles {
+        full_cycle(&mut contract, user_data);
+    }
+
+    assert!(
+        contract.operations.is_empty(),
+        "{cycles} sequential operations left {} tracked",
+        contract.operations.len()
+    );
+    assert!(
+        contract.finished.len() <= FINISHED_HISTORY,
+        "the history must stay capped at {FINISHED_HISTORY}, found {}",
+        contract.finished.len()
+    );
+    assert_eq!(
+        contract.finished.len(),
+        contract.finished_set.len(),
+        "the queue and its membership index must stay in step, or eviction \
+         leaks entries out of one and not the other"
+    );
+    assert_eq!(contract.check_quiescent(), Vec::new());
+}
+
+/// The bound's price, asserted rather than only documented.
+///
+/// A duplicate inside the window is named precisely; one that has fallen out
+/// of it is still **reported**, under the weaker name. Both halves matter: the
+/// first is what the window is for, and the second is the honest statement
+/// that nothing is silently missed past it.
+#[test]
+fn a_duplicate_is_named_precisely_within_the_window_and_still_reported_beyond_it() {
+    let mut contract = RingContract::new();
+
+    // `oldest` is pushed out of the history by the cycles that follow it.
+    let oldest = 0_usize;
+    full_cycle(&mut contract, oldest);
+    for user_data in 1..=FINISHED_HISTORY {
+        full_cycle(&mut contract, user_data);
+    }
+    let recent = FINISHED_HISTORY;
+
+    contract.observe_completion(recent);
+    assert!(
+        contract
+            .violations()
+            .contains(&Violation::DuplicateCompletion { user_data: recent }),
+        "a duplicate still inside the window is a duplicate: {:?}",
+        contract.violations()
+    );
+
+    contract.observe_completion(oldest);
+    assert!(
+        contract
+            .violations()
+            .contains(&Violation::UnexpectedCompletion { user_data: oldest }),
+        "a duplicate that has fallen out of the window is still reported, \
+         under the weaker name: {:?}",
+        contract.violations()
     );
 }

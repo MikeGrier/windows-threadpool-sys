@@ -723,6 +723,18 @@
       ]
     },
     {
+      "name": "M28.2: a finished operation is kept rather than retired",
+      "file": "src/contract.rs",
+      "expect": "caught",
+      "why": "The oracle's tracking map must follow how many operations are in flight, not how many have ever run. Before M28.2 a claim marked the entry Completed and kept it, so a long-running consumer following this crate's own recommendation grew one entry per operation for the life of the process -- and no test noticed, because a suite that runs a handful of operations cannot tell 'keeps none' from 'keeps all'. That is also what ruled out an always-on checked inventory in M23.3. Restoring the leak must turn the M28.2 memory tests red.",
+      "find": [
+        "        self.operations.remove(&user_data);"
+      ],
+      "replace": [
+        "        // sabotage: keep the entry, as before M28.2"
+      ]
+    },
+    {
       "name": "CONTROL: rewording a statement changes nothing",
       "file": "examples/epoch_log/contract.rs",
       "expect": "survives",

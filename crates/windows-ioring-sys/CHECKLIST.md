@@ -330,14 +330,7 @@ every consumer names the type -- which means the migration order matters more th
 
 - [x] **M28.1** -- Decided: a push returns a `Copy` identity that owns nothing, and the ring returns the payload at its own pop -- `Token` is split, not moved. Recorded as [D-71](DESIGN-NOTES.md#d-71). -> [completed 2026-09-25](COMPLETED-CHECKLIST.md#m281)
 
-- [ ] **M28.2** -- **Bound `RingContract` before anything depends on it more heavily.**
-  `operations: HashMap<usize, State>` is never pruned -- `observe_claim` marks an entry
-  `Completed` and keeps it -- so the oracle retains one entry per operation for the process's
-  life. Undocumented, and not visible in the sample because it appends 24 records. A long-running
-  consumer following the crate's own recommendation leaks. This blocks any design that checks by
-  default, which is why it is here rather than filed separately: `M23.3` reached for always-on
-  checking and this is what ruled it out. Decide whether completed entries are dropped, whether
-  `check_quiescent` needs them, and document the answer either way.
+- [x] **M28.2** -- `RingContract` is bounded by operations in flight: terminal entries are retired, and a capped history keeps a duplicate distinguishable from an unrecognised completion. Recorded as [D-72](DESIGN-NOTES.md#d-72). -> [completed 2026-09-25](COMPLETED-CHECKLIST.md#m282)
 
 - [ ] **M28.3** -- **Gated on `M28.1`.** Make `IoRing` generic and move the inventory inside.
   Carry the sidecar: the census found two thirds of consumers keep per-operation data beside the
