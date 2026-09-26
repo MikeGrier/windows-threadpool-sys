@@ -353,7 +353,7 @@ every consumer names the type -- which means the migration order matters more th
 
   Sequenced so the work is resumable, since it does not compile in the middle:
 
-  - [ ] **M28.3.1** -- `OperationId`: `Copy`, no `Drop`, a name and not a capability (`D-71`).
+  - [x] **M28.3.1** -- `OperationId`: `Copy`, no `Drop`, a name and not a capability (`D-71`).
   - [ ] **M28.3.2** -- `IoRing<T = ()>` carrying `inventory: HashMap<usize, T>`, and
         `Batch<'ring, T>` with it. A default keeps a payload-free consumer from naming `()`.
   - [ ] **M28.3.3** -- Push stores the payload and returns an `OperationId`; pop returns the

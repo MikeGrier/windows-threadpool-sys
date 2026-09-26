@@ -226,7 +226,7 @@ pub use pending::Pending;
 pub use ring::InjectedFailure;
 #[cfg(windows)]
 pub use ring::{Completion, CompletionWait, IoRing, Op, RingInfo, RingWait, SubmitWait};
-pub use token::Token;
+pub use token::{OperationId, Token};
 #[cfg(windows)]
 pub use win_numa_sys::NumaBuffer;
 
