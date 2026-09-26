@@ -4009,3 +4009,47 @@ including the README's headline example, which is the first thing a consumer rea
 rewritten. The census in [response_space_census.rs](tests/response_space_census.rs) also
 caught two unbounded `try_pop` spins that the rename made visible to it; both are now
 bounded pops.
+## Moved 2026-09-26 11:54:28 -04:00 -- M28.4.2, sabotaging the inventory
+
+### <a id="m2842"></a>M28.4.2 -- Sabotage the inventory: a push that does not record, and a pop that does not retire, must both turn the suite red. *(completed 2026-09-26 11:54:28 -04:00)*
+
+Sabotage the inventory: a push that does not record, and a pop that does
+    not retire, must both turn the suite red.
+
+    The pop half now has a worked precedent to follow rather than invent: `M28.4.1d.2`
+    made both public pops retire their entry, and verified it by re-injecting the
+    stranding -- five `registration.rs` tests went red, and all eighteen passed once it
+    was restored. Record that as a case in `sabotage.json` rather than leaving it as a
+    command that was run once and discarded.
+
+**Five cases added, two repaired, three removed.** The manifest is the artifact; what
+follows is what running it taught.
+
+**The sweep found that `M28.4.1d.3` had broken the manifest, and nobody noticed because
+nobody ran it.** Two cases patched `src/pending.rs`, which that commit deleted, so the
+harness aborted before testing anything. A third re-injected the `M22.2` ordering defect
+-- checking a write's result before claiming -- which is no longer expressible. Two more
+were silently stale: `M23.5`'s rundown guard had been re-indented, and `M26.7`'s
+restated-pop site now destructures a tuple, so both matched zero times. That is exactly
+the decay the harness exists to catch, arriving in the harness itself.
+
+**One case had to be rewritten because it was caught for the wrong reason.** The
+push-does-not-record sabotage originally dropped the entry, which frees the buffer while
+the kernel writes into it: the suite failed with `STATUS_HEAP_CORRUPTION` (0xC0000374).
+That scores as `caught` because the process died, not because a test noticed, and
+whether it dies at all depends on allocator behaviour -- the repository's own cargo-mutants
+guidance says to treat a crash-caught result as uncovered. The patch now *leaks* the entry
+instead. The ring still records nothing, `ring.held()` and every `held.expect(..)` go
+red by assertion, and the two defects are separated: this case asserts the ring failed to
+**record**, which is a claim a test can make, rather than that a freed buffer is unsound,
+which no sabotage can establish reliably.
+
+**The two pops are asserted separately on purpose.** They have separate bodies, and a fix
+to one has already failed to reach the other: the pair existed as `try_pop`/`try_pop_held`
+and `pop_within`/`pop_within_held` precisely because the reclaiming behaviour was added
+one at a time, and `pop_within` went a full milestone without it.
+
+**Two cases moved rather than died.** `Pending<T, X>`'s "push stops telling the oracle"
+guarantee survived its type -- `Appender` keeps a `RingContract` and must observe both
+ends -- so it is relocated to the appender, alongside a new completion-side case that
+replaces the retired `M22.2` ordering one.

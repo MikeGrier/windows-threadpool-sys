@@ -478,14 +478,7 @@ every consumer names the type -- which means the migration order matters more th
 
   - [x] **M28.4.1d.3** -- Token API retired, `D-74` applied, one reclaiming pop per shape; the break is closed. -> [completed 2026-09-26](COMPLETED-CHECKLIST.md#m2841d3)
 
-  - [ ] **M28.4.2** -- Sabotage the inventory: a push that does not record, and a pop that does
-        not retire, must both turn the suite red.
-
-        The pop half now has a worked precedent to follow rather than invent: `M28.4.1d.2`
-        made both public pops retire their entry, and verified it by re-injecting the
-        stranding -- five `registration.rs` tests went red, and all eighteen passed once it
-        was restored. Record that as a case in `sabotage.json` rather than leaving it as a
-        command that was run once and discarded.
+  - [x] **M28.4.2** -- Five inventory sabotages added (push, both pops, both appender halves); the sweep also found `d.3` had broken the manifest. -> [completed 2026-09-26](COMPLETED-CHECKLIST.md#m2842)
 
 - [ ] **M28.5** -- **Answer the tokenless push.** `flush_raw` returns a bare `usize` and
   `epoch_log`'s commit path depends on it, because a flush has no buffer and a *borrowed*
