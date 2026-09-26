@@ -196,29 +196,48 @@ impl InjectedFailure {
 /// names it. Unsealing that trait would break the arrangement -- the
 /// alternatives are type erasure, which [D-4](../DESIGN-NOTES.md#d-4) forbids,
 /// or a third generic parameter on every consumer.
-// Populated by the guarded and registered pushes, which migrate in `M28.4.1`;
-// `read_owned` is the unguarded shape and stows `Held::default()`. `expect`
-// rather than `allow` so this stops being silent the moment that lands.
-#[expect(
-    dead_code,
-    reason = "populated by the guarded pushes M28.4.1 migrates; see M28.3+M28.4 in CHECKLIST.md"
-)]
 #[derive(Default)]
 pub(crate) struct Held {
     /// Keeps the file valid for the operation's life.
+    ///
+    /// Never read, and `allow` rather than `expect` says so deliberately:
+    /// this field exists **for its `Drop`**, not for its value. Holding it
+    /// until the pop that completes the operation is the whole job, and
+    /// reading it would serve nothing. An `expect` here would be a promise
+    /// that some later change makes it read, which is not the intent.
+    #[allow(
+        dead_code,
+        reason = "held so the file outlives the operation; dropped at reclaim"
+    )]
     pub(crate) guard: Option<FileGuard>,
     /// Keeps a registered buffer's use counted while the kernel has it.
+    ///
+    /// Held for its `Drop`, as `guard` above.
+    #[allow(dead_code, reason = "held so the registration outlives the operation")]
     pub(crate) registration: Option<crate::batch::RegisteredUse>,
 }
 
 /// The closed set of file guards, per `D-73`.
-#[expect(
-    dead_code,
-    reason = "constructed by the guarded pushes M28.4.1 migrates; see M28.3+M28.4 in CHECKLIST.md"
-)]
-pub(crate) enum FileGuard {
+///
+/// Public only because [`crate::FileTarget`]'s `Guard` bound names it, and a
+/// bound may not be more private than the trait carrying it. It is opaque on
+/// purpose: a caller cannot construct one, and the sealed trait means nobody
+/// outside this crate implements the thing that produces one.
+pub enum FileGuard {
     Shared(crate::batch::SharedFile),
     Registered(crate::batch::RegisteredFile),
+}
+
+impl From<crate::batch::SharedFile> for FileGuard {
+    fn from(guard: crate::batch::SharedFile) -> Self {
+        Self::Shared(guard)
+    }
+}
+
+impl From<crate::batch::RegisteredFile> for FileGuard {
+    fn from(guard: crate::batch::RegisteredFile) -> Self {
+        Self::Registered(guard)
+    }
 }
 
 /// A popped completion and whatever the ring was holding for it.

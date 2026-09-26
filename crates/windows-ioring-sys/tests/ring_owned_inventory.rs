@@ -41,7 +41,7 @@ fn a_payload_handed_to_the_ring_comes_back_from_the_pop_that_completes_it() {
         // SAFETY: `file` outlives the operation -- it is dropped at the end of
         // this test, after the completion has been popped.
         unsafe {
-            batch.read_owned(
+            batch.read_raw_owned(
                 file.as_raw_handle(),
                 vec![0_u8; LEN],
                 "the sidecar",
@@ -96,7 +96,7 @@ fn a_second_pop_finds_nothing_held_for_the_same_identity() {
         let mut batch = Batch::new(&mut ring);
         // SAFETY: as above.
         unsafe {
-            batch.read_owned(
+            batch.read_raw_owned(
                 file.as_raw_handle(),
                 vec![0_u8; LEN],
                 (),
