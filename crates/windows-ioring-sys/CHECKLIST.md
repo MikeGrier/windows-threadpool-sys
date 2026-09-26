@@ -368,8 +368,18 @@ every consumer names the type -- which means the migration order matters more th
         writing into. Landing the inventory without this is a use-after-free, so it is one step.
 
         The tokenless shape is `M28.5`'s and is only accommodated here, not answered.
-  - [ ] **M28.3.4** -- Carry the parameter through `EventDelivery`, `RingScope` and the contract
+  - [x] **M28.3.4** -- Carry the parameter through `EventDelivery`, `RingScope` and the contract
         wiring.
+
+        **The tree stops compiling here, as this plan said it would.** The delivery callback is
+        now `Fn(Completion, Option<(T, X)>)`, so ten call sites across
+        [event_delivery.rs](tests/event_delivery.rs), [handover.rs](tests/handover.rs),
+        [checkpoint.rs](examples/epoch_log/checkpoint.rs) and
+        [model_a_delivery.rs](examples/model_a_delivery.rs) take a one-argument closure and no
+        longer build. The library and its own unit tests are green; the integration and example
+        targets are `M28.4.1`'s to migrate. Contract wiring is untouched deliberately -- what
+        becomes of the oracle's leak rules is a decision `M28.4.1` carries, per
+        [D-73](DESIGN-NOTES.md#d-73).
   - [ ] **M28.4.1** -- Migrate all 36 test and example files, and delete or demote
         `Pending<T, X>`. **Decide what becomes of the oracle's leak rules in the same step**:
         with no token a caller can hold, `Violation::LeakedToken`, `observe_deliberate_leak` and

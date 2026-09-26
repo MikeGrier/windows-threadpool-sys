@@ -17,7 +17,8 @@ fn a_scope_reports_the_rings_static_properties() {
     let ring = IoRing::new(8, 8).expect("create ring");
     let expected_version = ring.version();
     let expected_read = ring.supports(Op::Read);
-    let delivery = EventDelivery::new(ring, |_completion| {}, None).expect("wire event delivery");
+    let delivery =
+        EventDelivery::new(ring, |_completion, _held| {}, None).expect("wire event delivery");
 
     let scope = delivery.scope();
 
@@ -53,7 +54,8 @@ fn a_scope_reflects_a_ring_that_genuinely_lacks_support() {
     // the same seam `Batch::require`'s own gap needed.
     let mut ring = IoRing::new(8, 8).expect("create ring");
     ring.set_supported_ops_for_test(&[Op::Nop]);
-    let delivery = EventDelivery::new(ring, |_completion| {}, None).expect("wire event delivery");
+    let delivery =
+        EventDelivery::new(ring, |_completion, _held| {}, None).expect("wire event delivery");
 
     let scope = delivery.scope();
     assert!(scope.supports(Op::Nop));
@@ -66,7 +68,8 @@ fn a_scope_reflects_a_ring_that_genuinely_lacks_support() {
 #[test]
 fn a_scope_reports_registration_counts_that_change_with_registrations() {
     let ring = IoRing::new(8, 8).expect("create ring");
-    let delivery = EventDelivery::new(ring, |_completion| {}, None).expect("wire event delivery");
+    let delivery =
+        EventDelivery::new(ring, |_completion, _held| {}, None).expect("wire event delivery");
 
     assert_eq!(delivery.scope().registered_file_count(), 0);
     assert_eq!(delivery.scope().registered_buffer_count(), 0);
@@ -144,7 +147,7 @@ fn a_scope_reports_outstanding_work() {
     let (tx, rx) = std::sync::mpsc::channel();
     let delivery = EventDelivery::new(
         ring,
-        move |completion| {
+        move |completion, _held| {
             let _ = tx.send(completion.user_data());
         },
         None,

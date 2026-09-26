@@ -18,21 +18,28 @@ use crate::ring::{Completion, IoRing, Op, RingInfo};
 /// mutex released, so a slow callback does not block a submitter, and a
 /// callback that calls [`EventDelivery::ring`] and locks it itself cannot
 /// deadlock against this loop.
-fn drain(ring: &Mutex<IoRing>, on_completion: &(dyn Fn(Completion) + Send + Sync)) {
+/// What a delivery hands a caller for each completion.
+///
+/// The completion itself, plus whatever the ring was holding for it -- `None`
+/// when the push carried nothing to give back (`M28.5`), or when this ring was
+/// never holding anything for that identity.
+type OnCompletion<T, X> = dyn Fn(Completion, Option<(T, X)>) + Send + Sync;
+
+fn drain<T, X>(ring: &Mutex<IoRing<T, X>>, on_completion: &OnCompletion<T, X>) {
     loop {
         let popped = {
             let mut ring = ring
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner);
-            ring.try_pop()
+            ring.try_pop_held()
         };
         match popped {
-            Ok(Some(completion)) => on_completion(completion),
+            Ok(Some((completion, held))) => on_completion(completion, held),
             Ok(None) => break,
             Err(error) => {
                 debug_assert!(
                     false,
-                    "IoRing::try_pop failed during event-driven drain: {error}"
+                    "IoRing::try_pop_held failed during event-driven drain: {error}"
                 );
                 break;
             }
@@ -55,7 +62,7 @@ fn drain(ring: &Mutex<IoRing>, on_completion: &(dyn Fn(Completion) + Send + Sync
 /// member it did not create itself. `EventDelivery` stays individually
 /// owned, where its own field-drop order (below) gives the same
 /// quiesce-then-close guarantee a group would otherwise provide.
-pub struct EventDelivery {
+pub struct EventDelivery<T = (), X = ()> {
     // Drop order matters and is why these fields are declared in this order:
     // Rust drops struct fields top-to-bottom. `wait` must go first -- its own
     // `Drop` disarms, suppresses re-arming, and drains any in-flight callback
@@ -68,10 +75,10 @@ pub struct EventDelivery {
         reason = "held only for its Drop side effect and ordering relative to `ring`"
     )]
     wait: ThreadpoolWait,
-    ring: Arc<Mutex<IoRing>>,
+    ring: Arc<Mutex<IoRing<T, X>>>,
 }
 
-impl EventDelivery {
+impl<T: Send + 'static, X: Send + 'static> EventDelivery<T, X> {
     /// Wire `ring`'s completion event to a thread-pool wait, delivering every
     /// popped [`Completion`] to `on_completion` on a pool thread (M4.2).
     ///
@@ -123,12 +130,12 @@ impl EventDelivery {
     /// ring's completion event, from `ThreadpoolWait::new`, or from raising
     /// the setup signal.
     pub fn new<F>(
-        mut ring: IoRing,
+        mut ring: IoRing<T, X>,
         on_completion: F,
         env: Option<&mut CallbackEnviron<'_>>,
     ) -> io::Result<Self>
     where
-        F: Fn(Completion) + Send + Sync + 'static,
+        F: Fn(Completion, Option<(T, X)>) + Send + Sync + 'static,
     {
         // The ring creates, owns, and attaches its own event and hands back a
         // duplicate (D-20), which leaves exactly one
@@ -156,7 +163,7 @@ impl EventDelivery {
 
         let ring = Arc::new(Mutex::new(ring));
         let ring_for_wait = Arc::clone(&ring);
-        let on_completion: Arc<dyn Fn(Completion) + Send + Sync> = Arc::new(on_completion);
+        let on_completion: Arc<OnCompletion<T, X>> = Arc::new(on_completion);
         let wait = ThreadpoolWait::new(
             event,
             move |activation| {
@@ -248,7 +255,7 @@ impl EventDelivery {
     /// assert_eq!(scope.outstanding(), 0);
     /// ```
     #[must_use]
-    pub fn scope(&self) -> RingScope<'_> {
+    pub fn scope(&self) -> RingScope<'_, T, X> {
         RingScope {
             ring: self
                 .ring
@@ -268,16 +275,16 @@ impl EventDelivery {
 /// See [`EventDelivery::scope`] for what this deliberately does not expose,
 /// and why handing out anything that yields a `&mut IoRing` would reopen
 /// [D-43](../DESIGN-NOTES.md#d-43).
-pub struct RingScope<'delivery> {
-    ring: MutexGuard<'delivery, IoRing>,
+pub struct RingScope<'delivery, T = (), X = ()> {
+    ring: MutexGuard<'delivery, IoRing<T, X>>,
 }
 
-impl RingScope<'_> {
+impl<T, X> RingScope<'_, T, X> {
     /// Open a [`Batch`] against the ring.
     ///
     /// The borrow is confined to the returned batch, so no `&mut IoRing`
     /// escapes to the caller.
-    pub fn batch(&mut self) -> Batch<'_> {
+    pub fn batch(&mut self) -> Batch<'_, T, X> {
         Batch::new(&mut self.ring)
     }
 
