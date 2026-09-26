@@ -280,14 +280,25 @@ fn an_injected_failure_preserves_the_identity_a_token_claims_against() {
         .open(&path)
         .expect("open fixture");
 
-    let mut ring = IoRing::new(16, 16).expect("create ring");
+    let mut ring = IoRing::<Vec<u8>>::with_inventory(16, 16).expect("create ring");
     let mut batch = Batch::new(&mut ring);
-    // SAFETY: `file` outlives the operation; the token is claimed below.
-    let token =
-        unsafe { batch.read_raw(file.as_raw_handle(), vec![0_u8; 5], 0, PushOptions::new()) }
-            .expect("queue a read");
+    // SAFETY: `file` outlives the operation; the ring holds the buffer until
+    // the pop below hands it back.
+    unsafe {
+        batch.read_raw_owned(
+            file.as_raw_handle(),
+            vec![0_u8; 5],
+            (),
+            0,
+            PushOptions::new(),
+        )
+    }
+    .expect("queue a read");
     batch.submit_and_wait(1, 30_000).expect("submit and wait");
-    let completion = super::pop_within(&mut ring, "the read's completion");
+    let (completion, held) = ring
+        .pop_within(std::time::Duration::from_secs(30))
+        .expect("pop")
+        .expect("the read's completion");
     completion
         .result()
         .expect("the read really did succeed, or this test proves nothing");
@@ -296,8 +307,8 @@ fn an_injected_failure_preserves_the_identity_a_token_claims_against() {
         .with_injected_failure(crate::InjectedFailure::Ring(crate::RingCondition::Corrupt));
     assert!(injected.result().is_err(), "the injected failure applies");
 
-    let buffer = token
-        .claim_if(&injected)
+    let buffer = held
+        .map(|(payload, ())| payload.expect("a read carries a buffer"))
         .expect("a failed completion still claims its own token");
     assert_eq!(
         buffer, b"hello",
@@ -333,13 +344,20 @@ fn an_injected_failure_zeroes_the_transferred_byte_count() {
         .open(&path)
         .expect("open fixture");
 
-    let mut ring = IoRing::new(16, 16).expect("create ring");
+    let mut ring = IoRing::<Vec<u8>>::with_inventory(16, 16).expect("create ring");
     let mut batch = Batch::new(&mut ring);
     // SAFETY: `file` outlives the operation, and the completion is popped
     // below before it is dropped.
-    let _token =
-        unsafe { batch.read_raw(file.as_raw_handle(), vec![0_u8; 5], 0, PushOptions::new()) }
-            .expect("queue a read");
+    unsafe {
+        batch.read_raw_owned(
+            file.as_raw_handle(),
+            vec![0_u8; 5],
+            (),
+            0,
+            PushOptions::new(),
+        )
+    }
+    .expect("queue a read");
     batch.submit_and_wait(1, 30_000).expect("submit and wait");
     let completion = super::pop_within(&mut ring, "the fixture read's completion");
     assert_eq!(
@@ -647,7 +665,7 @@ fn pop_within_returns_the_completion_of_a_real_operation() {
     let (path, file) = pop_scratch("real");
     let ids = push_flushes(&mut ring, &file, 1);
 
-    let completion = ring
+    let (completion, _held) = ring
         .pop_within(std::time::Duration::from_secs(30))
         .expect("pop_within")
         .expect("the flush completes well inside the bound");
@@ -668,7 +686,7 @@ fn submit_wait_is_what_the_convenience_uses() {
     let (path, file) = pop_scratch("submit-wait");
     let ids = push_flushes(&mut ring, &file, 1);
 
-    let completion = ring
+    let (completion, _held) = ring
         .pop_within_with(&mut SubmitWait, std::time::Duration::from_secs(30))
         .expect("pop_within_with")
         .expect("the flush completes");
@@ -684,7 +702,7 @@ fn pop_within_returns_successive_completions_one_at_a_time() {
 
     let mut seen = Vec::new();
     for _ in 0..ids.len() {
-        let completion = ring
+        let (completion, _held) = ring
             .pop_within(std::time::Duration::from_secs(30))
             .expect("pop_within")
             .expect("each flush completes");

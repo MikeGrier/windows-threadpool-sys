@@ -207,10 +207,10 @@ impl IoRingError {
 /// ```no_run
 /// use windows_ioring_sys::{Batch, IoRing, IoRingErrorExt, PushOptions, SharedFile};
 ///
-/// # fn demo(ring: &mut IoRing, file: &SharedFile) -> std::io::Result<()> {
+/// # fn demo(ring: &mut IoRing<Vec<u8>>, file: &SharedFile) -> std::io::Result<()> {
 /// let mut batch = Batch::new(ring);
-/// match batch.read(file, vec![0_u8; 4096], 0, PushOptions::new()) {
-///     Ok(_token) => {}
+/// match batch.read_owned(file, vec![0_u8; 4096], (), 0, PushOptions::new()) {
+///     Ok(_id) => {}
 ///     // Backpressure, not a failure: submit and drain, then retry.
 ///     Err(error) if error.is_submission_queue_full() => {
 ///         batch.submit()?;

@@ -77,7 +77,7 @@ fn a_read_addressing_a_registered_file_and_a_registered_buffer_round_trips() {
     let files_pending =
         unsafe { batch.register_files(&[handle]) }.expect("queue file registration");
     batch.submit_and_wait(1, 5_000).expect("submit and wait");
-    let completion = ring
+    let (completion, _held) = ring
         .pop_within(POP_BOUND)
         .expect("pop completion")
         .expect("a completion arrives within the bound");
@@ -93,7 +93,7 @@ fn a_read_addressing_a_registered_file_and_a_registered_buffer_round_trips() {
         .register_buffers(vec![vec![0_u8; 256]])
         .expect("queue buffer registration");
     batch.submit_and_wait(1, 5_000).expect("submit and wait");
-    let completion = ring
+    let (completion, _held) = ring
         .pop_within(POP_BOUND)
         .expect("pop completion")
         .expect("a completion arrives within the bound");
@@ -122,7 +122,7 @@ fn a_read_addressing_a_registered_file_and_a_registered_buffer_round_trips() {
     .expect("queue registered read");
     batch.submit_and_wait(1, 5_000).expect("submit and wait");
 
-    let completion = ring
+    let (completion, _held) = ring
         .pop_within(POP_BOUND)
         .expect("pop completion")
         .expect("a completion arrives within the bound");
@@ -154,7 +154,7 @@ fn a_read_addressing_a_registered_file_and_a_registered_buffer_round_trips() {
         }
         .expect("queue another registered read");
         batch.submit_and_wait(1, 5_000).expect("submit and wait");
-        let completion = ring
+        let (completion, _held) = ring
             .pop_within(POP_BOUND)
             .expect("pop completion")
             .expect("a completion arrives within the bound");
@@ -185,7 +185,7 @@ fn a_second_file_or_buffer_registration_on_the_same_ring_is_refused() {
     let files_pending =
         unsafe { batch.register_files(&[handle]) }.expect("queue first file registration");
     batch.submit_and_wait(1, 5_000).expect("submit and wait");
-    let completion = ring
+    let (completion, _held) = ring
         .pop_within(POP_BOUND)
         .expect("pop completion")
         .expect("a completion arrives within the bound");
@@ -207,7 +207,7 @@ fn a_second_file_or_buffer_registration_on_the_same_ring_is_refused() {
         .register_buffers(vec![buffer])
         .expect("queue first buffer registration");
     batch.submit_and_wait(1, 5_000).expect("submit and wait");
-    let completion = ring
+    let (completion, _held) = ring
         .pop_within(POP_BOUND)
         .expect("pop completion")
         .expect("a completion arrives within the bound");
@@ -263,7 +263,7 @@ fn a_buffer_registration_survives_heap_churn_between_the_push_and_the_submit() {
     drop(churn);
 
     batch.submit_and_wait(1, 5_000).expect("submit and wait");
-    let completion = ring
+    let (completion, _held) = ring
         .pop_within(POP_BOUND)
         .expect("pop completion")
         .expect("a completion arrives within the bound");
@@ -291,7 +291,7 @@ fn a_buffer_registration_survives_heap_churn_between_the_push_and_the_submit() {
         )
         .expect("queue read against the registered buffer");
     batch.submit_and_wait(1, 5_000).expect("submit and wait");
-    let completion = ring
+    let (completion, _held) = ring
         .pop_within(POP_BOUND)
         .expect("pop completion")
         .expect("a completion arrives within the bound");
@@ -378,7 +378,7 @@ fn a_zero_length_registration_does_not_spend_the_ring_s_one_registration() {
     let pending = unsafe { batch.register_files(&[handle]) }
         .expect("a real registration must still be accepted after a zero-length one");
     batch.submit_and_wait(1, 5_000).expect("submit and wait");
-    let completion = ring
+    let (completion, _held) = ring
         .pop_within(POP_BOUND)
         .expect("pop completion")
         .expect("a completion arrives within the bound");
@@ -448,7 +448,7 @@ fn dropping_a_registration_with_an_operation_in_flight_leaks_rather_than_frees()
         .register_buffers(vec![buffer])
         .expect("queue buffer registration");
     batch.submit_and_wait(1, 5_000).expect("submit and wait");
-    let completion = ring
+    let (completion, _held) = ring
         .pop_within(POP_BOUND)
         .expect("pop completion")
         .expect("a completion arrives within the bound");
@@ -512,14 +512,14 @@ fn a_registered_file_from_a_different_ring_is_rejected() {
     let handle = file.as_raw_handle();
 
     let mut ring_a = IoRing::new(8, 8).expect("create ring a");
-    let mut ring_b = IoRing::new(8, 8).expect("create ring b");
+    let mut ring_b = IoRing::<Vec<u8>>::with_inventory(8, 8).expect("create ring b");
 
     let mut batch = Batch::new(&mut ring_a);
     // SAFETY: `handle` stays open for the whole test.
     let files_pending =
         unsafe { batch.register_files(&[handle]) }.expect("queue file registration on ring a");
     batch.submit_and_wait(1, 5_000).expect("submit and wait");
-    let completion = ring_a
+    let (completion, _held) = ring_a
         .pop_within(POP_BOUND)
         .expect("pop completion")
         .expect("a completion arrives within the bound");
@@ -536,7 +536,7 @@ fn a_registered_file_from_a_different_ring_is_rejected() {
     let buffer = vec![0_u8; 8];
     // SAFETY: never actually queued -- the ring-identity check rejects this
     // before any `Build*` call runs.
-    let error = unsafe { batch.read_raw(registered_file, buffer, 0, PushOptions::new()) }
+    let error = unsafe { batch.read_raw_owned(registered_file, buffer, (), 0, PushOptions::new()) }
         .expect_err("a RegisteredFile from a different ring must be rejected");
     assert_eq!(error.kind(), std::io::ErrorKind::InvalidInput);
 }
@@ -566,7 +566,7 @@ fn a_registered_file_is_readable_through_the_safe_api_without_unsafe() {
     let files_pending =
         unsafe { batch.register_files(&[handle]) }.expect("queue file registration");
     batch.submit_and_wait(1, 5_000).expect("submit and wait");
-    let completion = ring
+    let (completion, _held) = ring
         .pop_within(POP_BOUND)
         .expect("pop completion")
         .expect("a completion arrives within the bound");
@@ -583,7 +583,7 @@ fn a_registered_file_is_readable_through_the_safe_api_without_unsafe() {
         .expect("queue a safe read against the registered file");
     batch.submit_and_wait(1, 5_000).expect("submit and wait");
     let (completion, held) = ring
-        .pop_within_held(POP_BOUND)
+        .pop_within(POP_BOUND)
         .expect("pop completion")
         .expect("a completion arrives within the bound");
     assert_eq!(completion.result().expect("read succeeded"), 128);
@@ -618,7 +618,7 @@ fn a_registered_file_and_a_registered_buffer_compose_through_the_safe_api() {
     let files_pending =
         unsafe { batch.register_files(&[handle]) }.expect("queue file registration");
     batch.submit_and_wait(1, 5_000).expect("submit and wait");
-    let completion = ring
+    let (completion, _held) = ring
         .pop_within(POP_BOUND)
         .expect("pop completion")
         .expect("a completion arrives within the bound");
@@ -634,7 +634,7 @@ fn a_registered_file_and_a_registered_buffer_compose_through_the_safe_api() {
         .register_buffers(vec![vec![0_u8; 64]])
         .expect("queue buffer registration");
     batch.submit_and_wait(1, 5_000).expect("submit and wait");
-    let completion = ring
+    let (completion, _held) = ring
         .pop_within(POP_BOUND)
         .expect("pop completion")
         .expect("a completion arrives within the bound");
@@ -663,7 +663,7 @@ fn a_registered_file_and_a_registered_buffer_compose_through_the_safe_api() {
     // Both the registration lease and the file guard are the ring's to hold
     // and to release, and this pop is where that happens (`D-73`).
     let (completion, held) = ring
-        .pop_within_held(POP_BOUND)
+        .pop_within(POP_BOUND)
         .expect("pop completion")
         .expect("a completion arrives within the bound");
     assert_eq!(completion.result().expect("read succeeded"), 64);
@@ -692,14 +692,14 @@ fn the_safe_api_rejects_a_registered_file_from_a_different_ring() {
     let handle = file.as_raw_handle();
 
     let mut ring_a = IoRing::new(8, 8).expect("create ring a");
-    let mut ring_b = IoRing::new(8, 8).expect("create ring b");
+    let mut ring_b = IoRing::<Vec<u8>>::with_inventory(8, 8).expect("create ring b");
 
     let mut batch = Batch::new(&mut ring_a);
     // SAFETY: `handle` stays open for the whole test.
     let files_pending =
         unsafe { batch.register_files(&[handle]) }.expect("queue file registration on ring a");
     batch.submit_and_wait(1, 5_000).expect("submit and wait");
-    let completion = ring_a
+    let (completion, _held) = ring_a
         .pop_within(POP_BOUND)
         .expect("pop completion")
         .expect("a completion arrives within the bound");
@@ -712,7 +712,7 @@ fn the_safe_api_rejects_a_registered_file_from_a_different_ring() {
 
     let mut batch = Batch::new(&mut ring_b);
     let error = batch
-        .read(&registered_file, vec![0_u8; 8], 0, PushOptions::new())
+        .read_owned(&registered_file, vec![0_u8; 8], (), 0, PushOptions::new())
         .expect_err("a RegisteredFile from a different ring must be rejected");
     assert_eq!(error.kind(), std::io::ErrorKind::InvalidInput);
     drop(batch);
@@ -743,7 +743,7 @@ fn a_registered_buffers_from_a_different_ring_is_rejected() {
         .register_buffers(vec![vec![0_u8; 32]])
         .expect("queue buffer registration on ring a");
     batch.submit_and_wait(1, 5_000).expect("submit and wait");
-    let completion = ring_a
+    let (completion, _held) = ring_a
         .pop_within(POP_BOUND)
         .expect("pop completion")
         .expect("a completion arrives within the bound");
@@ -763,7 +763,14 @@ fn a_registered_buffers_from_a_different_ring_is_rejected() {
     // SAFETY: never actually queued -- the ring-identity check rejects this
     // before any `Build*` call runs.
     let error = unsafe {
-        batch.read_registered_raw(handle, &registered_buffers, span, 0, PushOptions::new())
+        batch.read_registered_raw_owned(
+            handle,
+            &registered_buffers,
+            span,
+            (),
+            0,
+            PushOptions::new(),
+        )
     }
     .expect_err("a RegisteredBuffers from a different ring must be rejected");
     assert_eq!(error.kind(), std::io::ErrorKind::InvalidInput);
@@ -859,7 +866,7 @@ fn a_registered_buffer_can_be_filled_and_written_back_out() {
         .register_buffers(vec![vec![0_u8; 64], vec![0_u8; 64]])
         .expect("queue buffer registration");
     batch.submit_and_wait(1, 5_000).expect("submit and wait");
-    let completion = ring
+    let (completion, _held) = ring
         .pop_within(POP_BOUND)
         .expect("pop completion")
         .expect("a completion arrives within the bound");
@@ -892,7 +899,7 @@ fn a_registered_buffer_can_be_filled_and_written_back_out() {
     }
     .expect("queue registered write");
     batch.submit_and_wait(1, 5_000).expect("submit and wait");
-    let completion = ring
+    let (completion, _held) = ring
         .pop_within(POP_BOUND)
         .expect("pop completion")
         .expect("a completion arrives within the bound");
@@ -930,7 +937,7 @@ fn get_mut_refuses_a_buffer_with_an_operation_outstanding_but_allows_its_neighbo
         .register_buffers(vec![vec![7_u8; 2048], vec![9_u8; 2048]])
         .expect("queue buffer registration");
     batch.submit_and_wait(1, 5_000).expect("submit and wait");
-    let completion = ring
+    let (completion, _held) = ring
         .pop_within(POP_BOUND)
         .expect("pop completion")
         .expect("a completion arrives within the bound");
@@ -989,7 +996,7 @@ fn get_mut_refuses_a_buffer_with_an_operation_outstanding_but_allows_its_neighbo
     // which is the shape `IoRing::pop_within` was introduced to replace: it
     // never states how long the operation is allowed to take, so a kernel that
     // stopped completing turns a failing test into a hung one.
-    let completion = ring
+    let (completion, _held) = ring
         .pop_within(POP_BOUND)
         .expect("pop completion")
         .expect("a completion arrives within the bound");
@@ -1030,7 +1037,7 @@ fn get_mut_yields_only_the_registered_bytes_and_cannot_move_the_allocation() {
         .register_buffers(vec![vec![0_u8; LEN], vec![0_u8; LEN / 2]])
         .expect("queue buffer registration");
     batch.submit_and_wait(1, 5_000).expect("submit and wait");
-    let completion = ring
+    let (completion, _held) = ring
         .pop_within(POP_BOUND)
         .expect("pop completion")
         .expect("a completion arrives within the bound");
@@ -1081,7 +1088,7 @@ fn get_mut_yields_only_the_registered_bytes_and_cannot_move_the_allocation() {
             .into(),
     );
     let too_long = batch
-        .write_registered(
+        .write_registered_owned(
             &span_file,
             &buffers,
             RegisteredSpan {
@@ -1089,6 +1096,7 @@ fn get_mut_yields_only_the_registered_bytes_and_cannot_move_the_allocation() {
                 offset: 0,
                 len: (LEN / 2 + 1) as u32,
             },
+            (),
             0,
             PushOptions::new(),
             WriteCaching::Cached,
@@ -1129,7 +1137,7 @@ fn get_refuses_a_buffer_a_read_is_landing_into_but_allows_one_a_write_is_reading
         .register_buffers(vec![vec![7_u8; 2048], vec![9_u8; 2048]])
         .expect("queue buffer registration");
     batch.submit_and_wait(1, 5_000).expect("submit and wait");
-    let completion = ring
+    let (completion, _held) = ring
         .pop_within(POP_BOUND)
         .expect("pop completion")
         .expect("a completion arrives within the bound");
@@ -1196,7 +1204,7 @@ fn get_refuses_a_buffer_a_read_is_landing_into_but_allows_one_a_write_is_reading
     // completion had arrived. The ring knows, so the loop does not have to.
     let mut claimed = 0;
     while claimed < 2 {
-        let Some((completion, held)) = ring.try_pop_held().expect("pop completion") else {
+        let Some((completion, held)) = ring.try_pop().expect("pop completion") else {
             continue;
         };
         completion.result().expect("operation succeeded");

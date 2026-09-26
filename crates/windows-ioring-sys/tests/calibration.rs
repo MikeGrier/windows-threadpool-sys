@@ -99,7 +99,7 @@ fn drain_in_order(ring: &mut CalRing, expected: usize) -> Vec<usize> {
         // A declined submit under RS-P-7 surfaces here as an error, which is
         // within `pop_within`'s documented contract and is retried rather than
         // treated as a failure -- see M26.4, which established that.
-        match ring.pop_within_held(Duration::from_millis(5)) {
+        match ring.pop_within(Duration::from_millis(5)) {
             Ok(Some((completion, held))) => {
                 assert!(
                     held.is_some(),
@@ -373,7 +373,7 @@ fn an_expired_wait_is_not_reported_as_a_failure() {
                 if seen == 3 {
                     break;
                 }
-                match ring.pop_within_held(Duration::from_millis(5)) {
+                match ring.pop_within(Duration::from_millis(5)) {
                     Ok(Some((completion, held))) => {
                         assert!(
                             held.is_some(),

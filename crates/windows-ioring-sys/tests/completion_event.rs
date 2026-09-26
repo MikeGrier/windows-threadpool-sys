@@ -177,7 +177,7 @@ fn submit_reads(ring: &mut EventRing, file: &File, count: usize, wait_operations
 /// nothing is leaked, and report how many completions this pass observed.
 fn drain_to_empty(ring: &mut EventRing) -> usize {
     let mut popped = 0;
-    while let Some((completion, held)) = ring.try_pop_held().expect("pop completion") {
+    while let Some((completion, held)) = ring.try_pop().expect("pop completion") {
         completion.result().expect("read succeeded");
         let _buffer = held.expect("the ring was holding this read's buffer");
         popped += 1;
@@ -529,7 +529,7 @@ fn the_ring_still_wakes_after_an_unrelated_handle_fires_in_a_multiplexed_wait() 
         "round 4: the batch's first completion must wake the wait"
     );
     let (_stranded, held) = ring
-        .pop_within_held(POP_BOUND)
+        .pop_within(POP_BOUND)
         .expect("pop one")
         .expect("the batch's remaining completion arrives within the bound");
     let _buffer = held.expect("the ring was holding this read's buffer");

@@ -115,7 +115,7 @@ impl Committer {
     /// # Errors
     ///
     /// Any error from the flush push or the submit.
-    pub fn commit(&mut self, ring: &mut IoRing, file: RawHandle) -> io::Result<Epoch> {
+    pub fn commit<T, X>(&mut self, ring: &mut IoRing<T, X>, file: RawHandle) -> io::Result<Epoch> {
         let closing = self.open;
         let mut batch = Batch::new(ring);
         // SAFETY: `file` is the log's own handle and outlives every operation

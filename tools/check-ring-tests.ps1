@@ -83,7 +83,7 @@ function Get-RingOpeningTests {
             $stop = $text.IndexOf("`n}", $start)
             if ($stop -lt 0) { $stop = $text.Length }
             $body = $text.Substring($start, [Math]::Min(4000, $stop - $start))
-            if ($body -match 'IoRing::new') { $helpers.Add($match.Groups[1].Value) | Out-Null }
+            if ($body -match '(IoRing::new|::with_inventory|::with_version)\s*\(') { $helpers.Add($match.Groups[1].Value) | Out-Null }
         }
 
         $blocks = $text -split '#\[test\]'
@@ -103,7 +103,7 @@ function Get-RingOpeningTests {
             $end = $block.IndexOf("`n}")
             $body = if ($end -gt 0) { $block.Substring(0, $end) } else { $block }
 
-            $opensRing = $body -match 'IoRing::new'
+            $opensRing = $body -match '(IoRing::new|::with_inventory|::with_version)\s*\('
             if (-not $opensRing) {
                 foreach ($helper in $helpers) {
                     if ($helper -eq $name) { continue }
@@ -175,7 +175,7 @@ if ($added.Count -gt 0) {
     Write-Host ''
     Write-Host '    Does this test need the KERNEL, or only a ring-shaped thing?' -ForegroundColor White
     Write-Host ''
-    Write-Host '    If only the latter, narrow what it reaches for -- Token::new takes' -ForegroundColor White
+    Write-Host '    If only the latter, narrow what it reaches for -- Accounting takes' -ForegroundColor White
     Write-Host '    the ledger rather than the ring for exactly this reason (M24.7) --' -ForegroundColor White
     Write-Host '    or move it to tests/ if it uses only public API (M24.3).' -ForegroundColor White
     Write-Host ''

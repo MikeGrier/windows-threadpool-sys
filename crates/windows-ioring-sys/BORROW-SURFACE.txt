@@ -15,5 +15,4 @@ crates/windows-ioring-sys/src/error.rs :: name -> Option<&'static str>
 crates/windows-ioring-sys/src/event_delivery.rs :: batch -> Batch<'_, T, X>
 crates/windows-ioring-sys/src/event_delivery.rs :: new(mut ring: IoRing<T, X>, on_completion: F, env: Option<&mut CallbackEnviron<'_>>,) -> io::Result<Self>
 crates/windows-ioring-sys/src/event_delivery.rs :: scope -> RingScope<'_, T, X>
-crates/windows-ioring-sys/src/pending.rs :: contract -> Option<&RingContract>
 crates/windows-ioring-sys/src/ring.rs :: wait(ring: &mut RingWait<'_>, timeout_ms: u32) -> io::Result<()>

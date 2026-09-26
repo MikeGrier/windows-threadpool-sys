@@ -276,14 +276,14 @@ pub struct Completion {
 
 impl Completion {
     /// The `UserData` identity this completion reports -- match it against
-    /// a held [`crate::Token`] via [`crate::Token::claim_if`].
+    /// the inventory entry the ring holds for it.
     #[must_use]
     pub fn user_data(&self) -> usize {
         self.user_data
     }
 
     /// The identity of the ring that popped this completion (PR #20 review
-    /// response): a [`crate::Token`]/registration only ever matches a
+    /// response): an entry or registration only ever matches a
     /// `Completion` whose `ring_id` is also its own, so a `UserData` value
     /// that happens to coincide across two different rings (every ring's
     /// own counter starts at the same value) can never be confused for a
@@ -346,7 +346,7 @@ impl Completion {
     ///
     /// # Why this is sound, where fabricating a completion would not be
     ///
-    /// [`crate::Token::claim_if`]'s safety argument is that a `Completion` for
+    /// The pop's safety argument is that a Completion for
     /// some `UserData` **existing at all** proves the kernel has finished with
     /// that operation, and therefore that handing its buffer back is sound.
     ///
@@ -386,7 +386,7 @@ impl Completion {
     ///
     /// # The one place injection is *not* inert: registration completions
     ///
-    /// The soundness argument above is about [`crate::Token::claim_if`], where
+    /// The soundness argument above is about the pop, where
     /// a failed completion changes nothing the caller does with memory: the
     /// buffer comes back either way. **A registration claim is different.**
     /// [`crate::PendingBufferRegistration::claim_if`] treats a failed
@@ -450,7 +450,7 @@ impl Completion {
     ///
     /// The result code is left successful and only the byte count moves, so
     /// every claim path behaves exactly as it would for the real completion:
-    /// [`crate::Token::claim_if`] returns the buffer, and no path keys memory
+    /// The pop returns the buffer, and no path keys memory
     /// ownership off the transferred count. That makes this seam free of the
     /// registration hazard documented on
     /// [`Completion::with_injected_failure`], which arises only because a
@@ -477,7 +477,7 @@ impl Completion {
     }
 
     /// Build a `Completion` without popping a real one, for tests that
-    /// exercise [`crate::Token::claim_if`] without real I/O.
+    /// exercise the pop without real I/O.
     ///
     /// Not available outside `#[cfg(test)]`: production code has no
     /// legitimate reason to fabricate a completion, since `Token::claim_if`'s
@@ -826,7 +826,7 @@ impl<T, X> IoRing<T, X> {
     /// # Errors
     ///
     /// As [`IoRing::try_pop`].
-    pub fn try_pop_held(&mut self) -> io::Result<Option<HeldCompletion<T, X>>> {
+    pub fn try_pop(&mut self) -> io::Result<Option<HeldCompletion<T, X>>> {
         let Some(completion) = self.pop_raw()? else {
             return Ok(None);
         };
@@ -881,7 +881,7 @@ impl<T, X> IoRing<T, X> {
     /// safe push surface reaches (M10.1, [`Op`]'s own docs list the mapping).
     /// The two coincide for every op except [`Op::Nop`], which has no
     /// [`crate::Batch`] method at all: a nop owns no buffer, so there is
-    /// nothing for a [`crate::Token`] to hand back, and it is reachable only
+    /// nothing for the ring to hand back, and it is reachable only
     /// through [`IoRing::push_raw`]. A `true` here therefore means "the
     /// kernel would accept this op", not "a `Batch` method exists to push
     /// it".
@@ -1244,7 +1244,7 @@ impl<T, X> IoRing<T, X> {
     /// Mint a fresh `UserData` identity for a new operation, and account for
     /// it as outstanding until `record_completion` is called for it.
     ///
-    /// The identity is the whole of what a [`crate::Token`] needs to validate
+    /// The identity is the whole of what the inventory needs to validate
     /// a completion (D-4): unlike `windows-overlapped-io-sys`'s
     /// `OperationId`, there is no separate storage address to pair it with,
     /// because `UserData` is a value this crate chooses rather than one Win32
@@ -1261,7 +1261,7 @@ impl<T, X> IoRing<T, X> {
 
     /// Record that one outstanding operation's completion has been observed
     /// (a real `IORING_CQE` was popped for it), whether or not a live
-    /// [`crate::Token`] was still around to claim it.
+    /// the ring was still holding something for it.
     pub(crate) fn record_completion(&mut self) {
         self.accounting.record_completion();
     }
@@ -1292,7 +1292,7 @@ impl<T, X> IoRing<T, X> {
         self.handle
     }
 
-    /// This ring's own identity, for stamping onto every [`crate::Token`]/
+    /// This ring's own identity, for stamping onto every [`crate::OperationId`]/
     /// registration it mints and checking against on use (PR #20 review
     /// response); see [`RingId`].
     pub(crate) fn ring_id(&self) -> RingId {
@@ -1459,49 +1459,14 @@ impl<T, X> IoRing<T, X> {
     /// interpreting it, since rundown only needs to know a completion
     /// happened, not what it was.
     ///
-    /// **Reclaims as it goes**, which `try_pop` alone does not. Rundown is the
-    /// one path that pops without a caller waiting for the result, so an entry
-    /// it left behind would sit in the inventory until the ring dropped and
-    /// its payload would reach nobody. Dropping here is correct rather than
-    /// merely convenient: the completion is the proof the kernel has finished,
-    /// which is exactly what makes freeing safe.
+    /// Whatever each entry held is dropped here rather than handed back,
+    /// because there is nobody to hand it to: rundown is the one path that
+    /// pops without a caller waiting for the result. Dropping is correct
+    /// rather than merely convenient -- the completion is the proof the kernel
+    /// has finished, which is exactly what makes freeing safe.
     fn drain_for_rundown(&mut self) -> io::Result<()> {
-        while let Some(completion) = self.try_pop()? {
-            drop(self.reclaim(completion.user_data()));
-        }
+        while let Some((_completion, _held)) = self.try_pop()? {}
         Ok(())
-    }
-
-    /// Pop one completion if the queue has one ready, without blocking
-    /// (M3.7).
-    ///
-    /// Every popped completion is recorded via `record_completion`
-    /// regardless of whether the caller still holds a [`crate::Token`] for
-    /// it (D-4): accounting is driven by observing a real `IORING_CQE`,
-    /// never by a token being dropped.
-    ///
-    /// `None` says the completion queue is empty *at this instant*, never
-    /// that an operation will not complete. **Every SQE that successfully
-    /// queues produces exactly one completion** (M10.2) -- unconditionally,
-    /// which is what lets [`IoRing::run_down`] terminate. The only push that
-    /// yields no completion is one whose `Build*` call failed synchronously,
-    /// and that push's reservation is released rather than left outstanding.
-    ///
-    /// A popped completion matching no live [`crate::Token`] is **normal**,
-    /// not a bug, and a drain loop must not treat it as one. It happens for
-    /// a registration (claimed by [`crate::PendingFileRegistration`] or
-    /// [`crate::PendingBufferRegistration`] instead), for a
-    /// [`crate::Batch::flush_raw`]/[`crate::Batch::cancel_raw`] push (which
-    /// return a bare identity because they own no buffer), for a cancel's own
-    /// completion as distinct from its target's, and for a token the caller
-    /// dropped unclaimed.
-    ///
-    /// # Errors
-    ///
-    /// Returns any error from `PopIoRingCompletion` other than its
-    /// documented empty-queue result.
-    pub fn try_pop(&mut self) -> io::Result<Option<Completion>> {
-        Ok(self.try_pop_held()?.map(|(completion, _held)| completion))
     }
 
     /// Pop a completion without touching the inventory.
@@ -1561,32 +1526,8 @@ impl<T, X> IoRing<T, X> {
     /// # Errors
     ///
     /// Any error from `SubmitIoRing` or `PopIoRingCompletion`.
-    pub fn pop_within(&mut self, timeout: Duration) -> io::Result<Option<Completion>> {
+    pub fn pop_within(&mut self, timeout: Duration) -> io::Result<Option<HeldCompletion<T, X>>> {
         self.pop_within_with(&mut SubmitWait, timeout)
-    }
-    /// [`IoRing::pop_within`], taking back whatever this ring was holding.
-    ///
-    /// Stands to [`IoRing::pop_within`] exactly as [`IoRing::try_pop_held`]
-    /// stands to [`IoRing::try_pop`], and exists for the same reason: a pop
-    /// that does not reclaim leaves the entry in the inventory forever, so a
-    /// caller who waits for a completion rather than polling for one would
-    /// strand every buffer it received. `M28.5` collapses each pair into the
-    /// one reclaiming form.
-    ///
-    /// # Errors
-    ///
-    /// As [`IoRing::pop_within`].
-    pub fn pop_within_held(
-        &mut self,
-        timeout: Duration,
-    ) -> io::Result<Option<HeldCompletion<T, X>>> {
-        let Some(completion) = self.pop_within_raw_with(&mut SubmitWait, timeout)? else {
-            return Ok(None);
-        };
-        let held = self
-            .reclaim(completion.user_data())
-            .map(|entry| (entry.payload, entry.extra));
-        Ok(Some((completion, held)))
     }
 
     /// [`IoRing::pop_within`] with a caller-chosen wait.
@@ -1605,13 +1546,14 @@ impl<T, X> IoRing<T, X> {
         &mut self,
         wait: &mut W,
         timeout: Duration,
-    ) -> io::Result<Option<Completion>> {
+    ) -> io::Result<Option<HeldCompletion<T, X>>> {
         let Some(completion) = self.pop_within_raw_with(wait, timeout)? else {
             return Ok(None);
         };
-        // Retired, not stranded. See `IoRing::pop_raw`.
-        let _retired = self.reclaim(completion.user_data());
-        Ok(Some(completion))
+        let held = self
+            .reclaim(completion.user_data())
+            .map(|entry| (entry.payload, entry.extra));
+        Ok(Some((completion, held)))
     }
 
     /// [`IoRing::pop_within_with`] without touching the inventory.
@@ -1955,13 +1897,14 @@ thread_local! {
 /// waited for in the failure message, where a consumer wants an `Option` it
 /// can act on.
 #[cfg(test)]
-pub(crate) fn pop_within(ring: &mut IoRing, what: &str) -> Completion {
+pub(crate) fn pop_within<T, X>(ring: &mut IoRing<T, X>, what: &str) -> Completion {
     // Named once so the bound and the message it reports cannot drift apart.
     const BOUND: std::time::Duration = std::time::Duration::from_secs(30);
 
     ring.pop_within(BOUND)
         .expect("pop")
         .unwrap_or_else(|| panic!("timed out after {BOUND:?} waiting for {what}"))
+        .0
 }
 
 #[cfg(test)]

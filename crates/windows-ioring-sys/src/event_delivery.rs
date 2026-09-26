@@ -31,7 +31,7 @@ fn drain<T, X>(ring: &Mutex<IoRing<T, X>>, on_completion: &OnCompletion<T, X>) {
             let mut ring = ring
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner);
-            ring.try_pop_held()
+            ring.try_pop()
         };
         match popped {
             Ok(Some((completion, held))) => on_completion(completion, held),
@@ -39,7 +39,7 @@ fn drain<T, X>(ring: &Mutex<IoRing<T, X>>, on_completion: &OnCompletion<T, X>) {
             Err(error) => {
                 debug_assert!(
                     false,
-                    "IoRing::try_pop_held failed during event-driven drain: {error}"
+                    "IoRing::try_pop failed during event-driven drain: {error}"
                 );
                 break;
             }

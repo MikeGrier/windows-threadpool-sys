@@ -73,8 +73,7 @@ use std::time::{Duration, Instant};
 use windows_ioring_sys::contract::{RingContract, Violation};
 use windows_ioring_sys::sys::{Resolver, ResolverWatch, Responses};
 use windows_ioring_sys::{
-    Batch, Completion, FlushCoverage, FlushMode, IoRing, PushOptions, SharedFile, Token,
-    WriteCaching,
+    Batch, Completion, FlushCoverage, FlushMode, IoRing, PushOptions, SharedFile, WriteCaching,
 };
 use windows_sys::core::HRESULT;
 
@@ -184,16 +183,16 @@ fn generate(rng: &mut Rng) -> Vec<Step> {
 
 // ------------------------------------------------------------------- run ---
 
-/// Tokens still awaiting their completion.
+/// The ring these properties run against.
 ///
-/// Two lists because the two operations hand back different types, and that
-/// difference is the point: a write's token owns its buffer, which is the
-/// lifetime P-5 is watching.
-#[derive(Default)]
-struct Outstanding {
-    flushes: Vec<Token<SharedFile>>,
-    writes: Vec<Token<(Vec<u8>, SharedFile)>>,
-}
+/// Two token vectors used to stand here, one per payload shape, because a
+/// write's token owned its buffer and a flush's owned only a file guard. The
+/// ring holds both now, so the lifetime `P-5` is watching is the ring's to
+/// keep rather than something the harness carries in a list it must search.
+type PropertyRing = IoRing<Vec<u8>>;
+
+/// What a pop on a [`PropertyRing`] hands back.
+type PropertyHeld = Option<(Option<Vec<u8>>, ())>;
 
 /// What a whole run actually exercised.
 ///
@@ -207,7 +206,6 @@ struct Coverage {
     pushes: usize,
     completions: usize,
     claims: usize,
-    deliberate_leaks: usize,
     barriers: usize,
     writes: usize,
     flushes: usize,
@@ -221,10 +219,9 @@ struct Coverage {
 }
 
 struct Run {
-    ring: IoRing,
+    ring: PropertyRing,
     file: SharedFile,
     contract: RingContract,
-    tokens: Outstanding,
     /// The resolution's own record, so a declined submit can be recognised by
     /// asking the resolver rather than by matching an `HRESULT` here.
     watch: ResolverWatch,
@@ -247,7 +244,6 @@ impl Coverage {
         self.pushes += other.pushes;
         self.completions += other.completions;
         self.claims += other.claims;
-        self.deliberate_leaks += other.deliberate_leaks;
         self.barriers += other.barriers;
         self.writes += other.writes;
         self.flushes += other.flushes;
@@ -277,10 +273,9 @@ impl Run {
             .write(true)
             .open(path)?;
         Ok(Self {
-            ring: IoRing::new(64, 128)?,
+            ring: PropertyRing::with_inventory(64, 128)?,
             file: SharedFile::new(file.into()),
             contract: RingContract::new(),
-            tokens: Outstanding::default(),
             watch,
             declined: 0,
             trace: Vec::new(),
@@ -302,7 +297,10 @@ impl Run {
     /// copy of a choice the resolver owns, and the two would drift the first
     /// time it picked a different one. Retrying is bounded by P-2's budget in
     /// every caller, so a resolution that declined forever is still caught.
-    fn pop_within(&mut self, bound: Duration) -> Result<Option<Completion>, String> {
+    fn pop_within(
+        &mut self,
+        bound: Duration,
+    ) -> Result<Option<(Completion, PropertyHeld)>, String> {
         let before = self.watch.stats().failed_submits;
         match self.ring.pop_within(bound) {
             Ok(outcome) => Ok(outcome),
@@ -332,75 +330,44 @@ impl Run {
         ))
     }
 
-    /// Account for one popped completion: tell the contract, then either claim
-    /// the token or abandon it on purpose.
+    /// Account for one popped completion.
     ///
-    /// The order matters and is not arbitrary. `RingContract` moves a `Pushed`
-    /// operation to a provisionally-leaked state on completion and only
-    /// `observe_claim` corrects it, so reporting a deliberate leak *before* the
-    /// completion would leave the contract seeing a second completion for an
-    /// already-settled operation and reporting a duplicate that did not happen.
-    fn account(&mut self, completion: &Completion, rng: &mut Rng) -> Result<(), String> {
+    /// This used to carry an ordering hazard worth remembering: the contract
+    /// moved a pushed operation to a *provisionally leaked* state on
+    /// completion, and only `observe_claim` corrected it -- so reporting a
+    /// deliberate leak before the completion made the oracle see a second
+    /// completion and report a duplicate that never happened. `D-74` removes
+    /// the provisional state, so completion is terminal and there is no second
+    /// report to sequence against it.
+    ///
+    /// The search is gone with it. Both token vectors were scanned by identity
+    /// to find whose completion this was; the ring returns the entry.
+    fn account(&mut self, completion: &Completion, held: PropertyHeld) -> Result<(), String> {
         let user_data = completion.user_data();
         self.contract.observe_completion(user_data);
         self.coverage.completions += 1;
 
-        if let Some(at) = self
-            .tokens
-            .flushes
-            .iter()
-            .position(|token| token.id() == user_data)
-        {
-            let token = self.tokens.flushes.remove(at);
-            return self.settle(token.claim_if(completion).is_ok(), user_data, rng);
-        }
-        if let Some(at) = self
-            .tokens
-            .writes
-            .iter()
-            .position(|token| token.id() == user_data)
-        {
-            let token = self.tokens.writes.remove(at);
-            return self.settle(token.claim_if(completion).is_ok(), user_data, rng);
-        }
-        Err(format!(
-            "a completion arrived for {user_data:#x}, which no live token matches -- either \
-             RS-C-2 was broken or this harness lost a push"
-        ))
-    }
-
-    fn settle(&mut self, claimed: bool, user_data: usize, rng: &mut Rng) -> Result<(), String> {
-        if !claimed {
+        if held.is_none() {
             return Err(format!(
-                "the token for {user_data:#x} refused a completion carrying its own identity, \
-                 which is RS-C-2 broken inside the crate's own matching"
+                "a completion arrived for {user_data:#x}, which this ring was holding nothing \
+                 for -- either RS-C-2 was broken or this harness lost a push"
             ));
         }
-        // Claiming already happened; whether to *report* it as a claim or as a
-        // deliberate abandonment is what exercises both of the contract's
-        // settled states. Both are legitimate endings, and the contract
-        // distinguishes them precisely so an unstated leak stays a violation.
-        if rng.chance(15) {
-            self.contract.observe_deliberate_leak(user_data);
-            self.coverage.deliberate_leaks += 1;
-        } else {
-            self.contract.observe_claim(user_data);
-            self.coverage.claims += 1;
-        }
+        self.coverage.claims += 1;
         Ok(())
     }
 
     /// Pop everything currently available. P-2's budget applies.
-    fn drain(&mut self, rng: &mut Rng) -> Result<(), String> {
+    fn drain(&mut self) -> Result<(), String> {
         for _ in 0..DRAIN_BUDGET {
-            let Some(completion) = self
+            let Some((completion, held)) = self
                 .ring
                 .try_pop()
                 .map_err(|error| format!("try_pop failed: {error}"))?
             else {
                 return Ok(());
             };
-            self.account(&completion, rng)?;
+            self.account(&completion, held)?;
         }
         Err(format!(
             "P-2 broken: try_pop kept yielding completions past a budget of {DRAIN_BUDGET}, \
@@ -410,14 +377,14 @@ impl Run {
 
     /// Drive to quiescence. P-2's budget applies, and this is where a
     /// resolution that stopped making progress is caught.
-    fn quiesce(&mut self, rng: &mut Rng) -> Result<(), String> {
+    fn quiesce(&mut self) -> Result<(), String> {
         for _ in 0..DRAIN_BUDGET {
             if self.ring.outstanding() == 0 {
-                self.drain(rng)?;
+                self.drain()?;
                 return Ok(());
             }
             match self.pop_within(Duration::from_millis(5))? {
-                Some(completion) => self.account(&completion, rng)?,
+                Some((completion, held)) => self.account(&completion, held)?,
                 None => continue,
             }
         }
@@ -430,7 +397,7 @@ impl Run {
 }
 
 /// Run one plan under one resolution. `Ok` is every property holding.
-fn run_plan(plan: &[Step], plan_rng: &mut Rng, run: &mut Run) -> Result<(), String> {
+fn run_plan(plan: &[Step], _plan_rng: &mut Rng, run: &mut Run) -> Result<(), String> {
     for (index, step) in plan.iter().enumerate() {
         run.trace.push(format!("{index}: {step:?}"));
         match step {
@@ -446,24 +413,23 @@ fn run_plan(plan: &[Step], plan_rng: &mut Rng, run: &mut Run) -> Result<(), Stri
                                 } else {
                                     FlushCoverage::Unordered
                                 };
-                                let token = batch
-                                    .flush(&run.file, coverage, FlushMode::Default)
+                                let id = batch
+                                    .flush_owned(&run.file, (), coverage, FlushMode::Default)
                                     .map_err(|error| format!("flush build failed: {error}"))?;
-                                pushed.push((token.id(), *drain, false));
-                                run.tokens.flushes.push(token);
+                                pushed.push((id.user_data(), *drain, false));
                             }
                             Op::Write { drain } => {
-                                let token = batch
-                                    .write(
+                                let id = batch
+                                    .write_owned(
                                         &run.file,
                                         vec![0_u8; BUF_LEN],
+                                        (),
                                         0,
                                         PushOptions::new().drain_preceding(*drain),
                                         WriteCaching::Cached,
                                     )
                                     .map_err(|error| format!("write build failed: {error}"))?;
-                                pushed.push((token.id(), *drain, true));
-                                run.tokens.writes.push(token);
+                                pushed.push((id.user_data(), *drain, true));
                             }
                         }
                     }
@@ -490,7 +456,7 @@ fn run_plan(plan: &[Step], plan_rng: &mut Rng, run: &mut Run) -> Result<(), Stri
                     }
                 }
             }
-            Step::Drain => run.drain(plan_rng)?,
+            Step::Drain => run.drain()?,
             Step::PopWithin(millis) => {
                 // P-3. The bound is what is being checked, so it is measured
                 // around the call rather than assumed from the argument.
@@ -503,8 +469,8 @@ fn run_plan(plan: &[Step], plan_rng: &mut Rng, run: &mut Run) -> Result<(), Stri
                         "P-3 broken: pop_within({millis}ms) took {elapsed:?}"
                     ));
                 }
-                if let Some(completion) = outcome {
-                    run.account(&completion, plan_rng)?;
+                if let Some((completion, held)) = outcome {
+                    run.account(&completion, held)?;
                 } else {
                     run.coverage.empty_pop_withins += 1;
                 }
@@ -513,7 +479,7 @@ fn run_plan(plan: &[Step], plan_rng: &mut Rng, run: &mut Run) -> Result<(), Stri
         }
     }
 
-    run.quiesce(plan_rng)?;
+    run.quiesce()?;
     run.check_outstanding("quiescence")?;
 
     // P-1, asked of the oracle rather than restated.
@@ -655,7 +621,7 @@ fn the_properties_hold_under_every_resolution() {
         "too few drain-flagged operations, so RS-C-4 barely applied: {coverage:?}"
     );
     assert!(
-        coverage.claims > PLANS * 3 && coverage.deliberate_leaks > PLANS / 2,
+        coverage.claims > PLANS * 3,
         "both of the contract's settled states must be reached: {coverage:?}"
     );
     assert!(
@@ -732,7 +698,7 @@ fn pop_within_honours_its_bound_when_nothing_completes() {
     // "it did not exceed the bound" says little; here nothing arrives at all
     // and the deadline is the only thing that can end the call.
     let guard = windows_ioring_sys::sys::install(Box::new(Stalled));
-    let mut ring = IoRing::new(64, 128).expect("a ring");
+    let mut ring = PropertyRing::with_inventory(64, 128).expect("a ring");
     let path = std::env::temp_dir().join(format!(
         "windows-ioring-sys-m26-4-stalled-{}.tmp",
         std::process::id()
@@ -747,14 +713,13 @@ fn pop_within_honours_its_bound_when_nothing_completes() {
             .into(),
     );
 
-    let token = {
+    {
         let mut batch = Batch::new(&mut ring);
-        let token = batch
-            .flush(&file, FlushCoverage::Unordered, FlushMode::Default)
+        batch
+            .flush_owned(&file, (), FlushCoverage::Unordered, FlushMode::Default)
             .expect("a flush builds");
         batch.submit().expect("the submit is answered");
-        token
-    };
+    }
     assert_eq!(
         ring.outstanding(),
         1,
@@ -783,11 +748,11 @@ fn pop_within_honours_its_bound_when_nothing_completes() {
         );
     }
 
-    // The operation never completed, so the token is abandoned on purpose and
-    // the ring is left to its own teardown; calling `run_down` here would park
-    // forever, which is this responder working as described rather than a
-    // defect to route around.
-    std::mem::forget(token);
+    // The operation never completed, so the ring is forgotten rather than run
+    // down: `run_down` would park forever here, which is this responder
+    // working as described rather than a defect to route around. Forgetting
+    // the ring is also what keeps its inventory alive, which is the same
+    // reason the token beside this line used to be forgotten.
     std::mem::forget(ring);
     drop(guard);
     drop(file);

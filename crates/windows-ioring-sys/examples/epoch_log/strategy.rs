@@ -516,7 +516,7 @@ impl Lane {
         let mut batch = Batch::new(&mut ring);
         let pending = batch.register_buffers(buffers)?;
         batch.submit_and_wait(1, WAIT_MS)?;
-        let completion = ring
+        let (completion, _held) = ring
             .try_pop()?
             .ok_or_else(|| io::Error::other("buffer registration produced no completion"))?;
         let arena = pending
@@ -628,7 +628,7 @@ impl Lane {
     /// drops completions runs the arena dry and never recovers.
     fn drain(&mut self) -> io::Result<usize> {
         let mut popped = 0;
-        while let Some((completion, held)) = self.ring.try_pop_held()? {
+        while let Some((completion, held)) = self.ring.try_pop()? {
             popped += 1;
             self.classify(completion, held)?;
         }
@@ -681,7 +681,7 @@ impl Lane {
                 return Ok(());
             }
             if self.drain()? == 0 {
-                match self.ring.pop_within_held(remaining(deadline))? {
+                match self.ring.pop_within(remaining(deadline))? {
                     Some((completion, held)) => self.classify(completion, held)?,
                     None => return Err(timed_out("a commit's flush")),
                 }
@@ -702,7 +702,7 @@ impl Lane {
         let deadline = Instant::now() + WAIT;
         while self.outstanding_writes > 0 {
             if self.drain()? == 0 {
-                match self.ring.pop_within_held(remaining(deadline))? {
+                match self.ring.pop_within(remaining(deadline))? {
                     Some((completion, held)) => self.classify(completion, held)?,
                     None => return Err(timed_out("this lane's outstanding writes")),
                 }

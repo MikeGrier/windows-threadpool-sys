@@ -34,8 +34,8 @@ use std::os::windows::io::RawHandle;
 
 use windows_ioring_sys::contract::RingContract;
 use windows_ioring_sys::{
-    Batch, IoBufMut, IoRing, NumaBuffer, Pending, PushOptions, RegisteredBuffers, RegisteredSpan,
-    RegisteredUse, WriteCaching,
+    Batch, IoBufMut, IoRing, NumaBuffer, PushOptions, RegisteredBuffers, RegisteredSpan,
+    WriteCaching,
 };
 
 use crate::commit::Epoch;
@@ -102,20 +102,36 @@ pub fn free_slots<B: IoBufMut>(arena: &RegisteredBuffers<B>, want: usize) -> Vec
         .collect()
 }
 
+/// The ring an [`Appender`] and its log share.
+///
+/// The appender names the ring type rather than taking a generic one, and that
+/// is the answer to the question `D-73` raised: a helper that pushes onto a
+/// ring has always constrained what that ring may hold, and the parameters
+/// only make the constraint visible. `u32` is the arena slot an append reads
+/// from, which is what the pop hands back.
+///
+/// The log's other producer, [`crate::commit::Committer`], pushes raw flushes
+/// that hold nothing -- so a popped completion with no sidecar is a commit and
+/// one with a sidecar is an append. That is the dispatch, and it is the ring's
+/// answer rather than a guess: the drain used to offer each completion to the
+/// appender and then the committer, taking whichever accepted it.
+pub type AppendRing = IoRing<(), u32>;
+
 /// The append path: an arena of registered buffers, a monotonic sequence
 /// counter, and the file offset the next record lands at.
 pub struct Appender {
     arena: RegisteredBuffers<NumaBuffer>,
-    /// Unclaimed tokens, with the arena slot each holds.
+    /// How many appends this appender still owes a completion for.
     ///
-    /// Checked, so the conservation oracle is driven by the same call that
-    /// updates the map (M16.2's accounting, now wired rather than hand-driven).
-    /// That matters for the specific failure it guards: an early return from
-    /// [`Appender::claim`] that skips the token claim leaks the arena slot
-    /// permanently, and nothing else in this program notices until the arena
-    /// runs dry `SLOTS` failures later -- somewhere else entirely, with no
-    /// trace of the cause.
-    pending: Pending<RegisteredUse, u32>,
+    /// A count rather than a map: the ring holds each append's registration
+    /// lease and the arena slot it names, and releases both at the pop. The
+    /// failure this field's predecessor guarded -- an early return from
+    /// [`Appender::claim`] skipping the claim and burning a slot permanently,
+    /// unnoticed until the arena ran dry `SLOTS` failures later -- is no
+    /// longer reachable, because releasing the slot is not something this code
+    /// does.
+    outstanding: usize,
+    contract: RingContract,
     next_sequence: u64,
     next_offset: u64,
 }
@@ -139,7 +155,7 @@ impl Appender {
     ///
     /// Any error from allocating the arena, the registration push, the submit,
     /// or the registration operation itself.
-    pub fn new(ring: &mut IoRing, placement: &Placement) -> io::Result<Self> {
+    pub fn new(ring: &mut AppendRing, placement: &Placement) -> io::Result<Self> {
         let node = placement.node();
         let buffers = (0..SLOTS)
             .map(|_| NumaBuffer::new(SLOT_LEN, node))
@@ -152,7 +168,7 @@ impl Appender {
         // between `try_pop`'s "empty right now" and a submit-side wait whose
         // return promises nothing about poppability. The bare `loop` that
         // used to be here turned a slow registration into a hung process.
-        let completion = ring.pop_within(REGISTRATION_TIMEOUT)?.ok_or_else(|| {
+        let (completion, _held) = ring.pop_within(REGISTRATION_TIMEOUT)?.ok_or_else(|| {
             io::Error::new(
                 io::ErrorKind::TimedOut,
                 "the buffer registration never completed",
@@ -167,7 +183,8 @@ impl Appender {
 
         Ok(Self {
             arena,
-            pending: Pending::checked(),
+            outstanding: 0,
+            contract: RingContract::new(),
             next_sequence: 0,
             next_offset: 0,
         })
@@ -176,16 +193,18 @@ impl Appender {
     /// This appender's conservation record, for a caller to assert against at
     /// teardown.
     ///
-    /// Reads through to the map's own oracle rather than a separate one. An
-    /// earlier draft of this conversion kept the `RingContract` field beside
-    /// `Pending::checked()`, which compiled, ran, and made
-    /// `assert_quiescent()` pass **vacuously** -- the field was never written
-    /// to again, so a caller's teardown check was asserting against an oracle
-    /// that had observed nothing.
+    /// The field is back, and the hazard it once carried is worth restating
+    /// rather than deleting. `Pending::checked()` used to drive this oracle,
+    /// and the draft before that kept a `RingContract` field *beside* the map
+    /// and never wrote to it again -- so `assert_quiescent()` passed
+    /// **vacuously**, against an oracle that had observed nothing. With
+    /// `Pending` retired the field is the only holder again, so the property
+    /// that keeps it honest is local and checkable: every push in
+    /// [`Appender::append_batch`] observes, and every completion in
+    /// [`Appender::claim`] observes. `append/tests.rs` asserts the counts move,
+    /// which is what makes a silently-unwritten oracle fail rather than pass.
     pub fn contract(&self) -> &RingContract {
-        self.pending
-            .contract()
-            .expect("the appender's map is always checked")
+        &self.contract
     }
 
     /// The sequence the next appended record will carry.
@@ -195,7 +214,7 @@ impl Appender {
 
     /// How many appends are pushed but not yet observed complete.
     pub fn in_flight(&self) -> usize {
-        self.pending.len()
+        self.outstanding
     }
 
     /// Compose as many of `payloads` as there are free arena slots, and push
@@ -226,7 +245,7 @@ impl Appender {
     /// drops (D-5), so they are real operations, not a rollback.
     pub fn append_batch(
         &mut self,
-        ring: &mut IoRing,
+        ring: &mut AppendRing,
         file: RawHandle,
         epoch: Epoch,
         payloads: &[Vec<u8>],
@@ -271,9 +290,9 @@ impl Appender {
             let offset = self.next_offset;
             // SAFETY: `file` is the log's own handle and outlives every
             // operation pushed here -- the log drains to empty before it
-            // closes. The token is held in `in_flight` until its completion is
-            // observed, so the arena slot it names cannot be refilled
-            // underneath the kernel.
+            // closes. The ring holds the slot's registration lease until its
+            // completion is popped, so the slot cannot be refilled underneath
+            // the kernel.
             //
             // `PushOptions::new()` deliberately carries no barrier: records
             // stream unordered within an epoch, exactly as the contract says,
@@ -281,20 +300,20 @@ impl Appender {
             // covering flush. `WriteCaching::Cached` for the same reason --
             // write-through here would shape latency without changing what is
             // durable.
-            let token = unsafe {
-                batch.write_registered_raw(
+            let id = unsafe {
+                batch.write_registered_raw_owned(
                     file,
                     &self.arena,
                     span,
+                    slot,
                     offset,
                     PushOptions::new(),
                     WriteCaching::Cached,
                 )
             }?;
 
-            // One call updates the map and its oracle, where this previously
-            // updated them separately and could drift.
-            self.pending.push(token, slot);
+            self.contract.observe_push(id.user_data());
+            self.outstanding += 1;
             self.next_sequence += 1;
             self.next_offset += record::RECORD_STRIDE as u64;
             accepted += 1;
@@ -308,33 +327,30 @@ impl Appender {
 
     /// Account for one popped completion that belongs to an append.
     ///
-    /// Returns `true` if `completion` was one of ours. Claiming the token is
-    /// what returns its arena slot to the free pool, so a caller that drops
-    /// completions on the floor will run the arena dry and never recover --
-    /// which is the same drain-to-empty discipline the ring itself demands.
-    pub fn claim(&mut self, completion: &windows_ioring_sys::Completion) -> io::Result<bool> {
-        // Claiming happens here, before the write's result is inspected, and
-        // that ordering still matters: bailing out on a failed write without
-        // claiming drops the token unclaimed, which `Token` deliberately
-        // treats as "still outstanding" and leaks -- burning this arena slot
-        // permanently, so `free_slots` never offers it again and after `SLOTS`
-        // failures every append returns `WouldBlock` forever. `M22.2` found
-        // exactly that bug here.
-        //
-        // `Pending` does not make the inverted order unrepresentable -- it
-        // compiles -- but it is no longer silent either way: the token stays in
-        // the map, and `append/tests.rs` drives a failed write through the
-        // injection seam so the inversion is caught by an assertion rather than
-        // waiting for a production arena to run dry.
-        let Some((released, slot)) = self.pending.claim(completion) else {
-            return Ok(false);
-        };
-        // Dropping the marker is what decrements the slot's count, so it has
-        // to happen before the check below rather than at end of scope.
-        drop(released);
+    /// `slot` is the sidecar the ring returned with the completion, which is
+    /// also what identifies the completion as an append -- the caller reads it
+    /// from the pop rather than offering the completion to each claimant in
+    /// turn.
+    ///
+    /// The ordering hazard this used to carry is gone, and it is worth saying
+    /// what it was: claiming had to happen *before* the write's result was
+    /// inspected, because an early return on a failed write dropped the token
+    /// unclaimed, which `Token` treated as still-outstanding. That burned the
+    /// arena slot permanently -- `free_slots` never offered it again, and
+    /// after `SLOTS` failures every append returned `WouldBlock` forever.
+    /// `M22.2` found exactly that bug here, and `M25.1` made it loud rather
+    /// than silent. The pop releases the slot now, before this runs, so there
+    /// is no order left to invert.
+    pub fn claim(
+        &mut self,
+        completion: &windows_ioring_sys::Completion,
+        slot: u32,
+    ) -> io::Result<()> {
+        self.contract.observe_completion(completion.user_data());
+        self.outstanding -= 1;
         debug_assert!(
             self.arena.outstanding(slot) == Some(0),
-            "claiming the token must release the slot"
+            "the pop must release the slot"
         );
 
         // The contract requires that a successful write of N bytes transferred
@@ -362,7 +378,7 @@ impl Appender {
                 ),
             ));
         }
-        Ok(true)
+        Ok(())
     }
 }
 

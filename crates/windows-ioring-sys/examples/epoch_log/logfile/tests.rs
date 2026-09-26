@@ -169,7 +169,7 @@ fn the_ring_refuses_an_unaligned_write_and_accepts_an_aligned_one() {
     .expect("push the aligned write");
     batch.submit().expect("submit");
     let (completion, held) = aligned_ring
-        .pop_within_held(WAIT)
+        .pop_within(WAIT)
         .expect("pop_within")
         .expect("the write completes well inside the bound");
     assert!(held.is_some(), "the completion must be the aligned write's");
@@ -193,7 +193,7 @@ fn the_ring_refuses_an_unaligned_write_and_accepts_an_aligned_one() {
     .expect("push the unaligned write");
     batch.submit().expect("submit");
     let (completion, held) = unaligned_ring
-        .pop_within_held(WAIT)
+        .pop_within(WAIT)
         .expect("pop_within")
         .expect("the write completes well inside the bound");
     assert!(

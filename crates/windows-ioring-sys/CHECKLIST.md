@@ -476,40 +476,7 @@ every consumer names the type -- which means the migration order matters more th
 
   - [x] **M28.4.1d.2b** -- Documented the two ways round a mixed payload on `IoRing::with_inventory` and in `D-73`; no `IoBuf` enum helper built. -> [completed 2026-09-26](COMPLETED-CHECKLIST.md#m2841d2b)
 
-  - [ ] **M28.4.1d.3** -- **Also carries the three consumers d.2 could not convert** (see
-        `M28.4.1d.2`): `generated_sequences.rs` and `properties_under_every_resolution.rs`
-        (each samples claim-or-drop as a generated dimension, with a coverage assertion that
-        the axis was exercised), and `failure_paths.rs`'s leak-ordering test (asserts
-        `Violation::LeakedToken` -- deleted here, not converted). Each is blocked on this item
-        rather than on effort, because what they assert is what this item deletes.
-
-        **Decide `epoch_log/append.rs`'s boundary question before converting it**: it takes
-        `&mut IoRing` rather than owning the ring, so reaching the inventory would put the
-        ring's payload type into the appender's own signature. It is also the last user of the
-        crate's `Pending<T, X>`, so retiring that type and answering this question are the same
-        piece of work.
-
-        Retire every `Token`-returning push -- there is now exactly one per `*_owned` form,
-        since `flush_raw_owned` closed the last gap -- along with `Token` itself and
-        `Pending<T, X>`; apply [D-74](DESIGN-NOTES.md#d-74) in the same commit -- drop
-        `Violation::LeakedToken`, `State::Leaked`, `observe_claim` and
-        `observe_deliberate_leak`, and collapse the two push states.
-
-        **Dropping `observe_claim` reaches past the three unconverted files.** `M28.4.1d.2`
-        left its calls in place in [handover.rs](tests/handover.rs),
-        [kernel_span.rs](tests/kernel_span.rs),
-        [submission_lifecycle.rs](tests/submission_lifecycle.rs) and the converted half of
-        [failure_paths.rs](tests/failure_paths.rs) -- deliberately, because the oracle still
-        modelled a claim while both token models were live, and a converted test that stopped
-        reporting one would have looked like a leak. Those calls have nothing left to report
-        once the pop is the claim, so they go with the API rather than being rewritten.
-        [contract.rs](src/contract.rs) also carries a doctest that calls it, and
-        [pending.rs](src/pending.rs) calls both -- the latter disappears with `Pending<T, X>`. Leaving them would describe
-        a hazard the API no longer has, which is worse than a gap: a reader would go looking for
-        the way to leak a token and not find one. **This is the commit that ends the break.** **Convert all of them or
-        none**: converting a few relocates the duplication rather than removing it, which is the
-        lesson `win-numa-sys` recorded the same day when it moved one `VirtualAllocExNuma` and
-        left the other. This is the step that ends with one token model.
+  - [x] **M28.4.1d.3** -- Token API retired, `D-74` applied, one reclaiming pop per shape; the break is closed. -> [completed 2026-09-26](COMPLETED-CHECKLIST.md#m2841d3)
 
   - [ ] **M28.4.2** -- Sabotage the inventory: a push that does not record, and a pop that does
         not retire, must both turn the suite red.

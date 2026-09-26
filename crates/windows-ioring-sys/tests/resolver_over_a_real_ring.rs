@@ -88,7 +88,7 @@ fn an_installed_resolver_answers_a_real_rings_operations() {
         );
 
         let (_completion, held) = ring
-            .pop_within_held(std::time::Duration::from_secs(5))
+            .pop_within(std::time::Duration::from_secs(5))
             .expect("the pop is answered")
             .expect("a completion arrives within the bound");
         assert!(
@@ -218,7 +218,7 @@ fn a_declined_submit_leaves_the_ring_resumable_and_the_policy_to_the_caller() {
         let mut batch = Batch::new(&mut ring);
         for _ in 0..6 {
             let _token = batch
-                .flush(&file, FlushCoverage::Unordered, FlushMode::Default)
+                .flush_owned(&file, (), FlushCoverage::Unordered, FlushMode::Default)
                 .expect("a flush builds");
         }
         let _ = batch.submit();
@@ -288,7 +288,7 @@ fn an_expired_wait_is_a_successful_submit() {
                 let mut batch = Batch::new(&mut ring);
                 for _ in 0..4 {
                     let _token = batch
-                        .flush(&file, FlushCoverage::Unordered, FlushMode::Default)
+                        .flush_owned(&file, (), FlushCoverage::Unordered, FlushMode::Default)
                         .expect("a flush builds");
                 }
                 // Ask to wait, which is what lets RS-P-4 apply.
@@ -342,7 +342,7 @@ fn run_down_within_honours_its_bound_and_reports_rather_than_deciding() {
             let mut batch = Batch::new(&mut ring);
             for _ in 0..4 {
                 let _token = batch
-                    .flush(&file, FlushCoverage::Unordered, FlushMode::Default)
+                    .flush_owned(&file, (), FlushCoverage::Unordered, FlushMode::Default)
                     .expect("a flush builds");
             }
             batch.submit().expect("the submit is answered");
@@ -438,7 +438,7 @@ fn a_pending_completion_defeats_try_pop_and_not_pop_within() {
         // The restated spelling: this crate's own contract, which holds under
         // every resolution rather than on one kind of handle.
         let (_completion, held) = ring
-            .pop_within_held(std::time::Duration::from_secs(5))
+            .pop_within(std::time::Duration::from_secs(5))
             .expect("pop_within")
             .expect("a completion arrives within the bound");
         assert!(
@@ -475,7 +475,7 @@ fn a_thread_with_nothing_installed_still_talks_to_the_kernel() {
             .expect("a flush builds");
         batch.submit().expect("the kernel accepts the submit");
         let (_completion, held) = ring
-            .pop_within_held(std::time::Duration::from_secs(5))
+            .pop_within(std::time::Duration::from_secs(5))
             .expect("the kernel answers")
             .expect("a real completion arrives");
         assert!(held.is_some());

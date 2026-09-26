@@ -109,7 +109,7 @@ fn registered_arena<T, X>(
     batch
         .submit_and_wait(1, WAIT_MS)
         .expect("submit the registration");
-    let completion = ring
+    let (completion, _held) = ring
         .pop_within(POP_BOUND)
         .expect("pop the registration completion")
         .expect("a completion arrives within the bound");
@@ -131,7 +131,7 @@ fn registered_arena<T, X>(
 /// test name at all. `IoRing::pop_within` (M21.2) is the crate's own join
 /// between the two and carries the bound.
 fn await_one<T, X>(ring: &mut IoRing<T, X>) -> windows_ioring_sys::HeldCompletion<T, X> {
-    ring.pop_within_held(std::time::Duration::from_millis(u64::from(WAIT_MS)))
+    ring.pop_within(std::time::Duration::from_millis(u64::from(WAIT_MS)))
         .expect("pop a completion")
         .expect("a completion arrived within the bound")
 }
@@ -508,7 +508,6 @@ fn a_mixed_workload_leaves_every_unaccounted_byte_poisoned() {
         // `observe_buffer` reports below.
         let (_payload, (slot, offset, is_read)) =
             held.expect("a completion must belong to a pushed operation");
-        contract.observe_claim(completion.user_data());
         outstanding -= 1;
 
         if is_read {

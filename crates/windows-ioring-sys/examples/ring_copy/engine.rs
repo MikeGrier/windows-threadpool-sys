@@ -147,7 +147,7 @@ fn register_buffer(
         batch.submit_and_wait(1, OP_TIMEOUT_MS)?;
         pending
     };
-    let completion = ring.try_pop()?.ok_or_else(|| {
+    let (completion, _held) = ring.try_pop()?.ok_or_else(|| {
         io::Error::new(
             io::ErrorKind::TimedOut,
             "no completion for buffer registration",
@@ -172,10 +172,10 @@ where
         push(&mut batch)?;
         batch.submit_and_wait(1, OP_TIMEOUT_MS)?;
     }
-    // `try_pop_held` rather than `try_pop`: this operation holds a
+    // `try_pop` rather than `try_pop`: this operation holds a
     // registration lease, and the pop is what releases it back to the
     // registered buffer's outstanding count.
-    let (completion, held) = ring.try_pop_held()?.ok_or_else(|| {
+    let (completion, held) = ring.try_pop()?.ok_or_else(|| {
         io::Error::new(
             io::ErrorKind::TimedOut,
             "no completion after submit_and_wait",

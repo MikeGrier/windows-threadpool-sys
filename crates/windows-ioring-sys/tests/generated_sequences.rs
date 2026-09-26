@@ -76,8 +76,8 @@ use std::path::PathBuf;
 
 use windows_ioring_sys::contract::RingContract;
 use windows_ioring_sys::{
-    Batch, Completion, FlushCoverage, FlushMode, IoRing, PushOptions, RegisteredBuffers,
-    RegisteredFile, RegisteredSpan, RegisteredUse, SharedFile, Token, WriteCaching,
+    Batch, FlushCoverage, FlushMode, IoRing, PushOptions, RegisteredBuffers, RegisteredFile,
+    RegisteredSpan, SharedFile, WriteCaching,
 };
 use windows_sys::Win32::Foundation::{WAIT_OBJECT_0, WAIT_TIMEOUT};
 use windows_sys::Win32::System::Threading::WaitForSingleObject;
@@ -170,7 +170,6 @@ enum BufferKind {
 #[derive(Default)]
 struct Coverage {
     shapes: std::collections::HashSet<(OpKind, TargetKind, BufferKind)>,
-    deliberate_drops: usize,
     attaches: usize,
     attaches_with_work_outstanding: usize,
     mid_sequence_drains: usize,
@@ -183,11 +182,6 @@ struct GenOp {
     kind: OpKind,
     target: TargetKind,
     buffer: BufferKind,
-    /// Claim the token against its completion, or drop it deliberately. A
-    /// deliberate drop is a legitimate choice -- it is what keeps a buffer
-    /// alive when the caller cannot prove the kernel is done -- so the
-    /// contract is told about it rather than reporting a leak.
-    claim: bool,
     drain_preceding: bool,
     slot: u64,
 }
@@ -302,7 +296,6 @@ fn generate(rng: &mut Rng) -> Plan {
             kind,
             target,
             buffer,
-            claim: rng.chance(85),
             drain_preceding: rng.chance(15),
             slot: rng.below(16),
         }));
@@ -312,42 +305,18 @@ fn generate(rng: &mut Rng) -> Plan {
 
 // --- what a sequence holds while it runs -------------------------------------
 
-/// One outstanding operation's token. The token type differs per path -- the
-/// raw entry points hand back a bare buffer, the targeted ones a buffer plus a
-/// guard keeping the file alive -- so this enum is what lets one sequence mix
-/// them and still claim each against its own completion.
-enum Held {
-    RawOwned(Token<Vec<u8>>),
-    RawRegistered(Token<RegisteredUse>),
-    SharedOwned(Token<(Vec<u8>, SharedFile)>),
-    SharedRegistered(Token<(RegisteredUse, SharedFile)>),
-    SharedFlush(Token<SharedFile>),
-    RegdOwned(Token<(Vec<u8>, RegisteredFile)>),
-    RegdRegistered(Token<(RegisteredUse, RegisteredFile)>),
-    RegdFlush(Token<RegisteredFile>),
-}
-
-impl Held {
-    fn claim(self, completion: &Completion) -> Result<(), ()> {
-        match self {
-            Held::RawOwned(token) => token.claim_if(completion).map(|_| ()).map_err(|_| ()),
-            Held::RawRegistered(token) => token.claim_if(completion).map(|_| ()).map_err(|_| ()),
-            Held::SharedOwned(token) => token.claim_if(completion).map(|_| ()).map_err(|_| ()),
-            Held::SharedRegistered(token) => token.claim_if(completion).map(|_| ()).map_err(|_| ()),
-            Held::SharedFlush(token) => token.claim_if(completion).map(|_| ()).map_err(|_| ()),
-            Held::RegdOwned(token) => token.claim_if(completion).map(|_| ()).map_err(|_| ()),
-            Held::RegdRegistered(token) => token.claim_if(completion).map(|_| ()).map_err(|_| ()),
-            Held::RegdFlush(token) => token.claim_if(completion).map(|_| ()).map_err(|_| ()),
-        }
-    }
-}
+/// The ring these sequences drive.
+///
+/// This replaced an eight-variant `Held` enum -- one per token payload shape
+/// -- and an `impl` that matched all eight to call `claim_if` on each. The
+/// eight shapes were real: a raw entry point handed back a bare buffer, a
+/// targeted one a buffer plus a file guard, a registered one a use count. The
+/// ring holds all of them now behind the two `Option`s `D-73` describes, so a
+/// sequence that mixes every path needs one type rather than a union of eight.
+type SequenceRing = IoRing<Vec<u8>>;
 
 struct Run {
     contract: RingContract,
-    held: HashMap<usize, Held>,
-    /// Operations whose token was dropped on purpose. Their completions still
-    /// arrive and must still be popped; they simply have nothing to claim.
-    dropped: HashMap<usize, ()>,
     /// Which registered buffer index each outstanding operation is using, so
     /// the generator never points two live operations at the same buffer --
     /// that would be a data race this crate cannot be blamed for.
@@ -389,25 +358,17 @@ fn duplicate_handle(file: &File) -> OwnedHandle {
         .into()
 }
 
-/// Drain to empty once, claiming what can be claimed, and report how many
-/// completions this pass observed.
-fn drain_to_empty(ring: &mut IoRing, run: &mut Run) -> usize {
+/// Drain to empty once, and report how many completions this pass observed.
+fn drain_to_empty(ring: &mut SequenceRing, run: &mut Run) -> usize {
     let mut popped = 0;
-    while let Some(completion) = ring.try_pop().expect("pop completion") {
+    while let Some((completion, _held)) = ring.try_pop().expect("pop completion") {
         let user_data = completion.user_data();
         run.contract.observe_completion(user_data);
         // The result itself is not asserted: a generated write to an odd offset
         // or a flush on a busy file may legitimately fail. What must hold is
-        // that the completion arrives exactly once and its token is settled.
+        // that the completion arrives exactly once, which the pop settles.
         let _ = completion.result();
         run.buffer_in_use.remove(&user_data);
-        if let Some(held) = run.held.remove(&user_data) {
-            held.claim(&completion)
-                .expect("a token must claim its own completion");
-            run.contract.observe_claim(user_data);
-        } else if run.dropped.remove(&user_data).is_some() {
-            run.contract.observe_deliberate_leak(user_data);
-        }
         popped += 1;
     }
     popped
@@ -420,11 +381,9 @@ fn run_plan(
     coverage: &mut Coverage,
 ) -> Result<(), String> {
     let handle = file.as_raw_handle();
-    let mut ring = IoRing::new(64, 64).expect("create ring");
+    let mut ring = SequenceRing::with_inventory(64, 64).expect("create ring");
     let mut run = Run {
         contract: RingContract::new(),
-        held: HashMap::new(),
-        dropped: HashMap::new(),
         buffer_in_use: HashMap::new(),
         trace: Vec::new(),
     };
@@ -438,7 +397,7 @@ fn run_plan(
         // test and every operation is drained before this function returns.
         let pending = unsafe { batch.register_files(&[handle]) }.expect("queue file registration");
         batch.submit_and_wait(1, 5_000).expect("submit");
-        let completion = ring
+        let (completion, _held) = ring
             .pop_within(POP_BOUND)
             .expect("pop")
             .expect("a registration completion arrives within the bound");
@@ -459,7 +418,7 @@ fn run_plan(
             )
             .expect("queue buffer registration");
         batch.submit_and_wait(1, 5_000).expect("submit");
-        let completion = ring
+        let (completion, _held) = ring
             .pop_within(POP_BOUND)
             .expect("pop")
             .expect("a registration completion arrives within the bound");
@@ -591,7 +550,7 @@ fn signalled_within(event: &OwnedHandle, timeout_ms: u32) -> bool {
 /// the attach is only reachable through the deliberate setup signal (D-20).
 /// Draining first would consume that backlog by polling and hide its absence.
 fn wait_then_drain(
-    ring: &mut IoRing,
+    ring: &mut SequenceRing,
     run: &mut Run,
     event: Option<&OwnedHandle>,
     timeout_ms: u32,
@@ -621,7 +580,7 @@ fn render(trace: &[String]) -> String {
 
 #[allow(clippy::too_many_arguments)]
 fn submit_one(
-    ring: &mut IoRing,
+    ring: &mut SequenceRing,
     run: &mut Run,
     op: &GenOp,
     handle: std::os::windows::io::RawHandle,
@@ -646,183 +605,162 @@ fn submit_one(
         len: BUF_LEN as u32,
     });
 
-    // Claim-or-drop is a free axis only for an **owned** buffer. A registered
-    // one is different by contract: `read_registered_raw`'s rustdoc states the
-    // token "must be claimed once its completion is observed", because claiming
-    // is the only thing that releases the use against `RegisteredBuffers`'s own
-    // drop check. `Token`'s drop is deliberately empty (D-4), so dropping the
-    // token instead leaks the `RegisteredUse`, permanently pins that buffer
-    // index, and makes the whole registration undroppable. Generating that
-    // would be emitting an invalid program and blaming the ring for it.
-    let claim = op.claim || buffer == BufferKind::Registered;
-
+    // **The claim-or-drop axis is gone, and so is the exception it needed.**
+    // The generator used to choose, per operation, whether to claim the token
+    // or drop it deliberately -- except for a registered buffer, where
+    // dropping leaked the `RegisteredUse`, pinned the buffer index and made
+    // the whole registration undroppable, so generating it would have been
+    // emitting an invalid program and blaming the ring for it. `D-74` removes
+    // both halves: there is no token to drop, the pop releases the lease, and
+    // a dimension the generator had to carve an exception out of stops
+    // existing.
     coverage.operations += 1;
     coverage.shapes.insert((op.kind, op.target, buffer));
     if op.buffer == BufferKind::Registered && buffer == BufferKind::Owned {
         coverage.buffer_downgrades += 1;
     }
-    if !claim {
-        coverage.deliberate_drops += 1;
-    }
-
     let read_offset = (op.slot % 32) * BUF_LEN as u64;
     let write_offset = WRITE_BASE + (op.slot % 32) * BUF_LEN as u64;
     let options = PushOptions::new().drain_preceding(op.drain_preceding);
 
     let mut batch = Batch::new(ring);
-    let held = match (op.kind, op.target, buffer) {
+    let pushed = match (op.kind, op.target, buffer) {
         (OpKind::Flush, TargetKind::Raw, _) => {
             // SAFETY: `handle` is the caller's file, open for the whole test.
-            let user_data =
-                unsafe { batch.flush_raw(handle, FlushCoverage::Unordered, FlushMode::Default) }
-                    .expect("queue raw flush");
-            batch.submit().expect("submit");
-            // A raw flush carries no token, so nothing is ever owed for it.
-            run.contract.observe_tokenless_push(user_data);
-            return;
+            unsafe {
+                batch.flush_raw_owned(handle, (), FlushCoverage::Unordered, FlushMode::Default)
+            }
         }
-        (OpKind::Flush, TargetKind::Shared, _) => batch
-            .flush(shared, FlushCoverage::Unordered, FlushMode::Default)
-            .map(Held::SharedFlush),
-        (OpKind::Flush, TargetKind::Registered, _) => batch
-            .flush(
-                &registered_file,
-                FlushCoverage::Unordered,
-                FlushMode::Default,
-            )
-            .map(Held::RegdFlush),
+        (OpKind::Flush, TargetKind::Shared, _) => {
+            batch.flush_owned(shared, (), FlushCoverage::Unordered, FlushMode::Default)
+        }
+        (OpKind::Flush, TargetKind::Registered, _) => batch.flush_owned(
+            &registered_file,
+            (),
+            FlushCoverage::Unordered,
+            FlushMode::Default,
+        ),
 
         (OpKind::Read, TargetKind::Raw, BufferKind::Owned) => {
             // SAFETY: as above -- the handle outlives every operation, all of
             // which are drained before `run_plan` returns.
-            unsafe { batch.read_raw(handle, vec![0_u8; BUF_LEN], read_offset, options) }
-                .map(Held::RawOwned)
+            unsafe { batch.read_raw_owned(handle, vec![0_u8; BUF_LEN], (), read_offset, options) }
         }
         (OpKind::Read, TargetKind::Raw, BufferKind::Registered) => {
             // SAFETY: as above.
             unsafe {
-                batch.read_registered_raw(
+                batch.read_registered_raw_owned(
                     handle,
                     registered_buffers,
                     span.expect("a free registered buffer"),
+                    (),
                     read_offset,
                     options,
                 )
             }
-            .map(Held::RawRegistered)
         }
-        (OpKind::Read, TargetKind::Shared, BufferKind::Owned) => batch
-            .read(shared, vec![0_u8; BUF_LEN], read_offset, options)
-            .map(Held::SharedOwned),
-        (OpKind::Read, TargetKind::Shared, BufferKind::Registered) => batch
-            .read_registered(
-                shared,
-                registered_buffers,
-                span.expect("a free registered buffer"),
-                read_offset,
-                options,
-            )
-            .map(Held::SharedRegistered),
-        (OpKind::Read, TargetKind::Registered, BufferKind::Owned) => batch
-            .read(&registered_file, vec![0_u8; BUF_LEN], read_offset, options)
-            .map(Held::RegdOwned),
+        (OpKind::Read, TargetKind::Shared, BufferKind::Owned) => {
+            batch.read_owned(shared, vec![0_u8; BUF_LEN], (), read_offset, options)
+        }
+        (OpKind::Read, TargetKind::Shared, BufferKind::Registered) => batch.read_registered_owned(
+            shared,
+            registered_buffers,
+            span.expect("a free registered buffer"),
+            (),
+            read_offset,
+            options,
+        ),
+        (OpKind::Read, TargetKind::Registered, BufferKind::Owned) => batch.read_owned(
+            &registered_file,
+            vec![0_u8; BUF_LEN],
+            (),
+            read_offset,
+            options,
+        ),
         (OpKind::Read, TargetKind::Registered, BufferKind::Registered) => batch
-            .read_registered(
+            .read_registered_owned(
                 &registered_file,
                 registered_buffers,
                 span.expect("a free registered buffer"),
+                (),
                 read_offset,
                 options,
-            )
-            .map(Held::RegdRegistered),
+            ),
 
         (OpKind::Write, TargetKind::Raw, BufferKind::Owned) => {
             // SAFETY: as above.
             unsafe {
-                batch.write_raw(
+                batch.write_raw_owned(
                     handle,
                     vec![7_u8; BUF_LEN],
+                    (),
                     write_offset,
                     options,
                     WriteCaching::Cached,
                 )
             }
-            .map(Held::RawOwned)
         }
         (OpKind::Write, TargetKind::Raw, BufferKind::Registered) => {
             // SAFETY: as above.
             unsafe {
-                batch.write_registered_raw(
+                batch.write_registered_raw_owned(
                     handle,
                     registered_buffers,
                     span.expect("a free registered buffer"),
+                    (),
                     write_offset,
                     options,
                     WriteCaching::Cached,
                 )
             }
-            .map(Held::RawRegistered)
         }
-        (OpKind::Write, TargetKind::Shared, BufferKind::Owned) => batch
-            .write(
-                shared,
-                vec![7_u8; BUF_LEN],
-                write_offset,
-                options,
-                WriteCaching::Cached,
-            )
-            .map(Held::SharedOwned),
+        (OpKind::Write, TargetKind::Shared, BufferKind::Owned) => batch.write_owned(
+            shared,
+            vec![7_u8; BUF_LEN],
+            (),
+            write_offset,
+            options,
+            WriteCaching::Cached,
+        ),
         (OpKind::Write, TargetKind::Shared, BufferKind::Registered) => batch
-            .write_registered(
+            .write_registered_owned(
                 shared,
                 registered_buffers,
                 span.expect("a free registered buffer"),
+                (),
                 write_offset,
                 options,
                 WriteCaching::Cached,
-            )
-            .map(Held::SharedRegistered),
-        (OpKind::Write, TargetKind::Registered, BufferKind::Owned) => batch
-            .write(
-                &registered_file,
-                vec![7_u8; BUF_LEN],
-                write_offset,
-                options,
-                WriteCaching::Cached,
-            )
-            .map(Held::RegdOwned),
+            ),
+        (OpKind::Write, TargetKind::Registered, BufferKind::Owned) => batch.write_owned(
+            &registered_file,
+            vec![7_u8; BUF_LEN],
+            (),
+            write_offset,
+            options,
+            WriteCaching::Cached,
+        ),
         (OpKind::Write, TargetKind::Registered, BufferKind::Registered) => batch
-            .write_registered(
+            .write_registered_owned(
                 &registered_file,
                 registered_buffers,
                 span.expect("a free registered buffer"),
+                (),
                 write_offset,
                 options,
                 WriteCaching::Cached,
-            )
-            .map(Held::RegdRegistered),
+            ),
     };
 
-    let held = held.expect("queue generated operation");
-    let user_data = match &held {
-        Held::RawOwned(t) => t.id(),
-        Held::RawRegistered(t) => t.id(),
-        Held::SharedOwned(t) => t.id(),
-        Held::SharedRegistered(t) => t.id(),
-        Held::SharedFlush(t) => t.id(),
-        Held::RegdOwned(t) => t.id(),
-        Held::RegdRegistered(t) => t.id(),
-        Held::RegdFlush(t) => t.id(),
-    };
+    let user_data = pushed.expect("queue generated operation").user_data();
     batch.submit().expect("submit");
 
     run.contract.observe_push(user_data);
     run.trace.push(format!(
-        "{:?} target={:?} buffer={:?} {} drain_preceding={} offset={} user_data={user_data}",
+        "{:?} target={:?} buffer={:?} drain_preceding={} offset={} user_data={user_data}",
         op.kind,
         op.target,
         buffer,
-        if claim { "claim" } else { "DROP" },
         op.drain_preceding,
         if op.kind == OpKind::Write {
             write_offset
@@ -834,15 +772,6 @@ fn submit_one(
         && let Some(span) = span
     {
         run.buffer_in_use.insert(user_data, span.buffer_index);
-    }
-    if claim {
-        run.held.insert(user_data, held);
-    } else {
-        // Dropped on purpose: the token's own `Drop` keeps whatever the kernel
-        // still needs alive, and the contract is told so it is not reported as
-        // an unstated leak.
-        drop(held);
-        run.dropped.insert(user_data, ());
     }
 }
 
@@ -914,10 +843,6 @@ fn generated_sequences_satisfy_the_ring_contract() {
         missing.join(", ")
     );
     assert!(
-        coverage.deliberate_drops > 0,
-        "no token was ever dropped without claiming, so the claim-or-drop axis was not sampled"
-    );
-    assert!(
         coverage.mid_sequence_drains > 0,
         "no sequence ever drained mid-flight, so the drain-now-or-later axis was not sampled"
     );
@@ -930,12 +855,11 @@ fn generated_sequences_satisfy_the_ring_contract() {
 
     eprintln!(
         "generated_sequences: {} sequences, {} operations, {} distinct shapes, \
-         {} deliberate drops, {} mid-sequence drains, {} attaches ({} with work outstanding), \
+         {} mid-sequence drains, {} attaches ({} with work outstanding), \
          {} registered-buffer downgrades",
         SEQUENCES,
         coverage.operations,
         coverage.shapes.len(),
-        coverage.deliberate_drops,
         coverage.mid_sequence_drains,
         coverage.attaches,
         coverage.attaches_with_work_outstanding,
@@ -974,7 +898,6 @@ fn read(target: TargetKind, buffer: BufferKind, slot: u64) -> Step {
         kind: OpKind::Read,
         target,
         buffer,
-        claim: true,
         drain_preceding: false,
         slot,
     })
@@ -985,7 +908,6 @@ fn write(target: TargetKind, buffer: BufferKind, slot: u64) -> Step {
         kind: OpKind::Write,
         target,
         buffer,
-        claim: true,
         drain_preceding: false,
         slot,
     })
@@ -1068,11 +990,9 @@ fn the_lost_wakeup_detector_fires_when_no_wakeup_is_owed() {
 
     let (file, path) = fixture("detector");
     let handle = file.as_raw_handle();
-    let mut ring = IoRing::new(64, 64).expect("create ring");
+    let mut ring = SequenceRing::with_inventory(64, 64).expect("create ring");
     let mut run = Run {
         contract: RingContract::new(),
-        held: HashMap::new(),
-        dropped: HashMap::new(),
         buffer_in_use: HashMap::new(),
         trace: Vec::new(),
     };
@@ -1081,10 +1001,10 @@ fn the_lost_wakeup_detector_fires_when_no_wakeup_is_owed() {
         let mut batch = Batch::new(&mut ring);
         // SAFETY: `file` outlives every operation queued here -- all of them are
         // drained before this test returns.
-        let token = unsafe { batch.read_raw(handle, vec![0_u8; BUF_LEN], 0, PushOptions::new()) }
-            .expect("queue read");
-        run.contract.observe_push(token.id());
-        run.held.insert(token.id(), Held::RawOwned(token));
+        let id =
+            unsafe { batch.read_raw_owned(handle, vec![0_u8; BUF_LEN], (), 0, PushOptions::new()) }
+                .expect("queue read");
+        run.contract.observe_push(id.user_data());
         batch.submit().expect("submit");
     }
 

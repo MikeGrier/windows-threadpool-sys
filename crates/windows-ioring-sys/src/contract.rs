@@ -111,17 +111,6 @@ pub enum Violation {
         /// The identity that was pushed and never completed.
         user_data: usize,
     },
-    /// A token was dropped without being claimed, and not deliberately.
-    ///
-    /// `Token` leaks on an unclaimed drop, which keeps the kernel's pointer
-    /// valid and is correct. It also means whatever that token held --
-    /// a buffer, a registered-buffer use count, a file guard -- is gone for
-    /// the process's life. A caller that means to do this says so with
-    /// [`RingContract::observe_deliberate_leak`].
-    LeakedToken {
-        /// The identity whose token was dropped unclaimed.
-        user_data: usize,
-    },
     /// A registered buffer still had operations outstanding at quiescence.
     BufferStillInUse {
         /// Position of the buffer within its registration.
@@ -147,11 +136,6 @@ impl fmt::Display for Violation {
             Self::Outstanding { user_data } => {
                 write!(f, "user_data {user_data:#x} was pushed and never completed")
             }
-            Self::LeakedToken { user_data } => write!(
-                f,
-                "the token for user_data {user_data:#x} was dropped unclaimed, leaking whatever \
-                 it held for the life of the process"
-            ),
             Self::BufferStillInUse { index, outstanding } => write!(
                 f,
                 "registered buffer {index} still has {outstanding} operation(s) outstanding at \
@@ -170,22 +154,16 @@ impl fmt::Display for Violation {
 /// what made the oracle grow without limit (M28.2).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum State {
-    /// Queued with a token to claim, no completion seen.
+    /// Queued, no completion seen.
+    ///
+    /// **One push state, as of `D-74`.** There were two, because a `_raw`
+    /// push returned a bare `user_data` while the others returned a
+    /// `Token`, and conflating them reported a leak for every
+    /// tokenless push -- a violation the caller could not satisfy, since
+    /// there was no token to claim. With the ring holding what an operation
+    /// carries, no push hands the caller anything to lose, so the distinction
+    /// has nothing left to distinguish.
     Pushed,
-    /// Queued with nothing to claim, no completion seen.
-    ///
-    /// The `_raw` flush and cancel entry points return a bare `user_data`
-    /// rather than a [`crate::Token`], because they own nothing a claim could
-    /// hand back. Conflating them with [`State::Pushed`] would report a
-    /// `LeakedToken` for every one -- a violation that is not merely wrong but
-    /// unfixable by the caller, since there is no token to claim.
-    PushedTokenless,
-    /// Completed, but its token has not been claimed.
-    ///
-    /// Provisional rather than final: [`RingContract::observe_claim`] retires
-    /// it. It stays in the map because [`RingContract::check_quiescent`] reads
-    /// it, which is exactly what distinguishes it from a terminal state.
-    Leaked,
 }
 
 /// How many finished identities the oracle remembers for duplicate diagnosis.
@@ -239,7 +217,6 @@ const FINISHED_HISTORY: usize = 1024;
 /// let mut contract = RingContract::new();
 /// contract.observe_push(0x1234);
 /// contract.observe_completion(0x1234);
-/// contract.observe_claim(0x1234);
 /// assert!(contract.check_quiescent().is_empty());
 /// ```
 #[derive(Debug, Default)]
@@ -278,11 +255,11 @@ impl RingContract {
     /// Record that an SQE was queued that carries **no token** to claim.
     ///
     /// The `_raw` flush and cancel entry points return a bare `user_data`
-    /// rather than a [`crate::Token`], because they own nothing a claim could
+    /// rather than a token, because they owned nothing a claim could
     /// hand back. Reporting one through [`RingContract::observe_push`] would
-    /// produce a [`Violation::LeakedToken`] the caller has no way to satisfy.
+    /// produce a leak violation the caller had no way to satisfy.
     pub fn observe_tokenless_push(&mut self, user_data: usize) {
-        self.operations.insert(user_data, State::PushedTokenless);
+        self.operations.insert(user_data, State::Pushed);
     }
 
     /// Record a completion popped from the ring.
@@ -301,26 +278,14 @@ impl RingContract {
                 }
             }
             Some(State::Pushed) => {
-                // Provisionally leaked: a completion whose token is never
-                // claimed *is* a leak, so this is corrected by
-                // `observe_claim` rather than assumed benign.
-                self.operations.insert(user_data, State::Leaked);
-            }
-            Some(State::PushedTokenless) => {
-                // Nothing was owed, so completing is the end of the story.
+                // Terminal. A completion used to be *provisional* here,
+                // parked in a leaked state until `observe_claim` corrected
+                // it, because a completion whose token was never claimed was
+                // a real leak. The pop is the claim now (`D-74`), so there is
+                // no second step for the caller to omit and nothing for this
+                // to wait on.
                 self.retire(user_data);
             }
-            Some(State::Leaked) => self
-                .violations
-                .push(Violation::DuplicateCompletion { user_data }),
-        }
-    }
-
-    /// Record that the operation's token was claimed against its completion,
-    /// returning whatever it held.
-    pub fn observe_claim(&mut self, user_data: usize) {
-        if self.operations.contains_key(&user_data) {
-            self.retire(user_data);
         }
     }
 
@@ -339,21 +304,6 @@ impl RingContract {
                 self.finished_set.remove(&evicted);
             }
         }
-    }
-
-    /// Record that a token was abandoned on purpose.
-    ///
-    /// Leaking is a legitimate choice -- it is what keeps a buffer alive when
-    /// a caller cannot prove the kernel is finished with it -- so it is
-    /// excused when it is *stated*. An unstated leak is still reported,
-    /// because the difference between the two is exactly the bug worth
-    /// finding.
-    pub fn observe_deliberate_leak(&mut self, user_data: usize) {
-        // Terminal, like a claim: the caller has said this operation's story
-        // is over, so it stops being tracked and its identity joins the
-        // history. A later completion for it is still named a duplicate while
-        // it remains in that window.
-        self.retire(user_data);
     }
 
     /// Record a registered buffer's outstanding count, as
@@ -386,18 +336,13 @@ impl RingContract {
             // Not a `filter_map`: since `M28.2` retired the terminal states,
             // every entry still tracked is a violation at quiescence.
             .map(|(user_data, state)| match state {
-                State::Pushed | State::PushedTokenless => Violation::Outstanding {
-                    user_data: *user_data,
-                },
-                State::Leaked => Violation::LeakedToken {
+                State::Pushed => Violation::Outstanding {
                     user_data: *user_data,
                 },
             })
             .collect();
         pending.sort_by_key(|violation| match violation {
-            Violation::Outstanding { user_data } | Violation::LeakedToken { user_data } => {
-                *user_data
-            }
+            Violation::Outstanding { user_data } => *user_data,
             _ => 0,
         });
         all.extend(pending);

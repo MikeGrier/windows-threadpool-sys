@@ -631,7 +631,7 @@ fn run_trial(
         log.push(Event::RoundBegan { round, at });
         let mut drained = 0;
 
-        while let Some((completion, held)) = ring.try_pop_held().expect("pop completion") {
+        while let Some((completion, held)) = ring.try_pop().expect("pop completion") {
             let transferred = completion.result().expect("write or flush succeeded");
             let id = completion.user_data();
             // Every submitted operation is recorded in `phase_of` -- phase A, the

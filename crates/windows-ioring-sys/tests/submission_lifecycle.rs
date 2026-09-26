@@ -101,7 +101,7 @@ fn many_reads_round_trip_every_user_data_and_buffer() {
             attempts <= CHUNKS * 4,
             "expected all completions ready after submit_and_wait"
         );
-        let Some((completion, held)) = ring.try_pop_held().expect("pop completion") else {
+        let Some((completion, held)) = ring.try_pop().expect("pop completion") else {
             continue;
         };
         let user_data = completion.user_data();
@@ -109,7 +109,6 @@ fn many_reads_round_trip_every_user_data_and_buffer() {
         let transferred = completion.result().expect("read succeeded");
         let (buffer, chunk_index) = held.expect("the ring was holding this read's buffer");
         let buffer = buffer.expect("a read carries a buffer");
-        contract.observe_claim(user_data);
         // CONFIRMS: RS-P-8 -- a full count here is a property of the handle
         // this test chose (an ordinary file on a local volume, where a
         // successful completion carries the whole length and a full volume is
@@ -189,7 +188,7 @@ fn pushing_past_submission_queue_capacity_reports_backpressure_and_the_ring_stay
 
     let mut remaining = queued;
     while remaining > 0 {
-        if let Some(completion) = ring.try_pop().expect("pop completion") {
+        if let Some((completion, _held)) = ring.try_pop().expect("pop completion") {
             contract.observe_completion(completion.user_data());
             remaining -= 1;
         }
@@ -206,7 +205,7 @@ fn pushing_past_submission_queue_capacity_reports_backpressure_and_the_ring_stay
             .expect("ring still accepts pushes after backpressure");
     contract.observe_tokenless_push(user_data);
     batch.submit_and_wait(1, 5_000).expect("submit and wait");
-    let completion = ring
+    let (completion, _held) = ring
         .pop_within(POP_BOUND)
         .expect("pop completion")
         .expect("a completion arrives within the bound");
@@ -247,7 +246,7 @@ fn a_dropped_batch_still_submits_its_queued_operations() {
         .expect("submit and wait");
 
     let (completion, held) = ring
-        .pop_within_held(POP_BOUND)
+        .pop_within(POP_BOUND)
         .expect("pop completion")
         .expect("a completion arrives within the bound");
     assert_eq!(completion.user_data(), user_data);
@@ -276,7 +275,7 @@ fn cancelling_a_target_that_is_not_outstanding_reports_error_not_found_through_c
         user_data
     };
 
-    let completion = ring
+    let (completion, _held) = ring
         .pop_within(POP_BOUND)
         .expect("pop completion")
         .expect("a completion arrives within the bound");
@@ -323,7 +322,7 @@ fn dropping_the_callers_own_sharedfile_clone_does_not_close_a_still_outstanding_
         .submit_and_wait(1, 5_000)
         .expect("submit and wait");
     let (completion, held) = ring
-        .pop_within_held(POP_BOUND)
+        .pop_within(POP_BOUND)
         .expect("pop completion")
         .expect("a completion arrives within the bound");
     assert_eq!(
@@ -369,12 +368,12 @@ const NULL_FILE: HANDLE = std::ptr::null_mut();
 
 #[test]
 fn read_rejects_a_buffer_longer_than_u32_max_without_touching_the_ring() {
-    let mut ring = ReadRing::with_inventory(8, 8).expect("create ring");
+    let mut ring = IoRing::<HugeBuffer>::with_inventory(8, 8).expect("create ring");
     let outstanding_before = ring.outstanding();
     let mut batch = Batch::new(&mut ring);
     // SAFETY: NULL_FILE is never dereferenced -- the oversized buffer is
     // rejected before the handle would be used.
-    let error = unsafe { batch.read_raw(NULL_FILE, HugeBuffer, 0, PushOptions::new()) }
+    let error = unsafe { batch.read_raw_owned(NULL_FILE, HugeBuffer, (), 0, PushOptions::new()) }
         .expect_err("an oversized buffer must be rejected");
     assert_eq!(error.kind(), std::io::ErrorKind::InvalidInput);
     drop(batch);
@@ -387,14 +386,15 @@ fn read_rejects_a_buffer_longer_than_u32_max_without_touching_the_ring() {
 
 #[test]
 fn write_rejects_a_buffer_longer_than_u32_max_without_touching_the_ring() {
-    let mut ring = ReadRing::with_inventory(8, 8).expect("create ring");
+    let mut ring = IoRing::<HugeBuffer>::with_inventory(8, 8).expect("create ring");
     let outstanding_before = ring.outstanding();
     let mut batch = Batch::new(&mut ring);
     // SAFETY: as above.
     let error = unsafe {
-        batch.write_raw(
+        batch.write_raw_owned(
             NULL_FILE,
             HugeBuffer,
+            (),
             0,
             PushOptions::new(),
             WriteCaching::Cached,

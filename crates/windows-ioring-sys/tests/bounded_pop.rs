@@ -197,7 +197,7 @@ fn settle(ring: &mut PipeRing, pipe: &mut Pipe) {
     // No token to hand in: the pop that observes the completion is what
     // returns the buffer, so there is no map to keep and nothing to match.
     let (completion, held) = loop {
-        if let Some(popped) = ring.try_pop_held().expect("try_pop_held") {
+        if let Some(popped) = ring.try_pop().expect("try_pop") {
             break popped;
         }
     };

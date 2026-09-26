@@ -21,19 +21,22 @@ use std::os::windows::io::OwnedHandle;
 
 let file = std::fs::File::open(r"C:\some\file.bin")?;
 let shared = SharedFile::new(OwnedHandle::from(file));
-let mut ring = IoRing::new(8, 8)?;
+// The ring holds each operation's buffer, so `T` says what it holds.
+let mut ring = IoRing::<Vec<u8>>::with_inventory(8, 8)?;
 
-let token = {
+{
     let mut batch = Batch::new(&mut ring);
-    let token = batch.read(&shared, vec![0_u8; 4096], 0, Default::default())?;
+    batch.read_owned(&shared, vec![0_u8; 4096], (), 0, Default::default())?;
     batch.submit_and_wait(1, 5_000)?;
-    token
-};
+}
 
-let completion = ring.try_pop()?.expect("a completion is ready");
+// The pop hands the buffer back. There is nothing to hold onto in between,
+// and nothing to match against: the ring already knows which operation this
+// completion belongs to.
+let (completion, held) = ring.try_pop()?.expect("a completion is ready");
 completion.result()?;
-let (buffer, _file) = token.claim_if(&completion).expect("token claims its own completion");
-println!("read {} bytes", buffer.len());
+let (buffer, ()) = held.expect("the ring was holding this read's buffer");
+println!("read {} bytes", buffer.expect("a read carries a buffer").len());
 # Ok::<(), std::io::Error>(())
 ```
 

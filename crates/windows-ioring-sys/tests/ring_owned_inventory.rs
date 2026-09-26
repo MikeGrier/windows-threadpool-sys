@@ -54,11 +54,15 @@ fn a_payload_handed_to_the_ring_comes_back_from_the_pop_that_completes_it() {
 
     assert_eq!(ring.held(), 1, "the ring holds the buffer, not the caller");
 
-    let (completion, held) = loop {
-        if let Some(popped) = ring.try_pop_held().expect("pop") {
-            break popped;
-        }
-    };
+    // Bounded, not spun. An unbounded `loop` around `try_pop` states this
+    // crate's contract as whatever the handle this test happened to open does
+    // -- `RS-P-5` lets a kernel complete later than the submit returns -- and
+    // turns a completion that never arrives into a hung harness with no test
+    // name attached. `response_space_census.rs` refuses the shape.
+    let (completion, held) = ring
+        .pop_within(std::time::Duration::from_secs(30))
+        .expect("pop")
+        .expect("the read completes within the bound");
 
     assert_eq!(
         completion.user_data(),
@@ -107,7 +111,14 @@ fn a_second_pop_finds_nothing_held_for_the_same_identity() {
         }
         .expect("queue");
     }
-    while ring.try_pop_held().expect("pop").is_none() {}
+    // `pop_within` rather than a `try_pop` spin: RS-P-5 leaves a kernel free
+    // to complete later than the submit returns, so spinning on `try_pop`
+    // states this crate's contract as whatever the handle this test happened
+    // to open does. `response_space_census.rs` enforces that, and caught this
+    // line when `M28.4.1d.3` renamed the reclaiming pop over the spinning one.
+    ring.pop_within(std::time::Duration::from_secs(30))
+        .expect("pop")
+        .expect("the read completes within the bound");
     assert_eq!(ring.held(), 0, "the entry retired with its completion");
 
     drop(file);
@@ -139,11 +150,10 @@ fn a_guarded_push_keeps_the_file_alive_after_the_caller_drops_its_handle() {
     // keeps the handle valid for the kernel.
     drop(shared);
 
-    let (_completion, held) = loop {
-        if let Some(popped) = ring.try_pop_held().expect("pop") {
-            break popped;
-        }
-    };
+    let (_completion, held) = ring
+        .pop_within(std::time::Duration::from_secs(30))
+        .expect("pop")
+        .expect("the read completes within the bound");
     let (buffer, ()) = held.expect("the ring held this operation's buffer");
     let buffer = buffer.expect("a read carries a buffer");
     assert!(

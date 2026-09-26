@@ -265,7 +265,7 @@ fn run_case(ring: &mut BarrierRing, file: RawHandle, coverage: FlushCoverage) ->
             "only {} of {expected} completions ever arrived",
             order.len()
         );
-        while let Some((completion, held)) = ring.try_pop_held().expect("pop completion") {
+        while let Some((completion, held)) = ring.try_pop().expect("pop completion") {
             let transferred = completion.result().expect("write or flush succeeded");
             // A short write would make every count below meaningless, and an
             // unbuffered write with a misaligned length or offset is exactly

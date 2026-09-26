@@ -15,7 +15,7 @@
 //! operation: `BuildIoRingRegisterBuffers` (M5) registers a buffer once and
 //! reuses it, by index, across many later reads and writes. A buffer held by
 //! a live registration must stay exactly as stable and valid as one held by
-//! a single in-flight [`crate::Token`] -- the kernel can address it through
+//! a single in-flight operation -- the kernel can address it through
 //! either path -- so the promise below is phrased in terms of "this crate
 //! holds it," not "an operation holds it."
 //!
@@ -24,7 +24,7 @@
 //! Completion-based I/O touches the caller's memory *after* the submitting
 //! call returns. A `&[u8]` cannot describe that: its borrow would have to
 //! span the whole operation, and nothing in the API can make it -- a
-//! [`crate::Token`] has no `Drop` that cancels, and even one would be
+//! The ring has no `Drop` that cancels an operation, and even one would be
 //! defeated by `mem::forget`, so a caller could always end the borrow with
 //! the kernel still reading. The buffer is handed over instead, and returned
 //! on completion through `Token::claim_if`.
@@ -44,7 +44,7 @@ use std::sync::Arc;
 /// # Safety
 ///
 /// Implementors guarantee that, for as long as this crate holds the value --
-/// whether as a single operation's [`crate::Token`], or as a buffer
+/// whether as a single operation's payload, or as a buffer
 /// registration spanning many operations (M5) -- :
 ///
 /// - [`IoBuf::stable_ptr`] returns the same address every time it is called,

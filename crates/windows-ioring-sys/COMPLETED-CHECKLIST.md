@@ -3941,3 +3941,71 @@ that a consumer multiplexing buffer types over one ring "will not generally" fin
 each free. Of the seventeen ring types the conversion introduced, one carried two buffer
 types through what had been a single ring, and its writes were already sequential. The
 prediction was made from a single observation and tested against sixteen more.
+## Moved 2026-09-26 10:26:56 -04:00 -- M28.4.1d.3, the commit that ended the break
+
+### <a id="m2841d3"></a>M28.4.1d.3 -- Retire the token API and apply D-74. *(completed 2026-09-26 10:26:56 -04:00)*
+
+**Also carries the three consumers d.2 could not convert** (see
+    `M28.4.1d.2`): `generated_sequences.rs` and `properties_under_every_resolution.rs`
+    (each samples claim-or-drop as a generated dimension, with a coverage assertion that
+    the axis was exercised), and `failure_paths.rs`'s leak-ordering test (asserts
+    `Violation::LeakedToken` -- deleted here, not converted). Each is blocked on this item
+    rather than on effort, because what they assert is what this item deletes.
+
+    **Decide `epoch_log/append.rs`'s boundary question before converting it**: it takes
+    `&mut IoRing` rather than owning the ring, so reaching the inventory would put the
+    ring's payload type into the appender's own signature. It is also the last user of the
+    crate's `Pending<T, X>`, so retiring that type and answering this question are the same
+    piece of work.
+
+    Retire every `Token`-returning push -- there is now exactly one per `*_owned` form,
+    since `flush_raw_owned` closed the last gap -- along with `Token` itself and
+    `Pending<T, X>`; apply [D-74](DESIGN-NOTES.md#d-74) in the same commit -- drop
+    `Violation::LeakedToken`, `State::Leaked`, `observe_claim` and
+    `observe_deliberate_leak`, and collapse the two push states.
+
+    **Dropping `observe_claim` reaches past the three unconverted files.** `M28.4.1d.2`
+    left its calls in place in [handover.rs](tests/handover.rs),
+    [kernel_span.rs](tests/kernel_span.rs),
+    [submission_lifecycle.rs](tests/submission_lifecycle.rs) and the converted half of
+    [failure_paths.rs](tests/failure_paths.rs) -- deliberately, because the oracle still
+    modelled a claim while both token models were live, and a converted test that stopped
+    reporting one would have looked like a leak. Those calls have nothing left to report
+    once the pop is the claim, so they go with the API rather than being rewritten.
+    [contract.rs](src/contract.rs) also carries a doctest that calls it, and
+    [pending.rs](src/pending.rs) calls both -- the latter disappears with `Pending<T, X>`. Leaving them would describe
+    a hazard the API no longer has, which is worse than a gap: a reader would go looking for
+    the way to leak a token and not find one. **This is the commit that ends the break.** **Convert all of them or
+    none**: converting a few relocates the duplication rather than removing it, which is the
+    lesson `win-numa-sys` recorded the same day when it moved one `VirtualAllocExNuma` and
+    left the other. This is the step that ends with one token model.
+
+**Done.** The token API is gone: `pending.rs` deleted, `Token` stripped from
+`token.rs` (`OperationId` survives, with its own tests -- deleting the file would have
+left the surviving type untested), ten `Token`-returning pushes and the private
+`finish_push` removed from `batch.rs`, and `try_pop`/`pop_within` now name the one
+reclaiming pop each. D-74 applied in full.
+
+**The count in this item was wrong, and it was my own correction that broke it.** An
+earlier revision said "ten"; `M28.4.1d.2` "corrected" it to eleven from a command that
+counted `io::Result<Token<...>>` occurrences. Eleven was the occurrence count; **ten** was
+the push count, because the eleventh was the private `finish_push` helper. The original
+was right. The rule that a census must come from a command holds -- but a command is only
+as good as what it is pointed at, and a return type is not a push.
+
+**Two guards were disturbed by the rename, and one of them had gone blind.**
+[check-ring-tests.ps1](../../tools/check-ring-tests.ps1) detected ring-opening tests by
+grepping `IoRing::new`, so every ring moved onto `with_inventory` vanished from its
+inventory -- reported as five REMOVED entries, which the script's own text calls
+"progress". It was a guard silently stopping guarding. Fixed to match the constructor
+*name* (which also catches a type alias like `PipeRing::with_inventory`), and the fix
+immediately surfaced two ring-opening tests the old pattern had never matched at all.
+[check-borrow-surface.ps1](../../tools/check-borrow-surface.ps1) reported the one genuine
+change, a removal, answered in [DESIGN-NOTES.md](DESIGN-NOTES.md#borrow-surface-audit-m2841d3).
+
+**The documentation sweep was larger than the code change.** Retiring `Token` broke 73
+intra-doc links and left 35 prose references describing a model that no longer exists --
+including the README's headline example, which is the first thing a consumer reads. All
+rewritten. The census in [response_space_census.rs](tests/response_space_census.rs) also
+caught two unbounded `try_pop` spins that the rename made visible to it; both are now
+bounded pops.

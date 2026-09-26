@@ -13,7 +13,6 @@ use super::{FINISHED_HISTORY, RingContract, Violation};
 fn full_cycle(contract: &mut RingContract, user_data: usize) {
     contract.observe_push(user_data);
     contract.observe_completion(user_data);
-    contract.observe_claim(user_data);
 }
 
 #[test]
@@ -47,45 +46,44 @@ fn a_push_that_never_completes_is_reported() {
     );
 }
 
+// Three tests stood here, and `D-74` retired all three with the model they
+// described: an unclaimed completion reported as a leak, and two forms of
+// *deliberate* leak that were accepted because they were stated. None of them
+// can be written now -- there is no token to abandon, so no distinction
+// between a stated leak and an unstated one, and `Violation::LeakedToken` is
+// gone with the difference.
+//
+// What replaces them is the pair below. The settlement rule changed shape
+// rather than disappearing: completion used to be *provisional*, corrected by
+// a claim, and is now terminal. Both directions are asserted, because a test
+// that only showed completion settling would pass just as well against an
+// oracle that settled everything.
+
 #[test]
-fn a_completion_claimed_by_nothing_is_reported_as_a_leak() {
-    // This is `Appender::claim`'s real defect, in miniature: a completion was
-    // observed, the token was never claimed, and the arena slot it held is
-    // gone for the life of the process. Nothing else in the crate notices.
+fn a_completion_settles_its_operation() {
+    // The replacement for the leak tests. A completion is terminal now: there
+    // is no second report the caller must make, so observing one is the whole
+    // story and quiescence follows.
     let mut contract = RingContract::new();
     contract.observe_push(7);
     contract.observe_completion(7);
-    // No claim.
+
+    assert_eq!(contract.check_quiescent(), Vec::new());
+}
+
+#[test]
+fn a_push_without_a_completion_is_still_outstanding() {
+    // The other direction, and the reason the pair exists. Settling on
+    // completion must not mean settling on anything: an operation that never
+    // completed is the one thing quiescence is there to catch, and it is
+    // reported as `Outstanding` rather than excused.
+    let mut contract = RingContract::new();
+    contract.observe_push(11);
 
     assert_eq!(
         contract.check_quiescent(),
-        vec![Violation::LeakedToken { user_data: 7 }]
+        vec![Violation::Outstanding { user_data: 11 }]
     );
-}
-
-#[test]
-fn a_deliberate_leak_is_not_reported() {
-    // Leaking is legitimate when it is *stated* -- it is what keeps a buffer
-    // alive when a caller cannot prove the kernel is done. The difference
-    // between a stated and an unstated leak is the whole point.
-    let mut contract = RingContract::new();
-    contract.observe_push(9);
-    contract.observe_completion(9);
-    contract.observe_deliberate_leak(9);
-
-    assert_eq!(contract.check_quiescent(), Vec::new());
-}
-
-#[test]
-fn a_deliberate_leak_before_any_completion_is_also_accepted() {
-    // A token abandoned while its operation is still in flight is the
-    // canonical reason leaking exists: the kernel may still be reading the
-    // buffer, so the memory must outlive the caller's knowledge of it.
-    let mut contract = RingContract::new();
-    contract.observe_push(11);
-    contract.observe_deliberate_leak(11);
-
-    assert_eq!(contract.check_quiescent(), Vec::new());
 }
 
 #[test]
@@ -202,10 +200,14 @@ fn every_violation_is_reported_rather_than_only_the_first() {
     // fixing a symptom.
     let mut contract = RingContract::new();
     contract.observe_push(1); // never completes
-    contract.observe_push(2);
-    contract.observe_completion(2); // never claimed
+    contract.observe_push(2); // nor does this one
     contract.observe_buffer(0, 3); // still in use
 
+    // Two *kinds* of violation, and more than one of the first kind. The
+    // middle case used to be a completion that was never claimed, which
+    // `D-74` made impossible -- so a second never-completing push replaces it
+    // rather than the count being lowered, because "several" is what this
+    // test is about.
     let violations = contract.check_quiescent();
     assert_eq!(violations.len(), 3, "got {violations:?}");
 }

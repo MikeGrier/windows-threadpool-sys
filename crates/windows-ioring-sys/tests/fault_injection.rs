@@ -55,7 +55,7 @@ fn real_read(ring: &mut InjectionRing, path: &std::path::Path) -> (Vec<u8>, Comp
     .expect("queue a read");
     batch.submit().expect("submit the read");
     let (completion, held) = ring
-        .pop_within_held(std::time::Duration::from_secs(30))
+        .pop_within(std::time::Duration::from_secs(30))
         .expect("pop")
         .expect("the read never completed");
     let (buffer, ()) = held.expect("the ring was holding this read's buffer");

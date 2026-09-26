@@ -144,7 +144,7 @@ type CopyRing = IoRing<Vec<u8>>;
 /// as it goes.
 fn drain(ring: &mut CopyRing) -> io::Result<usize> {
     let mut popped = 0;
-    while let Some((completion, held)) = ring.try_pop_held()? {
+    while let Some((completion, held)) = ring.try_pop()? {
         let transferred = completion.result()?;
         assert_eq!(transferred, CHUNK_LEN, "each read fills its whole chunk");
         let _buffer = held.expect("the ring was holding this read's buffer");

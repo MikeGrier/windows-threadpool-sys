@@ -98,7 +98,7 @@ impl EventLoop {
     /// [`io::ErrorKind::Unsupported`] if the system does not report
     /// `IORING_FEATURE_SET_COMPLETION_EVENT`, or any error from duplicating
     /// `non_ring` or creating the shutdown event.
-    pub fn new(ring: &mut IoRing, non_ring: &OwnedHandle) -> io::Result<Self> {
+    pub fn new<T, X>(ring: &mut IoRing<T, X>, non_ring: &OwnedHandle) -> io::Result<Self> {
         let completion = ring.completion_event()?;
         // Manual-reset, because shutdown is a latch rather than a hand-off:
         // once set, every subsequent wait must keep seeing it. The ring's own

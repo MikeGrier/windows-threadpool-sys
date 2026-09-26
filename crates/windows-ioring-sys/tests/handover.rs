@@ -290,11 +290,10 @@ fn submit_wave(ring: &mut WaveRing, file: &File, wave: usize, contract: &mut Rin
 /// contract, and return how many this pass observed.
 fn drain_to_empty<T>(ring: &mut IoRing<T>, contract: &mut RingContract) -> usize {
     let mut popped = 0;
-    while let Some((completion, held)) = ring.try_pop_held().expect("pop completion") {
+    while let Some((completion, held)) = ring.try_pop().expect("pop completion") {
         contract.observe_completion(completion.user_data());
         completion.result().expect("read succeeded");
         let _buffer = held.expect("the ring was holding this read's buffer");
-        contract.observe_claim(completion.user_data());
         popped += 1;
     }
     popped
@@ -410,7 +409,6 @@ fn a_handover_serves_both_the_backlog_and_the_wave_that_follows_it() {
         contract.observe_completion(completion.user_data());
         completion.result().expect("read succeeded");
         let _buffer = held.expect("the ring was holding this read's buffer");
-        contract.observe_claim(completion.user_data());
     }
     contract.assert_quiescent();
     drop(delivery);
@@ -644,7 +642,6 @@ fn a_wave_submitted_after_the_pool_drained_the_queue_is_still_delivered() {
             contract.observe_completion(completion.user_data());
             completion.result().expect("read succeeded");
             let _buffer = held.expect("the ring was holding this read's buffer");
-            contract.observe_claim(completion.user_data());
         }
     }
 

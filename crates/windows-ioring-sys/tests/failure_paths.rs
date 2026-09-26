@@ -32,7 +32,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
-use windows_ioring_sys::contract::{RingContract, Violation};
+use windows_ioring_sys::contract::RingContract;
 use windows_ioring_sys::{
     Batch, Completion, FlushCoverage, FlushMode, InjectedFailure, IoBuf, IoBufMut, IoRing,
     IoRingErrorExt, PushOptions, RingCondition, SharedFile, WriteCaching,
@@ -51,10 +51,11 @@ fn temp_file(tag: &str) -> PathBuf {
 /// turns a completion that never arrives into a hung harness with no test
 /// name attached. `IoRing::pop_within` (M21.2) is the crate's own join
 /// between the two and carries the bound.
-fn await_one(ring: &mut IoRing) -> Completion {
+fn await_one<T, X>(ring: &mut IoRing<T, X>) -> Completion {
     ring.pop_within(std::time::Duration::from_secs(30))
         .expect("pop a completion")
         .expect("a completion arrived within the bound")
+        .0
 }
 
 #[test]
@@ -89,12 +90,11 @@ fn a_failed_read_still_hands_its_buffer_back_when_claimed() {
     batch.submit_and_wait(1, 30_000).expect("submit and wait");
 
     let (completion, held) = ring
-        .pop_within_held(std::time::Duration::from_secs(30))
+        .pop_within(std::time::Duration::from_secs(30))
         .expect("pop a completion")
         .expect("a completion arrived within the bound");
     contract.observe_completion(completion.user_data());
     let (buffer, ()) = held.expect("the ring was holding this read's buffer");
-    contract.observe_claim(completion.user_data());
     let failed = completion.with_injected_failure(InjectedFailure::Ring(RingCondition::Corrupt));
 
     assert!(failed.result().is_err(), "the failure applies");
@@ -141,12 +141,11 @@ fn a_failed_write_still_hands_its_buffer_back_when_claimed() {
     batch.submit_and_wait(1, 30_000).expect("submit and wait");
 
     let (completion, held) = ring
-        .pop_within_held(std::time::Duration::from_secs(30))
+        .pop_within(std::time::Duration::from_secs(30))
         .expect("pop a completion")
         .expect("a completion arrived within the bound");
     contract.observe_completion(completion.user_data());
     let (buffer, ()) = held.expect("the ring was holding this write's buffer");
-    contract.observe_claim(completion.user_data());
     let failed = completion.with_injected_failure(InjectedFailure::Win32(
         windows_sys::Win32::Foundation::ERROR_DISK_FULL,
     ));
@@ -162,87 +161,21 @@ fn a_failed_write_still_hands_its_buffer_back_when_claimed() {
     let _ = std::fs::remove_file(&path);
 }
 
-#[test]
-fn claiming_before_checking_the_result_is_what_stops_a_failure_from_leaking() {
-    // The M16.2 finding, now reachable. Reverting `Appender::claim`'s *fix*
-    // does not reproduce its defect, because the early return only fires on a
-    // failed write -- a path nothing could reach until this seam existed.
-    //
-    // Both orderings are run here against the same conservation oracle, so the
-    // difference between them is a reported violation rather than an argument.
-    let path = temp_file("ordering");
-    std::fs::write(&path, b"hello").expect("create the fixture");
-    let file = std::fs::OpenOptions::new()
-        .read(true)
-        .open(&path)
-        .expect("open the fixture");
-
-    // Ordering A -- check the result first, return early on failure. The token
-    // is dropped unclaimed, which `Token` treats as "still outstanding" and
-    // forgets.
-    let leaked = {
-        let mut ring = IoRing::new(16, 16).expect("create a ring");
-        let mut contract = RingContract::new();
-        let mut batch = Batch::new(&mut ring);
-        // SAFETY: `file` outlives the operation.
-        let token =
-            unsafe { batch.read_raw(file.as_raw_handle(), vec![0_u8; 5], 0, PushOptions::new()) }
-                .expect("queue a read");
-        contract.observe_push(token.id());
-        batch.submit_and_wait(1, 30_000).expect("submit and wait");
-
-        let completion = await_one(&mut ring);
-        contract.observe_completion(completion.user_data());
-        let failed =
-            completion.with_injected_failure(InjectedFailure::Ring(RingCondition::Corrupt));
-
-        let id = token.id();
-        if failed.result().is_err() {
-            // The bug: bail out before claiming.
-            drop(token);
-        }
-        (id, contract.check_quiescent())
-    };
-    assert_eq!(
-        leaked.1,
-        vec![Violation::LeakedToken {
-            user_data: leaked.0
-        }],
-        "checking the result before claiming must leak the token on failure"
-    );
-
-    // Ordering B -- claim first, then check. The completion has already been
-    // observed, so claiming is sound either way, and the buffer comes back
-    // before any early return can skip it.
-    let clean = {
-        let mut ring = IoRing::new(16, 16).expect("create a ring");
-        let mut contract = RingContract::new();
-        let mut batch = Batch::new(&mut ring);
-        // SAFETY: `file` outlives the operation.
-        let token =
-            unsafe { batch.read_raw(file.as_raw_handle(), vec![0_u8; 5], 0, PushOptions::new()) }
-                .expect("queue a read");
-        contract.observe_push(token.id());
-        batch.submit_and_wait(1, 30_000).expect("submit and wait");
-
-        let completion = await_one(&mut ring);
-        contract.observe_completion(completion.user_data());
-        let failed =
-            completion.with_injected_failure(InjectedFailure::Ring(RingCondition::Corrupt));
-
-        let _buffer = token.claim_if(&failed).expect("claims its own completion");
-        contract.observe_claim(failed.user_data());
-        let _ = failed.result();
-        contract.check_quiescent()
-    };
-    assert_eq!(
-        clean,
-        Vec::new(),
-        "claiming before checking must conserve the token on the failure path"
-    );
-
-    let _ = std::fs::remove_file(&path);
-}
+// The leak-ordering test stood here, and `M28.4.1d.3` deleted rather than
+// converted it. Its whole subject was that checking a write's result *before*
+// claiming its token leaked the buffer on the failure path -- the M16.2
+// finding, reproduced against the conservation oracle so the difference
+// between the two orderings was a reported violation rather than an argument.
+//
+// Both halves are gone. There is no token to drop, so no ordering can leak
+// one; `Violation::LeakedToken` went with `D-74`, so the oracle it asserted
+// against no longer has the variant. A test cannot be kept for a hazard the
+// API has stopped being able to express, and rewriting it to assert something
+// else would be keeping the name rather than the test.
+//
+// What the hazard became is recorded where a reader meets it:
+// `Appender::claim` in `examples/epoch_log/append.rs` carries the history,
+// because that is where M16.2 found it.
 
 #[test]
 fn a_failed_flush_reports_its_error_and_leaves_the_ring_usable() {
