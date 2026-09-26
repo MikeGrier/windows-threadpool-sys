@@ -51,7 +51,7 @@ fn main() -> std::io::Result<()> {
     let ring = IoRing::new(64, 64)?;
     let delivery = EventDelivery::new(
         ring,
-        move |completion| {
+        move |completion, _held| {
             let _ = results_tx.send(completion);
         },
         None,

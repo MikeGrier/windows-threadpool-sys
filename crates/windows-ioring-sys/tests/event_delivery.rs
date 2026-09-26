@@ -293,7 +293,7 @@ fn completions_are_delivered_on_pool_threads_without_the_submitting_thread_waiti
     let ring = IoRing::new(64, 64).expect("create ring");
     let delivery = EventDelivery::new(
         ring,
-        move |completion| {
+        move |completion, _held| {
             callbacks_for_callback.fetch_add(1, Ordering::SeqCst);
             if std::thread::current().id() != submitting_thread {
                 saw_foreign_thread_for_callback.store(true, Ordering::SeqCst);
@@ -362,7 +362,7 @@ fn teardown_with_operations_in_flight_neither_hangs_nor_closes_the_ring_early() 
     let ring = IoRing::new(64, 64).expect("create ring");
     let delivery = EventDelivery::new(
         ring,
-        move |completion| {
+        move |completion, _held| {
             let _ = completion.result();
             delivered_for_callback.fetch_add(1, Ordering::SeqCst);
         },
@@ -445,7 +445,7 @@ fn completions_queued_before_handover_are_still_delivered() {
     let callbacks_for_callback = Arc::clone(&callbacks);
     let delivery = EventDelivery::new(
         ring,
-        move |completion| {
+        move |completion, _held| {
             callbacks_for_callback.fetch_add(1, Ordering::SeqCst);
             let _ = tx.send(completion);
         },
@@ -588,7 +588,7 @@ fn a_backlog_is_delivered_even_when_the_caller_attached_the_event_first() {
     let callbacks_for_callback = Arc::clone(&callbacks);
     let delivery = EventDelivery::new(
         ring,
-        move |completion| {
+        move |completion, _held| {
             callbacks_for_callback.fetch_add(1, Ordering::SeqCst);
             let _ = tx.send(completion);
         },
@@ -679,7 +679,8 @@ fn the_stall_report_carries_what_a_diagnosis_needs() {
 #[test]
 fn new_succeeds_and_the_ring_stays_reachable_for_pushes() {
     let ring = IoRing::new(8, 8).expect("create ring");
-    let delivery = EventDelivery::new(ring, |_completion| {}, None).expect("wire event delivery");
+    let delivery =
+        EventDelivery::new(ring, |_completion, _held| {}, None).expect("wire event delivery");
     let info = delivery.scope().info().expect("query info");
     assert!(info.submission_queue_size > 0);
 }
@@ -687,6 +688,7 @@ fn new_succeeds_and_the_ring_stays_reachable_for_pushes() {
 #[test]
 fn dropping_with_nothing_outstanding_does_not_hang() {
     let ring = IoRing::new(8, 8).expect("create ring");
-    let delivery = EventDelivery::new(ring, |_completion| {}, None).expect("wire event delivery");
+    let delivery =
+        EventDelivery::new(ring, |_completion, _held| {}, None).expect("wire event delivery");
     drop(delivery);
 }

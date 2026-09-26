@@ -231,7 +231,7 @@ impl Checkpointer {
 
         let delivery = EventDelivery::new(
             ring,
-            move |completion| {
+            move |completion, _held| {
                 let mut state = for_callback
                     .lock()
                     .unwrap_or_else(std::sync::PoisonError::into_inner);

@@ -237,7 +237,7 @@ impl<T: Send + 'static, X: Send + 'static> EventDelivery<T, X> {
     /// ```compile_fail
     /// # use windows_ioring_sys::{EventDelivery, IoRing};
     /// let delivery =
-    ///     EventDelivery::new(IoRing::new(8, 8).unwrap(), |_| {}, None).unwrap();
+    ///     EventDelivery::new(IoRing::new(8, 8).unwrap(), |_, _| {}, None).unwrap();
     /// let mut scope = delivery.scope();
     /// // No `DerefMut`, so there is no `&mut IoRing` to assign through.
     /// *scope = IoRing::new(8, 8).unwrap();
@@ -250,7 +250,7 @@ impl<T: Send + 'static, X: Send + 'static> EventDelivery<T, X> {
     /// ```
     /// # use windows_ioring_sys::{EventDelivery, IoRing};
     /// let delivery =
-    ///     EventDelivery::new(IoRing::new(8, 8).unwrap(), |_| {}, None).unwrap();
+    ///     EventDelivery::new(IoRing::new(8, 8).unwrap(), |_, _| {}, None).unwrap();
     /// let scope = delivery.scope();
     /// assert_eq!(scope.outstanding(), 0);
     /// ```

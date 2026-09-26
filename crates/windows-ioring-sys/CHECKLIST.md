@@ -380,12 +380,32 @@ every consumer names the type -- which means the migration order matters more th
         targets are `M28.4.1`'s to migrate. Contract wiring is untouched deliberately -- what
         becomes of the oracle's leak rules is a decision `M28.4.1` carries, per
         [D-73](DESIGN-NOTES.md#d-73).
-  - [ ] **M28.4.1** -- Migrate all 36 test and example files, and delete or demote
-        `Pending<T, X>`. **Decide what becomes of the oracle's leak rules in the same step**:
-        with no token a caller can hold, `Violation::LeakedToken`, `observe_deliberate_leak` and
-        `State::Leaked` are written around a hazard that changes shape ([D-73](DESIGN-NOTES.md#d-73)).
-        Narrow `RingContract` or retire part of it deliberately rather than discovering it
-        mid-migration.
+  - [x] **M28.4.1a** -- Restore the tree: every delivery callback takes the payload, so the
+        build is green again on every feature set.
+
+        **Two call sites were invisible to an ordinary sweep**, and both are worth remembering
+        rather than rediscovering. One lives in a **doctest**, found only because this repository
+        compiles its prose. The other is in [failure_paths.rs](tests/failure_paths.rs), which
+        compiles only under `--all-features`, so a default-feature check could not see it. A
+        migration sweep here has to run `--all-features` **and** `--doc` before it means anything.
+
+  - [ ] **M28.4.1b** -- **Re-planned: the inventory has one push.** `read_owned` is the only
+        entry point that stows, so "migrate the consumers" has no destination for the other ten
+        shapes yet -- writes, flushes, cancels, and the registered variants. Give each an
+        inventory form first, populating `Held` for the guarded ones, which is what retires the
+        `#[expect(dead_code)]` on `Held` and `FileGuard`.
+
+  - [ ] **M28.4.1c** -- **Decide what becomes of the oracle's leak rules.** With no token a
+        caller can hold, `Violation::LeakedToken`, `observe_deliberate_leak` and `State::Leaked`
+        are written around a hazard that changes shape ([D-73](DESIGN-NOTES.md#d-73)). Narrow
+        `RingContract` or retire part of it deliberately. Gated on `M28.4.1b`, because what the
+        rules should say depends on what the inventory pushes actually guarantee.
+
+  - [ ] **M28.4.1d** -- Migrate all 36 test and example files onto the inventory, retire the ten
+        `Token`-returning pushes, and delete or demote `Pending<T, X>`. **Convert all of them or
+        none**: converting a few relocates the duplication rather than removing it, which is the
+        lesson `win-numa-sys` recorded the same day when it moved one `VirtualAllocExNuma` and
+        left the other. This is the step that ends with one token model.
   - [ ] **M28.4.2** -- Sabotage the inventory: a push that does not record, and a pop that does
         not retire, must both turn the suite red.
 

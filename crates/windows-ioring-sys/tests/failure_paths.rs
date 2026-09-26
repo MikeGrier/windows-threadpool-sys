@@ -405,7 +405,7 @@ fn event_delivery_hands_a_failed_completion_to_the_callback() {
     let saw_code = Arc::clone(&not_found);
     let delivery = windows_ioring_sys::EventDelivery::new(
         ring,
-        move |completion| {
+        move |completion, _held| {
             seen.fetch_add(1, Ordering::SeqCst);
             if let Err(error) = completion.result() {
                 // The code is published *before* the counter the waiting

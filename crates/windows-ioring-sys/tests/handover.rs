@@ -399,7 +399,7 @@ fn a_handover_serves_both_the_backlog_and_the_wave_that_follows_it() {
     let (tx, rx) = mpsc::channel();
     let delivery = EventDelivery::new(
         ring,
-        move |completion| {
+        move |completion, _held| {
             let _ = tx.send(completion);
         },
         None,
@@ -641,7 +641,7 @@ fn a_wave_submitted_after_the_pool_drained_the_queue_is_still_delivered() {
     let (tx, rx) = mpsc::channel();
     let delivery = EventDelivery::new(
         ring,
-        move |completion| {
+        move |completion, _held| {
             let _ = tx.send(completion);
         },
         None,
