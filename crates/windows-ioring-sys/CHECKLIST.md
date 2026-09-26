@@ -332,16 +332,39 @@ every consumer names the type -- which means the migration order matters more th
 
 - [x] **M28.2** -- `RingContract` is bounded by operations in flight: terminal entries are retired, and a capped history keeps a duplicate distinguishable from an unrecognised completion. Recorded as [D-72](DESIGN-NOTES.md#d-72). -> [completed 2026-09-25](COMPLETED-CHECKLIST.md#m282)
 
-- [ ] **M28.3** -- **Gated on `M28.1`.** Make `IoRing` generic and move the inventory inside.
-  Carry the sidecar: the census found two thirds of consumers keep per-operation data beside the
-  token, so an inventory that holds only tokens serves a minority. Mixed-shape consumers use a
-  closed `enum` -- `tests/generated_sequences.rs` is the worked example and needs no change to
-  keep working.
+- [ ] **M28.3+M28.4** -- **Make `IoRing` generic, move the inventory inside, and migrate every
+  consumer, as one commit.** Gated on [D-71](DESIGN-NOTES.md#d-71), which settled what a caller
+  receives.
 
-- [ ] **M28.4** -- **Gated on `M28.3`.** Migrate the ~12 consumers, and delete `Pending<T, X>` or
-  demote it to the internal map. **Convert all of them or none**: converting a few relocates the
-  duplication rather than removing it, which is the lesson `win-numa-sys` recorded the same day
-  when it moved one `VirtualAllocExNuma` and left the other.
+  **Merged deliberately, and the coupling is acknowledged rather than disguised.** The milestone
+  header requires each step to compile, `M28.4` requires converting all consumers or none, and
+  `M28.3` changes `IoRing`'s shape -- so the three cannot all hold with the items separate. The
+  alternative considered and rejected was landing `M28.3` additively, with an `OperationId` path
+  beside the existing `Token` one: it compiles at every step, but it leaves two token models live
+  at once and the old one still lets a consumer lose a token, which is the defect `D-55` exists to
+  remove. Never having both is worth one large commit.
+
+  **Carry the sidecar.** The census found two thirds of consumers keep per-operation data beside
+  the token, so an inventory holding only tokens serves a minority. Mixed-shape consumers use a
+  closed `enum`; [generated_sequences.rs](tests/generated_sequences.rs) is the worked example.
+
+  **Soundness already settled:** [`IoBuf`](src/buf.rs) is an unsafe trait whose contract requires
+  the address to survive a move, so the ring may hold buffers in a map.
+
+  Sequenced so the work is resumable, since it does not compile in the middle:
+
+  - [ ] **M28.3.1** -- `OperationId`: `Copy`, no `Drop`, a name and not a capability (`D-71`).
+  - [ ] **M28.3.2** -- `IoRing<T = ()>` carrying `inventory: HashMap<usize, T>`, and
+        `Batch<'ring, T>` with it. A default keeps a payload-free consumer from naming `()`.
+  - [ ] **M28.3.3** -- Push stores the payload and returns an `OperationId`; pop returns the
+        payload with the completion. The tokenless shape is `M28.5`'s and is only accommodated
+        here, not answered.
+  - [ ] **M28.3.4** -- Carry the parameter through `EventDelivery`, `RingScope` and the contract
+        wiring.
+  - [ ] **M28.4.1** -- Migrate all 36 test and example files, and delete or demote
+        `Pending<T, X>`.
+  - [ ] **M28.4.2** -- Sabotage the inventory: a push that does not record, and a pop that does
+        not retire, must both turn the suite red.
 
 - [ ] **M28.5** -- **Answer the tokenless push.** `flush_raw` returns a bare `usize` and
   `epoch_log`'s commit path depends on it, because a flush has no buffer and a *borrowed*
