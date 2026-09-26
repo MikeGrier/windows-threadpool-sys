@@ -3,7 +3,6 @@
 
 #![cfg(windows)]
 
-use std::collections::HashMap;
 use std::io;
 use std::os::windows::io::{AsRawHandle, OwnedHandle};
 use std::path::PathBuf;
@@ -11,12 +10,22 @@ use std::path::PathBuf;
 use windows_ioring_sys::contract::RingContract;
 use windows_ioring_sys::{
     Batch, FlushCoverage, FlushMode, IoBuf, IoBufMut, IoRing, IoRingErrorExt, PushOptions,
-    RingCondition, SharedFile, Token, WriteCaching,
+    RingCondition, SharedFile, WriteCaching,
 };
 use windows_sys::Win32::Foundation::{ERROR_NOT_FOUND, HANDLE};
 
 /// How long a completion this test caused is allowed to take to arrive.
 ///
+/// The ring the chunked-read test drives: it holds each read's buffer and
+/// carries that read's chunk index as the sidecar, which is what the
+/// `HashMap<usize, (usize, Token<Vec<u8>>)>` this file used to keep was
+/// spelling out by hand.
+type IndexedRing = IoRing<Vec<u8>, usize>;
+
+/// The ring the single-read tests drive. No sidecar: there is one operation,
+/// so there is nothing to tell apart.
+type ReadRing = IoRing<Vec<u8>>;
+
 /// M26.7 replaced a `try_pop` here that asserted the completion was *already*
 /// queued when `submit_and_wait` returned. That is not something this crate
 /// promises -- `pop_within`'s own documentation says a submit-side wait's
@@ -63,22 +72,22 @@ fn many_reads_round_trip_every_user_data_and_buffer() {
         .expect("open for read");
     let handle = file.as_raw_handle();
 
-    let mut ring = IoRing::new(64, 64).expect("create ring");
+    let mut ring = IndexedRing::with_inventory(64, 64).expect("create ring");
     // Conservation is checked alongside the assertions this test was written
     // for (M16.2). It costs three calls and catches a class none of them can:
     // an operation that never completes, a completion nobody claimed, or a
     // completion arriving twice.
     let mut contract = RingContract::new();
-    let mut pending: HashMap<usize, (usize, Token<Vec<u8>>)> = HashMap::new();
     {
         let mut batch = Batch::new(&mut ring);
         for chunk_index in 0..CHUNKS {
             let buffer = vec![0_u8; CHUNK_LEN];
             let offset = (chunk_index * CHUNK_LEN) as u64;
-            let token = unsafe { batch.read_raw(handle, buffer, offset, PushOptions::new()) }
-                .expect("queue read");
-            contract.observe_push(token.id());
-            pending.insert(token.id(), (chunk_index, token));
+            let id = unsafe {
+                batch.read_raw_owned(handle, buffer, chunk_index, offset, PushOptions::new())
+            }
+            .expect("queue read");
+            contract.observe_push(id.user_data());
         }
         batch
             .submit_and_wait(CHUNKS as u32, 5_000)
@@ -86,24 +95,20 @@ fn many_reads_round_trip_every_user_data_and_buffer() {
     }
 
     let mut attempts = 0;
-    while !pending.is_empty() {
+    while ring.held() > 0 {
         attempts += 1;
         assert!(
             attempts <= CHUNKS * 4,
             "expected all completions ready after submit_and_wait"
         );
-        let Some(completion) = ring.try_pop().expect("pop completion") else {
+        let Some((completion, held)) = ring.try_pop_held().expect("pop completion") else {
             continue;
         };
         let user_data = completion.user_data();
         contract.observe_completion(user_data);
         let transferred = completion.result().expect("read succeeded");
-        let (chunk_index, token) = pending
-            .remove(&user_data)
-            .expect("completion matches a held token");
-        let buffer = token
-            .claim_if(&completion)
-            .expect("a token claims its own completion");
+        let (buffer, chunk_index) = held.expect("the ring was holding this read's buffer");
+        let buffer = buffer.expect("a read carries a buffer");
         contract.observe_claim(user_data);
         // CONFIRMS: RS-P-8 -- a full count here is a property of the handle
         // this test chose (an ordinary file on a local volume, where a
@@ -121,7 +126,7 @@ fn many_reads_round_trip_every_user_data_and_buffer() {
 
 #[test]
 fn pushing_past_submission_queue_capacity_reports_backpressure_and_the_ring_stays_usable() {
-    let mut ring = IoRing::new(4, 64).expect("create ring");
+    let mut ring = ReadRing::with_inventory(4, 64).expect("create ring");
     let capacity = ring.info().expect("info").submission_queue_size;
     let path = temp_file("backpressure");
     std::fs::write(&path, b"").expect("create fixture file");
@@ -223,15 +228,16 @@ fn a_dropped_batch_still_submits_its_queued_operations() {
         .expect("open for read");
     let handle = file.as_raw_handle();
 
-    let mut ring = IoRing::new(8, 8).expect("create ring");
+    let mut ring = ReadRing::with_inventory(8, 8).expect("create ring");
     let buffer = vec![0_u8; content.len()];
-    let token = {
+    let user_data = {
         let mut batch = Batch::new(&mut ring);
         // SAFETY: `handle` stays open for the whole test.
-        unsafe { batch.read_raw(handle, buffer, 0, PushOptions::new()) }.expect("queue read")
+        unsafe { batch.read_raw_owned(handle, buffer, (), 0, PushOptions::new()) }
+            .expect("queue read")
+            .user_data()
         // `batch` drops here without an explicit `submit()` call (D-5).
     };
-    let user_data = token.id();
 
     // A fresh batch that queues nothing still waits on the whole ring's
     // completion queue: if the dropped batch above had not actually
@@ -240,16 +246,14 @@ fn a_dropped_batch_still_submits_its_queued_operations() {
         .submit_and_wait(1, 5_000)
         .expect("submit and wait");
 
-    let completion = ring
-        .pop_within(POP_BOUND)
+    let (completion, held) = ring
+        .pop_within_held(POP_BOUND)
         .expect("pop completion")
         .expect("a completion arrives within the bound");
     assert_eq!(completion.user_data(), user_data);
     assert_eq!(completion.result().expect("read succeeded"), content.len());
-    let buffer = token
-        .claim_if(&completion)
-        .expect("a token claims its own completion");
-    assert_eq!(buffer, content);
+    let (buffer, ()) = held.expect("the ring was holding this read's buffer");
+    assert_eq!(buffer.expect("a read carries a buffer"), content);
 }
 
 #[test]
@@ -263,7 +267,7 @@ fn cancelling_a_target_that_is_not_outstanding_reports_error_not_found_through_c
         .expect("open");
     let handle = file.as_raw_handle();
 
-    let mut ring = IoRing::new(8, 8).expect("create ring");
+    let mut ring = ReadRing::with_inventory(8, 8).expect("create ring");
     let cancel_user_data = {
         let mut batch = Batch::new(&mut ring);
         // SAFETY: `handle` stays open for the whole test.
@@ -297,28 +301,29 @@ fn dropping_the_callers_own_sharedfile_clone_does_not_close_a_still_outstanding_
         .open(&path)
         .expect("open for read");
 
-    let mut ring = IoRing::new(8, 8).expect("create ring");
+    let mut ring = ReadRing::with_inventory(8, 8).expect("create ring");
     let shared = SharedFile::new(OwnedHandle::from(file));
     let buffer = vec![0_u8; CHUNK_LEN];
-    let token = {
+    {
         let mut batch = Batch::new(&mut ring);
-        let token = batch
-            .read(&shared, buffer, 0, PushOptions::new())
+        batch
+            .read_owned(&shared, buffer, (), 0, PushOptions::new())
             .expect("queue shared read");
         batch.submit_and_wait(0, 0).expect("submit without waiting");
-        token
-    };
+    }
 
-    // Drop the caller's own SharedFile clone -- its only external
-    // reference. If the token's own clone were not keeping the underlying
-    // handle open, the read below would fail against a closed handle.
+    // Drop the caller's own SharedFile clone -- its only external reference.
+    // The guard that keeps the underlying handle open is now the *ring's*
+    // (`D-73`) rather than a token's, so this is the same property with a
+    // different holder: without it the read below would fail against a closed
+    // handle.
     drop(shared);
 
     Batch::new(&mut ring)
         .submit_and_wait(1, 5_000)
         .expect("submit and wait");
-    let completion = ring
-        .pop_within(POP_BOUND)
+    let (completion, held) = ring
+        .pop_within_held(POP_BOUND)
         .expect("pop completion")
         .expect("a completion arrives within the bound");
     assert_eq!(
@@ -327,10 +332,8 @@ fn dropping_the_callers_own_sharedfile_clone_does_not_close_a_still_outstanding_
             .expect("read succeeded against a still-open handle"),
         CHUNK_LEN
     );
-    let (buffer, _file) = token
-        .claim_if(&completion)
-        .expect("token claims its own completion");
-    assert_eq!(buffer, content);
+    let (buffer, ()) = held.expect("the ring was holding this read's buffer");
+    assert_eq!(buffer.expect("a read carries a buffer"), content);
 }
 
 // ------------------------------------------------------------------------
@@ -366,7 +369,7 @@ const NULL_FILE: HANDLE = std::ptr::null_mut();
 
 #[test]
 fn read_rejects_a_buffer_longer_than_u32_max_without_touching_the_ring() {
-    let mut ring = IoRing::new(8, 8).expect("create ring");
+    let mut ring = ReadRing::with_inventory(8, 8).expect("create ring");
     let outstanding_before = ring.outstanding();
     let mut batch = Batch::new(&mut ring);
     // SAFETY: NULL_FILE is never dereferenced -- the oversized buffer is
@@ -384,7 +387,7 @@ fn read_rejects_a_buffer_longer_than_u32_max_without_touching_the_ring() {
 
 #[test]
 fn write_rejects_a_buffer_longer_than_u32_max_without_touching_the_ring() {
-    let mut ring = IoRing::new(8, 8).expect("create ring");
+    let mut ring = ReadRing::with_inventory(8, 8).expect("create ring");
     let outstanding_before = ring.outstanding();
     let mut batch = Batch::new(&mut ring);
     // SAFETY: as above.
