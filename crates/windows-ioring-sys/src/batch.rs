@@ -1829,6 +1829,90 @@ impl<'ring, T, X> Batch<'ring, T, X> {
     ///
     /// As [`Batch::flush_raw`], plus [`io::ErrorKind::InvalidInput`] if
     /// `file` is a [`RegisteredFile`] from a different ring.
+    /// Queue a flush, with the **ring** holding the file guard (`D-73`).
+    ///
+    /// The inventory counterpart to [`Batch::flush`]. There is no buffer, so
+    /// nothing comes back as a payload -- the pop yields `None` for it, which
+    /// is the shape `M28.5` will settle for the tokenless pushes generally.
+    /// The guard still has to outlive the operation, and the ring is what
+    /// holds it.
+    ///
+    /// # Errors
+    ///
+    /// As [`Batch::flush`].
+    pub fn flush_owned<F: FileTarget>(
+        &mut self,
+        file: &F,
+        extra: X,
+        coverage: FlushCoverage,
+        mode: FlushMode,
+    ) -> io::Result<OperationId> {
+        self.require(Op::Flush)?;
+        let target = handle_ref(file.as_file_ref(), self.ring.ring_id())?;
+        let (user_data, id) = self.begin_owned()?;
+        let held = Held {
+            guard: Some(file.guard().into()),
+            registration: None,
+        };
+        // SAFETY: as `flush` -- `target` stays valid at least as long as the
+        // ring's hold on `file`'s guard, which lasts until the pop that
+        // completes this operation.
+        let hr = unsafe {
+            crate::sys::build_flush(
+                self.ring.raw_handle(),
+                target,
+                mode.raw(),
+                user_data,
+                coverage.sqe_flags(),
+            )
+        };
+        self.finish_owned(hr, id, None, extra, held)
+    }
+
+    /// Queue a cancellation, with the **ring** holding the file guard
+    /// (`D-73`).
+    ///
+    /// The inventory counterpart to [`Batch::cancel`]. `target` is the
+    /// `UserData` of the operation to cancel --
+    /// [`OperationId::user_data`](crate::OperationId::user_data) is where a
+    /// caller gets one, which is the whole reason a push returns a name at
+    /// all.
+    ///
+    /// # Errors
+    ///
+    /// As [`Batch::cancel`].
+    pub fn cancel_owned<F: FileTarget>(
+        &mut self,
+        file: &F,
+        target: usize,
+        extra: X,
+    ) -> io::Result<OperationId> {
+        self.require(Op::Cancel)?;
+        let handle = handle_ref(file.as_file_ref(), self.ring.ring_id())?;
+        let (user_data, id) = self.begin_owned()?;
+        let held = Held {
+            guard: Some(file.guard().into()),
+            registration: None,
+        };
+        // SAFETY: as `cancel`.
+        let hr =
+            unsafe { crate::sys::build_cancel(self.ring.raw_handle(), handle, target, user_data) };
+        self.finish_owned(hr, id, None, extra, held)
+    }
+
+    /// Queue a flush of `file`, handing the caller a [`Token`] that owns
+    /// the file guard.
+    ///
+    /// The token-holding counterpart to [`Batch::flush_owned`], retained
+    /// while consumers migrate (`M28.4.1d`). See [`FlushCoverage`] and
+    /// [`FlushMode`]: neither has a safe default, which is why both are
+    /// required.
+    ///
+    /// # Errors
+    ///
+    /// [`io::ErrorKind::Unsupported`] if the ring was not probed as
+    /// supporting [`Op::Flush`], or any other error from
+    /// `BuildIoRingFlushFile`.
     pub fn flush<F: FileTarget>(
         &mut self,
         file: &F,
@@ -2123,6 +2207,115 @@ impl<'ring, T, X> Batch<'ring, T, X> {
     ///
     /// As [`Batch::read_raw`], plus [`io::ErrorKind::InvalidInput`] if
     /// `span.buffer_index` is out of range for `registration`.
+    /// Queue a read into a registered buffer, with the **ring** holding the
+    /// registration's use count (`D-73`).
+    ///
+    /// The inventory counterpart to [`Batch::read_registered_raw`]. The buffer
+    /// belongs to the registration rather than to the caller, so there is no
+    /// payload to give back -- what the ring holds is the *use*, which keeps
+    /// the registration from being torn down while the kernel is writing into
+    /// it. That is `Held.registration`, released at the pop that completes
+    /// this operation.
+    ///
+    /// # Safety
+    ///
+    /// As [`Batch::read_registered_raw`].
+    ///
+    /// # Errors
+    ///
+    /// As [`Batch::read_registered_raw`].
+    pub unsafe fn read_registered_raw_owned<B: IoBufMut>(
+        &mut self,
+        file: impl Into<FileRef>,
+        registration: &RegisteredBuffers<B>,
+        span: RegisteredSpan,
+        extra: X,
+        file_offset: u64,
+        options: PushOptions,
+    ) -> io::Result<OperationId> {
+        self.require(Op::Read)?;
+        self.check_registration_ring(registration)?;
+        let target = handle_ref(file.into(), self.ring.ring_id())?;
+        let index = registration.checked_span(span)?;
+        let (user_data, id) = self.begin_owned()?;
+        let held = Held {
+            guard: None,
+            registration: Some(registration.begin_use(span, KernelAccess::WritesBuffer)),
+        };
+        // SAFETY: as `read_registered_raw`.
+        let hr = unsafe {
+            crate::sys::build_read(
+                self.ring.raw_handle(),
+                target,
+                registered_buffer_ref(index, span.offset),
+                span.len,
+                file_offset,
+                user_data,
+                options.sqe_flags(),
+            )
+        };
+        self.finish_owned(hr, id, None, extra, held)
+    }
+
+    /// Queue a read into a registered buffer against a guarded file, with the
+    /// **ring** holding both the use and the guard (`D-73`).
+    ///
+    /// The inventory counterpart to [`Batch::read_registered`], and the only
+    /// shape that fills both halves of `Held`.
+    ///
+    /// # Errors
+    ///
+    /// As [`Batch::read_registered`].
+    pub fn read_registered_owned<B: IoBufMut, F: FileTarget>(
+        &mut self,
+        file: &F,
+        registration: &RegisteredBuffers<B>,
+        span: RegisteredSpan,
+        extra: X,
+        file_offset: u64,
+        options: PushOptions,
+    ) -> io::Result<OperationId> {
+        self.require(Op::Read)?;
+        self.check_registration_ring(registration)?;
+        let target = handle_ref(file.as_file_ref(), self.ring.ring_id())?;
+        let index = registration.checked_span(span)?;
+        let (user_data, id) = self.begin_owned()?;
+        let held = Held {
+            guard: Some(file.guard().into()),
+            registration: Some(registration.begin_use(span, KernelAccess::WritesBuffer)),
+        };
+        // SAFETY: as `read_registered`.
+        let hr = unsafe {
+            crate::sys::build_read(
+                self.ring.raw_handle(),
+                target,
+                registered_buffer_ref(index, span.offset),
+                span.len,
+                file_offset,
+                user_data,
+                options.sqe_flags(),
+            )
+        };
+        self.finish_owned(hr, id, None, extra, held)
+    }
+
+    /// Queue a read into a registered buffer, handing the caller a
+    /// [`Token`] that owns the registration's use count.
+    ///
+    /// The token-holding counterpart to
+    /// [`Batch::read_registered_raw_owned`], retained while consumers
+    /// migrate (`M28.4.1d`).
+    ///
+    /// # Safety
+    ///
+    /// The caller keeps `file` valid until the operation completes.
+    ///
+    /// # Errors
+    ///
+    /// [`io::ErrorKind::Unsupported`] if the ring was not probed as
+    /// supporting [`Op::Read`]; [`io::ErrorKind::InvalidInput`] if `span`
+    /// falls outside the registration; or any other error from
+    /// `BuildIoRingReadFile`.
     pub unsafe fn read_registered_raw<B: IoBufMut>(
         &mut self,
         file: impl Into<FileRef>,
@@ -2224,6 +2417,129 @@ impl<'ring, T, X> Batch<'ring, T, X> {
     /// # Errors
     ///
     /// As [`Batch::read_registered_raw`].
+    /// Queue a write from a registered buffer, with the **ring** holding the
+    /// registration's use count (`D-73`).
+    ///
+    /// The inventory counterpart to [`Batch::write_registered_raw`].
+    ///
+    /// # Safety
+    ///
+    /// As [`Batch::write_registered_raw`].
+    ///
+    /// # Errors
+    ///
+    /// As [`Batch::write_registered_raw`].
+    /// `BuildIoRingWriteFile`'s own parameters, plus the sidecar the inventory
+    /// carries. Collapsing them into a struct would hide which are the
+    /// kernel's and which are this crate's, which is the distinction a reader
+    /// of a push most needs. `sys.rs` takes the same view for the same reason.
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "mirrors the Win32 call plus the inventory sidecar"
+    )]
+    pub unsafe fn write_registered_raw_owned<B: IoBufMut>(
+        &mut self,
+        file: impl Into<FileRef>,
+        registration: &RegisteredBuffers<B>,
+        span: RegisteredSpan,
+        extra: X,
+        file_offset: u64,
+        options: PushOptions,
+        caching: WriteCaching,
+    ) -> io::Result<OperationId> {
+        self.require(Op::Write)?;
+        self.check_registration_ring(registration)?;
+        let target = handle_ref(file.into(), self.ring.ring_id())?;
+        let index = registration.checked_span(span)?;
+        let (user_data, id) = self.begin_owned()?;
+        let held = Held {
+            guard: None,
+            registration: Some(registration.begin_use(span, KernelAccess::ReadsBuffer)),
+        };
+        // SAFETY: as `write_registered_raw`.
+        let hr = unsafe {
+            crate::sys::build_write(
+                self.ring.raw_handle(),
+                target,
+                registered_buffer_ref(index, span.offset),
+                span.len,
+                file_offset,
+                caching.raw(),
+                user_data,
+                options.sqe_flags(),
+            )
+        };
+        self.finish_owned(hr, id, None, extra, held)
+    }
+
+    /// Queue a write from a registered buffer against a guarded file, with the
+    /// **ring** holding both the use and the guard (`D-73`).
+    ///
+    /// The inventory counterpart to [`Batch::write_registered`].
+    ///
+    /// # Errors
+    ///
+    /// As [`Batch::write_registered`].
+    /// `BuildIoRingWriteFile`'s own parameters, plus the sidecar the inventory
+    /// carries. Collapsing them into a struct would hide which are the
+    /// kernel's and which are this crate's, which is the distinction a reader
+    /// of a push most needs. `sys.rs` takes the same view for the same reason.
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "mirrors the Win32 call plus the inventory sidecar"
+    )]
+    pub fn write_registered_owned<B: IoBufMut, F: FileTarget>(
+        &mut self,
+        file: &F,
+        registration: &RegisteredBuffers<B>,
+        span: RegisteredSpan,
+        extra: X,
+        file_offset: u64,
+        options: PushOptions,
+        caching: WriteCaching,
+    ) -> io::Result<OperationId> {
+        self.require(Op::Write)?;
+        self.check_registration_ring(registration)?;
+        let target = handle_ref(file.as_file_ref(), self.ring.ring_id())?;
+        let index = registration.checked_span(span)?;
+        let (user_data, id) = self.begin_owned()?;
+        let held = Held {
+            guard: Some(file.guard().into()),
+            registration: Some(registration.begin_use(span, KernelAccess::ReadsBuffer)),
+        };
+        // SAFETY: as `write_registered`.
+        let hr = unsafe {
+            crate::sys::build_write(
+                self.ring.raw_handle(),
+                target,
+                registered_buffer_ref(index, span.offset),
+                span.len,
+                file_offset,
+                caching.raw(),
+                user_data,
+                options.sqe_flags(),
+            )
+        };
+        self.finish_owned(hr, id, None, extra, held)
+    }
+
+    /// Queue a write from a registered buffer, handing the caller a
+    /// [`Token`] that owns the registration's use count.
+    ///
+    /// The token-holding counterpart to
+    /// [`Batch::write_registered_raw_owned`], retained while consumers
+    /// migrate (`M28.4.1d`).
+    ///
+    /// # Safety
+    ///
+    /// The caller keeps `file` valid until the operation completes.
+    ///
+    /// # Errors
+    ///
+    /// [`io::ErrorKind::Unsupported`] if the ring was not probed as
+    /// supporting [`Op::Write`]; [`io::ErrorKind::InvalidInput`] if `span`
+    /// falls outside the registration; or any other error from
+    /// `BuildIoRingWriteFile`.
     pub unsafe fn write_registered_raw<B: IoBufMut>(
         &mut self,
         file: impl Into<FileRef>,

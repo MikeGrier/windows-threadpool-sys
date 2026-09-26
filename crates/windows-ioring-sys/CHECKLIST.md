@@ -389,11 +389,11 @@ every consumer names the type -- which means the migration order matters more th
         compiles only under `--all-features`, so a default-feature check could not see it. A
         migration sweep here has to run `--all-features` **and** `--doc` before it means anything.
 
-  - [ ] **M28.4.1b** -- *Partly done: four of the ten shapes have an inventory form* --
-        `read_raw_owned`, `write_raw_owned`, `read_owned` and `write_owned`, the last two
-        populating `Held` with the file guard. Still owed: `flush`, `cancel`, and the four
-        registered variants, which also populate `Held.registration`. **Re-planned: the inventory
-        has one push.** `read_owned` is the only
+  - [x] **M28.4.1b** -- All ten push shapes have an inventory form: `read_raw_owned`,
+        `write_raw_owned`, `read_owned`, `write_owned`, `flush_owned`, `cancel_owned`, and the
+        four registered variants. `Held` is populated by the guarded pushes and
+        `Held.registration` by the registered ones, so both halves are exercised and neither
+        needs a dead-code marker any longer. `read_owned` is the only
         entry point that stows, so "migrate the consumers" has no destination for the other ten
         shapes yet -- writes, flushes, cancels, and the registered variants. Give each an
         inventory form first, populating `Held` for the guarded ones, which is what retires the

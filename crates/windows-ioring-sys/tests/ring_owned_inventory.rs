@@ -112,3 +112,42 @@ fn a_second_pop_finds_nothing_held_for_the_same_identity() {
     drop(file);
     let _ = std::fs::remove_file(&path);
 }
+
+/// The guarded push holds the file for the operation, not the caller.
+///
+/// `read_owned` is the first shape to populate `Held.guard`. What it buys is
+/// the reason `Held` exists at all: the caller may drop its own handle the
+/// instant the push returns, and the read still completes correctly, because
+/// the ring is holding a guard that outlives it.
+#[test]
+fn a_guarded_push_keeps_the_file_alive_after_the_caller_drops_its_handle() {
+    use windows_ioring_sys::SharedFile;
+
+    let (path, file) = fixture("guarded");
+    let mut ring: IoRing<Vec<u8>> = IoRing::with_inventory(8, 8).expect("create ring");
+    let shared = SharedFile::new(file.into());
+
+    {
+        let mut batch = Batch::new(&mut ring);
+        batch
+            .read_owned(&shared, vec![0_u8; LEN], (), 0, PushOptions::new())
+            .expect("queue a guarded read");
+    }
+
+    // The caller's own reference goes away here. The ring's guard is what
+    // keeps the handle valid for the kernel.
+    drop(shared);
+
+    let (_completion, held) = loop {
+        if let Some(popped) = ring.try_pop_held().expect("pop") {
+            break popped;
+        }
+    };
+    let (buffer, ()) = held.expect("the ring held this operation's buffer");
+    assert!(
+        buffer.iter().all(|&byte| byte == 0xC3),
+        "the read completed against a file only the ring was still holding"
+    );
+
+    let _ = std::fs::remove_file(&path);
+}
