@@ -482,7 +482,4 @@ every consumer names the type -- which means the migration order matters more th
 
 - [x] **M28.5** -- `observe_tokenless_push` retired; the outer `None` has two causes the caller distinguishes, recorded as `D-75` and asserted both ways. -> [completed 2026-09-26](COMPLETED-CHECKLIST.md#m285)
 
-- [ ] **M28.6** -- **Sweep what the break makes false**, including the README's ring examples, the
-  `D-4` detail section, and every rustdoc that tells a caller to match a completion against a
-  held token -- `Completion::user_data` and `IoRing::push_raw` both do, and they are the evidence
-  D-55 rests on, so they are the first things the change invalidates.
+- [x] **M28.6** -- Swept what the break made false: `D-4` and `D-55` amended, six live example claims corrected, and three defects found in `d.3`'s own prose sweep. -> [completed 2026-09-26](COMPLETED-CHECKLIST.md#m286)

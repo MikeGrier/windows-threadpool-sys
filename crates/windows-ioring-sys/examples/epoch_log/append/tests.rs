@@ -4,22 +4,26 @@
 //! # Why these exist, and what they are the counterpart to
 //!
 //! `M22.2` found a real defect here: [`super::Appender::claim`] returned early
-//! on a failed write without claiming the token, which `Token` deliberately
-//! treats as still outstanding. The arena slot's outstanding count then never
+//! on a failed write without claiming its token, which `Token` deliberately
+//! treated as still outstanding. The arena slot's outstanding count then never
 //! returned to zero, `free_slots` never offered it again, and after `SLOTS`
 //! such failures every append returned `WouldBlock` forever -- somewhere else
 //! entirely, with no trace of the cause.
 //!
-//! The library has a test named for exactly that hazard,
+//! **That hazard is gone, and these tests are not.** `M28.4.1d.3` retired the
+//! token API, so the pop releases the slot before `claim` runs and no ordering
+//! can leak one. The library's own test for the hazard -- once
 //! `claiming_before_checking_the_result_is_what_stops_a_failure_from_leaking`
-//! in `tests/failure_paths.rs`. This consumer had no counterpart, and the gap
-//! was measured rather than suspected: reinstating the defect here -- moving
-//! `completion.result()?` above the claim -- compiled and passed every test,
-//! because nothing produced a failed write.
+//! in `tests/failure_paths.rs` -- was deleted with it, because its whole
+//! subject was an ordering that can no longer be written.
 //!
-//! A failed write is not rare enough to be unreachable, only rare enough to go
-//! untested. [`Completion::with_injected_failure`] is the seam that reaches it
-//! on demand, which is why `epoch_log` is a test target at all.
+//! What these tests still carry is the reason the gap existed at all, and it
+//! outlived the defect: it was measured rather than suspected. Reinstating the
+//! bug here compiled and passed every test, because nothing produced a failed
+//! write. A failed write is not rare enough to be unreachable, only rare enough
+//! to go untested, and [`Completion::with_injected_failure`] is the seam that
+//! reaches it on demand -- which is why `epoch_log` is a test target at all,
+//! and why the cases below still drive failures through it.
 
 use std::os::windows::io::AsRawHandle;
 use std::time::Duration;

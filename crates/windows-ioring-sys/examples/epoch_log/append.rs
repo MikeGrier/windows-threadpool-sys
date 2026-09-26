@@ -21,9 +21,9 @@
 //!    `RegisteredBuffers::get_mut` enforces that: it refuses a slot with an
 //!    operation still outstanding against it, and per-buffer accounting means
 //!    a busy slot does not block its neighbours.
-//! 2. **Push** the write over exactly the bytes the record occupies, and hold
-//!    the returned token until its completion is popped -- which is what
-//!    releases the slot for step 1 again.
+//! 2. **Push** the write over exactly the bytes the record occupies. The ring
+//!    holds the slot's registration lease until the completion is popped, and
+//!    that pop is what releases the slot for step 1 again.
 //!
 //! Nothing here makes a record durable. An append that returns has been
 //! *accepted into the open epoch*, which is all [`crate::contract`] promises;

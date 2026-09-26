@@ -4088,3 +4088,50 @@ asserts with two cases rather than one. And the first manifest case was crash-ca
 (STATUS_STACK_BUFFER_OVERRUN): manufacturing a payload needs an `X` from nowhere, and
 `std::mem::zeroed()` on a ring whose sidecar is `&'static str` is a null reference.
 The case is arithmetic now, and fails by assertion on every ring.
+## Moved 2026-09-26 13:30:33 -04:00 -- M28.6, sweeping what the break made false
+
+### <a id="m286"></a>M28.6 -- Sweep what the break makes false. *(completed 2026-09-26 13:30:33 -04:00)*
+
+**Sweep what the break makes false**, including the README's ring examples, the
+`D-4` detail section, and every rustdoc that tells a caller to match a completion against a
+held token -- `Completion::user_data` and `IoRing::push_raw` both do, and they are the evidence
+D-55 rests on, so they are the first things the change invalidates.
+
+**The named targets were mostly already done, and the sweep's value was the rest.**
+`M28.4.1d.3` had fixed the README example and reworded `Completion::user_data`; what
+remained of the list was `D-4`, `D-55`, and a nuance the item got slightly wrong.
+
+**`D-4`**: its load-bearing half -- no slab entry, no box, **no type erasure** -- is
+unchanged and is what `D-55` and `D-73` both rest on. What moved is who holds the
+buffer, and the forget-on-failure mechanism did not disappear so much as become the
+crate's: `Drop for IoRing` forgets the inventory for exactly the reason a dropped token
+used to forget its value. Amended in place rather than superseded.
+
+**`D-55`**: landed, with two of its own assertions corrected. Its evidence was that "its
+own rustdoc twice instructs a caller to match it against a held `Token`" -- but one of
+those two sites was `IoRing::push_raw`, which *still* says to match by hand, and is
+right to: a raw push creates no entry, which is `D-75`'s subject. The defect was in the
+tokened path; the raw seam only looked the same. And `generated_sequences.rs` no longer
+carries the eight-token-type enum that was the strongest evidence the erasure objection
+was false -- the argument stands, the artifact is gone, and a reader sent to look for it
+should know before going.
+
+**Six live false claims in the examples**, none of them on the item's list: `append.rs`
+and `strategy.rs` still told a reader that claiming a token returns its arena slot,
+`model_b_multiplexed.rs` twice said the kernel writes through buffers "those tokens
+own", `checkpoint.rs` documented a map field that no longer holds a token, `main.rs`
+asserted "every token was claimed", and `append/tests.rs` pointed at a library test
+`M28.4.1d.3` had deleted.
+
+**Three defects this sweep found in `M28.4.1d.3`'s own prose sweep**, which is the part
+worth remembering. That sweep replaced 35 `Token` references by table-driven
+substitution, and three of the replacements were wrong in ways no gate could catch:
+`buf.rs` was left with a sentence broken mid-clause (`-- a` followed by `The ring
+has no Drop...`), and two `ring.rs` sites lost their backticks or kept a stale
+"every claim path", because a PowerShell double-quoted replacement string eats backticks.
+**Prose does not compile, and rustdoc only checks links.** A substitution sweep over
+documentation needs its output read, not just its exit code.
+
+`MUTATION-SURVIVORS.md` and the `M18.1` borrow-surface table are dated captures and
+were **annotated, not edited** -- the record of what was measured then is the thing worth
+keeping, but a reader should not learn from a compile error that an item is gone.

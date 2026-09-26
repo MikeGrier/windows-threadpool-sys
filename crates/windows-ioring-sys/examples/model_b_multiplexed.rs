@@ -34,8 +34,8 @@
 //!
 //! Shutdown *with I/O still in flight* is the other half of the shape, and it
 //! is why the loop is followed by a quiesce rather than by a `return`: the
-//! kernel may still be writing through buffers those tokens own, so the ring
-//! cannot close until every outstanding operation has completed. Whether a
+//! kernel may still be writing through buffers the ring is holding, so the
+//! ring cannot close until every outstanding operation has completed. Whether a
 //! given run actually exits with work in flight is a timing question -- the
 //! ring is the lower wait index and so is serviced first whenever both
 //! handles are ready -- so the example reports what happened rather than
@@ -279,7 +279,7 @@ fn main() -> io::Result<()> {
     control.join().expect("control thread");
 
     // Shutdown with operations still in flight is the normal case, not an
-    // error: the kernel may still be writing through buffers those tokens own,
+    // error: the kernel may still be writing through buffers the ring holds,
     // so the ring must not close until they finish. Every SQE that queued
     // produces exactly one completion, so this terminates.
     //

@@ -624,7 +624,7 @@ impl Lane {
 
     /// Pop every completion currently available.
     ///
-    /// Claiming an append's token is what returns its slot; a caller that
+    /// Popping an append's completion is what returns its slot; a caller that
     /// drops completions runs the arena dry and never recovers.
     fn drain(&mut self) -> io::Result<usize> {
         let mut popped = 0;

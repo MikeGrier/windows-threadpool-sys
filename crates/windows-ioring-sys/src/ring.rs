@@ -275,8 +275,17 @@ pub struct Completion {
 }
 
 impl Completion {
-    /// The `UserData` identity this completion reports -- match it against
-    /// the inventory entry the ring holds for it.
+    /// The `UserData` identity this completion reports.
+    ///
+    /// **Not a way to reach what the operation was holding.** The pop that
+    /// produced this completion already returned that, and it is the only
+    /// call that can -- see [`IoRing::try_pop`]. This is the integer for
+    /// correlation and for naming a cancel target, which is the same thing
+    /// [`crate::OperationId`] is and for the same reason.
+    ///
+    /// It used to say "match it against a held `Token`", and that instruction
+    /// was [D-55](../DESIGN-NOTES.md#d-55)'s evidence that the crate handed a
+    /// caller two halves and connected them with nothing.
     #[must_use]
     pub fn user_data(&self) -> usize {
         self.user_data
@@ -346,9 +355,9 @@ impl Completion {
     ///
     /// # Why this is sound, where fabricating a completion would not be
     ///
-    /// The pop's safety argument is that a Completion for
-    /// some `UserData` **existing at all** proves the kernel has finished with
-    /// that operation, and therefore that handing its buffer back is sound.
+    /// The pop's safety argument is that a [`Completion`] for some `UserData`
+    /// **existing at all** proves the kernel has finished with that operation,
+    /// and therefore that handing its buffer back is sound.
     ///
     /// This method consumes a completion the ring genuinely popped and returns
     /// one carrying the same `UserData` and the same ring identity. The
@@ -386,9 +395,9 @@ impl Completion {
     ///
     /// # The one place injection is *not* inert: registration completions
     ///
-    /// The soundness argument above is about the pop, where
-    /// a failed completion changes nothing the caller does with memory: the
-    /// buffer comes back either way. **A registration claim is different.**
+    /// The soundness argument above is about the pop, where a failed
+    /// completion changes nothing the caller does with memory: the buffer
+    /// comes back either way. **A registration claim is different.**
     /// [`crate::PendingBufferRegistration::claim_if`] treats a failed
     /// completion as proof the kernel did *not* retain the addresses, and so
     /// **drops the buffers**. Inject a failure there and it frees memory the
@@ -449,9 +458,9 @@ impl Completion {
     /// # Why this one is inert
     ///
     /// The result code is left successful and only the byte count moves, so
-    /// every claim path behaves exactly as it would for the real completion:
-    /// The pop returns the buffer, and no path keys memory
-    /// ownership off the transferred count. That makes this seam free of the
+    /// the pop behaves exactly as it would for the real completion: the buffer
+    /// comes back, and no path keys memory ownership off the transferred
+    /// count. That makes this seam free of the
     /// registration hazard documented on
     /// [`Completion::with_injected_failure`], which arises only because a
     /// *failed* registration is taken as proof the kernel retained nothing.
@@ -1333,6 +1342,14 @@ impl<T, X> IoRing<T, X> {
     /// returned so the caller can match it against a later [`Completion`]
     /// popped by [`IoRing::try_pop`]; on failure the reservation is
     /// released, since the op was never actually queued.
+    ///
+    /// **Matching by hand is correct here, and only here.** This seam creates
+    /// no inventory entry -- it cannot, since it does not know what the
+    /// caller's `build` closure queued or what it needs held -- so a pop for
+    /// this operation reports `None` for what the ring was holding. That is
+    /// the legitimate half of [D-75](../DESIGN-NOTES.md#d-75)'s two causes,
+    /// and choosing this seam is what makes it legitimate. Every other push
+    /// hands its payload to the ring and gets it back from the pop.
     ///
     /// # Errors
     ///

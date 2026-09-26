@@ -23,11 +23,11 @@
 //!
 //! Completion-based I/O touches the caller's memory *after* the submitting
 //! call returns. A `&[u8]` cannot describe that: its borrow would have to
-//! span the whole operation, and nothing in the API can make it -- a
-//! The ring has no `Drop` that cancels an operation, and even one would be
-//! defeated by `mem::forget`, so a caller could always end the borrow with
-//! the kernel still reading. The buffer is handed over instead, and returned
-//! on completion through `Token::claim_if`.
+//! span the whole operation, and nothing in the API can make it: the ring has
+//! no `Drop` that cancels an operation, and even one would be defeated by
+//! `mem::forget`, so a caller could always end the borrow with the kernel
+//! still reading. The buffer is handed over instead, and the pop that observes
+//! its completion is what hands it back ([`crate::IoRing::try_pop`]).
 //!
 //! # Why `unsafe`
 //!

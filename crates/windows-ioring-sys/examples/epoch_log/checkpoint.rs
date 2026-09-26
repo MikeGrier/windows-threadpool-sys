@@ -130,8 +130,7 @@ impl Pending {
 struct State {
     /// Flush `UserData` -> the checkpoint that flush closes.
     pending: std::collections::HashMap<usize, Pending>,
-    /// Write `UserData` -> (its checkpoint's flush `UserData`, the token
-    /// holding the record).
+    /// Write `UserData` -> its checkpoint's flush `UserData`.
     ///
     /// Only the association survives here: the ring holds the record buffer
     /// and hands it back at the pop, so this map carries two numbers rather
