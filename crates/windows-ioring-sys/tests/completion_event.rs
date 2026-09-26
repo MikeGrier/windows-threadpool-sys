@@ -22,12 +22,11 @@
 
 #![cfg(windows)]
 
-use std::collections::HashMap;
 use std::fs::File;
 use std::os::windows::io::{AsRawHandle, FromRawHandle, OwnedHandle};
 use std::path::PathBuf;
 
-use windows_ioring_sys::{Batch, IoRing, PushOptions, Token, capabilities};
+use windows_ioring_sys::{Batch, IoRing, PushOptions, capabilities};
 use windows_sys::Win32::Foundation::{HANDLE, WAIT_OBJECT_0, WAIT_TIMEOUT};
 use windows_sys::Win32::System::Threading::{
     CreateEventW, SetEvent, WaitForMultipleObjects, WaitForSingleObject,
@@ -64,8 +63,13 @@ const LOST_WAKEUP_MS: u32 = 500;
 /// failure rather than a slow machine. Bounded so it fails instead of hangs.
 const MAX_DRAIN_ATTEMPTS: usize = 512;
 
-/// Read tokens still awaiting their completion, keyed by `UserData`.
-type Pending = HashMap<usize, Token<Vec<u8>>>;
+/// The ring these tests drive.
+///
+/// It holds each read's buffer, so the map of outstanding tokens this file
+/// used to thread through five functions is gone, and so is the parameter
+/// that carried it. `ring.held()` answers what `pending.is_empty()` did, and
+/// answers it from the ring rather than from a copy the test maintained.
+type EventRing = IoRing<Vec<u8>>;
 
 fn temp_file(tag: &str) -> PathBuf {
     std::env::temp_dir().join(format!(
@@ -151,13 +155,7 @@ fn wait_either(first: &OwnedHandle, second: &OwnedHandle, timeout_ms: u32) -> Op
 
 /// Queue `count` reads and submit them, blocking for `wait_operations`
 /// completions (0 to return immediately).
-fn submit_reads(
-    ring: &mut IoRing,
-    file: &File,
-    count: usize,
-    wait_operations: u32,
-    pending: &mut Pending,
-) {
+fn submit_reads(ring: &mut EventRing, file: &File, count: usize, wait_operations: u32) {
     assert!(count <= CHUNKS, "the fixture only has {CHUNKS} chunks");
     let handle = file.as_raw_handle();
     let mut batch = Batch::new(ring);
@@ -166,9 +164,9 @@ fn submit_reads(
         let offset = (chunk_index * CHUNK_LEN) as u64;
         // SAFETY: `file` is the caller's and outlives every operation queued
         // here -- each test drains its ring to empty before dropping either.
-        let token = unsafe { batch.read_raw(handle, buffer, offset, PushOptions::new()) }
+        // SAFETY: as above.
+        unsafe { batch.read_raw_owned(handle, buffer, (), offset, PushOptions::new()) }
             .expect("queue read");
-        pending.insert(token.id(), token);
     }
     batch
         .submit_and_wait(wait_operations, SIGNAL_TIMEOUT_MS)
@@ -177,15 +175,11 @@ fn submit_reads(
 
 /// Rule 2's drain: `try_pop` until it yields `None`, claiming each token so
 /// nothing is leaked, and report how many completions this pass observed.
-fn drain_to_empty(ring: &mut IoRing, pending: &mut Pending) -> usize {
+fn drain_to_empty(ring: &mut EventRing) -> usize {
     let mut popped = 0;
-    while let Some(completion) = ring.try_pop().expect("pop completion") {
+    while let Some((completion, held)) = ring.try_pop_held().expect("pop completion") {
         completion.result().expect("read succeeded");
-        if let Some(token) = pending.remove(&completion.user_data()) {
-            let _buffer = token
-                .claim_if(&completion)
-                .expect("a token claims its own completion");
-        }
+        let _buffer = held.expect("the ring was holding this read's buffer");
         popped += 1;
     }
     popped
@@ -193,7 +187,7 @@ fn drain_to_empty(ring: &mut IoRing, pending: &mut Pending) -> usize {
 
 /// Drain until exactly `want` completions have been observed and the queue
 /// is empty, so the ring can be dropped with nothing outstanding.
-fn drain_exactly(ring: &mut IoRing, pending: &mut Pending, want: usize) {
+fn drain_exactly(ring: &mut EventRing, want: usize) {
     let mut popped = 0;
     let mut attempts = 0;
     while popped < want {
@@ -202,7 +196,7 @@ fn drain_exactly(ring: &mut IoRing, pending: &mut Pending, want: usize) {
             attempts <= MAX_DRAIN_ATTEMPTS,
             "only {popped} of {want} completions ever arrived"
         );
-        popped += drain_to_empty(ring, pending);
+        popped += drain_to_empty(ring);
     }
     assert_eq!(popped, want, "more completions arrived than were submitted");
 }
@@ -210,8 +204,8 @@ fn drain_exactly(ring: &mut IoRing, pending: &mut Pending, want: usize) {
 /// Every test below needs the capability. Skipping silently would let the
 /// whole file rot unnoticed, so this states the requirement loudly instead;
 /// the capability's *absence* has its own test at the bottom of this file.
-fn ring_with_event(submission: u32, completion: u32) -> (IoRing, OwnedHandle) {
-    let mut ring = IoRing::new(submission, completion).expect("create ring");
+fn ring_with_event(submission: u32, completion: u32) -> (EventRing, OwnedHandle) {
+    let mut ring = EventRing::with_inventory(submission, completion).expect("create ring");
     let event = ring.completion_event().expect(
         "this host must report IORING_FEATURE_SET_COMPLETION_EVENT to run the M11.2 contract tests",
     );
@@ -220,12 +214,12 @@ fn ring_with_event(submission: u32, completion: u32) -> (IoRing, OwnedHandle) {
 
 /// Consume the deliberate setup signal (rule 3) and confirm nothing is left
 /// behind, leaving the ring quiet and the event unsignalled.
-fn settle(ring: &mut IoRing, event: &OwnedHandle, pending: &mut Pending) {
+fn settle(ring: &mut EventRing, event: &OwnedHandle) {
     assert!(
         signalled_within(event, SIGNAL_TIMEOUT_MS),
         "attaching must signal once (rule 3)"
     );
-    drain_to_empty(ring, pending);
+    drain_to_empty(ring);
     assert!(
         !signalled_now(event),
         "the setup signal must be consumable exactly once"
@@ -242,9 +236,8 @@ fn attaching_to_a_fresh_ring_signals_once_and_leaves_nothing_to_pop() {
         signalled_within(&event, SIGNAL_TIMEOUT_MS),
         "attaching must signal once even with no work outstanding (rule 3)"
     );
-    let mut pending = Pending::new();
     assert_eq!(
-        drain_to_empty(&mut ring, &mut pending),
+        drain_to_empty(&mut ring),
         0,
         "a wake with nothing to pop is normal, not an error (rule 3)"
     );
@@ -262,11 +255,10 @@ fn attaching_to_a_ring_whose_queue_is_already_non_empty_still_signals() {
     // deliberate setup signal this backlog is stranded permanently -- which
     // is exactly the `EventDelivery` bug M11.3 fixes.
     let file = fixture("backlog");
-    let mut ring = IoRing::new(64, 64).expect("create ring");
-    let mut pending = Pending::new();
+    let mut ring = EventRing::with_inventory(64, 64).expect("create ring");
 
     // Submit and let the completions land *before* the event exists.
-    submit_reads(&mut ring, &file, CHUNKS, CHUNKS as u32, &mut pending);
+    submit_reads(&mut ring, &file, CHUNKS, CHUNKS as u32);
 
     let event = ring.completion_event().expect("completion event");
     assert!(
@@ -274,7 +266,7 @@ fn attaching_to_a_ring_whose_queue_is_already_non_empty_still_signals() {
         "a caller that submitted before attaching must still be woken for its backlog"
     );
 
-    drain_exactly(&mut ring, &mut pending, CHUNKS);
+    drain_exactly(&mut ring, CHUNKS);
 }
 
 // --- rule 4: the returned handle is a duplicate of one shared event ---------
@@ -311,10 +303,9 @@ fn the_ring_still_signals_both_duplicates_after_a_repeat_call() {
     let file = fixture("idempotent");
     let (mut ring, first) = ring_with_event(64, 64);
     let second = ring.completion_event().expect("repeat completion event");
-    let mut pending = Pending::new();
-    settle(&mut ring, &first, &mut pending);
+    settle(&mut ring, &first);
 
-    submit_reads(&mut ring, &file, 1, 1, &mut pending);
+    submit_reads(&mut ring, &file, 1, 1);
     assert!(
         signalled_within(&first, SIGNAL_TIMEOUT_MS),
         "a repeat call must not detach the event the first call handed out"
@@ -323,9 +314,9 @@ fn the_ring_still_signals_both_duplicates_after_a_repeat_call() {
         !signalled_now(&second),
         "both handles name one event, so one completion edge satisfies exactly one wait"
     );
-    drain_exactly(&mut ring, &mut pending, 1);
+    drain_exactly(&mut ring, 1);
 
-    submit_reads(&mut ring, &file, 1, 1, &mut pending);
+    submit_reads(&mut ring, &file, 1, 1);
     assert!(
         signalled_within(&second, SIGNAL_TIMEOUT_MS),
         "the handle from the repeat call names that same event"
@@ -334,7 +325,7 @@ fn the_ring_still_signals_both_duplicates_after_a_repeat_call() {
         !signalled_now(&first),
         "one edge cannot satisfy a wait on both handles if they are one event"
     );
-    drain_exactly(&mut ring, &mut pending, 1);
+    drain_exactly(&mut ring, 1);
 }
 
 #[test]
@@ -349,17 +340,16 @@ fn closing_one_duplicate_does_not_stop_the_ring_signalling_the_other() {
     let file = fixture("closed-duplicate");
     let (mut ring, first) = ring_with_event(64, 64);
     let second = ring.completion_event().expect("repeat completion event");
-    let mut pending = Pending::new();
-    settle(&mut ring, &first, &mut pending);
+    settle(&mut ring, &first);
 
     drop(second);
 
-    submit_reads(&mut ring, &file, 1, 1, &mut pending);
+    submit_reads(&mut ring, &file, 1, 1);
     assert!(
         signalled_within(&first, SIGNAL_TIMEOUT_MS),
         "closing a duplicate must not disturb the ring's own event"
     );
-    drain_exactly(&mut ring, &mut pending, 1);
+    drain_exactly(&mut ring, 1);
 }
 
 #[test]
@@ -369,8 +359,7 @@ fn the_returned_handle_stays_valid_after_the_ring_is_dropped() {
     // ring had somehow closed on the caller's behalf would fail the wait
     // rather than time out, which `signalled_within` panics on.
     let (mut ring, event) = ring_with_event(8, 8);
-    let mut pending = Pending::new();
-    settle(&mut ring, &event, &mut pending);
+    settle(&mut ring, &event);
 
     drop(ring);
 
@@ -386,16 +375,15 @@ fn the_returned_handle_stays_valid_after_the_ring_is_dropped() {
 fn a_completion_arriving_into_an_empty_queue_signals() {
     let file = fixture("edge");
     let (mut ring, event) = ring_with_event(64, 64);
-    let mut pending = Pending::new();
-    settle(&mut ring, &event, &mut pending);
+    settle(&mut ring, &event);
 
-    submit_reads(&mut ring, &file, 1, 1, &mut pending);
+    submit_reads(&mut ring, &file, 1, 1);
 
     assert!(
         signalled_within(&event, SIGNAL_TIMEOUT_MS),
         "empty -> non-empty is the edge the event reports (rule 1)"
     );
-    drain_exactly(&mut ring, &mut pending, 1);
+    drain_exactly(&mut ring, 1);
 }
 
 #[test]
@@ -405,10 +393,9 @@ fn many_completions_arriving_at_once_produce_exactly_one_wakeup() {
     // drain-to-empty retrieves the whole batch.
     let file = fixture("batch");
     let (mut ring, event) = ring_with_event(64, 64);
-    let mut pending = Pending::new();
-    settle(&mut ring, &event, &mut pending);
+    settle(&mut ring, &event);
 
-    submit_reads(&mut ring, &file, CHUNKS, CHUNKS as u32, &mut pending);
+    submit_reads(&mut ring, &file, CHUNKS, CHUNKS as u32);
 
     assert!(
         signalled_within(&event, SIGNAL_TIMEOUT_MS),
@@ -419,7 +406,7 @@ fn many_completions_arriving_at_once_produce_exactly_one_wakeup() {
         "completions arriving into an already non-empty queue must not signal again"
     );
     assert_eq!(
-        drain_to_empty(&mut ring, &mut pending),
+        drain_to_empty(&mut ring),
         CHUNKS,
         "one drain-to-empty must retrieve every completion the single wakeup covered"
     );
@@ -432,16 +419,15 @@ fn the_edge_re_arms_after_every_drain_to_empty() {
     // signal-once-and-never-again bug survives a single round.
     let file = fixture("re-arm");
     let (mut ring, event) = ring_with_event(64, 64);
-    let mut pending = Pending::new();
-    settle(&mut ring, &event, &mut pending);
+    settle(&mut ring, &event);
 
     for round in 0..3 {
-        submit_reads(&mut ring, &file, 1, 1, &mut pending);
+        submit_reads(&mut ring, &file, 1, 1);
         assert!(
             signalled_within(&event, SIGNAL_TIMEOUT_MS),
             "round {round}: the edge must re-arm after the previous drain"
         );
-        drain_exactly(&mut ring, &mut pending, 1);
+        drain_exactly(&mut ring, 1);
         assert!(
             !signalled_now(&event),
             "round {round}: a full drain must leave no leftover signal"
@@ -473,8 +459,7 @@ fn the_ring_still_wakes_after_an_unrelated_handle_fires_in_a_multiplexed_wait() 
     let file = fixture("multiplexed");
     let (mut ring, event) = ring_with_event(64, 64);
     let other = unrelated_event();
-    let mut pending = Pending::new();
-    settle(&mut ring, &event, &mut pending);
+    settle(&mut ring, &event);
 
     // Round 0: the unrelated handle wakes a wait the ring has nothing for.
     signal(&other);
@@ -484,7 +469,7 @@ fn the_ring_still_wakes_after_an_unrelated_handle_fires_in_a_multiplexed_wait() 
         "round 0: the unrelated handle must wake the multiplexed wait"
     );
     assert_eq!(
-        drain_to_empty(&mut ring, &mut pending),
+        drain_to_empty(&mut ring),
         0,
         "round 0: a wake with nothing to pop is normal (rule 3)"
     );
@@ -492,14 +477,14 @@ fn the_ring_still_wakes_after_an_unrelated_handle_fires_in_a_multiplexed_wait() 
     // Round 1: a whole batch arrives under one wakeup, and rule 1 gives no
     // second signal for the rest of it -- draining to empty here is the only
     // thing that re-arms the edge for round 3.
-    submit_reads(&mut ring, &file, CHUNKS, CHUNKS as u32, &mut pending);
+    submit_reads(&mut ring, &file, CHUNKS, CHUNKS as u32);
     assert_eq!(
         wait_either(&event, &other, SIGNAL_TIMEOUT_MS),
         Some(0),
         "round 1: the ring must wake the wait after the unrelated handle already did"
     );
     assert_eq!(
-        drain_to_empty(&mut ring, &mut pending),
+        drain_to_empty(&mut ring),
         CHUNKS,
         "round 1: one drain-to-empty must retrieve the whole batch the single wakeup covered"
     );
@@ -512,21 +497,21 @@ fn the_ring_still_wakes_after_an_unrelated_handle_fires_in_a_multiplexed_wait() 
         "round 2: the unrelated handle must still wake the wait"
     );
     assert_eq!(
-        drain_to_empty(&mut ring, &mut pending),
+        drain_to_empty(&mut ring),
         0,
         "round 2: rule 2 says drain on every pass, not only the ring's"
     );
 
     // Round 3: the payoff of the conformant loop. This wakeup exists only
     // because round 1 emptied the queue and so re-armed the edge.
-    submit_reads(&mut ring, &file, 1, 1, &mut pending);
+    submit_reads(&mut ring, &file, 1, 1);
     assert_eq!(
         wait_either(&event, &other, SIGNAL_TIMEOUT_MS),
         Some(0),
         "round 3: the ring must still wake the wait after two unrelated wakeups"
     );
     assert_eq!(
-        drain_to_empty(&mut ring, &mut pending),
+        drain_to_empty(&mut ring),
         1,
         "round 3: the final completion must be retrievable"
     );
@@ -537,23 +522,19 @@ fn the_ring_still_wakes_after_an_unrelated_handle_fires_in_a_multiplexed_wait() 
     // nothing. A conformant consumer never reaches this state; a consumer
     // that assumes a level-triggered event reaches it immediately and then
     // blocks forever.
-    submit_reads(&mut ring, &file, CHUNKS, CHUNKS as u32, &mut pending);
+    submit_reads(&mut ring, &file, CHUNKS, CHUNKS as u32);
     assert_eq!(
         wait_either(&event, &other, SIGNAL_TIMEOUT_MS),
         Some(0),
         "round 4: the batch's first completion must wake the wait"
     );
-    let stranded = ring
-        .pop_within(POP_BOUND)
+    let (_stranded, held) = ring
+        .pop_within_held(POP_BOUND)
         .expect("pop one")
         .expect("the batch's remaining completion arrives within the bound");
-    let _buffer = pending
-        .remove(&stranded.user_data())
-        .expect("the popped completion matches a held token")
-        .claim_if(&stranded)
-        .expect("a token claims its own completion");
+    let _buffer = held.expect("the ring was holding this read's buffer");
 
-    submit_reads(&mut ring, &file, 1, 1, &mut pending);
+    submit_reads(&mut ring, &file, 1, 1);
     assert_eq!(
         wait_either(&event, &other, LOST_WAKEUP_MS),
         None,
@@ -563,11 +544,15 @@ fn the_ring_still_wakes_after_an_unrelated_handle_fires_in_a_multiplexed_wait() 
     // Nothing was lost but the wakeup: the entries are still there, and
     // draining recovers every one of them.
     assert_eq!(
-        drain_to_empty(&mut ring, &mut pending),
+        drain_to_empty(&mut ring),
         CHUNKS,
         "the stranded entries must still be poppable once the waiter drains"
     );
-    assert!(pending.is_empty(), "every token must have been claimed");
+    assert_eq!(
+        ring.held(),
+        0,
+        "the ring must be holding nothing once every completion is drained"
+    );
     assert!(
         !signalled_now(&event),
         "the ring must end quiet, with no leftover signal after a full drain"
@@ -585,7 +570,7 @@ fn completion_event_reports_unsupported_exactly_when_the_capability_is_absent() 
     let supported = capabilities()
         .expect("capabilities")
         .supports_completion_event;
-    let mut ring = IoRing::new(8, 8).expect("create ring");
+    let mut ring = EventRing::with_inventory(8, 8).expect("create ring");
 
     match ring.completion_event() {
         Ok(event) => {

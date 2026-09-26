@@ -1534,6 +1534,30 @@ impl<T, X> IoRing<T, X> {
     pub fn pop_within(&mut self, timeout: Duration) -> io::Result<Option<Completion>> {
         self.pop_within_with(&mut SubmitWait, timeout)
     }
+    /// [`IoRing::pop_within`], taking back whatever this ring was holding.
+    ///
+    /// Stands to [`IoRing::pop_within`] exactly as [`IoRing::try_pop_held`]
+    /// stands to [`IoRing::try_pop`], and exists for the same reason: a pop
+    /// that does not reclaim leaves the entry in the inventory forever, so a
+    /// caller who waits for a completion rather than polling for one would
+    /// strand every buffer it received. `M28.5` collapses each pair into the
+    /// one reclaiming form.
+    ///
+    /// # Errors
+    ///
+    /// As [`IoRing::pop_within`].
+    pub fn pop_within_held(
+        &mut self,
+        timeout: Duration,
+    ) -> io::Result<Option<HeldCompletion<T, X>>> {
+        let Some(completion) = self.pop_within(timeout)? else {
+            return Ok(None);
+        };
+        let held = self
+            .reclaim(completion.user_data())
+            .map(|entry| (entry.payload, entry.extra));
+        Ok(Some((completion, held)))
+    }
 
     /// [`IoRing::pop_within`] with a caller-chosen wait.
     ///

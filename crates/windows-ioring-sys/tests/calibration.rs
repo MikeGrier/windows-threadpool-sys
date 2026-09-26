@@ -49,8 +49,7 @@ use std::time::Duration;
 
 use windows_ioring_sys::sys::{Resolver, ResolverConfig};
 use windows_ioring_sys::{
-    Batch, Completion, FlushCoverage, FlushMode, IoRing, PushOptions, SharedFile, Token,
-    WriteCaching,
+    Batch, FlushCoverage, FlushMode, IoRing, PushOptions, SharedFile, WriteCaching,
 };
 
 /// Seeds each calibration sweeps.
@@ -81,37 +80,17 @@ fn scratch(tag: &str) -> (SharedFile, std::path::PathBuf) {
     (SharedFile::new(file.into()), path)
 }
 
-/// Tokens awaiting completion, claimed by identity as completions arrive.
-#[derive(Default)]
-struct Held {
-    flushes: Vec<Token<SharedFile>>,
-    writes: Vec<Token<(Vec<u8>, SharedFile)>>,
-}
-
-impl Held {
-    /// Claim whichever token this completion belongs to.
-    ///
-    /// Returns false if none matches, which would itself be `RS-C-2` broken --
-    /// asserted by the caller rather than ignored, so a calibration cannot
-    /// pass by losing track of an operation.
-    fn claim(&mut self, completion: &Completion) -> bool {
-        let user_data = completion.user_data();
-        if let Some(at) = self
-            .flushes
-            .iter()
-            .position(|token| token.id() == user_data)
-        {
-            return self.flushes.remove(at).claim_if(completion).is_ok();
-        }
-        if let Some(at) = self.writes.iter().position(|token| token.id() == user_data) {
-            return self.writes.remove(at).claim_if(completion).is_ok();
-        }
-        false
-    }
-}
+/// The ring these calibrations drive.
+///
+/// Writes hand it their buffer; flushes have none but are still entered, so
+/// every operation has an inventory entry and a pop that finds none is the
+/// `RS-C-2` breakage the drain below asserts against. The two token vectors
+/// this file used to linear-scan are gone, and so is the file guard they were
+/// each carrying: the ring holds that (`D-73`).
+type CalRing = IoRing<Vec<u8>>;
 
 /// Drain the ring, returning completion identities in the order they arrived.
-fn drain_in_order(ring: &mut IoRing, held: &mut Held, expected: usize) -> Vec<usize> {
+fn drain_in_order(ring: &mut CalRing, expected: usize) -> Vec<usize> {
     let mut order = Vec::new();
     for _ in 0..BUDGET {
         if order.len() == expected {
@@ -120,11 +99,11 @@ fn drain_in_order(ring: &mut IoRing, held: &mut Held, expected: usize) -> Vec<us
         // A declined submit under RS-P-7 surfaces here as an error, which is
         // within `pop_within`'s documented contract and is retried rather than
         // treated as a failure -- see M26.4, which established that.
-        match ring.pop_within(Duration::from_millis(5)) {
-            Ok(Some(completion)) => {
+        match ring.pop_within_held(Duration::from_millis(5)) {
+            Ok(Some((completion, held))) => {
                 assert!(
-                    held.claim(&completion),
-                    "a completion arrived for {:#x} with no live token to match it",
+                    held.is_some(),
+                    "a completion arrived for {:#x} that this ring was holding nothing for",
                     completion.user_data()
                 );
                 order.push(completion.user_data());
@@ -200,53 +179,52 @@ fn the_resolver_breaks_a_consumer_that_believes_the_drain_flag_holds_back() {
             },
         );
         let outcome = resolver.scoped(|_| {
-            let mut ring = IoRing::new(64, 128).expect("a ring");
-            let mut held = Held::default();
+            let mut ring = CalRing::with_inventory(64, 128).expect("a ring");
             let (before, flush, after) = {
                 let mut batch = Batch::new(&mut ring);
                 let mut before = Vec::new();
                 for _ in 0..2 {
-                    let token = batch
-                        .write(
+                    let id = batch
+                        .write_owned(
                             &file,
                             vec![0_u8; BUF_LEN],
+                            (),
                             0,
                             PushOptions::new(),
                             WriteCaching::Cached,
                         )
                         .expect("a write builds");
-                    before.push(token.id());
-                    held.writes.push(token);
+                    before.push(id.user_data());
                 }
-                let flush_token = batch
-                    .flush(
+                let flush = batch
+                    .flush_owned(
                         &file,
+                        (),
                         FlushCoverage::CoversPrecedingOperations,
                         FlushMode::Default,
                     )
-                    .expect("a covering flush builds");
-                let flush = flush_token.id();
-                held.flushes.push(flush_token);
+                    .expect("a covering flush builds")
+                    .user_data();
 
                 let mut after = Vec::new();
                 for _ in 0..3 {
-                    let token = batch
-                        .write(
+                    let id = batch
+                        .write_owned(
                             &file,
                             vec![0_u8; BUF_LEN],
+                            (),
                             0,
                             PushOptions::new(),
                             WriteCaching::Cached,
                         )
                         .expect("a write builds");
-                    after.push(token.id());
-                    held.writes.push(token);
+                    after.push(id.user_data());
                 }
                 batch.submit().expect("the submit is answered");
                 (before, flush, after)
             };
 
-            let order = drain_in_order(&mut ring, &mut held, 6);
+            let order = drain_in_order(&mut ring, 6);
             let mut believer = HoldBackBeliever::default();
             for user_data in &order {
                 believer.observe(*user_data, flush, &before, &after);
@@ -323,21 +301,19 @@ fn an_expired_wait_reaches_pop_within() {
             },
         );
         let expired = resolver.scoped(|watch| {
-            let mut ring = IoRing::new(64, 128).expect("a ring");
-            let mut held = Held::default();
+            let mut ring = CalRing::with_inventory(64, 128).expect("a ring");
             {
                 let mut batch = Batch::new(&mut ring);
                 for _ in 0..4 {
-                    let token = batch
-                        .flush(&file, FlushCoverage::Unordered, FlushMode::Default)
+                    batch
+                        .flush_owned(&file, (), FlushCoverage::Unordered, FlushMode::Default)
                         .expect("a flush builds");
-                    held.flushes.push(token);
                 }
                 batch.submit().expect("the submit is answered");
             }
             // `pop_within` is the only caller here, so any expired wait the
             // resolver records was answered to it.
-            drain_in_order(&mut ring, &mut held, 4);
+            drain_in_order(&mut ring, 4);
             ring.run_down().expect("rundown");
             watch.stats().expired_waits
         });
@@ -381,16 +357,13 @@ fn an_expired_wait_is_not_reported_as_a_failure() {
         );
         let replay = resolver.replay_hint();
         resolver.scoped(|watch| {
-            let mut ring = IoRing::new(64, 128).expect("a ring");
-            let mut held = Held::default();
+            let mut ring = CalRing::with_inventory(64, 128).expect("a ring");
             {
                 let mut batch = Batch::new(&mut ring);
                 for _ in 0..3 {
-                    held.flushes.push(
-                        batch
-                            .flush(&file, FlushCoverage::Unordered, FlushMode::Default)
-                            .expect("a flush builds"),
-                    );
+                    batch
+                        .flush_owned(&file, (), FlushCoverage::Unordered, FlushMode::Default)
+                        .expect("a flush builds");
                 }
                 batch.submit().expect("the submit is answered");
             }
@@ -400,9 +373,13 @@ fn an_expired_wait_is_not_reported_as_a_failure() {
                 if seen == 3 {
                     break;
                 }
-                match ring.pop_within(Duration::from_millis(5)) {
-                    Ok(Some(completion)) => {
-                        assert!(held.claim(&completion));
+                match ring.pop_within_held(Duration::from_millis(5)) {
+                    Ok(Some((completion, held))) => {
+                        assert!(
+                            held.is_some(),
+                            "a completion arrived for {:#x} that this ring was holding nothing for",
+                            completion.user_data()
+                        );
                         seen += 1;
                     }
                     Ok(None) => {}

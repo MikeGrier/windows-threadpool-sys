@@ -6,7 +6,6 @@
 // this whole file compiles out with `--no-default-features`.
 #![cfg(all(windows, feature = "threadpool"))]
 
-use std::collections::HashMap;
 use std::os::windows::io::AsRawHandle;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -14,7 +13,7 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::mpsc;
 use std::time::Duration;
 
-use windows_ioring_sys::{Batch, EventDelivery, IoRing, PushOptions, Token};
+use windows_ioring_sys::{Batch, EventDelivery, IoRing, PushOptions};
 use windows_sys::Win32::Foundation::{HANDLE, WAIT_OBJECT_0};
 use windows_sys::Win32::System::Threading::WaitForSingleObject;
 
@@ -218,18 +217,36 @@ fn trace_section() -> String {
     format!("  trace (oldest first):\n{dump}")
 }
 
+/// The ring these tests drive.
+///
+/// Each read hands over its buffer and carries its chunk index as the
+/// sidecar, so a delivered completion arrives already matched to both. That
+/// matching used to happen on the receiving thread, against a map the test
+/// maintained; the ring does it now, which is why the map is gone.
+type DeliveryRing = IoRing<Vec<u8>, usize>;
+
+/// What the callback forwards: the completion and whatever the ring was
+/// holding for it.
+///
+/// The payload has to travel through the channel now, because the ring lives
+/// inside the `EventDelivery` and the callback is the only place it surfaces.
+type Delivered = (
+    windows_ioring_sys::Completion,
+    Option<(Option<Vec<u8>>, usize)>,
+);
+
 /// Wait for one delivery, turning a timeout into the report above.
 fn recv_one(
-    rx: &mpsc::Receiver<windows_ioring_sys::Completion>,
+    rx: &mpsc::Receiver<Delivered>,
     watch: &mut DeliveryWatch,
     what: &str,
     expected: usize,
     outstanding: impl Fn() -> usize,
-) -> windows_ioring_sys::Completion {
+) -> Delivered {
     match rx.recv_timeout(DELIVERY_BOUND) {
-        Ok(completion) => {
+        Ok(delivered) => {
             watch.record_arrival();
-            completion
+            delivered
         }
         Err(_) => {
             // Read the ring's own count *before* the second wait, so it
@@ -290,15 +307,15 @@ fn completions_are_delivered_on_pool_threads_without_the_submitting_thread_waiti
     let callbacks = Arc::new(AtomicUsize::new(0));
     let callbacks_for_callback = Arc::clone(&callbacks);
 
-    let ring = IoRing::new(64, 64).expect("create ring");
+    let ring = DeliveryRing::with_inventory(64, 64).expect("create ring");
     let delivery = EventDelivery::new(
         ring,
-        move |completion, _held| {
+        move |completion, held| {
             callbacks_for_callback.fetch_add(1, Ordering::SeqCst);
             if std::thread::current().id() != submitting_thread {
                 saw_foreign_thread_for_callback.store(true, Ordering::SeqCst);
             }
-            let _ = tx.send(completion);
+            let _ = tx.send((completion, held));
         },
         None,
     )
@@ -315,8 +332,10 @@ fn completions_are_delivered_on_pool_threads_without_the_submitting_thread_waiti
         for chunk_index in 0..CHUNKS {
             let buffer = vec![0_u8; CHUNK_LEN];
             let offset = (chunk_index * CHUNK_LEN) as u64;
-            let _token = unsafe { batch.read_raw(handle, buffer, offset, PushOptions::new()) }
-                .expect("queue read");
+            unsafe {
+                batch.read_raw_owned(handle, buffer, chunk_index, offset, PushOptions::new())
+            }
+            .expect("queue read");
         }
         // `wait_operations = 0`: this thread submits and returns immediately,
         // never waiting for a single completion itself (M4.4).
@@ -326,14 +345,22 @@ fn completions_are_delivered_on_pool_threads_without_the_submitting_thread_waiti
     let mut watch = DeliveryWatch::new(Arc::clone(&callbacks));
     let mut received = 0;
     while received < CHUNKS {
-        let completion = recv_one(
+        let delivered = recv_one(
             &rx,
             &mut watch,
             "completions_are_delivered_on_pool_threads_without_the_submitting_thread_waiting",
             CHUNKS,
             || delivery.scope().outstanding(),
         );
+        let (completion, held) = delivered;
         completion.result().expect("read succeeded");
+        let (buffer, chunk_index) = held.expect("the ring was holding this read's buffer");
+        let buffer = buffer.expect("a read carries a buffer");
+        assert_eq!(
+            buffer.len(),
+            CHUNK_LEN,
+            "chunk {chunk_index} came back the size it went in"
+        );
         received += 1;
     }
 
@@ -359,7 +386,7 @@ fn teardown_with_operations_in_flight_neither_hangs_nor_closes_the_ring_early() 
     let delivered = Arc::new(AtomicUsize::new(0));
     let delivered_for_callback = Arc::clone(&delivered);
 
-    let ring = IoRing::new(64, 64).expect("create ring");
+    let ring = DeliveryRing::with_inventory(64, 64).expect("create ring");
     let delivery = EventDelivery::new(
         ring,
         move |completion, _held| {
@@ -375,7 +402,7 @@ fn teardown_with_operations_in_flight_neither_hangs_nor_closes_the_ring_early() 
         let mut batch = scope.batch();
         for _ in 0..8 {
             let buffer = vec![0_u8; content.len()];
-            let _token = unsafe { batch.read_raw(handle, buffer, 0, PushOptions::new()) }
+            unsafe { batch.read_raw_owned(handle, buffer, 0, 0, PushOptions::new()) }
                 .expect("queue read");
         }
         batch.submit_and_wait(0, 0).expect("submit without waiting");
@@ -420,16 +447,16 @@ fn completions_queued_before_handover_are_still_delivered() {
         .expect("open for read");
     let handle = file.as_raw_handle();
 
-    let mut ring = IoRing::new(64, 64).expect("create ring");
-    let mut pending: HashMap<usize, (usize, Token<Vec<u8>>)> = HashMap::new();
+    let mut ring = DeliveryRing::with_inventory(64, 64).expect("create ring");
     {
         let mut batch = Batch::new(&mut ring);
         for chunk_index in 0..CHUNKS {
             let buffer = vec![0_u8; CHUNK_LEN];
             let offset = (chunk_index * CHUNK_LEN) as u64;
-            let token = unsafe { batch.read_raw(handle, buffer, offset, PushOptions::new()) }
-                .expect("queue read");
-            pending.insert(token.id(), (chunk_index, token));
+            unsafe {
+                batch.read_raw_owned(handle, buffer, chunk_index, offset, PushOptions::new())
+            }
+            .expect("queue read");
         }
         // Wait for all of them here, on this thread, so the ring is handed
         // over with a full completion queue. This is the whole point: no
@@ -445,9 +472,9 @@ fn completions_queued_before_handover_are_still_delivered() {
     let callbacks_for_callback = Arc::clone(&callbacks);
     let delivery = EventDelivery::new(
         ring,
-        move |completion, _held| {
+        move |completion, held| {
             callbacks_for_callback.fetch_add(1, Ordering::SeqCst);
-            let _ = tx.send(completion);
+            let _ = tx.send((completion, held));
         },
         None,
     )
@@ -462,8 +489,9 @@ fn completions_queued_before_handover_are_still_delivered() {
     // the queue before the handover, so the kernel has nothing left to do.
     // A timeout in this test therefore cannot be the device being slow.
     let mut watch = DeliveryWatch::new(Arc::clone(&callbacks));
+    let mut seen = Vec::with_capacity(CHUNKS);
     for _ in 0..CHUNKS {
-        let completion = recv_one(
+        let delivered = recv_one(
             &rx,
             &mut watch,
             "completions_queued_before_handover_are_still_delivered (every completion was \
@@ -472,13 +500,11 @@ fn completions_queued_before_handover_are_still_delivered() {
             CHUNKS,
             || delivery.scope().outstanding(),
         );
+        let (completion, held) = delivered;
         let transferred = completion.result().expect("read succeeded");
-        let (chunk_index, token) = pending
-            .remove(&completion.user_data())
-            .expect("completion matches a held token");
-        let buffer = token
-            .claim_if(&completion)
-            .expect("a token claims its own completion");
+        let (buffer, chunk_index) = held.expect("the ring was holding this read's buffer");
+        let buffer = buffer.expect("a read carries a buffer");
+        seen.push(chunk_index);
         // CONFIRMS: RS-P-8 -- a full count here is a property of the handle
         // this test chose (an ordinary file on a local volume, where a
         // successful completion carries the whole length and a full volume is
@@ -489,9 +515,11 @@ fn completions_queued_before_handover_are_still_delivered() {
             content[chunk_index * CHUNK_LEN..(chunk_index + 1) * CHUNK_LEN]
         );
     }
-    assert!(
-        pending.is_empty(),
-        "every completion queued before the handover must have been delivered"
+    seen.sort_unstable();
+    assert_eq!(
+        seen,
+        (0..CHUNKS).collect::<Vec<_>>(),
+        "every completion queued before the handover must have been delivered, each exactly once"
     );
 
     drop(delivery);
@@ -536,7 +564,7 @@ fn a_backlog_is_delivered_even_when_the_caller_attached_the_event_first() {
         .expect("open for read");
     let handle = file.as_raw_handle();
 
-    let mut ring = IoRing::new(64, 64).expect("create ring");
+    let mut ring = DeliveryRing::with_inventory(64, 64).expect("create ring");
 
     // Attach before any work exists, so the handover finds the event already
     // in place -- and then **consume the signal that attaching raised**.
@@ -557,15 +585,15 @@ fn a_backlog_is_delivered_even_when_the_caller_attached_the_event_first() {
         "attaching raises one signal and this consumes it"
     );
 
-    let mut pending: HashMap<usize, (usize, Token<Vec<u8>>)> = HashMap::new();
     {
         let mut batch = Batch::new(&mut ring);
         for chunk_index in 0..CHUNKS {
             let buffer = vec![0_u8; CHUNK_LEN];
             let offset = (chunk_index * CHUNK_LEN) as u64;
-            let token = unsafe { batch.read_raw(handle, buffer, offset, PushOptions::new()) }
-                .expect("queue read");
-            pending.insert(token.id(), (chunk_index, token));
+            unsafe {
+                batch.read_raw_owned(handle, buffer, chunk_index, offset, PushOptions::new())
+            }
+            .expect("queue read");
         }
         batch
             .submit_and_wait(CHUNKS as u32, 5_000)
@@ -588,17 +616,18 @@ fn a_backlog_is_delivered_even_when_the_caller_attached_the_event_first() {
     let callbacks_for_callback = Arc::clone(&callbacks);
     let delivery = EventDelivery::new(
         ring,
-        move |completion, _held| {
+        move |completion, held| {
             callbacks_for_callback.fetch_add(1, Ordering::SeqCst);
-            let _ = tx.send(completion);
+            let _ = tx.send((completion, held));
         },
         None,
     )
     .expect("wire delivery to a ring whose event the caller already attached");
 
     let mut watch = DeliveryWatch::new(Arc::clone(&callbacks));
+    let mut seen = Vec::with_capacity(CHUNKS);
     for _ in 0..CHUNKS {
-        let completion = recv_one(
+        let delivered = recv_one(
             &rx,
             &mut watch,
             "a_backlog_is_delivered_even_when_the_caller_attached_the_event_first (the event \
@@ -607,21 +636,21 @@ fn a_backlog_is_delivered_even_when_the_caller_attached_the_event_first() {
             CHUNKS,
             || delivery.scope().outstanding(),
         );
-        let (chunk_index, token) = pending
-            .remove(&completion.user_data())
-            .expect("completion matches a held token");
-        let buffer = token
-            .claim_if(&completion)
-            .expect("a token claims its own completion");
+        let (_completion, held) = delivered;
+        let (buffer, chunk_index) = held.expect("the ring was holding this read's buffer");
+        let buffer = buffer.expect("a read carries a buffer");
+        seen.push(chunk_index);
         assert_eq!(
             buffer,
             content[chunk_index * CHUNK_LEN..(chunk_index + 1) * CHUNK_LEN]
         );
     }
-    assert!(
-        pending.is_empty(),
-        "every completion queued before the handover must have been delivered, even though \
-         the caller attached the event rather than the handover"
+    seen.sort_unstable();
+    assert_eq!(
+        seen,
+        (0..CHUNKS).collect::<Vec<_>>(),
+        "every completion queued before the handover must have been delivered, each exactly \
+         once, even though the caller attached the event rather than the handover"
     );
 
     drop(delivery);
