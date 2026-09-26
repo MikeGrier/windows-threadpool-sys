@@ -305,6 +305,25 @@ impl RingContract {
         }
     }
 
+    /// How many operations have been pushed and not yet completed.
+    ///
+    /// The same number [`RingContract::check_quiescent`] turns into one
+    /// [`Violation::Outstanding`] each, offered directly because a consumer
+    /// usually wants the count rather than the diagnosis -- a drain loop asks
+    /// "is anything left?", not "what is wrong?".
+    ///
+    /// **This exists because two callers had already written it by hand**, and
+    /// both were a restatement of what this type already knew.
+    /// `epoch_log`'s appender kept a `usize` beside its contract and drove it
+    /// at every push and every completion, which is precisely the
+    /// record-the-same-event-twice shape that
+    /// [D-55](../DESIGN-NOTES.md#d-55) exists to remove. The other counted
+    /// `Outstanding` violations out of `check_quiescent`, allocating a `Vec`
+    /// to answer a question about a map's length.
+    #[must_use]
+    pub fn in_flight(&self) -> usize {
+        self.operations.len()
+    }
     /// Record a registered buffer's outstanding count, as
     /// [`crate::RegisteredBuffers::outstanding`] reports it.
     pub fn observe_buffer(&mut self, index: u32, outstanding: usize) {

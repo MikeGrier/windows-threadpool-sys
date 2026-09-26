@@ -121,16 +121,6 @@ pub type AppendRing = IoRing<(), u32>;
 /// counter, and the file offset the next record lands at.
 pub struct Appender {
     arena: RegisteredBuffers<NumaBuffer>,
-    /// How many appends this appender still owes a completion for.
-    ///
-    /// A count rather than a map: the ring holds each append's registration
-    /// lease and the arena slot it names, and releases both at the pop. The
-    /// failure this field's predecessor guarded -- an early return from
-    /// [`Appender::claim`] skipping the claim and burning a slot permanently,
-    /// unnoticed until the arena ran dry `SLOTS` failures later -- is no
-    /// longer reachable, because releasing the slot is not something this code
-    /// does.
-    outstanding: usize,
     contract: RingContract,
     next_sequence: u64,
     next_offset: u64,
@@ -183,7 +173,6 @@ impl Appender {
 
         Ok(Self {
             arena,
-            outstanding: 0,
             contract: RingContract::new(),
             next_sequence: 0,
             next_offset: 0,
@@ -214,7 +203,7 @@ impl Appender {
 
     /// How many appends are pushed but not yet observed complete.
     pub fn in_flight(&self) -> usize {
-        self.outstanding
+        self.contract.in_flight()
     }
 
     /// Compose as many of `payloads` as there are free arena slots, and push
@@ -313,7 +302,6 @@ impl Appender {
             }?;
 
             self.contract.observe_push(id.user_data());
-            self.outstanding += 1;
             self.next_sequence += 1;
             self.next_offset += record::RECORD_STRIDE as u64;
             accepted += 1;
@@ -347,7 +335,6 @@ impl Appender {
         slot: u32,
     ) -> io::Result<()> {
         self.contract.observe_completion(completion.user_data());
-        self.outstanding -= 1;
         debug_assert!(
             self.arena.outstanding(slot) == Some(0),
             "the pop must release the slot"

@@ -932,6 +932,18 @@
       ]
     },
     {
+      "name": "M28.8: the contract misreports how much is in flight",
+      "file": "src/contract.rs",
+      "expect": "caught",
+      "why": "`RingContract::in_flight` is the single source two callers previously restated by hand, so it has to be right for both. Reporting quiescence unconditionally is the shape that matters: it is what a consumer's drain loop and the `P-4` property both read, and it fails safe-looking -- nothing errors, the program just believes it has no work left.\n\nWhat catches it is worth naming, because it is not what `M28.8` predicted. The item said to confirm `epoch_log`'s drain loops depend on the accessor; measured, **they do not**. `main.rs` loops on `appender.in_flight() > 0 || committer.in_flight() > 0`, and the committer keeps its own map -- so the second operand holds the loop open and each pass drains both producers anyway. The sample runs clean with this patch applied. `P-4` in `properties_under_every_resolution.rs` is the real guard: it compares `IoRing::outstanding()` against the contract's own count, which is exactly the agreement this accessor asserts.",
+      "find": [
+        "    pub fn in_flight(&self) -> usize {\n        self.operations.len()\n    }"
+      ],
+      "replace": [
+        "    pub fn in_flight(&self) -> usize {\n        0\n    }"
+      ]
+    },
+    {
       "name": "CONTROL: rewording a statement changes nothing",
       "file": "examples/epoch_log/contract.rs",
       "expect": "survives",

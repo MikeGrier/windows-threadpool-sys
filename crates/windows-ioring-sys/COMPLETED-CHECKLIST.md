@@ -4184,3 +4184,55 @@ becomes answerable and the question is live again.
 **Also fixed while here:** three links to `src/pending.rs`, which `M28.4.1d.3`
 deleted -- this item's own, and one each in `D-71` and `D-74`. All now point at the
 design session that holds the material.
+## Moved 2026-09-26 17:24:22 -04:00 -- M28.8, the duplication closed properly
+
+### <a id="m288"></a>M28.8 -- Give `RingContract` an in-flight count, and delete the counter that duplicates it. *(completed 2026-09-26 17:24:22 -04:00)*
+
+**Give `RingContract` an in-flight count, and delete the counter that
+duplicates it.** [`Appender`](examples/epoch_log/append.rs) keeps `outstanding: usize`
+next to its `RingContract`, incremented at every push and decremented at every
+completion -- two hand-driven lines at each of two sites. The oracle already knows that
+number: it is what [`RingContract::check_quiescent`](src/contract.rs) computes
+`Violation::Outstanding` from. The counter exists only because the oracle has no
+accessor for it, and [main.rs](examples/epoch_log/main.rs) needs `in_flight() > 0` for
+its two drain loops.
+
+Add `RingContract::in_flight()`, have `Appender::in_flight` read it, delete
+`Appender::outstanding`. One source of truth. Sabotage the accessor to confirm the
+drain loops genuinely depend on it rather than terminating for another reason.
+
+**Why this is worth an item.** It is the residue of the complaint that started
+[D-55](DESIGN-NOTES.md#d-55): an oracle driven *beside* a consumer's own record of the
+same event, "a restatement in the repository's own terms, and one that can drift in both
+directions" -- see
+[DESIGN-SESSION-2026-09-23-pending-inventory.md](design-sessions/DESIGN-SESSION-2026-09-23-pending-inventory.md).
+`M23.3`'s `Pending<T, X>` had closed it, by making one call drive both the map and the
+oracle. **`M28.4.1d.3` retired `Pending<T, X>` and re-opened it in a smaller form**, and
+that went unnoticed because a `usize` counter looks nothing like the map it replaced.
+This is not [M28.7](COMPLETED-CHECKLIST.md#m287) in another guise: nothing moves into
+the ring, so [D-75](DESIGN-NOTES.md#d-75)'s objection does not apply.
+
+**Two hand-written copies, not one.** The appender''s counter was the known one. Looking
+for it found a second in
+[properties_under_every_resolution.rs](tests/properties_under_every_resolution.rs):
+`contract_outstanding` counted `Violation::Outstanding` out of `check_quiescent()`,
+allocating a `Vec` to ask a map its length. Its own doc said "derived from the contract
+rather than counted here" -- the right instinct, implemented by hand because the type
+offered no accessor. Both now call `RingContract::in_flight`.
+
+**The verification this item specified was aimed at the wrong place, and measuring it
+said so.** The item asked to confirm `epoch_log`''s drain loops depend on the accessor.
+They do not. `main.rs` loops on `appender.in_flight() > 0 || committer.in_flight() > 0`
+and the committer keeps its own map, so the second operand holds the loop open while each
+pass drains both producers -- the sample runs clean with the accessor hard-coded to zero.
+That is exactly the "terminating for another reason" the item warned about, found by
+doing the check rather than assuming it.
+
+What does catch it is `P-4`, which compares `IoRing::outstanding()` against the
+contract''s own count -- the agreement this accessor asserts. Recorded as a case in
+[sabotage.json](sabotage.json) so it is re-run rather than discarded, with the
+wrong-place finding written into its `why`.
+
+**The appender''s half of that loop condition is not dead**, only unexercised by the
+sample''s path: it would matter with appends outstanding and no commit pending. Left
+alone rather than "simplified".

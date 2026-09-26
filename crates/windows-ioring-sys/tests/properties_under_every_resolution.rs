@@ -70,7 +70,7 @@
 
 use std::time::{Duration, Instant};
 
-use windows_ioring_sys::contract::{RingContract, Violation};
+use windows_ioring_sys::contract::RingContract;
 use windows_ioring_sys::sys::{Resolver, ResolverWatch, Responses};
 use windows_ioring_sys::{
     Batch, Completion, FlushCoverage, FlushMode, IoRing, PushOptions, SharedFile, WriteCaching,
@@ -257,12 +257,12 @@ impl Coverage {
 ///
 /// An operation the contract still has in a pushed state is exactly one whose
 /// completion has not been popped, which is what `IoRing::outstanding` counts.
+///
+/// This used to read the count out of `check_quiescent`, filtering for
+/// `Violation::Outstanding` -- allocating a `Vec` to ask a map its length.
+/// `M28.8` gave `RingContract` the accessor both callers had written by hand.
 fn contract_outstanding(contract: &RingContract) -> usize {
-    contract
-        .check_quiescent()
-        .iter()
-        .filter(|violation| matches!(violation, Violation::Outstanding { .. }))
-        .count()
+    contract.in_flight()
 }
 
 impl Run {
