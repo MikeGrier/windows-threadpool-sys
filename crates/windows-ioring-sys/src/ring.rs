@@ -1432,8 +1432,17 @@ impl<T, X> IoRing<T, X> {
     /// Pop every currently available completion, recording each -- without
     /// interpreting it, since rundown only needs to know a completion
     /// happened, not what it was.
+    ///
+    /// **Reclaims as it goes**, which `try_pop` alone does not. Rundown is the
+    /// one path that pops without a caller waiting for the result, so an entry
+    /// it left behind would sit in the inventory until the ring dropped and
+    /// its payload would reach nobody. Dropping here is correct rather than
+    /// merely convenient: the completion is the proof the kernel has finished,
+    /// which is exactly what makes freeing safe.
     fn drain_for_rundown(&mut self) -> io::Result<()> {
-        while self.try_pop()?.is_some() {}
+        while let Some(completion) = self.try_pop()? {
+            drop(self.reclaim(completion.user_data()));
+        }
         Ok(())
     }
 

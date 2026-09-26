@@ -422,12 +422,53 @@ every consumer names the type -- which means the migration order matters more th
         about itself. `RingContract` keeps the four claims that are about the kernel rather than
         about a caller's bookkeeping.
 
-  - [ ] **M28.4.1d** -- Migrate all 36 test and example files onto the inventory, retire the ten
-        `Token`-returning pushes, and delete or demote `Pending<T, X>`. **Apply
-        [D-74](DESIGN-NOTES.md#d-74) in the same commit**: drop `Violation::LeakedToken`,
-        `State::Leaked`, `observe_claim` and `observe_deliberate_leak`, and collapse the two push
-        states. Leaving them behind would describe a hazard the API no longer has, which is worse
-        than a gap -- a reader would go looking for the way to leak a token and not find one. **Convert all of them or
+  - [ ] **M28.4.1d** -- Migrate every consumer onto the inventory, then retire the token API.
+
+        **Measured before planning, and it is larger than "36 files" suggested**: 172 push call
+        sites and **116 `claim_if` sites** across 35 files. `claim_if` is not a substitution --
+        it is how each test *drives* its ring, so converting restructures control flow rather
+        than replacing a call.
+
+        **What a conversion actually does, which is why it is worth it.** The caller's
+        `HashMap<usize, (sidecar, Token<..>)>` *disappears* at each site: the push carries the
+        sidecar as `X`, and the pop returns `(payload, sidecar)` together. That is `D-55` paying
+        off rather than a cost being paid.
+
+        **Batched, and the reason that is legitimate.** Both APIs coexist today, so a
+        partly-converted tree still compiles and every batch is a green commit. `M28.4.2`'s
+        "convert all of them or none" governs the **shipped** state -- never two token models in
+        a release -- not the path to it. The final batch is what makes that true, and nothing is
+        released in between.
+
+  - [x] **M28.4.1d.1** -- [bounded_pop.rs](tests/bounded_pop.rs) converted as the worked
+        pattern. The `Token<Vec<u8>>` threaded through `push_pending_read`, `settle` and six call
+        sites is gone; `PipeRing = IoRing<Vec<u8>>` holds the buffer instead. The conversion
+        found a real defect in rundown, which is recorded as `M28.4.1d.1b`.
+
+  - [ ] **M28.4.1d.1b** -- **Decide what `try_pop` and `pop_within` mean on a ring that holds
+        payloads.** Found by converting the first file: `drain_for_rundown` popped with `try_pop`
+        and never reclaimed, so rundown stranded every entry it reaped. Fixed there -- rundown is
+        teardown, so dropping is right, and the completion is the proof that makes freeing safe.
+
+        **The same gap is still open on the public paths.** `try_pop` and `pop_within` return a
+        `Completion` and leave the entry, so a consumer using them on an inventory ring loses its
+        buffers silently. `try_pop_held` reclaims; its neighbours do not, and the two disagree
+        about what popping means.
+
+        Three shapes, none obviously right: make reclamation intrinsic to every pop and drop what
+        nobody asked for; restrict the non-returning pops to `IoRing<(), ()>`, where there is
+        nothing to lose; or keep both and document the split. The first is simplest and silently
+        discards; the second is safest and splits the API by type parameter. Decide before
+        converting 34 more files against whichever is wrong.
+
+  - [ ] **M28.4.1d.2** -- Convert the remaining consumers in batches, tree green at each.
+
+  - [ ] **M28.4.1d.3** -- Retire the ten `Token`-returning pushes, `Token` itself, and
+        `Pending<T, X>`; apply [D-74](DESIGN-NOTES.md#d-74) in the same commit -- drop
+        `Violation::LeakedToken`, `State::Leaked`, `observe_claim` and
+        `observe_deliberate_leak`, and collapse the two push states. Leaving them would describe
+        a hazard the API no longer has, which is worse than a gap: a reader would go looking for
+        the way to leak a token and not find one. **This is the commit that ends the break.** **Convert all of them or
         none**: converting a few relocates the duplication rather than removing it, which is the
         lesson `win-numa-sys` recorded the same day when it moved one `VirtualAllocExNuma` and
         left the other. This is the step that ends with one token model.

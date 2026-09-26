@@ -62,7 +62,10 @@ use std::io::Write;
 use std::os::windows::io::{AsRawHandle, FromRawHandle, OwnedHandle};
 use std::time::Duration;
 
-use windows_ioring_sys::{Batch, CompletionWait, IoRing, PushOptions, RingWait, SubmitWait, Token};
+use windows_ioring_sys::{Batch, CompletionWait, IoRing, PushOptions, RingWait, SubmitWait};
+
+/// The ring these tests drive: it holds the read's buffer, so no test has to.
+type PipeRing = IoRing<Vec<u8>>;
 use windows_sys::Win32::Foundation::GENERIC_WRITE;
 use windows_sys::Win32::Storage::FileSystem::{
     CreateFileW, FILE_ATTRIBUTE_NORMAL, FILE_FLAG_OVERLAPPED, FILE_SHARE_READ, FILE_SHARE_WRITE,
@@ -149,23 +152,22 @@ impl Pipe {
     }
 
     /// Queue a read that cannot complete, and submit it.
-    fn push_pending_read(&self, ring: &mut IoRing) -> Token<Vec<u8>> {
+    fn push_pending_read(&self, ring: &mut PipeRing) {
         let mut batch = Batch::new(ring);
         // SAFETY: the server handle outlives the operation -- every test
-        // releases and drains before dropping this `Pipe` -- and the token is
-        // returned to the caller, which holds it until the completion is
-        // claimed.
-        let token = unsafe {
-            batch.read_raw(
+        // releases and drains before dropping this `Pipe` -- and the buffer is
+        // the ring's from here, returned by the pop that completes it.
+        unsafe {
+            batch.read_raw_owned(
                 self.server.as_raw_handle(),
                 vec![0_u8; 64],
+                (),
                 0,
                 PushOptions::new(),
             )
         }
         .expect("queue a read on the pipe");
         batch.submit().expect("submit the read");
-        token
     }
 
     /// Satisfy the pending read, now.
@@ -190,26 +192,28 @@ impl Pipe {
 }
 
 /// Release the read and drain it, so the ring is quiet before it drops.
-fn settle(ring: &mut IoRing, pipe: &mut Pipe, token: Token<Vec<u8>>) {
+fn settle(ring: &mut PipeRing, pipe: &mut Pipe) {
     pipe.release();
-    let completion = ring
-        .pop_within(Duration::from_secs(30))
-        .expect("pop_within")
-        .expect("the read completes once the pipe has a byte in it");
+    // No token to hand in: the pop that observes the completion is what
+    // returns the buffer, so there is no map to keep and nothing to match.
+    let (completion, held) = loop {
+        if let Some(popped) = ring.try_pop_held().expect("try_pop_held") {
+            break popped;
+        }
+    };
     let bytes = completion.result().expect("the read succeeded");
     assert_eq!(bytes, 1, "exactly the byte that was written");
-    let _ = token
-        .claim_if(&completion)
-        .expect("the token claims its own");
+    let (buffer, ()) = held.expect("the ring held this read's buffer");
+    assert_eq!(buffer.len(), 64, "the buffer comes back as it went in");
 }
 
 #[test]
 fn a_bound_that_expires_reports_no_completion_rather_than_an_error() {
     // The regression test for the defect this file exists for. Before the fix
     // this returned `Err(HRESULT 0x800705B4)`.
-    let mut ring = IoRing::new(16, 16).expect("create a ring");
+    let mut ring = PipeRing::with_inventory(16, 16).expect("create a ring");
     let mut pipe = Pipe::new("expires");
-    let token = pipe.push_pending_read(&mut ring);
+    pipe.push_pending_read(&mut ring);
 
     let popped = ring
         .pop_within(SHORT_BOUND)
@@ -220,7 +224,7 @@ fn a_bound_that_expires_reports_no_completion_rather_than_an_error() {
     );
     assert!(ring.outstanding() > 0, "and the read must still be pending");
 
-    settle(&mut ring, &mut pipe, token);
+    settle(&mut ring, &mut pipe);
 }
 
 /// Forwards to the ring's own wait and records what it was asked and what it
@@ -245,9 +249,9 @@ fn the_rings_own_wait_is_reached_and_reports_an_expired_bound_as_success() {
     // Kills the mutation that started this: replacing `RingWait::block`'s body
     // with an unconditional error used to leave every test green, because no
     // test ever reached it.
-    let mut ring = IoRing::new(16, 16).expect("create a ring");
+    let mut ring = PipeRing::with_inventory(16, 16).expect("create a ring");
     let mut pipe = Pipe::new("reached");
-    let token = pipe.push_pending_read(&mut ring);
+    pipe.push_pending_read(&mut ring);
 
     let mut wait = CountingSubmitWait::default();
     let popped = ring
@@ -265,16 +269,16 @@ fn the_rings_own_wait_is_reached_and_reports_an_expired_bound_as_success() {
          ERROR_TIMEOUT -- this is the defect the whole file exists for"
     );
 
-    settle(&mut ring, &mut pipe, token);
+    settle(&mut ring, &mut pipe);
 }
 
 #[test]
 fn the_default_wait_is_the_ring_wait() {
     // `pop_within` and `pop_within_with(&mut SubmitWait, ..)` must agree, so the
     // convenience cannot quietly diverge from the documented default.
-    let mut ring = IoRing::new(16, 16).expect("create a ring");
+    let mut ring = PipeRing::with_inventory(16, 16).expect("create a ring");
     let mut pipe = Pipe::new("default");
-    let token = pipe.push_pending_read(&mut ring);
+    pipe.push_pending_read(&mut ring);
 
     let popped = ring
         .pop_within_with(&mut SubmitWait, SHORT_BOUND)
@@ -282,7 +286,7 @@ fn the_default_wait_is_the_ring_wait() {
     assert!(popped.is_none());
     assert!(ring.outstanding() > 0);
 
-    settle(&mut ring, &mut pipe, token);
+    settle(&mut ring, &mut pipe);
 }
 
 #[test]
@@ -292,9 +296,9 @@ fn run_down_tolerates_an_operation_slower_than_its_poll() {
     // then closed the ring anyway -- the exact hazard it exists to prevent. The
     // release is deliberately later than one poll, so at least one poll is
     // guaranteed to expire before the read completes.
-    let mut ring = IoRing::new(16, 16).expect("create a ring");
+    let mut ring = PipeRing::with_inventory(16, 16).expect("create a ring");
     let mut pipe = Pipe::new("rundown");
-    let token = pipe.push_pending_read(&mut ring);
+    pipe.push_pending_read(&mut ring);
     let writer = pipe.release_after(LONGER_THAN_A_RUNDOWN_POLL);
 
     ring.run_down()
@@ -306,21 +310,21 @@ fn run_down_tolerates_an_operation_slower_than_its_poll() {
     );
 
     writer.join().expect("the writer thread");
-    // The rundown reaped the completion, so the token has nothing left to
-    // claim; dropping it here is the honest end of its life.
-    drop(token);
+    // The rundown reaped the completion, so the ring is holding nothing: its
+    // inventory emptied as the completion was popped. Before this conversion
+    // it was here that a caller dropped a token it could no longer claim.
+    assert_eq!(ring.held(), 0, "rundown left nothing in the inventory");
 }
 
 #[test]
 fn dropping_a_ring_with_a_pending_operation_does_not_panic() {
     // The same defect seen from where it actually bit: `Drop` runs the rundown,
     // and in a debug build a failed rundown is a `debug_assert`.
-    let mut ring = IoRing::new(16, 16).expect("create a ring");
+    let mut ring = PipeRing::with_inventory(16, 16).expect("create a ring");
     let mut pipe = Pipe::new("drop");
-    let token = pipe.push_pending_read(&mut ring);
+    pipe.push_pending_read(&mut ring);
     let writer = pipe.release_after(LONGER_THAN_A_RUNDOWN_POLL);
 
-    drop(token);
     drop(ring);
 
     writer.join().expect("the writer thread");
@@ -343,7 +347,7 @@ fn pop_within_returns_none_at_once_when_nothing_can_ever_arrive() {
     // `Ok(None)` therefore distinguishes "returned early" from "waited", which
     // is exactly what an elapsed-time assertion was being asked to do -- and
     // unlike a clock, it cannot be wrong because the machine was busy.
-    let mut ring = IoRing::new(16, 16).expect("create ring");
+    let mut ring = PipeRing::with_inventory(16, 16).expect("create ring");
     let popped = ring
         .pop_within(std::time::Duration::from_secs(30))
         .expect("the early return means the ring's own wait is never reached");
@@ -355,7 +359,7 @@ fn a_bound_the_clock_cannot_represent_does_not_panic() {
     // `Instant + Duration` panics on overflow, and `Duration::MAX` is a
     // reasonable spelling of "no deadline". Nothing is outstanding here, so
     // the early return answers before any deadline arithmetic matters.
-    let mut ring = IoRing::new(16, 16).expect("create ring");
+    let mut ring = PipeRing::with_inventory(16, 16).expect("create ring");
     let popped = ring
         .pop_within(std::time::Duration::MAX)
         .expect("pop_within");
