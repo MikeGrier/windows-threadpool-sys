@@ -138,20 +138,29 @@ fn an_ordinary_handle_accepts_the_write_an_overlapped_one_refuses() {
 fn the_ring_refuses_an_unaligned_write_and_accepts_an_aligned_one() {
     let path = scratch("alignment");
     let file = super::create_preallocated(&path, 2).expect("create the log file");
-    let mut ring = IoRing::new(8, 8).expect("create ring");
+    // Two rings, one per write, because the two writes deliberately use
+    // different buffer *types* -- a `NumaBuffer` aligned on every axis and a
+    // `Vec<u8>` aligned on none -- and a ring holds a single payload type
+    // (`D-73`). Erasing that type is what `D-4` forbids, so the choices are an
+    // enum payload or a ring each. A ring each is the smaller lie here: the
+    // writes are already fully sequential, each submitted and drained before
+    // the next begins, so nothing this test asserts depends on them sharing a
+    // ring.
+    let mut aligned_ring = IoRing::<NumaBuffer>::with_inventory(8, 8).expect("create ring");
 
     // Aligned on every axis: a `NumaBuffer` is page-granular and so
     // sector-granular (M22.3), the length is one whole stride, and the offset
     // is a block boundary.
     let buffer = NumaBuffer::new(RECORD_STRIDE, None).expect("allocate an aligned buffer");
-    let mut batch = Batch::new(&mut ring);
+    let mut batch = Batch::new(&mut aligned_ring);
     // SAFETY: `file` outlives the operation -- it is dropped at the end of this
     // test, after the completion is popped -- and the buffer is moved into the
-    // token, which is held until then.
-    let accepted = unsafe {
-        batch.write_raw(
+    // ring, which holds it until then.
+    unsafe {
+        batch.write_raw_owned(
             file.as_raw_handle(),
             buffer,
+            (),
             0,
             PushOptions::new(),
             WriteCaching::Cached,
@@ -159,26 +168,23 @@ fn the_ring_refuses_an_unaligned_write_and_accepts_an_aligned_one() {
     }
     .expect("push the aligned write");
     batch.submit().expect("submit");
-    let completion = ring
-        .pop_within(WAIT)
+    let (completion, held) = aligned_ring
+        .pop_within_held(WAIT)
         .expect("pop_within")
         .expect("the write completes well inside the bound");
-    // Claimed before the result is inspected, which is the M22.2 discipline:
-    // a token left unclaimed is still outstanding, whatever the write did.
-    assert!(
-        accepted.claim_if(&completion).is_ok(),
-        "the completion must be the aligned write's"
-    );
+    assert!(held.is_some(), "the completion must be the aligned write's");
     completion
         .result()
         .expect("an aligned NO_BUFFERING write must be accepted");
 
-    let mut batch = Batch::new(&mut ring);
+    let mut unaligned_ring = IoRing::<Vec<u8>>::with_inventory(8, 8).expect("create ring");
+    let mut batch = Batch::new(&mut unaligned_ring);
     // SAFETY: as above.
-    let rejected = unsafe {
-        batch.write_raw(
+    unsafe {
+        batch.write_raw_owned(
             file.as_raw_handle(),
             vec![0xCD_u8; RECORD_STRIDE - 1],
+            (),
             0,
             PushOptions::new(),
             WriteCaching::Cached,
@@ -186,12 +192,12 @@ fn the_ring_refuses_an_unaligned_write_and_accepts_an_aligned_one() {
     }
     .expect("push the unaligned write");
     batch.submit().expect("submit");
-    let completion = ring
-        .pop_within(WAIT)
+    let (completion, held) = unaligned_ring
+        .pop_within_held(WAIT)
         .expect("pop_within")
         .expect("the write completes well inside the bound");
     assert!(
-        rejected.claim_if(&completion).is_ok(),
+        held.is_some(),
         "the completion must be the unaligned write's"
     );
     completion

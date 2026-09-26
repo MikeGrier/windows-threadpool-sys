@@ -474,6 +474,44 @@ every consumer names the type -- which means the migration order matters more th
 
   - [ ] **M28.4.1d.2** -- Convert the remaining consumers in batches, tree green at each.
 
+        **Converted so far** (each its own commit, full gate green at every one):
+        `bounded_pop.rs`, `flush_barrier.rs`, `flush_barrier_stress.rs`, `calibration.rs`,
+        `completion_event.rs`, `event_delivery.rs`, `fault_injection.rs`, `handover.rs`,
+        `resolver_over_a_real_ring.rs`, `submission_lifecycle.rs`, `model_a_delivery.rs`,
+        `model_b_multiplexed.rs`, `epoch_log/logfile/tests.rs`.
+
+        **Remaining**: `registration.rs` (27 `claim_if` sites over 20 rings with heterogeneous
+        payloads -- the hardest by some margin), `generated_sequences.rs` (10), `kernel_span.rs`
+        (6), `failure_paths.rs` (6), `properties_under_every_resolution.rs` (2, plus an
+        `Outstanding` struct holding two token vectors), `ring_copy/engine.rs` (2),
+        `epoch_log/strategy.rs` (2), `epoch_log/append.rs` (1), `epoch_log/checkpoint.rs` (1).
+
+        **Two API gaps the conversion found, both now closed**: `flush_raw_owned` did not exist
+        (eleven token pushes had ten owned counterparts), and `pop_within` had no reclaiming
+        form. A third is a real defect, fixed: `HeldCompletion` collapsed `Option<(T, X)>` via
+        `entry.payload.map(..)`, which discarded the sidecar of every *bufferless* operation --
+        so a flush could never say which group of writes it belonged to. It is
+        `Option<(Option<T>, X)>` now: the outer option is whether the ring stowed anything, the
+        inner one whether what it stowed included a buffer.
+
+  - [ ] **M28.4.1d.2b** -- Record what a single payload type costs a consumer holding
+        heterogeneous buffers, and decide whether anything is owed.
+
+        Found converting [epoch_log/logfile/tests.rs](examples/epoch_log/logfile/tests.rs): one
+        test wrote a `NumaBuffer` and a `Vec<u8>` through the same ring. A ring holds one payload
+        type ([D-73](DESIGN-NOTES.md#d-73)) and [D-4](DESIGN-NOTES.md#d-4) forbids erasing it, so
+        that consumer's choices are an enum payload implementing `IoBuf`, or a ring per buffer
+        type. The test took a ring each, which was free there because its two writes were already
+        sequential -- but that will not generally be true, and a consumer multiplexing buffer
+        types over one ring has no cheap answer today.
+
+        This is not a request to relax `D-73`; the seal is load-bearing and the single type is
+        what makes the payload come back without a cast. It is a request to **state the
+        consequence where a consumer will meet it** rather than leaving them to discover it from
+        a type error, and to decide whether the crate should offer an `IoBuf` enum helper or
+        simply document the two options. Gated on `M28.4.1d.2` finishing, so the full shape of
+        the problem is visible first.
+
   - [ ] **M28.4.1d.3** -- Retire the ten `Token`-returning pushes, `Token` itself, and
         `Pending<T, X>`; apply [D-74](DESIGN-NOTES.md#d-74) in the same commit -- drop
         `Violation::LeakedToken`, `State::Leaked`, `observe_claim` and
