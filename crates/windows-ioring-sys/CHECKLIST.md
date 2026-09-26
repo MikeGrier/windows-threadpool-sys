@@ -472,7 +472,7 @@ every consumer names the type -- which means the migration order matters more th
         **This does not gate the conversion.** Consumers migrate onto the reclaiming pop either
         way; the rename lands in `M28.4.1d.3` beside the push retirement.
 
-  - [ ] **M28.4.1d.2** -- Convert the remaining consumers in batches, tree green at each.
+  - [x] **M28.4.1d.2** -- Convert the remaining consumers in batches, tree green at each.
 
         **Converted** (each its own commit, full gate green at every one):
         `bounded_pop.rs`, `flush_barrier.rs`, `flush_barrier_stress.rs`, `calibration.rs`,
@@ -499,12 +499,22 @@ every consumer names the type -- which means the migration order matters more th
           covers and belongs in the commit that retires `observe_deliberate_leak`.
         - `failure_paths.rs`'s leak-ordering test asserts `Violation::LeakedToken` directly. It
           is not convertible at all -- it is d.3's to delete, alongside the variant.
-        - `epoch_log/append.rs` and `epoch_log/checkpoint.rs` keep their own pending-operation
-          maps (`append.rs` via the crate's `Pending<T, X>`, which d.3 retires). `append.rs`
-          also raises a question d.3 must answer: it takes `&mut IoRing` rather than owning the
-          ring, so an appender cannot reach the ring's inventory without the ring's payload
-          type reaching its own signature. **That is the first consumer to feel `D-73`'s type
-          parameters at an API boundary**, and it should be decided rather than discovered.
+        - `epoch_log/append.rs` uses the crate's `Pending<T, X>`, which d.3 retires, and raises
+          a question d.3 must answer first: it takes `&mut IoRing` rather than owning the ring,
+          so an appender cannot reach the inventory without the ring's payload type reaching
+          its own signature. **That is the first consumer to feel `D-73`'s type parameters at
+          an API boundary**, and it should be decided rather than discovered.
+
+        **Correction, same day**: an earlier version of this list also called
+        `epoch_log/checkpoint.rs` and `epoch_log/strategy.rs` blocked -- and omitted
+        `strategy.rs` from d.3's list while doing so, which would have lost it entirely.
+        Neither was blocked: both own their rings and use the plain sidecar pattern, and
+        neither samples the claim-or-drop axis that couples the others to `D-74`. The
+        over-broad claim came from reading `checkpoint.rs`'s own `Pending` struct as the
+        crate's `Pending<T, X>`; they are unrelated types with the same name. Both are now
+        converted. The lesson is narrow and worth keeping: *"blocked" is a claim about a
+        specific dependency, and naming that dependency is what makes it checkable* -- the
+        three files that really are blocked each name the item that unblocks them.
 
         **Two API gaps the conversion found, both now closed**: `flush_raw_owned` did not exist
         (eleven token pushes had ten owned counterparts), and `pop_within` had no reclaiming
@@ -532,13 +542,18 @@ every consumer names the type -- which means the migration order matters more th
         simply document the two options. Gated on `M28.4.1d.2` finishing, so the full shape of
         the problem is visible first.
 
-  - [ ] **M28.4.1d.3** -- **Now also carries the four files d.2 could not convert** (see
-        `M28.4.1d.2`): `generated_sequences.rs`, `properties_under_every_resolution.rs`,
-        `failure_paths.rs`'s leak-ordering test, and the two `epoch_log` consumers. Each is
-        blocked on this item rather than on effort, because what they assert is what this item
-        deletes. Decide `epoch_log/append.rs`'s boundary question here too: it takes
+  - [ ] **M28.4.1d.3** -- **Also carries the three consumers d.2 could not convert** (see
+        `M28.4.1d.2`): `generated_sequences.rs` and `properties_under_every_resolution.rs`
+        (each samples claim-or-drop as a generated dimension, with a coverage assertion that
+        the axis was exercised), and `failure_paths.rs`'s leak-ordering test (asserts
+        `Violation::LeakedToken` -- deleted here, not converted). Each is blocked on this item
+        rather than on effort, because what they assert is what this item deletes.
+
+        **Decide `epoch_log/append.rs`'s boundary question before converting it**: it takes
         `&mut IoRing` rather than owning the ring, so reaching the inventory would put the
-        ring's payload type into the appender's own signature.
+        ring's payload type into the appender's own signature. It is also the last user of the
+        crate's `Pending<T, X>`, so retiring that type and answering this question are the same
+        piece of work.
 
         Retire the ten `Token`-returning pushes, `Token` itself, and
         `Pending<T, X>`; apply [D-74](DESIGN-NOTES.md#d-74) in the same commit -- drop
