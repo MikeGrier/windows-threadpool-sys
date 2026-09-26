@@ -445,21 +445,32 @@ every consumer names the type -- which means the migration order matters more th
         sites is gone; `PipeRing = IoRing<Vec<u8>>` holds the buffer instead. The conversion
         found a real defect in rundown, which is recorded as `M28.4.1d.1b`.
 
-  - [ ] **M28.4.1d.1b** -- **Decide what `try_pop` and `pop_within` mean on a ring that holds
-        payloads.** Found by converting the first file: `drain_for_rundown` popped with `try_pop`
+  - [x] **M28.4.1d.1b** -- Decided: there should be one pop, not two. **Decide what `try_pop`
+        and `pop_within` mean on a ring that holds payloads.** Found by converting the first file: `drain_for_rundown` popped with `try_pop`
         and never reclaimed, so rundown stranded every entry it reaped. Fixed there -- rundown is
         teardown, so dropping is right, and the completion is the proof that makes freeing safe.
 
-        **The same gap is still open on the public paths.** `try_pop` and `pop_within` return a
-        `Completion` and leave the entry, so a consumer using them on an inventory ring loses its
-        buffers silently. `try_pop_held` reclaims; its neighbours do not, and the two disagree
-        about what popping means.
+        **The same gap is open on the public paths, and the answer is that the split should not
+        exist.** An earlier note here offered three ways to manage a permanent distinction
+        between `try_pop` and `try_pop_held`. That was wrong, and the symmetry is the argument:
+        `try_pop_held` sits beside `try_pop` for exactly the reason `read_raw_owned` sits beside
+        `read_raw` -- the inventory was added *beside* the token API rather than replacing it.
+        Both are the same transitional duplication, and the push side is already settled as
+        ending with one family.
 
-        Three shapes, none obviously right: make reclamation intrinsic to every pop and drop what
-        nobody asked for; restrict the non-returning pops to `IoRing<(), ()>`, where there is
-        nothing to lose; or keep both and document the split. The first is simplest and silently
-        discards; the second is safest and splits the API by type parameter. Decide before
-        converting 34 more files against whichever is wrong.
+        **Nothing needs a non-reclaiming pop.** Measured: the only internal callers are
+        `drain_for_rundown` (now reclaims), `pop_within_with`, and one other -- and once the
+        token pushes are gone, *every* operation has an inventory entry, including the tokenless
+        ones, which stow `payload: None`. There is no operation a pop could legitimately find
+        nothing for.
+
+        So `try_pop` becomes the reclaiming pop, `try_pop_held` disappears as a name, and
+        `pop_within` returns the same shape. Preserving the distinction would be a rule against
+        an impossible act, which [D-74](DESIGN-NOTES.md#d-74) already names as worse than no rule
+        at all.
+
+        **This does not gate the conversion.** Consumers migrate onto the reclaiming pop either
+        way; the rename lands in `M28.4.1d.3` beside the push retirement.
 
   - [ ] **M28.4.1d.2** -- Convert the remaining consumers in batches, tree green at each.
 
