@@ -33,7 +33,6 @@
 
 #![cfg(windows)]
 
-use std::collections::HashMap;
 use std::ffi::c_void;
 use std::fs::File;
 use std::os::windows::ffi::OsStrExt;
@@ -41,7 +40,7 @@ use std::os::windows::io::{AsRawHandle, FromRawHandle, OwnedHandle};
 use std::path::{Path, PathBuf};
 
 use windows_ioring_sys::contract::RingContract;
-use windows_ioring_sys::{Batch, IoBuf, IoBufMut, IoRing, PushOptions, Token};
+use windows_ioring_sys::{Batch, IoBuf, IoBufMut, IoRing, PushOptions};
 use windows_sys::Win32::Foundation::{
     GENERIC_READ, INVALID_HANDLE_VALUE, WAIT_OBJECT_0, WAIT_TIMEOUT,
 };
@@ -86,8 +85,18 @@ const MAX_WAITS: usize = 512;
 #[cfg(feature = "threadpool")]
 const DELIVERY_TIMEOUT: Duration = Duration::from_secs(5);
 
-/// Read tokens still awaiting their completion, keyed by `UserData`.
-type Pending<B = Vec<u8>> = HashMap<usize, Token<B>>;
+/// The ring the unbuffered `Aligned` reads run on.
+///
+/// A separate alias rather than a wider one: the payload type is what the
+/// ring holds, and these two tests genuinely hold different things.
+type DirectRing = IoRing<Aligned>;
+
+/// The ring the `Vec<u8>` waves run on.
+///
+/// The map of outstanding tokens this file used to thread through four
+/// helpers is gone: the ring holds each read's buffer, so `ring.held()`
+/// answers what `pending.is_empty()` did.
+type WaveRing = IoRing<Vec<u8>>;
 
 /// Reads issued against the unbuffered fixture, and their size. Large enough
 /// that a device read cannot finish inside the microseconds an attach takes.
@@ -253,11 +262,10 @@ fn signalled_within(event: &OwnedHandle, timeout_ms: u32) -> bool {
 /// Each wave reads a disjoint span of the fixture, so a completion carrying
 /// the wrong `UserData` is caught by the claim rather than passing unnoticed.
 fn queue_wave(
-    batch: &mut Batch<'_>,
+    batch: &mut Batch<'_, Vec<u8>>,
     file: &File,
     wave: usize,
     contract: &mut RingContract,
-    pending: &mut Pending,
 ) {
     let handle = file.as_raw_handle();
     for chunk_index in 0..CHUNKS {
@@ -265,43 +273,27 @@ fn queue_wave(
         let offset = ((wave * CHUNKS + chunk_index) * CHUNK_LEN) as u64;
         // SAFETY: `file` is the caller's and outlives every operation queued
         // here -- each test observes every completion before it drops.
-        let token = unsafe { batch.read_raw(handle, buffer, offset, PushOptions::new()) }
+        let id = unsafe { batch.read_raw_owned(handle, buffer, (), offset, PushOptions::new()) }
             .expect("queue read");
-        contract.observe_push(token.id());
-        pending.insert(token.id(), token);
+        contract.observe_push(id.user_data());
     }
 }
 
 /// [`queue_wave`] against a ring the test owns outright, then submit.
-fn submit_wave(
-    ring: &mut IoRing,
-    file: &File,
-    wave: usize,
-    contract: &mut RingContract,
-    pending: &mut Pending,
-) {
+fn submit_wave(ring: &mut WaveRing, file: &File, wave: usize, contract: &mut RingContract) {
     let mut batch = Batch::new(ring);
-    queue_wave(&mut batch, file, wave, contract, pending);
+    queue_wave(&mut batch, file, wave, contract);
     batch.submit_and_wait(0, 0).expect("submit without waiting");
 }
 
 /// Pop until the queue is empty, reporting each completion and claim to the
 /// contract, and return how many this pass observed.
-fn drain_to_empty<B: Send + 'static>(
-    ring: &mut IoRing,
-    contract: &mut RingContract,
-    pending: &mut Pending<B>,
-) -> usize {
+fn drain_to_empty<T>(ring: &mut IoRing<T>, contract: &mut RingContract) -> usize {
     let mut popped = 0;
-    while let Some(completion) = ring.try_pop().expect("pop completion") {
+    while let Some((completion, held)) = ring.try_pop_held().expect("pop completion") {
         contract.observe_completion(completion.user_data());
         completion.result().expect("read succeeded");
-        let token = pending
-            .remove(&completion.user_data())
-            .expect("completion matches a held token");
-        let _buffer = token
-            .claim_if(&completion)
-            .expect("a token claims its own completion");
+        let _buffer = held.expect("the ring was holding this read's buffer");
         contract.observe_claim(completion.user_data());
         popped += 1;
     }
@@ -310,11 +302,10 @@ fn drain_to_empty<B: Send + 'static>(
 
 /// Wait and drain until `want` completions have been seen in total, obeying
 /// the drain-to-empty-before-waiting-again rule (D-19).
-fn wait_and_drain<B: Send + 'static>(
-    ring: &mut IoRing,
+fn wait_and_drain<T>(
+    ring: &mut IoRing<T>,
     event: &OwnedHandle,
     contract: &mut RingContract,
-    pending: &mut Pending<B>,
     want: usize,
     context: &str,
 ) {
@@ -331,7 +322,7 @@ fn wait_and_drain<B: Send + 'static>(
             "{context}: {popped} of {want} completions drained and the ring never signalled \
              again -- a wakeup was lost"
         );
-        popped += drain_to_empty(ring, contract, pending);
+        popped += drain_to_empty(ring, contract);
     }
     assert_eq!(
         popped, want,
@@ -344,43 +335,34 @@ fn wait_and_drain<B: Send + 'static>(
 #[test]
 fn an_attach_serves_both_the_backlog_and_the_wave_that_follows_it() {
     let file = fixture("mixed-queue");
-    let mut ring = IoRing::new(64, 64).expect("create ring");
+    let mut ring = WaveRing::with_inventory(64, 64).expect("create ring");
     let mut contract = RingContract::new();
-    let mut pending = Pending::new();
 
     // Wave 0 lands *before* the event exists, so only the deliberate setup
     // signal can account for it.
-    submit_wave(&mut ring, &file, 0, &mut contract, &mut pending);
+    submit_wave(&mut ring, &file, 0, &mut contract);
 
     let event = ring.completion_event().expect(NEEDS_COMPLETION_EVENT);
 
     // Wave 1 lands *after* the attach, into a queue wave 0 already made
     // non-empty -- so it raises no edge of its own and is only ever seen by a
     // waiter that drains to empty rather than counting wakeups.
-    submit_wave(&mut ring, &file, 1, &mut contract, &mut pending);
+    submit_wave(&mut ring, &file, 1, &mut contract);
 
-    wait_and_drain(
-        &mut ring,
-        &event,
-        &mut contract,
-        &mut pending,
-        2 * CHUNKS,
-        "mixed queue",
-    );
+    wait_and_drain(&mut ring, &event, &mut contract, 2 * CHUNKS, "mixed queue");
 
     // With the queue now empty the edge must arm again, so a third wave is
     // delivered on its own signal rather than on the setup one.
-    submit_wave(&mut ring, &file, 2, &mut contract, &mut pending);
+    submit_wave(&mut ring, &file, 2, &mut contract);
     wait_and_drain(
         &mut ring,
         &event,
         &mut contract,
-        &mut pending,
         CHUNKS,
         "wave after re-arm",
     );
 
-    assert!(pending.is_empty(), "a token was never claimed");
+    assert_eq!(ring.held(), 0, "the ring was left holding something");
     contract.assert_quiescent();
 }
 
@@ -388,19 +370,18 @@ fn an_attach_serves_both_the_backlog_and_the_wave_that_follows_it() {
 #[test]
 fn a_handover_serves_both_the_backlog_and_the_wave_that_follows_it() {
     let file = fixture("delivery-mixed-queue");
-    let mut ring = IoRing::new(64, 64).expect("create ring");
+    let mut ring = WaveRing::with_inventory(64, 64).expect("create ring");
     let mut contract = RingContract::new();
-    let mut pending = Pending::new();
 
     // Queued before the handover: `EventDelivery::new` attaches the event, so
     // this is the backlog #47 stranded.
-    submit_wave(&mut ring, &file, 0, &mut contract, &mut pending);
+    submit_wave(&mut ring, &file, 0, &mut contract);
 
     let (tx, rx) = mpsc::channel();
     let delivery = EventDelivery::new(
         ring,
-        move |completion, _held| {
-            let _ = tx.send(completion);
+        move |completion, held| {
+            let _ = tx.send((completion, held));
         },
         None,
     )
@@ -411,32 +392,26 @@ fn a_handover_serves_both_the_backlog_and_the_wave_that_follows_it() {
     {
         let mut scope = delivery.scope();
         let mut batch = scope.batch();
-        queue_wave(&mut batch, &file, 1, &mut contract, &mut pending);
+        queue_wave(&mut batch, &file, 1, &mut contract);
         batch.submit_and_wait(0, 0).expect("submit without waiting");
     }
 
     // Claim on this thread rather than in the callback, so a delivery that
     // reported the wrong `UserData` fails here instead of passing.
     for delivered in 0..(2 * CHUNKS) {
-        let completion = rx.recv_timeout(DELIVERY_TIMEOUT).unwrap_or_else(|_| {
+        let delivery_item = rx.recv_timeout(DELIVERY_TIMEOUT).unwrap_or_else(|_| {
             panic!(
                 "only {delivered} of {} completions were delivered -- one attach did not \
                  serve both the backlog and the wave after it",
                 2 * CHUNKS
             )
         });
+        let (completion, held) = delivery_item;
         contract.observe_completion(completion.user_data());
         completion.result().expect("read succeeded");
-        let token = pending
-            .remove(&completion.user_data())
-            .expect("completion matches a held token");
-        let _buffer = token
-            .claim_if(&completion)
-            .expect("a token claims its own completion");
+        let _buffer = held.expect("the ring was holding this read's buffer");
         contract.observe_claim(completion.user_data());
     }
-
-    assert!(pending.is_empty(), "a token was never claimed");
     contract.assert_quiescent();
     drop(delivery);
 }
@@ -484,9 +459,8 @@ fn attaching_while_unbuffered_reads_are_still_in_flight_strands_nothing() {
 
     'widths: for width in DIRECT_WIDTHS {
         for attempt in 0..DIRECT_ATTEMPTS {
-            let mut ring = IoRing::new(64, 64).expect("create ring");
+            let mut ring = DirectRing::with_inventory(64, 64).expect("create ring");
             let mut contract = RingContract::new();
-            let mut pending: Pending<Aligned> = Pending::new();
             // Assigned once inside the block below and read after it, so no
             // initial value is needed -- and giving it one would be a value
             // nothing reads.
@@ -504,11 +478,11 @@ fn attaching_while_unbuffered_reads_are_still_in_flight_strands_nothing() {
                     // SAFETY: `file` outlives every operation queued here -- this
                     // attempt drains to completion before the next one starts, and
                     // the handle lives for the whole test.
-                    let token =
-                        unsafe { batch.read_raw(handle, buffer, offset, PushOptions::new()) }
-                            .expect("queue unbuffered read");
-                    contract.observe_push(token.id());
-                    pending.insert(token.id(), token);
+                    let id = unsafe {
+                        batch.read_raw_owned(handle, buffer, (), offset, PushOptions::new())
+                    }
+                    .expect("queue unbuffered read");
+                    contract.observe_push(id.user_data());
                 }
                 // **Started BEFORE the submit, not after it.** The reads begin
                 // executing inside `submit_and_wait`, so a clock started once it
@@ -525,7 +499,7 @@ fn attaching_while_unbuffered_reads_are_still_in_flight_strands_nothing() {
 
             // Non-blocking, so this measures what the attach actually found rather
             // than waiting for a state to develop.
-            let already_queued = drain_to_empty(&mut ring, &mut contract, &mut pending);
+            let already_queued = drain_to_empty(&mut ring, &mut contract);
             trace.push((
                 width,
                 attempt,
@@ -570,16 +544,16 @@ fn attaching_while_unbuffered_reads_are_still_in_flight_strands_nothing() {
                 &mut ring,
                 &event,
                 &mut contract,
-                &mut pending,
                 width - already_queued,
                 &format!(
                     "width {width}, attempt {attempt}, {already_queued} already queued at attach"
                 ),
             );
 
-            assert!(
-                pending.is_empty(),
-                "width {width}, attempt {attempt}: a token was never claimed"
+            assert_eq!(
+                ring.held(),
+                0,
+                "width {width}, attempt {attempt}: the ring was left holding something"
             );
             contract.assert_quiescent();
 
@@ -635,25 +609,24 @@ fn a_wave_submitted_after_the_pool_drained_the_queue_is_still_delivered() {
     // every other delivery test submits exactly one wave, so nothing
     // established that the edge arms again once the *pool* has emptied it.
     let file = fixture("waves");
-    let ring = IoRing::new(64, 64).expect("create ring");
+    let ring = WaveRing::with_inventory(64, 64).expect("create ring");
     let mut contract = RingContract::new();
 
     let (tx, rx) = mpsc::channel();
     let delivery = EventDelivery::new(
         ring,
-        move |completion, _held| {
-            let _ = tx.send(completion);
+        move |completion, held| {
+            let _ = tx.send((completion, held));
         },
         None,
     )
     .expect("wire event delivery");
 
     for wave in 0..WAVES {
-        let mut pending = Pending::new();
         {
             let mut scope = delivery.scope();
             let mut batch = scope.batch();
-            queue_wave(&mut batch, &file, wave, &mut contract, &mut pending);
+            queue_wave(&mut batch, &file, wave, &mut contract);
             batch.submit_and_wait(0, 0).expect("submit without waiting");
         }
 
@@ -661,24 +634,18 @@ fn a_wave_submitted_after_the_pool_drained_the_queue_is_still_delivered() {
         // makes the next one a re-arm test: the pool empties the queue, so the
         // following wave can only arrive if the edge armed again.
         for delivered in 0..CHUNKS {
-            let completion = rx.recv_timeout(DELIVERY_TIMEOUT).unwrap_or_else(|_| {
+            let delivery_item = rx.recv_timeout(DELIVERY_TIMEOUT).unwrap_or_else(|_| {
                 panic!(
                     "wave {wave}: only {delivered} of {CHUNKS} completions were delivered -- \
                      the edge did not re-arm after the pool drained the queue"
                 )
             });
+            let (completion, held) = delivery_item;
             contract.observe_completion(completion.user_data());
             completion.result().expect("read succeeded");
-            let token = pending
-                .remove(&completion.user_data())
-                .expect("completion matches a held token");
-            let _buffer = token
-                .claim_if(&completion)
-                .expect("a token claims its own completion");
+            let _buffer = held.expect("the ring was holding this read's buffer");
             contract.observe_claim(completion.user_data());
         }
-
-        assert!(pending.is_empty(), "wave {wave}: a token was never claimed");
     }
 
     contract.assert_quiescent();

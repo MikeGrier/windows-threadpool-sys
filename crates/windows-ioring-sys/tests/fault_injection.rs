@@ -29,29 +29,37 @@ fn temp_file(tag: &str) -> PathBuf {
     ))
 }
 
-/// Push a real read, wait for it, and hand back the token and its genuine
+/// The ring these tests drive.
+type InjectionRing = IoRing<Vec<u8>>;
+
+/// Push a real read, wait for it, and hand back its buffer and its genuine
 /// completion.
-fn real_read(
-    ring: &mut IoRing,
-    path: &std::path::Path,
-) -> (windows_ioring_sys::Token<Vec<u8>>, Completion) {
+fn real_read(ring: &mut InjectionRing, path: &std::path::Path) -> (Vec<u8>, Completion) {
     let file = std::fs::OpenOptions::new()
         .read(true)
         .open(path)
         .expect("open the fixture");
 
     let mut batch = Batch::new(ring);
-    // SAFETY: `file` outlives the operation, and the token is returned to the
-    // caller, which holds it until the completion is claimed.
-    let token =
-        unsafe { batch.read_raw(file.as_raw_handle(), vec![0_u8; 5], 0, PushOptions::new()) }
-            .expect("queue a read");
+    // SAFETY: `file` outlives the operation, and the ring holds the buffer
+    // until the pop below hands it back.
+    unsafe {
+        batch.read_raw_owned(
+            file.as_raw_handle(),
+            vec![0_u8; 5],
+            (),
+            0,
+            PushOptions::new(),
+        )
+    }
+    .expect("queue a read");
     batch.submit().expect("submit the read");
-    let completion = ring
-        .pop_within(std::time::Duration::from_secs(30))
+    let (completion, held) = ring
+        .pop_within_held(std::time::Duration::from_secs(30))
         .expect("pop")
         .expect("the read never completed");
-    (token, completion)
+    let (buffer, ()) = held.expect("the ring was holding this read's buffer");
+    (buffer.expect("a read carries a buffer"), completion)
 }
 
 #[test]
@@ -62,8 +70,8 @@ fn the_seam_is_reachable_from_an_integration_test() {
     let path = temp_file("reachable");
     std::fs::write(&path, b"hello").expect("create the fixture");
 
-    let mut ring = IoRing::new(16, 16).expect("create a ring");
-    let (token, completion) = real_read(&mut ring, &path);
+    let mut ring = InjectionRing::with_inventory(16, 16).expect("create a ring");
+    let (buffer, completion) = real_read(&mut ring, &path);
     completion
         .result()
         .expect("the read really did succeed, or this test proves nothing");
@@ -72,12 +80,14 @@ fn the_seam_is_reachable_from_an_integration_test() {
     let error = injected.result().expect_err("the injected failure applies");
     assert_eq!(error.ring_condition(), Some(RingCondition::Corrupt));
 
-    // And the token still claims it, because the operation genuinely finished.
-    // This is the property that makes the seam safe rather than a
-    // use-after-free vector, exercised from where a consumer would exercise it.
-    let buffer = token
-        .claim_if(&injected)
-        .expect("a failed completion still claims its own token");
+    // The buffer is back regardless of what the result says, which is what
+    // makes the seam safe rather than a use-after-free vector: injecting a
+    // failure changes how the completion *reads*, never who owns the memory.
+    //
+    // This used to be spelled as the token claiming an injected-failure
+    // completion. That was a property of `claim_if`, which retires with the
+    // token API (`D-74`); the ring reclaims at the pop, before any injection
+    // can be applied, so there is no second matching step left to break.
     assert_eq!(buffer, b"hello");
 
     let _ = std::fs::remove_file(&path);
@@ -91,8 +101,8 @@ fn a_win32_code_survives_the_hresult_wrapping() {
     let path = temp_file("win32");
     std::fs::write(&path, b"hello").expect("create the fixture");
 
-    let mut ring = IoRing::new(16, 16).expect("create a ring");
-    let (token, completion) = real_read(&mut ring, &path);
+    let mut ring = InjectionRing::with_inventory(16, 16).expect("create a ring");
+    let (_buffer, completion) = real_read(&mut ring, &path);
 
     let injected = completion.with_injected_failure(InjectedFailure::Win32(
         windows_sys::Win32::Foundation::ERROR_ACCESS_DENIED,
@@ -103,8 +113,5 @@ fn a_win32_code_survives_the_hresult_wrapping() {
         windows_sys::Win32::Foundation::ERROR_ACCESS_DENIED
     );
 
-    let _ = token
-        .claim_if(&injected)
-        .expect("claims its own completion");
     let _ = std::fs::remove_file(&path);
 }
