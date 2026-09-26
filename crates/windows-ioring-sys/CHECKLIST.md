@@ -474,17 +474,37 @@ every consumer names the type -- which means the migration order matters more th
 
   - [ ] **M28.4.1d.2** -- Convert the remaining consumers in batches, tree green at each.
 
-        **Converted so far** (each its own commit, full gate green at every one):
+        **Converted** (each its own commit, full gate green at every one):
         `bounded_pop.rs`, `flush_barrier.rs`, `flush_barrier_stress.rs`, `calibration.rs`,
         `completion_event.rs`, `event_delivery.rs`, `fault_injection.rs`, `handover.rs`,
-        `resolver_over_a_real_ring.rs`, `submission_lifecycle.rs`, `model_a_delivery.rs`,
-        `model_b_multiplexed.rs`, `epoch_log/logfile/tests.rs`.
+        `resolver_over_a_real_ring.rs`, `submission_lifecycle.rs`, `kernel_span.rs`,
+        `registration.rs`, `model_a_delivery.rs`, `model_b_multiplexed.rs`,
+        `epoch_log/logfile/tests.rs`, `ring_copy/engine.rs`, and the convertible half of
+        `failure_paths.rs`.
 
-        **Remaining**: `registration.rs` (27 `claim_if` sites over 20 rings with heterogeneous
-        payloads -- the hardest by some margin), `generated_sequences.rs` (10), `kernel_span.rs`
-        (6), `failure_paths.rs` (6), `properties_under_every_resolution.rs` (2, plus an
-        `Outstanding` struct holding two token vectors), `ring_copy/engine.rs` (2),
-        `epoch_log/strategy.rs` (2), `epoch_log/append.rs` (1), `epoch_log/checkpoint.rs` (1).
+        `registration.rs` was far smaller than its 27 `claim_if` sites suggested: most are
+        `PendingBufferRegistration` / `PendingFileRegistration` handles, which are a different
+        mechanism from `Token` and not in M28.4.1's push set. Eight were real token sites.
+
+        **Re-planned after execution: the rest of d.2 cannot precede d.3.** Four files remain,
+        and every one of them is blocked on `D-74` rather than on conversion effort -- their
+        subject matter *is* what d.3 removes, so converting them first would mean writing
+        assertions against an API in the same commit that another item deletes it. This is a
+        genuine sequencing discovery, not a deferral for convenience:
+
+        - `generated_sequences.rs` and `properties_under_every_resolution.rs` both sample a
+          **claim-or-drop axis** as a generated dimension, with their own coverage assertions
+          (`coverage.deliberate_drops > 0`, `coverage.deliberate_leaks`). Converting them
+          *removes a dimension from the generated space*, which is a change to what the oracle
+          covers and belongs in the commit that retires `observe_deliberate_leak`.
+        - `failure_paths.rs`'s leak-ordering test asserts `Violation::LeakedToken` directly. It
+          is not convertible at all -- it is d.3's to delete, alongside the variant.
+        - `epoch_log/append.rs` and `epoch_log/checkpoint.rs` keep their own pending-operation
+          maps (`append.rs` via the crate's `Pending<T, X>`, which d.3 retires). `append.rs`
+          also raises a question d.3 must answer: it takes `&mut IoRing` rather than owning the
+          ring, so an appender cannot reach the ring's inventory without the ring's payload
+          type reaching its own signature. **That is the first consumer to feel `D-73`'s type
+          parameters at an API boundary**, and it should be decided rather than discovered.
 
         **Two API gaps the conversion found, both now closed**: `flush_raw_owned` did not exist
         (eleven token pushes had ten owned counterparts), and `pop_within` had no reclaiming
@@ -512,7 +532,15 @@ every consumer names the type -- which means the migration order matters more th
         simply document the two options. Gated on `M28.4.1d.2` finishing, so the full shape of
         the problem is visible first.
 
-  - [ ] **M28.4.1d.3** -- Retire the ten `Token`-returning pushes, `Token` itself, and
+  - [ ] **M28.4.1d.3** -- **Now also carries the four files d.2 could not convert** (see
+        `M28.4.1d.2`): `generated_sequences.rs`, `properties_under_every_resolution.rs`,
+        `failure_paths.rs`'s leak-ordering test, and the two `epoch_log` consumers. Each is
+        blocked on this item rather than on effort, because what they assert is what this item
+        deletes. Decide `epoch_log/append.rs`'s boundary question here too: it takes
+        `&mut IoRing` rather than owning the ring, so reaching the inventory would put the
+        ring's payload type into the appender's own signature.
+
+        Retire the ten `Token`-returning pushes, `Token` itself, and
         `Pending<T, X>`; apply [D-74](DESIGN-NOTES.md#d-74) in the same commit -- drop
         `Violation::LeakedToken`, `State::Leaked`, `observe_claim` and
         `observe_deliberate_leak`, and collapse the two push states. Leaving them would describe
