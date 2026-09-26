@@ -328,13 +328,7 @@ because a consumer never holds a token to lose. The exploration and everything i
 **Sequenced so each step compiles.** The published crate is at 0.3.1, so this is a major bump and
 every consumer names the type -- which means the migration order matters more than usual.
 
-- [ ] **M28.1** -- **Decide what a caller receives, before writing any of it.** If the ring owns
-  the token then `Batch::write` can no longer hand one back, and the shape of what replaces it is
-  the whole design: an identity the caller matches later, or a claim that returns `(T, X)`
-  directly from the ring. The second makes drift impossible and is the point of the break; the
-  first is a smaller change that may not be worth breaking for. Settle it with the
-  `Token::claim_if` safety argument in hand, since that is what currently makes a mismatched
-  completion unclaimable.
+- [x] **M28.1** -- Decided: a push returns a `Copy` identity that owns nothing, and the ring returns the payload at its own pop -- `Token` is split, not moved. Recorded as [D-71](DESIGN-NOTES.md#d-71). -> [completed 2026-09-25](COMPLETED-CHECKLIST.md#m281)
 
 - [ ] **M28.2** -- **Bound `RingContract` before anything depends on it more heavily.**
   `operations: HashMap<usize, State>` is never pruned -- `observe_claim` marks an entry

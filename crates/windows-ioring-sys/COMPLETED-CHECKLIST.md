@@ -3821,3 +3821,19 @@ the sixth, added by this milestone.
 anything observed**, and must not be derived from observation -- deriving it from what we have seen
 closes the trap again. It is a deliberate specification of what we will tolerate, and therefore a
 reviewable artifact rather than a recording.
+
+## Moved 2026-09-25 20:47:00 -04:00 -- M28.1, what a caller receives
+
+### <a id="m281"></a>M28.1 -- Decided: a push returns a `Copy` identity that owns nothing, and the ring returns the payload at its own pop -- `Token` is split, not moved. *(completed 2026-09-25 20:47:00 -04:00)*
+
+The decision is [D-71](DESIGN-NOTES.md#d-71). The item asked between two shapes and the census
+answer was both, because `Token` is an ownership guard and an identity welded together and only
+the first is what `M28` moves. The item as it read when it closed:
+
+- [x] **M28.1** -- **Decide what a caller receives, before writing any of it.** If the ring owns
+  the token then `Batch::write` can no longer hand one back, and the shape of what replaces it is
+  the whole design: an identity the caller matches later, or a claim that returns `(T, X)`
+  directly from the ring. The second makes drift impossible and is the point of the break; the
+  first is a smaller change that may not be worth breaking for. Settle it with the
+  `Token::claim_if` safety argument in hand, since that is what currently makes a mismatched
+  completion unclaimable.
