@@ -246,7 +246,7 @@ impl From<crate::batch::RegisteredFile> for FileGuard {
 /// `Option` is "was there a completion", and the inner one is "was this ring
 /// holding anything for it", and those are different questions that read
 /// badly stacked.
-pub type HeldCompletion<T, X> = (Completion, Option<(T, X)>);
+pub type HeldCompletion<T, X> = (Completion, Option<(Option<T>, X)>);
 
 /// One in-flight operation's entry in the ring's inventory.
 pub(crate) struct Entry<T, X> {
@@ -797,10 +797,12 @@ impl<T, X> IoRing<T, X> {
     /// the memory it may still be using. [`crate::OperationId`] deliberately
     /// cannot do it.
     ///
-    /// `None` for the payload means this ring was holding nothing for that
-    /// identity -- either a push that carried nothing (`M28.5`), or a
-    /// completion for something never stowed, which
-    /// [`crate::contract::RingContract`] is the thing that reports.
+    /// The outer `None` means this ring was holding nothing for that
+    /// identity -- a completion for something never stowed, which
+    /// [`crate::contract::RingContract`] is the thing that reports. A `Some`
+    /// whose payload is `None` is the different and legitimate case of an
+    /// operation that never had a buffer, such as a flush or a cancellation;
+    /// its sidecar still arrives.
     ///
     /// # Errors
     ///
@@ -809,9 +811,14 @@ impl<T, X> IoRing<T, X> {
         let Some(completion) = self.try_pop()? else {
             return Ok(None);
         };
+        // The outer `Option` is whether this ring stowed anything for that
+        // identity; the inner one is whether what it stowed included a buffer.
+        // Collapsing the two -- which an earlier version did -- loses the
+        // sidecar of every bufferless operation, so a flush could never say
+        // which group of writes it belonged to.
         let held = self
             .reclaim(completion.user_data())
-            .and_then(|entry| entry.payload.map(|payload| (payload, entry.extra)));
+            .map(|entry| (entry.payload, entry.extra));
         Ok(Some((completion, held)))
     }
 

@@ -1814,21 +1814,55 @@ impl<'ring, T, X> Batch<'ring, T, X> {
         Ok(user_data)
     }
 
-    /// As [`Batch::flush_raw`], but safe: `file` is a [`FileTarget`] -- a
-    /// [`SharedFile`] or a [`RegisteredFile`] -- and the returned [`Token`]
-    /// (rather than a bare `UserData`) holds its guard until this
-    /// operation's completion is observed.
+    /// Queue a raw flush, with the **ring** holding the sidecar (`D-73`).
     ///
-    /// `coverage` is required for the reason [`FlushCoverage`] documents: an
-    /// unflagged flush does not cover preceding writes (D-23), so there is no
-    /// default spelling of this call that is safe to inherit. `mode` selects
-    /// how much is flushed and whether the device is synced at all; see
-    /// [`FlushMode`].
+    /// The inventory counterpart to [`Batch::flush_raw`]. There is no buffer
+    /// and no guard -- a raw handle is the caller's to keep alive, exactly as
+    /// for [`Batch::flush_raw`] -- so the entry exists purely to carry
+    /// `extra`. That is not a degenerate case: a flush that cannot say which
+    /// group of writes it belongs to forces the caller back into the
+    /// side-table this API exists to remove.
+    ///
+    /// # Safety
+    ///
+    /// As [`Batch::flush_raw`].
     ///
     /// # Errors
     ///
-    /// As [`Batch::flush_raw`], plus [`io::ErrorKind::InvalidInput`] if
-    /// `file` is a [`RegisteredFile`] from a different ring.
+    /// As [`Batch::flush_raw`].
+    pub unsafe fn flush_raw_owned(
+        &mut self,
+        file: impl Into<FileRef>,
+        extra: X,
+        coverage: FlushCoverage,
+        mode: FlushMode,
+    ) -> io::Result<OperationId> {
+        self.require(Op::Flush)?;
+        let target = handle_ref(file.into(), self.ring.ring_id())?;
+        let (user_data, id) = self.begin_owned()?;
+        // SAFETY: as `flush_raw` -- `file` is the caller's to keep alive,
+        // forwarded from this function's own contract; there is no buffer.
+        let hr = unsafe {
+            crate::sys::build_flush(
+                self.ring.raw_handle(),
+                target,
+                mode.raw(),
+                user_data,
+                coverage.sqe_flags(),
+            )
+        };
+        self.finish_owned(
+            hr,
+            id,
+            None,
+            extra,
+            Held {
+                guard: None,
+                registration: None,
+            },
+        )
+    }
+
     /// Queue a flush, with the **ring** holding the file guard (`D-73`).
     ///
     /// The inventory counterpart to [`Batch::flush`]. There is no buffer, so

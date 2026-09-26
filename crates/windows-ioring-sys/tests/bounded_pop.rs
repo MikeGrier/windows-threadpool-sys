@@ -204,6 +204,7 @@ fn settle(ring: &mut PipeRing, pipe: &mut Pipe) {
     let bytes = completion.result().expect("the read succeeded");
     assert_eq!(bytes, 1, "exactly the byte that was written");
     let (buffer, ()) = held.expect("the ring held this read's buffer");
+    let buffer = buffer.expect("a read carries a buffer");
     assert_eq!(buffer.len(), 64, "the buffer comes back as it went in");
 }
 

@@ -113,7 +113,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
 use windows_ioring_sys::{
-    Batch, FlushCoverage, FlushMode, IoBuf, IoRing, PushOptions, Token, WriteCaching,
+    Batch, FlushCoverage, FlushMode, IoBuf, IoRing, PushOptions, WriteCaching,
 };
 use windows_sys::Win32::Foundation::{GENERIC_READ, GENERIC_WRITE, INVALID_HANDLE_VALUE};
 use windows_sys::Win32::Storage::FileSystem::{
@@ -507,12 +507,23 @@ impl Observed {
     }
 }
 
+/// The ring each trial drives.
+///
+/// Every operation -- including the flush -- carries its phase, so a popped
+/// completion whose sidecar is missing is one this trial never submitted. That
+/// used to be a lookup miss in `phase_of`; now it is the absence of the entry
+/// itself, which also covers the flush the old map had to be told about
+/// separately.
+type TrialRing = IoRing<Aligned, (Phase, Option<usize>)>;
 /// Run one trial: phase A, one flush, phase B, submitted as a single batch.
-fn run_trial(ring: &mut IoRing, file: RawHandle, coverage: FlushCoverage) -> (Observed, EventLog) {
+fn run_trial(
+    ring: &mut TrialRing,
+    file: RawHandle,
+    coverage: FlushCoverage,
+) -> (Observed, EventLog) {
     let mut log = EventLog::new(8192);
-    let mut pending: HashMap<usize, Token<Aligned>> = HashMap::new();
-    let mut phase_of: HashMap<usize, Phase> = HashMap::new();
-    let mut expected_len: HashMap<usize, usize> = HashMap::new();
+    // All three maps this used to keep -- the token, the phase, the expected
+    // length -- are now one sidecar travelling with the operation.
     let mut phase_a = Vec::with_capacity(PHASE_OPS);
     let mut phase_b = Vec::with_capacity(PHASE_OPS);
     let flush_id;
@@ -526,17 +537,18 @@ fn run_trial(ring: &mut IoRing, file: RawHandle, coverage: FlushCoverage) -> (Ob
             let offset = (index * BIG_LEN) as u64;
             // SAFETY: `file` stays open for the whole trial, and every token is
             // held in `pending` until its completion has been popped.
-            let token = unsafe {
-                batch.write_raw(
+            let id = unsafe {
+                batch.write_raw_owned(
                     file,
                     buffer,
+                    (Phase::A, Some(BIG_LEN)),
                     offset,
                     PushOptions::new(),
                     WriteCaching::Cached,
                 )
             }
-            .expect("queue phase-A write");
-            let id = token.id();
+            .expect("queue phase-A write")
+            .user_data();
             log.push(Event::Submitted {
                 seq,
                 user_data: id,
@@ -546,14 +558,14 @@ fn run_trial(ring: &mut IoRing, file: RawHandle, coverage: FlushCoverage) -> (Ob
             });
             seq += 1;
             phase_a.push(id);
-            phase_of.insert(id, Phase::A);
-            expected_len.insert(id, BIG_LEN);
-            pending.insert(id, token);
         }
 
         // SAFETY: as above.
-        flush_id =
-            unsafe { batch.flush_raw(file, coverage, FlushMode::Default) }.expect("queue flush");
+        flush_id = unsafe {
+            batch.flush_raw_owned(file, (Phase::Flush, None), coverage, FlushMode::Default)
+        }
+        .expect("queue flush")
+        .user_data();
         log.push(Event::Submitted {
             seq,
             user_data: flush_id,
@@ -562,23 +574,23 @@ fn run_trial(ring: &mut IoRing, file: RawHandle, coverage: FlushCoverage) -> (Ob
             len: 0,
         });
         seq += 1;
-        phase_of.insert(flush_id, Phase::Flush);
 
         for index in 0..PHASE_OPS {
             let buffer = Aligned::new(SMALL_LEN, index as u8);
             let offset = (PHASE_B_BASE + index * SMALL_LEN) as u64;
             // SAFETY: as above.
-            let token = unsafe {
-                batch.write_raw(
+            let id = unsafe {
+                batch.write_raw_owned(
                     file,
                     buffer,
+                    (Phase::B, Some(SMALL_LEN)),
                     offset,
                     PushOptions::new(),
                     WriteCaching::Cached,
                 )
             }
-            .expect("queue phase-B write");
-            let id = token.id();
+            .expect("queue phase-B write")
+            .user_data();
             log.push(Event::Submitted {
                 seq,
                 user_data: id,
@@ -588,9 +600,6 @@ fn run_trial(ring: &mut IoRing, file: RawHandle, coverage: FlushCoverage) -> (Ob
             });
             seq += 1;
             phase_b.push(id);
-            phase_of.insert(id, Phase::B);
-            expected_len.insert(id, SMALL_LEN);
-            pending.insert(id, token);
         }
 
         let entries = batch
@@ -622,20 +631,9 @@ fn run_trial(ring: &mut IoRing, file: RawHandle, coverage: FlushCoverage) -> (Ob
         log.push(Event::RoundBegan { round, at });
         let mut drained = 0;
 
-        while let Some(completion) = ring.try_pop().expect("pop completion") {
+        while let Some((completion, held)) = ring.try_pop_held().expect("pop completion") {
             let transferred = completion.result().expect("write or flush succeeded");
             let id = completion.user_data();
-            if let Some(&len) = expected_len.get(&id) {
-                assert_eq!(
-                    transferred, len,
-                    "an unbuffered write transferred {transferred} of {len} bytes"
-                );
-            }
-            if let Some(token) = pending.remove(&id) {
-                let _buffer = token
-                    .claim_if(&completion)
-                    .expect("a token claims its own completion");
-            }
             // Every submitted operation is recorded in `phase_of` -- phase A, the
             // flush, phase B -- so a miss here means the completion queue
             // returned a `user_data` this trial never submitted. That is a defect
@@ -645,15 +643,23 @@ fn run_trial(ring: &mut IoRing, file: RawHandle, coverage: FlushCoverage) -> (Ob
             // analysis pivots on. The result would be a confusing measurement
             // rather than a clear failure, in a harness whose entire purpose is
             // making a rare reordering diagnosable.
-            let phase = *phase_of.get(&id).unwrap_or_else(|| {
-                let mut submitted: Vec<usize> = phase_of.keys().copied().collect();
+            let Some((_buffer, (phase, expected))) = held else {
+                let mut submitted: Vec<usize> =
+                    phase_a.iter().chain(phase_b.iter()).copied().collect();
+                submitted.push(flush_id);
                 submitted.sort_unstable();
                 panic!(
                     "completion carried user_data {id}, which this trial never submitted. \
                      The flush is {flush_id}; the {} submitted ids are {submitted:?}",
                     submitted.len(),
                 )
-            });
+            };
+            if let Some(len) = expected {
+                assert_eq!(
+                    transferred, len,
+                    "an unbuffered write transferred {transferred} of {len} bytes"
+                );
+            }
             log.push(Event::Popped {
                 seq: pop_seq,
                 round,
@@ -799,7 +805,7 @@ impl Drop for Contention {
 struct Fixture {
     file: Option<OwnedHandle>,
     handle: RawHandle,
-    ring: IoRing,
+    ring: TrialRing,
     path: PathBuf,
 }
 
@@ -810,7 +816,7 @@ impl Fixture {
         std::fs::write(&path, vec![0_u8; extent]).expect("pre-write the extent");
         let file = open_unbuffered(&path);
         let handle = file.as_raw_handle();
-        let ring = IoRing::new(256, 256).expect("create ring");
+        let ring = TrialRing::with_inventory(256, 256).expect("create ring");
         Self {
             file: Some(file),
             handle,
@@ -1200,7 +1206,7 @@ fn reordering_rate_by_ring_depth_is_reported() {
             "a depth of {depth} cannot hold one trial's {PER_TRIAL_OPS} entries"
         );
         let mut fixture = Fixture::new(&format!("depth-{depth}"));
-        fixture.ring = IoRing::new(depth, depth).expect("create ring");
+        fixture.ring = TrialRing::with_inventory(depth, depth).expect("create ring");
         let mut result = Campaign::new(count);
         for _ in 0..count {
             let (observed, _log) = run_trial(

@@ -66,6 +66,7 @@ fn a_payload_handed_to_the_ring_comes_back_from_the_pop_that_completes_it() {
         "the completion names the operation the push named"
     );
     let (buffer, extra) = held.expect("the ring was holding this operation's payload");
+    let buffer = buffer.expect("a read carries a buffer");
     assert_eq!(extra, "the sidecar", "the sidecar comes back with it");
     assert_eq!(buffer.len(), LEN);
     assert!(
@@ -144,6 +145,7 @@ fn a_guarded_push_keeps_the_file_alive_after_the_caller_drops_its_handle() {
         }
     };
     let (buffer, ()) = held.expect("the ring held this operation's buffer");
+    let buffer = buffer.expect("a read carries a buffer");
     assert!(
         buffer.iter().all(|&byte| byte == 0xC3),
         "the read completed against a file only the ring was still holding"

@@ -23,7 +23,7 @@ use crate::ring::{Completion, IoRing, Op, RingInfo};
 /// The completion itself, plus whatever the ring was holding for it -- `None`
 /// when the push carried nothing to give back (`M28.5`), or when this ring was
 /// never holding anything for that identity.
-type OnCompletion<T, X> = dyn Fn(Completion, Option<(T, X)>) + Send + Sync;
+type OnCompletion<T, X> = dyn Fn(Completion, Option<(Option<T>, X)>) + Send + Sync;
 
 fn drain<T, X>(ring: &Mutex<IoRing<T, X>>, on_completion: &OnCompletion<T, X>) {
     loop {
@@ -135,7 +135,7 @@ impl<T: Send + 'static, X: Send + 'static> EventDelivery<T, X> {
         env: Option<&mut CallbackEnviron<'_>>,
     ) -> io::Result<Self>
     where
-        F: Fn(Completion, Option<(T, X)>) + Send + Sync + 'static,
+        F: Fn(Completion, Option<(Option<T>, X)>) + Send + Sync + 'static,
     {
         // The ring creates, owns, and attaches its own event and hands back a
         // duplicate (D-20), which leaves exactly one

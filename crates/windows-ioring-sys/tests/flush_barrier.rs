@@ -52,14 +52,13 @@
 
 #![cfg(windows)]
 
-use std::collections::HashMap;
 use std::ffi::c_void;
 use std::os::windows::ffi::OsStrExt;
 use std::os::windows::io::{AsRawHandle, FromRawHandle, OwnedHandle, RawHandle};
 use std::path::{Path, PathBuf};
 
 use windows_ioring_sys::{
-    Batch, FlushCoverage, FlushMode, IoBuf, IoRing, PushOptions, Token, WriteCaching,
+    Batch, FlushCoverage, FlushMode, IoBuf, IoRing, PushOptions, WriteCaching,
 };
 use windows_sys::Win32::Foundation::{GENERIC_READ, GENERIC_WRITE, INVALID_HANDLE_VALUE};
 use windows_sys::Win32::Storage::FileSystem::{
@@ -191,10 +190,19 @@ impl Observed {
 }
 
 /// Push phase A, then one flush with `coverage`, then phase B; submit as one
+/// The ring this test drives.
+///
+/// It holds each write's buffer, and carries the length that write asked for
+/// as the sidecar. `Option<usize>` rather than `usize` because the flush has
+/// no expected length -- it transfers nothing -- and saying so in the type is
+/// what lets the drain below tell a write from a flush without a second map.
+type BarrierRing = IoRing<Aligned, Option<usize>>;
+
 /// batch and report the order in which the completions arrived.
-fn run_case(ring: &mut IoRing, file: RawHandle, coverage: FlushCoverage) -> Observed {
-    let mut pending: HashMap<usize, Token<Aligned>> = HashMap::new();
-    let mut expected_len: HashMap<usize, usize> = HashMap::new();
+fn run_case(ring: &mut BarrierRing, file: RawHandle, coverage: FlushCoverage) -> Observed {
+    // Both maps this used to keep are gone. The ring holds the buffer, and the
+    // expected length rides along as the sidecar, so a completion arrives with
+    // everything needed to check it.
     let mut phase_a = Vec::with_capacity(PHASE_OPS);
     let mut phase_b = Vec::with_capacity(PHASE_OPS);
     let flush_id;
@@ -205,19 +213,18 @@ fn run_case(ring: &mut IoRing, file: RawHandle, coverage: FlushCoverage) -> Obse
             let offset = (index * BIG_LEN) as u64;
             // SAFETY: `file` stays open for the whole test, and every token is
             // held in `pending` until its completion has been popped.
-            let token = unsafe {
-                batch.write_raw(
+            let id = unsafe {
+                batch.write_raw_owned(
                     file,
                     buffer,
+                    Some(BIG_LEN),
                     offset,
                     PushOptions::new(),
                     WriteCaching::Cached,
                 )
             }
             .expect("queue phase-A write");
-            phase_a.push(token.id());
-            expected_len.insert(token.id(), BIG_LEN);
-            pending.insert(token.id(), token);
+            phase_a.push(id.user_data());
         }
 
         // SAFETY: as above.
@@ -228,19 +235,18 @@ fn run_case(ring: &mut IoRing, file: RawHandle, coverage: FlushCoverage) -> Obse
             let buffer = Aligned::new(SMALL_LEN, index as u8);
             let offset = (PHASE_B_BASE + index * SMALL_LEN) as u64;
             // SAFETY: as above.
-            let token = unsafe {
-                batch.write_raw(
+            let id = unsafe {
+                batch.write_raw_owned(
                     file,
                     buffer,
+                    Some(SMALL_LEN),
                     offset,
                     PushOptions::new(),
                     WriteCaching::Cached,
                 )
             }
             .expect("queue phase-B write");
-            phase_b.push(token.id());
-            expected_len.insert(token.id(), SMALL_LEN);
-            pending.insert(token.id(), token);
+            phase_b.push(id.user_data());
         }
 
         batch
@@ -259,21 +265,20 @@ fn run_case(ring: &mut IoRing, file: RawHandle, coverage: FlushCoverage) -> Obse
             "only {} of {expected} completions ever arrived",
             order.len()
         );
-        while let Some(completion) = ring.try_pop().expect("pop completion") {
+        while let Some((completion, held)) = ring.try_pop_held().expect("pop completion") {
             let transferred = completion.result().expect("write or flush succeeded");
             // A short write would make every count below meaningless, and an
             // unbuffered write with a misaligned length or offset is exactly
             // how that happens. Check rather than assume the I/O was real.
-            if let Some(&len) = expected_len.get(&completion.user_data()) {
+            //
+            // The flush carries no buffer and no expected length, so `held` is
+            // `None` for it -- which is the same shape that used to be a miss
+            // in two separate maps.
+            if let Some((_buffer, Some(len))) = held {
                 assert_eq!(
                     transferred, len,
                     "an unbuffered write transferred {transferred} of {len} bytes"
                 );
-            }
-            if let Some(token) = pending.remove(&completion.user_data()) {
-                let _buffer = token
-                    .claim_if(&completion)
-                    .expect("a token claims its own completion");
             }
             order.push(completion.user_data());
         }
@@ -307,7 +312,7 @@ fn a_covering_flush_waits_for_preceding_writes_and_an_unordered_one_does_not() {
     // Both cases share one ring and one file so they are directly comparable;
     // each drains fully before the next begins. The submission queue must hold
     // a whole case at once.
-    let mut ring = IoRing::new(256, 256).expect("create ring");
+    let mut ring = BarrierRing::with_inventory(256, 256).expect("create ring");
 
     // The control, and it runs first on purpose.
     //
