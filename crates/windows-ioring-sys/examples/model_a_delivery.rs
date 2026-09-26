@@ -11,12 +11,10 @@
 //! ring's own completion event, which [`EventDelivery`] takes from
 //! [`IoRing::completion_event`] and hands to a `ThreadpoolWait`.
 
-use std::collections::HashMap;
 use std::os::windows::io::AsRawHandle;
-use std::sync::Mutex;
 use std::sync::mpsc;
 
-use windows_ioring_sys::{EventDelivery, IoRing, PushOptions, Token};
+use windows_ioring_sys::{EventDelivery, IoRing, PushOptions};
 
 const CHUNKS: usize = 8;
 const CHUNK_LEN: usize = 4096;
@@ -48,28 +46,28 @@ fn main() -> std::io::Result<()> {
     // the thread that called `submit_and_wait` below.
     let (results_tx, results_rx) = mpsc::channel();
 
-    let ring = IoRing::new(64, 64)?;
+    // The ring holds each read's buffer and hands it back with the
+    // completion, so this example keeps no map of outstanding operations --
+    // and therefore needs no lock around one. That matters more here than in
+    // a single-threaded example: the submitting thread and the pool thread
+    // that runs the callback would otherwise both need access to it.
+    let ring = IoRing::<Vec<u8>>::with_inventory(64, 64)?;
     let delivery = EventDelivery::new(
         ring,
-        move |completion, _held| {
-            let _ = results_tx.send(completion);
+        move |completion, held| {
+            let _ = results_tx.send((completion, held));
         },
         None,
     )?;
 
-    // Hold each chunk's token until its completion arrives, keyed by the
-    // `UserData` identity `Batch::read_raw` minted for it.
-    let tokens: Mutex<HashMap<usize, Token<Vec<u8>>>> = Mutex::new(HashMap::new());
     {
         let mut scope = delivery.scope();
         let mut batch = scope.batch();
-        let mut tokens = tokens.lock().expect("lock tokens");
         for chunk_index in 0..CHUNKS {
             let buffer = vec![0_u8; CHUNK_LEN];
             let offset = (chunk_index * CHUNK_LEN) as u64;
             // SAFETY: `handle` stays open for this whole example.
-            let token = unsafe { batch.read_raw(handle, buffer, offset, PushOptions::new()) }?;
-            tokens.insert(token.id(), token);
+            unsafe { batch.read_raw_owned(handle, buffer, (), offset, PushOptions::new()) }?;
         }
         // `wait_operations = 0`: submit and return immediately. This thread
         // is done with the ring the instant this call returns.
@@ -78,18 +76,12 @@ fn main() -> std::io::Result<()> {
 
     let mut verified = 0;
     while verified < CHUNKS {
-        let completion = results_rx
+        let (completion, held) = results_rx
             .recv()
             .expect("a completion for every submitted read");
         let transferred = completion.result()?;
-        let token = tokens
-            .lock()
-            .expect("lock tokens")
-            .remove(&completion.user_data())
-            .expect("completion matches a held token");
-        let buffer = token
-            .claim_if(&completion)
-            .expect("token claims its own completion");
+        let (buffer, ()) = held.expect("the ring was holding this read's buffer");
+        let buffer = buffer.expect("a read carries a buffer");
         assert_eq!(transferred, CHUNK_LEN);
         output.report(&format!(
             "chunk at user_data {} verified, first byte {}",

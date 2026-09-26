@@ -41,12 +41,11 @@
 //! handles are ready -- so the example reports what happened rather than
 //! asserting either outcome.
 
-use std::collections::HashMap;
 use std::io;
 use std::os::windows::io::{AsRawHandle, FromRawHandle, OwnedHandle, RawHandle};
 use std::sync::mpsc;
 
-use windows_ioring_sys::{Batch, IoRing, PushOptions, Token};
+use windows_ioring_sys::{Batch, IoRing, PushOptions};
 use windows_sys::Win32::Foundation::{HANDLE, WAIT_OBJECT_0, WAIT_TIMEOUT};
 use windows_sys::Win32::System::Threading::{CreateEventW, SetEvent, WaitForMultipleObjects};
 
@@ -137,39 +136,33 @@ fn wait_either(
     }
 }
 
-/// Rule 1's drain: pop until `try_pop` yields `None`, claiming each token so
-/// its buffer is recovered rather than leaked.
-fn drain(ring: &mut IoRing, pending: &mut HashMap<usize, Token<Vec<u8>>>) -> io::Result<usize> {
+/// The ring this example drives. It holds each read's buffer, so the example
+/// keeps no map of outstanding operations.
+type CopyRing = IoRing<Vec<u8>>;
+
+/// Rule 1's drain: pop until the queue reports empty, taking each buffer back
+/// as it goes.
+fn drain(ring: &mut CopyRing) -> io::Result<usize> {
     let mut popped = 0;
-    while let Some(completion) = ring.try_pop()? {
+    while let Some((completion, held)) = ring.try_pop_held()? {
         let transferred = completion.result()?;
         assert_eq!(transferred, CHUNK_LEN, "each read fills its whole chunk");
-        let token = pending
-            .remove(&completion.user_data())
-            .expect("completion matches a held token");
-        let _buffer = token
-            .claim_if(&completion)
-            .expect("a token claims its own completion");
+        let _buffer = held.expect("the ring was holding this read's buffer");
         popped += 1;
     }
     Ok(popped)
 }
 
 /// Queue a wave of reads and submit without waiting.
-fn submit_wave(
-    ring: &mut IoRing,
-    file: RawHandle,
-    pending: &mut HashMap<usize, Token<Vec<u8>>>,
-) -> io::Result<()> {
+fn submit_wave(ring: &mut CopyRing, file: RawHandle) -> io::Result<()> {
     let mut batch = Batch::new(ring);
     for chunk_index in 0..CHUNKS {
         let buffer = vec![0_u8; CHUNK_LEN];
         let offset = (chunk_index * CHUNK_LEN) as u64;
-        // SAFETY: `file` stays open for the whole example, and every token is
-        // held in `pending` until its own completion has been popped, so the
-        // kernel is never writing through a buffer that has been freed.
-        let token = unsafe { batch.read_raw(file, buffer, offset, PushOptions::new()) }?;
-        pending.insert(token.id(), token);
+        // SAFETY: `file` stays open for the whole example. The ring holds each
+        // buffer until its own completion has been popped, so the kernel is
+        // never writing through one that has been freed.
+        unsafe { batch.read_raw_owned(file, buffer, (), offset, PushOptions::new()) }?;
     }
     // `wait_operations = 0`: submit and return. This thread's blocking point
     // is the multiplexed wait, not here.
@@ -189,7 +182,7 @@ fn main() -> io::Result<()> {
     let handle = file.as_raw_handle();
 
     // Model B: this thread owns the ring for its entire life.
-    let mut ring = IoRing::new(64, 64)?;
+    let mut ring = CopyRing::with_inventory(64, 64)?;
 
     // The multiplexed wakeup source. The ring creates and keeps its own event
     // and hands back a *duplicate*, so this handle is ours to hold and to
@@ -212,12 +205,11 @@ fn main() -> io::Result<()> {
     });
     let mut stop_tx = Some(stop_tx);
 
-    let mut pending: HashMap<usize, Token<Vec<u8>>> = HashMap::new();
     let mut waves_submitted = 0_usize;
     let mut completed = 0_usize;
     let mut empty_wakes = 0_usize;
 
-    submit_wave(&mut ring, handle, &mut pending)?;
+    submit_wave(&mut ring, handle)?;
     waves_submitted += 1;
     output.report("wave 0 submitted");
 
@@ -230,7 +222,7 @@ fn main() -> io::Result<()> {
         // because a pass that returns to the wait without draining to empty
         // can never be woken again: the edge only re-arms when the queue goes
         // empty first.
-        let popped = drain(&mut ring, &mut pending)?;
+        let popped = drain(&mut ring)?;
         completed += popped;
 
         // Rule 2: a wake with nothing to pop is normal. At minimum the setup
@@ -242,17 +234,17 @@ fn main() -> io::Result<()> {
         if matches!(woken, Woken::Shutdown) {
             output.report(&format!(
                 "shutdown woke the wait; leaving the loop with {} operation(s) still in flight",
-                pending.len()
+                ring.held()
             ));
             break;
         }
 
-        if !pending.is_empty() {
+        if ring.held() > 0 {
             continue;
         }
 
         if waves_submitted < WAVES {
-            submit_wave(&mut ring, handle, &mut pending)?;
+            submit_wave(&mut ring, handle)?;
             waves_submitted += 1;
             output.report(&format!("wave {} submitted", waves_submitted - 1));
 
@@ -297,7 +289,7 @@ fn main() -> io::Result<()> {
     // Both are Model B; only what the thread blocks on differs.
     let mut attempts = 0;
     let mut quiesced = 0_usize;
-    while !pending.is_empty() {
+    while ring.held() > 0 {
         attempts += 1;
         if attempts > QUIESCE_ATTEMPTS {
             return Err(io::Error::new(
@@ -305,9 +297,9 @@ fn main() -> io::Result<()> {
                 "outstanding operations never completed during shutdown quiesce",
             ));
         }
-        let outstanding = u32::try_from(pending.len()).unwrap_or(u32::MAX);
+        let outstanding = u32::try_from(ring.held()).unwrap_or(u32::MAX);
         Batch::new(&mut ring).submit_and_wait(outstanding, QUIESCE_TIMEOUT_MS)?;
-        let popped = drain(&mut ring, &mut pending)?;
+        let popped = drain(&mut ring)?;
         completed += popped;
         quiesced += popped;
     }
