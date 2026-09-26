@@ -357,12 +357,25 @@ every consumer names the type -- which means the migration order matters more th
   - [x] **M28.3.2** -- `IoRing<T = ()>` carrying `inventory: HashMap<usize, T>`, and
         `Batch<'ring, T>` with it. A default keeps a payload-free consumer from naming `()`.
   - [ ] **M28.3.3** -- Push stores the payload and returns an `OperationId`; pop returns the
-        payload with the completion. The tokenless shape is `M28.5`'s and is only accommodated
-        here, not answered.
+        payload with the completion. Shape settled by [D-73](DESIGN-NOTES.md#d-73):
+        `IoRing<T, X = ()>`, with the file guard held in a concrete internal `Held` rather than
+        made generic, which is sound because `FileTarget` is sealed.
+
+        **Do the `Drop` half in this step, not later.** Moving buffers into the ring removes the
+        protection `Token`'s leak-on-unclaimed-drop provides on the path where `run_down` fails --
+        which `Drop for IoRing` takes best-effort, closing anyway. The inventory must be
+        *forgotten* rather than dropped there, or the close frees memory the kernel may still be
+        writing into. Landing the inventory without this is a use-after-free, so it is one step.
+
+        The tokenless shape is `M28.5`'s and is only accommodated here, not answered.
   - [ ] **M28.3.4** -- Carry the parameter through `EventDelivery`, `RingScope` and the contract
         wiring.
   - [ ] **M28.4.1** -- Migrate all 36 test and example files, and delete or demote
-        `Pending<T, X>`.
+        `Pending<T, X>`. **Decide what becomes of the oracle's leak rules in the same step**:
+        with no token a caller can hold, `Violation::LeakedToken`, `observe_deliberate_leak` and
+        `State::Leaked` are written around a hazard that changes shape ([D-73](DESIGN-NOTES.md#d-73)).
+        Narrow `RingContract` or retire part of it deliberately rather than discovering it
+        mid-migration.
   - [ ] **M28.4.2** -- Sabotage the inventory: a push that does not record, and a pop that does
         not retire, must both turn the suite red.
 
