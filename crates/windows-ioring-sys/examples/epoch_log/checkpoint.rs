@@ -70,7 +70,7 @@ use std::os::windows::io::RawHandle;
 use std::sync::{Arc, Mutex};
 
 use windows_ioring_sys::{
-    EventDelivery, FlushCoverage, FlushMode, IoRing, PushOptions, Token, WriteCaching,
+    EventDelivery, FlushCoverage, FlushMode, IoRing, PushOptions, WriteCaching,
 };
 
 use crate::commit::Epoch;
@@ -93,6 +93,14 @@ const MAGIC: &[u8; 8] = b"EPLOGCKP";
 ///
 /// So neither result is acted on alone: whichever completion arrives second
 /// decides, and it authorises only if both succeeded.
+/// The ring a checkpointer drives.
+///
+/// It holds each record write's buffer. No sidecar: the one thing a
+/// completion needs to be matched against is its checkpoint's flush, and that
+/// identity is assigned after the write is pushed, so it cannot travel with
+/// it. See `State::writes`.
+type CheckpointRing = IoRing<Vec<u8>>;
+
 struct Pending {
     epoch: Epoch,
     reclaim_to: u64,
@@ -125,12 +133,13 @@ struct State {
     /// Write `UserData` -> (its checkpoint's flush `UserData`, the token
     /// holding the record).
     ///
-    /// The token is what keeps the record buffer alive at a stable address
-    /// while the kernel reads it. A token dropped unclaimed deliberately leaks
-    /// that buffer (which is what keeps the kernel's pointer valid), so
-    /// claiming it on completion is not tidiness -- it is the only way the
-    /// memory comes back.
-    writes: std::collections::HashMap<usize, (usize, Token<Vec<u8>>)>,
+    /// Only the association survives here: the ring holds the record buffer
+    /// and hands it back at the pop, so this map carries two numbers rather
+    /// than memory the kernel is reading. It cannot become the sidecar,
+    /// because the flush's identity does not exist when the write is pushed
+    /// -- a covering flush has to *follow* the write it covers (`D-23`), so
+    /// its `UserData` is assigned one push too late to travel with it.
+    writes: std::collections::HashMap<usize, usize>,
     /// The highest watermark whose checkpoint is durable.
     durable_through: Option<Epoch>,
     /// Anything that went wrong on a pool thread, kept for the log thread to
@@ -200,7 +209,7 @@ fn settle(state: &mut State, flush: usize, reclaimer: &Mutex<Reclaimer>) {
 
 /// Owns the control ring and the thread-pool delivery over it.
 pub struct Checkpointer {
-    delivery: EventDelivery,
+    delivery: EventDelivery<Vec<u8>>,
     state: Arc<Mutex<State>>,
     handle: RawHandle,
 }
@@ -216,7 +225,7 @@ impl Checkpointer {
     /// `IORING_FEATURE_SET_COMPLETION_EVENT`, or any error from
     /// `EventDelivery::new`.
     pub fn new(
-        ring: IoRing,
+        ring: CheckpointRing,
         handle: RawHandle,
         reclaimer: Arc<Mutex<Reclaimer>>,
     ) -> io::Result<Self> {
@@ -231,24 +240,28 @@ impl Checkpointer {
 
         let delivery = EventDelivery::new(
             ring,
-            move |completion, _held| {
+            move |completion, held| {
                 let mut state = for_callback
                     .lock()
                     .unwrap_or_else(std::sync::PoisonError::into_inner);
                 let user_data = completion.user_data();
 
-                if let Some((flush, token)) = state.writes.remove(&user_data) {
-                    // The record write. Claiming the token is what returns its
-                    // buffer; the result is recorded against the checkpoint
+                if let Some((record, ())) = held {
+                    // The record write. The pop returned its buffer, and the
+                    // buffer's own length is what a short write is measured
+                    // against -- the result is recorded against the checkpoint
                     // rather than acted on here, because the flush may not have
                     // been observed yet.
-                    let expected = match token.claim_if(&completion) {
-                        Ok(record) => record.len(),
-                        Err(token) => {
-                            // Cannot happen: the key *is* the token's id.
-                            state.writes.insert(user_data, (flush, token));
-                            return;
-                        }
+                    //
+                    // The mismatch arm this used to carry is gone with it: a
+                    // completion cannot be handed the wrong entry, so there was
+                    // never a case to put the token back into the map.
+                    let expected = record.map_or(0, |record| record.len());
+                    let Some(flush) = state.writes.remove(&user_data) else {
+                        state.failures.push(format!(
+                            "a record write completed with no checkpoint: {user_data:#x}"
+                        ));
+                        return;
                     };
                     let result = match completion.result() {
                         Err(error) => Err(format!("record write: {error}")),
@@ -304,15 +317,15 @@ impl Checkpointer {
 
         let mut scope = self.delivery.scope();
         let mut batch = scope.batch();
-        // SAFETY: `record` is moved into the token, which is kept alive in
-        // `State::writes` until its own completion is observed and claimed --
-        // so the buffer stays at a stable address for as long as the kernel
-        // may read it. `self.handle` outlives this value by the contract on
-        // `new`.
+        // SAFETY: `record` is moved into the ring, which holds it at a stable
+        // address until its own completion is popped -- so it stays put for as
+        // long as the kernel may read it. `self.handle` outlives this value by
+        // the contract on `new`.
         let write = unsafe {
-            batch.write_raw(
+            batch.write_raw_owned(
                 self.handle,
                 record,
+                (),
                 0,
                 PushOptions::new(),
                 WriteCaching::Cached,
@@ -356,7 +369,7 @@ impl Checkpointer {
                     flush_result: None,
                 },
             );
-            state.writes.insert(write.id(), (flush, write));
+            state.writes.insert(write.user_data(), flush);
         }
         batch.submit()?;
         Ok(())

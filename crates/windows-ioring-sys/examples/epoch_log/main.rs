@@ -266,7 +266,7 @@ fn run_log<O: io::Write, E: io::Write>(
     // the log's own: `EventDelivery` owns its ring's completion event, and a
     // second waiter on that event is what D-21 rules out.
     let checkpointer = Checkpointer::new(
-        IoRing::new(8, 16)?,
+        IoRing::<Vec<u8>>::with_inventory(8, 16)?,
         checkpoint_file.as_raw_handle(),
         Arc::clone(&reclaimer),
     )?;

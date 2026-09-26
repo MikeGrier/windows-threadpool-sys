@@ -181,7 +181,7 @@ use std::time::{Duration, Instant};
 
 use windows_ioring_sys::{
     Batch, Completion, FlushCoverage, FlushMode, IoRing, NumaBuffer, PushOptions,
-    RegisteredBuffers, RegisteredSpan, RegisteredUse, Token, WriteCaching,
+    RegisteredBuffers, RegisteredSpan, WriteCaching,
 };
 
 use win_numa_sys::NumaNode;
@@ -484,13 +484,24 @@ fn settle(
 /// The arena is a separate registration per ring, which is the doubled cost
 /// [`CommitStrategy::AlternatingRings`] is charged for -- and it is doubled
 /// permanently, because `IoRing` has no unregister call.
+/// A lane's ring.
+///
+/// Writes carry the slot they read from as the sidecar; flushes are pushed
+/// raw and hold nothing. That difference is what tells the two apart in
+/// [`Lane::classify`], which is most of what the `in_flight` map this struct
+/// used to keep was for.
+type LaneRing = IoRing<(), u32>;
+
+/// What a pop on a [`LaneRing`] hands back.
+type LaneHeld = Option<(Option<()>, u32)>;
+
 struct Lane {
-    ring: IoRing,
+    ring: LaneRing,
     arena: RegisteredBuffers<NumaBuffer>,
-    /// `UserData` of an in-flight write -> its token and the slot it reads
-    /// from. The token must be *claimed* on completion: dropping it unclaimed
-    /// is treated as still-outstanding and leaks the slot forever.
-    in_flight: std::collections::HashMap<usize, (Token<RegisteredUse>, u32)>,
+    /// How many writes this lane still owes a completion for. The ring holds
+    /// each one's registration lease and releases it at the pop, so this is a
+    /// count rather than a table of things the caller must not lose.
+    outstanding_writes: usize,
     /// Completions that were not writes, kept by `UserData` for the commit
     /// path to match against.
     flushes: std::collections::HashMap<usize, io::Result<()>>,
@@ -498,7 +509,7 @@ struct Lane {
 
 impl Lane {
     fn new(node: Option<NumaNode>) -> io::Result<Self> {
-        let mut ring = IoRing::new(64, 128)?;
+        let mut ring = LaneRing::with_inventory(64, 128)?;
         let buffers = (0..SLOTS)
             .map(|_| NumaBuffer::new(SLOT_LEN, node))
             .collect::<io::Result<Vec<_>>>()?;
@@ -514,7 +525,7 @@ impl Lane {
         Ok(Self {
             ring,
             arena,
-            in_flight: std::collections::HashMap::new(),
+            outstanding_writes: 0,
             flushes: std::collections::HashMap::new(),
         })
     }
@@ -524,7 +535,7 @@ impl Lane {
         reason = "M14.4 measures ring idle time, which is exactly this count reaching zero"
     )]
     fn outstanding(&self) -> usize {
-        self.in_flight.len()
+        self.outstanding_writes
     }
 
     /// Compose as many records as there are free slots and push them all in
@@ -580,20 +591,21 @@ impl Lane {
                 })?,
             };
             // SAFETY: `file` outlives every operation pushed here -- the
-            // caller drains to empty before closing it -- and the token is
-            // held in `in_flight` until its completion is observed, so the
-            // slot cannot be refilled underneath the kernel.
-            let token = unsafe {
-                batch.write_registered_raw(
+            // caller drains to empty before closing it -- and the ring holds
+            // the slot's registration lease until its completion is popped,
+            // so the slot cannot be refilled underneath the kernel.
+            unsafe {
+                batch.write_registered_raw_owned(
                     file,
                     &self.arena,
                     span,
+                    slot,
                     first_offset + written,
                     PushOptions::new(),
                     WriteCaching::Cached,
                 )
             }?;
-            self.in_flight.insert(token.id(), (token, slot));
+            self.outstanding_writes += 1;
             written += record::RECORD_STRIDE as u64;
             accepted += 1;
         }
@@ -616,9 +628,9 @@ impl Lane {
     /// drops completions runs the arena dry and never recovers.
     fn drain(&mut self) -> io::Result<usize> {
         let mut popped = 0;
-        while let Some(completion) = self.ring.try_pop()? {
+        while let Some((completion, held)) = self.ring.try_pop_held()? {
             popped += 1;
-            self.classify(completion)?;
+            self.classify(completion, held)?;
         }
         Ok(popped)
     }
@@ -628,21 +640,18 @@ impl Lane {
     ///
     /// Factored out of [`Lane::drain`] so the bounded waits below can file a
     /// completion they blocked for without a second copy of this logic.
-    fn classify(&mut self, completion: Completion) -> io::Result<()> {
-        if let Some((token, slot)) = self.in_flight.remove(&completion.user_data()) {
-            // Claimed before the result is checked, for the reason
-            // `Appender::claim` spells out: bailing out first would drop
-            // the token unclaimed and burn the slot permanently.
-            let released = token
-                .claim_if(&completion)
-                .map_err(|_| io::Error::other("a write token refused its own completion"))?;
-            // Dropping the marker is what decrements the slot's outstanding
-            // count, and that count *is* the free list now -- so this drop,
-            // not a push to a side table, is what returns the slot.
-            drop(released);
+    fn classify(&mut self, completion: Completion, held: LaneHeld) -> io::Result<()> {
+        if let Some((_payload, slot)) = held {
+            // The pop already released the slot: the ring held the
+            // registration lease and dropped it as the entry retired, so the
+            // count is back to zero before this line runs. That used to
+            // depend on claiming *before* checking the result, because an
+            // early return would have dropped the token unclaimed and burnt
+            // the slot permanently. There is no ordering left to get wrong.
+            self.outstanding_writes -= 1;
             debug_assert!(
                 self.arena.outstanding(slot) == Some(0),
-                "claiming the token must release the slot"
+                "the pop must release the slot"
             );
             completion.result()?;
         } else {
@@ -672,8 +681,8 @@ impl Lane {
                 return Ok(());
             }
             if self.drain()? == 0 {
-                match self.ring.pop_within(remaining(deadline))? {
-                    Some(completion) => self.classify(completion)?,
+                match self.ring.pop_within_held(remaining(deadline))? {
+                    Some((completion, held)) => self.classify(completion, held)?,
                     None => return Err(timed_out("a commit's flush")),
                 }
             }
@@ -691,10 +700,10 @@ impl Lane {
     /// [`WAIT`], for the reason given on [`Lane::await_flush`].
     fn await_writes(&mut self) -> io::Result<()> {
         let deadline = Instant::now() + WAIT;
-        while !self.in_flight.is_empty() {
+        while self.outstanding_writes > 0 {
             if self.drain()? == 0 {
-                match self.ring.pop_within(remaining(deadline))? {
-                    Some(completion) => self.classify(completion)?,
+                match self.ring.pop_within_held(remaining(deadline))? {
+                    Some((completion, held)) => self.classify(completion, held)?,
                     None => return Err(timed_out("this lane's outstanding writes")),
                 }
             }
