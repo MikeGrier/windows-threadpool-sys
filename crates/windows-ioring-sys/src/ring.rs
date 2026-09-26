@@ -1008,11 +1008,11 @@ impl<T, X> IoRing<T, X> {
     /// callback". This method signals the event *before* it returns (rule 2
     /// above), so by the time you have a handle to build a wait object
     /// around, that setup signal has already happened -- in the order the
-    /// rule forbids. It is not guaranteed to run your callback, and because
-    /// the event is auto-reset the signal is *consumed* rather than left
-    /// pending, so a later arming has nothing to observe. Combined with the
-    /// edge rule above, a ring whose queue never returns to empty has no
-    /// second wakeup coming: the loss is permanent, not late.
+    /// rule forbids, and so with no documented guarantee that your callback
+    /// runs. Combined with the edge rule above, a ring whose queue never
+    /// returns to empty has no second wakeup coming, so a setup signal that
+    /// does not reach your callback strands the backlog permanently rather
+    /// than merely delaying it.
     ///
     /// The remedy needs nothing this method does not already give you --
     /// after arming the wait, signal your own duplicate yourself:    ///
@@ -1052,10 +1052,8 @@ impl<T, X> IoRing<T, X> {
     /// returns any error from `CreateEventW`,
     /// `SetIoRingCompletionEvent`, `SetEvent`, or duplicating the handle.
     pub fn completion_event(&mut self) -> io::Result<OwnedHandle> {
-        let (event, owes_setup_signal) = self.attach_completion_event_unsignalled()?;
-        if owes_setup_signal {
-            self.raise_setup_signal()?;
-        }
+        let event = self.attach_completion_event_unsignalled()?;
+        self.raise_setup_signal()?;
         Ok(event)
     }
 
@@ -1071,18 +1069,22 @@ impl<T, X> IoRing<T, X> {
     /// [`IoRing::completion_event`] is these two composed, for a caller who
     /// does its own waiting and is not bound by that rule.
     ///
-    /// The flag is false when the ring already had an event attached, which
-    /// matches [`IoRing::completion_event`]: the setup signal belongs to the
-    /// call that performs the attachment.
-    pub(crate) fn attach_completion_event_unsignalled(
-        &mut self,
-    ) -> io::Result<(OwnedHandle, bool)> {
+    /// The caller raises that signal **unconditionally**, whether or not this
+    /// call was the one that attached the event. The signal exists to make an
+    /// already-present backlog reachable, which is a property of the *waiter
+    /// about to arm* rather than of whoever attached the event first: a
+    /// caller that attaches, consumes the signal it raised, submits work, and
+    /// only then hands the ring to a waiter leaves a non-empty queue that the
+    /// edge rule (D-19) will never signal again. Owing the signal only to the
+    /// attaching call stranded exactly that backlog permanently, which is
+    /// `M26.12`.
+    pub(crate) fn attach_completion_event_unsignalled(&mut self) -> io::Result<OwnedHandle> {
         // Already attached: hand back another duplicate rather than
         // attaching a second event, which would silently detach the first
         // (`SetIoRingCompletionEvent` replaces rather than adds). The
         // capability was necessarily verified on the call that attached it.
         if let Some(event) = &self.completion_event {
-            return Ok((event.try_clone()?, false));
+            return event.try_clone();
         }
 
         if !capabilities()?.supports_completion_event {
@@ -1116,18 +1118,18 @@ impl<T, X> IoRing<T, X> {
         // Stored *before* the setup signal can be raised: from this point the
         // ring owns the event, so no later failure can drop it and leave the
         // ring signalling a closed (possibly recycled) handle.
-        self.completion_event
-            .insert(event)
-            .try_clone()
-            .map(|dup| (dup, true))
+        self.completion_event.insert(event).try_clone()
     }
 
     /// Raise the one deliberate setup signal on the attached completion event.
     ///
     /// This is the single spurious wakeup the event's contract allows for: a
-    /// caller who submitted before attaching would otherwise never be woken
-    /// for that backlog, since the queue never returns to empty and so never
-    /// re-arms the edge (D-19).
+    /// caller who submitted before attaching, **or who is about to start
+    /// waiting on an event someone else attached**, would otherwise never be
+    /// woken for that backlog, since the queue never returns to empty and so
+    /// never re-arms the edge (D-19). It is therefore raised for every such
+    /// caller rather than only for the one that performed the attachment --
+    /// see [`IoRing::attach_completion_event_unsignalled`] and `M26.12`.
     ///
     /// Separated from the attachment so that a caller arming a threadpool wait
     /// can obey `SetThreadpoolWait`'s documented ordering -- register first,

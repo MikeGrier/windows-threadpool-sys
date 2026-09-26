@@ -539,20 +539,17 @@ fn completions_queued_before_handover_are_still_delivered() {
 /// would signal either. The backlog would be stranded permanently, which is
 /// exactly what the guarantee promises against.
 ///
-/// **Ignored: this reproduces a defect that is not yet fixed (`M26.12`).**
+/// Raised by review on PR #108, which diagnosed it correctly: the setup signal
+/// was owed only to the call that performed the attachment, so a caller that
+/// attached earlier and consumed that signal got no wakeup at all. The fix is
+/// to raise it unconditionally.
 ///
-/// Raised by review on PR #108, and investigating it found something larger
-/// than the report. Signalling unconditionally -- the obvious repair, and the
-/// one the report suggests -- does **not** make this pass. What does is a
-/// 50 ms sleep between `wait.arm` and the signal, measured 3 of 3 against 0 of
-/// 6 without it, so the wakeup is lost in a window after arming rather than
-/// never being raised.
-///
-/// That matters beyond this test: `M26.9` fixed the delivery stall by ordering
-/// the arm before the signal, and this says that ordering alone is not
-/// sufficient. It is left failing-and-ignored rather than deleted, patched
-/// with a sleep, or "fixed" by a change that does not fix it.
-#[ignore = "M26.12: reproduces an unfixed wakeup race; see UNRESOLVED-TEST-FAILURES.md"]
+/// It was briefly recorded as a *wakeup race* with an unexplained timing
+/// window, on the strength of two claims that later measurement contradicted:
+/// that signalling unconditionally did not help, and that a 50 ms sleep after
+/// arming was what made it pass. Neither holds. The failure is deterministic
+/// and the callback ran zero times, which is a signal never raised rather than
+/// one raised and lost.
 #[test]
 fn a_backlog_is_delivered_even_when_the_caller_attached_the_event_first() {
     let path = temp_file("attached-before-handover");

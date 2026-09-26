@@ -325,3 +325,52 @@ the injected fault was in the callback body, which the counters it had just prin
 out.
 
 **Queued as `M26.9`** in [CHECKLIST.md](CHECKLIST.md).
+
+## Resolved 2026-09-26 19:11:20 -04:00 -- the backlog was not a wakeup race; the signal was simply never raised
+
+**Test:** `a_backlog_is_delivered_even_when_the_caller_attached_the_event_first` in
+[tests/event_delivery.rs](tests/event_delivery.rs), no longer `#[ignore]`d.
+
+**The recorded diagnosis was wrong.** The entry this replaces described a wakeup lost in a window
+*after* arming, on the strength of two claims: that signalling unconditionally left the test failing
+6 of 6, and that a 50 ms sleep between `wait.arm` and the signal made it pass 3 of 3. Re-measuring
+contradicted both.
+
+**What was measured.** A standalone experiment with no I/O ring in it -- create an auto-reset event,
+`CreateThreadpoolWait`, `SetThreadpoolWait`, signal, wait for the callback -- lost **0 of 2000** in
+arm-then-signal order, **0 of 2000** with the 50 ms pause, and **0 of 2000** in the signal-then-arm
+order `SetThreadpoolWait` documents against. Against a real ring holding an eight-deep completion
+backlog, with both earlier signals consumed: a manual `SetEvent` observed by a plain wait lost
+**0 of 500** with no pool involved, and a pool wait armed exactly as `EventDelivery::new` arms one,
+then signalled immediately, lost **0 of 500**. With the signal raised unconditionally the reproducer
+passed **30 of 30**, and the whole `event_delivery` suite passed five times over. Moving that signal
+to *before* the arm also passed 6 of 6, so the ordering the prior entry turned on makes no
+difference to this failure.
+
+**The actual cause** is the narrow one Copilot review reported on PR #108.
+`attach_completion_event_unsignalled` reported the setup signal "still owed" only when that call had
+performed the attachment, so a caller who attached the event earlier, consumed the signal attaching
+raised, submitted, and consumed the signal the completions raised handed over a **non-empty** queue
+with no wakeup pending -- and [D-19](DESIGN-NOTES.md#d-19)'s edge cannot re-arm without the queue
+first returning to empty. The failure was deterministic, and the reproducer's own report said as
+much before any of this: `callbacks run: 0` is a signal never raised, not one raised and lost.
+
+**Fixed** by removing the flag: attaching and signalling remain two steps so a caller can arm in
+between, but `IoRing::completion_event` and `EventDelivery::new` both raise the setup signal
+unconditionally. Recorded as [D-77](DESIGN-NOTES.md#d-77), which also corrects the one clause of
+[D-68](DESIGN-NOTES.md#d-68) that the measurements above contradict. Guarded by two sabotage cases
+and by `a_repeat_call_signals_again_once_the_earlier_signal_has_been_consumed`, which is the only
+test that consumes both earlier signals and so the only one able to observe the ring-level half at
+all -- verified by sabotage to be the single test that fails when the old behaviour is restored.
+
+**How the earlier measurement probably went wrong, offered as reconstruction rather than finding.**
+The same trap was hit during this investigation: restoring a file with `Copy-Item` preserves its
+mtime, cargo then judged the crate unchanged, skipped the rebuild, and a test was run against a
+*stale binary* built from the patched source. It was caught only because the result was impossible
+-- a test passing that could not pass. A stale binary would produce exactly the reported "the
+obvious repair does not work", and would also make an unrelated pause look like the active
+ingredient.
+
+**Still open:** `M26.9`'s original intermittent stall was real and its fix is retained, but the
+mechanism D-68 offered for it does not survive these measurements, so that mechanism is once again
+unexplained.

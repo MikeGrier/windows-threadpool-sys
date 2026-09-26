@@ -4236,3 +4236,41 @@ wrong-place finding written into its `why`.
 **The appender''s half of that loop condition is not dead**, only unexercised by the
 sample''s path: it would matter with appends outstanding and no commit pending. Left
 alone rather than "simplified".
+
+## Moved 2026-09-26 19:11:20 -04:00 -- M26.12, which turned out not to be a race at all
+
+### <a id="m2612"></a>M26.12 -- Find why a signal raised just after `wait.arm` can be lost, and fix it. *(completed 2026-09-26 19:11:20 -04:00)*
+
+**The item's premise was false, and measuring it said so.** It asked for the mechanism of a
+wakeup lost in a window after arming. There is no window. Isolating `SetThreadpoolWait` from
+the ring entirely lost no wakeups in arm-then-signal order, none with the 50 ms pause, and
+none in the signal-then-arm order the API documents against; a real ring holding a backlog
+lost none with no pool, and none under a wait armed exactly as `EventDelivery::new` arms one.
+Full figures in [RESOLVED-TEST-FAILURES.md](RESOLVED-TEST-FAILURES.md).
+
+**The cause was the narrow finding review reported on PR #108**, which the investigation had
+set aside as too small. `attach_completion_event_unsignalled` reported the setup signal "still
+owed" only when that call had performed the attachment, so a caller that attached earlier and
+consumed that signal handed over a non-empty queue with no wakeup pending -- and D-19's edge
+cannot re-arm without the queue first returning to empty. Deterministic, not rare. The
+reproducer's own report had said so all along: `callbacks run: 0` is a signal never raised.
+
+**Two claims in the record were wrong in the same direction**, and both had been treated as
+measurement: that signalling unconditionally did not fix it, and that a 50 ms sleep did.
+Signalling unconditionally passes 30 of 30. The likely cause of the bad measurement was
+reproduced by accident during this work -- a stale test binary, after a file restore that
+preserved mtime let cargo skip the rebuild. Recorded as reconstruction, not finding.
+
+**Fixed** by deleting the flag: attach and signal stay separate so a caller can arm in
+between, but both `IoRing::completion_event` and `EventDelivery::new` raise the signal
+unconditionally. Recorded as [D-77](DESIGN-NOTES.md#d-77), which also corrects the one clause
+of [D-68](DESIGN-NOTES.md#d-68) the measurements contradict -- D-68's ordering stands, since
+it binds to what `SetThreadpoolWait` documents rather than to what this host tolerates.
+
+**Guarded** by two sabotage cases in [sabotage.json](sabotage.json) and by a new test,
+`a_repeat_call_signals_again_once_the_earlier_signal_has_been_consumed`, which is the only
+test that consumes both earlier signals and so the only one that can observe the ring-level
+half -- confirmed by sabotage to be the single test that fails when the old behaviour returns.
+
+**Left open:** `M26.9`'s intermittent stall was real and its fix is kept, but the mechanism
+D-68 offered for it does not survive these measurements. Queued as `M26.13`.

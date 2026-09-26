@@ -954,6 +954,30 @@
       "replace": [
         "        text: \"a record reported durable is present and intact when the log is read back\","
       ]
+    },
+    {
+      "name": "M26.12: the setup signal is owed only to the call that attached the event",
+      "file": "src/ring.rs",
+      "expect": "caught",
+      "why": "This is the defect itself, restored exactly. The setup signal exists to make an already-present backlog reachable, which is a property of the waiter about to arm rather than of whoever attached the event first. Tying it to the attachment strands the backlog of any caller that attached earlier and consumed that signal -- permanently, because D-19's edge cannot re-arm without the queue first returning to empty. Guarded by a_repeat_call_signals_again_once_the_earlier_signal_has_been_consumed, which is the only test that consumes both earlier signals and so the only one that can observe this at all.",
+      "find": [
+        "        let event = self.attach_completion_event_unsignalled()?;\n        self.raise_setup_signal()?;"
+      ],
+      "replace": [
+        "        let was_attached = self.completion_event.is_some();\n        let event = self.attach_completion_event_unsignalled()?;\n        if !was_attached {\n            self.raise_setup_signal()?;\n        }"
+      ]
+    },
+    {
+      "name": "M26.12: EventDelivery stops raising the setup signal after arming",
+      "file": "src/event_delivery.rs",
+      "expect": "caught",
+      "why": "The backlog guarantee in EventDelivery::new rustdoc is bought entirely by this one signal: the ring's event is edge-triggered (D-19), so a queue that is already non-empty at handover signals nothing and never will. Dropping the call strands every handed-over backlog, which is M11.3's defect and M26.12's together.",
+      "find": [
+        "        ring.lock()\n            .unwrap_or_else(std::sync::PoisonError::into_inner)\n            .raise_setup_signal()?;"
+      ],
+      "replace": [
+        "        let _ = &ring;"
+      ]
     }
   ]
 }

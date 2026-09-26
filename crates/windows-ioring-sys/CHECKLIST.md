@@ -251,24 +251,25 @@ about this crate's own surface rather than about storage at all.
 
 ## M26+ -- The wakeup window review opened
 
-- [ ] **M26.12** -- **Find why a signal raised just after `wait.arm` can be lost, and fix it.**
-  Raised as a narrower finding by Copilot review on PR #108 -- that `EventDelivery::new` signals
-  only when it attached the event itself -- and the investigation found something wider.
+- [x] **M26.12** -- Not a race: the setup signal was owed only to the call that attached the event, so a caller that attached earlier got no wakeup at all. -> [completed 2026-09-26](COMPLETED-CHECKLIST.md#m2612)
 
-  **What is measured.** The `#[ignore]`d reproducer
-  `a_backlog_is_delivered_even_when_the_caller_attached_the_event_first` in
-  [event_delivery.rs](tests/event_delivery.rs) fails 6 of 6. Signalling unconditionally, which is
-  what the review suggested, does not change that. A 50 ms sleep between `wait.arm` and the signal
-  makes it pass 3 of 3, and so does `--features trace`, which is the same perturbation by another
-  route. Full figures in [UNRESOLVED-TEST-FAILURES.md](UNRESOLVED-TEST-FAILURES.md).
+- [ ] **M26.13** -- **Re-open the mechanism of `M26.9`'s intermittent delivery stall.**
+  [D-68](DESIGN-NOTES.md#d-68) fixed that stall by arming before signalling, measured at 0
+  failures in 3600 runs, and explained it by saying an auto-reset signal is consumed rather
+  than left pending for a later arming to observe. `M26.12` measured that explanation and it
+  does not hold: signal-then-arm lost no wakeups in 2000 trials, and the same order passes
+  `M26.12`'s reproducer. See [D-77](DESIGN-NOTES.md#d-77).
 
-  **Why this is not a small follow-up.** [D-68](DESIGN-NOTES.md#d-68) fixed `M26.9`'s stall by
-  ordering the arm before the signal, measured at 0 failures in 3600 runs. This says that ordering
-  narrows the window rather than closing it, so the decision's reasoning needs revisiting once the
-  mechanism is known -- not before, because the mechanism is currently a guess.
+  **The fix is not in question and must not be reverted** -- it binds to what
+  `SetThreadpoolWait` documents, which is reason enough to keep it independently of any
+  mechanism. What is open is *why the stall happened*, which matters because a cause still
+  unidentified can recur somewhere the documented ordering does not already cover.
 
-  **Do not apply the sleep.** It is a diagnostic that identified a window, not a fix, and shipping
-  it would convert a reproducible defect into a rare one.
+  **Start from what is already ruled out**, so the search is not repeated: the figures in
+  [RESOLVED-TEST-FAILURES.md](RESOLVED-TEST-FAILURES.md) clear the thread-pool wait itself,
+  the ring's completion event, and the combination of the two.
+
+
 ## M28+ -- Opened by the inventory
 
 - [x] **M28.7** -- Decided against: the ring can answer 1 of 4 violations, and an internal check would be wrong about 13 live `_raw` push sites. -> [completed 2026-09-26](COMPLETED-CHECKLIST.md#m287)

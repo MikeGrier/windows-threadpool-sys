@@ -102,22 +102,22 @@ impl<T: Send + 'static, X: Send + 'static> EventDelivery<T, X> {
     /// That signal is raised *after* the wait has been armed, which is the
     /// order `SetThreadpoolWait` documents -- "you must re-register the event
     /// with the wait object before signaling it each time to trigger the wait
-    /// callback". Signalling first and arming afterwards is not guaranteed to
-    /// run the callback, and since the event is auto-reset the signal is
-    /// consumed rather than left pending for the arming to find. For a ring
-    /// whose queue never returns to empty there is no second wakeup coming,
-    /// so that loss strands the backlog permanently instead of merely
-    /// delaying it. This method therefore attaches the event unsignalled and
-    /// raises the signal itself, rather than going through
-    /// [`IoRing::completion_event`], which signals as it attaches and so
-    /// leaves a caller no way to arm in between.
+    /// callback". The ordering binds to that documented rule, not to any
+    /// observed tolerance for the other order. This method therefore attaches
+    /// the event unsignalled and raises the signal itself, rather than going
+    /// through [`IoRing::completion_event`], which raises the signal before it
+    /// returns and so leaves a caller no way to arm in between.
     ///
     /// This was false in the implementation, and asserted anyway in this
     /// rustdoc, before M11.3 -- every test until then handed over a fresh
     /// ring, so nothing contradicted it. A caller on an earlier version
     /// cannot rely on the guarantee; `tests/event_delivery.rs` keeps the
     /// repro that now holds it. The ordering above was wrong until M26.9, in
-    /// a way that stranded the backlog in roughly one run in a hundred.
+    /// a way that stranded the backlog in roughly one run in a hundred. It
+    /// was wrong again until `M26.12`, which raised the signal only when this
+    /// method had itself attached the event: a caller that attached earlier
+    /// and consumed that signal lost its whole backlog, every time rather
+    /// than rarely.
     ///
     /// # Errors
     ///
@@ -148,7 +148,7 @@ impl<T: Send + 'static, X: Send + 'static> EventDelivery<T, X> {
         // that "you must re-register the event with the wait object before
         // signaling it each time to trigger the wait callback". Signalling
         // first and arming afterwards is the order that rule forbids.
-        let (event, owes_setup_signal) = ring.attach_completion_event_unsignalled()?;
+        let event = ring.attach_completion_event_unsignalled()?;
         windows_threadpool_sys::trace_record!(
             "delivery",
             "event-attached",
@@ -188,18 +188,13 @@ impl<T: Send + 'static, X: Send + 'static> EventDelivery<T, X> {
         // backlog guarantee above true, so a failure to raise it is a failure
         // to construct.
         //
-        // Signalled only when this call attached the event. A caller that
-        // attached it earlier and consumed the signal reaches this with a
-        // non-empty queue and no wakeup owing, which review raised and
-        // `M26.12` is investigating -- the obvious repair, signalling
-        // unconditionally, was tried and does **not** fix it, so it is not
-        // applied here. See the ignored reproducer in
-        // `tests/event_delivery.rs` and UNRESOLVED-TEST-FAILURES.md.
-        if owes_setup_signal {
-            ring.lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner)
-                .raise_setup_signal()?;
-        }
+        // Raised unconditionally. It was once raised only when this call had
+        // itself attached the event, which stranded the backlog of a caller
+        // who attached earlier and consumed that signal -- the state the
+        // guarantee is precisely about. See `M26.12`.
+        ring.lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .raise_setup_signal()?;
 
         Ok(Self { wait, ring })
     }

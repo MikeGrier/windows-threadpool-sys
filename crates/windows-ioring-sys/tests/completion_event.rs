@@ -290,6 +290,46 @@ fn a_repeat_call_hands_back_a_duplicate_of_the_same_event() {
 }
 
 #[test]
+fn a_repeat_call_signals_again_once_the_earlier_signal_has_been_consumed() {
+    // The ring-level form of the defect `M26.12` fixed. A caller that
+    // attaches, consumes the signal attaching raised, submits, and consumes
+    // the signal those completions raised is left holding a **non-empty**
+    // queue with nothing pending anywhere -- and rule 1 says the edge cannot
+    // re-arm without the queue first returning to empty, so no further wakeup
+    // is coming from the kernel either. Anything that begins waiting from
+    // here depends entirely on its own call raising a fresh setup signal.
+    //
+    // Both earlier signals have to be consumed for this to mean anything: an
+    // auto-reset event that is *already* signalled swallows a further
+    // `SetEvent`, so a repeat call cannot be shown to signal while any
+    // earlier signal is still outstanding. That is why
+    // `a_repeat_call_hands_back_a_duplicate_of_the_same_event` above holds at
+    // the same time as this -- it never consumes the first signal.
+    let file = fixture("repeat-after-consume");
+    let (mut ring, first) = ring_with_event(64, 64);
+
+    assert!(
+        signalled_within(&first, SIGNAL_TIMEOUT_MS),
+        "attaching raises the setup signal (rule 3)"
+    );
+
+    submit_reads(&mut ring, &file, CHUNKS, CHUNKS as u32);
+    assert!(
+        signalled_within(&first, SIGNAL_TIMEOUT_MS),
+        "the completions take the queue from empty to non-empty, which signals once (rule 1)"
+    );
+
+    let second = ring.completion_event().expect("repeat completion event");
+    assert!(
+        signalled_within(&second, SIGNAL_TIMEOUT_MS),
+        "a repeat call must raise its own setup signal; without it a waiter starting here \
+         never learns about the backlog already in the queue"
+    );
+
+    drain_exactly(&mut ring, CHUNKS);
+}
+
+#[test]
 fn the_ring_still_signals_both_duplicates_after_a_repeat_call() {
     // `SetIoRingCompletionEvent` replaces rather than adds, so a repeat call
     // that attached a second event would silently detach the *first*
