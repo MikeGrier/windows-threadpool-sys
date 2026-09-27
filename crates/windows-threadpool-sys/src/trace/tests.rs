@@ -4,11 +4,116 @@
 //! These run in both builds. Without the `trace` feature every entry point is
 //! a no-op, and asserting *that* is the point: a call site left in shipping
 //! code must cost nothing and must not misreport.
+//!
+//! The eviction policy is tested against [`Buffer`] directly rather than
+//! through the global one. Two reasons, and the second is the binding one:
+//! a capacity of four is reachable where eight thousand is tedious, and
+//! filling the real buffer would evict every record the rest of the suite had
+//! just taken.
 
 use std::sync::mpsc;
 use std::time::Duration;
 
-use super::{counted, dump, enabled, wants};
+use super::{Buffer, Record, counted, dump, enabled, wants};
+
+/// A record distinguishable from its neighbours by its `a` slot.
+fn record(a: u64) -> Record {
+    Record {
+        at: Duration::from_micros(a),
+        thread: 1,
+        target: "test",
+        event: "filler",
+        a,
+        b: 0,
+    }
+}
+
+/// The `a` slots still held, oldest first.
+fn held(buffer: &Buffer) -> Vec<u64> {
+    buffer.records.iter().map(|record| record.a).collect()
+}
+
+#[test]
+fn a_buffer_below_its_capacity_keeps_everything_and_drops_nothing() {
+    let mut buffer = Buffer::with_capacity(4);
+    for a in 0..4 {
+        assert!(
+            !buffer.push(record(a), 4),
+            "a push that fits is not an eviction"
+        );
+    }
+    assert_eq!(held(&buffer), vec![0, 1, 2, 3]);
+    assert_eq!(buffer.dropped, 0);
+    assert!(
+        !buffer.announced,
+        "nothing has been lost, so nothing may be announced"
+    );
+}
+
+#[test]
+fn a_full_buffer_evicts_the_oldest_and_keeps_the_newest() {
+    let mut buffer = Buffer::with_capacity(4);
+    for a in 0..7 {
+        buffer.push(record(a), 4);
+    }
+    assert_eq!(
+        held(&buffer),
+        vec![3, 4, 5, 6],
+        "the window must slide, not stop: a buffer that stopped recording when full would \
+         report the same length and lose the end of the run instead of the start"
+    );
+    assert_eq!(buffer.dropped, 3, "one drop per push past the capacity");
+}
+
+#[test]
+fn only_the_first_eviction_is_announced() {
+    let mut buffer = Buffer::with_capacity(2);
+    buffer.push(record(0), 2);
+    buffer.push(record(1), 2);
+    assert!(
+        buffer.push(record(2), 2),
+        "the first eviction is the one worth reporting"
+    );
+    for a in 3..10 {
+        assert!(
+            !buffer.push(record(a), 2),
+            "reporting every later eviction would put a formatted line on the traced path \
+             once per record, which is what this facility exists not to do"
+        );
+    }
+    assert_eq!(buffer.dropped, 8, "silence is not the same as not counting");
+}
+
+#[test]
+fn a_cleared_buffer_will_announce_an_overflow_again() {
+    let mut buffer = Buffer::with_capacity(1);
+    buffer.push(record(0), 1);
+    assert!(buffer.push(record(1), 1));
+    buffer.clear();
+    assert!(held(&buffer).is_empty());
+    assert_eq!(buffer.dropped, 0);
+    buffer.push(record(2), 1);
+    assert!(
+        buffer.push(record(3), 1),
+        "a clear starts a new capture, and a new capture that overflows is as worth \
+         reporting as the first one was"
+    );
+}
+
+#[test]
+fn a_zero_capacity_buffer_stores_nothing_rather_than_panicking() {
+    // Degenerate, and unreachable through the global buffer -- but the
+    // eviction branch reaches `remove(0)`, which panics on an empty vector, so
+    // the case is defined here rather than left to be discovered.
+    let mut buffer = Buffer::with_capacity(0);
+    assert!(
+        buffer.push(record(0), 0),
+        "the first loss is still announced"
+    );
+    assert!(!buffer.push(record(1), 0));
+    assert!(held(&buffer).is_empty());
+    assert_eq!(buffer.dropped, 2, "everything offered was dropped");
+}
 
 #[test]
 fn a_build_without_the_feature_reports_nothing_and_says_so() {

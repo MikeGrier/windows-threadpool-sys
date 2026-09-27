@@ -284,13 +284,7 @@ about this crate's own surface rather than about storage at all.
 
 - [x] **M26.13.1** -- Paired entry/exit records added to all five pool trampolines, the re-arm, and the test's post-mortem path; a sabotage sweep confirms each is load-bearing. -> [completed 2026-09-26](COMPLETED-CHECKLIST.md#m26131)
 
-- [ ] **M26.13.2** -- **Validate the trace buffer under the full suite before trusting a capture.**
-  `CAPACITY` is 8192 and evicts **oldest** first, which is the wrong bias here -- this failure is
-  set up in the first milliseconds. A 3-test filtered run did not overflow (the capture began at
-  `0.000000s` with no dropped-records marker); the full suite has never been checked. Run one or two
-  full-suite runs with `WINDOWS_THREADPOOL_TRACE='*'`, look for the
-  `... earlier record(s) dropped` line, and raise `CAPACITY` until it is absent. Do this **before**
-  M26.13.3, or a capture may be missing exactly the setup records that matter.
+- [x] **M26.13.2** -- The buffer is per-process, so the population was never "the full suite"; the capturing binary emits 89 records, the threadpool crate's own 14061, and an overflow now announces itself. -> [completed 2026-09-26](COMPLETED-CHECKLIST.md#m26132)
 
 - [ ] **M26.13.3** -- **Re-run the reproducer with the fuller trace and read the filled-in gap.**
   Either reproducer trips at roughly one run in three hundred: the filtered

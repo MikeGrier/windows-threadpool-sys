@@ -4332,3 +4332,62 @@ and both are decisions to raise rather than take in passing.
 **Left to M26.13.** The report's "it arrived, N past the bound" wording is still measured from
 the start of the post-mortem; `second-wait-begin` / `second-wait-ended` now make that interval
 readable in the trace, but the wording fix is M26.13's own, not this item's.
+
+## Moved 2026-09-26 22:13:01 -04:00 -- M26.13.2, in which the buffer question turned out to be two questions
+
+### <a id="m26132"></a>M26.13.2 -- The buffer is per-process, so the population was never "the full suite"; the capturing binary emits 89 records, the threadpool crate's own 14061, and an overflow now announces itself. *(completed 2026-09-26 22:13:01 -04:00)*
+
+**The item's premise was wrong in a way that mattered.** It asked for one or two full-suite
+runs, looking for the `... earlier record(s) dropped` line. That line appears only in a
+`dump()`, and `dump()` is called from exactly one place in this workspace --
+[event_delivery.rs](tests/event_delivery.rs)'s `trace_section`, on a failing delivery. A
+passing full-suite run produces no dump, so the prescribed check could not have answered the
+question it was asked to answer, whatever the answer turned out to be.
+
+**The buffer is also per-process, and every test binary is its own process.** So "the full
+suite" is not one population, it is one per binary, and only the binary that takes a capture
+can carry a truncated one. Measured with the trace narrowed to everything, the two that record
+at all are four orders of magnitude apart:
+
+| Binary | Records offered | Against a capacity of 8192 |
+|---|---|---|
+| `windows-ioring-sys`' `event_delivery` (7 tests, the only one that captures) | 89 | never fills |
+| `windows-threadpool-sys`' lib tests (224 tests) | 14061 | 5869 evicted -- the first 42% of the run |
+
+**So the answer to the question as asked is that no capture was ever at risk**, and the answer
+to the question underneath it is that the buffer was nonetheless losing most of a traced run
+of the crate that owns it -- the half nobody could see, because nothing there dumps.
+
+**Three changes, in the order they matter.**
+
+1. **An overflow now announces itself to stderr, once, as it happens.** This is what makes the
+   check re-runnable by anyone rather than a measurement that rots: a run that never dumps is
+   now still told that its capture no longer reaches back to the start. It is the one place
+   this module formats on the traced path, and it is reached only after `CAPACITY` records have
+   already been taken. Both suites were re-run under it afterwards with zero announcements.
+2. **`CAPACITY` raised from 8192 to 65536**, which is 4.6x the larger measured population
+   rather than a round number. The buffer is allocated only when something is actually
+   recorded, so a build carrying the feature with the environment unset still pays nothing;
+   a run that asks for a trace pays about 4.7 MB.
+3. **The eviction policy was lifted out of the `trace` feature gate** into a `Buffer` type
+   tested at a capacity of four. It now runs in every developer's `cargo test` and in CI, with
+   no feature flag and no environment variable -- where the rest of this facility's guards
+   need both. Filling the *real* buffer in a test was never an option: it would evict every
+   record the rest of the suite had just taken.
+
+**Verified by sabotage.** Eight behavioural mutations of the policy -- evict newest instead of
+oldest, stop counting losses, announce every eviction, announce none, let a clear leave the
+announcement spent or the count standing, drop the zero-capacity guard, let a full buffer stop
+recording -- were each injected in turn and all eight caught. A control that loosens `>=` to
+`==` survives, which is correct: the buffer is never allowed past its capacity, so the two
+forms cannot differ.
+
+**A side effect worth naming.** `M26.13.1`'s guard reads the global dump inside the very
+binary that was overflowing. It asserts immediately after its own exercise, so the newest
+records were always its own -- but the hazard was real and is now removed outright rather than
+left improbable, because that binary no longer wraps.
+
+**Not covered.** The glue in `record` -- that it passes `CAPACITY` and forwards the push's
+answer to the announcement -- has no test. Reaching it needs 65536 real records through the
+global buffer, which is the exact thing the `Buffer` split exists to avoid. The decision it
+carries is tested; the five lines that carry it are not.

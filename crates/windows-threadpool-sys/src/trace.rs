@@ -43,52 +43,126 @@
 //! Unset, empty, or matching nothing means no record is kept and the cost is
 //! one relaxed atomic load per call site.
 
+/// One observation. Deliberately `Copy` and free of owned data, so recording
+/// is a push and never an allocation.
+///
+/// Lives outside the feature gate so that [`Buffer`]'s eviction policy is
+/// built and tested in every build, not only in one nobody's `cargo test`
+/// selects. Without the feature the formatting that reads these fields is
+/// compiled out, which is what the `dead_code` allowance is for.
+#[cfg(any(feature = "trace", test))]
+#[cfg_attr(not(feature = "trace"), allow(dead_code))]
+#[derive(Clone, Copy)]
+struct Record {
+    at: std::time::Duration,
+    thread: u32,
+    target: &'static str,
+    event: &'static str,
+    a: u64,
+    b: u64,
+}
+
+/// The bounded record store and, with it, the whole of what happens when a
+/// trace outgrows the room it was given.
+///
+/// Separated from the global it backs so that the policy can be exercised at a
+/// capacity of four rather than of eight thousand. Filling the real buffer in a
+/// test would evict every record every other test had just recorded, which is
+/// the one thing a shared trace cannot tolerate.
+#[cfg(any(feature = "trace", test))]
+struct Buffer {
+    records: Vec<Record>,
+    /// How many records were evicted to make room for later ones.
+    dropped: usize,
+    /// Whether the first eviction has already been reported.
+    announced: bool,
+}
+
+#[cfg(any(feature = "trace", test))]
+impl Buffer {
+    fn with_capacity(capacity: usize) -> Self {
+        Self {
+            records: Vec::with_capacity(capacity),
+            dropped: 0,
+            announced: false,
+        }
+    }
+
+    /// Append `record`, evicting the oldest first if the buffer is already at
+    /// `capacity`.
+    ///
+    /// Returns whether this call was the **first** eviction, so a caller can
+    /// report the loss once rather than on every subsequent push. The report
+    /// matters because the alternative is silence: a run that never dumps
+    /// never reads [`dump`]'s dropped-record line, so an overflow that
+    /// truncated the start of a capture would be discovered only by whoever
+    /// later wondered why the trace began in the middle.
+    ///
+    /// A `capacity` of zero stores nothing and counts every record as dropped.
+    /// Degenerate, and defined rather than left to `remove(0)` on an empty
+    /// vector, which panics.
+    fn push(&mut self, record: Record, capacity: usize) -> bool {
+        if self.records.len() >= capacity {
+            if capacity > 0 {
+                self.records.remove(0);
+            }
+            self.dropped += 1;
+            let first = !self.announced;
+            self.announced = true;
+            if capacity == 0 {
+                return first;
+            }
+            self.records.push(record);
+            return first;
+        }
+        self.records.push(record);
+        false
+    }
+
+    fn clear(&mut self) {
+        self.records.clear();
+        self.dropped = 0;
+        self.announced = false;
+    }
+}
+
 #[cfg(feature = "trace")]
 mod imp {
     use std::sync::Mutex;
     use std::sync::atomic::{AtomicU8, Ordering};
     use std::time::Instant;
 
+    use super::{Buffer, Record};
+
     /// How many records are retained. Fixed and pre-allocated: growing a
     /// buffer mid-trace would allocate on the path being measured, which is
-    /// the one thing this module exists to avoid.
+    /// the one thing this module exists to avoid. Nothing is allocated until
+    /// something is actually recorded, so a build carrying the feature with
+    /// the environment unset pays nothing for this.
     ///
     /// Oldest records are dropped first. The failures this was built for show
     /// up in the first moments of a run, so keeping the most recent entries is
     /// the wrong bias -- but keeping a bounded window is what stops a long run
-    /// consuming the machine, and a dump reports how many were lost.
-    const CAPACITY: usize = 8192;
-
-    /// One observation. Deliberately `Copy` and free of owned data, so
-    /// recording is a push and never an allocation.
-    #[derive(Clone, Copy)]
-    pub struct Record {
-        pub at: std::time::Duration,
-        pub thread: u32,
-        pub target: &'static str,
-        pub event: &'static str,
-        pub a: u64,
-        pub b: u64,
-    }
-
-    struct State {
-        records: Vec<Record>,
-        dropped: usize,
-    }
+    /// consuming the machine, and an overflow now reports itself twice over:
+    /// once to stderr as it happens, and again at the head of every dump.
+    ///
+    /// **Set from measurement.** The buffer is per-process and each test
+    /// binary is its own process, so the population that can fill it is one
+    /// binary's own run. Both were measured under `WINDOWS_THREADPOOL_TRACE`
+    /// set to everything, and they are four orders of magnitude apart: the
+    /// figures, and what the larger one cost at the previous value, are in
+    /// [the archive entry for
+    /// M26.13.2](../../windows-ioring-sys/COMPLETED-CHECKLIST.md#m26132).
+    const CAPACITY: usize = 65536;
 
     static ARMED: AtomicU8 = AtomicU8::new(ARMED_UNKNOWN);
     const ARMED_UNKNOWN: u8 = 0;
     const ARMED_OFF: u8 = 1;
     const ARMED_ON: u8 = 2;
 
-    fn state() -> &'static Mutex<State> {
-        static STATE: std::sync::OnceLock<Mutex<State>> = std::sync::OnceLock::new();
-        STATE.get_or_init(|| {
-            Mutex::new(State {
-                records: Vec::with_capacity(CAPACITY),
-                dropped: 0,
-            })
-        })
+    fn state() -> &'static Mutex<Buffer> {
+        static STATE: std::sync::OnceLock<Mutex<Buffer>> = std::sync::OnceLock::new();
+        STATE.get_or_init(|| Mutex::new(Buffer::with_capacity(CAPACITY)))
     }
 
     fn started() -> Instant {
@@ -146,21 +220,34 @@ mod imp {
         let at = started().elapsed();
         // SAFETY: no preconditions; returns the calling thread's id.
         let thread = unsafe { windows_sys::Win32::System::Threading::GetCurrentThreadId() };
-        let Ok(mut state) = state().lock() else {
-            return;
+        let first_eviction = {
+            let Ok(mut state) = state().lock() else {
+                return;
+            };
+            state.push(
+                Record {
+                    at,
+                    thread,
+                    target,
+                    event,
+                    a,
+                    b,
+                },
+                CAPACITY,
+            )
         };
-        if state.records.len() == CAPACITY {
-            state.records.remove(0);
-            state.dropped += 1;
+        // Outside the lock, and only ever once: a capture that has begun
+        // discarding its start is a different artifact from one that has not,
+        // and a run that never dumps would otherwise never be told. This is
+        // the one place the module formats on the traced path, and it is
+        // reached only after `CAPACITY` records have already been taken.
+        if first_eviction {
+            eprintln!(
+                "windows-threadpool-sys trace: the {CAPACITY}-record buffer is full and is now \
+                 evicting the oldest records, so this capture no longer reaches back to the \
+                 start of the run. Narrow WINDOWS_THREADPOOL_TRACE, or raise CAPACITY."
+            );
         }
-        state.records.push(Record {
-            at,
-            thread,
-            target,
-            event,
-            a,
-            b,
-        });
     }
 
     /// Every record so far, oldest first, formatted for reading.
@@ -192,8 +279,7 @@ mod imp {
     /// Discard everything recorded so far.
     pub fn clear() {
         if let Ok(mut state) = state().lock() {
-            state.records.clear();
-            state.dropped = 0;
+            state.clear();
         }
     }
 }
