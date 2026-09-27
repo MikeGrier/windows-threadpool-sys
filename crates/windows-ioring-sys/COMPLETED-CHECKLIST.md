@@ -4391,3 +4391,55 @@ left improbable, because that binary no longer wraps.
 answer to the announcement -- has no test. Reaching it needs 65536 real records through the
 global buffer, which is the exact thing the `Buffer` split exists to avoid. The decision it
 carries is tested; the five lines that carry it are not.
+
+## Moved 2026-09-26 22:34:12 -04:00 -- M26.13.3, which found what ends the stall and moved the search
+
+### <a id="m26133"></a>M26.13.3 -- The stall ends when a work item is queued to the pool, at no other time, and the five-second coincidence is the probe's timing rather than a timer. *(completed 2026-09-26 22:34:12 -04:00)*
+
+**The question the item set** was what record immediately precedes `trampoline-entered` at the
+five-second mark. In all nine captures taken for this item it is **`work submitted`**, from the
+pool-liveness probe the delivery test runs after giving up, a few hundred microseconds earlier.
+
+**That alone would have been a correlation**, and `M26.13` had already rejected the probe as an
+explanation once, on the grounds that the probe's own `wait created` is stamped *after* the first
+`trampoline-entered`. It is: in all nine. The resolution is that it is the **work** half of the
+probe that precedes dispatch, not the wait half -- which is why looking at the wait half ruled the
+probe out.
+
+**Two further configurations turned the correlation into a cause**, each a temporary edit to the
+test that delays only what happens *after* the test has already given up:
+
+- **A two-second quiet period** inserted before anything touches the ring or the pool. Zero records
+  of any kind appear inside it, in all six captures that have one, and the stall ends two seconds
+  later than before -- tracking the probe, not the clock. So the stall does not end on a timer, and
+  the test thread waking from `recv_timeout` is not what ends it either.
+- **A one-second gap between `ThreadpoolWork::new` and `submit`.** The work object exists for a full
+  second in the same silence; dispatch follows the `submit`. So it is the queuing, not the creation.
+
+Captures, the generated figures, and the exact edits:
+[measurements/2026-09-26-what-releases-the-stall/](measurements/2026-09-26-what-releases-the-stall/README.md).
+The figures there are generated from the captures rather than transcribed -- five of nine were wrong
+when the table was first typed by hand, which is recorded in the README because it is the same
+transcription failure this repository's instructions already warn about.
+
+**What it cost to find:** 3 failures in 1200 runs, 3 in 1312, and 3 in 1070, at about 0.05s a run.
+The rate is in the same range as the one in three hundred recorded before this trace existed.
+
+**It moved the search, so `M26.13` was re-planned in the same commit.** That item was framed as a
+ring question and its four queued experiments all added ring ingredients to a pool-only isolation.
+The remaining question is a pool question -- why a queued wait callback waits for an unrelated
+`SubmitThreadpoolWork` -- so those four are withdrawn as the *next* step (recorded, not deleted, and
+still available if the new line dead-ends) and four pool-side experiments replace them, starting
+with the pool's worker-thread supply and with whether a private pool carrying a non-zero minimum
+stalls at all.
+
+**Deliberately not concluded.** The captures do not observe the pool's own thread accounting: the
+gap between `SetThreadpoolWait` returning and the trampoline being entered is inside the pool, where
+this workspace's trace cannot see. The supply reading is the obvious hypothesis and it is queued as
+an experiment rather than written up as a finding.
+
+**One instruction in the item was not needed and is recorded so it is not re-derived.** It warned
+against polling the completion event to see whether it was still signalled, because the event is
+auto-reset and a successful poll would consume the signal and manufacture the bug. Nothing here
+polled it -- the question was answered from record ordering alone -- so the `NtQueryEvent`
+dependency decision it flagged stays unraised.

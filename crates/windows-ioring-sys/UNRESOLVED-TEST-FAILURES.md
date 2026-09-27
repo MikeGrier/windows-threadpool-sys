@@ -15,7 +15,8 @@ checklist-execution rules. When one is resolved, move its entry into a sibling
 with a co-running test that creates an `EventDelivery` and drops it promptly.
 
 **Rate**, using that record's own reproducer against the current build: 2 failures in 600 runs and 2
-in 900. The prior entry recorded 0 in 3600 after D-68's fix; that no longer holds.
+in 900. The prior entry recorded 0 in 3600 after D-68's fix; that no longer holds. Re-measured on
+2026-09-26 with the fuller trace, in three configurations: 3 in 1200, 3 in 1312, and 3 in 1070.
 
 **D-68's ordering is in effect and does not prevent it.** The trace of a captured failure shows
 `wait armed` at 0.002286s and `setup-signalled` at 0.002288s -- arm first, then signal, exactly as
@@ -28,11 +29,24 @@ recorded `callbacks run: 0` and nothing after a further ten seconds; today the c
 data arrives. D-68 appears to have converted a permanent loss into a delayed dispatch rather than
 removing it.
 
-**The delay ends when the test gives up.** Dispatch resumes at 5.0087s, microseconds after the 5s
-`DELIVERY_BOUND` expires and the post-mortem begins, and both rings' waits then fire within 100us of
-each other on one pool thread. Note that the report's "it arrived, 1.1us past the bound" is measured
-from the *start of the post-mortem*, which is after the pool-liveness probe has already run -- so it
-does not mean the delivery was 1.1us late.
+**The delay ends when a work item is queued to the pool, and not before.** Corrected on
+2026-09-26 by `M26.13.3`, which replaces this entry's earlier reading that it ends "when the test
+gives up". It does not end on a timer, it does not end on its own, and the coincidence with the 5s
+`DELIVERY_BOUND` is a coincidence of *when the pool-liveness probe runs*: delaying the probe by two
+seconds delays the end of the stall by two seconds, and delaying it by three delays it by three.
+Across nine captures in three configurations the record immediately preceding the first
+`trampoline-entered` is always `work submitted`, a few hundred microseconds earlier; a two-second
+quiet period inserted before the probe contains no record of any kind; and creating the work object
+is not enough, since a one-second gap between `ThreadpoolWork::new` and `submit` passes in the same
+silence. Captures and figures:
+[measurements/2026-09-26-what-releases-the-stall/](measurements/2026-09-26-what-releases-the-stall/README.md).
+
+The probe's own `wait created` is stamped after the first `trampoline-entered` in all nine, which is
+what made the probe look like it could not be the cause. It is the **work** half of the probe that
+precedes dispatch, not the wait half.
+
+The report's "it arrived, N past the bound" is still measured from the *start of the post-mortem*,
+which is after the probe has run, so it does not mean the delivery was N late.
 
 **Ruled out: the thread pool's wait dispatch on its own.** A standalone experiment with no I/O ring
 in it -- create an auto-reset event, `CreateThreadpoolWait`, `SetThreadpoolWait`, signal, wait for
@@ -42,12 +56,10 @@ joined before the victim is checked, and 1500 more where each churn cycle signal
 immediately without waiting for the callback, which is what the trigger test does. Slowest ordinary
 dispatch across those runs was 18.6us. Whatever the mechanism is, it needs the ring.
 
-**Not established:** why dispatch is delayed. The remaining difference between the reproducer and
-the isolation is the ring itself -- an event the kernel also signals, a callback that drains under a
-mutex and re-arms itself, and `CloseIoRing` releasing the kernel's reference to that event. The next
-experiments are to add those one at a time to the isolation, and to determine what actually releases
-the stall at 5.0087s, since the pool-liveness probe's own `wait created` record is timestamped
-*after* the first `trampoline-entered` and so cannot be the whole story.
+**Not established:** why a queued wait callback is not dispatched until a work item is submitted.
+Nothing measured so far observes the pool's own thread accounting; the gap is inside the pool, where
+this workspace's trace cannot see. The next experiments are queued in
+[CHECKLIST.md](CHECKLIST.md) under `M26.13`.
 
 **Why it matters beyond these two tests.** The sabotage harness runs the whole suite once per case,
 and a suite that fails for this reason is recorded as the case being `caught`. That is the dangerous

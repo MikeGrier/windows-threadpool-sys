@@ -262,46 +262,48 @@ about this crate's own surface rather than about storage at all.
   trace of every capture. What the fix did change is the shape -- `M26.9` recorded a permanent lost
   wakeup, and what happens now is a delayed dispatch that eventually delivers everything.
 
-  **Ruled out, so the search is not repeated.** The thread pool's wait dispatch on its own does not
-  reproduce it, across three isolation configurations totalling six thousand trials with no ring
-  present. The ordering is not the mechanism, and neither is wait churn by itself.
+  **Re-planned 2026-09-26 after `M26.13.3`.** The question this item was written around --
+  what releases the stall -- is answered, and the answer moves the search. The stall ends when a
+  work item is **queued** to the pool and at no other time: it does not end on a timer, does not end
+  on its own through a two-second quiet period, and does not end when the work object is merely
+  created. Nine captures in three configurations, in
+  [measurements/2026-09-26-what-releases-the-stall/](measurements/2026-09-26-what-releases-the-stall/README.md).
+  So the remaining question is a **pool** question -- why a queued wait callback waits for an
+  unrelated `SubmitThreadpoolWork` -- where this item had been framed as a **ring** question.
 
-  **The next experiments**, in order, each adding one ingredient the isolation lacks:
-  1. an event the **kernel** also signals, via `SetIoRingCompletionEvent`, rather than only
-     `SetEvent` from user code;
-  2. a callback that **re-arms itself** from the pool thread, as `EventDelivery`'s does;
-  3. a callback that **drains under a mutex** the test thread also takes;
-  4. `CloseIoRing` releasing the kernel's reference to a still-armed event.
+  **The four ring-ingredient experiments are withdrawn as the next step**, not because they are
+  answered but because they were aimed at the wrong half: they were designed to reproduce the
+  *entry* into the stall in isolation, and the isolation already fails to reproduce it across six
+  thousand trials. They stay available if the experiments below dead-end. For the record, they were:
+  an event the kernel also signals via `SetIoRingCompletionEvent`; a callback that re-arms itself
+  from the pool thread; a callback that drains under a mutex the test thread also takes; and
+  `CloseIoRing` releasing the kernel's reference to a still-armed event.
 
-  **Also unexplained:** what releases the stall at the five-second mark. The pool-liveness probe is
-  the obvious candidate and the trace does not support it cleanly -- the probe's own `wait created`
-  record is timestamped *after* the first `trampoline-entered`. Settle this before building on the
-  probe as an explanation.
+  **The next experiments**, in order:
+  1. **Is it the pool's worker supply?** Observe the pool's thread accounting across the stall --
+     how many worker threads exist, and whether one is created when the work item is submitted.
+     Nothing in the current trace can see this; it needs either a thread-creation observation or a
+     private pool whose minimum is set and can be compared against the default pool's behaviour.
+  2. **Does a private pool with a non-zero minimum stall at all?** `EventDelivery::new` takes an
+     env, and both delivery tests pass `None`. If a private pool with `SetThreadpoolThreadMinimum`
+     does not stall, the supply reading is supported and the fix has a shape.
+  3. **Does any other pool poke release it**, or only a work submit? A timer firing, an I/O
+     completion, and a second wait on an unrelated event each test a different path into the same
+     pool.
+  4. **Does the trigger test matter once the release is known?** `M26.9` narrowed entry to a
+     co-running create-and-drop; re-check whether that is about the ring at all, or about leaving
+     the pool with no work to do.
 
   **Do not treat the report's "it arrived, N past the bound" as delivery latency.** That interval is
-  measured from the start of the post-mortem, which is after the probe has run. Fixing that wording
-  is part of this item.
+  measured from the start of the post-mortem, which is after the probe has run -- and the probe is
+  now known to be what ends the stall, so the figure describes the probe, not the delivery. Fixing
+  that wording is part of this item.
 
 - [x] **M26.13.1** -- Paired entry/exit records added to all five pool trampolines, the re-arm, and the test's post-mortem path; a sabotage sweep confirms each is load-bearing. -> [completed 2026-09-26](COMPLETED-CHECKLIST.md#m26131)
 
 - [x] **M26.13.2** -- The buffer is per-process, so the population was never "the full suite"; the capturing binary emits 89 records, the threadpool crate's own 14061, and an overflow now announces itself. -> [completed 2026-09-26](COMPLETED-CHECKLIST.md#m26132)
 
-- [ ] **M26.13.3** -- **Re-run the reproducer with the fuller trace and read the filled-in gap.**
-  Either reproducer trips at roughly one run in three hundred: the filtered
-  `completions_ dropping_with` loop, or the sabotage command
-  `cargo test -p windows-ioring-sys --locked --all-features` (measured 1 spurious failure in 300).
-  With `WINDOWS_THREADPOOL_TRACE='*'` one was caught at run 62. The question to answer first is what
-  record immediately precedes `trampoline-entered` at the five-second mark.
-
-  **A 5s timeout is already ruled out as the cause.** No 5-second constant exists anywhere in
-  either crate's `src/`; the only ones are the tests' own `DELIVERY_BOUND` and `SIGNAL_TIMEOUT_MS`,
-  and every wait is armed with `None`, i.e. `SetThreadpoolWait(..., NULL)` with no timeout. So the
-  coincidence with the test's bound points at the test thread waking, not at a library timer.
-
-  **Do not poll the event to check whether it is still signalled.** It is auto-reset, so a
-  successful zero-timeout poll consumes the signal and the callback then genuinely never runs --
-  the probe would manufacture the bug it is looking for. Reading that state non-destructively
-  needs `NtQueryEvent`, which is a dependency decision to raise rather than take in passing.
+- [x] **M26.13.3** -- The stall ends when a work item is queued to the pool, at no other time, and the five-second coincidence is the probe's timing rather than a timer. -> [completed 2026-09-26](COMPLETED-CHECKLIST.md#m26133)
 
 ## M28+ -- Opened by the inventory
 
