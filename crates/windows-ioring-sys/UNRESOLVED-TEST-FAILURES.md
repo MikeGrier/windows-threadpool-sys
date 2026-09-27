@@ -40,6 +40,10 @@ measured 13 and 21 in two separate 4000-run measurements, so no effect is claime
 [event_delivery.rs](tests/event_delivery.rs). They fail together, never singly, and only in parallel
 with a co-running test that creates an `EventDelivery` and drops it promptly.
 
+**An annotated, record-by-record walk through one captured occurrence is in
+[STALL-TIMELINE.md](STALL-TIMELINE.md)**, including a reference table mapping every trace event to
+the Win32 call behind it. Read that first if you are coming to this cold.
+
 **Rate**, using that record's own reproducer against the current build: 2 failures in 600 runs and 2
 in 900. The prior entry recorded 0 in 3600 after D-68's fix; that no longer holds. Re-measured on
 2026-09-26 with the fuller trace, in three configurations: 3 in 1200, 3 in 1312, and 3 in 1070; and

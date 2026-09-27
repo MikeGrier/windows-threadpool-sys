@@ -255,7 +255,9 @@ about this crate's own surface rather than about storage at all.
 
 - [ ] **M26.13** -- **Find why the delivery stall's dispatch is delayed.**
   Re-opened and substantially narrowed on 2026-09-26; the measurements are in
-  [UNRESOLVED-TEST-FAILURES.md](UNRESOLVED-TEST-FAILURES.md) and are not repeated here.
+  [UNRESOLVED-TEST-FAILURES.md](UNRESOLVED-TEST-FAILURES.md) and are not repeated here, and one
+  captured occurrence is walked through record by record in
+  [STALL-TIMELINE.md](STALL-TIMELINE.md).
 
   **What changed.** The stall was believed fixed by [D-68](DESIGN-NOTES.md#d-68). It is not: it
   still reproduces against the current build, with D-68's arm-before-signal ordering visible in the
