@@ -282,26 +282,7 @@ about this crate's own surface rather than about storage at all.
   measured from the start of the post-mortem, which is after the probe has run. Fixing that wording
   is part of this item.
 
-- [ ] **M26.13.1** -- **Trace entry and exit of every pool-invoked functor, and of the post-mortem
-  path.** `M26.13`'s capture has no records at all between 0.0023s and 5.0087s, so the stall itself
-  is unobserved. Every record already carries time and thread id (`0.002288s t644556 delivery
-  setup-signalled`), so this is about *coverage*, not format.
-
-  Add paired entry/exit records, in [windows-threadpool-sys](../windows-threadpool-sys/src/wait.rs)
-  unless noted:
-  1. the wait trampoline -- entry exists (`trampoline-entered`); **exit does not**;
-  2. `WaitActivation::rearm` / `rearm_reporting` -- the re-arm issued from a pool thread;
-  3. work-item callbacks in [work.rs](../windows-threadpool-sys/src/work.rs), both ends;
-  4. `ThreadpoolWait::drop`'s stages already trace; confirm no gap between `drop-drained` and the
-     handle's own close.
-
-  Then the untraced post-mortem in [event_delivery.rs](tests/event_delivery.rs), which is where the
-  release happens: the `outstanding()` call, `pool_liveness`'s work submit / work ran / fresh wait
-  created / fresh wait fired, and the `recv_timeout` expiry itself.
-
-  **Why this ordering matters.** The probe's `wait created` is stamped *after* the first
-  `trampoline-entered`, so the fresh wait is not what released the stall and something earlier in
-  that path is. Without these records the question cannot be settled.
+- [x] **M26.13.1** -- Paired entry/exit records added to all five pool trampolines, the re-arm, and the test's post-mortem path; a sabotage sweep confirms each is load-bearing. -> [completed 2026-09-26](COMPLETED-CHECKLIST.md#m26131)
 
 - [ ] **M26.13.2** -- **Validate the trace buffer under the full suite before trusting a capture.**
   `CAPACITY` is 8192 and evicts **oldest** first, which is the wrong bias here -- this failure is

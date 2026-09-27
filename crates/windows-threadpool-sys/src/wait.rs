@@ -487,14 +487,20 @@ impl WaitActivation<'_> {
     /// use it to observe the suppression directly, which is otherwise only
     /// visible as the absence of undefined behaviour.
     pub(crate) fn rearm_reporting(&self, timeout: Option<Duration>) -> bool {
+        // Recorded *before* the lock, not after: the acquisition can block on a
+        // concurrent `suppress_and_disarm`, and a re-arm parked on that mutex is
+        // one of the things a silent interval in the trace could be. Entry and
+        // exit straddling the lock is what tells the two apart.
+        let wait = self.ctx.wait.load(Ordering::Acquire);
+        crate::trace_record!("wait", "rearm-entered", wait);
         // Taken before arming and held across it, so this either happens before
         // a suppressing caller raises the count or is suppressed by it -- never
         // in between.
         let suppressed = self.ctx.suppression();
         if *suppressed > 0 {
+            crate::trace_record!("wait", "rearm-suppressed", wait, *suppressed);
             return false;
         }
-        let wait = self.ctx.wait.load(Ordering::Acquire);
         debug_assert_ne!(
             wait, 0,
             "the wait object must be published before callbacks"
@@ -504,6 +510,7 @@ impl WaitActivation<'_> {
         // still open. The timeout, if any, is a live stack value for the call.
         unsafe { arm_raw(wait, self.ctx.handle, timeout) };
         drop(suppressed);
+        crate::trace_record!("wait", "rearm-left", wait, self.ctx.handle as usize);
         true
     }
 }
@@ -563,6 +570,10 @@ unsafe extern "system" fn wait_trampoline(
     };
     // Not contained: see the callback contract in the crate docs.
     (ctx.callback)(&activation);
+    // Paired with the record above. The pair is what makes a silent interval
+    // readable: an entry with no exit says a callback is still inside the
+    // closure, which is a different finding from no entry at all.
+    crate::trace_record!("wait", "trampoline-left", _wait, wait_result);
 }
 
 /// An owned thread-pool wait object bound to one waitable handle.
@@ -885,7 +896,7 @@ impl Drop for ThreadpoolWait {
         let ctx = unsafe { &*self.context };
         // Raised and never released: unlike `stop_and_drain`, there is no
         // afterwards for this object.
-        crate::trace_record!("wait", "drop-begin", self.wait);
+        crate::trace_record!("wait", "drop-begin", self.wait, self.target.raw() as usize);
         ctx.suppress_and_disarm();
         // The lock is released before draining: a callback blocked on it would
         // otherwise never finish, and this wait would never return.
@@ -901,7 +912,14 @@ impl Drop for ThreadpoolWait {
             CloseThreadpoolWait(self.wait);
             drop(Box::from_raw(self.context));
         }
-        crate::trace_record!("wait", "drop-closed", self.wait);
+        // The last record this object emits, and it carries the target handle
+        // because nothing after it can: the close of that handle is the field
+        // drop that runs the instant this body returns, with no code of ours in
+        // between. So the interval from `drop-drained` to the handle's close
+        // holds exactly `CloseThreadpoolWait`, the context free, and that field
+        // drop -- a reader who sees a gap there is looking at one of those three
+        // and not at something unrecorded.
+        crate::trace_record!("wait", "drop-closed", self.wait, self.target.raw() as usize);
     }
 }
 

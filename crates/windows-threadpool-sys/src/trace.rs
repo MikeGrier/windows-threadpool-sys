@@ -34,6 +34,12 @@
 //! $env:WINDOWS_THREADPOOL_TRACE = '*'               # everything
 //! ```
 //!
+//! The targets this crate records under are `wait`, `work`, `io`, `timer`, and
+//! `timer-periodic` -- one per pool object, and matched by substring, so
+//! `timer` selects the periodic timer as well. Dependent crates add their own;
+//! `windows-ioring-sys` records under `delivery` and, from its own tests,
+//! `postmortem`.
+//!
 //! Unset, empty, or matching nothing means no record is kept and the cost is
 //! one relaxed atomic load per call site.
 
@@ -217,6 +223,26 @@ mod imp {
 }
 
 pub use imp::{clear, dump, enabled, record, wants};
+
+/// How many records so far carry this target and this event.
+///
+/// Reads [`dump`] rather than the buffer behind it, so it sees exactly what a
+/// reader of a capture sees: a call site that records under a target other
+/// than the one it means to would be invisible to a check that went behind the
+/// formatting, and is the kind of mistake this is used to catch.
+#[cfg(test)]
+pub(crate) fn counted(target: &str, event: &str) -> usize {
+    dump()
+        .lines()
+        .filter(|line| {
+            let mut fields = line.split_whitespace();
+            // Elapsed time, then thread id, then the two labels.
+            fields.next();
+            fields.next();
+            fields.next() == Some(target) && fields.next() == Some(event)
+        })
+        .count()
+}
 
 /// Record one observation, evaluating its arguments only when the target is
 /// being traced.

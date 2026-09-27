@@ -228,6 +228,23 @@ fn pending_read_completes_through_the_callback() {
     assert_eq!(transferred, content.len());
     assert_eq!(&buffer[..content.len()], content);
 
+    // The `io` trampoline's two ends, asserted here because this test already
+    // owns the only exercise of that trampoline in the crate. It checks only
+    // when the process environment has narrowed the trace to `io` -- the
+    // filter is read once per process, so a test cannot set it without racing
+    // every other test in the binary. See
+    // `crate::trace::tests::every_pool_trampoline_records_both_of_its_ends`,
+    // which carries the same reasoning for the other four trampolines.
+    if crate::trace::wants("io") {
+        for event in ["trampoline-entered", "trampoline-left"] {
+            assert!(
+                crate::trace::counted("io", event) > 0,
+                "`io` recorded no `{event}`; the trace is narrowed to it and an I/O callback \
+                 has just run, so the call site is missing"
+            );
+        }
+    }
+
     drop(tp);
     let _ = std::fs::remove_file(&path);
 }

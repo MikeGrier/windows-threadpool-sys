@@ -318,6 +318,7 @@ unsafe extern "system" fn timer_trampoline(
 ) {
     // SAFETY: context is a valid *mut TimerContext for the full callback duration.
     let ctx = unsafe { &*(context as *const TimerContext) };
+    crate::trace_record!("timer", "trampoline-entered", _timer);
     let firing = TimerFiring {
         ctx,
         pending: Cell::new(None),
@@ -327,6 +328,7 @@ unsafe extern "system" fn timer_trampoline(
     // Applied only now that the callback has returned, so a requested delay runs
     // from the end of this firing and the next one cannot overlap it.
     firing.apply_pending();
+    crate::trace_record!("timer", "trampoline-left", _timer);
 }
 
 /// An owned one-shot thread-pool timer.

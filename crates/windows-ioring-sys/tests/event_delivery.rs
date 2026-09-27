@@ -142,6 +142,7 @@ fn pool_liveness() -> String {
     use windows_threadpool_sys::work::ThreadpoolWork;
 
     let probe_bound = Duration::from_secs(2);
+    windows_threadpool_sys::trace_record!("postmortem", "probe-begin");
 
     // 1. A plain work item. If this does not run, the pool is not dispatching
     //    anything and the wait mechanism is not the subject.
@@ -156,10 +157,19 @@ fn pool_liveness() -> String {
         None,
     ) {
         Ok(work) => {
+            // The submit and the callback's own two ends are recorded by
+            // `windows-threadpool-sys` under `work`; what is added here is the
+            // answer this thread got, so a probe that timed out is separable
+            // from one whose callback ran after the probe gave up.
             work.submit();
-            work_rx.recv_timeout(probe_bound).is_ok()
+            let ran = work_rx.recv_timeout(probe_bound).is_ok();
+            windows_threadpool_sys::trace_record!("postmortem", "work-probe-answered", ran);
+            ran
         }
-        Err(error) => return format!("could not create a work probe: {error}"),
+        Err(error) => {
+            windows_threadpool_sys::trace_record!("postmortem", "probe-left-work-uncreatable");
+            return format!("could not create a work probe: {error}");
+        }
     };
 
     // 2. A brand-new wait on a brand-new event, armed and then signalled. If
@@ -179,6 +189,13 @@ fn pool_liveness() -> String {
                 None,
             ) {
                 Ok(wait) => {
+                    // Creation and arming are recorded by
+                    // `windows-threadpool-sys` under `wait`, as `created` and
+                    // `armed`. The signal is not, so it is recorded here: the
+                    // question this probe was built for is whether a wait armed
+                    // *during* the stall dispatches, and that is an interval
+                    // from this record to the `trampoline-entered` that follows
+                    // it.
                     wait.arm(None);
                     // SAFETY: the wait owns the event, so the handle is open.
                     unsafe {
@@ -186,14 +203,34 @@ fn pool_liveness() -> String {
                             std::os::windows::io::AsRawHandle::as_raw_handle(&wait.handle()),
                         )
                     };
-                    rx.recv_timeout(probe_bound).is_ok()
+                    windows_threadpool_sys::trace_record!(
+                        "postmortem",
+                        "wait-probe-signalled",
+                        std::os::windows::io::AsRawHandle::as_raw_handle(&wait.handle()) as usize
+                    );
+                    let ran = rx.recv_timeout(probe_bound).is_ok();
+                    windows_threadpool_sys::trace_record!("postmortem", "wait-probe-answered", ran);
+                    ran
                 }
-                Err(error) => return format!("could not create a wait probe: {error}"),
+                Err(error) => {
+                    windows_threadpool_sys::trace_record!(
+                        "postmortem",
+                        "probe-left-wait-uncreatable"
+                    );
+                    return format!("could not create a wait probe: {error}");
+                }
             }
         }
-        Err(error) => return format!("could not create a probe event: {error}"),
+        Err(error) => {
+            windows_threadpool_sys::trace_record!("postmortem", "probe-left-event-uncreatable");
+            return format!("could not create a probe event: {error}");
+        }
     };
 
+    // Recorded before the probe's own objects are dropped, so the drop records
+    // that follow it in the trace are attributable to this probe rather than
+    // mistaken for the delivery path tearing down.
+    windows_threadpool_sys::trace_record!("postmortem", "probe-left", work_ran, wait_ran);
     format!("work item ran: {work_ran}; a fresh wait ran: {wait_ran} (both within {probe_bound:?})")
 }
 
@@ -249,10 +286,23 @@ fn recv_one(
             delivered
         }
         Err(_) => {
+            // The first record of the post-mortem, and the one every later
+            // timestamp is read against: it is the moment this thread gave up,
+            // which is also the moment the captured stalls resume dispatching.
+            windows_threadpool_sys::trace_record!("postmortem", "delivery-wait-expired");
             // Read the ring's own count *before* the second wait, so it
             // describes the moment of failure rather than the moment of
             // giving up on it.
+            //
+            // Bracketed, because this takes the ring's mutex and the delivery
+            // callback drains under that same mutex. An `outstanding-begin`
+            // with no `outstanding-read` after it is therefore a finding in
+            // itself: this thread is parked behind a callback that is inside
+            // the drain, which is a different stall from one where no callback
+            // ever ran.
+            windows_threadpool_sys::trace_record!("postmortem", "outstanding-begin");
             let at_failure = outstanding();
+            windows_threadpool_sys::trace_record!("postmortem", "outstanding-read", at_failure);
             // The pool-liveness probe runs first, while the process is still
             // in the failed state -- asking afterwards would describe a
             // different moment.
@@ -275,10 +325,21 @@ fn recv_one(
                 )
             );
             let started = std::time::Instant::now();
+            // The interval this brackets is *not* the delivery latency: it
+            // begins here, after the liveness probe has already run and
+            // created and armed a fresh wait of its own. The two records make
+            // that visible, so a reader can subtract the probe rather than
+            // taking the printed figure for the lateness of the delivery.
+            windows_threadpool_sys::trace_record!("postmortem", "second-wait-begin");
             let postmortem = match rx.recv_timeout(POST_MORTEM_BOUND) {
                 Ok(_) => format!("it arrived, {:?} past the bound", started.elapsed()),
                 Err(_) => format!("still nothing after a further {POST_MORTEM_BOUND:?}"),
             };
+            windows_threadpool_sys::trace_record!(
+                "postmortem",
+                "second-wait-ended",
+                started.elapsed().as_micros() as u64
+            );
             panic!(
                 "{}\n  pool liveness  : {liveness}",
                 watch.report(what, expected, at_failure, &postmortem)

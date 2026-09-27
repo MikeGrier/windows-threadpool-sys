@@ -31,9 +31,11 @@ unsafe extern "system" fn work_trampoline(
 ) {
     // SAFETY: context is a valid *mut WorkContext for the full callback duration (see Drop).
     let ctx = unsafe { &*(context as *const WorkContext) };
+    crate::trace_record!("work", "trampoline-entered", _work);
     // Not contained: the callback contract requires that it not unwind, and a
     // callback that breaks it aborts here rather than being silently forgiven.
     (ctx.f)();
+    crate::trace_record!("work", "trampoline-left", _work);
 }
 
 /// An owned thread-pool work object.
@@ -105,6 +107,7 @@ impl ThreadpoolWork {
             return Err(io::Error::last_os_error());
         }
 
+        crate::trace_record!("work", "created", handle);
         Ok(Self { handle, ctx })
     }
 
@@ -115,6 +118,10 @@ impl ThreadpoolWork {
     pub fn submit(&self) {
         // SAFETY: handle is valid for the lifetime of self.
         unsafe { SubmitThreadpoolWork(self.handle) };
+        // The submit is the start of the interval a stalled dispatch is
+        // measured over; without it, a `trampoline-entered` has nothing to be
+        // late relative to.
+        crate::trace_record!("work", "submitted", self.handle);
     }
 
     /// Blocks until all queued and in-progress invocations have completed.

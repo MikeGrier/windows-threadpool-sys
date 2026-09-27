@@ -69,9 +69,14 @@ unsafe extern "system" fn periodic_trampoline(
 ) {
     // SAFETY: context is a valid *mut PeriodicContext for the full callback duration.
     let ctx = unsafe { &*(context as *const PeriodicContext) };
+    // The target begins with `timer` so that narrowing to `timer` catches both
+    // kinds, and continues so that narrowing to `timer-periodic` catches only
+    // this one.
+    crate::trace_record!("timer-periodic", "trampoline-entered", _timer);
     let tick = PeriodicTick { ctx };
     // Not contained: see the callback contract in the crate docs.
     (ctx.callback)(&tick);
+    crate::trace_record!("timer-periodic", "trampoline-left", _timer);
 }
 
 /// An owned repeating thread-pool timer.

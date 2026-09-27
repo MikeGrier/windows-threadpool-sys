@@ -65,6 +65,7 @@ unsafe extern "system" fn io_trampoline(
 ) {
     // SAFETY: context is a valid *mut IoContext for the full callback duration (see Drop).
     let ctx = unsafe { &*(context as *const IoContext) };
+    crate::trace_record!("io", "trampoline-entered", overlapped as usize, io_result);
 
     let overlapped = overlapped.cast::<OVERLAPPED>();
 
@@ -90,6 +91,7 @@ unsafe extern "system" fn io_trampoline(
         claimed: Cell::new(false),
     };
     (ctx.callback)(&completion);
+    crate::trace_record!("io", "trampoline-left", overlapped as usize, io_result);
 }
 
 /// An owned thread-pool I/O object bound to one overlapped endpoint.

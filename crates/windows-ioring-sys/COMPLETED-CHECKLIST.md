@@ -4274,3 +4274,61 @@ half -- confirmed by sabotage to be the single test that fails when the old beha
 
 **Left open:** `M26.9`'s intermittent stall was real and its fix is kept, but the mechanism
 D-68 offered for it does not survive these measurements. Queued as `M26.13`.
+
+## Moved 2026-09-26 21:55:20 -04:00 -- M26.13.1, the trace coverage the stall capture lacked
+
+### <a id="m26131"></a>M26.13.1 -- Paired entry/exit records added to all five pool trampolines, the re-arm, and the test's post-mortem path; a sabotage sweep confirms each is load-bearing. *(completed 2026-09-26 21:55:20 -04:00)*
+
+**What the item asked for, and what was added.** `M26.13`'s capture had no records at all
+between 0.0023s and 5.0087s, so the stall itself was unobserved. The item named four gaps in
+[windows-threadpool-sys](../windows-threadpool-sys/src/wait.rs) and one in this crate's test,
+and all five are closed:
+
+1. the wait trampoline's **exit** (`trampoline-left`), paired with the entry that existed;
+2. `rearm_reporting`'s two ends -- `rearm-entered` recorded *before* the suppression lock it
+   can block on, then `rearm-left` or `rearm-suppressed`, so a re-arm parked on that mutex is
+   distinguishable from one that never started;
+3. work-item callbacks in [work.rs](../windows-threadpool-sys/src/work.rs), both ends, plus
+   `created` and `submitted` -- without the submit, a `trampoline-entered` has nothing to be
+   late relative to;
+4. `ThreadpoolWait::drop`'s stages, confirmed rather than changed: the interval from
+   `drop-drained` to the handle's own close holds exactly `CloseThreadpoolWait`, the context
+   free, and the `target` field drop that runs the instant the body returns. `drop-begin` and
+   `drop-closed` now carry the target handle, because nothing after `drop-closed` can;
+5. the post-mortem in [event_delivery.rs](tests/event_delivery.rs), under a `postmortem`
+   target: the `recv_timeout` expiry, the `outstanding()` call **bracketed** (it takes the ring
+   mutex the delivery callback drains under, so an `outstanding-begin` with no
+   `outstanding-read` is itself a finding), the liveness probe's phases, and the second wait.
+
+**Extended past the four the item listed**, because the item's own title says *every*
+pool-invoked functor and there are five: the `io`, `timer`, and `timer-periodic` trampolines
+now record both ends too. A reader of a capture can then take silence to mean no functor ran,
+rather than no *traced* functor ran.
+
+**Verified by sabotage, not by reading.** Each of the thirteen new library call sites was
+deleted in turn and the guard re-run: all thirteen `caught`, and a control case (deleting the
+unasserted `suppress-and-disarm` record) `survives`, so the guard is sensitive to these call
+sites rather than merely sensitive. The post-mortem records were verified by making the
+expiry happen for real -- `DELIVERY_BOUND` cut to one nanosecond -- which exercises the whole
+failure path rather than a proxy for it, and every `postmortem` record appeared in the
+captured report.
+
+**The guard is `every_pool_trampoline_records_both_of_its_ends`** in
+[trace/tests.rs](../windows-threadpool-sys/src/trace/tests.rs), with the `io` half asserted
+inside the existing `pending_read_completes_through_the_callback`, which already owns the only
+overlapped-read exercise in that crate. It asserts **only** when `WINDOWS_THREADPOOL_TRACE` has
+narrowed the trace, because the filter is read once per process and cached, so a test cannot
+set it without racing every other test in the binary; the test says so rather than leaving a
+reader to infer it from a green run. Run it as `$env:WINDOWS_THREADPOOL_TRACE = '*'` with
+`cargo test -p windows-threadpool-sys --features trace`.
+
+**Not recorded in a sabotage manifest.** [tools/run-sabotage.ps1](../../tools/run-sabotage.ps1)
+has no way to set an environment variable for a case's test command, and this guard is
+env-gated by construction, so a manifest entry would run in a build where the test returns
+having asserted nothing. The sweep above was therefore run by hand and is not persisted; closing
+that gap means either env support in the harness or a CI job that builds with `--features trace`,
+and both are decisions to raise rather than take in passing.
+
+**Left to M26.13.** The report's "it arrived, N past the bound" wording is still measured from
+the start of the post-mortem; `second-wait-begin` / `second-wait-ended` now make that interval
+readable in the trace, but the wording fix is M26.13's own, not this item's.
