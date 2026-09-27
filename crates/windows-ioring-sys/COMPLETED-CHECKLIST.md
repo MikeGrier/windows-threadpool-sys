@@ -4770,3 +4770,35 @@ stack or Win32 start address is `ntdll!TppWorkerThread`, either from a dump as h
 through `NtQueryInformationThread`. The kernel does track live and available counts in the worker
 factory object, reachable through `NtQueryInformationWorkerFactory`, but the pool exposes no handle
 to it -- so that route needs the handle recovered from a dump or by enumeration.
+
+## Moved 2026-09-27 16:35:48 -04:00 -- M26.13.12, the strongest statement yet
+
+### <a id="m261312"></a>M26.13.12 -- A self-rearming timer armed while the pool was healthy, due inside the stall window, fires only at the release in 10 of 10 -- so the fault is dispatch, not registration. *(completed 2026-09-27 16:35:48 -04:00)*
+
+**Designed in review:** a one-shot timer armed for four seconds whose callback does nothing but
+re-arm itself for another four, to see what it does to the failure rate.
+
+**It differs from [M26.13.4](COMPLETED-CHECKLIST.md#m26134)'s timer poke in the way that matters.**
+That one created a timer *during* the stall, which leaves open the objection that a pool in this
+state cannot accept new registrations. This one is armed at process start while the pool is
+demonstrably healthy and holds a standing commitment, so there is no registration to fail. A passing
+run exits in about fifty milliseconds, long before the four-second expiry, so the heartbeat only ever
+gets a chance to fire on a run that stalls -- a clean probe rather than added load.
+
+**Result: 10 of 10 fired about a second late, at the release, never when due.** Armed at 0.000s, due
+at 4.000s, fired between 5.004s and 5.019s -- the moment the work submit woke the pool.
+[measurements/2026-09-27-a-timer-armed-while-healthy-also-stops/](measurements/2026-09-27-a-timer-armed-while-healthy-also-stops/README.md).
+
+**It is its own positive control.** The timer does fire, so the machinery works and the arming took
+effect; it simply cannot fire while the pool is in this state. A bare "never fires" would have been
+ambiguous between a wedged pool and a broken probe. This is not.
+
+**What it closes.** The fault is in dispatch, not in registration, and it is not about events,
+handles, waits or the ring: this is a pure kernel timer expiry, registered before anything went
+wrong, and it is suppressed exactly like everything else. Together with
+[M26.13.11](COMPLETED-CHECKLIST.md#m261311)'s three idle workers, the picture is a pool with threads
+available, commitments registered while healthy, and nothing being dispatched to them.
+
+**On the rate:** 10 in 4000, against 13, 21, 14, 18, 24 and 14 for the same configuration earlier
+the same day. Just below that spread, and one measurement cannot separate a real reduction from
+ordinary variation, so no effect is claimed either way.

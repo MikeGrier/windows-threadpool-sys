@@ -99,6 +99,9 @@ dataset is 220us. The arming pair that precedes the silence -- `CreateThreadpool
 `SetThreadpoolWait` -- takes 2us and 1us respectively.
 [measurements/2026-09-27-no-win32-call-blocks/](measurements/2026-09-27-no-win32-call-blocks/README.md).
 
+**A timer armed while the pool was healthy also stops.** `M26.13.12` armed a self-rearming four-second timer at process start, due a full second before the test's deadline. In 10 of 10 captures it did not fire when due and fired only when the work submit released the pool, about a second late -- which is also its own positive control, since it does fire. It involves no event, no handle, no ring and no wait, and it was registered before anything went wrong, so the fault is in dispatch rather than in registration.
+[measurements/2026-09-27-a-timer-armed-while-healthy-also-stops/](measurements/2026-09-27-a-timer-armed-while-healthy-also-stops/README.md).
+
 **Not established:** why the pool will create a worker for a submitted work item but not for a wait,
 timer, or I/O callback that is already queued. That is the whole of what is left, and it is inside
 the pool, where this workspace's trace cannot reach. Four more readings were ruled out on
