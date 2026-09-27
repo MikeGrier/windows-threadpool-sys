@@ -288,27 +288,36 @@ about this crate's own surface rather than about storage at all.
   `CloseIoRing` releasing the kernel's reference to a still-armed event.
 
   **The remaining experiments**, in order:
-  1. **Is it the pool's worker supply?** The only question left standing, and the one every
-     observation so far points at without reaching: when dispatch resumes, a *single* pool thread
-     runs everything queued, in order. Observe the pool's own thread accounting across the stall --
-     how many worker threads exist, and whether one is created or woken when the work item is
-     submitted. Nothing in this workspace's trace can see it; that interval is inside the pool.
-  2. **Does a private pool with a non-zero minimum stall at all?** `EventDelivery::new` takes an
-     env and both delivery tests pass `None`, so they run on the default process pool. If a private
-     pool with `SetThreadpoolThreadMinimum` does not stall, the supply reading is supported and a
-     remedy has a shape. Cheap, and it tests (1) from the other side.
-  3. **What about the trigger leaves the pool in this state?** `M26.9` narrowed entry to a
+  1. **Is it the pool's worker supply?** The one remaining reading that could explain the mechanism,
+     and `M26.13.5` weakened it without killing it: a thread minimum changes nothing, but a private
+     pool with no minimum is already clean, so supply cannot be tested from that direction. When
+     dispatch does resume, a *single* pool thread runs everything queued, in order. Observing this
+     needs the pool's own thread accounting -- how many worker threads exist across the stall, and
+     whether one is created or woken by the work submit -- which is inside the pool, where this
+     workspace's trace cannot reach. **Nothing here can settle it**; it needs an external
+     instrument, and choosing one is a decision to raise rather than take.
+  2. **What about the trigger leaves the pool in this state?** `M26.9` narrowed entry to a
      co-running test that creates an `EventDelivery` over a ring with nothing outstanding and drops
-     it promptly. Now that the stall is known to be pool-wide, re-ask whether that is about the ring
-     at all, or about a teardown that leaves the pool with no worker and nothing to wake it.
+     it promptly. Now that the stall is known to be pool-wide and default-pool-only, re-ask whether
+     that is about the ring at all, or about a teardown that leaves the default pool in a state
+     nothing wakes.
 
-     > **-> CROSS-COMPONENT HANDOFF:** a remedy, if one is found, most likely lands in
+  3. **DECISION TO RAISE, not to take: adopt a private pool, or keep looking?** `M26.13.5` measured
+     a clean 12000 runs across three private-pool arms against 13 failures in 4000 on the default
+     pool. `EventDelivery::new` already takes an environment, so this is reachable today -- but it
+     is a **workaround ahead of a diagnosis**, and it carries design questions this item must not
+     answer alone: who owns the pool, whether there is one per delivery or one shared, what it means
+     for a caller who passes an environment of their own, and whether a crate should quietly move a
+     caller's callbacks off the pool they expected. Raise it before building it.
+
+     > **-> CROSS-COMPONENT HANDOFF:** a remedy, if one is adopted, most likely lands in
      > [windows-threadpool-sys](../windows-threadpool-sys/CHECKLIST.md) or in what this crate passes
      > it as an environment -- not in the ring. Decide where before building it.
 
   **Done, and archived rather than repeated here:**
   - `M26.13.3` -- the stall ends on a work submit and at no other time.
   - `M26.13.4` -- and nothing else dispatches either, so the fault is pool-wide.
+  - `M26.13.5` -- it has only ever been seen on the default pool, and the thread minimum is not why.
 
   **Do not treat the report's "it arrived, N past the bound" as delivery latency.** That interval is
   measured from the start of the post-mortem, which is after the probe has run -- and the probe is
@@ -322,6 +331,8 @@ about this crate's own surface rather than about storage at all.
 - [x] **M26.13.3** -- The stall ends when a work item is queued to the pool, at no other time, and the five-second coincidence is the probe's timing rather than a timer. -> [completed 2026-09-26](COMPLETED-CHECKLIST.md#m26133)
 
 - [x] **M26.13.4** -- Experiment 3: nothing else releases it, and nothing else dispatches either -- a wait, a timer and an I/O object armed during the stall all sit undispatched, so the fault is pool-wide and not this crate's. -> [completed 2026-09-27](COMPLETED-CHECKLIST.md#m26134)
+
+- [x] **M26.13.5** -- Experiment 2: a private pool does not stall in 12000 runs, but the thread minimum is not why -- the no-minimum arm is already clean, so the supply reading it was written to test is unsupported. -> [completed 2026-09-27](COMPLETED-CHECKLIST.md#m26135)
 
 ## M28+ -- Opened by the inventory
 

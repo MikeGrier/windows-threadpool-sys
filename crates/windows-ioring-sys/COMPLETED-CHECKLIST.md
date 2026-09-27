@@ -4493,3 +4493,57 @@ work 3 in 859.
 **No source changed.** The experiment was a temporary edit to
 [event_delivery.rs](tests/event_delivery.rs)'s post-mortem, reverted after the runs and described
 in the measurement README.
+
+## Moved 2026-09-27 12:01:28 -04:00 -- M26.13.5, a null result that the queued wording would have hidden
+
+### <a id="m26135"></a>M26.13.5 -- Experiment 2: a private pool does not stall in 12000 runs, but the thread minimum is not why -- the no-minimum arm is already clean, so the supply reading it was written to test is unsupported. *(completed 2026-09-27 12:01:28 -04:00)*
+
+**The experiment as queued would have produced a confident wrong answer.** Its wording was: "if a
+private pool with `SetThreadpoolThreadMinimum` does not stall, the supply reading is supported."
+That conflates two variables -- being off the default process pool, and having a non-zero thread
+minimum -- so the clean result it anticipated would have been read as confirming worker supply.
+
+Split into four arms, it is a **null result on that hypothesis**:
+
+| Arm | Failures | Runs |
+|---|---|---|
+| `default` (control) | 13 | 4000 |
+| `private-min0`, no minimum set | 0 | 4000 |
+| `private-min1` | 0 | 4000 |
+| `private-min4` | 0 | 4000 |
+
+`private-min0` is the arm the original wording did not call for, and it is the one that carries the
+finding: a private pool with **no minimum at all** is already clean, so the minimum adds nothing and
+supply cannot be tested from this direction. Figures, method and the positive control in
+[measurements/2026-09-27-private-pool-does-not-stall/](measurements/2026-09-27-private-pool-does-not-stall/README.md).
+
+**What it does establish:** the stall has only ever been seen on the default process pool. All three
+`EventDelivery` objects shared one pool in every arm, including the trigger's, so the variable is
+*which* pool and never shared-against-isolated -- the private arms are exactly as shared as the
+default arm.
+
+**A positive control, because this experiment's failure mode is a false negative.** A private arm
+whose environment silently named no pool would have run on the default pool and reported "does not
+stall" for the wrong reason. Every construction therefore asserted a non-null pool in its
+environment and recorded the pointer, and the assertion was checked by sabotage: removing the
+`set_pool` call makes the arm fail with the message the assertion carries.
+
+**Sizing, so that zero means something.** Every arm is the same size, so each private arm would have
+been expected to produce about as many failures as the control did, and the three together about
+three times that.
+
+**What it does not establish.** Why. "A private pool" is still compound -- a different pool object,
+its own threads, and no sharing with whatever else in the process uses the default one -- and
+nothing here observes pool-internal state. It is not evidence that the default pool is defective,
+only that the failure has never been seen off it.
+
+**It also does not make a remedy, and `M26.13` was re-planned to say so.** Putting deliveries on a
+private pool is reachable today, since `EventDelivery::new` already takes an environment. But it
+would be a workaround ahead of a diagnosis, and it raises questions this item must not answer alone:
+who owns the pool, one per delivery or one shared, what it means for a caller passing their own
+environment, and whether a crate should quietly move a caller's callbacks off the pool they
+expected. That is now recorded as a **decision to raise, not to take**.
+
+**No source changed.** The experiment was a temporary edit to
+[event_delivery.rs](tests/event_delivery.rs), reverted after the runs and described in the
+measurement README.

@@ -19,6 +19,13 @@ The ring is still needed to reach the state -- six thousand ring-free trials nev
 but nothing about the ring's own wait is what is stuck. The entry stays here because the failing
 tests are here.
 
+**It has only ever been seen on the default process pool.** `M26.13.5` put every `EventDelivery` in
+the reproducer -- including the trigger's -- on one shared *private* pool: 0 failures in 4000 runs,
+against 13 in 4000 on the default pool in the same build. A thread minimum makes no difference; the
+arm with no minimum set was already clean, so the worker-supply reading the experiment was written
+to test is **not** supported. Figures and the positive control in
+[measurements/2026-09-27-private-pool-does-not-stall/](measurements/2026-09-27-private-pool-does-not-stall/README.md).
+
 **Tests:** `completions_are_delivered_on_pool_threads_without_the_submitting_thread_waiting` and
 `completions_queued_before_handover_are_still_delivered` in
 [event_delivery.rs](tests/event_delivery.rs). They fail together, never singly, and only in parallel
