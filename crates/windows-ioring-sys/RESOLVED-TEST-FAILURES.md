@@ -131,6 +131,13 @@ part of what the file cost to run.
 
 ## Resolved 2026-09-25 14:19:35 -04:00 -- event_delivery stalled because the wait was armed after the event was signalled
 
+**Corrected 2026-09-26 by `M26.13`: this stall was not closed.** It still reproduces against the
+current build at roughly one run in three hundred, with D-68's ordering in effect, and the fix
+appears to have converted a permanent lost wakeup into a delayed dispatch rather than removing it.
+The claim of 0 failures in 3600 runs below is superseded; see
+[UNRESOLVED-TEST-FAILURES.md](UNRESOLVED-TEST-FAILURES.md). The rest of this entry is left as
+written, because its narrowing is still the best record of how the failure behaves.
+
 `SetThreadpoolWait` documents that "you must re-register the event with the wait object before
 signaling it each time to trigger the wait callback". `EventDelivery::new` did the reverse: it took an
 already-signalled event from `IoRing::completion_event` and armed its wait afterwards.

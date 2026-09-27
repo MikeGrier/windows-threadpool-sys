@@ -253,22 +253,34 @@ about this crate's own surface rather than about storage at all.
 
 - [x] **M26.12** -- Not a race: the setup signal was owed only to the call that attached the event, so a caller that attached earlier got no wakeup at all. -> [completed 2026-09-26](COMPLETED-CHECKLIST.md#m2612)
 
-- [ ] **M26.13** -- **Re-open the mechanism of `M26.9`'s intermittent delivery stall.**
-  [D-68](DESIGN-NOTES.md#d-68) fixed that stall by arming before signalling, measured at 0
-  failures in 3600 runs, and explained it by saying an auto-reset signal is consumed rather
-  than left pending for a later arming to observe. `M26.12` measured that explanation and it
-  does not hold: signal-then-arm lost no wakeups in 2000 trials, and the same order passes
-  `M26.12`'s reproducer. See [D-77](DESIGN-NOTES.md#d-77).
+- [ ] **M26.13** -- **Find why the delivery stall's dispatch is delayed.**
+  Re-opened and substantially narrowed on 2026-09-26; the measurements are in
+  [UNRESOLVED-TEST-FAILURES.md](UNRESOLVED-TEST-FAILURES.md) and are not repeated here.
 
-  **The fix is not in question and must not be reverted** -- it binds to what
-  `SetThreadpoolWait` documents, which is reason enough to keep it independently of any
-  mechanism. What is open is *why the stall happened*, which matters because a cause still
-  unidentified can recur somewhere the documented ordering does not already cover.
+  **What changed.** The stall was believed fixed by [D-68](DESIGN-NOTES.md#d-68). It is not: it
+  still reproduces against the current build, with D-68's arm-before-signal ordering visible in the
+  trace of every capture. What the fix did change is the shape -- `M26.9` recorded a permanent lost
+  wakeup, and what happens now is a delayed dispatch that eventually delivers everything.
 
-  **Start from what is already ruled out**, so the search is not repeated: the figures in
-  [RESOLVED-TEST-FAILURES.md](RESOLVED-TEST-FAILURES.md) clear the thread-pool wait itself,
-  the ring's completion event, and the combination of the two.
+  **Ruled out, so the search is not repeated.** The thread pool's wait dispatch on its own does not
+  reproduce it, across three isolation configurations totalling six thousand trials with no ring
+  present. The ordering is not the mechanism, and neither is wait churn by itself.
 
+  **The next experiments**, in order, each adding one ingredient the isolation lacks:
+  1. an event the **kernel** also signals, via `SetIoRingCompletionEvent`, rather than only
+     `SetEvent` from user code;
+  2. a callback that **re-arms itself** from the pool thread, as `EventDelivery`'s does;
+  3. a callback that **drains under a mutex** the test thread also takes;
+  4. `CloseIoRing` releasing the kernel's reference to a still-armed event.
+
+  **Also unexplained:** what releases the stall at the five-second mark. The pool-liveness probe is
+  the obvious candidate and the trace does not support it cleanly -- the probe's own `wait created`
+  record is timestamped *after* the first `trampoline-entered`. Settle this before building on the
+  probe as an explanation.
+
+  **Do not treat the report's "it arrived, N past the bound" as delivery latency.** That interval is
+  measured from the start of the post-mortem, which is after the probe has run. Fixing that wording
+  is part of this item.
 
 ## M28+ -- Opened by the inventory
 
