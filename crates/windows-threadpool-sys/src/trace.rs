@@ -160,18 +160,19 @@ mod imp {
     const ARMED_OFF: u8 = 1;
     const ARMED_ON: u8 = 2;
 
+    static STATE: std::sync::OnceLock<Mutex<Buffer>> = std::sync::OnceLock::new();
+    static STARTED: std::sync::OnceLock<Instant> = std::sync::OnceLock::new();
+    static FILTERS: std::sync::OnceLock<Vec<String>> = std::sync::OnceLock::new();
+
     fn state() -> &'static Mutex<Buffer> {
-        static STATE: std::sync::OnceLock<Mutex<Buffer>> = std::sync::OnceLock::new();
         STATE.get_or_init(|| Mutex::new(Buffer::with_capacity(CAPACITY)))
     }
 
     fn started() -> Instant {
-        static STARTED: std::sync::OnceLock<Instant> = std::sync::OnceLock::new();
         *STARTED.get_or_init(Instant::now)
     }
 
     fn filters() -> &'static Vec<String> {
-        static FILTERS: std::sync::OnceLock<Vec<String>> = std::sync::OnceLock::new();
         FILTERS.get_or_init(|| {
             std::env::var("WINDOWS_THREADPOOL_TRACE")
                 .unwrap_or_default()
@@ -196,6 +197,9 @@ mod imp {
             _ => {
                 let on = !filters().is_empty();
                 ARMED.store(if on { ARMED_ON } else { ARMED_OFF }, Ordering::Relaxed);
+                if on {
+                    observe_exceptions();
+                }
                 on
             }
         }
@@ -282,6 +286,129 @@ mod imp {
             state.clear();
         }
     }
+
+    /// The target every exception observation is recorded under.
+    const EXCEPTION_TARGET: &str = "exception";
+
+    /// Tell the OS this handler did not handle the exception, so the search
+    /// continues exactly as it would have without us. Named rather than
+    /// written as a bare literal: this value is the whole of the promise that
+    /// installing the observer changes no behaviour.
+    const EXCEPTION_CONTINUE_SEARCH: i32 = 0;
+
+    /// Ask to be called *before* any previously installed handler, which is
+    /// what makes the timestamp the moment of the raise rather than the moment
+    /// some other handler declined it.
+    const CALL_FIRST: u32 = 1;
+
+    /// Record one observation from a context that must neither block nor
+    /// initialise anything.
+    ///
+    /// A vectored exception handler runs on whatever thread raised, at
+    /// whatever point it raised -- including, in principle, a thread that is
+    /// inside [`record`] holding the buffer lock. So this takes none of the
+    /// paths that could deadlock or allocate:
+    ///
+    /// - every `OnceLock` is read with `get`, never `get_or_init`, so a first
+    ///   exception arriving before the trace has initialised is dropped rather
+    ///   than initialising the trace from inside an exception handler;
+    /// - the buffer lock is taken with `try_lock`, so an exception raised by a
+    ///   thread already holding it drops the record instead of deadlocking;
+    /// - the eviction announcement is deliberately ignored, because writing to
+    ///   stderr from an exception handler is not something this facility
+    ///   should do uninvited.
+    ///
+    /// The cost of all three is the same: a lost record, which is the right
+    /// trade for an observer whose entire purpose is to change nothing.
+    fn record_without_blocking(event: &'static str, a: u64, b: u64) {
+        if ARMED.load(Ordering::Relaxed) != ARMED_ON {
+            return;
+        }
+        let Some(filters) = FILTERS.get() else {
+            return;
+        };
+        if !filters
+            .iter()
+            .any(|filter| filter == "*" || EXCEPTION_TARGET.contains(filter.as_str()))
+        {
+            return;
+        }
+        let (Some(started), Some(state)) = (STARTED.get(), STATE.get()) else {
+            return;
+        };
+        let at = started.elapsed();
+        // SAFETY: no preconditions; returns the calling thread's id.
+        let thread = unsafe { windows_sys::Win32::System::Threading::GetCurrentThreadId() };
+        let Ok(mut state) = state.try_lock() else {
+            return;
+        };
+        let _ = state.push(
+            Record {
+                at,
+                thread,
+                target: EXCEPTION_TARGET,
+                event,
+                a,
+                b,
+            },
+            CAPACITY,
+        );
+    }
+
+    /// Note that an exception was raised, and decline to handle it.
+    ///
+    /// SAFETY: this is the `PVECTORED_EXCEPTION_HANDLER` ABI. `info` is
+    /// supplied by the OS and is valid for the duration of the call.
+    unsafe extern "system" fn exception_observer(
+        info: *mut windows_sys::Win32::System::Diagnostics::Debug::EXCEPTION_POINTERS,
+    ) -> i32 {
+        if !info.is_null() {
+            // SAFETY: non-null and OS-supplied for this call.
+            let record = unsafe { (*info).ExceptionRecord };
+            if !record.is_null() {
+                // SAFETY: as above; the record outlives this call.
+                let (code, address) =
+                    unsafe { ((*record).ExceptionCode, (*record).ExceptionAddress) };
+                record_without_blocking("raised", code as u32 as u64, address as u64);
+            }
+        }
+        EXCEPTION_CONTINUE_SEARCH
+    }
+
+    /// Start noting every exception raised in this process, once.
+    ///
+    /// Installed when the trace turns on rather than on demand, so that no
+    /// caller has to remember: the window an investigation cares about has
+    /// usually opened before anyone would think to ask for this.
+    ///
+    /// **It observes and does nothing else.** The handler returns
+    /// `EXCEPTION_CONTINUE_SEARCH`, so every exception is dispatched exactly
+    /// as it would have been -- including first-chance exceptions a later
+    /// handler goes on to swallow, which is precisely the population a normal
+    /// debugger view hides and an investigation may want.
+    pub fn observe_exceptions() {
+        use std::sync::atomic::AtomicBool;
+        static INSTALLED: AtomicBool = AtomicBool::new(false);
+        if INSTALLED.swap(true, Ordering::SeqCst) {
+            return;
+        }
+        // Force the clock and the buffer into existence *here*, in an ordinary
+        // context, because the handler deliberately refuses to initialise
+        // either. Without this an exception raised before the first ordinary
+        // record would be dropped -- which is the window an investigation is
+        // most likely to care about, since it is the one before anything has
+        // happened yet.
+        let _ = started();
+        let _ = state();
+        // SAFETY: the handler matches the documented ABI, has static lifetime,
+        // and is never removed.
+        unsafe {
+            windows_sys::Win32::System::Diagnostics::Debug::AddVectoredExceptionHandler(
+                CALL_FIRST,
+                Some(exception_observer),
+            )
+        };
+    }
 }
 
 #[cfg(not(feature = "trace"))]
@@ -306,9 +433,12 @@ mod imp {
     }
     /// Does nothing in this build.
     pub fn clear() {}
+    /// Does nothing in this build: there is no trace to attribute exceptions
+    /// to, so no handler is installed.
+    pub fn observe_exceptions() {}
 }
 
-pub use imp::{clear, dump, enabled, record, wants};
+pub use imp::{clear, dump, enabled, observe_exceptions, record, wants};
 
 /// How many records so far carry this target and this event.
 ///

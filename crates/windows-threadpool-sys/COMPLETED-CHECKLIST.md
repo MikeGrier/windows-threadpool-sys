@@ -322,3 +322,44 @@ suite, where this assertion does not run.
 
 **Buffer headroom re-checked**, since this adds record sites to a crate `M26.13.2` had just measured
 at 14061 records against a capacity of 65536: the traced suite still announces no overflow.
+
+## Moved 2026-09-27 14:25:47 -04:00 -- M-T2, an exception observer for the trace
+
+### <a id="m-t21"></a>M-T2.1 -- The trace installs a vectored exception handler when it turns on, so a first-chance exception that something else swallows is still visible. *(completed 2026-09-27 14:25:47 -04:00)*
+
+**Asked for during an investigation**, to test whether anything was being raised and swallowed
+during a five-second window in which the trace otherwise records nothing. A first-chance exception
+is invisible to a debugger's default view and leaves no other trace, so it is exactly the kind of
+thing that window could have been hiding.
+
+**What was added.** `AddVectoredExceptionHandler(CALL_FIRST, ...)`, installed by the trace itself
+the moment it turns on, recording `exception raised` with the `NTSTATUS` code in one payload
+slot and `ExceptionRecord->ExceptionAddress` -- the instruction that raised -- in the other. The
+two `u64` slots the record already carried were exactly the room needed.
+
+**It changes nothing**, and three properties are what make that true rather than hopeful. The
+handler returns `EXCEPTION_CONTINUE_SEARCH`. And because it can fire on a thread that is already
+inside the trace holding its lock, it reads every `OnceLock` rather than initialising one, takes
+the buffer lock with `try_lock`, and suppresses the overflow announcement -- each costing a
+dropped record rather than a deadlock, an allocation in an exception handler, or a write to stderr
+from one.
+
+**Installing it starts the trace's clock**, deliberately: `0.000000s` is then by construction the
+moment the observer went live, so an empty capture means no exception was raised rather than that
+the observer was late. This was not the first design -- the handler recorded **nothing at all**
+until the installer was changed to bring the clock and the buffer into existence itself, because the
+handler refuses to.
+
+**The guard found that defect.** `the_exception_observer_notes_a_first_chance_exception` raises a
+real first-chance exception through `OutputDebugStringA` -- which raises `DBG_PRINTEXCEPTION_C`
+and catches it itself, so it is genuinely of the population being observed -- and asserts it was
+recorded. Written before the observer worked, it reported `before=0 after=0` twice and was what
+identified the initialisation gap.
+
+**One feature cost.** `AddVectoredExceptionHandler` and `EXCEPTION_POINTERS` are gated on
+`Win32_System_Kernel` as well as `Win32_System_Diagnostics_Debug` in `windows-sys`, so the
+`trace` feature now enables both. A consumer who never traces compiles neither.
+
+**What it found**, for the investigation that asked: no exception is raised during the stall window,
+in 18 of 18 captures. Recorded in
+[windows-ioring-sys](../windows-ioring-sys/measurements/2026-09-27-exceptions-during-the-stall/README.md).

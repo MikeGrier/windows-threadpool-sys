@@ -163,6 +163,36 @@ fn the_filter_narrows_to_the_targets_named() {
     }
 }
 
+/// The exception observer notes a first-chance exception.
+///
+/// `OutputDebugStringA` raises `DBG_PRINTEXCEPTION_C` and catches it itself,
+/// so it is a genuine first-chance exception that changes nothing -- exactly
+/// the population this observer exists to see, and one a debugger view would
+/// hide behind its own handling.
+///
+/// Env-gated like the other guards here, and for the same reason: the filter
+/// is read once per process, so a test cannot set it without racing every
+/// other test in the binary. Feature-gated too, because without `trace` there
+/// is no handler to exercise and the binding it probes with is not compiled.
+#[cfg(feature = "trace")]
+#[test]
+fn the_exception_observer_notes_a_first_chance_exception() {
+    if !wants("exception") {
+        return;
+    }
+    let before = counted("exception", "raised");
+    let text = c"windows-threadpool-sys exception observer probe";
+    // SAFETY: a valid NUL-terminated string, live for the duration of the call.
+    unsafe {
+        windows_sys::Win32::System::Diagnostics::Debug::OutputDebugStringA(text.as_ptr().cast())
+    };
+    assert!(
+        counted("exception", "raised") > before,
+        "the trace is narrowed to `exception` and a first-chance exception has just been \
+         raised, so either the handler is not installed or it recorded nothing"
+    );
+}
+
 /// How long a probe waits for a pool callback before calling it absent.
 ///
 /// Generous, because these run alongside the rest of the suite on a machine
