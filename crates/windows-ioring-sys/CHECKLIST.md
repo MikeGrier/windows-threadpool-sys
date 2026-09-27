@@ -271,6 +271,14 @@ about this crate's own surface rather than about storage at all.
   So the remaining question is a **pool** question -- why a queued wait callback waits for an
   unrelated `SubmitThreadpoolWork` -- where this item had been framed as a **ring** question.
 
+  **Re-planned again 2026-09-27 after `M26.13.4`, and the item is no longer about this crate.**
+  During the stall the pool dispatches **no callback of any kind**: a wait, a timer, and an I/O
+  object each created and armed *during* the stall, with no connection to any ring, all sit
+  undispatched for two seconds and then run only once a work item is submitted. Fifteen captures in
+  [measurements/2026-09-27-which-poke-releases-the-stall/](measurements/2026-09-27-which-poke-releases-the-stall/README.md).
+  So the earlier framing -- "a queued *wait* callback waits for an unrelated `SubmitThreadpoolWork`"
+  -- was still too narrow. Nothing dispatches, and a work submit restarts everything.
+
   **The four ring-ingredient experiments are withdrawn as the next step**, not because they are
   answered but because they were aimed at the wrong half: they were designed to reproduce the
   *entry* into the stall in isolation, and the isolation already fails to reproduce it across six
@@ -279,28 +287,28 @@ about this crate's own surface rather than about storage at all.
   from the pool thread; a callback that drains under a mutex the test thread also takes; and
   `CloseIoRing` releasing the kernel's reference to a still-armed event.
 
-  **The next experiments**, in order:
-  1. **Is it the pool's worker supply?** Observe the pool's thread accounting across the stall --
-     how many worker threads exist, and whether one is created when the work item is submitted.
-     Nothing in the current trace can see this; it needs either a thread-creation observation or a
-     private pool whose minimum is set and can be compared against the default pool's behaviour.
+  **The remaining experiments**, in order:
+  1. **Is it the pool's worker supply?** The only question left standing, and the one every
+     observation so far points at without reaching: when dispatch resumes, a *single* pool thread
+     runs everything queued, in order. Observe the pool's own thread accounting across the stall --
+     how many worker threads exist, and whether one is created or woken when the work item is
+     submitted. Nothing in this workspace's trace can see it; that interval is inside the pool.
   2. **Does a private pool with a non-zero minimum stall at all?** `EventDelivery::new` takes an
-     env, and both delivery tests pass `None`. If a private pool with `SetThreadpoolThreadMinimum`
-     does not stall, the supply reading is supported and the fix has a shape.
-  3. **Does any other pool poke release it**, or only a work submit? A timer firing, an I/O
-     completion, and a second wait on an unrelated event each test a different path into the same
-     pool.
+     env and both delivery tests pass `None`, so they run on the default process pool. If a private
+     pool with `SetThreadpoolThreadMinimum` does not stall, the supply reading is supported and a
+     remedy has a shape. Cheap, and it tests (1) from the other side.
+  3. **What about the trigger leaves the pool in this state?** `M26.9` narrowed entry to a
+     co-running test that creates an `EventDelivery` over a ring with nothing outstanding and drops
+     it promptly. Now that the stall is known to be pool-wide, re-ask whether that is about the ring
+     at all, or about a teardown that leaves the pool with no worker and nothing to wake it.
 
-     > **CROSS-COMPONENT PREREQUISITE -- met 2026-09-27.**
-     > [windows-threadpool-sys](../windows-threadpool-sys/CHECKLIST.md) -> `M-T1.1` has landed, so
-     > the timer, the periodic timer and the I/O object are now stamped from creation through every
-     > arming or submission to teardown, as the wait already was. Before it, the trace stamped only
-     > the *firing*, and a timer armed on time but dispatched late could not be told apart from one
-     > armed late -- which is the whole distinction this experiment rests on.
+     > **-> CROSS-COMPONENT HANDOFF:** a remedy, if one is found, most likely lands in
+     > [windows-threadpool-sys](../windows-threadpool-sys/CHECKLIST.md) or in what this crate passes
+     > it as an environment -- not in the ring. Decide where before building it.
 
-  4. **Does the trigger test matter once the release is known?** `M26.9` narrowed entry to a
-     co-running create-and-drop; re-check whether that is about the ring at all, or about leaving
-     the pool with no work to do.
+  **Done, and archived rather than repeated here:**
+  - `M26.13.3` -- the stall ends on a work submit and at no other time.
+  - `M26.13.4` -- and nothing else dispatches either, so the fault is pool-wide.
 
   **Do not treat the report's "it arrived, N past the bound" as delivery latency.** That interval is
   measured from the start of the post-mortem, which is after the probe has run -- and the probe is
@@ -312,6 +320,8 @@ about this crate's own surface rather than about storage at all.
 - [x] **M26.13.2** -- The buffer is per-process, so the population was never "the full suite"; the capturing binary emits 89 records, the threadpool crate's own 14061, and an overflow now announces itself. -> [completed 2026-09-26](COMPLETED-CHECKLIST.md#m26132)
 
 - [x] **M26.13.3** -- The stall ends when a work item is queued to the pool, at no other time, and the five-second coincidence is the probe's timing rather than a timer. -> [completed 2026-09-26](COMPLETED-CHECKLIST.md#m26133)
+
+- [x] **M26.13.4** -- Experiment 3: nothing else releases it, and nothing else dispatches either -- a wait, a timer and an I/O object armed during the stall all sit undispatched, so the fault is pool-wide and not this crate's. -> [completed 2026-09-27](COMPLETED-CHECKLIST.md#m26134)
 
 ## M28+ -- Opened by the inventory
 

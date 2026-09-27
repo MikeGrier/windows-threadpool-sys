@@ -4443,3 +4443,53 @@ against polling the completion event to see whether it was still signalled, beca
 auto-reset and a successful poll would consume the signal and manufacture the bug. Nothing here
 polled it -- the question was answered from record ordering alone -- so the `NtQueryEvent`
 dependency decision it flagged stays unraised.
+
+## Moved 2026-09-27 11:39:37 -04:00 -- M26.13.4, which moved the fault out of this crate
+
+### <a id="m26134"></a>M26.13.4 -- Experiment 3: nothing else releases it, and nothing else dispatches either -- a wait, a timer and an I/O object armed during the stall all sit undispatched, so the fault is pool-wide and not this crate's. *(completed 2026-09-27 11:39:37 -04:00)*
+
+**The question asked** was whether any pool poke releases the stall or only a work submit. Five
+configurations, three captures each, with a work-submit control in every one so that a poke which
+did nothing could not be confused with a stall that had already ended:
+[measurements/2026-09-27-which-poke-releases-the-stall/](measurements/2026-09-27-which-poke-releases-the-stall/README.md).
+
+**The answer to the question as asked:** only a work submit. A fresh wait armed and signalled, a
+fresh timer due in a millisecond, and a real overlapped read that completed each leave the delivery
+stalled for the full two-second observe window; the work submit releases it within microseconds.
+Fifteen captures, no exceptions.
+
+**The answer underneath it is larger, and it is why this item matters more than its own question.**
+The poke's *own* callback does not run either. A wait, a timer and an I/O object created and armed
+**during** the stall, with no connection to any ring, all sit undispatched for two seconds and then
+run only once a work item is submitted. So the stall is not a property of the ring's wait, and not
+of waits: the process thread pool is dispatching **nothing**, of any kind, and a work submit
+restarts everything at once.
+
+**`M-T1.1` is what made this readable, one day after it was queued.** The claim "the poke was
+established at 7.01s and dispatched at 9.01s" rests entirely on the `created` and `armed` records
+that item added to the timer and the I/O object -- `timer created` / `timer armed` at 7.016s against
+`timer trampoline-entered` at 9.017s, and the same shape for `io`. Without them the capture would
+have shown only a late trampoline, which is equally consistent with a poke that never armed at all.
+That was the exact distinction the item was written for.
+
+**One further observation, recorded because it bears on what is left:** when dispatch resumes, a
+*single* pool thread runs everything queued, in order -- the delivery waits first, which had been
+queued since about two milliseconds into the run, then the work items.
+
+**What it does not establish.** Why the pool stops, and why a work submit is the one thing that
+restarts it. That interval is inside the pool, where this workspace's trace cannot reach, and it is
+`M26.13`'s remaining experiment 1. The worker-supply reading is the obvious hypothesis and is
+recorded as a hypothesis, not a finding.
+
+**`M26.13` was re-planned in the same commit**, for the second time in two days and for the same
+reason both times: the measurement moved the question. Its experiment list is now three pool-side
+items rather than four, and it carries a handoff noting that a remedy most likely lands in
+[windows-threadpool-sys](../windows-threadpool-sys/CHECKLIST.md) or in what this crate passes it as
+an environment -- not in the ring.
+
+**Rates**, all three-failure runs: none 3 in 525, wait 3 in 1307, timer 3 in 612, io 3 in 2105,
+work 3 in 859.
+
+**No source changed.** The experiment was a temporary edit to
+[event_delivery.rs](tests/event_delivery.rs)'s post-mortem, reverted after the runs and described
+in the measurement README.

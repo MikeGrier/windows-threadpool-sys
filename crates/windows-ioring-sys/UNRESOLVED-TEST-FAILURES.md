@@ -4,10 +4,20 @@ Pre-existing failures that do not block an unrelated commit, recorded per the re
 checklist-execution rules. When one is resolved, move its entry into a sibling
 [RESOLVED-TEST-FAILURES.md](RESOLVED-TEST-FAILURES.md) (append-only) rather than deleting it.
 
-## The M26.9 delivery stall still occurs; D-68 did not close it
+## The M26.9 delivery stall still occurs; D-68 did not close it, and it is not this crate's fault
 
 **Found 2026-09-26**, by `M26.13`, which re-opened the mechanism. This entry replaces the claim in
 [RESOLVED-TEST-FAILURES.md](RESOLVED-TEST-FAILURES.md) that the stall was fixed.
+
+**The fault is not in this crate.** Established 2026-09-27 by `M26.13.4`: during the stall the
+process thread pool dispatches **no callback of any kind**. A wait, a timer, and an I/O object each
+created and armed *during* the stall, with no connection to any ring, all sit undispatched for a
+full two seconds and then run only once a work item is submitted. Fifteen captures across five
+configurations, with a control proving the stall was still live throughout:
+[measurements/2026-09-27-which-poke-releases-the-stall/](measurements/2026-09-27-which-poke-releases-the-stall/README.md).
+The ring is still needed to reach the state -- six thousand ring-free trials never produced it --
+but nothing about the ring's own wait is what is stuck. The entry stays here because the failing
+tests are here.
 
 **Tests:** `completions_are_delivered_on_pool_threads_without_the_submitting_thread_waiting` and
 `completions_queued_before_handover_are_still_delivered` in
@@ -16,7 +26,8 @@ with a co-running test that creates an `EventDelivery` and drops it promptly.
 
 **Rate**, using that record's own reproducer against the current build: 2 failures in 600 runs and 2
 in 900. The prior entry recorded 0 in 3600 after D-68's fix; that no longer holds. Re-measured on
-2026-09-26 with the fuller trace, in three configurations: 3 in 1200, 3 in 1312, and 3 in 1070.
+2026-09-26 with the fuller trace, in three configurations: 3 in 1200, 3 in 1312, and 3 in 1070; and
+on 2026-09-27 across five more, from 3 in 525 to 3 in 2105.
 
 **D-68's ordering is in effect and does not prevent it.** The trace of a captured failure shows
 `wait armed` at 0.002286s and `setup-signalled` at 0.002288s -- arm first, then signal, exactly as
@@ -56,10 +67,10 @@ joined before the victim is checked, and 1500 more where each churn cycle signal
 immediately without waiting for the callback, which is what the trigger test does. Slowest ordinary
 dispatch across those runs was 18.6us. Whatever the mechanism is, it needs the ring.
 
-**Not established:** why a queued wait callback is not dispatched until a work item is submitted.
-Nothing measured so far observes the pool's own thread accounting; the gap is inside the pool, where
-this workspace's trace cannot see. The next experiments are queued in
-[CHECKLIST.md](CHECKLIST.md) under `M26.13`.
+**Not established:** why the pool stops dispatching, and why a work submit is the one thing that
+restarts it. Nothing measured so far observes the pool's own thread accounting; the interval between
+an object being armed and its trampoline being entered is inside the pool, where this workspace's
+trace cannot reach. The next experiments are queued in [CHECKLIST.md](CHECKLIST.md) under `M26.13`.
 
 **Why it matters beyond these two tests.** The sabotage harness runs the whole suite once per case,
 and a suite that fails for this reason is recorded as the case being `caught`. That is the dangerous
