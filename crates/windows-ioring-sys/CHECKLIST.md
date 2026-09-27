@@ -356,6 +356,8 @@ about this crate's own surface rather than about storage at all.
 
 - [x] **M26.13.9** -- It never self-releases. With the probe removed the delivery never arrives in 65s, so this is a permanent hang and the `delayed dispatch` claim was an artifact of the instrument. -> [completed 2026-09-27](COMPLETED-CHECKLIST.md#m26139)
 
+- [x] **M26.13.10** -- Not a missed wake: re-signalling the event the wait is armed on releases nothing in 5 of 5, with every SetEvent's success recorded. -> [completed 2026-09-27](COMPLETED-CHECKLIST.md#m261310)
+
 ## M28+ -- Opened by the inventory
 
 - [x] **M28.7** -- Decided against: the ring can answer 1 of 4 violations, and an internal check would be wrong about 13 live `_raw` push sites. -> [completed 2026-09-26](COMPLETED-CHECKLIST.md#m287)

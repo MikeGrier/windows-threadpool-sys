@@ -4701,3 +4701,34 @@ permanent lost wakeup -- was right all along. Corrected in
 something else, so all of them stand: the stall ends on a work submit and at no other time, nothing
 else dispatches during it, no Win32 call blocks, no exception is raised, and it is never seen off
 the default pool. What changes is the severity and the wording -- this is a hang, not a delay.
+
+## Moved 2026-09-27 16:11:58 -04:00 -- M26.13.10, the best hypothesis this failure has had, refuted
+
+### <a id="m261310"></a>M26.13.10 -- Not a missed wake: re-signalling the event the wait is armed on releases nothing in 5 of 5, with every SetEvent's success recorded. *(completed 2026-09-27 16:11:58 -04:00)*
+
+**The strongest hypothesis so far, and it came from review.** Everything about the signature fits a
+lost wakeup: `callbacks run: 0`, an auto-reset event ([D-21](DESIGN-NOTES.md#d-21)) whose signal is
+consumed rather than left pending, an edge that cannot re-arm without the queue returning to empty
+([D-19](DESIGN-NOTES.md#d-19)), and a stall now known to be permanent. This crate has had exactly
+that bug twice, in [D-68](DESIGN-NOTES.md#d-68) and [D-77](DESIGN-NOTES.md#d-77).
+
+**The test:** if the wait is armed and healthy and merely never woken, setting that same event again
+must release it -- with no work submitted. `SetEvent` is safe where a zero-timeout poll is not,
+because setting an auto-reset event can only add a signal, never consume one; the poll would have
+manufactured the bug it was looking for, which is why
+[M26.13.3](COMPLETED-CHECKLIST.md#m26133) forbade it.
+
+**Result: 5 of 5 releases nothing.** Three seconds pass between the signal and the delivery, and the
+delivery lands at the control work submit, never at the signal.
+[measurements/2026-09-27-not-a-missed-wake/](measurements/2026-09-27-not-a-missed-wake/README.md).
+
+**The positive control is what makes that a refutation rather than a null.** A `SetEvent` that
+quietly failed would look identical to a signal that did nothing, so every call's return value is
+recorded. Two captures show `0` for the first handle of each pass -- the trigger's delivery, already
+dropped, so its duplicate is closed. Expected, and worth seeing. **Both victims' handles returned 1
+in every capture.**
+
+**So the fault is not in the signal and not in the arming.** It is that the pool does not dispatch,
+which [M26.13.4](COMPLETED-CHECKLIST.md#m26134) showed from the other direction when a fresh wait, a
+fresh timer and a fresh I/O completion all failed to dispatch in the same window. None of D-19, D-68
+or D-77 is implicated.
