@@ -14,9 +14,72 @@ examined without capping.
 
 The trace facility, its targets and its filter are documented on
 [windows-threadpool-sys](../windows-threadpool-sys/src/trace.rs)'s `trace`
-module. The columns are: elapsed seconds, thread id, target, event, and two
-payload slots whose meaning is per-event and given in the reference table at the
-bottom.
+module.
+
+## How to read a row
+
+Every row has the same six fields, and none of them is labelled in the dump:
+
+```text
+      5.323957s t1253864 wait                   trampoline-entered           1783077454640      0
+      \_______/ \______/ \__________________/   \______________________/     \___________/  \___/
+          1         2            3                          4                      5          6
+```
+
+| # | Field | Meaning |
+|---|---|---|
+| 1 | elapsed | seconds since the trace's own clock started, which is the first time anything was recorded |
+| 2 | thread | `GetCurrentThreadId` of whoever recorded it |
+| 3 | target | the subsystem: `wait`, `work`, `io`, `timer`, `timer-periodic`, `exception` from the pool crate; `delivery` from this crate; `postmortem` and `experiment` from the test |
+| 4 | event | what happened |
+| 5 | slot a | first payload, **meaning depends on the event** |
+| 6 | slot b | second payload, likewise; `0` where the event carries only one value or none |
+
+The two payload slots are plain `u64`s with no per-event labelling, which is
+what keeps recording free of formatting and allocation. The price is that they
+can only be decoded by looking the event up in the table at the bottom of this
+document.
+
+### Where a callback begins and ends
+
+Two nested pairs, and telling them apart matters:
+
+- **`<target> trampoline-entered` / `trampoline-left`** bracket the **pool
+  callback** -- the `extern "system"` function the thread pool itself calls.
+  Between them, a pool thread is inside our code.
+- **`delivery callback-entered` / `callback-left`** bracket the **body of
+  `EventDelivery`'s closure**, which sits *inside* the wait's trampoline pair.
+  Between them, the ring is being drained.
+
+So a normal delivery nests like this, all on one pool thread:
+
+```text
+wait trampoline-entered        <- the pool entered our callback
+  delivery callback-entered    <- our closure began
+    ... drain, re-arm, drain ...
+  delivery callback-left
+wait trampoline-left           <- the pool callback returned
+```
+
+An entry with no matching exit means a callback is still running or blocked. No
+entry at all means the pool never dispatched. Those are different faults, which
+is why both ends are recorded.
+
+### The two different `armed` events
+
+They are easy to confuse and mean different things:
+
+- **`wait armed`** is the **Win32 call**: `SetThreadpoolWait` has just been
+  issued. It is recorded at the one place that call is made, so it covers the
+  first arming, the cleanup-group arming, and every re-arm. Slot a is the
+  `PTP_WAIT`, slot b the handle now being watched.
+- **`delivery armed`** is a **milestone in `EventDelivery::new`**: construction
+  has finished its arming step. It carries no payload. It follows `wait armed`
+  by a microsecond or two and tells you *who* did the arming, not that a second
+  arming happened.
+
+The same shape applies to `timer armed`, which is `SetThreadpoolTimer`, with
+slot b carrying the period in milliseconds -- zero for a one-shot.
 
 ## The cast
 
@@ -220,6 +283,7 @@ measurement is linked.
 | a thread minimum prevents it | ruled out -- the no-minimum private arm is already clean ([private-pool](measurements/2026-09-27-private-pool-does-not-stall/README.md)) |
 | our callbacks occupy the pool's threads | ruled out -- zero trampolines entered during the stall, in 27 captures |
 | announcing them `runs_long` prevents it | ruled out -- no measurable effect ([the-pool-has-no-worker](measurements/2026-09-27-the-pool-has-no-worker/README.md)) |
+| an exception is being raised and swallowed during the window | ruled out -- a vectored exception handler saw **none**, in 18 captures ([exceptions-during-the-stall](measurements/2026-09-27-exceptions-during-the-stall/README.md)) |
 | it happens off the default process pool | never observed -- 0 in 12000 runs across three private-pool arms |
 
 **What is left is one question:** why the pool creates a worker for a submitted
@@ -275,6 +339,18 @@ worker* is not -- nothing here counts pool threads specifically.
 | `postmortem` | `wait-probe-answered` | 1 or 0 | -- | its wait reported in |
 | `postmortem` | `second-wait-begin` / `-ended` | -- / microseconds | -- | the post-mortem's further wait |
 | `experiment` | `threads-at-stall` / `-after-poke` | thread count | -- | a Toolhelp snapshot, post-mortem only |
+| `exception` | `raised` | exception code | raise address | a first-chance exception, seen by a vectored handler that declines to handle it |
+
+The exception code is the raw `NTSTATUS`, printed in decimal like every other
+slot. Two values seen so far: `1073807366` is `0x40010006`
+(`DBG_PRINTEXCEPTION_C`, what `OutputDebugStringA` raises), and `3765269347` is
+`0xE06D7363`, the C++ exception code that a Rust panic uses on MSVC targets.
+Slot b is `ExceptionRecord->ExceptionAddress` -- the instruction that raised.
+
+**The observer is live from `0.000000s` by construction**, because installing it
+is what starts the trace's clock. So the absence of `exception raised` rows in a
+capture means no exception was raised in the traced run, not that the observer
+was late.
 
 Several of those appear in no capture here because the reproducer builds no
 timer and no `TP_IO`; they are listed so a future capture of something else
