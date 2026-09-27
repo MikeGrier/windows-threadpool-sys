@@ -4605,3 +4605,40 @@ worker for a submitted work item but not for a wait, timer, or I/O callback that
 [event_delivery.rs](tests/event_delivery.rs) plus one dev-dependency feature, both reverted after
 the runs and described in
 [measurements/2026-09-27-the-pool-has-no-worker/](measurements/2026-09-27-the-pool-has-no-worker/README.md).
+
+## Moved 2026-09-27 15:07:48 -04:00 -- M26.13.7, a run with every instrument on
+
+### <a id="m26137"></a>M26.13.7 -- With call-boundary and exception tracing on, no Win32 call blocks during the stall: 707 bracketed calls across 24 captures all returned, slowest 220us. *(completed 2026-09-27 15:07:48 -04:00)*
+
+**The buffer was checked first, not after.** The trace had roughly tripled -- this workspace's
+threadpool suite went from 14061 records to 47997 with the new targets on -- leaving a third of a
+buffer spare at the old capacity. Raised to 262144 before the run rather than discovering a
+truncated capture afterwards. The binary that actually captures holds **153** records, identically
+in all 24 captures, so it is nowhere near either figure.
+
+**The run:** 24 failures in 4000, in the range this configuration has produced all day.
+
+**What it rules out, measured rather than assumed:**
+
+- **No Win32 call blocked.** Every `syscall-enter` had its `syscall-leave`, in all 24 captures.
+  707 calls measured; the slowest single one anywhere is 220us.
+- **No pool lock contended at arming time.** `CreateThreadpoolWait` returns in 2us and
+  `SetThreadpoolWait` in 1us, immediately before the silence begins.
+- **No exception was raised**, confirming M26.13.6's result on a second population.
+
+Figures and captures in
+[measurements/2026-09-27-no-win32-call-blocks/](measurements/2026-09-27-no-win32-call-blocks/README.md).
+
+**One observation, offered as one.** `SubmitThreadpoolWork` is the slowest call in the table by an
+order of magnitude -- median 85us against 1 to 3us for everything else -- and every one of those 48
+measurements is the probe's submit, the call already known to end the stall and to gain the process
+two or three threads. The cost is consistent with work happening inside it that the other calls do
+not do. It is not evidence of what that work is.
+
+**A flaky guard was found and fixed on the way.** The exception observer's test asserted that a
+single raised exception was recorded. Run filtered it passed; run under the full suite with every
+target on it failed, because the handler records with `try_lock` and drops rather than blocks --
+which is the property that makes it safe to run on a thread already inside the trace. The test now
+raises repeatedly and asserts that at least one landed, which keeps the guarantee that matters
+without pretending a designed-in loss does not happen. Worth recording as a method error: the guard
+had only ever been exercised in isolation, and the suite is where it had to hold.

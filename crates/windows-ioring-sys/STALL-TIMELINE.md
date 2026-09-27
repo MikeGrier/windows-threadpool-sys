@@ -284,6 +284,7 @@ measurement is linked.
 | our callbacks occupy the pool's threads | ruled out -- zero trampolines entered during the stall, in 27 captures |
 | announcing them `runs_long` prevents it | ruled out -- no measurable effect ([the-pool-has-no-worker](measurements/2026-09-27-the-pool-has-no-worker/README.md)) |
 | an exception is being raised and swallowed during the window | ruled out -- a vectored exception handler saw **none**, in 18 captures ([exceptions-during-the-stall](measurements/2026-09-27-exceptions-during-the-stall/README.md)) |
+| a Win32 call is blocked, or contending on a pool lock | ruled out -- 707 bracketed calls across 24 captures all returned, slowest 220us ([no-win32-call-blocks](measurements/2026-09-27-no-win32-call-blocks/README.md)) |
 | it happens off the default process pool | never observed -- 0 in 12000 runs across three private-pool arms |
 
 **What is left is one question:** why the pool creates a worker for a submitted

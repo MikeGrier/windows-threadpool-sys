@@ -87,10 +87,19 @@ joined before the victim is checked, and 1500 more where each churn cycle signal
 immediately without waiting for the callback, which is what the trigger test does. Slowest ordinary
 dispatch across those runs was 18.6us. Whatever the mechanism is, it needs the ring.
 
+**No Win32 call blocks during it either.** `M26.13.7` bracketed every Win32 call in
+[windows-threadpool-sys](../windows-threadpool-sys/src/trace.rs) that blocks or takes a pool lock,
+and measured 707 of them across 24 captured stalls: every one returned, and the slowest in the whole
+dataset is 220us. The arming pair that precedes the silence -- `CreateThreadpoolWait` then
+`SetThreadpoolWait` -- takes 2us and 1us respectively.
+[measurements/2026-09-27-no-win32-call-blocks/](measurements/2026-09-27-no-win32-call-blocks/README.md).
+
 **Not established:** why the pool will create a worker for a submitted work item but not for a wait,
 timer, or I/O callback that is already queued. That is the whole of what is left, and it is inside
-the pool, where this workspace's trace cannot reach. The next experiments are queued in
-[CHECKLIST.md](CHECKLIST.md) under `M26.13`.
+the pool, where this workspace's trace cannot reach. Four more readings were ruled out on
+2026-09-27 -- a blocked or contending Win32 call, an exception raised and swallowed, our own
+callbacks holding threads, and a thread minimum -- so what remains is narrow rather than open. The
+next experiments are queued in [CHECKLIST.md](CHECKLIST.md) under `M26.13`.
 
 **Why it matters beyond these two tests.** The sabotage harness runs the whole suite once per case,
 and a suite that fails for this reason is recorded as the case being `caught`. That is the dangerous

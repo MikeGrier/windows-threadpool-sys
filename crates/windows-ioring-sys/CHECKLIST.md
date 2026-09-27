@@ -347,6 +347,8 @@ about this crate's own surface rather than about storage at all.
 
 - [x] **M26.13.6** -- The pool has 6 threads while stalled and 8 or 9 right after the work submit, so it has no worker and makes one; runs-long does not change that, and no callback of ours is holding a thread. -> [completed 2026-09-27](COMPLETED-CHECKLIST.md#m26136)
 
+- [x] **M26.13.7** -- With call-boundary and exception tracing on, no Win32 call blocks during the stall: 707 bracketed calls across 24 captures all returned, slowest 220us. -> [completed 2026-09-27](COMPLETED-CHECKLIST.md#m26137)
+
 ## M28+ -- Opened by the inventory
 
 - [x] **M28.7** -- Decided against: the ring can answer 1 of 4 violations, and an internal check would be wrong about 13 live `_raw` push sites. -> [completed 2026-09-26](COMPLETED-CHECKLIST.md#m287)
