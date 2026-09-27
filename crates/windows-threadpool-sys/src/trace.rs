@@ -146,14 +146,23 @@ mod imp {
     /// consuming the machine, and an overflow now reports itself twice over:
     /// once to stderr as it happens, and again at the head of every dump.
     ///
-    /// **Set from measurement.** The buffer is per-process and each test
-    /// binary is its own process, so the population that can fill it is one
-    /// binary's own run. Both were measured under `WINDOWS_THREADPOOL_TRACE`
-    /// set to everything, and they are four orders of magnitude apart: the
-    /// figures, and what the larger one cost at the previous value, are in
-    /// [the archive entry for
+    /// **Set from measurement, and re-measured when the trace grows.** The
+    /// buffer is per-process and each test binary is its own process, so the
+    /// population that can fill it is one binary's own run. Two measurements,
+    /// both under `WINDOWS_THREADPOOL_TRACE` set to everything:
+    ///
+    /// | | records |
+    /// |---|---|
+    /// | `windows-ioring-sys`' `event_delivery`, the only binary that captures | 89 |
+    /// | this crate's own lib tests, 2026-09-26 | 14061 |
+    /// | this crate's own lib tests, after the call-boundary and exception targets | 47997 |
+    ///
+    /// The third figure is why this is not 65536 any more: adding
+    /// `syscall-enter`/`syscall-leave` and `exception` tripled the volume and
+    /// left only a third of a buffer spare. The figures, and what the smallest
+    /// value cost, are in [the archive entry for
     /// M26.13.2](../../windows-ioring-sys/COMPLETED-CHECKLIST.md#m26132).
-    const CAPACITY: usize = 65536;
+    const CAPACITY: usize = 262_144;
 
     static ARMED: AtomicU8 = AtomicU8::new(ARMED_UNKNOWN);
     const ARMED_UNKNOWN: u8 = 0;

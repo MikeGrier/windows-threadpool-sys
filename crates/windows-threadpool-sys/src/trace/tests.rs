@@ -170,6 +170,15 @@ fn the_filter_narrows_to_the_targets_named() {
 /// the population this observer exists to see, and one a debugger view would
 /// hide behind its own handling.
 ///
+/// **Raised repeatedly on purpose.** The handler records with `try_lock` and
+/// drops the record rather than block, which is what makes it safe to run on a
+/// thread that may already be inside the trace holding that lock. Under the
+/// full suite with every target enabled the buffer lock is hot enough that a
+/// single raise really can be lost -- this test asserted on one raise and was
+/// flaky for exactly that reason. Asserting that *at least one of many* landed
+/// keeps the guarantee that matters (the handler is installed and records)
+/// without pretending a designed-in loss does not happen.
+///
 /// Env-gated like the other guards here, and for the same reason: the filter
 /// is read once per process, so a test cannot set it without racing every
 /// other test in the binary. Feature-gated too, because without `trace` there
@@ -180,16 +189,25 @@ fn the_exception_observer_notes_a_first_chance_exception() {
     if !wants("exception") {
         return;
     }
+    /// Enough that losing every one to lock contention is not a thing that
+    /// happens, few enough to stay instant.
+    const RAISES: usize = 64;
+
     let before = counted("exception", "raised");
     let text = c"windows-threadpool-sys exception observer probe";
-    // SAFETY: a valid NUL-terminated string, live for the duration of the call.
-    unsafe {
-        windows_sys::Win32::System::Diagnostics::Debug::OutputDebugStringA(text.as_ptr().cast())
-    };
-    assert!(
-        counted("exception", "raised") > before,
-        "the trace is narrowed to `exception` and a first-chance exception has just been \
-         raised, so either the handler is not installed or it recorded nothing"
+    for _ in 0..RAISES {
+        // SAFETY: a valid NUL-terminated string, live for the duration of the call.
+        unsafe {
+            windows_sys::Win32::System::Diagnostics::Debug::OutputDebugStringA(text.as_ptr().cast())
+        };
+        if counted("exception", "raised") > before {
+            return;
+        }
+    }
+    panic!(
+        "the trace is narrowed to `exception` and {RAISES} first-chance exceptions have just been \
+         raised with none recorded, so either the handler is not installed or it is losing every \
+         record"
     );
 }
 
