@@ -290,6 +290,8 @@ measurement is linked.
 | the pool is starved of threads | **ruled out** -- a dump taken while stalled shows three workers parked idle in `ZwWaitForWorkViaWorkerFactory` ([the-workers-are-there](measurements/2026-09-27-the-workers-are-there/README.md)) |
 | the fault is in *registering* with the pool, not dispatching | ruled out -- a timer armed while the pool was healthy, due inside the stall window, fires only at the release, 10 of 10 ([a-timer-armed-while-healthy-also-stops](measurements/2026-09-27-a-timer-armed-while-healthy-also-stops/README.md)) |
 | the pool runs for a while and then wedges | ruled out -- with a 100ms heartbeat, **no** pool callback of any kind is dispatched before the release, in 18 of 18: it never starts ([the-pool-never-starts](measurements/2026-09-27-the-pool-never-starts/README.md)) |
+| *anything at all* happens in the process during the window | ruled out -- at the 15.625ms system tick the last setup record and the first post-mortem record are **adjacent lines**: no callback, no syscall, no exception, in 13 of 13 ([at-the-system-tick](measurements/2026-09-27-at-the-system-tick-it-still-never-starts/README.md)) |
+| the onset is somewhere late in the five seconds | ruled out -- bracketed to the first 15.7ms: a timer armed at 0.00004s, before the trigger's first record, is due at 15.7ms and never fires |
 | it happens off the default process pool | never observed -- 0 in 12000 runs across three private-pool arms |
 
 **What is left is one question:** why the pool creates a worker for a submitted
@@ -298,7 +300,10 @@ is queued as M26.13 experiment 1 in [CHECKLIST.md](CHECKLIST.md).
 
 **And one inference boundary.** That the process gains threads when dispatch
 resumes is measured. That the six it holds while stalled contain *no idle pool
-worker* is not -- nothing here counts pool threads specifically.
+worker* was inferred from that and is **false**: the dump in
+[the-workers-are-there](measurements/2026-09-27-the-workers-are-there/README.md)
+finds three parked in `ZwWaitForWorkViaWorkerFactory`. Why the pool adds threads
+it does not need is part of the open question above.
 
 ## Reference: every event the trace can emit, and the API behind it
 

@@ -105,6 +105,9 @@ dataset is 220us. The arming pair that precedes the silence -- `CreateThreadpool
 **In a stalled run the pool dispatches nothing at all, from process start.** `M26.13.13` shortened the standing heartbeat to 100ms, making it a clock. Its first expiry at 0.1s is missed, about 50 consecutive expiries are missed, and across 18 captures **not one** pool callback of any kind -- wait, timer, work or I/O -- is dispatched before the release. So this is not a pool that runs and then wedges; the five seconds is a period during which it never starts.
 [measurements/2026-09-27-the-pool-never-starts/](measurements/2026-09-27-the-pool-never-starts/README.md).
 
+**Nothing whatsoever happens in the process during the window.** `M26.13.14` shortened the heartbeat again to 15.625ms -- the default Windows tick, the finest period reachable without `timeBeginPeriod` changing the machine's timer behaviour under the measurement. It misses 320 consecutive expiries, and in 13 of 13 captures the last setup record (`delivery setup-signalled`, about 2.5ms) and the first post-mortem record (about 5.01s) are **adjacent lines**. The trace brackets every Win32 call and carries a vectored exception handler, so the window contains no callback, no syscall and no exception. The heartbeat is also armed *before* the trigger's first record, which brackets the onset to the first 15.7ms.
+[measurements/2026-09-27-at-the-system-tick-it-still-never-starts/](measurements/2026-09-27-at-the-system-tick-it-still-never-starts/README.md).
+
 **Not established:** why the pool will create a worker for a submitted work item but not for a wait,
 timer, or I/O callback that is already queued. That is the whole of what is left, and it is inside
 the pool, where this workspace's trace cannot reach. Four more readings were ruled out on

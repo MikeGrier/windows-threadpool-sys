@@ -4832,3 +4832,39 @@ a wedged pool and a broken probe are not confusable.
 never have dispatched in this process, or whether it was put into this state during setup. Nothing
 in these runs needs a callback before the deliveries are armed at about 2.5ms, so there is no
 earlier successful dispatch to compare against. A period of one or two milliseconds would give one.
+### <a id="m261314"></a>M26.13.14 -- At the 15.625ms system tick the heartbeat misses 320 consecutive expiries and the trace window is empty end to end, in 13 of 13; the onset is bracketed to the first 15.7ms, and the sub-millisecond period item 0 asked for is not reachable this way. *(completed 2026-09-27 16:59:53 -04:00)*
+
+**Same probe as [M26.13.13](COMPLETED-CHECKLIST.md#m261313), period changed from a hundred
+milliseconds to 15.625ms** -- the default Windows timer interval, 64 ticks a second, and the finest
+period a process can ask for without raising the machine's global timer resolution with
+`timeBeginPeriod`. A shorter request lands on the same tick.
+
+**Rate unaffected:** 13 in 4000, inside the day's range (13, 21, 14, 18, 24, 14, 10, 18). A timer
+expiring 64 times a second does not prevent the fault.
+
+**320 consecutive expiries missed, in every capture.** The minimum and the maximum across the 13 are
+both 320. The heartbeat fires exactly once, at the release, about a tenth of a millisecond behind
+the post-mortem probe's work item -- which remains the first pool callback of any kind in the
+process.
+
+**The new thing this shows: the trace window is empty.** At 100ms the claim was "no pool callback is
+dispatched before the release". At the tick the instrument is fine enough for a plainer statement --
+the last record before the stall (`delivery setup-signalled`, about 2.5ms) and the first record
+after it (`postmortem delivery-wait-expired`, about 5.01s) are **adjacent lines in the capture**.
+`records_in_between` is 0 in all 13. Since the trace brackets every Win32 call and carries a
+vectored exception handler as well as every callback, the window contains no callback, no syscall
+and no exception. Nothing happens in the process at all.
+
+**A tighter bracket on the onset.** In all 13 the heartbeat's `armed` record (about 0.00004s)
+precedes the trigger's first `delivery event-attached` (about 0.00015s), so the timer was registered
+while the pool was not merely healthy but untouched by the trigger -- and it still never fired.
+With its 15.7ms due time that brackets the onset to the interval between process start and 15.7ms;
+the trigger's whole create-and-drop completes inside the first 0.2ms of it.
+
+**It ruled out its own successor's method.** Item 0 asked for a heartbeat whose first expiry
+precedes the deliveries. 15.625ms is the floor for a thread-pool timer without `timeBeginPeriod`,
+and 15.7ms is still after the deliveries are armed at about 2.5ms, so no timer period reaches it
+without changing the machine's timer behaviour under the measurement. Item 0 is re-planned to arm a
+wait on an **already-signalled** event at process start instead: due immediately, no timer
+resolution needed, and in the kernel-delivered class that fails.
+[measurements/2026-09-27-at-the-system-tick-it-still-never-starts/](measurements/2026-09-27-at-the-system-tick-it-still-never-starts/README.md).
