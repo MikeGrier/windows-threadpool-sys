@@ -4562,7 +4562,10 @@ mechanism, not a hint".
 
 **The supply half is confirmed, and it is the sharpest evidence yet.** Counting the process's
 threads in the post-mortem: **6 while stalled, 8 or 9 immediately after the work submit**, in all
-six captures across both arms. The pool has no worker and makes two or three the moment work is
+six captures across both arms -- and, in a follow-up that examined **every** failure rather than a
+capped sample, in 14 of 14. `at_stall` was 6 every single time. The capped figure is left above
+because it is what this item measured; the uncapped one is the stronger claim and lives with the
+data. The pool has no worker and makes two or three the moment work is
 queued to it. `M26.13` had recorded this as needing an external instrument; it does not -- a
 Toolhelp snapshot in the post-mortem is enough.
 

@@ -78,3 +78,39 @@ occurred; the control then returned to its usual rate.
 This is the hazard the trace facility's own module documentation is built
 around, arriving through a different door: an instrument cheap enough to leave
 in a callback is not automatically cheap enough to put on a setup path.
+
+## Addendum: how often the signature reproduces, every failure examined
+
+The arms above capped capture at three failures each, so the thread counts were
+read from six captures out of thirty-three failures. That is a sample, and it
+cannot support a statement about how often the signature appears. Re-measured
+with **every** failure examined, default pool, the same instrumentation in
+place:
+
+| | |
+|---|---|
+| failures | 14 in 4000 runs |
+| showing the signature (`at_stall` < `after_poke`) | 14 of 14 |
+| `at_stall` | 6, in all 14 |
+| `after_poke` | 8 in twelve, 9 in two |
+
+Raw captures and the per-failure classification are in
+[every-failure/](every-failure), including
+[signature.csv](every-failure/signature.csv).
+
+Three fixed-size measurements of the same configuration now exist -- 13, 21 and
+14 failures in 4000 runs each -- which are consistent with a single underlying
+rate rather than with the arms differing.
+
+**What this does and does not establish.** That the process gains threads at the
+moment dispatch resumes is measured, with no counterexample. That the six it
+holds while stalled contain *no idle pool worker* is **not**: the count is
+consistent with the pool creating threads on demand, but nothing here counts
+pool threads specifically.
+
+An attempt to settle it from thread ids was discarded as **vacuous**, and is
+recorded so it is not retried: no pool thread can appear in this trace before a
+callback runs, and no callback runs during the stall, so the thread that
+dispatches first necessarily shows no earlier records whether it was newly
+created or already idle. The check cannot distinguish the two cases, and a
+green-looking result from it would have meant nothing.
