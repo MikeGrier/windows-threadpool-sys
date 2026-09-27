@@ -282,6 +282,52 @@ about this crate's own surface rather than about storage at all.
   measured from the start of the post-mortem, which is after the probe has run. Fixing that wording
   is part of this item.
 
+- [ ] **M26.13.1** -- **Trace entry and exit of every pool-invoked functor, and of the post-mortem
+  path.** `M26.13`'s capture has no records at all between 0.0023s and 5.0087s, so the stall itself
+  is unobserved. Every record already carries time and thread id (`0.002288s t644556 delivery
+  setup-signalled`), so this is about *coverage*, not format.
+
+  Add paired entry/exit records, in [windows-threadpool-sys](../windows-threadpool-sys/src/wait.rs)
+  unless noted:
+  1. the wait trampoline -- entry exists (`trampoline-entered`); **exit does not**;
+  2. `WaitActivation::rearm` / `rearm_reporting` -- the re-arm issued from a pool thread;
+  3. work-item callbacks in [work.rs](../windows-threadpool-sys/src/work.rs), both ends;
+  4. `ThreadpoolWait::drop`'s stages already trace; confirm no gap between `drop-drained` and the
+     handle's own close.
+
+  Then the untraced post-mortem in [event_delivery.rs](tests/event_delivery.rs), which is where the
+  release happens: the `outstanding()` call, `pool_liveness`'s work submit / work ran / fresh wait
+  created / fresh wait fired, and the `recv_timeout` expiry itself.
+
+  **Why this ordering matters.** The probe's `wait created` is stamped *after* the first
+  `trampoline-entered`, so the fresh wait is not what released the stall and something earlier in
+  that path is. Without these records the question cannot be settled.
+
+- [ ] **M26.13.2** -- **Validate the trace buffer under the full suite before trusting a capture.**
+  `CAPACITY` is 8192 and evicts **oldest** first, which is the wrong bias here -- this failure is
+  set up in the first milliseconds. A 3-test filtered run did not overflow (the capture began at
+  `0.000000s` with no dropped-records marker); the full suite has never been checked. Run one or two
+  full-suite runs with `WINDOWS_THREADPOOL_TRACE='*'`, look for the
+  `... earlier record(s) dropped` line, and raise `CAPACITY` until it is absent. Do this **before**
+  M26.13.3, or a capture may be missing exactly the setup records that matter.
+
+- [ ] **M26.13.3** -- **Re-run the reproducer with the fuller trace and read the filled-in gap.**
+  Either reproducer trips at roughly one run in three hundred: the filtered
+  `completions_ dropping_with` loop, or the sabotage command
+  `cargo test -p windows-ioring-sys --locked --all-features` (measured 1 spurious failure in 300).
+  With `WINDOWS_THREADPOOL_TRACE='*'` one was caught at run 62. The question to answer first is what
+  record immediately precedes `trampoline-entered` at the five-second mark.
+
+  **A 5s timeout is already ruled out as the cause.** No 5-second constant exists anywhere in
+  either crate's `src/`; the only ones are the tests' own `DELIVERY_BOUND` and `SIGNAL_TIMEOUT_MS`,
+  and every wait is armed with `None`, i.e. `SetThreadpoolWait(..., NULL)` with no timeout. So the
+  coincidence with the test's bound points at the test thread waking, not at a library timer.
+
+  **Do not poll the event to check whether it is still signalled.** It is auto-reset, so a
+  successful zero-timeout poll consumes the signal and the callback then genuinely never runs --
+  the probe would manufacture the bug it is looking for. Reading that state non-destructively
+  needs `NtQueryEvent`, which is a dependency decision to raise rather than take in passing.
+
 ## M28+ -- Opened by the inventory
 
 - [x] **M28.7** -- Decided against: the ring can answer 1 of 4 violations, and an internal check would be wrong about 13 live `_raw` push sites. -> [completed 2026-09-26](COMPLETED-CHECKLIST.md#m287)
