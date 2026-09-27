@@ -358,6 +358,8 @@ about this crate's own surface rather than about storage at all.
 
 - [x] **M26.13.10** -- Not a missed wake: re-signalling the event the wait is armed on releases nothing in 5 of 5, with every SetEvent's success recorded. -> [completed 2026-09-27](COMPLETED-CHECKLIST.md#m261310)
 
+- [x] **M26.13.11** -- A dump taken while stalled shows three pool workers parked idle in `ZwWaitForWorkViaWorkerFactory`, so the pool is not starved of threads and `M26.13.6`'s reading was wrong. -> [completed 2026-09-27](COMPLETED-CHECKLIST.md#m261311)
+
 ## M28+ -- Opened by the inventory
 
 - [x] **M28.7** -- Decided against: the ring can answer 1 of 4 violations, and an internal check would be wrong about 13 live `_raw` push sites. -> [completed 2026-09-26](COMPLETED-CHECKLIST.md#m287)

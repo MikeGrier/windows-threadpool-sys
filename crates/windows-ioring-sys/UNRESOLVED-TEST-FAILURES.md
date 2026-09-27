@@ -26,7 +26,7 @@ arm with no minimum set was already clean, so the worker-supply reading the expe
 to test is **not** supported. Figures and the positive control in
 [measurements/2026-09-27-private-pool-does-not-stall/](measurements/2026-09-27-private-pool-does-not-stall/README.md).
 
-**The pool has no worker while stalled, and makes one when work is submitted.** `M26.13.6` counted
+**The pool has idle workers while stalled, and does not dispatch to them.** Corrected 2026-09-27 by `M26.13.11`: a full dump taken while stalled shows **three** threads parked in `ntdll!ZwWaitForWorkViaWorkerFactory` under `ntdll!TppWorkerThread`. An earlier reading of this entry said the pool had *no* worker and created one on the work submit; the thread count was right and the inference was wrong. [measurements/2026-09-27-the-workers-are-there/](measurements/2026-09-27-the-workers-are-there/README.md). The count evidence below stands as counts. `M26.13.6` counted
 the process's threads in the post-mortem: 6 while stalled, 8 or 9 immediately after the work submit,
 in every capture. Two readings it rules out rather than supports: this workspace's own callbacks are
 not occupying the threads -- across 27 captures, **zero** trampolines are entered during the stall,

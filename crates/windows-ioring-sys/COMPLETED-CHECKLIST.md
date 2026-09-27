@@ -4732,3 +4732,41 @@ in every capture.**
 which [M26.13.4](COMPLETED-CHECKLIST.md#m26134) showed from the other direction when a fresh wait, a
 fresh timer and a fresh I/O completion all failed to dispatch in the same window. None of D-19, D-68
 or D-77 is implicated.
+
+## Moved 2026-09-27 16:22:50 -04:00 -- M26.13.11, a dump, and a thesis refuted
+
+### <a id="m261311"></a>M26.13.11 -- A dump taken while stalled shows three pool workers parked idle, so the pool is not starved of threads and M26.13.6's reading was wrong. *(completed 2026-09-27 16:22:50 -04:00)*
+
+**Suggested in review**, along with the observation that the same hook used to inject a `SetEvent`
+could inject a process dump. It could, and out of process: the post-mortem spawns
+`cdb -pvr -p <pid> -c ".dump /ma <path>; qd"` at the moment of failure, before the liveness probe,
+so what is captured is the faulted state rather than the repaired one. Non-invasive attach injects
+no thread; `qd` leaves the process running, and it went on to produce its usual report.
+
+**The dump shows six threads, three of them the pool's**, all parked in
+`ntdll!ZwWaitForWorkViaWorkerFactory` under `ntdll!TppWorkerThread` -- the kernel's "give me
+work" wait. They are idle and available.
+
+**That corrects `M26.13.6`.** It measured 6 threads while stalled and 8 or 9 after the work submit
+and read it as "the pool has no worker and makes one". The counts were right; the inference was
+wrong, and it was the kind of inference a thread *count* can never support -- it cannot say what the
+threads are. Recorded in
+[measurements/2026-09-27-the-workers-are-there/](measurements/2026-09-27-the-workers-are-there/README.md).
+
+**So the question is now sharper and stranger.** The pool has idle workers. The wait is armed. Its
+event can be signalled successfully ([M26.13.10](COMPLETED-CHECKLIST.md#m261310)). No Win32 call
+blocks ([M26.13.7](COMPLETED-CHECKLIST.md#m26137)). And no callback is handed to any of those idle
+workers until a work item is submitted.
+
+**One observation, offered as one.** Of the four ways into this pool, the three that fail during the
+stall -- a wait's event signalling, a timer expiring, an I/O completing -- are all delivered **by the
+kernel** into the worker factory, while the one that works, `SubmitThreadpoolWork`, is a user-mode
+queue push. Whether that distinction is the mechanism is not established, and a dump cannot settle
+it: it captures state, not a delivery path.
+
+**On querying the pool's thread count:** there is no supported Win32 API, which the root
+[DESIGN-NOTES.md](../../DESIGN-NOTES.md) already recorded. What works is counting threads whose
+stack or Win32 start address is `ntdll!TppWorkerThread`, either from a dump as here or at run time
+through `NtQueryInformationThread`. The kernel does track live and available counts in the worker
+factory object, reachable through `NtQueryInformationWorkerFactory`, but the pool exposes no handle
+to it -- so that route needs the handle recovered from a dump or by enumeration.
