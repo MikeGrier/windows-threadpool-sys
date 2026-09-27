@@ -94,7 +94,10 @@ impl ThreadpoolPool {
     /// cannot allocate the pool.
     pub fn new() -> io::Result<Self> {
         // SAFETY: the reserved parameter must be null; no other input is read.
-        let pool = unsafe { CreateThreadpool(ptr::null()) };
+        let pool = crate::trace_call!("CreateThreadpool", 0, 0, {
+            // SAFETY: a null reserved argument is the documented call.
+            unsafe { CreateThreadpool(ptr::null()) }
+        });
         if pool == 0 {
             return Err(io::Error::last_os_error());
         }
@@ -171,7 +174,10 @@ impl ThreadpoolPool {
             ));
         }
         // SAFETY: pool is valid for the lifetime of self.
-        unsafe { SetThreadpoolThreadMaximum(self.pool, maximum) };
+        crate::trace_call!("SetThreadpoolThreadMaximum", self.pool, maximum, {
+            // SAFETY: pool is valid for the lifetime of self.
+            unsafe { SetThreadpoolThreadMaximum(self.pool, maximum) };
+        });
         limits.maximum = Some(maximum);
         Ok(())
     }
@@ -218,7 +224,12 @@ impl ThreadpoolPool {
             ));
         }
         // SAFETY: pool is valid for the lifetime of self.
-        let ok = unsafe { SetThreadpoolThreadMinimum(self.pool, minimum) };
+        // This one really does block: it creates threads, and is documented to
+        // fail when it cannot.
+        let ok = crate::trace_call!("SetThreadpoolThreadMinimum", self.pool, minimum, {
+            // SAFETY: pool is valid for the lifetime of self.
+            unsafe { SetThreadpoolThreadMinimum(self.pool, minimum) }
+        });
         if ok == 0 {
             return Err(io::Error::last_os_error());
         }
@@ -236,7 +247,10 @@ impl Drop for ThreadpoolPool {
     fn drop(&mut self) {
         // SAFETY: pool is valid and owned; the OS releases it once its last
         // member object is released.
-        unsafe { CloseThreadpool(self.pool) };
+        crate::trace_call!("CloseThreadpool", self.pool, 0, {
+            // SAFETY: pool is valid and closed exactly once, here.
+            unsafe { CloseThreadpool(self.pool) };
+        });
     }
 }
 

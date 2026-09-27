@@ -264,15 +264,17 @@ impl ThreadpoolPeriodicTimer {
         }));
         let env_ptr = env.map_or(ptr::null_mut(), |e| e.as_mut_ptr());
 
-        // SAFETY: context is a valid heap pointer that outlives every callback,
-        // and env_ptr is valid (or null) for the duration of this call.
-        let timer = unsafe {
-            CreateThreadpoolTimer(
-                Some(periodic_trampoline),
-                context.cast(),
-                env_ptr.cast_const(),
-            )
-        };
+        let timer = crate::trace_call!("CreateThreadpoolTimer", 0, millis_u32(period), {
+            // SAFETY: context is a valid heap pointer that outlives every callback,
+            // and env_ptr is valid (or null) for the duration of this call.
+            unsafe {
+                CreateThreadpoolTimer(
+                    Some(periodic_trampoline),
+                    context.cast(),
+                    env_ptr.cast_const(),
+                )
+            }
+        });
 
         if timer == 0 {
             let error = io::Error::last_os_error();
@@ -372,7 +374,10 @@ impl ThreadpoolPeriodicTimer {
     #[must_use]
     pub fn is_running(&self) -> bool {
         // SAFETY: timer is valid for the lifetime of self.
-        unsafe { IsThreadpoolTimerSet(self.timer) != 0 }
+        crate::trace_call!("IsThreadpoolTimerSet", self.timer, 0, {
+            // SAFETY: timer is valid for the lifetime of self.
+            unsafe { IsThreadpoolTimerSet(self.timer) != 0 }
+        })
     }
 
     /// Block until all queued and executing ticks have completed.
@@ -381,7 +386,10 @@ impl ThreadpoolPeriodicTimer {
     /// new ticks. [`ThreadpoolPeriodicTimer::stop_and_drain`] does both in the right order.
     pub fn wait(&self) {
         // SAFETY: timer is valid for the lifetime of self.
-        unsafe { WaitForThreadpoolTimerCallbacks(self.timer, FALSE) };
+        crate::trace_call!("WaitForThreadpoolTimerCallbacks", self.timer, 0, {
+            // SAFETY: timer is valid for the lifetime of self.
+            unsafe { WaitForThreadpoolTimerCallbacks(self.timer, FALSE) };
+        });
     }
 
     /// Stop the timer and wait until no tick is queued or executing.
@@ -401,7 +409,11 @@ impl ThreadpoolPeriodicTimer {
         self.stop();
         // SAFETY: timer is valid for the lifetime of self. A cancelled timer
         // callback owns no storage, so dropping queued ticks orphans nothing.
-        unsafe { WaitForThreadpoolTimerCallbacks(self.timer, TRUE) };
+        crate::trace_call!("WaitForThreadpoolTimerCallbacks(cancel)", self.timer, 1, {
+            // SAFETY: timer is valid for the lifetime of self. A cancelled timer
+            // callback owns no storage, so dropping queued ticks orphans nothing.
+            unsafe { WaitForThreadpoolTimerCallbacks(self.timer, TRUE) };
+        });
     }
 
     /// Give up ownership, returning the raw object, its callback context, and
@@ -438,10 +450,12 @@ impl Drop for ThreadpoolPeriodicTimer {
 
         // SAFETY: no tick can be queued or executing, so the object can be
         // closed and the context freed exactly once.
-        unsafe {
-            CloseThreadpoolTimer(self.timer);
-            drop(Box::from_raw(self.context));
-        }
+        crate::trace_call!("CloseThreadpoolTimer", self.timer, 0, {
+            // SAFETY: no tick remains, so the object can be closed once.
+            unsafe { CloseThreadpoolTimer(self.timer) };
+        });
+        // SAFETY: nothing can reach the context again; free it exactly once.
+        unsafe { drop(Box::from_raw(self.context)) };
         crate::trace_record!("timer-periodic", "drop-closed", self.timer);
     }
 }

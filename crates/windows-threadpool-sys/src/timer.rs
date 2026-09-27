@@ -130,7 +130,10 @@ pub(crate) fn millis_u32(duration: Duration) -> u32 {
 pub(crate) unsafe fn arm_raw(timer: PTP_TIMER, due: FILETIME, period_ms: u32, window_ms: u32) {
     // SAFETY: forwarded from this function's contract; `due` is read only for
     // the duration of the call.
-    unsafe { SetThreadpoolTimer(timer, &due, period_ms, window_ms) };
+    crate::trace_call!("SetThreadpoolTimer", timer, period_ms, {
+        // SAFETY: forwarded; `due` is read only for the duration of the call.
+        unsafe { SetThreadpoolTimer(timer, &due, period_ms, window_ms) };
+    });
     crate::trace_record!("timer", "armed", timer, period_ms);
 }
 
@@ -139,7 +142,10 @@ pub(crate) unsafe fn arm_raw(timer: PTP_TIMER, due: FILETIME, period_ms: u32, wi
 /// SAFETY: `timer` must be a live `PTP_TIMER`.
 pub(crate) unsafe fn disarm_raw(timer: PTP_TIMER) {
     // SAFETY: forwarded; a null due time is the documented way to stop a timer.
-    unsafe { SetThreadpoolTimer(timer, ptr::null(), 0, 0) };
+    crate::trace_call!("SetThreadpoolTimer(disarm)", timer, 0, {
+        // SAFETY: forwarded; a null due time stops the timer.
+        unsafe { SetThreadpoolTimer(timer, ptr::null(), 0, 0) };
+    });
     crate::trace_record!("timer", "disarmed", timer);
 }
 
@@ -484,9 +490,13 @@ impl ThreadpoolTimer {
 
         // SAFETY: context is a valid heap pointer that outlives every callback,
         // and env_ptr is valid (or null) for the duration of this call.
-        let timer = unsafe {
-            CreateThreadpoolTimer(Some(timer_trampoline), context.cast(), env_ptr.cast_const())
-        };
+        let timer = crate::trace_call!("CreateThreadpoolTimer", 0, 0, {
+            // SAFETY: context is a valid heap pointer that outlives every callback,
+            // and env_ptr is valid (or null) for the duration of this call.
+            unsafe {
+                CreateThreadpoolTimer(Some(timer_trampoline), context.cast(), env_ptr.cast_const())
+            }
+        });
 
         if timer == 0 {
             let error = io::Error::last_os_error();
@@ -565,7 +575,10 @@ impl ThreadpoolTimer {
     #[must_use]
     pub fn is_set(&self) -> bool {
         // SAFETY: timer is valid for the lifetime of self.
-        unsafe { IsThreadpoolTimerSet(self.timer) != 0 }
+        crate::trace_call!("IsThreadpoolTimerSet", self.timer, 0, {
+            // SAFETY: timer is valid for the lifetime of self.
+            unsafe { IsThreadpoolTimerSet(self.timer) != 0 }
+        })
     }
 
     /// Let every queued callback run, and block until none is executing.
@@ -577,7 +590,10 @@ impl ThreadpoolTimer {
     /// [`stop_and_drain`](Self::stop_and_drain) to reach quiescence.
     pub fn wait(&self) {
         // SAFETY: timer is valid for the lifetime of self.
-        unsafe { WaitForThreadpoolTimerCallbacks(self.timer, FALSE) };
+        crate::trace_call!("WaitForThreadpoolTimerCallbacks", self.timer, 0, {
+            // SAFETY: timer is valid for the lifetime of self.
+            unsafe { WaitForThreadpoolTimerCallbacks(self.timer, FALSE) };
+        });
     }
 
     /// Drop callbacks that have not started, then wait for any executing one.
@@ -589,7 +605,10 @@ impl ThreadpoolTimer {
     pub fn cancel_pending(&self) {
         // SAFETY: timer is valid for the lifetime of self. A cancelled timer
         // callback owns no storage, so dropping queued callbacks orphans nothing.
-        unsafe { WaitForThreadpoolTimerCallbacks(self.timer, TRUE) };
+        crate::trace_call!("WaitForThreadpoolTimerCallbacks(cancel)", self.timer, 1, {
+            // SAFETY: timer is valid for the lifetime of self.
+            unsafe { WaitForThreadpoolTimerCallbacks(self.timer, TRUE) };
+        });
     }
 
     /// Stop the timer and block until it is idle, leaving it reusable.
@@ -705,10 +724,12 @@ impl Drop for ThreadpoolTimer {
 
         // SAFETY: no callback can be queued or executing, so the object can be
         // closed and the context freed exactly once.
-        unsafe {
-            CloseThreadpoolTimer(self.timer);
-            drop(Box::from_raw(self.context));
-        }
+        crate::trace_call!("CloseThreadpoolTimer", self.timer, 0, {
+            // SAFETY: no callback remains, so the object can be closed once.
+            unsafe { CloseThreadpoolTimer(self.timer) };
+        });
+        // SAFETY: nothing can reach the context again; free it exactly once.
+        unsafe { drop(Box::from_raw(self.context)) };
         crate::trace_record!("timer", "drop-closed", self.timer);
     }
 }

@@ -268,7 +268,7 @@ mod imp {
         }
         for record in &state.records {
             out.push_str(&format!(
-                "  {:>12.6}s t{:<6} {:<22} {:<28} {:>6} {:>6}\n",
+                "  {:>12.6}s t{:<6} {:<22} {:<36} {:>6} {:>6}\n",
                 record.at.as_secs_f64(),
                 record.thread,
                 record.target,
@@ -481,6 +481,43 @@ macro_rules! trace_record {
             $crate::trace::record($target, $event, $a as u64, $b as u64);
         }
     };
+}
+
+/// Bracket a Win32 call that blocks, or that takes a lock inside the pool.
+///
+/// Records the call's name under `syscall-enter` before it and `syscall-leave`
+/// after, so a call that blocked shows up as an *interval* rather than as a
+/// record with a later timestamp than you expected. The difference matters:
+/// a single record stamped after the call returns cannot distinguish "this was
+/// issued late" from "this took four seconds to return".
+///
+/// Every thread-pool API touches the pool's own synchronisation, and several
+/// block outright -- the `WaitForThreadpool*Callbacks` family,
+/// `CloseThreadpoolCleanupGroupMembers`, `CloseThreadpool`, and
+/// `SetThreadpoolThreadMinimum`, which creates threads. Which of the rest can
+/// contend is not documented, so they are bracketed too rather than assumed
+/// cheap: the whole point is to catch synchronisation nobody expected.
+///
+/// **It is its own target**, so it can be switched on without it. A capture
+/// narrowed to `wait,delivery` is unchanged by this existing; one narrowed to
+/// `syscall` sees only the call boundaries. Argument expressions are evaluated
+/// only when the target is being traced, and the whole thing compiles to the
+/// call alone without the `trace` feature.
+///
+/// ```ignore
+/// crate::trace_call!("SetThreadpoolWait", wait, handle as usize, {
+///     // SAFETY: ...
+///     unsafe { SetThreadpoolWait(wait, handle, ptr::null()) }
+/// })
+/// ```
+#[macro_export]
+macro_rules! trace_call {
+    ($name:literal, $a:expr, $b:expr, $call:block) => {{
+        $crate::trace_record!("syscall-enter", $name, $a, $b);
+        let result = $call;
+        $crate::trace_record!("syscall-leave", $name, $a, $b);
+        result
+    }};
 }
 
 #[cfg(test)]

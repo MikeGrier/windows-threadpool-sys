@@ -246,7 +246,7 @@ fn every_pool_object_records_its_creation_establishment_callbacks_and_teardown()
     // `io` is exercised by `crate::io::tests`, which already has an endpoint
     // and a real overlapped read; asserting there costs a few lines rather than
     // a second copy of that setup here.
-    let expected: [(&str, &[&str]); 4] = [
+    let expected: [(&str, &[&str]); 6] = [
         (
             "wait",
             &[
@@ -307,6 +307,44 @@ fn every_pool_object_records_its_creation_establishment_callbacks_and_teardown()
                 "drop-begin",
                 "drop-drained",
                 "drop-closed",
+            ],
+        ),
+        // The Win32 calls themselves, bracketed so a call that blocked is an
+        // interval rather than a late timestamp. Asserted on both sides,
+        // because an enter with no leave is the finding this exists for and a
+        // missing leave would make every such call look instantaneous.
+        (
+            "syscall-enter",
+            &[
+                "CreateThreadpoolWait",
+                "SetThreadpoolWait",
+                "WaitForThreadpoolWaitCallbacks(cancel)",
+                "CloseThreadpoolWait",
+                "CreateThreadpoolWork",
+                "SubmitThreadpoolWork",
+                "WaitForThreadpoolWorkCallbacks",
+                "CloseThreadpoolWork",
+                "CreateThreadpoolTimer",
+                "SetThreadpoolTimer",
+                "WaitForThreadpoolTimerCallbacks(cancel)",
+                "CloseThreadpoolTimer",
+            ],
+        ),
+        (
+            "syscall-leave",
+            &[
+                "CreateThreadpoolWait",
+                "SetThreadpoolWait",
+                "WaitForThreadpoolWaitCallbacks(cancel)",
+                "CloseThreadpoolWait",
+                "CreateThreadpoolWork",
+                "SubmitThreadpoolWork",
+                "WaitForThreadpoolWorkCallbacks",
+                "CloseThreadpoolWork",
+                "CreateThreadpoolTimer",
+                "SetThreadpoolTimer",
+                "WaitForThreadpoolTimerCallbacks(cancel)",
+                "CloseThreadpoolTimer",
             ],
         ),
     ];

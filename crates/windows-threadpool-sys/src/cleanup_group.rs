@@ -163,7 +163,10 @@ impl CleanupGroup {
     /// Returns the error from `CreateThreadpoolCleanupGroup`.
     pub fn new() -> io::Result<Self> {
         // SAFETY: the call takes no inputs.
-        let group = unsafe { CreateThreadpoolCleanupGroup() };
+        let group = crate::trace_call!("CreateThreadpoolCleanupGroup", 0, 0, {
+            // SAFETY: the call takes no inputs.
+            unsafe { CreateThreadpoolCleanupGroup() }
+        });
         if group == 0 {
             return Err(io::Error::last_os_error());
         }
@@ -395,15 +398,25 @@ impl CleanupGroup {
             }
         }
 
-        // SAFETY: the group is live. This waits for executing callbacks and
-        // releases every member, so afterwards nothing can reach the contexts.
-        unsafe {
-            CloseThreadpoolCleanupGroupMembers(
-                self.group,
-                if cancel_pending { TRUE } else { FALSE },
-                ptr::null_mut(),
-            );
-        }
+        // The longest-blocking call in this crate: it waits for every member's
+        // executing callback. Bracketed so a release that parks is visible as
+        // an interval rather than inferred from the gap after it.
+        crate::trace_call!(
+            "CloseThreadpoolCleanupGroupMembers",
+            self.group,
+            u32::from(cancel_pending),
+            {
+                // SAFETY: the group is live. This waits for executing callbacks and
+                // releases every member, so afterwards nothing can reach the contexts.
+                unsafe {
+                    CloseThreadpoolCleanupGroupMembers(
+                        self.group,
+                        if cancel_pending { TRUE } else { FALSE },
+                        ptr::null_mut(),
+                    );
+                }
+            }
+        );
 
         let resources = std::mem::take(
             &mut *self
@@ -424,7 +437,10 @@ impl Drop for CleanupGroup {
         // Let queued callbacks run, matching the default of `close_members`.
         self.release_members(false);
         // SAFETY: the members are released, so the group can be closed.
-        unsafe { CloseThreadpoolCleanupGroup(self.group) };
+        crate::trace_call!("CloseThreadpoolCleanupGroup", self.group, 0, {
+            // SAFETY: the group is live and closed exactly once, here.
+            unsafe { CloseThreadpoolCleanupGroup(self.group) };
+        });
     }
 }
 
@@ -451,19 +467,28 @@ impl WorkMember<'_> {
     pub fn submit(&self) {
         // SAFETY: the handle is live until the group releases its members,
         // which the borrow on `_group` prevents from happening first.
-        unsafe { SubmitThreadpoolWork(self.handle) };
+        crate::trace_call!("SubmitThreadpoolWork", self.handle, 0, {
+            // SAFETY: the handle is live until the group releases it.
+            unsafe { SubmitThreadpoolWork(self.handle) };
+        });
     }
 
     /// Block until all queued and in-progress invocations have completed.
     pub fn wait(&self) {
         // SAFETY: as above.
-        unsafe { WaitForThreadpoolWorkCallbacks(self.handle, FALSE) };
+        crate::trace_call!("WaitForThreadpoolWorkCallbacks", self.handle, 0, {
+            // SAFETY: the handle is live until the group releases it.
+            unsafe { WaitForThreadpoolWorkCallbacks(self.handle, FALSE) };
+        });
     }
 
     /// Cancel invocations that have not started, then wait for those that have.
     pub fn cancel_pending(&self) {
         // SAFETY: as above.
-        unsafe { WaitForThreadpoolWorkCallbacks(self.handle, TRUE) };
+        crate::trace_call!("WaitForThreadpoolWorkCallbacks(cancel)", self.handle, 1, {
+            // SAFETY: the handle is live until the group releases it.
+            unsafe { WaitForThreadpoolWorkCallbacks(self.handle, TRUE) };
+        });
     }
 }
 
@@ -503,19 +528,28 @@ impl TimerMember<'_> {
     #[must_use]
     pub fn is_set(&self) -> bool {
         // SAFETY: as above.
-        unsafe { IsThreadpoolTimerSet(self.handle) != 0 }
+        crate::trace_call!("IsThreadpoolTimerSet", self.handle, 0, {
+            // SAFETY: the handle is live until the group releases it.
+            unsafe { IsThreadpoolTimerSet(self.handle) != 0 }
+        })
     }
 
     /// Block until all queued and executing callbacks have completed.
     pub fn wait(&self) {
         // SAFETY: as above.
-        unsafe { WaitForThreadpoolTimerCallbacks(self.handle, FALSE) };
+        crate::trace_call!("WaitForThreadpoolTimerCallbacks", self.handle, 0, {
+            // SAFETY: the handle is live until the group releases it.
+            unsafe { WaitForThreadpoolTimerCallbacks(self.handle, FALSE) };
+        });
     }
 
     /// Cancel callbacks that have not started, then wait for those that have.
     pub fn cancel_pending(&self) {
         // SAFETY: as above.
-        unsafe { WaitForThreadpoolTimerCallbacks(self.handle, TRUE) };
+        crate::trace_call!("WaitForThreadpoolTimerCallbacks(cancel)", self.handle, 1, {
+            // SAFETY: the handle is live until the group releases it.
+            unsafe { WaitForThreadpoolTimerCallbacks(self.handle, TRUE) };
+        });
     }
 }
 
@@ -566,13 +600,19 @@ impl PeriodicTimerMember<'_> {
     #[must_use]
     pub fn is_running(&self) -> bool {
         // SAFETY: as above.
-        unsafe { IsThreadpoolTimerSet(self.handle) != 0 }
+        crate::trace_call!("IsThreadpoolTimerSet", self.handle, 0, {
+            // SAFETY: the handle is live until the group releases it.
+            unsafe { IsThreadpoolTimerSet(self.handle) != 0 }
+        })
     }
 
     /// Block until all queued and executing ticks have completed.
     pub fn wait(&self) {
         // SAFETY: as above.
-        unsafe { WaitForThreadpoolTimerCallbacks(self.handle, FALSE) };
+        crate::trace_call!("WaitForThreadpoolTimerCallbacks", self.handle, 0, {
+            // SAFETY: the handle is live until the group releases it.
+            unsafe { WaitForThreadpoolTimerCallbacks(self.handle, FALSE) };
+        });
     }
 
     /// Stop the timer and wait until no tick is queued or executing.
@@ -584,7 +624,10 @@ impl PeriodicTimerMember<'_> {
     pub fn stop_and_drain(&self) {
         self.stop();
         // SAFETY: as above.
-        unsafe { WaitForThreadpoolTimerCallbacks(self.handle, TRUE) };
+        crate::trace_call!("WaitForThreadpoolTimerCallbacks(cancel)", self.handle, 1, {
+            // SAFETY: the handle is live until the group releases it.
+            unsafe { WaitForThreadpoolTimerCallbacks(self.handle, TRUE) };
+        });
     }
 }
 
@@ -628,13 +671,19 @@ impl WaitMember<'_> {
     /// Block until all queued and executing callbacks have completed.
     pub fn wait(&self) {
         // SAFETY: as above.
-        unsafe { WaitForThreadpoolWaitCallbacks(self.handle, FALSE) };
+        crate::trace_call!("WaitForThreadpoolWaitCallbacks", self.handle, 0, {
+            // SAFETY: the handle is live until the group releases it.
+            unsafe { WaitForThreadpoolWaitCallbacks(self.handle, FALSE) };
+        });
     }
 
     /// Cancel callbacks that have not started, then wait for those that have.
     pub fn cancel_pending(&self) {
         // SAFETY: as above.
-        unsafe { WaitForThreadpoolWaitCallbacks(self.handle, TRUE) };
+        crate::trace_call!("WaitForThreadpoolWaitCallbacks(cancel)", self.handle, 1, {
+            // SAFETY: the handle is live until the group releases it.
+            unsafe { WaitForThreadpoolWaitCallbacks(self.handle, TRUE) };
+        });
     }
 }
 

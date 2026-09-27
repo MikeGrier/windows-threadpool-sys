@@ -97,9 +97,10 @@ impl ThreadpoolWork {
         let env_ptr = env.map_or(ptr::null_mut(), |e| e.as_mut_ptr());
 
         // SAFETY: ctx is a valid heap pointer; env_ptr is valid (or null) for this call.
-        let handle = unsafe {
-            CreateThreadpoolWork(Some(work_trampoline), ctx.cast(), env_ptr.cast_const())
-        };
+        let handle = crate::trace_call!("CreateThreadpoolWork", 0, 0, {
+            // SAFETY: ctx is a valid heap pointer; env_ptr is valid (or null) for this call.
+            unsafe { CreateThreadpoolWork(Some(work_trampoline), ctx.cast(), env_ptr.cast_const()) }
+        });
 
         if handle == 0 {
             // SAFETY: the pool never saw ctx; reclaim it immediately.
@@ -116,8 +117,10 @@ impl ThreadpoolWork {
     /// May be called repeatedly; each call queues an independent invocation.
     /// Multiple queued invocations may execute concurrently.
     pub fn submit(&self) {
-        // SAFETY: handle is valid for the lifetime of self.
-        unsafe { SubmitThreadpoolWork(self.handle) };
+        crate::trace_call!("SubmitThreadpoolWork", self.handle, 0, {
+            // SAFETY: handle is valid for the lifetime of self.
+            unsafe { SubmitThreadpoolWork(self.handle) };
+        });
         // The submit is the start of the interval a stalled dispatch is
         // measured over; without it, a `trampoline-entered` has nothing to be
         // late relative to.
@@ -126,15 +129,19 @@ impl ThreadpoolWork {
 
     /// Blocks until all queued and in-progress invocations have completed.
     pub fn wait(&self) {
-        // SAFETY: handle is valid for the lifetime of self.
-        unsafe { WaitForThreadpoolWorkCallbacks(self.handle, FALSE) };
+        crate::trace_call!("WaitForThreadpoolWorkCallbacks", self.handle, 0, {
+            // SAFETY: handle is valid for the lifetime of self.
+            unsafe { WaitForThreadpoolWorkCallbacks(self.handle, FALSE) };
+        });
     }
 
     /// Cancels callbacks that have not yet started, then waits for any
     /// currently-executing invocations to finish.
     pub fn cancel_pending(&self) {
-        // SAFETY: handle is valid for the lifetime of self.
-        unsafe { WaitForThreadpoolWorkCallbacks(self.handle, TRUE) };
+        crate::trace_call!("WaitForThreadpoolWorkCallbacks(cancel)", self.handle, 1, {
+            // SAFETY: handle is valid for the lifetime of self.
+            unsafe { WaitForThreadpoolWorkCallbacks(self.handle, TRUE) };
+        });
     }
 
     /// Give up ownership, returning the raw object and its callback context.
@@ -162,13 +169,18 @@ impl ThreadpoolWork {
 impl Drop for ThreadpoolWork {
     fn drop(&mut self) {
         crate::trace_record!("work", "drop-begin", self.handle);
-        unsafe {
+        crate::trace_call!("WaitForThreadpoolWorkCallbacks", self.handle, 0, {
             // Let all in-flight callbacks run to completion before freeing the context.
-            WaitForThreadpoolWorkCallbacks(self.handle, FALSE);
-            crate::trace_record!("work", "drop-drained", self.handle);
-            CloseThreadpoolWork(self.handle);
-            drop(Box::from_raw(self.ctx));
-        }
+            // SAFETY: handle is valid until it is closed just below.
+            unsafe { WaitForThreadpoolWorkCallbacks(self.handle, FALSE) };
+        });
+        crate::trace_record!("work", "drop-drained", self.handle);
+        crate::trace_call!("CloseThreadpoolWork", self.handle, 0, {
+            // SAFETY: no callback remains, so the object can be closed once.
+            unsafe { CloseThreadpoolWork(self.handle) };
+        });
+        // SAFETY: nothing can reach the context again; free it exactly once.
+        unsafe { drop(Box::from_raw(self.ctx)) };
         crate::trace_record!("work", "drop-closed", self.handle);
     }
 }

@@ -363,3 +363,67 @@ identified the initialisation gap.
 **What it found**, for the investigation that asked: no exception is raised during the stall window,
 in 18 of 18 captures. Recorded in
 [windows-ioring-sys](../windows-ioring-sys/measurements/2026-09-27-exceptions-during-the-stall/README.md).
+
+## Moved 2026-09-27 14:47:48 -04:00 -- M-T3, call-boundary tracing and a callback census
+
+### <a id="m-t31"></a>M-T3.1 -- Bracket every Win32 call that blocks or takes a pool lock, under its own syscall target. *(completed 2026-09-27 14:47:48 -04:00)*
+
+**Raised by review while reading the source:** the calls that actually execute waits carried no
+tracing. True, and the gap was wider than the waits -- `pool.rs` and `cleanup_group.rs` had no
+tracing at all, including `CloseThreadpoolCleanupGroupMembers`, which is the longest-blocking call
+in the crate.
+
+**Why a record after the call is not enough.** Several sites already stamped a record once the call
+returned (`armed`, `created`, `submitted`). That cannot distinguish *issued late* from *took
+four seconds to return* -- both look like a record with a later timestamp than expected. A bracket
+turns the second case into a visible interval.
+
+**Its own target, so it costs nothing to anyone who does not want it.** `syscall-enter` and
+`syscall-leave`, with the Win32 function's own name as the event. A capture narrowed to
+`wait,delivery` is unchanged; one narrowed to `syscall` sees only call boundaries. The
+`trace_call!` macro keeps argument evaluation behind the filter check and compiles to the call
+alone without the feature.
+
+**Coverage is a census, not a judgement.** Every `Create*`, `Set*`, `Submit*`, `Close*`,
+`Start*`, `Cancel*` and `WaitFor*` on a pool object, in all seven modules, plus `CancelIoEx`
+and `IsThreadpoolTimerSet`. Which of them can contend is not documented, so none was assumed
+cheap. A scan for pool calls outside a bracket now reports none.
+
+**Also traced: the caller-supplied wait close routine.** `CustomClose::drop` invokes a function the
+caller gave us -- the case it exists for is `FindCloseChangeNotification`, a kernel close -- while
+the owning wait is being torn down. A slow one previously showed as a stalled teardown with no
+explanation.
+
+**Guarded and sabotage-verified.** The pool-object guard now asserts both halves for twelve calls;
+deleting either the enter or the leave record from the macro is caught.
+
+### <a id="m-t32"></a>M-T3.2 -- Census of OS-invoked callbacks, and whether each has entry/exit tracing. *(completed 2026-09-27 14:47:48 -04:00)*
+
+Asked alongside M-T3.1: are there callback mechanisms besides the thread pool, and do they all have
+entry/exit tracing? Searched the whole workspace for the registration APIs.
+
+| Mechanism | Used | Entry/exit traced |
+|---|---|---|
+| `PTP_WAIT_CALLBACK` | yes | yes |
+| `PTP_WORK_CALLBACK` | yes | yes |
+| `PTP_TIMER_CALLBACK` (one-shot) | yes | yes |
+| `PTP_TIMER_CALLBACK` (periodic) | yes | yes |
+| `PTP_WIN32_IO_CALLBACK` | yes | yes |
+| `PVECTORED_EXCEPTION_HANDLER` | yes, since M-T2.1 | yes |
+| `WaitCloseFn` (caller-supplied close) | yes | **yes, added by M-T3.1** |
+| `PTP_CLEANUP_GROUP_CANCEL_CALLBACK` | **no** -- `CleanupGroup` passes `None` | n/a |
+
+Checked and **not** used anywhere in the workspace: `RegisterWaitForSingleObject`,
+`QueueUserAPC` and alertable waits, `SetConsoleCtrlHandler`,
+`SetUnhandledExceptionFilter`, `AddVectoredContinueHandler`, timer-queue timers, and
+`InitOnceExecuteOnce`.
+
+Two that look like callbacks and are not. `FindFirstChangeNotification` produces a *waitable
+handle*, serviced by `ThreadpoolWait` -- already traced; its custom close is the `WaitCloseFn`
+row above. And `ReadDirectoryChangesW` in `windows-file-watcher` is issued through
+`ThreadpoolIo` in its `OVERLAPPED` form, not with an APC completion routine, so it arrives on
+the already-traced `io` trampoline.
+
+**The one gap left open deliberately:** `CallbackEnviron::set_cleanup_group` is a public raw seam
+that lets a caller install their own cleanup-group cancel callback. That function would be the
+caller's, not ours, so there is nothing here to bracket.

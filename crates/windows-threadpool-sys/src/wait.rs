@@ -78,11 +78,18 @@ pub(crate) struct CustomClose {
 
 impl Drop for CustomClose {
     fn drop(&mut self) {
-        // SAFETY: the handle was vouched for by `assume_waitable_with` and is
-        // still open -- every owner drains the wait before dropping this, so the
-        // pool is no longer watching it. This runs exactly once, because `Drop`
-        // does.
-        unsafe { (self.close)(self.raw) };
+        // Bracketed like a Win32 call because that is what it usually is: the
+        // routine is caller-supplied and the case this exists for,
+        // `FindCloseChangeNotification`, is a kernel close. It runs while the
+        // owning wait is being torn down, so a slow one shows up as a stalled
+        // teardown with no other explanation.
+        crate::trace_call!("WaitCloseFn", self.raw as usize, self.close as usize, {
+            // SAFETY: the handle was vouched for by `assume_waitable_with` and is
+            // still open -- every owner drains the wait before dropping this, so the
+            // pool is no longer watching it. This runs exactly once, because `Drop`
+            // does.
+            unsafe { (self.close)(self.raw) };
+        });
     }
 }
 
@@ -519,8 +526,10 @@ impl WaitActivation<'_> {
 ///
 /// SAFETY: `wait` must be a live `PTP_WAIT`.
 pub(crate) unsafe fn disarm_raw(wait: PTP_WAIT) {
-    // SAFETY: forwarded; a null handle is the documented way to cancel a wait.
-    unsafe { SetThreadpoolWait(wait, ptr::null_mut(), ptr::null()) };
+    crate::trace_call!("SetThreadpoolWait(disarm)", wait, 0, {
+        // SAFETY: forwarded; a null handle is the documented way to cancel a wait.
+        unsafe { SetThreadpoolWait(wait, ptr::null_mut(), ptr::null()) };
+    });
     crate::trace_record!("wait", "disarmed", wait);
 }
 
@@ -538,16 +547,18 @@ pub(crate) unsafe fn arm_member(wait: PTP_WAIT, target: &WaitTarget, timeout: Op
 /// SAFETY: `wait` must be a live `PTP_WAIT` and `handle` a live waitable handle
 /// (or null to disarm).
 unsafe fn arm_raw(wait: PTP_WAIT, handle: HANDLE, timeout: Option<Duration>) {
-    match timeout {
-        Some(timeout) => {
-            let filetime = relative_filetime(timeout);
-            // SAFETY: forwarded from this function's contract; `filetime` is
-            // read only for the duration of the call.
-            unsafe { SetThreadpoolWait(wait, handle, &filetime) };
+    crate::trace_call!("SetThreadpoolWait", wait, handle as usize, {
+        match timeout {
+            Some(timeout) => {
+                let filetime = relative_filetime(timeout);
+                // SAFETY: forwarded from this function's contract; `filetime` is
+                // read only for the duration of the call.
+                unsafe { SetThreadpoolWait(wait, handle, &filetime) };
+            }
+            // SAFETY: forwarded; a null timeout means "wait indefinitely".
+            None => unsafe { SetThreadpoolWait(wait, handle, ptr::null()) },
         }
-        // SAFETY: forwarded; a null timeout means "wait indefinitely".
-        None => unsafe { SetThreadpoolWait(wait, handle, ptr::null()) },
-    }
+    });
     crate::trace_record!("wait", "armed", wait, handle as usize);
 }
 
@@ -703,9 +714,13 @@ impl ThreadpoolWait {
 
         // SAFETY: context is a valid heap pointer that outlives every callback,
         // and env_ptr is valid (or null) for the duration of this call.
-        let wait = unsafe {
-            CreateThreadpoolWait(Some(wait_trampoline), context.cast(), env_ptr.cast_const())
-        };
+        let wait = crate::trace_call!("CreateThreadpoolWait", 0, 0, {
+            // SAFETY: context is a valid heap pointer that outlives every callback,
+            // and env_ptr is valid (or null) for the duration of this call.
+            unsafe {
+                CreateThreadpoolWait(Some(wait_trampoline), context.cast(), env_ptr.cast_const())
+            }
+        });
 
         if wait == 0 {
             let error = io::Error::last_os_error();
@@ -769,9 +784,11 @@ impl ThreadpoolWait {
     /// New activations stop being queued, but a callback already queued still
     /// runs; use [`ThreadpoolWait::cancel_pending`] to drop those as well.
     pub fn disarm(&self) {
-        // SAFETY: `wait` is valid for the lifetime of self; a null handle is the
-        // documented way to cancel a pending wait.
-        unsafe { SetThreadpoolWait(self.wait, ptr::null_mut(), ptr::null()) };
+        crate::trace_call!("SetThreadpoolWait(disarm)", self.wait, 0, {
+            // SAFETY: `wait` is valid for the lifetime of self; a null handle is the
+            // documented way to cancel a pending wait.
+            unsafe { SetThreadpoolWait(self.wait, ptr::null_mut(), ptr::null()) };
+        });
         crate::trace_record!("wait", "disarmed", self.wait);
     }
 
@@ -782,8 +799,10 @@ impl ThreadpoolWait {
     /// so the object is watching again when this returns. Use
     /// [`stop_and_drain`](Self::stop_and_drain) to reach quiescence.
     pub fn wait(&self) {
-        // SAFETY: `wait` is valid for the lifetime of self.
-        unsafe { WaitForThreadpoolWaitCallbacks(self.wait, FALSE) };
+        crate::trace_call!("WaitForThreadpoolWaitCallbacks", self.wait, 0, {
+            // SAFETY: `wait` is valid for the lifetime of self.
+            unsafe { WaitForThreadpoolWaitCallbacks(self.wait, FALSE) };
+        });
     }
 
     /// Drop callbacks that have not started, then wait for any executing one.
@@ -793,9 +812,11 @@ impl ThreadpoolWait {
     /// running. Use [`stop_and_drain`](Self::stop_and_drain) when the wait must
     /// actually be quiescent afterwards.
     pub fn cancel_pending(&self) {
-        // SAFETY: `wait` is valid for the lifetime of self. A cancelled wait
-        // callback owns no storage, so dropping queued callbacks orphans nothing.
-        unsafe { WaitForThreadpoolWaitCallbacks(self.wait, TRUE) };
+        crate::trace_call!("WaitForThreadpoolWaitCallbacks(cancel)", self.wait, 1, {
+            // SAFETY: `wait` is valid for the lifetime of self. A cancelled wait
+            // callback owns no storage, so dropping queued callbacks orphans nothing.
+            unsafe { WaitForThreadpoolWaitCallbacks(self.wait, TRUE) };
+        });
     }
 
     /// Stop watching and block until the wait is idle, leaving it reusable.
@@ -910,8 +931,11 @@ impl Drop for ThreadpoolWait {
         // this, when its field is dropped, so the handle outlives the wait
         // object and its close routine -- `CloseHandle` or a custom one -- runs
         // only once the pool has stopped watching it.
+        crate::trace_call!("CloseThreadpoolWait", self.wait, 0, {
+            unsafe { CloseThreadpoolWait(self.wait) };
+        });
+        // SAFETY: as above; the pool can no longer reach the context.
         unsafe {
-            CloseThreadpoolWait(self.wait);
             drop(Box::from_raw(self.context));
         }
         // The last record this object emits, and it carries the target handle
