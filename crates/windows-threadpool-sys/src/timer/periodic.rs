@@ -285,6 +285,7 @@ impl ThreadpoolPeriodicTimer {
         // started yet, so no callback can observe the unpublished value.
         // SAFETY: context is live and exclusively ours until the first start.
         unsafe { (*context).timer.store(timer, Ordering::Release) };
+        crate::trace_record!("timer-periodic", "created", timer, millis_u32(period));
 
         Ok(Self {
             timer,
@@ -431,7 +432,9 @@ impl Drop for ThreadpoolPeriodicTimer {
     fn drop(&mut self) {
         // Stop before draining, or the timer would queue a fresh tick while the
         // drain is in progress and never settle.
+        crate::trace_record!("timer-periodic", "drop-begin", self.timer);
         self.stop_and_drain();
+        crate::trace_record!("timer-periodic", "drop-drained", self.timer);
 
         // SAFETY: no tick can be queued or executing, so the object can be
         // closed and the context freed exactly once.
@@ -439,6 +442,7 @@ impl Drop for ThreadpoolPeriodicTimer {
             CloseThreadpoolTimer(self.timer);
             drop(Box::from_raw(self.context));
         }
+        crate::trace_record!("timer-periodic", "drop-closed", self.timer);
     }
 }
 

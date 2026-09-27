@@ -521,6 +521,7 @@ impl WaitActivation<'_> {
 pub(crate) unsafe fn disarm_raw(wait: PTP_WAIT) {
     // SAFETY: forwarded; a null handle is the documented way to cancel a wait.
     unsafe { SetThreadpoolWait(wait, ptr::null_mut(), ptr::null()) };
+    crate::trace_record!("wait", "disarmed", wait);
 }
 
 /// Arm a raw wait object against a borrowed target.
@@ -771,6 +772,7 @@ impl ThreadpoolWait {
         // SAFETY: `wait` is valid for the lifetime of self; a null handle is the
         // documented way to cancel a pending wait.
         unsafe { SetThreadpoolWait(self.wait, ptr::null_mut(), ptr::null()) };
+        crate::trace_record!("wait", "disarmed", self.wait);
     }
 
     /// Let every queued callback run, and block until none is executing.

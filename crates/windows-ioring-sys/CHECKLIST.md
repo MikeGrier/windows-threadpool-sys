@@ -290,6 +290,14 @@ about this crate's own surface rather than about storage at all.
   3. **Does any other pool poke release it**, or only a work submit? A timer firing, an I/O
      completion, and a second wait on an unrelated event each test a different path into the same
      pool.
+
+     > **CROSS-COMPONENT PREREQUISITE -- met 2026-09-27.**
+     > [windows-threadpool-sys](../windows-threadpool-sys/CHECKLIST.md) -> `M-T1.1` has landed, so
+     > the timer, the periodic timer and the I/O object are now stamped from creation through every
+     > arming or submission to teardown, as the wait already was. Before it, the trace stamped only
+     > the *firing*, and a timer armed on time but dispatched late could not be told apart from one
+     > armed late -- which is the whole distinction this experiment rests on.
+
   4. **Does the trigger test matter once the release is known?** `M26.9` narrowed entry to a
      co-running create-and-drop; re-check whether that is about the ring at all, or about leaving
      the pool with no work to do.

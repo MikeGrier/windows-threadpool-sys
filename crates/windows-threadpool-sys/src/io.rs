@@ -248,6 +248,7 @@ impl ThreadpoolIo {
             return Err(error);
         }
 
+        crate::trace_record!("io", "created", tp_io, handle.as_raw_handle() as usize);
         Ok(Self {
             tp_io,
             handle,
@@ -345,6 +346,7 @@ impl ThreadpoolIo {
         // SAFETY: tp_io is valid for the lifetime of self. This start is balanced
         // exactly once on every path below.
         unsafe { StartThreadpoolIo(self.tp_io) };
+        crate::trace_record!("io", "started", self.tp_io, overlapped as usize);
 
         match issue(self.handle(), overlapped) {
             Ok(Issued::Pending) => Submitted::Pending(id),
@@ -352,6 +354,10 @@ impl ThreadpoolIo {
                 // SAFETY: no callback will arrive, so the start must be balanced
                 // here or the pool would wait for a completion that never comes.
                 unsafe { CancelThreadpoolIo(self.tp_io) };
+                // Paired with `started`: this operation will never reach the
+                // trampoline, so without this record its `started` would look
+                // like a dispatch that never happened.
+                crate::trace_record!("io", "start-cancelled", self.tp_io, overlapped as usize);
                 self.live.remove(overlapped);
                 // SAFETY: the operation completed synchronously and no callback
                 // will arrive, so the kernel is done with the storage; reclaim
@@ -367,6 +373,7 @@ impl ThreadpoolIo {
                 // SAFETY: the submission failed and no callback will arrive, so
                 // the start must be balanced here.
                 unsafe { CancelThreadpoolIo(self.tp_io) };
+                crate::trace_record!("io", "start-cancelled", self.tp_io, overlapped as usize);
                 self.live.remove(overlapped);
                 // SAFETY: no callback will arrive, so reclaim the operation we
                 // just leaked, exactly once.
@@ -440,10 +447,12 @@ impl ThreadpoolIo {
     /// Must not be called from inside this object's own callback, which would
     /// wait on the callback's own completion.
     pub fn run_down(&self) {
+        crate::trace_record!("io", "rundown-begin", self.tp_io, self.outstanding());
         self.live.wait_until_empty();
         // Deregistration happens at callback entry, so an empty registry does
         // not by itself mean the callbacks have finished.
         self.wait();
+        crate::trace_record!("io", "rundown-ended", self.tp_io);
     }
 
     /// Block until no I/O callback for this object is executing.
@@ -476,6 +485,7 @@ impl fmt::Debug for ThreadpoolIo {
 impl Drop for ThreadpoolIo {
     fn drop(&mut self) {
         let count = self.outstanding();
+        crate::trace_record!("io", "drop-begin", self.tp_io, count);
         if count > 0 {
             // A blocking Drop signals that rundown was skipped. Report it from
             // this single site, then make the block terminate: because this
@@ -502,11 +512,16 @@ impl Drop for ThreadpoolIo {
             WaitForThreadpoolIoCallbacks(self.tp_io, FALSE);
             CloseThreadpoolIo(self.tp_io);
         }
+        crate::trace_record!("io", "drop-drained", self.tp_io);
 
         // SAFETY: the TP_IO object is closed and every callback has finished, so
         // nothing can reach the context again; free it exactly once. `handle`
         // closes after this, when its field is dropped.
         unsafe { drop(Box::from_raw(self.context)) };
+        // The last record this object emits, and it carries the handle because
+        // nothing after it can: the handle's close is the field drop that runs
+        // the instant this body returns, with no code of ours in between.
+        crate::trace_record!("io", "drop-closed", self.tp_io, self.raw_handle() as usize);
     }
 }
 

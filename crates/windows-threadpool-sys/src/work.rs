@@ -161,12 +161,15 @@ impl ThreadpoolWork {
 
 impl Drop for ThreadpoolWork {
     fn drop(&mut self) {
+        crate::trace_record!("work", "drop-begin", self.handle);
         unsafe {
             // Let all in-flight callbacks run to completion before freeing the context.
             WaitForThreadpoolWorkCallbacks(self.handle, FALSE);
+            crate::trace_record!("work", "drop-drained", self.handle);
             CloseThreadpoolWork(self.handle);
             drop(Box::from_raw(self.ctx));
         }
+        crate::trace_record!("work", "drop-closed", self.handle);
     }
 }
 

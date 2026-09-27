@@ -170,16 +170,20 @@ fn the_filter_narrows_to_the_targets_named() {
 /// how promptly it arrived.
 const PROBE_BOUND: Duration = Duration::from_secs(5);
 
-/// Every pool-invoked functor in this crate records both of its ends, and so
-/// does every step the delivery investigation reads between them.
+/// Every pool object in this crate records its whole life: its creation, every
+/// arming or submission that establishes it, both ends of every callback it
+/// invokes, and its teardown.
 ///
-/// This is what makes a silent interval in a capture readable. An entry with
-/// no exit says a callback is still inside the closure; no entry at all says
-/// the pool never dispatched. Those are different findings, and only the exit
-/// records separate them -- so a deleted exit call site would quietly turn the
-/// second into the first. The same argument covers the re-arm, whose entry is
-/// recorded before a lock it can block on, and the drop stages, which bracket
-/// the drain.
+/// This is what makes a silent interval in a capture readable, and the
+/// establishment half is not optional decoration. An entry with no exit says a
+/// callback is still inside the closure; no entry at all says the pool never
+/// dispatched. Those are different findings, and only the exit records separate
+/// them. In exactly the same way, a `created` with no `armed` says an object
+/// was never established, while an `armed` with no callback says it was
+/// established and not dispatched -- and an investigation into *why a callback
+/// is late* cannot tell those apart without both. That gap is what `M-T1.1`
+/// closed for the timer and the I/O object, which until then recorded only
+/// their firings.
 ///
 /// **It asserts only when the process environment has narrowed the trace.**
 /// The filter is read once per process and cached, so a test cannot set it
@@ -198,10 +202,19 @@ const PROBE_BOUND: Duration = Duration::from_secs(5);
 /// test. What a one-sided assertion does catch is the case it exists for: a
 /// missing call site makes its event absent from the entire process, not
 /// merely scarce.
+///
+/// **It is also per-event, not per-call-site**, which matters for the two
+/// events emitted from two places: `timer`'s `rearm-requested`, from
+/// `rearm_after` and `rearm_at`, and `io`'s `start-cancelled`, from the
+/// inline-completion and issue-failure arms of `submit`. Losing one of a pair
+/// leaves the event present and this test green. The exercises below reach both
+/// `rearm-requested` sites so neither is merely written; `io`'s inline
+/// completion is not reachable from a unit test here and is covered by the
+/// integration suite, where this assertion does not run.
 #[test]
-fn every_pool_trampoline_records_both_of_its_ends() {
+fn every_pool_object_records_its_creation_establishment_callbacks_and_teardown() {
     // `io` is exercised by `crate::io::tests`, which already has an endpoint
-    // and a real overlapped read; asserting there costs two lines rather than
+    // and a real overlapped read; asserting there costs a few lines rather than
     // a second copy of that setup here.
     let expected: [(&str, &[&str]); 4] = [
         (
@@ -209,11 +222,13 @@ fn every_pool_trampoline_records_both_of_its_ends() {
             &[
                 "created",
                 "armed",
+                "disarmed",
                 "trampoline-entered",
                 "trampoline-left",
                 // The re-arm the exercise drives from the pool thread.
                 "rearm-entered",
                 "rearm-left",
+                "suppress-and-disarm",
                 // The drop stages, whose gaps are what a stalled teardown
                 // would show up as.
                 "drop-begin",
@@ -228,10 +243,42 @@ fn every_pool_trampoline_records_both_of_its_ends() {
                 "submitted",
                 "trampoline-entered",
                 "trampoline-left",
+                "drop-begin",
+                "drop-drained",
+                "drop-closed",
             ],
         ),
-        ("timer", &["trampoline-entered", "trampoline-left"]),
-        ("timer-periodic", &["trampoline-entered", "trampoline-left"]),
+        (
+            "timer",
+            &[
+                "created",
+                "armed",
+                "disarmed",
+                "trampoline-entered",
+                "trampoline-left",
+                // The deferred re-arm's three moments: the callback asking,
+                // the trampoline acting on it after the callback returns, and
+                // the arming itself.
+                "rearm-requested",
+                "rearm-entered",
+                "rearm-left",
+                "suppress-and-disarm",
+                "drop-begin",
+                "drop-drained",
+                "drop-closed",
+            ],
+        ),
+        (
+            "timer-periodic",
+            &[
+                "created",
+                "trampoline-entered",
+                "trampoline-left",
+                "drop-begin",
+                "drop-drained",
+                "drop-closed",
+            ],
+        ),
     ];
     if !expected.iter().any(|(target, _)| wants(target)) {
         return;
@@ -309,14 +356,32 @@ fn exercise_a_work_item() {
     work.wait();
 }
 
-/// One one-shot timer firing.
+/// One one-shot timer firing, which also drives one deferred re-arm.
 fn exercise_a_timer() {
     use crate::timer::ThreadpoolTimer;
 
     let (tx, rx) = mpsc::channel();
     let tx = std::sync::Mutex::new(tx);
+    let firings = std::sync::atomic::AtomicUsize::new(0);
     let timer = ThreadpoolTimer::new(
-        move |_| {
+        move |firing| {
+            // Re-arm on the first firing and report on the second. Waiting for
+            // the *second* is what makes the re-arm's records certain to be in
+            // the trace by the time this test reads it: a second firing can
+            // only happen if the deferred re-arm was requested, applied, and
+            // armed. Reporting on the first would race the trampoline, which
+            // applies the request after the callback returns.
+            if firings.fetch_add(1, std::sync::atomic::Ordering::SeqCst) == 0 {
+                firing.rearm_after(Duration::from_millis(1));
+                return;
+            }
+            // The second request goes through the other entry point, so both
+            // `rearm-requested` call sites are executed rather than only the
+            // one that happened to be written first.
+            if firings.load(std::sync::atomic::Ordering::SeqCst) == 1 {
+                firing.rearm_at(std::time::SystemTime::now() + Duration::from_millis(1));
+                return;
+            }
             if let Ok(tx) = tx.lock() {
                 let _ = tx.send(());
             }
@@ -325,7 +390,8 @@ fn exercise_a_timer() {
     )
     .expect("create a probe timer");
     timer.set_after(Duration::from_millis(1));
-    rx.recv_timeout(PROBE_BOUND).expect("the timer fired");
+    rx.recv_timeout(PROBE_BOUND)
+        .expect("the timer fired, re-armed twice, and fired again");
     timer.stop_and_drain();
 }
 

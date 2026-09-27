@@ -123,6 +123,19 @@ fn immediate_failure_returns_the_operation_and_balances_the_start() {
     // The start was balanced by CancelThreadpoolIo, so nothing is outstanding.
     assert_eq!(tp.outstanding(), 0);
 
+    // `start-cancelled` is asserted here rather than in the pending-read test
+    // because this is the path that produces it: a start balanced without a
+    // callback. Without the record, this operation's `started` would read as a
+    // dispatch that never arrived -- which is exactly the shape of the defect
+    // the trace is being used to chase.
+    if crate::trace::wants("io") {
+        assert!(
+            crate::trace::counted("io", "start-cancelled") > 0,
+            "`io` recorded no `start-cancelled`; the trace is narrowed to it and a start has \
+             just been balanced with no callback, so the call site is missing"
+        );
+    }
+
     drop(tp);
     let _ = std::fs::remove_file(&path);
 }
@@ -228,23 +241,36 @@ fn pending_read_completes_through_the_callback() {
     assert_eq!(transferred, content.len());
     assert_eq!(&buffer[..content.len()], content);
 
-    // The `io` trampoline's two ends, asserted here because this test already
-    // owns the only exercise of that trampoline in the crate. It checks only
-    // when the process environment has narrowed the trace to `io` -- the
-    // filter is read once per process, so a test cannot set it without racing
-    // every other test in the binary. See
-    // `crate::trace::tests::every_pool_trampoline_records_both_of_its_ends`,
-    // which carries the same reasoning for the other four trampolines.
+    drop(tp);
+
+    // The `io` object's whole life, asserted here because this test already
+    // owns the only real overlapped exercise in the crate -- and after the drop
+    // above, so the teardown stages are in the trace by the time it reads. It
+    // checks only when the process environment has narrowed the trace to `io`;
+    // the filter is read once per process, so a test cannot set it without
+    // racing every other test in the binary. See
+    // `crate::trace::tests::every_pool_object_records_its_creation_establishment_callbacks_and_teardown`,
+    // which carries the same reasoning for the other four objects.
     if crate::trace::wants("io") {
-        for event in ["trampoline-entered", "trampoline-left"] {
+        for event in [
+            "created",
+            "started",
+            "trampoline-entered",
+            "trampoline-left",
+            "rundown-begin",
+            "rundown-ended",
+            "drop-begin",
+            "drop-drained",
+            "drop-closed",
+        ] {
             assert!(
                 crate::trace::counted("io", event) > 0,
-                "`io` recorded no `{event}`; the trace is narrowed to it and an I/O callback \
-                 has just run, so the call site is missing"
+                "`io` recorded no `{event}`; the trace is narrowed to it and an object has just \
+                 been created, started, dispatched, run down and dropped, so the call site is \
+                 missing"
             );
         }
     }
 
-    drop(tp);
     let _ = std::fs::remove_file(&path);
 }

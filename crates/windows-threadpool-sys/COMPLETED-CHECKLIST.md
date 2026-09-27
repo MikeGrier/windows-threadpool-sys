@@ -270,3 +270,55 @@ submissions and `run_down` waits for the completion.
 
 Recorded in the workspace-root [DESIGN-NOTES.md](../../DESIGN-NOTES.md). Breaking change: a callback that
 panics now ends the process instead of being absorbed.
+
+## Moved 2026-09-27 11:24:16 -04:00 -- M-T1, lifecycle parity in the concurrency trace
+
+### <a id="m-t11"></a>M-T1.1 -- Stamp every pool object's establishment, not only its callbacks. *(completed 2026-09-27 11:24:16 -04:00)*
+
+**Found by review, not by the tests.** `M26.13.1` added entry/exit records to all five trampolines
+and read "every pool-invoked functor" as the functors alone, leaving the objects that invoke them
+uneven: the wait was stamped from creation through every arming to close, while the timer, the
+periodic timer and the I/O object were stamped only where their callbacks ran. Nothing failed as a
+result -- the question was asked directly.
+
+**Why it was worth fixing before the next experiment rather than after.** A capture that stamps only
+firings cannot tell a timer armed on time and dispatched late from one armed late, and that is
+exactly the distinction
+[windows-ioring-sys](../windows-ioring-sys/CHECKLIST.md) -> `M26.13`'s experiment 3 rests on. The
+same distinction, for the wait, is what made `M26.13.3`'s answer readable at all.
+
+**Twenty-four new call sites**, bringing the timer, the periodic timer and the I/O object to parity
+with the wait, and closing two holes of the same kind in the wait and the work object:
+
+| Target | Added |
+|---|---|
+| `timer` | `created`; `armed` and `disarmed` in the shared `arm_raw` / `disarm_raw`, so every `SetThreadpoolTimer` is stamped for **both** timer kinds; `rearm-requested` at both request entry points; `rearm-entered` / `rearm-left` / `rearm-suppressed` around the deferred application; `suppress-and-disarm`; three drop stages |
+| `timer-periodic` | `created` carrying the period; three drop stages. Its `start*` and `stop` come free through the shared raw pair |
+| `io` | `created` carrying the handle; `started` per `StartThreadpoolIo`; `start-cancelled` at both sites that balance a start with no callback; `rundown-begin` / `rundown-ended`; three drop stages |
+| `wait` | `disarmed`, which a plain `ThreadpoolWait::disarm` had never recorded |
+| `work` | three drop stages |
+
+**One design point worth keeping.** `timer` and `timer-periodic` share `arm_raw` and `disarm_raw`, so
+a single record at each covers both kinds rather than two near-identical ones: the record's second
+slot carries `period_ms`, which is zero for a one-shot arming and non-zero for a periodic one, so the
+two are told apart by the data rather than by the target.
+
+**Verified by sabotage.** Each of the twenty-four sites was deleted in turn and the guard re-run: all
+twenty-four caught. Two events are emitted from two places each -- `timer`'s `rearm-requested` and
+`io`'s `start-cancelled` -- so those were additionally checked by removing both sites at once, which
+is also caught.
+
+**The guard** is `every_pool_object_records_its_creation_establishment_callbacks_and_teardown` in
+[trace/tests.rs](src/trace/tests.rs), renamed because it is no longer only about trampolines, with
+the `io` half asserted inside `io::tests` where the only real overlapped exercise already lives. The
+timer probe now drives a deferred re-arm through **both** request entry points, so neither is merely
+written.
+
+**Stated limits, rather than implied.** The guard is one-sided and env-gated, for the reasons already
+recorded on it, and it is **per-event, not per-call-site**: losing one of a two-site pair leaves the
+event present and the test green. `io`'s inline-completion `start-cancelled` is not reachable from a
+unit test here -- it needs a synchronous completion -- so it is exercised only by the integration
+suite, where this assertion does not run.
+
+**Buffer headroom re-checked**, since this adds record sites to a crate `M26.13.2` had just measured
+at 14061 records against a capacity of 65536: the traced suite still announces no overflow.
