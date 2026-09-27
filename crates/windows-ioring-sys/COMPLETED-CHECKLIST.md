@@ -4802,3 +4802,33 @@ available, commitments registered while healthy, and nothing being dispatched to
 **On the rate:** 10 in 4000, against 13, 21, 14, 18, 24 and 14 for the same configuration earlier
 the same day. Just below that spread, and one measurement cannot separate a real reduction from
 ordinary variation, so no effect is claimed either way.
+
+## Moved 2026-09-27 16:45:53 -04:00 -- M26.13.13, the clock says it never starts
+
+### <a id="m261313"></a>M26.13.13 -- At a 100ms period the heartbeat becomes a clock: its first expiry is already missed and no pool callback of any kind is dispatched before the release, in 18 of 18. The pool never starts. *(completed 2026-09-27 16:45:53 -04:00)*
+
+**Same probe as [M26.13.12](COMPLETED-CHECKLIST.md#m261312), period changed from four seconds to a
+hundred milliseconds**, on review's suggestion. At four seconds it could only say the timer was
+late; at a hundred milliseconds it is fine-grained enough to say *when* dispatch stopped.
+
+**Rate unaffected:** 18 in 4000, squarely in the day's range. A constantly-expiring timer does not
+prevent the fault.
+
+**The timer is armed at 0.000031s**, so due at 0.100031s and every 100ms after. In all 18 captures
+it fires **zero** times before the release and **once** in total, at the release -- about fifty
+consecutive expiries missed.
+
+**The stronger statement that licenses.** Across all 18, **not one** pool callback of any kind is
+dispatched before the release. So this is not a pool that runs for a while and then wedges: in a run
+that stalls, the pool dispatches nothing at all from process start until a work item is submitted.
+The five seconds is not a period during which it stopped working; it is a period during which it
+never started.
+[measurements/2026-09-27-the-pool-never-starts/](measurements/2026-09-27-the-pool-never-starts/README.md).
+
+**Still its own positive control:** the one firing at the release proves the arming took effect, so
+a wedged pool and a broken probe are not confusable.
+
+**What it cannot separate**, and what is now queued as the next experiment: whether the pool would
+never have dispatched in this process, or whether it was put into this state during setup. Nothing
+in these runs needs a callback before the deliveries are armed at about 2.5ms, so there is no
+earlier successful dispatch to compare against. A period of one or two milliseconds would give one.

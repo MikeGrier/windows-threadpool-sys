@@ -289,6 +289,7 @@ measurement is linked.
 | a wakeup was missed, as in D-19/D-68/D-77 | ruled out -- re-signalling the very event the wait is armed on releases nothing, 5 of 5, with each SetEvent's success recorded ([not-a-missed-wake](measurements/2026-09-27-not-a-missed-wake/README.md)) |
 | the pool is starved of threads | **ruled out** -- a dump taken while stalled shows three workers parked idle in `ZwWaitForWorkViaWorkerFactory` ([the-workers-are-there](measurements/2026-09-27-the-workers-are-there/README.md)) |
 | the fault is in *registering* with the pool, not dispatching | ruled out -- a timer armed while the pool was healthy, due inside the stall window, fires only at the release, 10 of 10 ([a-timer-armed-while-healthy-also-stops](measurements/2026-09-27-a-timer-armed-while-healthy-also-stops/README.md)) |
+| the pool runs for a while and then wedges | ruled out -- with a 100ms heartbeat, **no** pool callback of any kind is dispatched before the release, in 18 of 18: it never starts ([the-pool-never-starts](measurements/2026-09-27-the-pool-never-starts/README.md)) |
 | it happens off the default process pool | never observed -- 0 in 12000 runs across three private-pool arms |
 
 **What is left is one question:** why the pool creates a worker for a submitted

@@ -293,6 +293,7 @@ about this crate's own surface rather than about storage at all.
   `CloseIoRing` releasing the kernel's reference to a still-armed event.
 
   **The remaining experiments**, in order:
+  0. **Bracket the onset with a heartbeat whose first expiry precedes the deliveries.** `M26.13.13` showed a 100ms timer's first expiry is already missed, and that nothing dispatches before the release -- but nothing in these runs needed a callback before the deliveries are armed at about 2.5ms, so there is no earlier successful dispatch to compare against. A period of one or two milliseconds would make a healthy process show firings and a stalled one show where they stop, which separates `the pool would never have dispatched in this process` from `it was put into this state during setup`.
   1. **Why does the pool create a worker for a submitted work item but not for an already-queued
      wait, timer, or I/O callback?** This is what is left of the supply question after `M26.13.6`
      answered the rest of it: the process has 6 threads while stalled and 8 or 9 immediately after
@@ -361,6 +362,8 @@ about this crate's own surface rather than about storage at all.
 - [x] **M26.13.11** -- A dump taken while stalled shows three pool workers parked idle in `ZwWaitForWorkViaWorkerFactory`, so the pool is not starved of threads and `M26.13.6`'s reading was wrong. -> [completed 2026-09-27](COMPLETED-CHECKLIST.md#m261311)
 
 - [x] **M26.13.12** -- A self-rearming timer armed while the pool was healthy, due inside the stall window, fires only at the release in 10 of 10 -- so the fault is dispatch, not registration. -> [completed 2026-09-27](COMPLETED-CHECKLIST.md#m261312)
+
+- [x] **M26.13.13** -- At a 100ms period the heartbeat becomes a clock: its first expiry is already missed and no pool callback of any kind is dispatched before the release, in 18 of 18. The pool never starts.  -> [completed 2026-09-27](COMPLETED-CHECKLIST.md#m261313)
 
 ## M28+ -- Opened by the inventory
 
