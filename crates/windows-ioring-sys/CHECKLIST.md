@@ -261,8 +261,11 @@ about this crate's own surface rather than about storage at all.
 
   **What changed.** The stall was believed fixed by [D-68](DESIGN-NOTES.md#d-68). It is not: it
   still reproduces against the current build, with D-68's arm-before-signal ordering visible in the
-  trace of every capture. What the fix did change is the shape -- `M26.9` recorded a permanent lost
-  wakeup, and what happens now is a delayed dispatch that eventually delivers everything.
+  trace of every capture. It is a **permanent hang** -- `M26.13.9` removed the post-mortem probe and
+  waited sixty seconds, and the delivery never arrived at all. An earlier revision of this item said
+  D-68 had converted the permanent loss into "a delayed dispatch that eventually delivers
+  everything"; that was an artifact of the probe, which releases the pool before the measurement is
+  taken.
 
   **Re-planned 2026-09-26 after `M26.13.3`.** The question this item was written around --
   what releases the stall -- is answered, and the answer moves the search. The stall ends when a
@@ -350,6 +353,8 @@ about this crate's own surface rather than about storage at all.
 - [x] **M26.13.7** -- With call-boundary and exception tracing on, no Win32 call blocks during the stall: 707 bracketed calls across 24 captures all returned, slowest 220us. -> [completed 2026-09-27](COMPLETED-CHECKLIST.md#m26137)
 
 - [x] **M26.13.8** -- The reproducer's own 5000ms submit timeout is not the five seconds: changed to 4000ms, dispatch still resumed at five in 14 of 14. -> [completed 2026-09-27](COMPLETED-CHECKLIST.md#m26138)
+
+- [x] **M26.13.9** -- It never self-releases. With the probe removed the delivery never arrives in 65s, so this is a permanent hang and the `delayed dispatch` claim was an artifact of the instrument. -> [completed 2026-09-27](COMPLETED-CHECKLIST.md#m26139)
 
 ## M28+ -- Opened by the inventory
 

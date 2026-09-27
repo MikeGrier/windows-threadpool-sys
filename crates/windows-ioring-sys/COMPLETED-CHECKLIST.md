@@ -4670,3 +4670,34 @@ timer armed near t=0 could do.
 one matters: `DELIVERY_BOUND` decides when the test gives up and runs the pool-liveness probe, and
 the probe's work submit is what ends the stall. The stall lasts five seconds *because* that is when
 the probe runs. No five-second constant exists in either crate's library code.
+
+## Moved 2026-09-27 15:39:37 -04:00 -- M26.13.9, in which the instrument turned out to be repairing the fault
+
+### <a id="m26139"></a>M26.13.9 -- It never self-releases. With the probe removed the delivery never arrives in 65s, so this is a permanent hang and the "delayed dispatch" claim was an artifact of the instrument. *(completed 2026-09-27 15:39:37 -04:00)*
+
+**Found by a question, not by a plan.** Review asked why anything waits five seconds before
+submitting the work that ends the stall. Nothing does: the probe is diagnostic code in the test's
+*failure* path, and the five seconds is `DELIVERY_BOUND`, the test's own assertion deadline. The
+probe runs at step 5 of a sequence whose step 4 is "the test has already failed".
+
+**Which exposed an untested assumption.** If the probe is the only thing in the process that submits
+work after the stall begins, every observation of the delivery "arriving late" was taken *after* the
+repair. That had never been separated.
+
+**Measured:** probe removed, post-mortem extended to sixty seconds. 3 failures in 1896 runs, and in
+all three the delivery **never arrives** -- `callbacks run: 0`, no trampoline entered, nothing in
+the trace between 2ms and 65.02s.
+[measurements/2026-09-27-it-never-self-releases/](measurements/2026-09-27-it-never-self-releases/README.md).
+
+**The correction.** This record said in four places that the failure was "not a lost wakeup" but "a
+delayed dispatch that eventually delivers everything", and that `D-68` had converted a permanent
+loss into a late one. All four were wrong, for the most avoidable reason there is: the instrument
+was repairing the fault before the measurement was taken. `M26.9`'s original signature -- a
+permanent lost wakeup -- was right all along. Corrected in
+[UNRESOLVED-TEST-FAILURES.md](UNRESOLVED-TEST-FAILURES.md),
+[RESOLVED-TEST-FAILURES.md](RESOLVED-TEST-FAILURES.md) and this checklist in the same commit.
+
+**What survives unchanged.** Every result about *what releases it* kept the probe and varied
+something else, so all of them stand: the stall ends on a work submit and at no other time, nothing
+else dispatches during it, no Win32 call blocks, no exception is raised, and it is never seen off
+the default pool. What changes is the severity and the wording -- this is a hang, not a delay.

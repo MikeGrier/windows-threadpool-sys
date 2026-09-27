@@ -53,12 +53,17 @@ on 2026-09-27 across five more, from 3 in 525 to 3 in 2105.
 `wait armed` at 0.002286s and `setup-signalled` at 0.002288s -- arm first, then signal, exactly as
 D-68 requires.
 
-**It is not a lost wakeup. It is a delayed dispatch.** In the same capture the wait is armed and its
-event signalled at 2.3ms, and `trampoline-entered` does not appear until **5.008724s**. The callback
-then runs and every completion is delivered. The signature has therefore changed since M26.9, which
-recorded `callbacks run: 0` and nothing after a further ten seconds; today the callbacks run and the
-data arrives. D-68 appears to have converted a permanent loss into a delayed dispatch rather than
-removing it.
+**It is a permanent hang, not a delayed dispatch.** Corrected 2026-09-27 by `M26.13.9`, which
+falsified this entry's own earlier claim. The "delay" was an artifact of the instrument: the
+post-mortem's pool-liveness probe submits work, that submit is what releases the pool, and only
+*then* did the delivery arrive -- so every capture showed data arriving and the stall looked late
+rather than lost. With the probe removed and the post-mortem extended to sixty seconds, the
+delivery **never arrives**: `callbacks run: 0`, no trampoline is entered, and the trace holds
+nothing between 0.002s and 65.02s in 3 of 3 captures.
+[measurements/2026-09-27-it-never-self-releases/](measurements/2026-09-27-it-never-self-releases/README.md).
+
+So `M26.9`'s original signature -- a permanent lost wakeup -- was right, and D-68 did not convert it
+into anything milder. What D-68 changed, if anything, is not established here.
 
 **The delay ends when a work item is queued to the pool, and not before.** Corrected on
 2026-09-26 by `M26.13.3`, which replaces this entry's earlier reading that it ends "when the test
