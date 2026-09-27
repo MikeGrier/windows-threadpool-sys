@@ -285,6 +285,7 @@ measurement is linked.
 | announcing them `runs_long` prevents it | ruled out -- no measurable effect ([the-pool-has-no-worker](measurements/2026-09-27-the-pool-has-no-worker/README.md)) |
 | an exception is being raised and swallowed during the window | ruled out -- a vectored exception handler saw **none**, in 18 captures ([exceptions-during-the-stall](measurements/2026-09-27-exceptions-during-the-stall/README.md)) |
 | a Win32 call is blocked, or contending on a pool lock | ruled out -- 707 bracketed calls across 24 captures all returned, slowest 220us ([no-win32-call-blocks](measurements/2026-09-27-no-win32-call-blocks/README.md)) |
+| the reproducer's own 5000ms `submit_and_wait` timeout is the five seconds | ruled out -- changed to 4000ms, and dispatch still resumed at five seconds in 14 of 14 ([the-submit-timeout-is-not-it](measurements/2026-09-27-the-submit-timeout-is-not-it/README.md)) |
 | it happens off the default process pool | never observed -- 0 in 12000 runs across three private-pool arms |
 
 **What is left is one question:** why the pool creates a worker for a submitted

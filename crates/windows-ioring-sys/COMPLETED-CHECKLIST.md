@@ -4642,3 +4642,31 @@ which is the property that makes it safe to run on a thread already inside the t
 raises repeatedly and asserts that at least one landed, which keeps the guarantee that matters
 without pretending a designed-in loss does not happen. Worth recording as a method error: the guard
 had only ever been exercised in isolation, and the suite is where it had to hold.
+
+## Moved 2026-09-27 15:27:23 -04:00 -- M26.13.8, a coincidence eliminated by changing it
+
+### <a id="m26138"></a>M26.13.8 -- The reproducer's own 5000ms submit timeout is not the five seconds: changed to 4000ms, dispatch still resumed at five in 14 of 14. *(completed 2026-09-27 15:27:23 -04:00)*
+
+**Raised in review and worth running.** The reproducer contains a literal `5_000`, the stall lasts
+five seconds, and coincidences of that shape usually are not. `submit_and_wait`'s second argument
+really is `timeout_ms`, so the units matched too.
+
+**The experiment's design is what made it decisive**, and it came from the reviewer rather than from
+here: change the constant to **4000**, not to something tiny. If it governed the stall, dispatch
+would resume at about four seconds -- before the test's own `DELIVERY_BOUND` of five -- so the
+delivery would arrive in time and the tests would simply stop failing.
+
+**Result:** 14 failures in 4000 runs, squarely in the range this configuration has produced all day,
+and dispatch resumed at about five seconds in **14 of 14**, never at four. Figures and captures in
+[measurements/2026-09-27-the-submit-timeout-is-not-it/](measurements/2026-09-27-the-submit-timeout-is-not-it/README.md).
+
+**Three existing observations already pointed this way**, but each was an inference where the
+experiment is direct: the call returns in about two milliseconds and never consumes its timeout; the
+*other* victim submits with `submit_and_wait(0, 0)` and has no such constant yet fails in lockstep;
+and the stall had already been moved to seven and eight seconds by delaying the probe, which no
+timer armed near t=0 could do.
+
+**What the five seconds actually is.** Two five-second constants exist in the reproducer and only
+one matters: `DELIVERY_BOUND` decides when the test gives up and runs the pool-liveness probe, and
+the probe's work submit is what ends the stall. The stall lasts five seconds *because* that is when
+the probe runs. No five-second constant exists in either crate's library code.

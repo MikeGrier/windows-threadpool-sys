@@ -349,6 +349,8 @@ about this crate's own surface rather than about storage at all.
 
 - [x] **M26.13.7** -- With call-boundary and exception tracing on, no Win32 call blocks during the stall: 707 bracketed calls across 24 captures all returned, slowest 220us. -> [completed 2026-09-27](COMPLETED-CHECKLIST.md#m26137)
 
+- [x] **M26.13.8** -- The reproducer's own 5000ms submit timeout is not the five seconds: changed to 4000ms, dispatch still resumed at five in 14 of 14. -> [completed 2026-09-27](COMPLETED-CHECKLIST.md#m26138)
+
 ## M28+ -- Opened by the inventory
 
 - [x] **M28.7** -- Decided against: the ring can answer 1 of 4 violations, and an internal check would be wrong about 13 live `_raw` push sites. -> [completed 2026-09-26](COMPLETED-CHECKLIST.md#m287)
