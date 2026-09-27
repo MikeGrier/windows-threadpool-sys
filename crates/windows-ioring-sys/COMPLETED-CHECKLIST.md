@@ -4547,3 +4547,58 @@ expected. That is now recorded as a **decision to raise, not to take**.
 **No source changed.** The experiment was a temporary edit to
 [event_delivery.rs](tests/event_delivery.rs), reverted after the runs and described in the
 measurement README.
+
+## Moved 2026-09-27 12:47:35 -04:00 -- M26.13.6, a reading from review, half confirmed and half refuted
+
+### <a id="m26136"></a>M26.13.6 -- The pool has 6 threads while stalled and 8 or 9 right after the work submit, so it has no worker and makes one; runs-long does not change that, and no callback of ours is holding a thread. *(completed 2026-09-27 12:47:35 -04:00)*
+
+**Prompted by a reading offered during review**, not by the queued plan: that the pool is not
+dispatching because it has no thread, and will not grow promptly because nothing told it these
+callbacks may run long. Worth testing rather than arguing about, because this workspace had already
+measured what that flag does -- four threads immediately, then growth throttled to roughly one
+thread per 166 ms without it, against a millisecond with it, in the root
+[DESIGN-NOTES.md](../../DESIGN-NOTES.md) under "`SetThreadpoolCallbackRunsLong` is the growth
+mechanism, not a hint".
+
+**The supply half is confirmed, and it is the sharpest evidence yet.** Counting the process's
+threads in the post-mortem: **6 while stalled, 8 or 9 immediately after the work submit**, in all
+six captures across both arms. The pool has no worker and makes two or three the moment work is
+queued to it. `M26.13` had recorded this as needing an external instrument; it does not -- a
+Toolhelp snapshot in the post-mortem is enough.
+
+**The runs-long half is refuted, twice and independently.**
+
+- *Nothing of ours is running.* Across the 27 captures from `M26.13.3`, `M26.13.4` and `M26.13.5`,
+  **zero** trampolines are entered during the stall. No callback of this workspace's is inside a
+  closure, blocked or otherwise, so none can be occupying a worker. This is exactly the distinction
+  the entry/exit pairing from `M26.13.1` was built for, answered from data already committed.
+- *Setting the flag changes nothing measurable.* 12 failures in 4000 with
+  `SetThreadpoolCallbackRunsLong` on the delivery environment, against a control that has measured
+  13 and 21 in two separate 4000-run measurements. 12 is inside the control's own spread and no
+  effect is claimed in either direction.
+
+The two are consistent rather than contradictory: the measured effect of runs-long is on growth
+*under blocking callbacks*, and there are no blocking callbacks here.
+
+**Both arms assert their own environment before use** -- the runs-long arm that the flag bit is set
+and that it is still on the default pool -- and record it in the trace, because an arm that silently
+carried no flag would behave exactly like the control and report its result for the wrong reason.
+The assertion was checked by sabotage: removing the `set_runs_long` call makes the arm fail with the
+message it carries.
+
+**A methodological result worth as much as the finding.** The first version took its thread count on
+the *setup* path, once per `EventDelivery` construction. A Toolhelp snapshot enumerates every thread
+on the system, and three per run -- taken exactly where the race happens -- cut the failure rate to
+roughly one in several thousand and slowed each run by an order of magnitude. The run was abandoned,
+the count moved into the post-mortem, and the control returned to its usual rate. This is the hazard
+the trace facility's own module documentation is built around, arriving through a different door:
+an instrument cheap enough to leave in a callback is not automatically cheap enough for a setup
+path.
+
+**What is left is one sentence**, and `M26.13` was re-planned around it: why the pool will create a
+worker for a submitted work item but not for a wait, timer, or I/O callback that is already queued.
+
+**No source changed.** The experiment was a temporary edit to
+[event_delivery.rs](tests/event_delivery.rs) plus one dev-dependency feature, both reverted after
+the runs and described in
+[measurements/2026-09-27-the-pool-has-no-worker/](measurements/2026-09-27-the-pool-has-no-worker/README.md).

@@ -26,6 +26,15 @@ arm with no minimum set was already clean, so the worker-supply reading the expe
 to test is **not** supported. Figures and the positive control in
 [measurements/2026-09-27-private-pool-does-not-stall/](measurements/2026-09-27-private-pool-does-not-stall/README.md).
 
+**The pool has no worker while stalled, and makes one when work is submitted.** `M26.13.6` counted
+the process's threads in the post-mortem: 6 while stalled, 8 or 9 immediately after the work submit,
+in every capture. Two readings it rules out rather than supports: this workspace's own callbacks are
+not occupying the threads -- across 27 captures, **zero** trampolines are entered during the stall,
+so none is inside a closure -- and marking the delivery callbacks with
+`SetThreadpoolCallbackRunsLong` does not prevent it (12 failures in 4000, against a control that has
+measured 13 and 21 in two separate 4000-run measurements, so no effect is claimed).
+[measurements/2026-09-27-the-pool-has-no-worker/](measurements/2026-09-27-the-pool-has-no-worker/README.md).
+
 **Tests:** `completions_are_delivered_on_pool_threads_without_the_submitting_thread_waiting` and
 `completions_queued_before_handover_are_still_delivered` in
 [event_delivery.rs](tests/event_delivery.rs). They fail together, never singly, and only in parallel
@@ -74,10 +83,10 @@ joined before the victim is checked, and 1500 more where each churn cycle signal
 immediately without waiting for the callback, which is what the trigger test does. Slowest ordinary
 dispatch across those runs was 18.6us. Whatever the mechanism is, it needs the ring.
 
-**Not established:** why the pool stops dispatching, and why a work submit is the one thing that
-restarts it. Nothing measured so far observes the pool's own thread accounting; the interval between
-an object being armed and its trampoline being entered is inside the pool, where this workspace's
-trace cannot reach. The next experiments are queued in [CHECKLIST.md](CHECKLIST.md) under `M26.13`.
+**Not established:** why the pool will create a worker for a submitted work item but not for a wait,
+timer, or I/O callback that is already queued. That is the whole of what is left, and it is inside
+the pool, where this workspace's trace cannot reach. The next experiments are queued in
+[CHECKLIST.md](CHECKLIST.md) under `M26.13`.
 
 **Why it matters beyond these two tests.** The sabotage harness runs the whole suite once per case,
 and a suite that fails for this reason is recorded as the case being `caught`. That is the dangerous
