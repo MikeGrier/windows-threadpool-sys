@@ -340,6 +340,23 @@ worker* is not -- nothing here counts pool threads specifically.
 | `postmortem` | `second-wait-begin` / `-ended` | -- / microseconds | -- | the post-mortem's further wait |
 | `experiment` | `threads-at-stall` / `-after-poke` | thread count | -- | a Toolhelp snapshot, post-mortem only |
 | `exception` | `raised` | exception code | raise address | a first-chance exception, seen by a vectored handler that declines to handle it |
+| `syscall-enter` / `syscall-leave` | the Win32 function's own name | the object | a discriminating argument | the call boundary -- see below |
+
+### `syscall-enter` / `syscall-leave`
+
+A separate target, off unless asked for, that brackets **every** Win32 call in
+`windows-threadpool-sys` that blocks or touches the pool's own synchronisation:
+the `WaitForThreadpool*Callbacks` family, `CloseThreadpoolCleanupGroupMembers`,
+`CloseThreadpool`, `SetThreadpoolThreadMinimum` (which creates threads), every
+`Create*`, `Set*`, `Submit*`, `Close*`, `Start*` and `Cancel*` on a pool object,
+`CancelIoEx`, and the caller-supplied wait close routine.
+
+It exists because a single record stamped *after* a call returns cannot tell
+"this was issued late" from "this took four seconds to return". Which of these
+contend is not documented, so they are bracketed rather than assumed cheap.
+
+Narrow to it with `WINDOWS_THREADPOOL_TRACE='syscall'`, which matches both
+halves. A capture narrowed to anything else is unchanged by its existing.
 
 The exception code is the raw `NTSTATUS`, printed in decimal like every other
 slot. Two values seen so far: `1073807366` is `0x40010006`
