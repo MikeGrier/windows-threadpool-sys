@@ -304,16 +304,24 @@ about this crate's own surface rather than about storage at all.
      dispatched before the trigger ran and the fault was induced afterwards; not firing means the
      pool never dispatched in this process at all. Guard it with the healthy case: in a passing run
      it must fire, or the probe proves nothing.
-  1. **Why does the pool create a worker for a submitted work item but not for an already-queued
-     wait, timer, or I/O callback?** This is what is left of the supply question after `M26.13.6`
-     answered the rest of it: the process has 6 threads while stalled and 8 or 9 immediately after
-     the work submit, so the pool demonstrably has no worker and demonstrably makes one -- but only
-     for work. A discriminator worth running first: establish whether the stalled callback is
-     *queued and unserved* or *not yet noticed at all*. The root
-     [DESIGN-NOTES.md](../../DESIGN-NOTES.md), under "`SetThreadpoolCallbackRunsLong` is the growth
-     mechanism, not a hint", records that an armed `TP_WAIT` costs no thread because the kernel
-     multiplexes the wait, which argues for queued-and-unserved -- but that is a reading of a
-     decision rather than a measurement of this state.
+  1. **Why does the worker factory not release a parked worker for a packet it already holds?**
+     `M26.13.15` answered the discriminator this item used to open with, and the premise it used to
+     rest on is gone. The stalled callback is **queued and unserved**: the released worker serves the
+     five-second-old wait 29 to 67us *ahead of* the work item whose submit woke it, in 99 of 99. And
+     the pool does *not* lack workers -- `M26.13.11`'s dump found three parked in
+     `NtWaitForWorkViaWorkerFactory`. What is unique about the work path is that `TppWorkPost` calls
+     **`NtReleaseWorkerFactoryWorker`**; it is one of only four functions in all 189 of `ntdll`'s
+     thread-pool functions that does, and none of the four is on the wait, timer or I/O path
+     ([ntdll-census.txt](measurements/2026-09-27-the-submit-is-what-releases-it/ntdll-census.txt)).
+     The thread growth is the same call's doing -- `TppAdjustRunningThreadGoalWithLock` runs on that
+     path -- so it is a side effect of the submit, not evidence about supply.
+     So the question is now: the factory has parked workers and a queued packet and does not put them
+     together. **The next measurement is the factory's own counters.** `NtQueryInformationWorkerFactory`
+     reports live, available and pending counts; the pool exposes no handle, so recover it from a
+     dump taken while stalled (`M26.13.11`'s recipe already works) or by handle enumeration, and read
+     the counts at the stalled moment. That distinguishes "the packet is not in the port" from "it is
+     in the port and the factory will not release for it", which is the last fork this workspace can
+     reach from outside.
   2. **What about the trigger leaves the pool with no worker?** `M26.9` narrowed entry to a
      co-running test that creates an `EventDelivery` over a ring with nothing outstanding and drops
      it promptly. Re-ask it as a thread-supply question rather than a ring question: does that
@@ -376,6 +384,8 @@ about this crate's own surface rather than about storage at all.
 - [x] **M26.13.13** -- At a 100ms period the heartbeat becomes a clock: its first expiry is already missed and no pool callback of any kind is dispatched before the release, in 18 of 18. The pool never starts.  -> [completed 2026-09-27](COMPLETED-CHECKLIST.md#m261313)
 
 - [x] **M26.13.14** -- At the 15.625ms system tick the heartbeat misses 320 consecutive expiries and the trace window is empty end to end, in 13 of 13; the onset is bracketed to the first 15.7ms, and the sub-millisecond period item 0 asked for is not reachable this way. -> [completed 2026-09-27](COMPLETED-CHECKLIST.md#m261314)
+
+- [x] **M26.13.15** -- Delaying only the `SubmitThreadpoolWork` call by up to 2000ms moves the delivery with it in 99 of 99, the released worker serves the queued wait ahead of the work that woke it, and an `ntdll` census corrects "user-mode queue push" to "the only path that calls `NtReleaseWorkerFactoryWorker`". -> [completed 2026-09-27](COMPLETED-CHECKLIST.md#m261315)
 
 ## M28+ -- Opened by the inventory
 

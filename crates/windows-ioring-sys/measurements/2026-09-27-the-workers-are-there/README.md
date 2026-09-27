@@ -76,3 +76,13 @@ worker factory, while the one that works, `SubmitThreadpoolWork`, is a
 user-mode queue push. Whether that distinction is the mechanism is not
 established by this dump, and the dump cannot settle it: it captures state, not
 the delivery path.
+
+> **Correction, 2026-09-27.** The last sentence of that paragraph stands, but
+> "user-mode queue push" is wrong in the half that matters and was never
+> verified when written. `SubmitThreadpoolWork` (`TppWorkPost`) pushes in user
+> mode *and then* calls `NtReleaseWorkerFactoryWorker` -- and it is one of only
+> four functions in all of `ntdll`'s thread pool that does. The three failing
+> paths call none of them. So the distinction is not user mode against kernel
+> mode; it is that the work path is the only one that **explicitly asks the
+> factory to release a worker**. See
+> [the-submit-is-what-releases-it](../2026-09-27-the-submit-is-what-releases-it/README.md).

@@ -292,18 +292,29 @@ measurement is linked.
 | the pool runs for a while and then wedges | ruled out -- with a 100ms heartbeat, **no** pool callback of any kind is dispatched before the release, in 18 of 18: it never starts ([the-pool-never-starts](measurements/2026-09-27-the-pool-never-starts/README.md)) |
 | *anything at all* happens in the process during the window | ruled out -- at the 15.625ms system tick the last setup record and the first post-mortem record are **adjacent lines**: no callback, no syscall, no exception, in 13 of 13 ([at-the-system-tick](measurements/2026-09-27-at-the-system-tick-it-still-never-starts/README.md)) |
 | the onset is somewhere late in the five seconds | ruled out -- bracketed to the first 15.7ms: a timer armed at 0.00004s, before the trigger's first record, is due at 15.7ms and never fires |
+| something other than the submit in the probe releases it | ruled out -- delaying only the `SubmitThreadpoolWork` call by 0 / 250 / 500 / 1000 / 2000ms moves the delivery with it: delivery-minus-submit stays at 0.25-0.54ms across all 99 captures ([the-submit-is-what-releases-it](measurements/2026-09-27-the-submit-is-what-releases-it/README.md)) |
+| the stalled callback is unnoticed rather than queued | ruled out -- the released worker serves the five-second-old **wait** 29-67us *ahead of* the work item whose submit woke it, in 99 of 99 |
+| `SubmitThreadpoolWork` differs by being user-mode | ruled out -- it makes a syscall too; what is unique is that `TppWorkPost` calls `NtReleaseWorkerFactoryWorker`, which 185 of the 189 `ntdll` thread-pool functions and all three failing paths do not ([ntdll-census.txt](measurements/2026-09-27-the-submit-is-what-releases-it/ntdll-census.txt)) |
 | it happens off the default process pool | never observed -- 0 in 12000 runs across three private-pool arms |
 
-**What is left is one question:** why the pool creates a worker for a submitted
-work item but not for a wait, timer or I/O callback that is already queued. It
-is queued as M26.13 experiment 1 in [CHECKLIST.md](CHECKLIST.md).
+**What is left is one question**, now stated in the pool's own terms: the
+worker factory has parked workers and a queued wait-completion packet, and does
+not put the two together until `NtReleaseWorkerFactoryWorker` is called. Only
+`TppWorkPost` and three siblings call it, and none of the wait, timer or I/O
+paths do -- they register for kernel delivery and rely on the factory releasing
+a worker by itself. Why it does not is the open question, and it is inside the
+factory, where this workspace's trace cannot reach. Queued as M26.13
+experiment 1 in [CHECKLIST.md](CHECKLIST.md).
 
 **And one inference boundary.** That the process gains threads when dispatch
 resumes is measured. That the six it holds while stalled contain *no idle pool
 worker* was inferred from that and is **false**: the dump in
 [the-workers-are-there](measurements/2026-09-27-the-workers-are-there/README.md)
-finds three parked in `ZwWaitForWorkViaWorkerFactory`. Why the pool adds threads
-it does not need is part of the open question above.
+finds three parked in `ZwWaitForWorkViaWorkerFactory`. The thread growth itself
+now has a mechanism rather than a mystery: `TppWorkPost` calls
+`TppAdjustRunningThreadGoalWithLock` on the way to releasing a worker, so the
+submit raises the pool's running-thread goal as a side effect of being a submit.
+That says where the threads come from, not why the idle ones were not used.
 
 ## Reference: every event the trace can emit, and the API behind it
 

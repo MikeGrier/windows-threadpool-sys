@@ -4764,6 +4764,12 @@ kernel** into the worker factory, while the one that works, `SubmitThreadpoolWor
 queue push. Whether that distinction is the mechanism is not established, and a dump cannot settle
 it: it captures state, not a delivery path.
 
+> **Corrected by [M26.13.15](COMPLETED-CHECKLIST.md#m261315).** "User-mode queue push" is wrong in
+> the half that matters: `TppWorkPost` pushes in user mode and then calls
+> `NtReleaseWorkerFactoryWorker`, one of only four functions in `ntdll`'s thread pool that does, and
+> the three failing paths call none of them. The distinction is not user mode against kernel mode;
+> it is that the work path alone **explicitly asks the factory to release a worker**.
+
 **On querying the pool's thread count:** there is no supported Win32 API, which the root
 [DESIGN-NOTES.md](../../DESIGN-NOTES.md) already recorded. What works is counting threads whose
 stack or Win32 start address is `ntdll!TppWorkerThread`, either from a dump as here or at run time
@@ -4868,3 +4874,53 @@ without changing the machine's timer behaviour under the measurement. Item 0 is 
 wait on an **already-signalled** event at process start instead: due immediately, no timer
 resolution needed, and in the kernel-delivered class that fails.
 [measurements/2026-09-27-at-the-system-tick-it-still-never-starts/](measurements/2026-09-27-at-the-system-tick-it-still-never-starts/README.md).
+### <a id="m261315"></a>M26.13.15 -- Delaying only the `SubmitThreadpoolWork` call by up to 2000ms moves the delivery with it in 99 of 99, the released worker serves the queued wait ahead of the work that woke it, and an `ntdll` census corrects "user-mode queue push" to "the only path that calls `NtReleaseWorkerFactoryWorker`". *(completed 2026-09-27 19:43:47 -04:00)*
+
+**Three results, from one experiment and one census.**
+
+**1. The submit, and nothing else in the probe, is what releases it.** Prior runs showed that a work
+submit releases the pool and no other poke does, but the probe that submits also creates a work
+object, reads the ring's count and writes to stderr first. A sleep was inserted **between
+`CreateThreadpoolWork` and `SubmitThreadpoolWork`** so the submit moves and nothing else does. Five
+arms of 4000 runs, delay in {0, 250, 500, 1000, 2000}ms, 99 captures (17, 19, 23, 16, 24 -- the rate
+is unmoved by the delay). Delivery-minus-**submit** stays at 0.25 to 0.54ms in every arm;
+delivery-minus-**create** tracks the delay across a 2000ms span. The negative half was already on
+record and was not repeated: a created-but-unsubmitted work object releases nothing
+([M26.13.3](COMPLETED-CHECKLIST.md#m26133)'s 1s create/submit gap arm), and with no submit the delivery never
+arrives inside 60s ([M26.13.9](COMPLETED-CHECKLIST.md#m26139)).
+
+**2. The backlog was already queued.** In 99 of 99 the first callback dispatched anywhere in the
+process is the stalled delivery's **wait**, served 29 to 67us (mean 39) *ahead of* the work item
+whose submit woke the worker; one released worker then drains everything, on two threads in 91
+captures and one in 8. A worker that had to be told to wake and then finds a five-second-old wait
+callback ahead of the item that woke it is taking the front of an existing queue. This is the
+discriminator experiment 1 asked for: **queued and unserved, not unnoticed.** The limit, stated: the
+trace cannot see the completion port, so this shows the wait is *ordered ahead of* the work, not the
+instant the kernel enqueued it.
+
+**3. Correction: `SubmitThreadpoolWork` makes a syscall, and it is the interesting one.** This
+record has carried "`SubmitThreadpoolWork` is a user-mode queue push" since 2026-09-26 as an
+unverified label. Every one of the 189 `ntdll!Tp*`/`Tpp*` functions was disassembled and grepped.
+`TppWorkPost` pushes in user mode under the pool's SRW lock and then calls
+`TppAdjustRunningThreadGoalWithLock`, `NtAlertThreadByThreadId` and **`NtReleaseWorkerFactoryWorker`**
+-- and exactly four functions in the whole thread pool call that last one (`TppWorkPost`,
+`TpPostTask`, `TppPrepareDirectParams`, `TppWorkCallbackPrologRelease`). None of the four is on the
+wait, timer or I/O path; those register for kernel delivery (`NtCreateWaitCompletionPacket`,
+`NtAssociateWaitCompletionPacket`, `NtSetTimer2`) and rely on the factory releasing a worker itself.
+So the distinction is not user mode against kernel mode -- the submit makes a syscall too -- it is
+that **the work path is the only one that explicitly asks the factory to release a worker.** The
+same call also explains the thread growth that had no explanation: the running-thread goal is raised
+on that path, so the 6-to-8 rise is a side effect of the submit rather than evidence about supply.
+This is static evidence about a code path, not a measurement of the fault.
+[measurements/2026-09-27-the-submit-is-what-releases-it/](measurements/2026-09-27-the-submit-is-what-releases-it/README.md).
+
+**Swept the corrected claim:** 2 sites carried the wrong wording ([M26.13.11](COMPLETED-CHECKLIST.md#m261311)'s
+archive entry and its measurement README); both now carry an additive correction rather than a
+rewrite, since both are dated records. 4 further sites use "kernel-delivered", which the census
+confirms rather than contradicts, and were left alone.
+
+**Experiment 1 re-planned.** Its premise ("the pool has no worker and makes one, but only for work")
+is gone -- [M26.13.11](COMPLETED-CHECKLIST.md#m261311) found three parked workers and the thread
+growth is now accounted for. The question becomes: the factory holds parked workers and a queued
+packet and does not put them together. The next measurement is the factory's own counters via
+`NtQueryInformationWorkerFactory`, read from a dump taken while stalled.
