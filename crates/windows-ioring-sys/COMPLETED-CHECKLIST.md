@@ -5140,3 +5140,48 @@ event anywhere for a packet arriving at a completion port or for a worker factor
 **Queued rather than taken:** `DISPATCHER`, which adds `ReadyThread` and would name what causes the
 worker to appear in a healthy run. Left out here to keep a machine-wide trace small; it is now the
 whole of M26.13 experiment 1.
+### <a id="m261320"></a>M26.13.20 -- Re-verified the reproducer's premises from a clean build: the 3-test reduction matches the full binary (16 vs 18 in 4000), the trigger is necessary (0 in 4000 without it), one victim suffices at about half the rate, and "fail together, never singly" was wrong. *(completed 2026-09-28 08:27:01 -04:00)*
+
+**Why re-check the setup at all.** Nineteen findings had accumulated on top of a reproducer that was
+itself a reduction, and several of them had already corrected earlier ones. The premises were worth
+re-establishing from a clean build of the committed tree rather than from the record.
+
+**What the reproducer is, stated precisely.** Each run is one **fresh process** -- measured, not
+assumed: the ETW capture in `M26.13.19` recorded 900 distinct process ids for 900 runs. Inside it
+the tests run **concurrently**; the machine has 16 logical processors, `libtest` defaults to that
+many threads, and the kernel trace shows the three test threads created within 105us. Outside it
+there is **no deliberate load** -- the loop is serial, one process at a time. "Concurrent" in this
+investigation has always meant between the tests inside one process, and saying so removes an
+ambiguity that had never been written down.
+
+**Five arms, 4000 runs each:**
+
+| arm | what runs | failures |
+|---|---|---|
+| A | 3-test reproducer: 2 victims + trigger | 16 |
+| B | the whole binary, all 7 tests | 18 |
+| C | 2 victims, no trigger | **0** |
+| D | one victim + trigger | 8 |
+| A again | as A, against a cleared temp directory | 13 |
+
+B says the **reduction is representative** -- narrowing 7 tests to 3 changed nothing. C re-confirms
+from scratch that the **trigger is necessary**. D is the interesting one: a single victim still
+fails, at about half the rate, which fits a race between the trigger's teardown and *a victim's*
+setup (two victims, two chances to enter the state) better than a per-process failure that any
+victim would report. Offered as the reading the numbers fit.
+
+**A claim corrected.** The record said the victims "fail together, never singly". Across the 80
+committed captures, 79 report both and **one reports a single victim**. It is the same phenomenon:
+that capture's trace shows the pool dead for the full five seconds, and what differs is the finish
+-- the victims' deadlines are a fraction of a millisecond apart, the first to expire runs the probe,
+the probe releases the pool ~0.3ms later, and the second victim's deliveries land inside its own
+deadline. Both are always *stalled*; they usually both *report*. One more instance of the probe
+repairing the fault it measures.
+
+**A defect found and queued as M26.14.** The tests leak their temp files -- two per run, nothing
+ever deletes them, and roughly thirty thousand runs had left **307,383 files, 1.2 GB** on the
+machine, since removed. Fifteen of this crate's test files share the pattern. Measured **not** to be
+a confound (13 in 4000 against a cleared directory, 16 against a full one) before being queued, and
+deliberately not fixed during M26.13 because adding teardown changes the reproducer while it is the
+instrument of an active investigation.
+[measurements/2026-09-28-re-verifying-the-premises/](measurements/2026-09-28-re-verifying-the-premises/README.md).

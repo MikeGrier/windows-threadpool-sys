@@ -37,8 +37,20 @@ measured 13 and 21 in two separate 4000-run measurements, so no effect is claime
 
 **Tests:** `completions_are_delivered_on_pool_threads_without_the_submitting_thread_waiting` and
 `completions_queued_before_handover_are_still_delivered` in
-[event_delivery.rs](tests/event_delivery.rs). They fail together, never singly, and only in parallel
-with a co-running test that creates an `EventDelivery` and drops it promptly.
+[event_delivery.rs](tests/event_delivery.rs). Both are always *stalled* together, and it happens
+only in parallel with a co-running test that creates an `EventDelivery` and drops it promptly.
+
+**They usually both *report* failure, but not always, and the exception is instructive.** An earlier
+version of this line said "never singly", which is wrong: across the 80 captures committed under
+[measurements/](measurements/), 79 report both victims and
+[one reports a single victim](measurements/2026-09-27-the-pool-never-starts/stall-3888.txt) while
+the other test passes. That capture's own trace shows why, and it is not a second phenomenon. The
+pool was dead for the full five seconds there too -- the first callback of any kind is at
+5.003027s. What differs is only the race at the end: the two victims' deadlines are a fraction of a
+millisecond apart, the first to expire runs the post-mortem probe, the probe's work submit releases
+the pool about 0.3ms later, and the second victim's deliveries arrived at 5.003056s, inside its own
+deadline. So whether the second victim reports depends on whether its remaining margin exceeds the
+release latency, which is one more way the diagnostic probe repairs the fault it is measuring.
 
 **An annotated, record-by-record walk through one captured occurrence is in
 [STALL-TIMELINE.md](STALL-TIMELINE.md)**, including a reference table mapping every trace event to

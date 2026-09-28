@@ -49,8 +49,10 @@ experiment is direct:
   captures of
   [2026-09-27-no-win32-call-blocks](../2026-09-27-no-win32-call-blocks/README.md).
   The timeout is never consumed.
-- **The other victim has no such constant.** The two delivery tests fail
-  together, never singly, and
+- **The other victim has no such constant.** The two delivery tests are always
+  stalled together (they usually both report it; see the correction in
+  [UNRESOLVED-TEST-FAILURES.md](../../UNRESOLVED-TEST-FAILURES.md) for the one
+  capture in 80 where only one does, and why that is the same phenomenon), and
   `completions_are_delivered_on_pool_threads_without_the_submitting_thread_waiting`
   submits with `submit_and_wait(0, 0)` -- no wait operations and no timeout at
   all.
