@@ -316,12 +316,16 @@ about this crate's own surface rather than about storage at all.
      The thread growth is the same call's doing -- `TppAdjustRunningThreadGoalWithLock` runs on that
      path -- so it is a side effect of the submit, not evidence about supply.
      So the question is now: the factory has parked workers and a queued packet and does not put them
-     together. **The next measurement is the factory's own counters.** `NtQueryInformationWorkerFactory`
-     reports live, available and pending counts; the pool exposes no handle, so recover it from a
-     dump taken while stalled (`M26.13.11`'s recipe already works) or by handle enumeration, and read
-     the counts at the stalled moment. That distinguishes "the packet is not in the port" from "it is
-     in the port and the factory will not release for it", which is the last fork this workspace can
-     reach from outside.
+     together -- and `M26.13.16` showed it does not put them together even at the release: in 12 of 12
+     **no thread alive at the stall ever runs a callback**, while a passing run serves the delivery on
+     a pre-existing thread in 30 of 30. **The next measurement is the factory's own counters.**
+     `NtQueryInformationWorkerFactory` reports live, available and pending counts; the pool exposes no
+     handle, so recover it from a dump taken while stalled (`M26.13.11`'s recipe already works) or by
+     handle enumeration, and read the counts at the stalled moment. Two readings to separate, and both
+     are now worth distinguishing: whether the packet is in the port at all, and whether the factory
+     believes it has an available worker while three sit parked in `NtWaitForWorkViaWorkerFactory`.
+     That second one is what `M26.13.16` makes pointed -- if the counters say zero available while the
+     stacks say three parked, the disagreement *is* the fault.
   2. **What about the trigger leaves the pool with no worker?** `M26.9` narrowed entry to a
      co-running test that creates an `EventDelivery` over a ring with nothing outstanding and drops
      it promptly. Re-ask it as a thread-supply question rather than a ring question: does that
@@ -386,6 +390,8 @@ about this crate's own surface rather than about storage at all.
 - [x] **M26.13.14** -- At the 15.625ms system tick the heartbeat misses 320 consecutive expiries and the trace window is empty end to end, in 13 of 13; the onset is bracketed to the first 15.7ms, and the sub-millisecond period item 0 asked for is not reachable this way. -> [completed 2026-09-27](COMPLETED-CHECKLIST.md#m261314)
 
 - [x] **M26.13.15** -- Delaying only the `SubmitThreadpoolWork` call by up to 2000ms moves the delivery with it in 99 of 99, the released worker serves the queued wait ahead of the work that woke it, and an `ntdll` census corrects "user-mode queue push" to "the only path that calls `NtReleaseWorkerFactoryWorker`". -> [completed 2026-09-27](COMPLETED-CHECKLIST.md#m261315)
+
+- [x] **M26.13.16** -- No thread alive at the stall ever runs a callback, in 12 of 12, while a passing run serves the delivery on a pre-existing thread in 30 of 30: the parked workers are present and unused, so `M26.13.11`'s "not starved" survives but the inference drawn from it does not. -> [completed 2026-09-27](COMPLETED-CHECKLIST.md#m261316)
 
 ## M28+ -- Opened by the inventory
 

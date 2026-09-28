@@ -4924,3 +4924,61 @@ is gone -- [M26.13.11](COMPLETED-CHECKLIST.md#m261311) found three parked worker
 growth is now accounted for. The question becomes: the factory holds parked workers and a queued
 packet and does not put them together. The next measurement is the factory's own counters via
 `NtQueryInformationWorkerFactory`, read from a dump taken while stalled.
+### <a id="m261316"></a>M26.13.16 -- No thread alive at the stall ever runs a callback, in 12 of 12, while a passing run serves the delivery on a pre-existing thread in 30 of 30: the parked workers are present and unused, so `M26.13.11`'s "not starved" survives but the inference drawn from it does not. *(completed 2026-09-27 20:20:01 -04:00)*
+
+**Prompted by a question about [M26.13.15](COMPLETED-CHECKLIST.md#m261315):** was the thread that
+releases the stall the one that had been waiting? No, and the two calls are different in kind --
+`NtWaitForWorkViaWorkerFactory` is the park that `TppWorkerThread` blocks in, while
+`NtReleaseWorkerFactoryWorker` is a post that never blocks, called by whichever thread runs
+`SubmitThreadpoolWork` (here the test's own post-mortem thread, running rather than waiting). But the
+question pointed at one that had not been asked: are the three parked workers the ones that
+eventually serve the backlog?
+
+**Method.** A Toolhelp thread snapshot emitting one `thread-present` record per live thread with its
+`GetCurrentThreadId` value. The trace stamps every record with the same id, so the thread that later
+serves the stalled wait can be tested for membership. Taken in the post-mortem for the stalled arm --
+[M26.13.6](COMPLETED-CHECKLIST.md#m26136) had already measured that the same snapshot on the setup
+path destroys the race -- and, for the healthy control, after the delivery is armed and before any
+completion can arrive.
+
+**Result.** Both populations hold six threads at the snapshot: main, the two test threads, and three
+others.
+
+| | threads alive at the snapshot | first delivery served by a thread that already existed |
+|---|---|---|
+| stalled, 12 captures | 6 | **0 of 12** |
+| healthy, 30 runs | 6 | **30 of 30** |
+
+In a passing run one of the three others serves the delivery, every time. In a stalled run none of
+them ever runs anything, and the backlog is served by one or two threads that did not exist when the
+stall was observed.
+
+**What it changes.** [M26.13.11](COMPLETED-CHECKLIST.md#m261311) read its dump as "the pool is not
+starved of threads". The literal claim survives -- the threads are there, parked, in both
+populations. The inference does not: their presence was taken to mean supply is not the subject, and
+these runs show the parked workers are **present and unused**. A free worker sat available for the
+whole five seconds, in the same state as the one that serves the delivery in a passing run, and the
+pool dispatched only once a *new* thread existed. So the stall is not "a queued packet waiting for a
+free worker".
+
+**What it does not establish.** Whether the new thread was created *because* the parked ones were
+unusable, or merely as a side effect of the submit: `TppWorkPost` calls
+`TppAdjustRunningThreadGoalWithLock` on its way to the release, so a submit raises the thread goal
+whether or not a worker is idle, and this cannot separate the two. What needs no such separation is
+the **wait** callback -- no submit involved, queued for five seconds -- served by a thread that did
+not exist at the stall in 12 of 12 while a passing run serves it on one that did in 30 of 30. It
+also does not identify the three parked threads as this pool's by direct evidence; the identical
+composition across both populations, one of which serves the delivery, is the argument.
+[measurements/2026-09-27-the-parked-workers-are-never-used/](measurements/2026-09-27-the-parked-workers-are-never-used/README.md).
+
+**Swept the qualified inference:** 8 pre-existing sites mention idle workers or starvation (one
+further hit, on an appender, is unrelated). Two assert the inference and carry a qualifier now -- the
+timeline's ruled-out row and [M26.13.11](COMPLETED-CHECKLIST.md#m261311)'s measurement README. Two
+more are this archive's own dated heading and its checklist stub, left as written because the archive
+is history. The remaining four say "has idle workers and does not dispatch to them", which this
+sharpens rather than contradicts.
+
+**Experiment 1 sharpened.** The factory-counter measurement now has a second reading to separate:
+whether the factory believes it has an available worker while three sit parked in
+`NtWaitForWorkViaWorkerFactory`. If the counters say zero available while the stacks say three
+parked, that disagreement is the fault.

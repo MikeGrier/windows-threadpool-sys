@@ -63,6 +63,15 @@ its event can be signalled successfully
 ([2026-09-27-not-a-missed-wake](../2026-09-27-not-a-missed-wake/README.md)), and
 no callback is handed to any of them.
 
+> **Qualified, 2026-09-27.** "Not starved of threads" survives -- the threads
+> are there. What does not survive is the inference that supply is therefore
+> not the subject. Snapshotting the thread set at the stall and testing the
+> serving thread for membership finds that **no thread alive at the stall ever
+> runs a callback** (12 of 12); the backlog is served by threads created after
+> the fact, while a passing run serves the delivery on a pre-existing thread
+> (30 of 30). These three workers are present and *unused*. See
+> [the-parked-workers-are-never-used](../2026-09-27-the-parked-workers-are-never-used/README.md).
+
 ## What it does not establish
 
 Why. Two things are now known to be true at the same time -- idle workers exist,
