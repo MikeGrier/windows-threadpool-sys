@@ -5048,3 +5048,50 @@ carried here.
 asking each factory, never by reading stacks. A parked `TppWorkerThread` says *a* pool has a worker;
 in a process with more than one factory it does not say which, and here that distinction was the
 whole answer.
+### <a id="m261318"></a>M26.13.18 -- Hooks installed before `main` show the pool's first worker is never created: a healthy run makes one 0.24-0.31ms after the delivery is armed, a stalled run makes none before the release in 8 of 8, and the `AlreadySignaled` race is refuted. *(completed 2026-09-27 22:37:50 -04:00)*
+
+**From a suggestion in review**: the hooks were arriving after the tests started, so put something
+in front of the tests. The better form of that is to move the *install* earlier rather than delay
+the tests -- a function pointer in `.CRT$XCU`, the C runtime's static-initialiser table, runs before
+`main` and therefore before the harness has created a thread. It is also cheaper than the lazy
+install it replaces: patching live code requires every other thread to be stopped, and at that point
+there are none, so the suspend-and-resume pass finds nothing and perturbs nothing.
+
+**The result, with the hooks in place from process start:**
+
+| | first worker announces `NtWorkerFactoryWorkerReady`, relative to the delivery being armed |
+|---|---|
+| healthy, 10 runs | **0.243 -- 0.309 ms** |
+| stalled, 8 captures | **5003 -- 5017 ms**, which is the release |
+
+A healthy run does the whole thing in a quarter of a millisecond: the event signals, the kernel
+makes a worker, it announces itself, parks, is handed the queued packet at once, and runs the
+callback. **A stalled run has no `ready` and no `park` on that factory at any point before the
+release, in 8 of 8.** So the stall is not a worker that fails to wake, nor a packet handed to the
+wrong thread, nor a callback that runs and goes missing. The thread to run it is never made.
+
+**Refuted: the `AlreadySignaled` race**, which was the reason the wait registration was hooked.
+`NtAssociateWaitCompletionPacket` sets an out-parameter when the object is already signalled at
+association time; on that path the kernel queues no completion and leaves the caller to act, which
+is a second delivery path taken only on a race and exactly the shape of a lost callback. It is not
+what happens: the flag is **false** for every association made before the first callback, in both
+arms. The only `true` anywhere is a re-arm after the release, which is the ordinary case.
+
+**Two instrument defects fixed on the way, neither found by a test.** The suspended window
+allocated -- `held.push` grew a vector while other threads were stopped, and a thread suspended
+holding the allocator lock can never give it back. Both vectors are now reserved before anything is
+suspended. And the install pass was paying for `CreateToolhelp32Snapshot` *per hook*; it snapshots
+every thread on the machine and is then filtered to this process, about 0.12s each, which put the
+last of six installs 0.73s into the process. One snapshot for the batch puts all of them at 0.132s.
+
+**Cost:** 8 failures in 4000 with four hooks installed, inside the range this configuration produces
+without them.
+[measurements/2026-09-27-the-factory-never-makes-its-first-worker/](measurements/2026-09-27-the-factory-never-makes-its-first-worker/README.md).
+
+**Still not established:** the packet's presence in the port. "The kernel queued the completion and
+the factory did not act on it" and "the kernel never queued it" produce identical records here,
+because every observation is of a call *ntdll* makes and neither case involves one.
+
+**What is left is outside this workspace's reach.** A worker factory with no workers, permitted to
+create one, not paused and not shut down, owes a callback and does not make the thread to run it
+until `NtReleaseWorkerFactoryWorker` asks. Why is inside the kernel.

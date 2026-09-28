@@ -290,6 +290,8 @@ measurement is linked.
 | the pool is starved of threads | **not ruled out after all** -- the dump's three parked workers belong to a *second* worker factory (`ThreadMaximum` 3, identical in passing runs). The pool under test reports `TotalWorkerCount` **0** while stalled against **1** while healthy, in 12 and 20 captures ([the-default-pool-has-no-worker-at-all](measurements/2026-09-27-the-default-pool-has-no-worker-at-all/README.md)) |
 | the parked workers wake and serve the backlog | ruled out -- **no thread alive at the stall ever runs a callback**, in 12 of 12; a passing run serves the delivery on a pre-existing thread in 30 of 30 ([the-parked-workers-are-never-used](measurements/2026-09-27-the-parked-workers-are-never-used/README.md)). They were never candidates: they are the other factory's |
 | the factory has been paused, shut down, or forbidden to create | ruled out -- while stalled it reports `Paused` false, `Shutdown` false, `MayCreate` **true**, `ThreadMinimum` 0, `LastThreadCreationStatus` 0 |
+| the pool's first worker is created and then fails to pick up the packet | ruled out -- **it is never created**: no `NtWorkerFactoryWorkerReady` and no `NtWaitForWorkViaWorkerFactory` on that factory before the release, in 8 of 8, against a healthy run where a new worker announces itself 0.24-0.31ms after the delivery is armed ([the-factory-never-makes-its-first-worker](measurements/2026-09-27-the-factory-never-makes-its-first-worker/README.md)) |
+| the wait was already signalled when it was registered, taking the kernel's no-packet path | ruled out -- `NtAssociateWaitCompletionPacket` reports `AlreadySignaled` **false** for every association made before the first callback, in every capture of both arms; the only `true` is an ordinary re-arm after the release |
 | the fault is in *registering* with the pool, not dispatching | ruled out -- a timer armed while the pool was healthy, due inside the stall window, fires only at the release, 10 of 10 ([a-timer-armed-while-healthy-also-stops](measurements/2026-09-27-a-timer-armed-while-healthy-also-stops/README.md)) |
 | the pool runs for a while and then wedges | ruled out -- with a 100ms heartbeat, **no** pool callback of any kind is dispatched before the release, in 18 of 18: it never starts ([the-pool-never-starts](measurements/2026-09-27-the-pool-never-starts/README.md)) |
 | *anything at all* happens in the process during the window | ruled out -- at the 15.625ms system tick the last setup record and the first post-mortem record are **adjacent lines**: no callback, no syscall, no exception, in 13 of 13 ([at-the-system-tick](measurements/2026-09-27-at-the-system-tick-it-still-never-starts/README.md)) |
@@ -299,16 +301,18 @@ measurement is linked.
 | `SubmitThreadpoolWork` differs by being user-mode | ruled out -- it makes a syscall too; what is unique is that `TppWorkPost` calls `NtReleaseWorkerFactoryWorker`, which 185 of the 189 `ntdll` thread-pool functions and all three failing paths do not ([ntdll-census.txt](measurements/2026-09-27-the-submit-is-what-releases-it/ntdll-census.txt)) |
 | it happens off the default process pool | never observed -- 0 in 12000 runs across three private-pool arms |
 
-**What is left is one question**, now stated in the pool's own terms: the
-default pool's worker factory holds **no worker at all** while stalled, is not
-paused, is not shut down, reports `MayCreate` true and no failed creation, and
-owes a queued wait-completion packet -- and it does not make a worker for it
-until `NtReleaseWorkerFactoryWorker` asks. Only `TppWorkPost` and three
-siblings call that release, and none of the wait, timer or I/O paths do: they
-register for kernel delivery and rely on the factory acting by itself. Why it
-does not is the open question, and it is inside the factory, where this
-workspace's trace cannot reach. Queued as M26.13 experiment 1 in
-[CHECKLIST.md](CHECKLIST.md).
+**What is left is one question**, and everything outside the kernel is now
+accounted for. In a healthy run the event signals and the kernel makes a worker
+for the default pool within a quarter of a millisecond -- it announces itself
+with `NtWorkerFactoryWorkerReady`, parks, and is handed the packet at once. In
+a stalled run **that worker is never created**, and the factory meanwhile
+reports no workers, `MayCreate` true, not paused, not shut down, and no failed
+creation. So: a worker factory with no workers, permitted to make one, owes a
+callback and does not make the thread to run it -- until
+`NtReleaseWorkerFactoryWorker` asks, which only the work-submit path calls.
+
+Why is inside the kernel, and no instrument available to this workspace reaches
+there. Queued as M26.13 experiment 1 in [CHECKLIST.md](CHECKLIST.md).
 
 **And one inference boundary, twice corrected.** That the process gains threads
 when dispatch resumes is measured. It was first read as "the six it holds while

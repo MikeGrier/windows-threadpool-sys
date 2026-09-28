@@ -395,6 +395,8 @@ about this crate's own surface rather than about storage at all.
 
 - [x] **M26.13.17** -- Inline ntdll hooks and a worker-factory scan: the process holds two factories, and the default pool reports zero workers while stalled against one while healthy, so `M26.13.11`'s three parked workers were the *other* factory's all along. -> [completed 2026-09-27](COMPLETED-CHECKLIST.md#m261317)
 
+- [x] **M26.13.18** -- Hooks installed before `main` show the pool's first worker is never created: a healthy run makes one 0.24-0.31ms after the delivery is armed, a stalled run makes none before the release in 8 of 8, and the `AlreadySignaled` race is refuted. -> [completed 2026-09-27](COMPLETED-CHECKLIST.md#m261318)
+
 ## M28+ -- Opened by the inventory
 
 - [x] **M28.7** -- Decided against: the ring can answer 1 of 4 violations, and an internal check would be wrong about 13 live `_raw` push sites. -> [completed 2026-09-26](COMPLETED-CHECKLIST.md#m287)
