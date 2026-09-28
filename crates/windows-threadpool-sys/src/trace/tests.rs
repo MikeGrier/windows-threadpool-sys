@@ -647,3 +647,59 @@ fn an_install_of_an_unknown_label_refuses_rather_than_patching_something() {
          catastrophic misreading of a typo"
     );
 }
+
+/// The factory scan finds this process's worker factory, and what it reports
+/// is the pool's own state rather than a misread of some other object.
+///
+/// The scan matters more than the hooks it backs up. A stalled process is
+/// precisely one in which no hooked call has fired, so the handle a hook would
+/// have learned is exactly the handle that is missing at the moment it is
+/// needed -- and this asks the question without needing one, and without
+/// patching anything.
+///
+/// The assertions pin the layout, not just the call. A wrong `Basic` would
+/// still let the query succeed while placing the counts over the timeouts or
+/// the padding, so the guard requires the numbers to be consistent with a pool
+/// that has just run a callback: at least one worker, and no more waiting than
+/// exist.
+#[cfg(feature = "trace")]
+#[test]
+fn the_factory_scan_finds_the_pool_and_reads_plausible_counts() {
+    use super::hook::probe_factory;
+    use crate::work::ThreadpoolWork;
+
+    // Force the default pool into existence and make it dispatch, so there is
+    // a factory to find and it has at least one worker.
+    let (tx, rx) = mpsc::channel();
+    let tx = std::sync::Mutex::new(tx);
+    let work = ThreadpoolWork::new(
+        move || {
+            if let Ok(tx) = tx.lock() {
+                let _ = tx.send(());
+            }
+        },
+        None,
+    )
+    .expect("create the work item");
+    work.submit();
+    rx.recv_timeout(PROBE_BOUND)
+        .expect("the default pool ran the callback");
+
+    let (total, waiting, pending) =
+        probe_factory().expect("the scan must find the worker factory of a process that has one");
+
+    assert!(
+        total >= 1,
+        "a pool that has just run a callback has at least one worker, got total={total}"
+    );
+    assert!(
+        waiting <= total,
+        "more workers waiting than exist means the layout is misread: waiting={waiting} \
+         total={total}"
+    );
+    assert!(
+        total < 10_000 && pending < 10_000,
+        "these are small counts for a test process; total={total} pending={pending} reads like \
+         a timeout or a pointer landing in the fields the layout names"
+    );
+}

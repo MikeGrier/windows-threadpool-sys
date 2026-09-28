@@ -525,34 +525,149 @@ const WORKER_FACTORY_BASIC_INFORMATION: u32 = 7;
 /// pointer-sized member, so a layout that has grown at the end is still read
 /// correctly. A layout that changed in the middle would not be, which is why
 /// every field is recorded rather than interpreted here.
-pub(crate) fn counts() -> bool {
-    #[repr(C)]
-    #[derive(Default)]
-    struct Basic {
-        timeout: i64,
-        retry_timeout: i64,
-        idle_timeout: i64,
-        paused: u8,
-        timer_set: u8,
-        queued_to_ex_worker: u8,
-        may_create: u8,
-        create_in_progress: u8,
-        inserted_into_queue: u8,
-        shutdown: u8,
-        _pad: u8,
-        binding_count: u32,
-        thread_minimum: u32,
-        thread_maximum: u32,
-        pending_worker_count: u32,
-        waiting_worker_count: u32,
-        total_worker_count: u32,
-        release_count: u32,
-        infinite_wait_goal: i64,
+#[repr(C)]
+#[derive(Default)]
+struct Basic {
+    timeout: i64,
+    retry_timeout: i64,
+    idle_timeout: i64,
+    paused: u8,
+    timer_set: u8,
+    queued_to_ex_worker: u8,
+    may_create: u8,
+    create_in_progress: u8,
+    inserted_into_queue: u8,
+    shutdown: u8,
+    _pad: u8,
+    binding_count: u32,
+    thread_minimum: u32,
+    thread_maximum: u32,
+    pending_worker_count: u32,
+    waiting_worker_count: u32,
+    total_worker_count: u32,
+    release_count: u32,
+    infinite_wait_goal: i64,
+    start_routine: usize,
+    start_parameter: usize,
+    process_id: usize,
+    stack_reserve: usize,
+    stack_commit: usize,
+    last_thread_creation_status: i32,
+    _tail: u32,
+}
+
+type Query = unsafe extern "system" fn(usize, u32, *mut core::ffi::c_void, u32, *mut u32) -> i32;
+
+/// Find this process's worker factory by asking every plausible handle whether
+/// it is one.
+///
+/// The default process pool exposes no way to reach its factory, and the hooks
+/// only learn the handle once a hooked call has carried one -- which in a
+/// stalled process is exactly what has not happened. So this asks instead: for
+/// each candidate handle value, `NtQueryInformationWorkerFactory` succeeds only
+/// on a worker factory, and answers `STATUS_OBJECT_TYPE_MISMATCH` or
+/// `STATUS_INVALID_HANDLE` on anything else. The query is read-only and the
+/// wrong answers are ordinary error returns, so the scan cannot disturb what it
+/// is looking for -- which matters more here than usual, because the whole
+/// difficulty of this investigation has been instruments that repair the fault.
+///
+/// Kernel handles are multiples of four, and a test process holds few of them;
+/// the ceiling below covers a thousand candidates and takes well under a
+/// millisecond. Every factory found is recorded, not just the first: a process
+/// with a private pool as well as the default one has two, and silently
+/// reporting whichever came first would be a reading rather than a measurement.
+fn scan_for_factory(query: Query) -> Vec<usize> {
+    /// Highest handle value tried. Handles are allocated low and densely, so
+    /// this is generous for a test process rather than a tuned figure.
+    const CEILING: usize = 4096;
+
+    let mut all: Vec<usize> = Vec::new();
+    let mut probe = Basic::default();
+    let mut returned = 0_u32;
+    let mut candidate = 4_usize;
+    while candidate <= CEILING {
+        // SAFETY: `probe` is a live, correctly sized buffer. An unusable
+        // candidate is reported as an error status, not undefined behaviour.
+        let status = unsafe {
+            query(
+                candidate,
+                WORKER_FACTORY_BASIC_INFORMATION,
+                std::ptr::from_mut(&mut probe).cast(),
+                size_of::<Basic>() as u32,
+                &mut returned,
+            )
+        };
+        if status >= 0 {
+            all.push(candidate);
+            record(TARGET, "factory-found", candidate as u64, all.len() as u64);
+        }
+        candidate += 4;
     }
+    record(TARGET, "factories-seen", all.len() as u64, 0);
+    all
+}
 
-    type Query =
-        unsafe extern "system" fn(usize, u32, *mut core::ffi::c_void, u32, *mut u32) -> i32;
+/// The factory's headline counts, for the scan's guard: total workers, waiting
+/// workers, pending work.
+///
+/// Separate from [`counts`] because a guard needs values to assert on, while a
+/// capture needs records. Returning them from `counts` would tempt a caller to
+/// interpret a layout this module deliberately only records.
+#[cfg(test)]
+pub(crate) fn probe_factory() -> Option<(u32, u32, u32)> {
+    let raw = ntdll_proc("NtQueryInformationWorkerFactory")?;
+    // SAFETY: the name resolved in `ntdll` and this is its documented shape.
+    let query: Query = unsafe { std::mem::transmute::<usize, Query>(raw) };
+    let handle = *scan_for_factory(query).first()?;
+    let mut info = Basic::default();
+    let mut returned = 0_u32;
+    // SAFETY: `info` is a live, correctly sized buffer.
+    let status = unsafe {
+        query(
+            handle,
+            WORKER_FACTORY_BASIC_INFORMATION,
+            std::ptr::from_mut(&mut info).cast(),
+            size_of::<Basic>() as u32,
+            &mut returned,
+        )
+    };
+    if status < 0 {
+        return None;
+    }
+    Some((
+        info.total_worker_count,
+        info.waiting_worker_count,
+        info.pending_worker_count,
+    ))
+}
 
+/// What the factory itself believes, at the moment of the call.
+///
+/// **This is what every outside measurement leaves open.** Threads parked in a
+/// dump and callbacks that did or did not run describe the factory from
+/// outside; these are its own counters, and they separate "the packet never
+/// reached the port" from "the factory has the packet, has parked workers, and
+/// does not consider them available".
+///
+/// Returns whether anything was read. Recorded either way, so a capture can
+/// tell "asked and could not" from "never asked".
+///
+/// The layout above is not published by Microsoft; it is the long-standing
+/// community reconstruction. **It has to be exactly right, including its
+/// total size**, because the query rejects a buffer whose length does not
+/// match the class -- an earlier draft of this module stopped the struct after
+/// the counts it wanted, and every call answered
+/// `STATUS_INFO_LENGTH_MISMATCH`, which looked exactly like a process with no
+/// worker factory in it. That is why the scan's guard asserts on values rather
+/// than only on the call succeeding, and why the fields are recorded rather
+/// than interpreted here.
+pub(crate) fn counts() -> bool {
+    let Some(raw) = ntdll_proc("NtQueryInformationWorkerFactory") else {
+        record(TARGET, "counts-unavailable", 0, 0);
+        return false;
+    };
+    // SAFETY: the name resolved in `ntdll` and this is its documented shape.
+    let query: Query = unsafe { std::mem::transmute::<usize, Query>(raw) };
     let handle = FACTORY.load(Ordering::Relaxed);
     for (index, (_, label, _)) in HOOKS.iter().enumerate() {
         let count = fired(label);
@@ -564,16 +679,29 @@ pub(crate) fn counts() -> bool {
             record(TARGET, "fired", index as u64, count as u64);
         }
     }
-    if handle == 0 {
-        record(TARGET, "counts-no-handle", 0, 0);
+    // Every factory in the process, not just one. A process can hold more than
+    // the default pool's -- a private pool is a second factory, and this
+    // investigation's own control arms create one -- so reporting whichever
+    // was found first would be picking an answer rather than measuring it.
+    let mut handles = scan_for_factory(query);
+    if handle != 0 && !handles.contains(&handle) {
+        handles.push(handle);
+    }
+    if handles.is_empty() {
+        record(TARGET, "counts-no-handle", 0, handle as u64);
         return false;
     }
-    let Some(raw) = ntdll_proc("NtQueryInformationWorkerFactory") else {
-        record(TARGET, "counts-unavailable", 0, 0);
-        return false;
-    };
-    // SAFETY: the name resolved in `ntdll` and this is its documented shape.
-    let query: Query = unsafe { std::mem::transmute::<usize, Query>(raw) };
+    let mut read_any = false;
+    for handle in handles {
+        read_any |= read_one(query, handle);
+    }
+    read_any
+}
+
+/// Record one factory's counters. Every record carries the handle in its
+/// second slot, so a capture from a process holding more than one factory can
+/// be read apart rather than averaged into nonsense.
+fn read_one(query: Query, handle: usize) -> bool {
     let mut info = Basic::default();
     let mut returned = 0_u32;
     // SAFETY: `info` is a live, correctly sized buffer; the call only writes
@@ -596,7 +724,12 @@ pub(crate) fn counts() -> bool {
     if status < 0 {
         return false;
     }
-    record(TARGET, "counts-total", info.total_worker_count as u64, 0);
+    record(
+        TARGET,
+        "counts-total",
+        info.total_worker_count as u64,
+        handle as u64,
+    );
     record(
         TARGET,
         "counts-waiting",
@@ -609,23 +742,51 @@ pub(crate) fn counts() -> bool {
         info.pending_worker_count as u64,
         0,
     );
-    record(TARGET, "counts-release", info.release_count as u64, 0);
-    record(TARGET, "counts-binding", info.binding_count as u64, 0);
+    record(
+        TARGET,
+        "counts-release",
+        info.release_count as u64,
+        handle as u64,
+    );
+    record(
+        TARGET,
+        "counts-binding",
+        info.binding_count as u64,
+        handle as u64,
+    );
     record(
         TARGET,
         "counts-min-max",
         info.thread_minimum as u64,
         info.thread_maximum as u64,
     );
-    record(TARGET, "counts-paused", info.paused as u64, 0);
-    record(TARGET, "counts-may-create", info.may_create as u64, 0);
+    record(TARGET, "counts-paused", info.paused as u64, handle as u64);
+    record(
+        TARGET,
+        "counts-may-create",
+        info.may_create as u64,
+        handle as u64,
+    );
     record(
         TARGET,
         "counts-creating",
         info.create_in_progress as u64,
         info.inserted_into_queue as u64,
     );
-    record(TARGET, "counts-shutdown", info.shutdown as u64, 0);
+    record(
+        TARGET,
+        "counts-shutdown",
+        info.shutdown as u64,
+        handle as u64,
+    );
+    // The field that would explain a factory refusing to make a worker, which
+    // is one of the two readings this whole facility exists to separate.
+    record(
+        TARGET,
+        "counts-last-create-status",
+        info.last_thread_creation_status as u32 as u64,
+        0,
+    );
     record(
         TARGET,
         "counts-idle-timeout-ms",
