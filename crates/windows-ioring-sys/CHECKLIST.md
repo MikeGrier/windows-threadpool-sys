@@ -304,28 +304,45 @@ about this crate's own surface rather than about storage at all.
      dispatched before the trigger ran and the fault was induced afterwards; not firing means the
      pool never dispatched in this process at all. Guard it with the healthy case: in a passing run
      it must fire, or the probe proves nothing.
-  1. **Why does the worker factory not release a parked worker for a packet it already holds?**
-     `M26.13.15` answered the discriminator this item used to open with, and the premise it used to
-     rest on is gone. The stalled callback is **queued and unserved**: the released worker serves the
-     five-second-old wait 29 to 67us *ahead of* the work item whose submit woke it, in 99 of 99. And
-     the pool does *not* lack workers -- `M26.13.11`'s dump found three parked in
-     `NtWaitForWorkViaWorkerFactory`. What is unique about the work path is that `TppWorkPost` calls
-     **`NtReleaseWorkerFactoryWorker`**; it is one of only four functions in all 189 of `ntdll`'s
-     thread-pool functions that does, and none of the four is on the wait, timer or I/O path
-     ([ntdll-census.txt](measurements/2026-09-27-the-submit-is-what-releases-it/ntdll-census.txt)).
-     The thread growth is the same call's doing -- `TppAdjustRunningThreadGoalWithLock` runs on that
-     path -- so it is a side effect of the submit, not evidence about supply.
-     So the question is now: the factory has parked workers and a queued packet and does not put them
-     together -- and `M26.13.16` showed it does not put them together even at the release: in 12 of 12
-     **no thread alive at the stall ever runs a callback**, while a passing run serves the delivery on
-     a pre-existing thread in 30 of 30. **The next measurement is the factory's own counters.**
-     `NtQueryInformationWorkerFactory` reports live, available and pending counts; the pool exposes no
-     handle, so recover it from a dump taken while stalled (`M26.13.11`'s recipe already works) or by
-     handle enumeration, and read the counts at the stalled moment. Two readings to separate, and both
-     are now worth distinguishing: whether the packet is in the port at all, and whether the factory
-     believes it has an available worker while three sit parked in `NtWaitForWorkViaWorkerFactory`.
-     That second one is what `M26.13.16` makes pointed -- if the counters say zero available while the
-     stacks say three parked, the disagreement *is* the fault.
+  1. **BLOCKED ON ELEVATION -- name the context that creates the pool's first worker, with an
+     ETW kernel trace.** `M26.13.17` and `M26.13.18` answered everything this item used to ask:
+     the factory reports zero workers, and the first worker is never created rather than created
+     and left idle. What is left is one step further in, and ETW reaches exactly one part of it.
+
+     **What ETW can answer.** The `PROC_THREAD` kernel flag emits a thread-create event whose
+     header carries the *creating* thread, so a healthy run will name the context in which the
+     kernel makes the pool's first worker -- the thing `M26.13.18` shows happening 0.24 to 0.31 ms
+     after the delivery is armed, and never happening in a stalled run. `DISPATCHER` adds
+     `ReadyThread`, which says who readied whom, and pins the moment on the other side. Together
+     they turn "no worker appears" into "this is the context that would have made it, and here is
+     how far it got".
+
+     **What ETW cannot answer, checked rather than assumed.** There is no public event for a
+     wait-completion packet reaching an I/O completion port, and none for worker-factory
+     activation. Measured on this machine, 2026-09-27: all 1198 registered providers carry no
+     thread-pool provider by name; `xperf -providers KF` has no thread-pool kernel flag; and a
+     census of all 40 `Microsoft-Windows-Kernel-*` provider manifests (`wevtutil gp /ge /gm`) finds
+     no event declaring a worker factory or a completion packet -- the only `Worker` hits are the
+     cache, power and prefetch providers' own unrelated workers. `ntdll`'s `TppETW*` routines do
+     emit, but through `NtTraceEvent` directly, and they carry the same timer and work-item facts
+     the hooks in `windows-threadpool-sys` already record. So the open question -- whether the
+     packet is in the port -- stays out of reach, and this item must not be written up as though
+     it settles it.
+
+     **The blocker is elevation, and it is real rather than a preference.** The NT Kernel Logger
+     refuses a non-elevated session: `xperf -on PROC_THREAD+DISPATCHER` answers
+     `NT Kernel Logger: Access is denied. (0x5)`. The reproducer needs roughly 4000 runs to produce
+     a handful of failures, so the trace has to run for minutes with the session open, which is a
+     decision for the engineer rather than something to arrange unilaterally.
+
+     **Recipe, for whoever runs it elevated.** Start `xperf -on PROC_THREAD+DISPATCHER -f
+     .scratch\kernel.etl`, loop the `event_delivery` binary with `WINDOWS_THREADPOOL_TRACE` set so
+     the user-mode trace and the kernel trace can be lined up by thread id, stop with
+     `xperf -d`, and compare a failing run against a passing one on: whether any thread is created
+     for the process between the delivery being armed and the release, and whether any `ReadyThread`
+     names a thread of this process in that window. Pair every capture with a healthy control from
+     the same session -- a kernel trace with no passing run in it cannot show what the missing
+     events look like when they are present.
   2. **What about the trigger leaves the pool with no worker?** `M26.9` narrowed entry to a
      co-running test that creates an `EventDelivery` over a ring with nothing outstanding and drops
      it promptly. Re-ask it as a thread-supply question rather than a ring question: does that
