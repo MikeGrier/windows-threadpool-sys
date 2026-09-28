@@ -5200,3 +5200,41 @@ about 2.4 ms later -- so the trigger has finished before the victims arrive. Tha
 passing ones, with an indistinguishable gap distribution, so it is simply how `libtest` schedules
 these three tests. Reading the failures alone would have promoted a constant to a discriminator;
 the passing control is the only reason that did not happen.
+### <a id="m26141"></a>M26.14.1 -- The trigger's *teardown* is what poisons: built and never dropped it gives 0 in 4000 against a live control's 11, and a ring dropped without a delivery also gives 0. *(completed 2026-09-28 12:57:52 -04:00)*
+
+**From a review reading**: that `dropping_with_nothing_outstanding_does_not_hang` poisons the
+process rather than competing with the victims for anything. Tested rather than accepted, by making
+the trigger selectable so one build served five arms of 4000 runs.
+
+| arm | what the trigger does | failures |
+|---|---|---|
+| `default` | ring + `EventDelivery`, **dropped** | **11** |
+| `none` | nothing | 0 |
+| `ring-only` | ring created and dropped, **no delivery** | 0 |
+| `leak` | ring + `EventDelivery`, **never dropped** | **0** |
+| `x4` | four create-and-drop cycles | **26** |
+
+`default` was re-run in the same session, so the three zeroes are measured against a live
+reproducer rather than against an earlier figure.
+
+**`leak` is the result.** The trigger builds exactly what it always builds -- a ring, an event
+attached to it, a `ThreadpoolWait` armed on that event -- and does not drop it. Zero in 4000. So the
+setup does not poison; taking it back down does. `ring-only` closes the other half: a ring created
+and dropped with no delivery over it is also zero, so the ring alone is innocent too. It takes the
+delivery **and** its teardown.
+
+**What that teardown is**, on the trigger's own thread and spanning 54us: a `TP_WAIT` created, armed
+on the ring's completion event, then `SetThreadpoolWait(NULL)`, `WaitForThreadpoolWaitCallbacks` and
+`CloseThreadpoolWait` -- all before the pool has dispatched anything, and about 2.4ms before either
+victim arms its own delivery.
+
+**`x4` gives 26 against 11**, which is 3.5 Poisson sigma below four independent chances and 2.9
+above no increase. Repeating it raises the rate without quadrupling it. Offered as a direction
+rather than a dose-response, and the reason is stated: four cycles take longer than one, which also
+moves when the trigger finishes relative to the victims arming, so the arm changes two things at
+once.
+
+**Not established:** which part of the teardown does it -- disarm, drain and close are 12us apart
+and this cannot separate them. Nor why a ring is needed when the wait is on an ordinary event.
+Both are queued as M26.14.2.
+[measurements/2026-09-28-the-teardown-is-what-poisons/](measurements/2026-09-28-the-teardown-is-what-poisons/README.md).

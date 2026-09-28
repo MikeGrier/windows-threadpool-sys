@@ -300,6 +300,9 @@ measurement is linked.
 | something other than the submit in the probe releases it | ruled out -- delaying only the `SubmitThreadpoolWork` call by 0 / 250 / 500 / 1000 / 2000ms moves the delivery with it: delivery-minus-submit stays at 0.25-0.54ms across all 99 captures ([the-submit-is-what-releases-it](measurements/2026-09-27-the-submit-is-what-releases-it/README.md)) |
 | the stalled callback is unnoticed rather than queued | ruled out -- the released worker serves the five-second-old **wait** 29-67us *ahead of* the work item whose submit woke it, in 99 of 99 |
 | `SubmitThreadpoolWork` differs by being user-mode | ruled out -- it makes a syscall too; what is unique is that `TppWorkPost` calls `NtReleaseWorkerFactoryWorker`, which 185 of the 189 `ntdll` thread-pool functions and all three failing paths do not ([ntdll-census.txt](measurements/2026-09-27-the-submit-is-what-releases-it/ntdll-census.txt)) |
+| the trigger competes with the victims for something | ruled out -- it finishes about 2.4ms *before* either victim arms, in 80 of 80 failures and 183 of 183 passing runs alike ([re-verifying-the-premises](measurements/2026-09-28-re-verifying-the-premises/README.md)) |
+| the trigger's *setup* is what poisons | ruled out -- built and deliberately **not dropped**, it gives 0 in 4000 against a live control's 11 ([the-teardown-is-what-poisons](measurements/2026-09-28-the-teardown-is-what-poisons/README.md)) |
+| a ring created and dropped is enough | ruled out -- with no `EventDelivery` over it, 0 in 4000; the delivery and its teardown are both needed |
 | it happens off the default process pool | never observed -- 0 in 12000 runs across three private-pool arms |
 
 **What is left is one question**, and everything outside the kernel is now

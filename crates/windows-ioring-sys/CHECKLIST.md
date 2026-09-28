@@ -408,6 +408,22 @@ about this crate's own surface rather than about storage at all.
 
 - [x] **M26.13.20** -- Re-verified the reproducer's premises from a clean build: the 3-test reduction matches the full binary (16 vs 18 in 4000), the trigger is necessary (0 in 4000 without it), one victim suffices at about half the rate, and "fail together, never singly" was wrong. -> [completed 2026-09-28](COMPLETED-CHECKLIST.md#m261320)
 
+- [x] **M26.14.1** -- The trigger's *teardown* is what poisons: built and never dropped it gives 0 in 4000 against a live control's 11, and a ring dropped without a delivery also gives 0. -> [completed 2026-09-28](COMPLETED-CHECKLIST.md#m26141)
+
+- [ ] **M26.14.2** -- **Decompose the teardown, in `windows-threadpool-sys` rather than here.**
+  `M26.14.1` narrowed the poison to taking an `EventDelivery` down -- a `TP_WAIT` armed on the
+  ring's completion event, then disarmed, drained and closed 32us later. Disarm, drain and close
+  happen within 12us of each other and that measurement cannot separate them. Run the three
+  variants that can: **arm then close without disarming**, **arm then disarm without closing**, and
+  **create then close without ever arming**. Each needs a live positive control in the same session,
+  because three zeroes mean nothing next to a reproducer that has gone quiet.
+
+  **Carry the open puzzle into it.** A ring is needed and a ring alone is not enough: six thousand
+  ring-free trials produced nothing, and `M26.14.1`'s `ring-only` arm is equally clean at 0 in 4000.
+  So the ring and the delivery are needed together, and why is not established. The wait is armed on
+  an ordinary event -- what the ring contributes is that `SetIoRingCompletionEvent` gives the kernel
+  a reference to that same event, which is the one asymmetry between this and a ring-free wait.
+  State that as the thing to test, not as the answer.
 - [ ] **M26.14** -- **The ioring tests leak their temp files, and nothing cleans up.** `temp_file` in
   [tests/event_delivery.rs](tests/event_delivery.rs) builds a path under the system temp directory
   and no test removes it; each run of the M26.13 reproducer leaves two behind, and roughly thirty
