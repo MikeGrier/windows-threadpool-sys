@@ -1,0 +1,105 @@
+{
+  "package": "windows-threadpool-sys",
+  "description": "Sabotages for the ntdll inline-hook facility in src/trace/hook.rs -- the stub recogniser that makes patching safe, the trampoline that rebuilds the displaced system call, and the table column that decides which calls carry a worker factory handle. Run with tools/run-sabotage.ps1; see tools/README-sabotage.md for the format and for why the results are read the way they are.",
+  "notCoveredHere": "The trace RECORDS a hook emits are deliberately absent from this manifest. They are asserted by the same test, but only when WINDOWS_THREADPOOL_TRACE is set in the environment, and neither this harness nor CI sets it -- so a sabotage that removed the `record` calls would be reported SURVIVED for a guard that does in fact exist. That is the feature-gate trap this repository already documents, arriving through an environment variable rather than a cargo feature. The guard those assertions back is the `fired` counter, which is unconditional and IS swept below. Making the record assertions reachable needs the traced tests to run somewhere, which is queued as M-T4.1 in CHECKLIST.md.",
+  "testArgs": [
+    "--all-features"
+  ],
+  "whyTestArgs": "--all-features, because the whole hook module is behind the `trace` feature. Without it the module is not compiled, every sabotage lands in code that does not exist, and the sweep reports SURVIVED for guards that are present and working.",
+  "sabotages": [
+    {
+      "name": "the trampoline omits the system call",
+      "file": "src/trace/hook.rs",
+      "expect": "caught",
+      "why": "The trampoline rebuilds the displaced stub from the system call number. Replacing the two-byte `syscall` with NOPs leaves a trampoline that returns whatever was in eax without entering the kernel, so the hooked call silently stops doing anything. This is the failure that would make every hooked measurement a fiction while the process kept running, so the guard has to notice it by the call's own results rather than by a crash.",
+      "find": [
+        "    stub[8] = 0x0F;",
+        "    stub[9] = 0x05;"
+      ],
+      "replace": [
+        "    stub[8] = 0x90;",
+        "    stub[9] = 0x90;"
+      ]
+    },
+    {
+      "name": "the recogniser accepts anything",
+      "file": "src/trace/hook.rs",
+      "expect": "caught",
+      "why": "The recogniser is the entire safety argument for patching another module's code: it is what stops a jump being planted over instructions nobody decoded. A version that returns true unconditionally would happily corrupt any export whose name resolved.",
+      "find": [
+        "    head[..4] == PREFIX_HEAD && head[8..16] == PREFIX_TAIL"
+      ],
+      "replace": [
+        "    let _ = (head, PREFIX_HEAD, PREFIX_TAIL);",
+        "    true"
+      ]
+    },
+    {
+      "name": "the recogniser pins the system call number",
+      "file": "src/trace/hook.rs",
+      "expect": "caught",
+      "why": "The four system-call-number bytes are the one part of the stub that legitimately varies, between functions and between Windows builds. A recogniser that matched them too would refuse every stub but the one it was written against -- a failure that looks like safety and is in fact a facility that never works. This is the opposite direction from the sabotage above, and a guard that only tested one of them would pass either way.",
+      "find": [
+        "    head[..4] == PREFIX_HEAD && head[8..16] == PREFIX_TAIL"
+      ],
+      "replace": [
+        "    head[..8] == [0x4C, 0x8B, 0xD1, 0xB8, 0xE6, 0x01, 0x00, 0x00] && head[8..16] == PREFIX_TAIL"
+      ]
+    },
+    {
+      "name": "an unknown hook label falls back to the first entry",
+      "file": "src/trace/hook.rs",
+      "expect": "caught",
+      "why": "A typo in WINDOWS_THREADPOOL_TRACE_HOOKS must refuse, not silently patch whichever stub happens to be first in the table. The first entry is the worker park, the hottest path in the pool, so this mistake would be both invisible and maximally perturbing.",
+      "find": [
+        "    let Some(index) = HOOKS.iter().position(|(_, name, _)| *name == label) else {",
+        "        return Err(Refusal::NotFound);",
+        "    };",
+        "    install(index)"
+      ],
+      "replace": [
+        "    let index = HOOKS",
+        "        .iter()",
+        "        .position(|(_, name, _)| *name == label)",
+        "        .unwrap_or(0);",
+        "    install(index)"
+      ]
+    },
+    {
+      "name": "the fired counter never increments",
+      "file": "src/trace/hook.rs",
+      "expect": "caught",
+      "why": "The counter is what makes the facility's guard run on a machine with no trace environment set. Removing the increment is indistinguishable, to every unconditional assertion, from a jump that was never planted -- which is exactly the state the guard exists to rule out.",
+      "find": [
+        "                FIRED[$index].fetch_add(1, Ordering::Relaxed);"
+      ],
+      "replace": [
+        "                let _ = &FIRED[$index];"
+      ]
+    },
+    {
+      "name": "every hooked call is taken to carry a factory handle",
+      "file": "src/trace/hook.rs",
+      "expect": "caught",
+      "why": "Only the worker-factory calls have a factory handle in their first argument. Ignoring the table column that says so lets a stub with an out-pointer there install itself as the handle, after which the factory counters describe whatever that pointer was -- an error that reports itself as a plain query failure and would be read as the factory's own answer. This sabotage is here because the defect was real: it was in the first draft of the module and was caught while writing the table, not by a test.",
+      "find": [
+        "                if $carries_handle && a1 != 0 {"
+      ],
+      "replace": [
+        "                if a1 != 0 {"
+      ]
+    },
+    {
+      "name": "CONTROL: a refusal reason is renumbered",
+      "file": "src/trace/hook.rs",
+      "expect": "survives",
+      "why": "The control this manifest needs. The numeric value of a refusal reason is carried into a trace record and never compared against anything, so changing it cannot break a test. A sweep in which this were CAUGHT would mean the suite is sensitive to something other than behaviour, and the CAUGHT results above would be worth no more than this one.",
+      "find": [
+        "    NoTrampoline = 3,"
+      ],
+      "replace": [
+        "    NoTrampoline = 30,"
+      ]
+    }
+  ]
+}

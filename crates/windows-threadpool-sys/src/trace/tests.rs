@@ -504,3 +504,146 @@ fn exercise_a_periodic_timer() {
     // this callback sends into a channel the test is about to drop.
     timer.stop_and_drain();
 }
+
+/// The stub recogniser is what makes patching `ntdll` safe, so it is asserted
+/// in **both** directions: that it accepts the shape, and that it rejects
+/// everything else. A recogniser tested only on things it should accept would
+/// pass just as well if it accepted everything, which is the failure mode that
+/// matters -- accepting a non-stub means planting a jump over instructions
+/// that were never decoded.
+///
+/// The hermetic cases pin the pattern; the live `ntdll` case is the one that
+/// says the pattern still describes this machine's Windows.
+#[cfg(feature = "trace")]
+#[test]
+fn the_stub_recogniser_accepts_the_shape_and_rejects_everything_else() {
+    use super::hook::{is_syscall_stub, stub_entry};
+
+    // mov r10,rcx / mov eax,0x1E6 / test byte ptr [7FFE0308h],1
+    let genuine: [u8; 16] = [
+        0x4C, 0x8B, 0xD1, 0xB8, 0xE6, 0x01, 0x00, 0x00, 0xF6, 0x04, 0x25, 0x08, 0x03, 0xFE, 0x7F,
+        0x01,
+    ];
+    // SAFETY: sixteen readable bytes, which is all the recogniser reads.
+    assert!(
+        unsafe { is_syscall_stub(genuine.as_ptr()) },
+        "the canonical stub shape must be accepted, or nothing can ever be hooked"
+    );
+
+    for spoiled_at in [0, 1, 2, 3, 8, 9, 10, 11, 12, 13, 14, 15] {
+        let mut altered = genuine;
+        altered[spoiled_at] ^= 0xFF;
+        // SAFETY: as above.
+        assert!(
+            !unsafe { is_syscall_stub(altered.as_ptr()) },
+            "byte {spoiled_at} is part of the fixed prefix, so changing it must be a refusal"
+        );
+    }
+
+    // The four system-call-number bytes are the one wildcard, and must stay
+    // one: a recogniser that pinned them would refuse every stub but the one
+    // it was written against.
+    for wildcard_at in 4..8 {
+        let mut altered = genuine;
+        altered[wildcard_at] ^= 0xFF;
+        // SAFETY: as above.
+        assert!(
+            unsafe { is_syscall_stub(altered.as_ptr()) },
+            "byte {wildcard_at} is the system call number and must not be part of the match"
+        );
+    }
+
+    let live = stub_entry("selftest").expect("ntdll exports the self-test stub");
+    // SAFETY: an exported entry point has at least sixteen readable bytes.
+    assert!(
+        unsafe { is_syscall_stub(live) },
+        "the pattern no longer describes a real ntdll stub on this build, so every install would \
+         refuse -- the shape has changed and this module needs revisiting"
+    );
+}
+
+/// A hooked stub records both ends of every call **and still performs the
+/// system call it displaced**.
+///
+/// Both halves matter and they fail differently. A hook that records but
+/// breaks the call would leave the process quietly wrong; a trampoline that
+/// works but records nothing would leave an investigation reading an empty
+/// capture and concluding the call never happened -- which is exactly the
+/// inference this facility exists to support, so a silent hook is worse than
+/// no hook.
+///
+/// Uses the table's self-test entry rather than a worker-factory stub: the
+/// patch is never removed, so hooking a busy stub here would follow every
+/// later test in the process.
+#[cfg(feature = "trace")]
+#[test]
+fn a_hooked_stub_records_both_ends_and_still_performs_its_syscall() {
+    use super::hook::{call_selftest, factory_handle, fired, install_by_label};
+
+    install_by_label("selftest").expect("the self-test stub is hookable");
+
+    // Counted rather than read out of the trace, so this runs on every machine
+    // rather than only where `WINDOWS_THREADPOOL_TRACE` happens to be set. The
+    // record assertions below are additional, and are skipped when the trace is
+    // not armed -- but the fired count is not, because a guard that is silently
+    // inert wherever the environment is unset is not a guard.
+    let before_fired = fired("selftest");
+    let before_enter = counted("wfactory", "selftest-enter");
+    let before_leave = counted("wfactory", "selftest-leave");
+
+    // The call whose result proves the trampoline: a working system call fills
+    // all three values and reports success, so a trampoline that jumped
+    // somewhere useless cannot produce this.
+    let (status, minimum, maximum, current) = call_selftest();
+    assert!(status >= 0, "the displaced system call must still succeed");
+    assert!(
+        minimum > 0 && maximum > 0 && current > 0,
+        "the system call must still write its three out-parameters, got \
+         minimum={minimum} maximum={maximum} current={current}"
+    );
+    assert!(
+        maximum <= current && current <= minimum,
+        "the values must still be the kernel's own, ordered finest to coarsest: \
+         maximum={maximum} current={current} minimum={minimum}"
+    );
+
+    assert!(
+        fired("selftest") > before_fired,
+        "the planted jump must actually be reached: the call above went somewhere, and if it \
+         was not through the hook then nothing is installed"
+    );
+
+    assert_eq!(
+        factory_handle(),
+        0,
+        "the self-test stub's first argument is an out-pointer, not a worker factory handle, \
+         so it must not be mistaken for one -- a hook that learned a handle from the wrong \
+         call would leave the factory counters describing whatever that pointer happened to be"
+    );
+
+    if wants("wfactory") {
+        assert!(
+            counted("wfactory", "selftest-enter") > before_enter,
+            "the hook must record entering the call"
+        );
+        assert!(
+            counted("wfactory", "selftest-leave") > before_leave,
+            "the hook must record leaving it, or a call that never returned would be \
+             indistinguishable from one that did"
+        );
+    }
+}
+
+/// An install refuses, and leaves `ntdll` alone, when the name is not there.
+#[cfg(feature = "trace")]
+#[test]
+fn an_install_of_an_unknown_label_refuses_rather_than_patching_something() {
+    use super::hook::{Refusal, install_by_label};
+
+    assert_eq!(
+        install_by_label("no-such-hook-label"),
+        Err(Refusal::NotFound),
+        "an unrecognised label must refuse; silently patching index zero would be a \
+         catastrophic misreading of a typo"
+    );
+}

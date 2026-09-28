@@ -127,6 +127,9 @@ impl Buffer {
 }
 
 #[cfg(feature = "trace")]
+mod hook;
+
+#[cfg(feature = "trace")]
 mod imp {
     use std::sync::Mutex;
     use std::sync::atomic::{AtomicU8, Ordering};
@@ -417,6 +420,22 @@ mod imp {
                 Some(exception_observer),
             )
         };
+        // Planting code over `ntdll` needs its own opt-in and does nothing
+        // without one; see `trace::hook`. It is placed here so that a process
+        // that asked for hooks gets them as early as the trace itself, which
+        // for the worker factory means before the pool has any thread.
+        super::hook::install_requested();
+    }
+
+    /// Record what the default pool's worker factory believes about itself.
+    ///
+    /// Answers the question every outside measurement leaves open: the pool
+    /// has parked workers and a queued packet, so does the *factory* think it
+    /// has an available worker? Returns whether anything was recorded; it
+    /// needs a handle, which only a hooked call can supply, so it reports
+    /// `false` when hooks were not installed or have not yet fired.
+    pub fn worker_factory_counts() -> bool {
+        super::hook::counts()
     }
 }
 
@@ -445,9 +464,14 @@ mod imp {
     /// Does nothing in this build: there is no trace to attribute exceptions
     /// to, so no handler is installed.
     pub fn observe_exceptions() {}
+    /// Reports that this build cannot read the factory's counters, which is a
+    /// different finding from a build that read them and saw nothing.
+    pub fn worker_factory_counts() -> bool {
+        false
+    }
 }
 
-pub use imp::{clear, dump, enabled, observe_exceptions, record, wants};
+pub use imp::{clear, dump, enabled, observe_exceptions, record, wants, worker_factory_counts};
 
 /// How many records so far carry this target and this event.
 ///
