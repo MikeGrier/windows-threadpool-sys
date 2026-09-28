@@ -304,45 +304,35 @@ about this crate's own surface rather than about storage at all.
      dispatched before the trigger ran and the fault was induced afterwards; not firing means the
      pool never dispatched in this process at all. Guard it with the healthy case: in a passing run
      it must fire, or the probe proves nothing.
-  1. **BLOCKED ON ELEVATION -- name the context that creates the pool's first worker, with an
-     ETW kernel trace.** `M26.13.17` and `M26.13.18` answered everything this item used to ask:
-     the factory reports zero workers, and the first worker is never created rather than created
-     and left idle. What is left is one step further in, and ETW reaches exactly one part of it.
+  1. **Add `DISPATCHER` to the kernel trace and name who readies the worker.** `M26.13.19` ran the
+     `PROC_THREAD` half of this and it landed: across 900 traced runs exactly one process has a gap
+     over a second, the failing one, whose first pool worker arrives 5008.7 ms after the last test
+     thread against a healthy 0.232 to 17.928 ms. That confirms the missing worker from an
+     instrument the `ntdll` hooks do not touch, which was the point of running it.
 
-     **What ETW can answer.** The `PROC_THREAD` kernel flag emits a thread-create event whose
-     header carries the *creating* thread, so a healthy run will name the context in which the
-     kernel makes the pool's first worker -- the thing `M26.13.18` shows happening 0.24 to 0.31 ms
-     after the delivery is armed, and never happening in a stalled run. `DISPATCHER` adds
-     `ReadyThread`, which says who readied whom, and pins the moment on the other side. Together
-     they turn "no worker appears" into "this is the context that would have made it, and here is
-     how far it got".
+     What is left of this item is the second flag. `DISPATCHER` emits `ReadyThread`, naming which
+     thread readied which, so a healthy run would say what *causes* the worker to appear 0.376 ms
+     after the last test thread -- and a failing run would say whether anything in the process is
+     readied at all during the five seconds. Run it the same way, and pair every capture with a
+     healthy control from the same session.
 
-     **What ETW cannot answer, checked rather than assumed.** There is no public event for a
-     wait-completion packet reaching an I/O completion port, and none for worker-factory
-     activation. Measured on this machine, 2026-09-27: all 1198 registered providers carry no
-     thread-pool provider by name; `xperf -providers KF` has no thread-pool kernel flag; and a
-     census of all 40 `Microsoft-Windows-Kernel-*` provider manifests (`wevtutil gp /ge /gm`) finds
-     no event declaring a worker factory or a completion packet -- the only `Worker` hits are the
-     cache, power and prefetch providers' own unrelated workers. `ntdll`'s `TppETW*` routines do
-     emit, but through `NtTraceEvent` directly, and they carry the same timer and work-item facts
-     the hooks in `windows-threadpool-sys` already record. So the open question -- whether the
-     packet is in the port -- stays out of reach, and this item must not be written up as though
-     it settles it.
+     **It needs elevation, and that is the only thing stopping it.** The NT Kernel Logger refuses a
+     non-elevated session (`xperf -on ...` answers `Access is denied. (0x5)`); `sudo` in Inline mode
+     works and was used for `M26.13.19`. `DISPATCHER` is far higher volume than `PROC_THREAD`, so
+     size the run deliberately: 900 runs took 190 s and produced a 31 MB trace with `PROC_THREAD`
+     alone, and one failure. Consider a ring buffer flushed on failure rather than a continuous
+     file.
 
-     **The blocker is elevation, and it is real rather than a preference.** The NT Kernel Logger
-     refuses a non-elevated session: `xperf -on PROC_THREAD+DISPATCHER` answers
-     `NT Kernel Logger: Access is denied. (0x5)`. The reproducer needs roughly 4000 runs to produce
-     a handful of failures, so the trace has to run for minutes with the session open, which is a
-     decision for the engineer rather than something to arrange unilaterally.
-
-     **Recipe, for whoever runs it elevated.** Start `xperf -on PROC_THREAD+DISPATCHER -f
-     .scratch\kernel.etl`, loop the `event_delivery` binary with `WINDOWS_THREADPOOL_TRACE` set so
-     the user-mode trace and the kernel trace can be lined up by thread id, stop with
-     `xperf -d`, and compare a failing run against a passing one on: whether any thread is created
-     for the process between the delivery being armed and the release, and whether any `ReadyThread`
-     names a thread of this process in that window. Pair every capture with a healthy control from
-     the same session -- a kernel trace with no passing run in it cannot show what the missing
-     events look like when they are present.
+     **What no amount of ETW will answer**, checked rather than assumed on 2026-09-27: there is no
+     public event for a wait-completion packet reaching an I/O completion port, and none for
+     worker-factory activation. All 1198 registered providers carry no thread-pool provider by name;
+     `xperf -providers KF` has no thread-pool kernel flag; and a census of all 40
+     `Microsoft-Windows-Kernel-*` manifests (`wevtutil gp /ge /gm`) finds no event declaring a
+     worker factory or a completion packet -- the only `Worker` hits are the cache, power and
+     prefetch providers' own unrelated workers. `ntdll`'s `TppETW*` routines emit through
+     `NtTraceEvent` directly and carry the same facts the hooks already record. So "the factory was
+     given the packet and did not act" and "the packet never arrived" cannot be separated this way,
+     and this item must not be written up as though it settles them.
   2. **What about the trigger leaves the pool with no worker?** `M26.9` narrowed entry to a
      co-running test that creates an `EventDelivery` over a ring with nothing outstanding and drops
      it promptly. Re-ask it as a thread-supply question rather than a ring question: does that
@@ -413,6 +403,8 @@ about this crate's own surface rather than about storage at all.
 - [x] **M26.13.17** -- Inline ntdll hooks and a worker-factory scan: the process holds two factories, and the default pool reports zero workers while stalled against one while healthy, so `M26.13.11`'s three parked workers were the *other* factory's all along. -> [completed 2026-09-27](COMPLETED-CHECKLIST.md#m261317)
 
 - [x] **M26.13.18** -- Hooks installed before `main` show the pool's first worker is never created: a healthy run makes one 0.24-0.31ms after the delivery is armed, a stalled run makes none before the release in 8 of 8, and the `AlreadySignaled` race is refuted. -> [completed 2026-09-27](COMPLETED-CHECKLIST.md#m261318)
+
+- [x] **M26.13.19** -- An ETW kernel trace confirms the missing worker independently of the ntdll hooks: across 900 traced runs exactly one process has a gap over a second, the failing one, at 5008.7ms against a healthy 0.232-17.928ms. -> [completed 2026-09-27](COMPLETED-CHECKLIST.md#m261319)
 
 ## M28+ -- Opened by the inventory
 

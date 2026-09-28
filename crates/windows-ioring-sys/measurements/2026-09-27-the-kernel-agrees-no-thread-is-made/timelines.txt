@@ -1,0 +1,22 @@
+process 32780 (healthy), thread starts relative to the first:
+  +    0.000 ms
+  +   45.275 ms
+  +   45.366 ms
+  +   45.481 ms
+  +  183.331 ms
+  +  183.391 ms
+  +  183.438 ms
+  +  183.807 ms
+  +  187.175 ms
+
+process 2240816 (failing), thread starts relative to the first:
+  +    0.000 ms
+  +   42.433 ms
+  +   42.525 ms
+  +   42.621 ms
+  +  200.320 ms
+  +  200.383 ms
+  +  200.425 ms
+  + 5209.161 ms
+  + 5209.361 ms
+  + 5209.534 ms

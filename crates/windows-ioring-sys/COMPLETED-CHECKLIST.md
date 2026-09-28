@@ -5095,3 +5095,48 @@ because every observation is of a call *ntdll* makes and neither case involves o
 **What is left is outside this workspace's reach.** A worker factory with no workers, permitted to
 create one, not paused and not shut down, owes a callback and does not make the thread to run it
 until `NtReleaseWorkerFactoryWorker` asks. Why is inside the kernel.
+### <a id="m261319"></a>M26.13.19 -- An ETW kernel trace confirms the missing worker independently of the ntdll hooks: across 900 traced runs exactly one process has a gap over a second, the failing one, at 5008.7ms against a healthy 0.232-17.928ms. *(completed 2026-09-28 00:08:32 -04:00)*
+
+**Why a second instrument.** Everything known about the missing worker came from hooks this
+workspace plants in `ntdll` -- a good instrument, and a self-interested one, since it reports on the
+very mechanism it modifies. A reader is entitled to ask whether the hooks are why the worker is
+missing. This answers that with the kernel's own thread-creation record, collected through the NT
+Kernel Logger's `PROC_THREAD` flag, which needs no cooperation from `ntdll` or from this crate.
+
+**The result**, over 900 runs in one trace:
+
+| | first pool worker created, relative to the last test thread |
+|---|---|
+| healthy, 899 processes | **0.232 -- 17.928 ms**, mean 1.298 |
+| failing, 1 process | **5008.736 ms** |
+
+Exactly one process in the trace has a gap of more than a second anywhere in its thread activity,
+and it is the run that failed. The slowest healthy process is 17.9 ms, so the separation is complete
+with nothing in between. The failing process then creates **three** workers inside 373 us, which is
+consistent with the release path raising the running-thread goal on its way to
+`NtReleaseWorkerFactoryWorker`, and is why it is one of only three processes in the trace to reach
+ten threads.
+
+**So the hooks were not the cause.** The kernel logged the same absence, in the same runs, through a
+path the hooks do not touch -- and logged normal behaviour for 899 other processes that had those
+same hooks installed.
+[measurements/2026-09-27-the-kernel-agrees-no-thread-is-made/](measurements/2026-09-27-the-kernel-agrees-no-thread-is-made/README.md).
+
+**Method note worth keeping.** Thread ids are recycled aggressively across 900 short-lived
+processes, so matching the failing run to its process by any single id is wrong -- several processes
+in this trace contain any given id. The match is the process holding **all seven** ids that appear
+in the failing run's own user-mode trace, and only one process does.
+
+**Elevation.** The NT Kernel Logger refuses a non-elevated session; `sudo` in Inline mode supplied
+it, for `xperf` only. The reproducer itself ran unprivileged, exactly as every earlier arm, so the
+conditions are unchanged. One failure in 900 is the usual rate, and the session was stopped and
+merged before analysis.
+
+**Still not settled, and no ETW will settle it**: whether the wait-completion packet reached the
+port. `PROC_THREAD` records threads, not queues, and a census done the same day found no public
+event anywhere for a packet arriving at a completion port or for a worker factory being activated --
+1198 registered providers, `xperf -providers KF`, and all 40 `Microsoft-Windows-Kernel-*` manifests.
+
+**Queued rather than taken:** `DISPATCHER`, which adds `ReadyThread` and would name what causes the
+worker to appear in a healthy run. Left out here to keep a machine-wide trace small; it is now the
+whole of M26.13 experiment 1.
