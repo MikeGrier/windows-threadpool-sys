@@ -5185,3 +5185,18 @@ a confound (13 in 4000 against a cleared directory, 16 against a full one) befor
 deliberately not fixed during M26.13 because adding teardown changes the reproducer while it is the
 instrument of an active investigation.
 [measurements/2026-09-28-re-verifying-the-premises/](measurements/2026-09-28-re-verifying-the-premises/README.md).
+
+**Extended on review, with the question stated plainly: several different test cases per process,
+never a repeat.** `libtest` runs each `#[test] fn` exactly once and this file has no
+parameterisation, so the 3-test reproducer is three distinct functions -- a 6-line trigger and two
+victims of 83 and 99 lines -- on three concurrent threads. No run in this investigation has ever had
+fewer than two test cases in a process, because the fault needs the trigger co-running; all the
+repetition is *across* roughly thirty thousand fresh processes and none within one.
+
+**They overlap less than "concurrent" suggests, and the ordering turned out to be a constant.** The
+trigger creates its delivery, arms, drops and closes it within about 0.05 ms, and the victims arm
+about 2.4 ms later -- so the trigger has finished before the victims arrive. That holds in **80 of
+80** failing captures, which on its own looks like a signature. It also holds in **183 of 183**
+passing ones, with an indistinguishable gap distribution, so it is simply how `libtest` schedules
+these three tests. Reading the failures alone would have promoted a constant to a discriminator;
+the passing control is the only reason that did not happen.

@@ -86,3 +86,49 @@ than fixed here, for a stated reason: adding teardown to the reproducer changes
 the test under an active investigation, and every failure rate on record would
 have to be re-established against the new shape. That is a decision to take
 deliberately, not in passing.
+
+## What actually runs in one process, and in what order
+
+Two questions the check was asked to settle plainly.
+
+**Is it several test cases in one process, or one test repeated?** Several
+*different* test cases, always, and never a repeat. `libtest` runs each
+`#[test] fn` exactly once per process, and this file has no parameterisation --
+no `test_case`, no `rstest`, no `proptest`. The 3-test reproducer is three
+distinct functions on three concurrent threads:
+
+| thread | test | role | body |
+|---|---|---|---|
+| first | `dropping_with_nothing_outstanding_does_not_hang` | trigger | 6 lines |
+| second | `completions_are_delivered_on_pool_threads_without_the_submitting_thread_waiting` | victim | 83 lines |
+| third | `completions_queued_before_handover_are_still_delivered` | victim | 99 lines |
+
+No run in this investigation has ever had **fewer than two** test cases in a
+process: the fault needs the trigger co-running, so a single-test process
+cannot produce it. All the repetition is *across* processes -- roughly thirty
+thousand fresh ones -- and none within one.
+
+**Do they overlap?** Less than the word "concurrent" suggests. The trigger
+creates its `EventDelivery`, arms a wait, drops it and closes it within about
+0.05 ms, and the victims arm their deliveries about 2.4 ms later. Figures in
+[setup-ordering.csv](setup-ordering.csv):
+
+| | trigger finished before the first victim armed | gap |
+|---|---|---|
+| failing, 80 captures | **80 of 80** | 1.837 -- 9.856 ms, mean 2.442 |
+| passing, 183 captures | **183 of 183** | 1.897 -- 28.838 ms, mean 2.602 |
+
+So the trigger is not running alongside the victims' setup at all. Whatever it
+does to the pool, it has finished doing before they arrive.
+
+**And the ordering carries no information**, which is why the passing row is
+here. Failures show it 80 out of 80 times, which on its own looks like a
+signature; passing runs show exactly the same thing 183 out of 183. It is
+simply how `libtest` schedules these three tests, and a reading of the failures
+alone would have made a discriminator out of a constant.
+
+Seventeen further passing runs were captured and are not in that table: the
+dump is emitted at the end of one victim, and in those it finished before the
+*other* victim had created its delivery, so the capture holds two deliveries
+rather than three. That is a limit of where the dump sits, not a second
+behaviour -- and it does show the two victims do not always overlap each other.
