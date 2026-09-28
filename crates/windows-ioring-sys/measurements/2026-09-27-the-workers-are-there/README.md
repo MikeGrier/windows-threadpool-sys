@@ -72,6 +72,19 @@ no callback is handed to any of them.
 > (30 of 30). These three workers are present and *unused*. See
 > [the-parked-workers-are-never-used](../2026-09-27-the-parked-workers-are-never-used/README.md).
 
+> **Overturned, 2026-09-27, and the reason is a mis-attribution in this
+> document.** The three parked threads are real and the stacks are accurate,
+> but they are **not this pool's workers**. Reading every worker factory in the
+> process finds two: the default pool, `ThreadMaximum` 768, holding **zero**
+> workers while stalled and one while healthy; and a second factory,
+> `ThreadMaximum` 3, holding exactly three -- identical in both arms.
+> `TppWorkerThread` is the worker routine for *every* pool in a process, so a
+> stack can never say which factory a parked worker serves, and this document
+> assumed the only one that mattered. The default pool has no worker, which is
+> what [the-pool-has-no-worker](../2026-09-27-the-pool-has-no-worker/README.md)
+> said and this was taken to disprove. See
+> [the-default-pool-has-no-worker-at-all](../2026-09-27-the-default-pool-has-no-worker-at-all/README.md).
+
 ## What it does not establish
 
 Why. Two things are now known to be true at the same time -- idle workers exist,

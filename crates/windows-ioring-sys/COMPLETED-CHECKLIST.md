@@ -4982,3 +4982,69 @@ sharpens rather than contradicts.
 whether the factory believes it has an available worker while three sit parked in
 `NtWaitForWorkViaWorkerFactory`. If the counters say zero available while the stacks say three
 parked, that disagreement is the fault.
+### <a id="m261317"></a>M26.13.17 -- Inline ntdll hooks and a worker-factory scan: the process holds two factories, and the default pool reports zero workers while stalled against one while healthy, so `M26.13.11`'s three parked workers were the *other* factory's all along. *(completed 2026-09-27 21:46:03 -04:00)*
+
+**Built the instrument the question needed.** `windows-threadpool-sys` gained inline hooks on
+`ntdll`'s worker-factory syscall stubs. No disassembler is required, because every `ntdll` `Nt*`
+entry point is the same stub: the displaced bytes are not decoded and relocated, they are
+**recognised**, and the trampoline is rebuilt from the one variable in them -- the system call
+number. The recognition is the safety property and is enforced, patching happens with every other
+thread suspended, and the whole facility needs the `trace` feature *and*
+`WINDOWS_THREADPOOL_TRACE_HOOKS` before it will touch anything.
+
+**The hooks turned out not to be how the answer arrived**, and that is itself a finding. Installing
+them took 0.15s to 0.58s, which is **after** the onset (`M26.13.14` brackets it to the first
+15.7ms), so in a stalled run no hooked call had ever fired and the factory handle a hook would have
+learned was exactly the handle that was missing. The handle is instead found by asking each
+candidate handle whether it is a worker factory -- read-only, sub-millisecond, and it cannot disturb
+what it is looking at, which matters in an investigation whose instruments have repaired the fault
+before.
+
+**The result, 12 stalled captures against 20 healthy runs, every capture in each arm identical:**
+
+| | factory with `ThreadMaximum` 768 | factory with `ThreadMaximum` 3 |
+|---|---|---|
+| stalled | total **0**, waiting **0** | total 3, waiting 3 |
+| healthy | total **1**, waiting 1 | total 3, waiting 3 |
+
+**This overturns [M26.13.11](COMPLETED-CHECKLIST.md#m261311).** Its dump was accurate and its
+inference was not: `TppWorkerThread` is the worker routine for *every* pool in a process, so a stack
+can never say which factory a parked worker serves. The three it found answer to the second factory
+-- whose maximum is three, which is why there are exactly three -- and that factory is byte-for-byte
+identical in passing runs. The pool under test has **no worker**, which is what
+[M26.13.6](COMPLETED-CHECKLIST.md#m26136) said from thread counts and the dump was taken to
+disprove. It also explains [M26.13.16](COMPLETED-CHECKLIST.md#m261316) rather than leaving it
+strange: no thread alive at the stall runs a callback because the parked ones were never candidates.
+
+**What the factory says about itself while stalled**, beyond the zero: `Paused` false, `Shutdown`
+false, `MayCreate` **true**, `ThreadMinimum` 0, `PendingWorkerCount` 0, `ReleaseCount` 0,
+`LastThreadCreationStatus` 0. Nothing has told it to stop, nothing has failed, and nothing has asked
+it for a worker.
+
+**Not established:** the packet's presence in the port. These counters describe workers, not queued
+completions, so "the factory holds the packet and will not act on it" and "the packet never arrived"
+are both still consistent with them. `M26.13.15`'s ordering evidence argues for the first and
+remains an argument. The second factory's identity is also unresolved -- a loose end rather than a
+gap, since it is identical in both arms.
+[measurements/2026-09-27-the-default-pool-has-no-worker-at-all/](measurements/2026-09-27-the-default-pool-has-no-worker-at-all/README.md).
+
+**Two defects in the instrument, both caught by building the guard rather than by the guard:** the
+self-test stub's first argument is an out-pointer and the first draft would have installed it as the
+worker factory handle; and the information struct was truncated, which makes the query fail with
+`STATUS_INFO_LENGTH_MISMATCH` and look exactly like a process with no factory in it. Both are now
+sabotages in the crate's new `sabotage.json` -- 9 sabotages, 8 caught and the control survived.
+
+**Swept the overturned claim.** Named rather than counted, because a grep for "parked" or "starved"
+across this crate's documents matches mostly incidental prose and a tally of it would say nothing.
+The documents that *assert* the overturned reading are four, and each now carries a correction at
+the point of the assertion: [the-workers-are-there](measurements/2026-09-27-the-workers-are-there/README.md)
+and [the-parked-workers-are-never-used](measurements/2026-09-27-the-parked-workers-are-never-used/README.md)
+open with an overturning note, [UNRESOLVED-TEST-FAILURES.md](UNRESOLVED-TEST-FAILURES.md)'s entry is
+marked at its heading, and [STALL-TIMELINE.md](STALL-TIMELINE.md)'s ruled-out row now reads "not
+ruled out after all". The dated archive entries above are left as written, with the correction
+carried here.
+
+**A standing lesson, recorded in [STALL-TIMELINE.md](STALL-TIMELINE.md):** count a pool's workers by
+asking each factory, never by reading stacks. A parked `TppWorkerThread` says *a* pool has a worker;
+in a process with more than one factory it does not say which, and here that distinction was the
+whole answer.

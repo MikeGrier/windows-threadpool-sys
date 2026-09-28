@@ -287,7 +287,9 @@ measurement is linked.
 | a Win32 call is blocked, or contending on a pool lock | ruled out -- 707 bracketed calls across 24 captures all returned, slowest 220us ([no-win32-call-blocks](measurements/2026-09-27-no-win32-call-blocks/README.md)) |
 | the reproducer's own 5000ms `submit_and_wait` timeout is the five seconds | ruled out -- changed to 4000ms, and dispatch still resumed at five seconds in 14 of 14 ([the-submit-timeout-is-not-it](measurements/2026-09-27-the-submit-timeout-is-not-it/README.md)) |
 | a wakeup was missed, as in D-19/D-68/D-77 | ruled out -- re-signalling the very event the wait is armed on releases nothing, 5 of 5, with each SetEvent's success recorded ([not-a-missed-wake](measurements/2026-09-27-not-a-missed-wake/README.md)) |
-| the pool is starved of threads | **ruled out** as stated -- a dump taken while stalled shows three workers parked idle in `ZwWaitForWorkViaWorkerFactory` ([the-workers-are-there](measurements/2026-09-27-the-workers-are-there/README.md)). But see the last two rows: those workers are never *used*, so "threads exist" does not extend to "supply is not the subject" |
+| the pool is starved of threads | **not ruled out after all** -- the dump's three parked workers belong to a *second* worker factory (`ThreadMaximum` 3, identical in passing runs). The pool under test reports `TotalWorkerCount` **0** while stalled against **1** while healthy, in 12 and 20 captures ([the-default-pool-has-no-worker-at-all](measurements/2026-09-27-the-default-pool-has-no-worker-at-all/README.md)) |
+| the parked workers wake and serve the backlog | ruled out -- **no thread alive at the stall ever runs a callback**, in 12 of 12; a passing run serves the delivery on a pre-existing thread in 30 of 30 ([the-parked-workers-are-never-used](measurements/2026-09-27-the-parked-workers-are-never-used/README.md)). They were never candidates: they are the other factory's |
+| the factory has been paused, shut down, or forbidden to create | ruled out -- while stalled it reports `Paused` false, `Shutdown` false, `MayCreate` **true**, `ThreadMinimum` 0, `LastThreadCreationStatus` 0 |
 | the fault is in *registering* with the pool, not dispatching | ruled out -- a timer armed while the pool was healthy, due inside the stall window, fires only at the release, 10 of 10 ([a-timer-armed-while-healthy-also-stops](measurements/2026-09-27-a-timer-armed-while-healthy-also-stops/README.md)) |
 | the pool runs for a while and then wedges | ruled out -- with a 100ms heartbeat, **no** pool callback of any kind is dispatched before the release, in 18 of 18: it never starts ([the-pool-never-starts](measurements/2026-09-27-the-pool-never-starts/README.md)) |
 | *anything at all* happens in the process during the window | ruled out -- at the 15.625ms system tick the last setup record and the first post-mortem record are **adjacent lines**: no callback, no syscall, no exception, in 13 of 13 ([at-the-system-tick](measurements/2026-09-27-at-the-system-tick-it-still-never-starts/README.md)) |
@@ -295,29 +297,33 @@ measurement is linked.
 | something other than the submit in the probe releases it | ruled out -- delaying only the `SubmitThreadpoolWork` call by 0 / 250 / 500 / 1000 / 2000ms moves the delivery with it: delivery-minus-submit stays at 0.25-0.54ms across all 99 captures ([the-submit-is-what-releases-it](measurements/2026-09-27-the-submit-is-what-releases-it/README.md)) |
 | the stalled callback is unnoticed rather than queued | ruled out -- the released worker serves the five-second-old **wait** 29-67us *ahead of* the work item whose submit woke it, in 99 of 99 |
 | `SubmitThreadpoolWork` differs by being user-mode | ruled out -- it makes a syscall too; what is unique is that `TppWorkPost` calls `NtReleaseWorkerFactoryWorker`, which 185 of the 189 `ntdll` thread-pool functions and all three failing paths do not ([ntdll-census.txt](measurements/2026-09-27-the-submit-is-what-releases-it/ntdll-census.txt)) |
-| the parked workers wake and serve the backlog | ruled out -- **no thread alive at the stall ever runs a callback**, in 12 of 12; a passing run serves the delivery on a pre-existing thread in 30 of 30 ([the-parked-workers-are-never-used](measurements/2026-09-27-the-parked-workers-are-never-used/README.md)) |
-| the wait is queued behind a busy pool waiting for a free worker | ruled out -- a worker sat parked for the whole five seconds, in the same state as the one that serves the delivery in a passing run |
 | it happens off the default process pool | never observed -- 0 in 12000 runs across three private-pool arms |
 
 **What is left is one question**, now stated in the pool's own terms: the
-worker factory has parked workers and a queued wait-completion packet, and does
-not put the two together until `NtReleaseWorkerFactoryWorker` is called -- and
-even then it does not hand the packet to a parked worker, but serves it on a
-thread that did not exist a moment earlier. Only `TppWorkPost` and three
+default pool's worker factory holds **no worker at all** while stalled, is not
+paused, is not shut down, reports `MayCreate` true and no failed creation, and
+owes a queued wait-completion packet -- and it does not make a worker for it
+until `NtReleaseWorkerFactoryWorker` asks. Only `TppWorkPost` and three
 siblings call that release, and none of the wait, timer or I/O paths do: they
-register for kernel delivery and rely on the factory releasing a worker by
-itself. Why it does not is the open question, and it is inside the factory,
-where this workspace's trace cannot reach. Queued as M26.13 experiment 1 in
+register for kernel delivery and rely on the factory acting by itself. Why it
+does not is the open question, and it is inside the factory, where this
+workspace's trace cannot reach. Queued as M26.13 experiment 1 in
 [CHECKLIST.md](CHECKLIST.md).
 
-**And one inference boundary.** That the process gains threads when dispatch
-resumes is measured. That the six it holds while stalled contain *no idle pool
-worker* was inferred from that and is **false**: the dump in
-[the-workers-are-there](measurements/2026-09-27-the-workers-are-there/README.md)
-finds three parked in `ZwWaitForWorkViaWorkerFactory`. The thread growth itself
-now has a mechanism rather than a mystery: `TppWorkPost` calls
+**And one inference boundary, twice corrected.** That the process gains threads
+when dispatch resumes is measured. It was first read as "the six it holds while
+stalled contain no idle pool worker", then contradicted by a dump showing three
+parked in `ZwWaitForWorkViaWorkerFactory`, and the counters now say the first
+reading was right about *this pool*: the parked three answer to a different
+worker factory, and `TppWorkerThread` on a stack cannot distinguish them. The
+thread growth has a mechanism rather than a mystery: `TppWorkPost` calls
 `TppAdjustRunningThreadGoalWithLock` on the way to releasing a worker, so the
 submit raises the pool's running-thread goal as a side effect of being a submit.
+
+The lesson is worth more than the correction. A parked `TppWorkerThread` says a
+pool has a worker; it does not say **which** pool, and in a process with more
+than one factory that distinction decides the answer. Count workers by asking
+each factory, not by reading stacks.
 That says where the threads come from, not why the idle ones were not used.
 
 ## Reference: every event the trace can emit, and the API behind it

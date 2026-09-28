@@ -50,6 +50,16 @@ the snapshot is 30 of 30 in the healthy arm and **0 of 30** in the stalled arm.
 
 ## What this changes
 
+> **Superseded in its explanation, 2026-09-27 -- the measurement stands, the
+> reading of it does not.** The counts in this document are correct: no thread
+> alive at the stall runs a callback, and a passing run serves the delivery on
+> a pre-existing thread. What was wrong is the assumption underneath the
+> section below, that the parked threads were the pool's own. They belong to a
+> second worker factory; the pool under test has **zero** workers while
+> stalled. That turns "present and unused" into something simpler -- they were
+> never candidates. See
+> [the-default-pool-has-no-worker-at-all](../2026-09-27-the-default-pool-has-no-worker-at-all/README.md).
+
 [M26.13.11](../2026-09-27-the-workers-are-there/README.md) read the dump as
 "the pool is not starved of threads". The literal claim survives -- the threads
 are there, parked, in both populations. The inference drawn from it does not:
