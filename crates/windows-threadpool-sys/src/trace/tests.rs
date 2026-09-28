@@ -703,3 +703,75 @@ fn the_factory_scan_finds_the_pool_and_reads_plausible_counts() {
          a timeout or a pointer landing in the fields the layout names"
     );
 }
+
+/// The trace's static initialiser really runs before `main`.
+///
+/// The whole point of `.CRT$XCU` here is timing: hooks installed on the first
+/// traced call land inside the first test, which in the investigation this was
+/// built for is already too late to see the thing being investigated. So the
+/// property worth guarding is not "the hooks work" -- that has its own test --
+/// but "the arrangement to run them early was not silently discarded".
+///
+/// It is a live risk rather than a theoretical one. A static that nothing
+/// references is exactly what a linker may drop; `#[used]` is what asks it not
+/// to; and if that ask stops working the build still succeeds and the
+/// instrument quietly goes back to arriving late. There is no compile error to
+/// catch it, so there is a test.
+#[cfg(feature = "trace")]
+#[test]
+fn the_trace_arms_itself_before_main() {
+    assert!(
+        super::armed_before_main(),
+        "the .CRT$XCU initialiser did not run, so the trace armed lazily instead -- hooks will \
+         install inside the first test rather than before any thread exists, which is the \
+         failure this arrangement exists to prevent"
+    );
+}
+
+/// Hooking the wait registration records whether the kernel reported the
+/// object as already signalled.
+///
+/// Arming a `ThreadpoolWait` on an event that is **already set** is the case
+/// that takes the second delivery path: the kernel queues no completion and
+/// reports the fact through `AlreadySignaled` instead. This asserts the hook
+/// observes that flag at all -- without it, a capture showing no
+/// `associate-already-signalled` record would be ambiguous between "the flag
+/// was never set" and "nothing was ever looking".
+///
+/// Deliberately does not assert *which* value comes back. That is a fact about
+/// the kernel's behaviour on the day, and pinning it here would turn an
+/// observation into an expectation.
+#[cfg(feature = "trace")]
+#[test]
+fn hooking_the_wait_registration_observes_the_already_signalled_flag() {
+    use super::hook::{fired, install_by_label};
+    use crate::wait::{ThreadpoolWait, WaitableHandle};
+
+    install_by_label("associate").expect("the wait-registration stub is hookable");
+    let before = fired("associate");
+
+    // Signalled at creation, so the association races an object that is
+    // already set -- which is the path the flag exists to report.
+    let event = WaitableHandle::event(true, true).expect("create a set event");
+    let (tx, rx) = mpsc::channel();
+    let tx = std::sync::Mutex::new(tx);
+    let wait = ThreadpoolWait::new(
+        event,
+        move |_| {
+            if let Ok(tx) = tx.lock() {
+                let _ = tx.send(());
+            }
+        },
+        None,
+    )
+    .expect("create the wait");
+    wait.arm(None);
+    rx.recv_timeout(PROBE_BOUND)
+        .expect("an already-signalled event still reaches the callback");
+
+    assert!(
+        fired("associate") > before,
+        "arming a wait must go through NtAssociateWaitCompletionPacket, so the hook must have \
+         been entered -- if it was not, the registration took a path this facility cannot see"
+    );
+}

@@ -178,6 +178,12 @@ macro_rules! hooks {
                     unsafe { call(a1, a2, a3, a4, a5, a6, a7, a8, a9, a10, a11, a12) }
                 };
                 record(TARGET, concat!($label, "-leave"), a1 as u64, status as u32 as u64);
+                if $label == "associate" {
+                    // SAFETY: the call has returned, so anything it wrote
+                    // through its out-parameter is finished.
+                    let flag = unsafe { already_signalled(a8) };
+                    record(TARGET, "associate-already-signalled", flag, a3 as u64);
+                }
                 status
             }
         )*
@@ -204,6 +210,36 @@ hooks! {
     // an unfamiliar Windows build can verify the mechanism end to end before
     // trusting what the other five report.
     5 => "NtQueryTimerResolution", "selftest", false, hook_selftest;
+    // The wait registration itself, and the one entry here whose *return
+    // value* is the interesting part rather than its arguments. Its first
+    // argument is a wait-completion packet, not a factory, so it must not
+    // teach `counts` a handle.
+    6 => "NtAssociateWaitCompletionPacket", "associate", false, hook_associate;
+}
+
+/// `NtAssociateWaitCompletionPacket`'s eighth argument is a `PBOOLEAN`
+/// out-parameter, `AlreadySignaled`.
+///
+/// **This is why the call is hooked.** When the object being waited on is
+/// already signalled at the moment the packet is associated, the kernel does
+/// not queue a completion -- it reports the fact through this flag and leaves
+/// the caller to act on it. That is a second, entirely different delivery path
+/// through the same API, taken only on a race, and a caller that mishandles it
+/// loses the callback rather than delaying it. The stall under investigation
+/// has exactly that shape, so whether this flag is set in a failing run is a
+/// fact worth having, and it is not observable any other way.
+///
+/// Recorded after the call, never interpreted here.
+///
+/// SAFETY: `slot` is the pointer the caller passed and the call has returned,
+/// so the kernel has finished writing through it. A null pointer reads as
+/// absent rather than being dereferenced.
+unsafe fn already_signalled(slot: usize) -> u64 {
+    if slot == 0 {
+        return u64::MAX;
+    }
+    // SAFETY: as above -- a live `BOOLEAN` the callee has just written.
+    u64::from(unsafe { std::ptr::read_volatile(slot as *const u8) })
 }
 
 /// Resolve an `ntdll` export, or `None`.
@@ -266,10 +302,17 @@ fn with_others_suspended<T>(patch: impl FnOnce() -> T) -> T {
         THREAD_SUSPEND_RESUME,
     };
 
-    let me = unsafe { GetCurrentProcessId() };
-    let self_thread = unsafe { GetCurrentThreadId() };
-    let mut held: Vec<*mut core::ffi::c_void> = Vec::new();
+    /// Threads handled without a second allocation. Both vectors are reserved
+    /// to this before anything is suspended, and growth past it is refused
+    /// rather than allocated -- see below for why that matters.
+    const ROOM: usize = 512;
 
+    // SAFETY: neither has preconditions.
+    let (me, self_thread) = unsafe { (GetCurrentProcessId(), GetCurrentThreadId()) };
+
+    // Phase one: enumerate. This allocates, and does so while every thread is
+    // still running.
+    let mut ids: Vec<u32> = Vec::with_capacity(ROOM);
     // SAFETY: no preconditions; an invalid handle is handled.
     let snap = unsafe { CreateToolhelp32Snapshot(TH32CS_SNAPTHREAD, 0) };
     if snap != INVALID_HANDLE_VALUE {
@@ -280,25 +323,38 @@ fn with_others_suspended<T>(patch: impl FnOnce() -> T) -> T {
         };
         // SAFETY: `snap` is live and `entry.dwSize` is set.
         let mut ok = unsafe { Thread32First(snap, &mut entry) } != 0;
-        while ok {
+        while ok && ids.len() < ROOM {
             if entry.th32OwnerProcessID == me && entry.th32ThreadID != self_thread {
-                // SAFETY: no preconditions; a null return is skipped.
-                let thread = unsafe { OpenThread(THREAD_SUSPEND_RESUME, 0, entry.th32ThreadID) };
-                if !thread.is_null() {
-                    // SAFETY: opened for exactly this access.
-                    if unsafe { SuspendThread(thread) } != u32::MAX {
-                        held.push(thread);
-                    } else {
-                        // SAFETY: nothing else refers to this handle.
-                        unsafe { CloseHandle(thread) };
-                    }
-                }
+                ids.push(entry.th32ThreadID);
             }
             // SAFETY: as above; `entry` is still initialised.
             ok = unsafe { Thread32Next(snap, &mut entry) } != 0;
         }
         // SAFETY: the snapshot is not used again.
         unsafe { CloseHandle(snap) };
+    }
+    let mut held: Vec<*mut core::ffi::c_void> = Vec::with_capacity(ids.len());
+
+    // Phase two: suspend, patch, resume. **Nothing in here may allocate.**
+    // Both vectors already have their capacity, so the pushes cannot grow
+    // them. This is not fastidiousness: the allocator is a process-wide lock,
+    // and a thread suspended while holding it can never give it back, so an
+    // allocation here would deadlock the process with no thread able to run.
+    // The first version of this function pushed into an unreserved vector and
+    // had exactly that bug.
+    for id in ids {
+        // SAFETY: no preconditions; a null return is skipped.
+        let thread = unsafe { OpenThread(THREAD_SUSPEND_RESUME, 0, id) };
+        if thread.is_null() {
+            continue;
+        }
+        // SAFETY: opened for exactly this access.
+        if unsafe { SuspendThread(thread) } == u32::MAX {
+            // SAFETY: nothing else refers to this handle.
+            unsafe { CloseHandle(thread) };
+            continue;
+        }
+        held.push(thread);
     }
 
     let outcome = patch();
@@ -311,7 +367,6 @@ fn with_others_suspended<T>(patch: impl FnOnce() -> T) -> T {
     }
     outcome
 }
-
 /// Plant a jump over one `ntdll` stub, after checking it is one.
 ///
 /// Returns the refusal reason when nothing was patched. Every refusal leaves
@@ -382,7 +437,10 @@ fn install(index: usize) -> Result<(), Refusal> {
     let mut before = 0_u32;
     // Everything from here to the resume must not allocate, record, or take a
     // lock: other threads are stopped and may hold any of them.
-    let patched = with_others_suspended(|| {
+    // No suspension here: every caller wraps this in `with_others_suspended`,
+    // and nesting it would restore the per-hook snapshot this batching exists
+    // to remove.
+    let patched = (|| {
         // SAFETY: `entry` is a live code page in this process.
         let opened =
             unsafe { VirtualProtect(entry.cast(), PATCH_LEN, PAGE_EXECUTE_READWRITE, &mut before) };
@@ -397,7 +455,7 @@ fn install(index: usize) -> Result<(), Refusal> {
         // SAFETY: no preconditions beyond a live process handle.
         unsafe { FlushInstructionCache(GetCurrentProcess(), entry.cast(), PATCH_LEN) };
         true
-    });
+    })();
     if !patched {
         return Err(Refusal::NotWritable);
     }
@@ -453,11 +511,12 @@ pub(crate) fn call_selftest() -> (i32, u32, u32, u32) {
 ///
 /// The name-to-index step [`install_requested`] and the tests share, so a test
 /// exercises the same lookup a run does rather than a parallel one.
+#[cfg(test)]
 pub(crate) fn install_by_label(label: &str) -> Result<(), Refusal> {
     let Some(index) = HOOKS.iter().position(|(_, name, _)| *name == label) else {
         return Err(Refusal::NotFound);
     };
-    install(index)
+    with_others_suspended(|| install(index))
 }
 
 /// Install the hooks named by `WINDOWS_THREADPOOL_TRACE_HOOKS`, once.
@@ -494,13 +553,37 @@ pub(crate) fn install_requested() {
     if wanted.is_empty() {
         return;
     }
+    let mut chosen: Vec<usize> = Vec::new();
     for (index, (_, label, _)) in HOOKS.iter().enumerate() {
         if !wanted.iter().any(|want| *want == "*" || want == label) {
             continue;
         }
-        match install_by_label(label) {
-            Ok(()) => record(TARGET, "installed", index as u64, 0),
-            Err(why) => record(TARGET, "refused", index as u64, why as u64),
+        chosen.push(index);
+    }
+    if chosen.is_empty() {
+        return;
+    }
+    // One suspension for the whole batch, not one per hook.
+    //
+    // The pass is dominated by `CreateToolhelp32Snapshot`, which snapshots
+    // **every thread on the machine** and is then filtered down to this
+    // process -- measured at about 0.12 s each. Paying that per hook put the
+    // last of six installs 0.73 s into the process. Batching makes it one
+    // payment however many hooks are asked for.
+    let outcomes = with_others_suspended(|| {
+        let mut done = [None; HOOKS.len()];
+        for &index in &chosen {
+            done[index] = Some(install(index));
+        }
+        done
+    });
+    // Recorded after the resume. Nothing may take the trace lock while another
+    // thread is stopped, possibly holding it.
+    for index in chosen {
+        match outcomes[index] {
+            Some(Ok(())) => record(TARGET, "installed", index as u64, 0),
+            Some(Err(why)) => record(TARGET, "refused", index as u64, why as u64),
+            None => {}
         }
     }
 }

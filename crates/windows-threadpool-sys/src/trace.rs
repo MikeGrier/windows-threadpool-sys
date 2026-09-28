@@ -129,6 +129,60 @@ impl Buffer {
 #[cfg(feature = "trace")]
 mod hook;
 
+/// Arm the trace, and install any requested hooks, **before `main`**.
+///
+/// `.CRT$XCU` is the C runtime's static-initialiser table; a function pointer
+/// placed in it is called during CRT startup, which for a Rust binary is
+/// before `main` and therefore before the test harness has created a single
+/// thread.
+///
+/// This exists because lazy installation was measured to be too late. Hooks
+/// were previously installed on the first traced call, which is already inside
+/// the first test: in the `M26.13` reproducer they landed between 0.15 s and
+/// 0.58 s, while the fault under investigation is established in the first
+/// 15.7 ms. An instrument that arrives after the event cannot observe it.
+///
+/// Installing here is also **cheaper and safer**, not merely earlier. Patching
+/// live code requires every other thread to be stopped, and at this point
+/// there are none to stop -- so the suspend-and-resume pass finds nothing, the
+/// perturbation it would otherwise cause does not happen, and the whole
+/// question of suspending a thread that holds a lock does not arise.
+///
+/// It does nothing unless the environment asks for it: no
+/// `WINDOWS_THREADPOOL_TRACE`, no arming, and no
+/// `WINDOWS_THREADPOOL_TRACE_HOOKS`, no patching.
+#[cfg(feature = "trace")]
+#[used]
+#[unsafe(link_section = ".CRT$XCU")]
+static ARM_BEFORE_MAIN: extern "C" fn() = {
+    extern "C" fn arm() {
+        ARMED_BEFORE_MAIN.store(true, std::sync::atomic::Ordering::Relaxed);
+        // `enabled` is the single path that arms the trace, starts its clock,
+        // installs the exception observer and requests the hooks. Calling it
+        // rather than any of those directly keeps one order of operations
+        // rather than two that have to be kept in step.
+        let _ = imp::enabled();
+    }
+    arm
+};
+
+/// Whether [`ARM_BEFORE_MAIN`] ran.
+///
+/// Set only from inside the static initialiser and never anywhere else, so it
+/// distinguishes "ran before `main`" from "was arranged and silently dropped".
+/// That is the failure this needs a guard for: a static nothing references is
+/// exactly what a linker is entitled to discard, `#[used]` is what asks it not
+/// to, and the symptom of getting that wrong is not a build error but an
+/// instrument that quietly reverts to installing too late.
+#[cfg(feature = "trace")]
+static ARMED_BEFORE_MAIN: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// Whether the trace's static initialiser ran before `main`.
+#[cfg(all(test, feature = "trace"))]
+pub(crate) fn armed_before_main() -> bool {
+    ARMED_BEFORE_MAIN.load(std::sync::atomic::Ordering::Relaxed)
+}
+
 #[cfg(feature = "trace")]
 mod imp {
     use std::sync::Mutex;

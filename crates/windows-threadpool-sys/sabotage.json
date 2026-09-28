@@ -55,14 +55,14 @@
         "    let Some(index) = HOOKS.iter().position(|(_, name, _)| *name == label) else {",
         "        return Err(Refusal::NotFound);",
         "    };",
-        "    install(index)"
+        "    with_others_suspended(|| install(index))"
       ],
       "replace": [
         "    let index = HOOKS",
         "        .iter()",
         "        .position(|(_, name, _)| *name == label)",
         "        .unwrap_or(0);",
-        "    install(index)"
+        "    with_others_suspended(|| install(index))"
       ]
     },
     {
@@ -116,6 +116,30 @@
       ],
       "replace": [
         "    const CEILING: usize = 4;"
+      ]
+    },
+    {
+      "name": "the pre-main initialiser is dropped by the linker",
+      "file": "src/trace.rs",
+      "expect": "caught",
+      "why": "`#[used]` is what stops the linker discarding a static nothing references, and `.CRT$XCU` is what makes the CRT call it before main. Getting either wrong still builds: the instrument silently reverts to installing hooks lazily, which in the investigation this was built for lands 0.12s into the process, long after the fault is established. Renaming the section reproduces exactly that -- a working build whose initialiser never runs.",
+      "find": [
+        "#[unsafe(link_section = \".CRT$XCU\")]"
+      ],
+      "replace": [
+        "#[unsafe(link_section = \".CRT$XCZ_not_an_initialiser\")]"
+      ]
+    },
+    {
+      "name": "the suspended window allocates",
+      "file": "src/trace/hook.rs",
+      "expect": "survives",
+      "why": "A DELIBERATE control, and the one entry here that documents a hazard the tests cannot see. Dropping the reservation on `held` makes the push allocate while other threads are suspended, and a thread suspended holding the allocator lock can never give it back -- a deadlock. It survives because the tests install hooks from a process whose other threads are not holding that lock at that instant, so the defect is real and the suite is blind to it. It is recorded here so the reservation is not removed as redundant by a future reader; the argument for it is in the comment at the call site, not in a test.",
+      "find": [
+        "    let mut held: Vec<*mut core::ffi::c_void> = Vec::with_capacity(ids.len());"
+      ],
+      "replace": [
+        "    let mut held: Vec<*mut core::ffi::c_void> = Vec::new();"
       ]
     },
     {
