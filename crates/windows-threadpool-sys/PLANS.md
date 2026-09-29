@@ -6,6 +6,4 @@ Completed checklists are recorded in
 
 | Path to CHECKLIST.md | Status | Brief description | Design Notes |
 |---|---|---|---|
-
-No active checklist. [CHECKLIST.md](CHECKLIST.md) is in its closed state; add a row here when new work is
-planned against it.
+| [CHECKLIST.md](CHECKLIST.md) | in progress | M-T4: teardown drains rather than cancels, `Drop` blocks until it is finished, and an undischarged obligation is reported | [DESIGN-NOTES.md](../../DESIGN-NOTES.md#teardown-drains) |

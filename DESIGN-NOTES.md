@@ -884,6 +884,99 @@ alongside so the incidental cancellation is not mistaken for a contract and quie
 This is the honest shape of the decision: a documented precondition is a weaker thing than an enforced one, and
 saying so is better than either overclaiming or paying for machinery nobody needs.
 
+## <a id="teardown-drains"></a>Teardown drains rather than cancels, `Drop` blocks until it is finished, and an undischarged obligation is reported
+
+**Decided 2026-09-28. This decision schedules work; the implementation is
+queued as `M-T4` in
+[crates/windows-threadpool-sys/CHECKLIST.md](crates/windows-threadpool-sys/CHECKLIST.md)
+and is not yet done.** It amends the `cancel_pending` half of
+[Quiescing without dropping is `stop_and_drain`](#quiescing-without-dropping-is-stop_and_drain-and-it-covers-the-callback-only),
+which stands in every other respect.
+
+### The rule
+
+1. **`Drop` blocks until the object's callbacks are finished, and control flow
+   never leaves it with the resources unsynchronised.** Leaking is not an
+   acceptable alternative.
+2. **Teardown drains rather than cancels**: `WaitForThreadpool*Callbacks` with
+   `fCancelPendingCallbacks` **FALSE**, not TRUE. A queued callback is work the
+   caller asked for, and discarding it is not "finalised".
+3. **The caller can pay the cost earlier, at a point they choose.** `Drop` is
+   the worst place to meet a blocking call, because its position in the
+   caller's control flow is often accidental. Every object that blocks in
+   `Drop` also exposes a synchronous method doing the same drain on demand.
+4. **A drain that happens in `Drop` is a discharged obligation worth
+   reporting.** The object records on the diagnostic channel that the caller
+   did not drain earlier. A fail-fast response to that is available and **off
+   by default**.
+
+### Why the earlier reasoning does not survive
+
+The decision above rejected `wait()` on measured grounds: "after `disarm();
+wait();` a self-re-arming timer was measured still set and firing, because the
+deferred re-arm is applied after the callback returns, which is after the
+external disarm."
+
+That measurement is correct and it is **not** the configuration teardown uses.
+It has no suppression raised. `stop_and_drain` and `Drop` both raise the
+suppression *first*, and the suppression exists precisely to refuse a re-arm
+requested by a callback that runs during the drain. With it raised, letting the
+callback run is safe: it asks to re-arm, and the ask is refused. The reason to
+prefer cancelling therefore applies to bare `disarm(); wait();` and not to the
+teardown path, where the objection had already been answered by the mechanism
+sitting one line above it.
+
+The same section's other argument now points the other way. It declined to rely
+on the pool dropping a trampoline-armed callback during an in-flight cancel,
+because "no SDK contract promises that". Draining needs no such promise: a
+callback that runs is a callback that ran.
+
+### The measurement that forced it
+
+[2026-09-28-closing-too-soon-after-the-disarm](crates/windows-ioring-sys/measurements/2026-09-28-closing-too-soon-after-the-disarm/README.md):
+a `CloseThreadpoolWait` issued close behind a `SetThreadpoolWait(NULL)` leaves
+the default pool's worker factory unable to make its first worker. Replacing
+the cancelling drain with a draining one gave **0 failures in 20000 runs
+against a control's 10**.
+
+That is a workaround with a mechanism-shaped hint, not a diagnosis, and it is
+not the whole reason. The rest is that **the crate was already inconsistent and
+the object that cancels is the one in the failing path**:
+
+| object | `Drop` uses |
+|---|---|
+| `ThreadpoolWork` | FALSE -- drains |
+| `ThreadpoolIo` | FALSE -- drains |
+| `ThreadpoolWait` | TRUE -- cancels |
+| `ThreadpoolTimer` | TRUE -- cancels |
+| `PeriodicTimer` | TRUE -- cancels, via `stop_and_drain` |
+
+This is not a new policy. It is the one `work` and `io` already follow, applied
+to the three that do not.
+
+**And `stop_and_drain` does not drain.** On all three it calls
+`cancel_pending`, the TRUE form. The name has said "drain" and the body has
+said "cancel" since it was written.
+
+### What it costs, stated plainly
+
+**A draining teardown can block forever where a cancelling one could not.** If a
+queued callback never runs -- the pool wedged, or the callback waiting on
+something the dropping thread holds -- `Drop` does not return. Accepted
+deliberately: a hang is a visible failure with a stack, an abandoned callback is
+an invisible one. Rules 3 and 4 exist to make that affordable, by letting the
+caller drain where a hang is diagnosable and making it loud when they did not.
+
+### Deliberately not decided here
+
+- **Whether `stop_and_drain` changes behaviour or is joined by a new method.**
+  Changing it matches its name and fixes every caller at once; it is also a
+  silent behavioural change to a published crate, turning a call that discarded
+  queued callbacks into one that runs them.
+- **How the fail-fast is selected**, and what it does when the object is
+  dropped on an already-panicking path, where a panic aborts.
+- **Whether `CleanupGroup` follows.** It has both forms at six sites, its own
+  ownership model, and was not measured.
 ## The encoding check rejects stray control characters
 
 A form feed reached two committed source comments. The cause was a PowerShell replacement containing
