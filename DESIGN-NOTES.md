@@ -967,16 +967,56 @@ deliberately: a hang is a visible failure with a stack, an abandoned callback is
 an invisible one. Rules 3 and 4 exist to make that affordable, by letting the
 caller drain where a hang is diagnosable and making it loud when they did not.
 
-### Deliberately not decided here
+### `stop_and_drain` changes rather than gaining a sibling
 
-- **Whether `stop_and_drain` changes behaviour or is joined by a new method.**
-  Changing it matches its name and fixes every caller at once; it is also a
-  silent behavioural change to a published crate, turning a call that discarded
-  queued callbacks into one that runs them.
-- **How the fail-fast is selected**, and what it does when the object is
-  dropped on an already-panicking path, where a panic aborts.
-- **Whether `CleanupGroup` follows.** It has both forms at six sites, its own
-  ownership model, and was not measured.
+**Decided.** It always should have drained; the name was right and the body was
+wrong. It is a breaking behavioural change to a published crate -- a call that
+discarded queued callbacks will run them, and will block until they finish --
+and it ships as one rather than as a second method a reader has to tell apart
+from the first.
+
+### `CleanupGroup` already complies, and is not part of this work
+
+It was queued for review on the strength of a grep showing both drain forms at
+eight sites in `cleanup_group.rs`. Reading it, those eight are the *member*
+accessors -- `WaitMember::wait` against `WaitMember::cancel_pending` and the
+same pair for work and the two timers -- which are caller-facing choices, the
+same both-forms-exposed pattern the standalone types have. They are not
+teardown.
+
+The group's own teardown is `CloseThreadpoolCleanupGroupMembers`, reached
+through `release_members`, and `Drop` calls it with `cancel_pending` **false**:
+
+```rust
+impl Drop for CleanupGroup {
+    fn drop(&mut self) {
+        // Let queued callbacks run, matching the default of `close_members`.
+        self.release_members(false);
+```
+
+So it already drains. `close_members(cancel_pending: bool)` is also already the
+method requirement 3 asks for: an explicit, synchronous release at a point the
+caller picks, with the choice in the caller's hands and the draining form as
+what `Drop` does when they do not.
+
+A member is also structurally unlike the standalone case: it never closes
+itself, so nothing in that path issues a `CloseThreadpoolWait` behind a
+`SetThreadpoolWait(NULL)`. The group close does both inside one kernel call.
+**Whether that makes a cleanup-group consumer immune to the measured stall is
+untested**, and worth knowing, but it is a question about the ring crate's
+reproducer rather than a change to this one.
+
+### Still not decided: the fail-fast, and its bound
+
+Off by default, and its selection -- environment variable, constructor option,
+process-wide setter -- is open, as is what it does when the object is dropped
+on an already-unwinding path, where a panic aborts.
+
+Whether an *indefinite* hang is reasonable is also open. What is settled is the
+shape of any answer: **forward progress is not the alternative.** A teardown
+that cannot drain may abort, or fail fast by some other route, but it may not
+return to its caller having abandoned the callback. Bounding the wait is a
+question about which failure to take, never about whether to continue.
 ## The encoding check rejects stray control characters
 
 A form feed reached two committed source comments. The cause was a PowerShell replacement containing

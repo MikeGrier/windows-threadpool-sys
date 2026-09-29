@@ -13,38 +13,54 @@ Implements [Teardown drains rather than cancels](../../DESIGN-NOTES.md#teardown-
 shows the cancelling form leaves the default pool unable to make its first worker, 10 failures in
 20000 against 0 for the draining form.
 
-- [ ] **M-T4.1** -- **DECISION TO RAISE, not to take: does `stop_and_drain` change, or gain a
-  sibling?** It calls `cancel_pending` on `ThreadpoolWait`, `ThreadpoolTimer` and `PeriodicTimer`,
-  so the method whose name says "drain" is the one that cancels. Changing it matches the name and
-  fixes every caller at once; it is also a silent behavioural change to a published crate, turning
-  a call that discarded queued callbacks into one that runs them -- a caller relying on teardown
-  being prompt would start blocking. Adding `stop_and_run_out` beside it keeps the old behaviour
-  reachable at the cost of two methods a reader must tell apart. **Decide before M-T4.2**, because
-  `PeriodicTimer::drop` calls `stop_and_drain` and the answer changes what that drop does.
+- [x] **M-T4.1** -- **DECIDED 2026-09-28: `stop_and_drain` changes rather than gaining a sibling.**
+  It always should have drained; the name was right and the body was wrong. This is a breaking
+  behavioural change to a published crate -- a call that discarded queued callbacks will now run
+  them and block until they finish -- and ships as one. No second method.
 
 - [ ] **M-T4.2** -- **Drain instead of cancel in the three teardowns that do not.** `Drop` for
   `ThreadpoolWait` and `ThreadpoolTimer` calls `cancel_pending`; `PeriodicTimer::drop` reaches it
-  through `stop_and_drain`. `ThreadpoolWork` and `ThreadpoolIo` already drain, so this removes an
-  inconsistency rather than introducing a policy. The suppression is already raised before the
-  drain in every one of these paths, which is what makes draining safe: a callback that runs asks
-  to re-arm and the ask is refused. Guard it by asserting the callback **ran** -- the existing
-  tests assert quiescence, which both forms satisfy.
+  through `stop_and_drain`, which M-T4.1 changes. `ThreadpoolWork` and `ThreadpoolIo` already
+  drain, so this removes an inconsistency rather than introducing a policy. The suppression is
+  already raised before the drain in every one of these paths, which is what makes draining safe:
+  a callback that runs asks to re-arm and the ask is refused.
+
+  **Guard it by asserting the callback RAN.** The existing tests assert quiescence, which both
+  forms satisfy -- that is precisely why the wrong one survived this long. A guard that cannot
+  tell a drained teardown from a cancelling one is not a guard for this change. Sabotage-verify by
+  reverting each site to `TRUE` and confirming the new assertion fails.
+
+  Breaking: `feat!` on this crate, with the changed `stop_and_drain` semantics named in the commit.
 
 - [ ] **M-T4.3** -- **Report an obligation discharged in `Drop`.** Record on the trace that the
   drain happened in `Drop` rather than having been done earlier, so a capture distinguishes
   "teardown was paid for deliberately" from "teardown happened wherever the value went out of
   scope". Needs a flag the early-discharge method sets and arming clears.
 
-- [ ] **M-T4.4** -- **DECISION TO RAISE: the opt-in fail-fast, and what it does while panicking.**
-  Off by default. How it is selected -- environment variable, constructor option, process-wide
-  setter -- is open, and so is its behaviour when the object is dropped on an already-unwinding
-  path, where a panic aborts. The root
-  [DESIGN-NOTES.md](../../DESIGN-NOTES.md#a-panicking-callback-aborts-rather-than-being-contained)
-  already chose abort for a panicking callback, which is the nearest precedent.
+- [ ] **M-T4.4** -- **DECISION TO RAISE, deferred by the engineer 2026-09-28: the opt-in
+  fail-fast, and whether the wait is bounded at all.** Off by default. Selection -- environment
+  variable, constructor option, process-wide setter -- is open, as is behaviour when the object is
+  dropped on an already-unwinding path, where a panic aborts.
 
-- [ ] **M-T4.5** -- **Decide whether `CleanupGroup` follows.** Six sites carry both forms, it has
-  its own ownership model, and it was not measured. Gated on M-T4.2 landing.
+  **One bound is already fixed and constrains every answer: forward progress is not the
+  alternative.** A teardown that cannot drain may abort, or fail fast by some other route, but it
+  may not return to its caller having abandoned the callback. Bounding the wait is a question
+  about which failure to take, never about whether to continue.
 
+- [x] **M-T4.5** -- **`CleanupGroup` already complies; no change needed.** Queued on the strength
+  of a grep showing both drain forms at eight sites; reading it, those are the *member* accessors
+  (`WaitMember::wait` against `WaitMember::cancel_pending`, and the same pair for work and the two
+  timers) -- caller-facing choices, not teardown. The group's own teardown is
+  `release_members(false)` in `Drop`, which drains, and `close_members(cancel_pending: bool)` is
+  already the explicit early-release method. A member never closes itself either, so nothing in
+  that path issues a close behind a disarm.
+- [ ] **M-T4.7** -- **Is a cleanup-group consumer already immune?** `M-T4.5` found the group's
+  teardown drains and that a member never closes itself, so nothing on that path issues a close
+  behind a disarm. Whether that makes it immune to the measured stall is **untested**. Run the ring
+  reproducer with the trigger's wait owned by a `CleanupGroup` instead of standing alone, against a
+  live control in the same session. A clean result would be independent evidence for the mechanism;
+  a failing one would say the group close has the same hazard inside a single kernel call, which
+  would be worth knowing before `M-T4.2` is trusted as the fix.
 - [ ] **M-T4.6** -- **Re-measure the ring reproducer against the drained build.** The 20000-run
   arms were a hand-rolled model of the teardown, not this crate's code. Confirm the real
   `EventDelivery` path reaches 0 where it currently reaches ~10, with a live control in the same
