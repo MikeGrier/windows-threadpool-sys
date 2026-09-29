@@ -32,15 +32,76 @@ shows the cancelling form leaves the default pool unable to make its first worke
 
   Breaking: `feat!` on this crate, with the changed `stop_and_drain` semantics named in the commit.
 
-- [ ] **M-T4.3** -- **Report an obligation discharged in `Drop`.** Record on the trace that the
-  drain happened in `Drop` rather than having been done earlier, so a capture distinguishes
-  "teardown was paid for deliberately" from "teardown happened wherever the value went out of
-  scope". Needs a flag the early-discharge method sets and arming clears.
+- [ ] **M-T4.3** -- **The discharge flag, and what it is allowed to decide.** Investigated
+  2026-09-28; findings below are measured from the source, not proposed.
 
-- [ ] **M-T4.4** -- **DECISION TO RAISE, deferred by the engineer 2026-09-28: the opt-in
-  fail-fast, and whether the wait is bounded at all.** Off by default. Selection -- environment
-  variable, constructor option, process-wide setter -- is open, as is behaviour when the object is
-  dropped on an already-unwinding path, where a panic aborts.
+  **`ThreadpoolIo` already implements this whole pattern** and is the precedent rather than a gap.
+  Its `Drop` reads `outstanding()`, and when that is non-zero it reports on a diagnostic channel,
+  names the method the caller should have used, then makes the block terminate and blocks. So the
+  work here is generalising one type's existing behaviour to the rest, not inventing it.
+
+  **`io` needs no flag because it has a derived signal.** `outstanding()` is a real observable of
+  whether rundown happened. The other four have no equivalent, which is what the flag is for.
+
+  **The flag goes on the struct, not the context.** `Drop` holds `&mut self`; callbacks never read
+  it; and the clearing methods take `&self` on `Sync` types, so it is an `AtomicBool` on the
+  struct. Set by the synchronous close, cleared by anything that re-arms:
+
+  | type | synchronous close sets it | these clear it |
+  |---|---|---|
+  | `ThreadpoolWait` | `stop_and_drain` | `arm` |
+  | `ThreadpoolTimer` | `stop_and_drain` | `set_after`, `set_at`, `set_after_with_window` |
+  | `PeriodicTimer` | `stop_and_drain` | `start`, `start_after` |
+  | `ThreadpoolWork` | `wait` -- see M-T4.8, it has no named close | `submit` |
+  | `ThreadpoolIo` | `run_down` | -- derived from `outstanding()`, no flag |
+
+  **The flag must gate the REPORT, never the WORK.** This is the load-bearing finding. If `Drop`
+  skips the drain because the flag is set, then a stale flag silently skips finalisation -- and it
+  can be stale, because the root
+  [DESIGN-NOTES.md](../../DESIGN-NOTES.md#the-suppression-covers-the-callbacks-re-arm-not-an-external-one)
+  already records that a concurrent external `arm` is not excluded from `stop_and_drain`. That
+  would reintroduce exactly the hazard
+  [the decision](../../DESIGN-NOTES.md#teardown-drains) forbids, in exchange for saving a drain on
+  an already-quiescent object, which is nearly free. So: always drain; consult the flag only to
+  decide whether to say anything.
+
+- [ ] **M-T4.8** -- **DECISION TO RAISE: the synchronous close is not uniform, in name or in
+  existence.** Found while investigating M-T4.3. Four shapes across five types:
+  `stop_and_drain` on `ThreadpoolWait`, `ThreadpoolTimer` and `PeriodicTimer`; `run_down` on
+  `ThreadpoolIo`; `close_members(cancel_pending: bool)` on `CleanupGroup`; and **nothing named as
+  such on `ThreadpoolWork`**, whose `wait()` happens to be the drain.
+
+  This blocks any uniform flag or fail-fast, because there is no uniform method to attach the
+  obligation to. `run_down` and `close_members` have good reasons to differ -- one waits on an
+  operation registry, the other releases a whole group -- so the question is whether they are
+  renamed, given a common alias, or left alone with the obligation defined per type.
+
+- [ ] **M-T4.9** -- **DECISION TO RAISE: which diagnostic channel carries an obligation report.**
+  The crate has two and no stated rule. `ThreadpoolIo::drop` uses `eprintln!`; everything else uses
+  `trace_record!`, and [trace.rs](src/trace.rs)'s own module docs open with "Why this is not
+  `eprintln!`".
+
+  **That argument does not settle this case**, which is why it is a decision rather than a lookup:
+  it is about not perturbing a timing-sensitive race during observation, and an obligation report
+  at `Drop` is neither timing-sensitive nor addressed to an investigator. It is addressed to a
+  developer who will not have the `trace` feature on -- and the trace compiles to nothing without
+  it, so a trace-only report would be invisible to exactly the audience it is for.
+- [ ] **M-T4.4** -- **DECISION TO RAISE, reserved by the engineer 2026-09-28 as CRATE-WIDE: a
+  fail-fast that forces the caller to have closed, making these types linear rather than affine.**
+
+  **Not to be made piecemeal, and if made, made uniformly.** That is a constraint on the work, not
+  a note about it: implementing it for `ThreadpoolWait` alone -- the type the M26.13 measurement
+  happens to implicate -- would leave the crate with one linear type and four affine ones, which
+  is a worse surface than either choice made consistently. Gated on **M-T4.8**, because there is
+  no uniform method to be linear *about* until the synchronous close is uniform.
+
+  **It is not greenfield.** `ThreadpoolIo` already ships a soft version: its `Drop` reports a
+  skipped rundown and then continues. A hard fail-fast changes that type's existing behaviour too,
+  so the decision is "does the crate become linear", not "do we add something new".
+
+  Still open within it: whether the fail-fast is off by default (assumed), how it is selected --
+  environment variable, constructor option, process-wide setter -- and what it does when the
+  object is dropped on an already-unwinding path, where a panic aborts.
 
   **One bound is already fixed and constrains every answer: forward progress is not the
   alternative.** A teardown that cannot drain may abort, or fail fast by some other route, but it
