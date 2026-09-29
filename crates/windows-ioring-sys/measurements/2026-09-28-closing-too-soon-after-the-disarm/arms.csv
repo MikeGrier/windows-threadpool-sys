@@ -1,0 +1,7 @@
+"arm","teardown","runs","failures","ms_per_run"
+"hand-full","disarm -> WaitForThreadpoolWaitCallbacks(TRUE) -> close","20000","10","157.7"
+"hand-disarm-sleep-close","disarm -> sleep 1ms -> close","20000","0","155.6"
+"hand-disarm-drainwait-close","disarm -> WaitForThreadpoolWaitCallbacks(FALSE) -> close","20000","0","156.3"
+"hand-disarm-only","disarm, never closed (cumulative over 3 sessions)","15000","0","0"
+"hand-sleep-after","full teardown -> sleep 1ms (sleep OUTSIDE the teardown)","8000","1","95.9"
+"hand-disarm-close","disarm -> close, no drain at all","8000","11","156"

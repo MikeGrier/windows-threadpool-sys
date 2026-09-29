@@ -410,20 +410,32 @@ about this crate's own surface rather than about storage at all.
 
 - [x] **M26.14.1** -- The trigger's *teardown* is what poisons: built and never dropped it gives 0 in 4000 against a live control's 11, and a ring dropped without a delivery also gives 0. -> [completed 2026-09-28](COMPLETED-CHECKLIST.md#m26141)
 
-- [ ] **M26.14.2** -- **Decompose the teardown, in `windows-threadpool-sys` rather than here.**
-  `M26.14.1` narrowed the poison to taking an `EventDelivery` down -- a `TP_WAIT` armed on the
-  ring's completion event, then disarmed, drained and closed 32us later. Disarm, drain and close
-  happen within 12us of each other and that measurement cannot separate them. Run the three
-  variants that can: **arm then close without disarming**, **arm then disarm without closing**, and
-  **create then close without ever arming**. Each needs a live positive control in the same session,
-  because three zeroes mean nothing next to a reproducer that has gone quiet.
+- [x] **M26.14.2** -- Closing the wait too soon after disarming it is the poison: a 1ms gap between the disarm and the close, or a true drain in place of a cancel, each give 0 in 20000 against a control's 10. -> [completed 2026-09-28](COMPLETED-CHECKLIST.md#m26142)
 
-  **Carry the open puzzle into it.** A ring is needed and a ring alone is not enough: six thousand
-  ring-free trials produced nothing, and `M26.14.1`'s `ring-only` arm is equally clean at 0 in 4000.
-  So the ring and the delivery are needed together, and why is not established. The wait is armed on
-  an ordinary event -- what the ring contributes is that `SetIoRingCompletionEvent` gives the kernel
-  a reference to that same event, which is the one asymmetry between this and a ring-free wait.
-  State that as the thing to test, not as the answer.
+- [ ] **M26.14.3** -- **DECISION TO RAISE, not to take: adopt the draining teardown in
+  `windows-threadpool-sys`?** `M26.14.2` found that `ThreadpoolWait`'s drop -- disarm, then
+  `WaitForThreadpoolWaitCallbacks` with `fCancelPendingCallbacks` **TRUE**, then close -- is what
+  poisons, and that passing **FALSE** instead prevents it entirely (0 in 20000 against 10).
+
+  **It is a one-argument change and a real semantic one, which is why it is a decision rather than
+  a fix.** Cancelling returns promptly and abandons a pending callback; draining blocks until that
+  callback has actually run. A drop that waits for a callback can deadlock a caller whose callback
+  needs something the dropping thread holds -- and this crate's `Drop` is not a place a caller can
+  see a deadlock coming. Questions that belong to the engineer, not to this item: whether drop may
+  block at all, whether the draining form should be opt-in on a builder rather than the default,
+  what it means for `stop_and_drain` and `cancel_pending` which already expose both shapes, and
+  whether the suppression machinery that exists to make drop safe is still needed if drop drains.
+
+  **Do not ship the sleep.** The 1ms gap works equally well in the measurement and is the worse of
+  the two: it is a timing constant with no principle behind it, no established threshold, and it
+  would sit in a teardown path forever.
+
+- [ ] **M26.14.4** -- **Find the threshold, if the draining teardown is not adopted.** `M26.14.2`
+  used 1ms because it is about 80x the natural 12us gap; nothing establishes what the minimum is.
+  A sweep -- 0, 10us, 50us, 100us, 500us, 1ms, interleaved at 20000 each -- would say whether the
+  window is microseconds or milliseconds, which is itself evidence about what the close races.
+  Gated on `M26.14.3`: if the draining teardown is adopted the sleep never ships and this is only
+  of diagnostic interest.
 - [ ] **M26.14** -- **The ioring tests leak their temp files, and nothing cleans up.** `temp_file` in
   [tests/event_delivery.rs](tests/event_delivery.rs) builds a path under the system temp directory
   and no test removes it; each run of the M26.13 reproducer leaves two behind, and roughly thirty

@@ -5238,3 +5238,53 @@ once.
 and this cannot separate them. Nor why a ring is needed when the wait is on an ordinary event.
 Both are queued as M26.14.2.
 [measurements/2026-09-28-the-teardown-is-what-poisons/](measurements/2026-09-28-the-teardown-is-what-poisons/README.md).
+### <a id="m26142"></a>M26.14.2 -- Closing the wait too soon after disarming it is the poison: a 1ms gap between the disarm and the close, or a true drain in place of a cancel, each give 0 in 20000 against a control's 10. *(completed 2026-09-28 20:39:34 -04:00)*
+
+**The decisive run**: three arms interleaved, 20000 each, pipes drained asynchronously, 60s bound
+per run, timing balanced to 1.3% (157.7 / 155.6 / 156.3 ms per run) and no timeouts.
+
+| arm | teardown | failures in 20000 |
+|---|---|---|
+| `hand-full` | disarm -> `WaitForThreadpoolWaitCallbacks(TRUE)` -> close | **10** |
+| `hand-disarm-sleep-close` | disarm -> **sleep 1ms** -> close | **0** |
+| `hand-disarm-drainwait-close` | disarm -> `WaitForThreadpoolWaitCallbacks(FALSE)` -> close | **0** |
+
+Each zero has probability `exp(-10)` = 4.5e-5 under the control's rate.
+
+**The whole decomposition reads down one column.** Nothing before the disarm matters -- never
+armed then closed, armed then abandoned, and armed then closed while still armed are all 0 in
+4000. The disarm alone is innocent: 0 in **15000** cumulative. The poison appears exactly when a
+close follows a disarm closely (disarm -> close, 11 in 8000; disarm -> cancel-drain -> close, 10 in
+20000), and putting any real gap between those two calls stops it.
+
+**The control that makes the sleep mean something** is `hand-sleep-after`: the identical 1ms sleep
+placed *after* the whole teardown, which still fails. So the sleep does not help by delaying the
+trigger or by moving when it finishes relative to the victims arming -- the gap must sit between
+the disarm and the close.
+
+**Cancelling is not draining.** `WaitForThreadpoolWaitCallbacks`' `fCancelPendingCallbacks` is TRUE
+in `EventDelivery`'s path and does not prevent the stall; FALSE does. One argument, 10 failures
+against 0 over 20000 runs each. The arm was written expecting it might hang -- the trigger signals
+the event while the wait is armed, so a callback is usually pending -- and it never did, in 20000
+runs against a 60s bound.
+
+**This is a workaround with a mechanism-shaped hint, not a diagnosis.** A sleep that makes a race
+disappear is evidence of a race, not an explanation of one. Nothing here says what the close races,
+nor why the worker factory is left unable to make its first worker. No threshold is established
+either; 1ms was chosen as about 80x the natural 12us gap.
+
+**Two false turns on the way, both caught by controls rather than by reasoning.** A five-arm
+interleaved run came back all zeroes and was reported as void on the grounds that the harness had
+broken the reproducer; re-testing the control on the historical launcher gave 4 in 4000 against the
+harness's 3 in 8000 (p = 0.18), so the harness was innocent and the run was merely underpowered --
+its four events had in fact landed 3 and 1 on the two unmodified-teardown arms and 0 on the three
+modified ones. Separately, an apparent 5x instability in the failure rate was mostly Poisson noise
+on counts of 5 to 16: a chi-square over six measurements of the unmodified teardown gives p = 0.048,
+and five of the six sit inside the 95% band around a pooled 2.6 per 1000. The practical lesson
+governed this run's design -- at 4000 runs a zero is strong but a rate comparison is not, which is
+why the decisive arms used 20000.
+[measurements/2026-09-28-closing-too-soon-after-the-disarm/](measurements/2026-09-28-closing-too-soon-after-the-disarm/README.md).
+
+**Raised, not taken:** M26.14.3 asks whether `windows-threadpool-sys` should adopt the draining
+teardown, which is a one-argument change with real semantic weight -- a drop that blocks until a
+pending callback runs can deadlock a caller. M26.14.4 asks for the threshold sweep if it does not.

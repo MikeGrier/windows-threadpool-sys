@@ -303,6 +303,10 @@ measurement is linked.
 | the trigger competes with the victims for something | ruled out -- it finishes about 2.4ms *before* either victim arms, in 80 of 80 failures and 183 of 183 passing runs alike ([re-verifying-the-premises](measurements/2026-09-28-re-verifying-the-premises/README.md)) |
 | the trigger's *setup* is what poisons | ruled out -- built and deliberately **not dropped**, it gives 0 in 4000 against a live control's 11 ([the-teardown-is-what-poisons](measurements/2026-09-28-the-teardown-is-what-poisons/README.md)) |
 | a ring created and dropped is enough | ruled out -- with no `EventDelivery` over it, 0 in 4000; the delivery and its teardown are both needed |
+| the disarm alone poisons | ruled out -- disarmed and never closed, 0 in 15000 cumulative ([closing-too-soon](measurements/2026-09-28-closing-too-soon-after-the-disarm/README.md)) |
+| the stall is unavoidable once the trigger runs | ruled out -- **two teardowns prevent it**: a 1ms gap between the disarm and the close, and a true drain in place of a cancel, each 0 in 20000 against a control's 10 |
+| cancelling a pending callback is as good as draining it | ruled out -- `WaitForThreadpoolWaitCallbacks(TRUE)` still poisons (10 in 20000); the same call with FALSE does not (0 in 20000) |
+| the 1ms sleep helps by delaying the trigger | ruled out -- the same sleep placed *after* the whole teardown still fails; the gap must sit between the disarm and the close |
 | it happens off the default process pool | never observed -- 0 in 12000 runs across three private-pool arms |
 
 **What is left is one question**, and everything outside the kernel is now
