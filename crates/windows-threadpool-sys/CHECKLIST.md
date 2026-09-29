@@ -18,20 +18,26 @@ shows the cancelling form leaves the default pool unable to make its first worke
   behavioural change to a published crate -- a call that discarded queued callbacks will now run
   them and block until they finish -- and ships as one. No second method.
 
-- [ ] **M-T4.2** -- **Drain instead of cancel in the three teardowns that do not.** `Drop` for
-  `ThreadpoolWait` and `ThreadpoolTimer` calls `cancel_pending`; `PeriodicTimer::drop` reaches it
-  through `stop_and_drain`, which M-T4.1 changes. `ThreadpoolWork` and `ThreadpoolIo` already
-  drain, so this removes an inconsistency rather than introducing a policy. The suppression is
-  already raised before the drain in every one of these paths, which is what makes draining safe:
-  a callback that runs asks to re-arm and the ask is refused.
+- [x] **M-T4.2** -- **Done 2026-09-28, and the item was wrong about two of its three sites.** All
+  five teardown call sites now drain (`ThreadpoolWait::drop` and `stop_and_drain`,
+  `ThreadpoolTimer::drop` and `stop_and_drain`, `PeriodicTimer::stop_and_drain`, which its `Drop`
+  reaches). Only the wait's two are **verifiable**, and finding that out was most of the work.
 
-  **Guard it by asserting the callback RAN.** The existing tests assert quiescence, which both
-  forms satisfy -- that is precisely why the wrong one survived this long. A guard that cannot
-  tell a drained teardown from a cancelling one is not a guard for this change. Sabotage-verify by
-  reverting each site to `TRUE` and confirming the new assertion fails.
+  **The wait is a real defect and is guarded.** Two new tests use a private pool capped at one
+  occupied thread, which is what makes "queued but not started" deterministic instead of a race,
+  and assert the callback **ran**. Both sabotage-caught by reverting to `cancel_pending`. All 234
+  pre-existing tests passed *before* the change, because they assert quiescence and both forms
+  satisfy it -- which is exactly why the wrong form survived.
 
-  Breaking: `feat!` on this crate, with the changed `stop_and_drain` semantics named in the commit.
-
+  **The timers' change is unobservable, measured rather than assumed.** A probe found that
+  `SetThreadpoolTimer(NULL)` discards an already-queued tick where `SetThreadpoolWait(NULL)` does
+  not: without a disarm the queued tick ran, with one it did not. Both timer teardowns disarm
+  before draining, so no queued callback survives for the drain to run and the two forms are
+  identical. The change was **kept** -- it is the form the rest of the crate uses and stays correct
+  if that asymmetry ever changes -- and is documented as unobservable at both call sites rather
+  than left looking verified. No guard was written that could not discriminate; instead the
+  asymmetry itself is pinned by
+  `disarming_cancels_a_queued_tick_which_a_waits_disarm_does_not`, and sabotaged by inverting it.
 - [ ] **M-T4.3** -- **The discharge flag, and what it is allowed to decide.** Investigated
   2026-09-28; findings below are measured from the source, not proposed.
 

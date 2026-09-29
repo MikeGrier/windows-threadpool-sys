@@ -837,6 +837,8 @@ these, a test could only assert that teardown terminated, which it does with the
 
 ## Quiescing without dropping is `stop_and_drain`, and it covers the callback only
 
+**Partly superseded by [Teardown drains rather than cancels](#teardown-drains).** The choice of cancel_pending recorded below is reversed; everything else here -- the suppression depth count, why disarm(); wait(); alone is not quiescence, and the limit on an external arm -- stands.
+
 `ThreadpoolTimer` and `ThreadpoolWait` both let a callback re-arm from inside itself, so "stop this and wait
 until it is idle" is not expressible as disarm-plus-drain. `wait()` demonstrably does not do it: after
 `disarm(); wait();` a self-re-arming timer was measured still set and firing, because the deferred re-arm is

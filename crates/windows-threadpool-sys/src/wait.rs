@@ -836,6 +836,12 @@ impl ThreadpoolWait {
     /// - the object is not watching -- a re-arm requested by a callback that ran
     ///   during the call is discarded rather than deferred.
     ///
+    /// **A queued callback runs; it is not discarded.** That is the difference
+    /// between this and [`cancel_pending`](Self::cancel_pending), and it is why
+    /// this can block for as long as the callback takes. See
+    /// [the teardown-drains decision](../../../DESIGN-NOTES.md#teardown-drains)
+    /// for why finishing the work is preferred to abandoning it.
+    ///
     /// # What it does not
     ///
     /// **A concurrent [`arm`](Self::arm) from another thread is not excluded.**
@@ -854,7 +860,7 @@ impl ThreadpoolWait {
         ctx.suppress_and_disarm();
         // Drained with the lock released: a callback blocked on it would
         // otherwise never finish, and this would never return.
-        self.cancel_pending();
+        self.wait();
         ctx.release_suppression();
     }
 
@@ -923,7 +929,7 @@ impl Drop for ThreadpoolWait {
         ctx.suppress_and_disarm();
         // The lock is released before draining: a callback blocked on it would
         // otherwise never finish, and this wait would never return.
-        self.cancel_pending();
+        self.wait();
         crate::trace_record!("wait", "drop-drained", self.wait);
 
         // SAFETY: no callback can be queued or executing, so the object can be

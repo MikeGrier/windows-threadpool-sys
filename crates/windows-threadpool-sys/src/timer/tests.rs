@@ -777,3 +777,81 @@ fn a_coalescing_window_still_fires() {
     timer.wait();
     assert_eq!(fires.count(), 1);
 }
+
+/// Disarming a one-shot timer **cancels a tick that is already queued**, which
+/// a wait's disarm does not.
+///
+/// Pinned because it decides whether this type's teardown can distinguish
+/// draining from cancelling, and the answer is that it cannot. `Drop` and
+/// `stop_and_drain` both disarm before they drain; if the disarm has already
+/// discarded the queued callback, no drain can run it. So the drain form is
+/// unobservable here -- see the note at those call sites -- and the reason is
+/// this asymmetry rather than anything about the drain.
+///
+/// A private pool capped at one occupied thread is what makes "queued but not
+/// started" deterministic; without it the tick would simply run and neither
+/// arm would mean anything.
+#[test]
+fn disarming_cancels_a_queued_tick_which_a_waits_disarm_does_not() {
+    let mut outcomes = Vec::new();
+    for disarm_first in [false, true] {
+        let pool = ThreadpoolPool::new().expect("create the private pool");
+        pool.set_min_threads(1).expect("one thread minimum");
+        pool.set_max_threads(1).expect("one thread maximum");
+        let mut env = CallbackEnviron::new();
+        env.set_pool(&pool);
+
+        let gate = Arc::new((Mutex::new(false), Condvar::new()));
+        let gate_for_work = Arc::clone(&gate);
+        let occupier = crate::work::ThreadpoolWork::new(
+            move || {
+                let (lock, cvar) = &*gate_for_work;
+                let mut open = lock.lock().unwrap_or_else(|p| p.into_inner());
+                while !*open {
+                    open = cvar.wait(open).unwrap_or_else(|p| p.into_inner());
+                }
+            },
+            Some(&mut env),
+        )
+        .expect("create the occupying work item");
+        occupier.submit();
+
+        let ran = Arc::new(AtomicUsize::new(0));
+        let ran_for_callback = Arc::clone(&ran);
+        let timer = ThreadpoolTimer::new(
+            move |_| {
+                ran_for_callback.fetch_add(1, Ordering::SeqCst);
+            },
+            Some(&mut env),
+        )
+        .expect("create the timer");
+        timer.set_after(Duration::from_millis(1));
+        std::thread::sleep(Duration::from_millis(60));
+        assert_eq!(
+            ran.load(Ordering::SeqCst),
+            0,
+            "the pool's only thread is occupied, so the tick must still be queued"
+        );
+
+        if disarm_first {
+            timer.disarm();
+        }
+        {
+            let (lock, cvar) = &gate.clone() as &(Mutex<bool>, Condvar);
+            *lock.lock().unwrap_or_else(|p| p.into_inner()) = true;
+            cvar.notify_all();
+        }
+        timer.wait();
+        std::thread::sleep(Duration::from_millis(100));
+        outcomes.push(ran.load(Ordering::SeqCst));
+    }
+    assert_eq!(
+        outcomes[0], 1,
+        "without a disarm the queued tick runs, so the setup really does queue one"
+    );
+    assert_eq!(
+        outcomes[1], 0,
+        "with a disarm the queued tick is discarded -- this is the asymmetry with waits, and it \
+         is why draining rather than cancelling cannot be observed on this type"
+    );
+}

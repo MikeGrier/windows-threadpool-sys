@@ -6,7 +6,7 @@ use std::ptr;
 use std::sync::atomic::{AtomicIsize, Ordering};
 use std::time::{Duration, SystemTime};
 
-use windows_sys::Win32::Foundation::{FALSE, TRUE};
+use windows_sys::Win32::Foundation::FALSE;
 use windows_sys::Win32::System::Threading::{
     CloseThreadpoolTimer, CreateThreadpoolTimer, IsThreadpoolTimerSet, PTP_CALLBACK_INSTANCE,
     PTP_TIMER, WaitForThreadpoolTimerCallbacks,
@@ -395,8 +395,14 @@ impl ThreadpoolPeriodicTimer {
     /// Stop the timer and wait until no tick is queued or executing.
     ///
     /// This is the correct teardown order -- stop first, drain second -- and is
-    /// what [`Drop`] performs. Ticks that have not started are dropped rather
-    /// than run.
+    /// what [`Drop`] performs.
+    ///
+    /// The drain no longer cancels: it waits for a queued tick to run. On this
+    /// type that is **unobservable**, because `stop` discards a queued tick the
+    /// way a one-shot timer's disarm does -- pinned by
+    /// `disarming_cancels_a_queued_tick_which_a_waits_disarm_does_not` in the
+    /// one-shot timer's tests. It is the form the rest of the crate uses, and
+    /// the one that stays correct if that ever changes.
     ///
     /// The result holds provided no other thread starts the timer during the
     /// call. `ThreadpoolPeriodicTimer` is `Sync` and the `start*` methods take
@@ -407,13 +413,9 @@ impl ThreadpoolPeriodicTimer {
     /// no re-arm to suppress: [`PeriodicTick::stop`] only ever stops.
     pub fn stop_and_drain(&self) {
         self.stop();
-        // SAFETY: timer is valid for the lifetime of self. A cancelled timer
-        // callback owns no storage, so dropping queued ticks orphans nothing.
-        crate::trace_call!("WaitForThreadpoolTimerCallbacks(cancel)", self.timer, 1, {
-            // SAFETY: timer is valid for the lifetime of self. A cancelled timer
-            // callback owns no storage, so dropping queued ticks orphans nothing.
-            unsafe { WaitForThreadpoolTimerCallbacks(self.timer, TRUE) };
-        });
+        // The stop above is what makes this terminate: with no period left to
+        // re-queue from, the drain has a finite backlog to run out.
+        self.wait();
     }
 
     /// Give up ownership, returning the raw object, its callback context, and

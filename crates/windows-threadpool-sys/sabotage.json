@@ -143,6 +143,54 @@
       ]
     },
     {
+      "name": "the wait's Drop cancels instead of draining",
+      "file": "src/wait.rs",
+      "expect": "caught",
+      "why": "The teardown-drains decision: Drop must run a queued callback, not discard it. This is the exact defect the M26.13 investigation measured -- the cancelling form leaves the default pool unable to make its first worker. Both forms leave the object quiescent, so only a guard asserting the callback RAN can tell them apart, which is why the tests that were already here could not.",
+      "find": [
+        "        // The lock is released before draining: a callback blocked on it would",
+        "        // otherwise never finish, and this wait would never return.",
+        "        self.wait();",
+        "        crate::trace_record!(\"wait\", \"drop-drained\", self.wait);"
+      ],
+      "replace": [
+        "        // The lock is released before draining: a callback blocked on it would",
+        "        // otherwise never finish, and this wait would never return.",
+        "        self.cancel_pending();",
+        "        crate::trace_record!(\"wait\", \"drop-drained\", self.wait);"
+      ]
+    },
+    {
+      "name": "the wait's stop_and_drain cancels instead of draining",
+      "file": "src/wait.rs",
+      "expect": "caught",
+      "why": "The early-discharge method a caller uses to pay the teardown cost at a point they choose. Separate from Drop because they are separate call sites: fixing one and not the other would leave whichever the caller did not reach still discarding work. The method has been named `stop_and_drain` and implemented as a cancel since it was written.",
+      "find": [
+        "        // Drained with the lock released: a callback blocked on it would",
+        "        // otherwise never finish, and this would never return.",
+        "        self.wait();",
+        "        ctx.release_suppression();"
+      ],
+      "replace": [
+        "        // Drained with the lock released: a callback blocked on it would",
+        "        // otherwise never finish, and this would never return.",
+        "        self.cancel_pending();",
+        "        ctx.release_suppression();"
+      ]
+    },
+    {
+      "name": "the timer's disarm is taken to leave a queued tick alone",
+      "file": "src/timer/tests.rs",
+      "expect": "caught",
+      "why": "Pins the asymmetry that decides whether this crate's timer teardown can distinguish draining from cancelling: SetThreadpoolTimer(NULL) discards a queued tick where SetThreadpoolWait(NULL) does not. Inverting the expectation must fail, because the whole argument for leaving the timer's drain form unverified rests on this being measured rather than assumed.",
+      "find": [
+        "        outcomes[1], 0,"
+      ],
+      "replace": [
+        "        outcomes[1], 1,"
+      ]
+    },
+    {
       "name": "CONTROL: a refusal reason is renumbered",
       "file": "src/trace/hook.rs",
       "expect": "survives",

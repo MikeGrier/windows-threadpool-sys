@@ -654,7 +654,7 @@ impl ThreadpoolTimer {
         ctx.suppress_and_disarm();
         // Drained with the lock released: a callback blocked on it would
         // otherwise never finish, and this would never return.
-        self.cancel_pending();
+        self.wait();
         ctx.release_suppression();
     }
 
@@ -719,7 +719,9 @@ impl Drop for ThreadpoolTimer {
         ctx.suppress_and_disarm();
         // The lock is released before draining: a callback blocked on it would
         // otherwise never finish, and this wait would never return.
-        self.cancel_pending();
+        // As in `stop_and_drain`: the disarm above has already discarded any
+        // queued tick, so draining and cancelling are indistinguishable here.
+        self.wait();
         crate::trace_record!("timer", "drop-drained", self.timer);
 
         // SAFETY: no callback can be queued or executing, so the object can be
