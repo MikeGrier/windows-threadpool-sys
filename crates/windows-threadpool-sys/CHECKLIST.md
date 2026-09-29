@@ -128,8 +128,12 @@ shows the cancelling form leaves the default pool unable to make its first worke
   live control in the same session. A clean result would be independent evidence for the mechanism;
   a failing one would say the group close has the same hazard inside a single kernel call, which
   would be worth knowing before `M-T4.2` is trusted as the fix.
-- [ ] **M-T4.6** -- **Re-measure the ring reproducer against the drained build.** The 20000-run
-  arms were a hand-rolled model of the teardown, not this crate's code. Confirm the real
-  `EventDelivery` path reaches 0 where it currently reaches ~10, with a live control in the same
-  session, before `M26.9` is called closed in
-  [windows-ioring-sys](../windows-ioring-sys/UNRESOLVED-TEST-FAILURES.md).
+- [x] **M-T4.6** -- **Done 2026-09-29: the fix holds on the real path.** The 20000-run arms were a
+  hand-rolled model of the teardown, not this crate's code, so the committed change had to be
+  measured against `EventDelivery` itself. Two builds differing only in `ThreadpoolWait`'s teardown,
+  same reproducer, same session: the reverted (cancel) build reproduces, the committed (drain) build
+  does not over seven times the runs. Counts and provenance in
+  [measurements/2026-09-29-the-fix-on-the-real-path/](../windows-ioring-sys/measurements/2026-09-29-the-fix-on-the-real-path/README.md).
+  Note what it does *not* establish: it excludes "the rate is unchanged", not "the rate is zero",
+  and it is not a root cause. `M26.9` may be called closed on this; the open question is why the
+  close-behind-disarm stalls the pool at all.

@@ -306,6 +306,7 @@ measurement is linked.
 | the disarm alone poisons | ruled out -- disarmed and never closed, 0 in 15000 cumulative ([closing-too-soon](measurements/2026-09-28-closing-too-soon-after-the-disarm/README.md)) |
 | the stall is unavoidable once the trigger runs | ruled out -- **two teardowns prevent it**: a 1ms gap between the disarm and the close, and a true drain in place of a cancel, each 0 in 20000 against a control's 10 |
 | cancelling a pending callback is as good as draining it | ruled out -- `WaitForThreadpoolWaitCallbacks(TRUE)` still poisons (10 in 20000); the same call with FALSE does not (0 in 20000) |
+| the drain result is an artifact of the hand-rolled model | ruled out -- the same comparison on the real `EventDelivery` path, two builds differing only in `ThreadpoolWait`'s teardown: the cancel build reproduces, the drain build does not over seven times the runs ([the-fix-on-the-real-path](measurements/2026-09-29-the-fix-on-the-real-path/README.md)) |
 | the 1ms sleep helps by delaying the trigger | ruled out -- the same sleep placed *after* the whole teardown still fails; the gap must sit between the disarm and the close |
 | it happens off the default process pool | never observed -- 0 in 12000 runs across three private-pool arms |
 
