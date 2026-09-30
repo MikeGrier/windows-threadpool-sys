@@ -781,6 +781,92 @@ pub(crate) fn counts() -> bool {
     read_any
 }
 
+/// `IoCompletionBasicInformation`, whose whole content is the queue depth.
+const IO_COMPLETION_BASIC_INFORMATION: u32 = 0;
+
+type QueryPort =
+    unsafe extern "system" fn(usize, u32, *mut core::ffi::c_void, u32, *mut u32) -> i32;
+
+/// How much work is sitting on each completion port in this process, undelivered.
+///
+/// **This is the quantity that decides whether the pool creates a worker.** A
+/// factory's create test approves when its completion port has work outstanding,
+/// so a stalled pool whose port is non-empty was entitled to a thread and did not
+/// get one -- while an empty port means the factory is behaving correctly on the
+/// information it has and the fault lies earlier, in delivery. Those two readings
+/// send the investigation in opposite directions, and nothing measured so far
+/// separates them.
+///
+/// Found the same way as the factories, and for the same reason: the default
+/// pool exposes no way to reach its port, but `NtQueryIoCompletion` succeeds
+/// only on a completion port and returns an ordinary error on anything else. The
+/// query reports the depth **without dequeuing**, so it cannot consume the very
+/// packet whose presence is the question -- which matters here more than usual,
+/// given how much of this investigation has been spent on instruments that
+/// repaired the fault they were measuring.
+///
+/// Every port is recorded with its handle, never just the deepest or the first:
+/// a process holding a private pool has more than one, and choosing between them
+/// here would be interpreting rather than measuring.
+pub(crate) fn port_depths() -> bool {
+    scan_ports(|depth, handle| record(TARGET, "port-depth", depth as u64, handle as u64))
+}
+
+/// The scan itself, with the per-port action left to the caller.
+///
+/// Split out so the guard can collect what the capture records, rather than
+/// testing a reimplementation of it. A probe that silently found nothing would
+/// be indistinguishable from a genuinely empty port, and "empty" is one of the
+/// two readings this instrument exists to separate -- so the thing under test
+/// has to be this function and not a copy.
+fn scan_ports(mut each: impl FnMut(u32, usize)) -> bool {
+    /// Highest handle tried. Matches the factory scan's ceiling, for the same
+    /// reason -- handles are allocated low and densely in a test process.
+    const CEILING: usize = 4096;
+
+    let Some(raw) = ntdll_proc("NtQueryIoCompletion") else {
+        record(TARGET, "port-unavailable", 0, 0);
+        return false;
+    };
+    // SAFETY: the name resolved in `ntdll` and this is its documented shape.
+    let query: QueryPort = unsafe { std::mem::transmute::<usize, QueryPort>(raw) };
+
+    let mut found = 0_u64;
+    let mut candidate = 4_usize;
+    while candidate <= CEILING {
+        let mut depth = 0_u32;
+        let mut returned = 0_u32;
+        // SAFETY: `depth` is a live, correctly sized buffer for this class. An
+        // unusable candidate is reported as an error status, not UB.
+        let status = unsafe {
+            query(
+                candidate,
+                IO_COMPLETION_BASIC_INFORMATION,
+                std::ptr::from_mut(&mut depth).cast(),
+                size_of::<u32>() as u32,
+                &mut returned,
+            )
+        };
+        if status >= 0 {
+            found += 1;
+            each(depth, candidate);
+        }
+        candidate += 4;
+    }
+    record(TARGET, "ports-seen", found, 0);
+    found != 0
+}
+
+/// Every completion port the scan can see, as `(depth, handle)`.
+///
+/// For the guard, which needs values to assert on where a capture needs records.
+#[cfg(test)]
+pub(crate) fn probe_ports() -> Vec<(u32, usize)> {
+    let mut seen = Vec::new();
+    scan_ports(|depth, handle| seen.push((depth, handle)));
+    seen
+}
+
 /// Record one factory's counters. Every record carries the handle in its
 /// second slot, so a capture from a process holding more than one factory can
 /// be read apart rather than averaged into nonsense.

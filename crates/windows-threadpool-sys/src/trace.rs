@@ -491,6 +491,18 @@ mod imp {
     pub fn worker_factory_counts() -> bool {
         super::hook::counts()
     }
+
+    /// Record how much undelivered work sits on each completion port in this
+    /// process.
+    ///
+    /// The companion to [`worker_factory_counts`], and the one that says whether
+    /// a stalled factory was *entitled* to a worker: its create test approves
+    /// when the port has work outstanding. Reads the depth without dequeuing, so
+    /// observing cannot consume the packet whose presence is the question.
+    /// Returns whether any port was found.
+    pub fn completion_port_depths() -> bool {
+        super::hook::port_depths()
+    }
 }
 
 #[cfg(not(feature = "trace"))]
@@ -523,9 +535,17 @@ mod imp {
     pub fn worker_factory_counts() -> bool {
         false
     }
+    /// Reports that this build cannot read completion-port depths, which is a
+    /// different finding from a build that read them and saw nothing.
+    pub fn completion_port_depths() -> bool {
+        false
+    }
 }
 
-pub use imp::{clear, dump, enabled, observe_exceptions, record, wants, worker_factory_counts};
+pub use imp::{
+    clear, completion_port_depths, dump, enabled, observe_exceptions, record, wants,
+    worker_factory_counts,
+};
 
 /// How many records so far carry this target and this event.
 ///

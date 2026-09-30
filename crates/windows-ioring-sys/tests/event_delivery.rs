@@ -303,6 +303,20 @@ fn recv_one(
             windows_threadpool_sys::trace_record!("postmortem", "outstanding-begin");
             let at_failure = outstanding();
             windows_threadpool_sys::trace_record!("postmortem", "outstanding-read", at_failure);
+            // M-T5.1. Read the factory's own counters and, with them, how much
+            // undelivered work is sitting on each completion port -- the
+            // quantity the factory's create test actually consults.
+            //
+            // **Both must happen before `pool_liveness`**, and the ordering is
+            // the whole measurement rather than a tidiness preference: the
+            // liveness probe submits a work item, and submitting work is the
+            // one action measured to release this stall every time. Asking
+            // afterwards would describe a pool that had already been repaired
+            // by the question.
+            //
+            // Neither call dequeues anything, so reading is not consuming.
+            windows_threadpool_sys::trace::worker_factory_counts();
+            windows_threadpool_sys::trace::completion_port_depths();
             // The pool-liveness probe runs first, while the process is still
             // in the failed state -- asking afterwards would describe a
             // different moment.
@@ -772,8 +786,92 @@ fn new_succeeds_and_the_ring_stays_reachable_for_pushes() {
     assert!(info.submission_queue_size > 0);
 }
 
+/// EXPERIMENT (M-T5.1): the trigger, hand-rolled from raw Win32.
+///
+/// `EventDelivery` no longer reproduces the stall -- M-T4.2 made its teardown
+/// drain, and a drain never asks the kernel to remove a delivered packet. This
+/// rebuilds the pre-fix teardown so the fault can still be provoked on demand.
+///
+/// `hand-spin-3us` is the arm to run: at about 4.15 failures per thousand it is
+/// roughly five times the no-gap rate, so a few thousand processes yield enough
+/// stalls to read. `hand-control` is the pre-M-T4.2 teardown, kept as the live
+/// control.
+fn hand_rolled_trigger(variant: &str) {
+    use std::os::windows::io::AsRawHandle;
+    use std::time::Instant;
+    use windows_sys::Win32::System::Threading::{
+        CloseThreadpoolWait, CreateThreadpoolWait, PTP_CALLBACK_INSTANCE, PTP_WAIT, SetEvent,
+        SetThreadpoolWait, WaitForThreadpoolWaitCallbacks,
+    };
+
+    unsafe extern "system" fn noop(
+        _instance: PTP_CALLBACK_INSTANCE,
+        _context: *mut std::ffi::c_void,
+        _wait: PTP_WAIT,
+        _result: u32,
+    ) {
+    }
+
+    // (make the cancel call, microseconds to spin before the close)
+    let (cancel, spin_us): (bool, u64) = match variant {
+        "hand-nocancel" => (false, 0),
+        v if v.starts_with("hand-spin-") && v.ends_with("us") => (
+            false,
+            v["hand-spin-".len()..v.len() - 2]
+                .parse()
+                .expect("hand-spin-<N>us: N must parse"),
+        ),
+        _ => (true, 0),
+    };
+
+    let mut ring = IoRing::new(8, 8).expect("create ring");
+    let event = ring
+        .completion_event()
+        .expect("attach the completion event");
+    let handle = event.as_raw_handle();
+
+    // SAFETY: a no-op callback of the documented shape, default environment.
+    let wait = unsafe { CreateThreadpoolWait(Some(noop), std::ptr::null_mut(), std::ptr::null()) };
+    assert!(wait != 0, "create the wait");
+    // SAFETY: `wait` is live and `handle` is an event this thread owns.
+    unsafe { SetThreadpoolWait(wait, handle, std::ptr::null()) };
+    // SAFETY: a live event handle. Satisfies the wait, so a callback is owed
+    // and its packet is queued to the pool's completion port.
+    unsafe { SetEvent(handle) };
+
+    // SAFETY: `wait` is live and armed; a null target disarms it. This asks the
+    // kernel to cancel *without* removing an already-delivered packet, so it
+    // leaves the packet queued.
+    unsafe { SetThreadpoolWait(wait, std::ptr::null_mut(), std::ptr::null()) };
+
+    let t0 = Instant::now();
+    if cancel {
+        // SAFETY: `wait` is live and disarmed. TRUE removes the queued packet.
+        unsafe { WaitForThreadpoolWaitCallbacks(wait, 1) };
+    }
+    while t0.elapsed() < Duration::from_micros(spin_us) {
+        std::hint::spin_loop();
+    }
+    let gap_us = t0.elapsed().as_micros();
+
+    // SAFETY: `wait` is live and no longer armed. The close removes the queued
+    // packet, which is the action under investigation.
+    unsafe { CloseThreadpoolWait(wait) };
+    // Proof on every run that the arm dispatched and cost what it should. An
+    // experiment was once voided entirely by an edit that silently failed to
+    // apply, leaving every arm running the same code.
+    eprintln!("hand_rolled_trigger: variant={variant} cancel={cancel} gap_us={gap_us}");
+    drop(event);
+    drop(ring);
+}
+
 #[test]
 fn dropping_with_nothing_outstanding_does_not_hang() {
+    let variant = std::env::var("IORING_TRIGGER").unwrap_or_default();
+    if variant.starts_with("hand-") {
+        hand_rolled_trigger(&variant);
+        return;
+    }
     let ring = IoRing::new(8, 8).expect("create ring");
     let delivery =
         EventDelivery::new(ring, |_completion, _held| {}, None).expect("wire event delivery");

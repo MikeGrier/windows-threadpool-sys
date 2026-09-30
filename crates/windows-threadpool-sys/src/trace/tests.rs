@@ -775,3 +775,63 @@ fn hooking_the_wait_registration_observes_the_already_signalled_flag() {
          been entered -- if it was not, the registration took a path this facility cannot see"
     );
 }
+
+/// The completion-port scan finds a port and reports its depth correctly.
+///
+/// **The positive control for `M-T5.1`.** That measurement turns on reading a
+/// stalled pool's completion-port depth, and its two outcomes send the
+/// investigation in opposite directions -- so the failure that matters is not a
+/// wrong number but a silent one. A scan that resolved nothing, or that found no
+/// port, would report exactly what a genuinely empty port reports, and the
+/// conclusion drawn from it would be the opposite of the truth.
+///
+/// So this builds a port whose depth is *known* rather than inferred, and
+/// requires the scan to agree. Both halves are asserted, because they fail
+/// differently: that a port is found at all, and that the depth read back is the
+/// number of packets posted. Asserting only the first would pass on a misread
+/// layout; asserting only the second would pass vacuously on an empty scan.
+///
+/// The depth is checked against an exact count rather than a range. This process
+/// holds other ports -- the default pool has one, and it is deliberately not
+/// disturbed here -- so the assertion is that *some* port reports exactly what
+/// was posted, not that every port does.
+#[cfg(feature = "trace")]
+#[test]
+fn the_port_scan_finds_a_completion_port_and_reads_its_depth() {
+    use super::hook::probe_ports;
+    use windows_sys::Win32::Foundation::{CloseHandle, HANDLE, INVALID_HANDLE_VALUE};
+    use windows_sys::Win32::System::IO::{CreateIoCompletionPort, PostQueuedCompletionStatus};
+
+    /// Packets posted before the scan. More than one so the guard pins the
+    /// depth rather than a boolean, and an odd value unlikely to coincide with
+    /// whatever another port in the process happens to hold.
+    const POSTED: u32 = 7;
+
+    // SAFETY: the documented way to create a standalone completion port.
+    let port: HANDLE =
+        unsafe { CreateIoCompletionPort(INVALID_HANDLE_VALUE, std::ptr::null_mut(), 0, 1) };
+    assert!(!port.is_null(), "create a completion port");
+
+    for i in 0..POSTED {
+        // SAFETY: `port` is a live completion port; the packet carries no
+        // overlapped pointer, which a queue depth does not interpret.
+        let ok = unsafe { PostQueuedCompletionStatus(port, i, 0, std::ptr::null_mut()) };
+        assert!(ok != 0, "post packet {i}");
+    }
+
+    let seen = probe_ports();
+    // SAFETY: nothing else holds this handle and the scan does not retain it.
+    unsafe { CloseHandle(port) };
+
+    assert!(
+        !seen.is_empty(),
+        "the scan must find at least one completion port in a process that just made one; \
+         finding none is what a silently-broken probe reports, and it reads identically to \
+         an empty port"
+    );
+    assert!(
+        seen.iter().any(|(depth, _)| *depth == POSTED),
+        "no port reported the {POSTED} packets that were posted to one of them, so the depth \
+         is not being read correctly: saw {seen:?}"
+    );
+}

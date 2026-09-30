@@ -152,25 +152,21 @@ queued callback must have run" (refuted by a graded gap sweep) and "a creation-i
 stuck" (refuted by a 2026-09-27 capture recording that counter as 0). Treat any third with the
 same suspicion, and look for a disconfirming measurement before building on it.
 
-- [ ] **M-T5.1** -- **Measure the completion port's queue depth during a stall.** The decisive next
-  measurement, and it needs no elevation, no reboot and no kernel debugger. A worker factory makes
-  a thread when its completion port has work outstanding, so the port's queue depth is the quantity
-  that decides whether the stalled pool *should* have created one. Read it from user mode with
-  `NtQueryIoCompletion(handle, IoCompletionBasicInformation, ...)`, which reports the depth without
-  dequeuing, so the observation does not disturb what it measures. Getting the handle needs no new
-  discovery work: the completion port is an argument to `NtCreateWorkerFactory`, and this crate
-  already hooks that surface. Run it on the `hand-spin-3us` arm, whose rate is about 4.15 per
-  thousand against a baseline of 0.87, so a few thousand runs suffice rather than tens of
-  thousands.
-
-  **The two outcomes send the investigation in opposite directions**, which is what makes this
-  worth doing first. A depth above zero means the victims' work is queued and undispatched while
-  the factory reports itself willing and idle -- so the factory was never asked, and the question
-  becomes what should have asked it. A depth of zero means the work is not there at all, the
-  factory is behaving correctly on the information it has, and the fault is upstream in delivery.
+- [x] **M-T5.1** -- **Done 2026-09-30: the work is queued and the pool is idle beside it.** Depth
+  **2** on the pool under test, in 15 captures of 15 -- exactly the two victims -- while that pool
+  reports 0 workers, `may_create` 1 and `create_in_progress` 0. So the fault is **not** in delivery:
+  the packet reaches the port, the factory was entitled to make a thread, and it did not. Also kills
+  the benign reading of those counters, which had been consistent with a factory correctly seeing no
+  work. Artifact:
+  [the-work-is-queued-and-the-pool-is-idle](../windows-ioring-sys/measurements/2026-09-30-the-work-is-queued-and-the-pool-is-idle/README.md).
+  The instrument (`trace::completion_port_depths`) has a sabotage-verified positive control, which
+  mattered here because a silently broken probe reports "depth 0" -- the finding that would have
+  sent the investigation the other way.
 
 - [ ] **M-T5.2** -- **Establish what prompts a factory to create a worker after work is queued.**
-  Gated on `M-T5.1` returning a non-zero depth. Our own measurements already bound the answer: a
+  **Ungated 2026-09-30: `M-T5.1` returned depth 2, so this is now the live question** -- the create
+  test would approve, because the port is non-empty, so the stall is not a decision to decline. It
+  is the absence of the question. Our own measurements already bound the answer: a
   healthy run creates a worker 0.24-0.31ms after the delivery is armed, so something on the
   queueing path does prompt it; a stalled run never does, and the only call ever observed to
   release the stall is `NtReleaseWorkerFactoryWorker` from the work-submit path, which reaches the
@@ -259,9 +255,10 @@ same suspicion, and look for a disconfirming measurement before building on it.
   2-6us race at about one run in a thousand, so a configuration change that alters kernel timing
   could mask it while appearing to test it. A clean result under debug boot is not evidence.
 
-- [ ] **M-T5.5** -- **Re-establish the baseline after the pending Windows update.** The analysis so
-  far is of specific builds -- ntdll 10.0.26100.9278 and ntoskrnl 10.0.26100.9444 -- and an update
-  was being installed when this milestone was opened. Internal layouts are unstable across builds
-  and the thread-pool code may differ. Before comparing any earlier rate against a new one,
-  re-measure the control arm and record the new build numbers. The committed disassembly listings
-  name the build they came from precisely so that this comparison is possible.
+- [x] **M-T5.5** -- **Done 2026-09-30: the update moved the kernel, and nothing else.** ntoskrnl
+  went 10.0.26100.9444 -> **10.0.26100.9457**; ntdll is **unchanged** at 10.0.26100.9278, so the
+  committed disassembly still describes the shipped binary. Every worker-factory routine the
+  analysis rests on is still present in 9457, and the reproducer's rate is unchanged (15 stalls in
+  8400 on `hand-spin-3us`, against the 4.15 per thousand measured before the update). Later work is
+  measured against 9457.
+
