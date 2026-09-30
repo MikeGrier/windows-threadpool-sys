@@ -137,3 +137,96 @@ shows the cancelling form leaves the default pool unable to make its first worke
   Note what it does *not* establish: it excludes "the rate is unchanged", not "the rate is zero",
   and it is not a root cause. `M26.9` may be called closed on this; the open question is why the
   close-behind-disarm stalls the pool at all.
+## M-T5 -- Why the pool stops making workers
+
+Opened 2026-09-30. `M-T4` shipped a fix whose correctness is structural rather than statistical --
+the drain cannot reach the primitive that does the damage, so it holds however the timing falls --
+but the *cause* is still open. What is established is in
+[what-the-disassembly-says](../windows-ioring-sys/measurements/2026-09-30-what-the-disassembly-says/README.md)
+and [STALL-TIMELINE.md](../windows-ioring-sys/STALL-TIMELINE.md): all four teardown paths converge
+on `NtCancelWaitCompletionPacket`, differing only in whether they ask it to remove an
+already-delivered packet, and the drain never calls it at all.
+
+Two hypotheses have already been killed by evidence that existed before they were proposed -- "the
+queued callback must have run" (refuted by a graded gap sweep) and "a creation-in-progress gate is
+stuck" (refuted by a 2026-09-27 capture recording that counter as 0). Treat any third with the
+same suspicion, and look for a disconfirming measurement before building on it.
+
+- [ ] **M-T5.1** -- **Measure the completion port's queue depth during a stall.** The decisive next
+  measurement, and it needs no elevation, no reboot and no kernel debugger. A worker factory makes
+  a thread when its completion port has work outstanding, so the port's queue depth is the quantity
+  that decides whether the stalled pool *should* have created one. Read it from user mode with
+  `NtQueryIoCompletion(handle, IoCompletionBasicInformation, ...)`, which reports the depth without
+  dequeuing, so the observation does not disturb what it measures. Getting the handle needs no new
+  discovery work: the completion port is an argument to `NtCreateWorkerFactory`, and this crate
+  already hooks that surface. Run it on the `hand-spin-3us` arm, whose rate is about 4.15 per
+  thousand against a baseline of 0.87, so a few thousand runs suffice rather than tens of
+  thousands.
+
+  **The two outcomes send the investigation in opposite directions**, which is what makes this
+  worth doing first. A depth above zero means the victims' work is queued and undispatched while
+  the factory reports itself willing and idle -- so the factory was never asked, and the question
+  becomes what should have asked it. A depth of zero means the work is not there at all, the
+  factory is behaving correctly on the information it has, and the fault is upstream in delivery.
+
+- [ ] **M-T5.2** -- **Establish what prompts a factory to create a worker after work is queued.**
+  Gated on `M-T5.1` returning a non-zero depth. Our own measurements already bound the answer: a
+  healthy run creates a worker 0.24-0.31ms after the delivery is armed, so something on the
+  queueing path does prompt it; a stalled run never does, and the only call ever observed to
+  release the stall is `NtReleaseWorkerFactoryWorker` from the work-submit path, which reaches the
+  factory by a different route than queued work does. That asymmetry is the thing to explain.
+
+  **What the create decision looks like, and why it narrows the search.** The relevant routines are
+  named in the public symbols -- `ExpWorkerFactoryCheckCreate`, `ExpWorkerFactoryWantsToCreate`,
+  `ExpWorkerFactoryCreateThread`, `ExpSetWorkerFactoryDeferredCreateTimer`,
+  `ExpWorkerFactoryManagerThread` -- alongside globals for a creation state, a deferred-creation
+  list, and short, medium and long deferral timeouts. Their structure is readable by disassembly
+  (the public PDB carries these names but no struct layouts, so field *names* are not available and
+  nothing below depends on one).
+
+  Three properties matter for this investigation:
+
+  1. **The create test has two independent triggers.** One is work outstanding on the completion
+     port; the other is a count of user-mode release requests. `NtReleaseWorkerFactoryWorker`
+     arrives on the second. Removing a delivered packet zeroes the first and leaves the second
+     untouched -- which is precisely the asymmetry measured between queued work (never recovers)
+     and the submit (always recovers).
+  2. **A one-at-a-time gate is tested before either trigger**, so a creation believed to be in
+     flight suppresses all others. That was the obvious wedge and it is **already refuted**: the
+     2026-09-27 captures record that counter as 0 in stalled processes.
+  3. **The deferral path is built to self-heal.** Each declining policy escalates a retry across
+     two deferrals and is then skipped outright, forcing a create. So a factory cannot be wedged by
+     a policy that keeps saying no -- which is what makes "the factory is never asked again" the
+     remaining shape, and why `M-T5.1`'s queue depth is the measurement that matters.
+
+  Verify this structure against the shipped binary before building on it, rather than carrying it
+  forward as an assumption: it was read once, and `M-T5.5` may invalidate it.
+
+- [ ] **M-T5.3** -- **Is the hazard window anchored to the queueing or to the disarm?** A run was
+  built and started for this and stopped at 45% to free the machine; redo it when a quiet machine
+  is available. Two arm families place the packet removal the same distance after `SetEvent` while
+  putting the delay on opposite sides of the disarm: `SetEvent -> disarm -> spin N -> close`
+  against `SetEvent -> spin N -> disarm -> close`. Coinciding curves say the window is anchored to
+  the queueing; a flat second family says it is anchored to the disarm. Both families were verified
+  to place the removal at matching times (4-5us, 12us, 32us) before the run started, so the arms
+  are ready to rebuild.
+
+- [ ] **M-T5.4** -- **RECORDED AS BLOCKED, NOT DEFERRED: local kernel debugging is unavailable on
+  this machine.** Reading the factory's own state directly would settle `M-T5.2` outright, and
+  `kd -kl` is the tool for it. It is blocked by a **firmware** condition rather than a missing
+  step: `bcdedit -debug on` fails with "The value is protected by Secure Boot policy", and the
+  machine reports Secure Boot enabled with VBS running and Credential Guard active. Enabling it
+  needs Secure Boot disabled in UEFI, which is a real security downgrade and may be policy
+  forbidden. Two further cautions if it is ever revisited. Local kernel debugging is **read-only**,
+  so it cannot set the kernel's thread-pool debug-print mask (the symbol exists, and the component
+  id is 84) -- capturing that narration would additionally need a registry filter and a
+  kernel-print capture. And **boot-debug mode perturbs what is being measured**: the signal is a
+  2-6us race at about one run in a thousand, so a configuration change that alters kernel timing
+  could mask it while appearing to test it. A clean result under debug boot is not evidence.
+
+- [ ] **M-T5.5** -- **Re-establish the baseline after the pending Windows update.** The analysis so
+  far is of specific builds -- ntdll 10.0.26100.9278 and ntoskrnl 10.0.26100.9444 -- and an update
+  was being installed when this milestone was opened. Internal layouts are unstable across builds
+  and the thread-pool code may differ. Before comparing any earlier rate against a new one,
+  re-measure the control arm and record the new build numbers. The committed disassembly listings
+  name the build they came from precisely so that this comparison is possible.
