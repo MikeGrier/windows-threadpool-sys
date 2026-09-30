@@ -309,6 +309,22 @@ measurement is linked.
 | the drain result is an artifact of the hand-rolled model | ruled out -- the same comparison on the real `EventDelivery` path, two builds differing only in `ThreadpoolWait`'s teardown: the cancel build reproduces, the drain build does not over seven times the runs ([the-fix-on-the-real-path](measurements/2026-09-29-the-fix-on-the-real-path/README.md)) |
 | the 1ms sleep helps by delaying the trigger | ruled out -- the same sleep placed *after* the whole teardown still fails; the gap must sit between the disarm and the close |
 | it happens off the default process pool | never observed -- 0 in 12000 runs across three private-pool arms |
+| the gap works by being a timer wait, or by engaging the scheduler | ruled out -- a timer sleep, a sleep at the finest timer resolution, a spin on the yield syscall and a spin on the pause instruction all reach 0 in 10002 each, against two controls at the same rate ([what-the-gap-is-made-of](measurements/2026-09-29-what-the-gap-is-made-of/README.md)) |
+| the gap and the cancel call are the same effect | ruled out -- a 2x2 over cancel x gap: neither alone moves the rate off the control's, and only the cell with both reaches zero |
+| the pool is poisoned when the wait is closed without its queued callback having run | ruled out, and it had fit every cell of that 2x2 and been *directly observed* rather than inferred -- but it predicts a graded rate, and a gap that leaves the callback pending in most of its runs still gives 0 in 10002. Whether the callback had run was a correlate of elapsed time, which a one-cell-per-corner factorial cannot distinguish from a cause |
+| the gap has to cover the queued callback's dispatch latency | ruled out -- 30us is already enough at n = 20004, and in that arm the callback runs in about one run per thousand |
+| the cancel call can be made safe by waiting long enough afterwards | ruled out -- with the cancel call still made, 1ms and 10ms both fail at the control's rate. That path is immune to time over four orders of magnitude |
+| dropping the cancel call is sufficient on its own | ruled out -- no cancel and no gap fails at the control's rate, 22 in 20004 against 16 |
+
+**The teardown rule, as measured.** A teardown is safe if and only if it makes no
+cancel call *and* leaves a gap of at least a few tens of microseconds before the
+close; either condition alone fails
+([what-the-gap-is-made-of](measurements/2026-09-29-what-the-gap-is-made-of/README.md)).
+The drain that `M-T4.2` ships satisfies both. What is still unexplained is why
+either condition exists -- a close a microsecond after a disarm poisons and one
+thirty microseconds after does not, which has the shape of something needing to
+settle, while the cancel call's immunity to time has the shape of a state left
+behind rather than a race.
 
 **What is left is one question**, and everything outside the kernel is now
 accounted for. In a healthy run the event signals and the kernel makes a worker

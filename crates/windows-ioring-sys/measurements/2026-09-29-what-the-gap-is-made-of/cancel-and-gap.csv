@@ -1,0 +1,5 @@
+"arm","runs","fail","per_1000","ms_per_run"
+"hand-cancel-spin","10002","11","1.1","617.8"
+"hand-control","10002","9","0.9","610.7"
+"hand-nocancel","10002","6","0.6","609.6"
+"hand-spinpause","10002","0","0","612.6"
