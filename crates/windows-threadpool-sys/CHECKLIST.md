@@ -275,38 +275,23 @@ same suspicion, and look for a disconfirming measurement before building on it.
   measured against 9457.
 
 
-- [ ] **M-T5.6** -- **Post a packet to the stalled pool's completion port and see whether a worker
-  appears.** The direct next measurement after `M-T5.2`'s narrowing, and it is reachable from user
-  mode with what is already built: the port handle comes from the same scan
-  `completion_port_depths` uses, and the factory's worker count is already captured.
+- [x] **M-T5.6** -- **Done 2026-09-30: arrivals no longer reach the factory.** The posted packet
+  lands -- depth 2 -> 4, so the port accepts it -- and **no worker is created**, in 13 captures of
+  13. The same poke on a healthy factory in the same starting position takes it from 0 workers to 1
+  and consumes the packet, so the stimulus is valid and the null result is a property of the
+  stalled process. Artifact:
+  [arrivals-no-longer-reach-the-factory](../windows-ioring-sys/measurements/2026-09-30-arrivals-no-longer-reach-the-factory/README.md).
 
-  **Why it discriminates.** Two routes reach the factory's create decision: work outstanding on the
-  port, and a count of user-mode release requests. `NtReleaseWorkerFactoryWorker` arrives on the
-  second and is measured to release the stall **every** time; queued work arrives on the first and
-  never does. That asymmetry is currently the whole remaining mystery. Posting an ordinary packet
-  exercises the first route on demand, in a process already stalled:
-  - **A worker appears** -- the insert-to-factory link is intact, and the fault is specific to how
-    the victims' packets were inserted rather than to the link itself.
-  - **No worker appears** -- the link is severed for this port. Work can arrive and nothing will
-    ever notice, which localises the fault precisely and explains why only the release path
-    recovers.
+  **This answers `M-T5.2` and dissolves the standing asymmetry.** Port healthy, factory healthy,
+  and the notification between them persistently gone -- a packet posted by hand five seconds into
+  the stall is ignored exactly as the originals were, so nothing was special about the victims'
+  inserts. `NtReleaseWorkerFactoryWorker` recovers the stall every time because it reaches the
+  create decision by the other route, which does not depend on the severed link. The fault's shape
+  is now: a per-port, persistent loss of the arrival-to-factory notification, caused by removing a
+  delivered packet a few microseconds after it was queued, on a port whose factory has no threads
+  yet. Why that link breaks is inside the kernel and out of reach here.
 
-  Measure by reading the factory's worker count before and after, rather than by watching for a
-  callback: a raw packet is not a real work item, so what matters is whether a **thread gets
-  created**, not whether anything sensible runs. Give it a bounded wait and record the count either
-  way, so "asked and nothing happened" is distinguishable from "never asked".
-
-  Two cautions. The post must happen **after** the existing port-depth and factory reads and
-  **before** the liveness probe, for the same reason the current ordering exists -- the probe
-  submits work and repairs the stall. And a posted packet may be dispatched as garbage by a worker
-  that does appear; that is acceptable in a process which has already failed and is about to panic,
-  but it means this arm must stay behind its own environment switch rather than running by default.
-
-- [ ] **M-T5.7** -- **Emit the rest of the factory layout before reasoning further.** `M-T5.2` was
-  narrowed by emitting two flags that had been decoded and discarded since the hooks were written,
-  and that is now the third time a refutation came from data already in hand. The capture still
-  decodes and drops several fields: the retry and idle timeouts, the infinite-wait goal, the start
-  routine and parameter, the process id, and the stack reserve and commit. None is obviously
-  interesting, which is exactly what was said about the deferred-create flags. Emit them all, once,
-  and stop guessing which will matter. Cheap: one record each, no new instrument, no new run --
-  they land in the next capture that happens for another reason.
+- [x] **M-T5.7** -- **Done 2026-09-30.** The retry timeout, infinite-wait goal, start routine and
+  parameter, process id, and stack reserve/commit are now emitted alongside the rest. None proved
+  decisive this time -- `M-T5.6` answered the question first -- but they are in every future
+  capture at the cost of a handful of records, which is the point: the guessing is over.

@@ -503,6 +503,18 @@ mod imp {
     pub fn completion_port_depths() -> bool {
         super::hook::port_depths()
     }
+
+    /// Post one packet to every completion port that already has work on it, and
+    /// report how many were poked.
+    ///
+    /// Asks whether an ordinary arrival wakes a stalled pool, which is the one
+    /// route to a factory's create decision that has never been seen to recover
+    /// this stall. **Destructive**: a posted packet is not a real work item, so
+    /// a worker that appears may dispatch it as garbage. Only for a process that
+    /// has already failed, and never on a path that runs by default.
+    pub fn poke_completion_ports(min_depth: u32) -> u32 {
+        super::hook::poke_ports_with_work(min_depth)
+    }
 }
 
 #[cfg(not(feature = "trace"))]
@@ -540,11 +552,15 @@ mod imp {
     pub fn completion_port_depths() -> bool {
         false
     }
+    /// Does nothing in this build: there is no scan to find ports with.
+    pub fn poke_completion_ports(_min_depth: u32) -> u32 {
+        0
+    }
 }
 
 pub use imp::{
-    clear, completion_port_depths, dump, enabled, observe_exceptions, record, wants,
-    worker_factory_counts,
+    clear, completion_port_depths, dump, enabled, observe_exceptions, poke_completion_ports,
+    record, wants, worker_factory_counts,
 };
 
 /// How many records so far carry this target and this event.

@@ -981,5 +981,102 @@ fn read_one(query: Query, handle: usize) -> bool {
         (info.idle_timeout / -10_000) as u64,
         (info.timeout / -10_000) as u64,
     );
+    // M-T5.7. Everything else the layout decodes.
+    //
+    // **Emitted without knowing which will matter, which is the point.** Three
+    // hypotheses have now been refuted by fields that were already being read
+    // and discarded, the last of them a pair that had looked no more promising
+    // than these do. Guessing which field is interesting has a worse record here
+    // than emitting all of them once and never guessing again. The cost is a
+    // handful of records in a capture that only happens when something has
+    // already gone wrong.
+    record(
+        TARGET,
+        "counts-retry-timeout-ms",
+        (info.retry_timeout / -10_000) as u64,
+        handle as u64,
+    );
+    record(
+        TARGET,
+        "counts-infinite-wait-goal",
+        info.infinite_wait_goal as u64,
+        handle as u64,
+    );
+    record(
+        TARGET,
+        "counts-start-routine",
+        info.start_routine as u64,
+        info.start_parameter as u64,
+    );
+    record(
+        TARGET,
+        "counts-process-id",
+        info.process_id as u64,
+        handle as u64,
+    );
+    record(
+        TARGET,
+        "counts-stack",
+        info.stack_reserve as u64,
+        info.stack_commit as u64,
+    );
     true
+}
+
+/// Post one packet to every completion port that already has work on it, and
+/// report how many were poked.
+///
+/// **`M-T5.6`: does an ordinary arrival wake a stalled pool?** Two routes reach
+/// a factory's create decision -- work outstanding on its completion port, and a
+/// count of user-mode release requests. `NtReleaseWorkerFactoryWorker` arrives on
+/// the second and is measured to recover this stall every time; queued work
+/// arrives on the first and never does. Posting exercises the first route on
+/// demand, inside a process that is already stalled, and either answer localises
+/// the fault:
+///
+/// - a worker appears, and the arrival-to-factory link is intact, so the fault is
+///   specific to how the victims' packets were inserted;
+/// - no worker appears, and that link is severed for this port -- work can arrive
+///   and nothing will ever notice.
+///
+/// `min_depth` selects which ports to poke, and both settings are needed:
+///
+/// - **1** for the stalled case, so only the port holding the stuck work is
+///   poked -- that is the one whose pool is stalled, and poking an idle port
+///   would answer a different question.
+/// - **0** for the positive control, which pokes an idle port in a *healthy*
+///   process. Without that control a null result is uninterpretable: "no worker
+///   appeared" would look identical whether the link is severed or whether
+///   posting a bare packet simply is not a stimulus that creates workers at all.
+///
+/// **This is destructive and is why it sits behind its own switch.** A posted
+/// packet is not a real work item, so a worker that does appear may dispatch it
+/// as garbage. That is acceptable only because the caller is a process which has
+/// already failed and is about to panic; it must never run by default. The
+/// measurement is the *worker count*, read before and after -- not whether
+/// anything sensible ran.
+pub(crate) fn poke_ports_with_work(min_depth: u32) -> u32 {
+    use windows_sys::Win32::System::IO::PostQueuedCompletionStatus;
+
+    let mut poked = 0_u32;
+    let mut targets: Vec<(usize, u32)> = Vec::new();
+    scan_ports(|depth, handle| {
+        if depth >= min_depth {
+            targets.push((handle, depth));
+        }
+    });
+    for (handle, depth) in targets {
+        record(TARGET, "port-poking", handle as u64, depth as u64);
+        // SAFETY: `handle` answered `NtQueryIoCompletion`, so it is a completion
+        // port. The packet carries no overlapped pointer.
+        let ok = unsafe {
+            PostQueuedCompletionStatus(handle as *mut core::ffi::c_void, 0, 0, std::ptr::null_mut())
+        };
+        record(TARGET, "port-poked", handle as u64, u64::from(ok != 0));
+        if ok != 0 {
+            poked += 1;
+        }
+    }
+    record(TARGET, "ports-poked", u64::from(poked), 0);
+    poked
 }

@@ -317,6 +317,7 @@ fn recv_one(
             // Neither call dequeues anything, so reading is not consuming.
             windows_threadpool_sys::trace::worker_factory_counts();
             windows_threadpool_sys::trace::completion_port_depths();
+            poke_the_stalled_port();
             // The pool-liveness probe runs first, while the process is still
             // in the failed state -- asking afterwards would describe a
             // different moment.
@@ -865,6 +866,44 @@ fn hand_rolled_trigger(variant: &str) {
     drop(ring);
 }
 
+/// EXPERIMENT (M-T5.6): does an ordinary arrival wake the stalled pool?
+///
+/// `M-T5.1` and `M-T5.2` between them leave one question: the work is on the
+/// port, the factory would approve a create if asked, and nothing is scheduled
+/// to ask it. So is the route from "work arrived" to "make a worker" broken, or
+/// did it simply never fire for these particular packets?
+///
+/// Posting a packet exercises that route on demand. The measurement is the
+/// factory's **worker count**, read before and after -- not whether anything
+/// sensible runs, because a raw packet is not a real work item.
+///
+/// Enabled by `IORING_POKE_PORT`, and deliberately not on by default: the post
+/// is destructive, and a worker that does appear may dispatch garbage. That is
+/// tolerable here only because this runs inside a process that has already
+/// failed and is about to panic.
+///
+/// The wait is generous relative to what a healthy run needs -- a worker
+/// announces itself within a third of a millisecond there -- so a zero afterwards
+/// means the prompt did not work, not that the answer was missed.
+fn poke_the_stalled_port() {
+    if std::env::var_os("IORING_POKE_PORT").is_none() {
+        return;
+    }
+    windows_threadpool_sys::trace_record!("postmortem", "poke-begin");
+    // Depth 1: only the port holding the stuck work, which is the stalled
+    // pool's. The healthy control uses 0, because the port it pokes is idle.
+    let poked = windows_threadpool_sys::trace::poke_completion_ports(1);
+    windows_threadpool_sys::trace_record!("postmortem", "poke-posted", poked as u64);
+    std::thread::sleep(Duration::from_millis(250));
+    // The same counters again, so the pair brackets the post. A capture that
+    // shows identical values either side is the negative answer, and has to be
+    // distinguishable from one where the read never happened.
+    windows_threadpool_sys::trace_record!("postmortem", "poke-after");
+    windows_threadpool_sys::trace::worker_factory_counts();
+    windows_threadpool_sys::trace::completion_port_depths();
+    windows_threadpool_sys::trace_record!("postmortem", "poke-end");
+}
+
 /// EXPERIMENT (M-T5.2): the healthy control for the factory-state capture.
 ///
 /// The post-mortem only fires on a stall, so every factory reading so far comes
@@ -884,6 +923,26 @@ fn capture_healthy_factory_state() {
     windows_threadpool_sys::trace_record!("postmortem", "healthy-capture");
     windows_threadpool_sys::trace::worker_factory_counts();
     windows_threadpool_sys::trace::completion_port_depths();
+
+    // **The positive control for `M-T5.6`**, and the reason this function is
+    // worth more than a resting-state reading. At this point the default pool
+    // exists, has no workers, is permitted to create one, and its port is empty
+    // -- the same starting position as the stalled factory, minus the fault. If
+    // a posted packet makes a worker appear here and not there, the difference
+    // is the finding. If it makes no worker appear here either, then posting is
+    // simply not a stimulus that creates workers and the stalled arm proves
+    // nothing at all.
+    if std::env::var_os("IORING_POKE_PORT").is_some() {
+        windows_threadpool_sys::trace_record!("postmortem", "poke-begin");
+        let poked = windows_threadpool_sys::trace::poke_completion_ports(0);
+        windows_threadpool_sys::trace_record!("postmortem", "poke-posted", poked as u64);
+        std::thread::sleep(Duration::from_millis(250));
+        windows_threadpool_sys::trace_record!("postmortem", "poke-after");
+        windows_threadpool_sys::trace::worker_factory_counts();
+        windows_threadpool_sys::trace::completion_port_depths();
+        windows_threadpool_sys::trace_record!("postmortem", "poke-end");
+    }
+
     eprintln!("{}", windows_threadpool_sys::trace::dump());
 }
 

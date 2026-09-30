@@ -318,6 +318,9 @@ measurement is linked.
 | the pool woke and mislaid the work | ruled out -- the packets are still queued five seconds after they were posted, so nothing dequeued and discarded them |
 | a thread creation is scheduled and never serviced | ruled out -- the stalled factory is **not** queued for a deferred create and **no** deferred timer is armed, in 14 captures of 14. Nothing is pending, so nothing is scheduled to ask it again ([nothing-ever-asks-the-factory](measurements/2026-09-30-nothing-ever-asks-the-factory/README.md)) |
 | the factory is in some distinguishable broken state | ruled out -- every field reads exactly as a factory with nothing to do: not paused, not shut down, may-create 1, nothing in progress, nothing scheduled, no failed creation. The only thing that differs from genuine idleness is the two packets on its port |
+| the fault is specific to the victims' two packets | ruled out -- a packet posted **by hand** five seconds later, through the public API, is ignored exactly as they were: depth 2 -> 4, workers 0, in 13 captures of 13 ([arrivals-no-longer-reach-the-factory](measurements/2026-09-30-arrivals-no-longer-reach-the-factory/README.md)) |
+| the completion port itself is broken | ruled out by the same reading -- it accepts the posted packet and its depth grows correctly |
+| the factory itself is broken | ruled out -- the same poke on a healthy factory in the same starting position (no workers, permitted to create, empty port) takes it from 0 workers to 1 and consumes the packet |
 | the gap works by letting the disarm settle | ruled out -- a settling time cannot be non-monotonic, and **a 3us gap is about five times worse than no gap at all**, decaying to baseline by 7-10us. Replicated across two runs, 20004 per arm ([a-short-gap-is-worse-than-none](measurements/2026-09-30-a-short-gap-is-worse-than-none/README.md)) |
 | the cancel call can be made safe by waiting long enough afterwards | ruled out -- with the cancel call still made, 1ms and 10ms both fail at the control's rate. That path is immune to time over four orders of magnitude |
 | dropping the cancel call is sufficient on its own | ruled out -- no cancel and no gap fails at the control's rate, 22 in 20004 against 16 |
@@ -367,18 +370,30 @@ kernel. The thread pool is overwhelmingly user-mode code in ntdll, and only the
 `Nt*` stubs transition -- `TpSetWaitEx`, `TppCancelWait`, `TpReleaseWait` and
 `TpWaitForWait` contain no `syscall` between them.
 
-**What is left is one question**, and everything outside the kernel is now
-accounted for. In a healthy run the event signals and the kernel makes a worker
-for the default pool within a quarter of a millisecond -- it announces itself
-with `NtWorkerFactoryWorkerReady`, parks, and is handed the packet at once. In
-a stalled run **that worker is never created**, and the factory meanwhile
-reports no workers, `MayCreate` true, not paused, not shut down, and no failed
-creation. So: a worker factory with no workers, permitted to make one, owes a
-callback and does not make the thread to run it -- until
-`NtReleaseWorkerFactoryWorker` asks, which only the work-submit path calls.
+**What is left is one question, and it is now a much narrower one than this
+section once described.** The three components are each individually healthy and
+the break is in the connection between two of them:
 
-Why is inside the kernel, and no instrument available to this workspace reaches
-there. Queued as M26.13 experiment 1 in [CHECKLIST.md](CHECKLIST.md).
+- the **port** accepts packets and counts them correctly;
+- the **factory** reads as perfectly idle in every field, and creates a worker on
+  demand when reached by the release route;
+- the **notification from one to the other is gone**, persistently -- a packet
+  posted by hand five seconds into the stall is ignored exactly as the original
+  ones were.
+
+That also dissolves the asymmetry this file carried unexplained for days.
+`NtReleaseWorkerFactoryWorker` recovers the stall every time not because there is
+anything special about the submit path, but because it reaches the create
+decision by the **other** route -- a count of user-mode release requests -- which
+does not depend on the severed link.
+
+So the shape of the fault is now: **a per-port, persistent loss of the
+arrival-to-factory notification, caused by removing a delivered packet a few
+microseconds after it was queued, on a port whose factory has no threads yet.**
+
+Why that link breaks is inside the kernel's queue-to-factory notification, and no
+instrument available to this workspace reaches there. Queued as `M-T5` in
+[windows-threadpool-sys/CHECKLIST.md](../windows-threadpool-sys/CHECKLIST.md).
 
 **And one inference boundary, twice corrected.** That the process gains threads
 when dispatch resumes is measured. It was first read as "the six it holds while
