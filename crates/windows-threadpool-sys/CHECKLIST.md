@@ -205,16 +205,34 @@ same suspicion, and look for a disconfirming measurement before building on it.
      to be skipped outright, forcing the create. So a factory cannot be wedged by a policy that
      keeps saying no -- which is what makes "the factory is never asked again" the remaining shape,
      and why `M-T5.1`'s queue depth is the measurement that matters.
-  4. **`queued_for_deferred_create` is the current prime suspect.** A factory is pushed onto the
-     global deferred-creation list only when this per-factory flag is clear, and setting it is what
-     makes the push happen. Both of the early exits from the create routine -- the one taken when a
-     deferred request finds its retry levels already cleared, and the one taken when the basic test
-     declines -- return without clearing it. If a stall leaves it set while the factory is on no
-     list, nothing would ever queue it again, and with no workers alive nothing else would ask.
-     That is consistent with every counter we captured, including `create_in_progress` being 0.
-     **Do not treat this as established**: it is the third hypothesis in this investigation, and
-     the first two were killed by data that already existed. Look for the disconfirming measurement
-     first.
+  4. **A transient empty queue can erase the justification for a create that is already pending.**
+     This is the interaction that makes the fault plausible at all, and it is a two-step:
+     - A deferred request treats "every `policy_retry_level` is clear" as meaning the work was
+       already picked up by some existing worker, and returns **without creating**.
+     - The basic test declining **clears every `policy_retry_level`** on its way out.
+
+     Those retry levels are the only record that a thread is still wanted. So if the basic test
+     runs while the queue happens to be empty, it wipes the justification a pending deferred
+     request was going to rely on, and that request then cancels itself.
+
+     The design reads "queue empty" as "the work was consumed". **Removing a delivered packet makes
+     consumed and destroyed indistinguishable** -- the same class of aliasing the platform already
+     documents elsewhere on this path, where a cancel-then-reassociate to the same port cannot be
+     told from the original association. Our teardown manufactures exactly that ambiguity, a few
+     microseconds after the work is queued.
+
+  5. **`queued_for_deferred_create` is the current prime suspect for why it stays broken.** A
+     factory is pushed onto the global deferred-creation list only when this per-factory flag is
+     clear, and setting it is what makes the push happen. Both early exits above return without
+     clearing it. If a stall leaves it set while the factory sits on no list, nothing would queue
+     it again, and with no workers alive nothing else would ask -- a permanent wedge rather than a
+     missed wakeup, which is what the measurements show. Consistent with every counter we captured,
+     including `create_in_progress` being 0.
+
+     **Do not treat 4 or 5 as established.** They are the third hypothesis in this investigation,
+     and the first two were killed by data that already existed before they were proposed. Look for
+     the disconfirming measurement first -- `M-T5.1` is designed to be exactly that, because a
+     queue depth of zero during a stall would refute this whole account rather than support it.
 
   Verify this structure against the shipped binary before building on it, rather than carrying it
   forward as an assumption: it was read once, and `M-T5.5` may invalidate it.
