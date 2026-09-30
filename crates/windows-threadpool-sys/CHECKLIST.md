@@ -184,7 +184,13 @@ same suspicion, and look for a disconfirming measurement before building on it.
   (the public PDB carries these names but no struct layouts, so field *names* are not available and
   nothing below depends on one).
 
-  Three properties matter for this investigation:
+  **Nomenclature.** The factory's per-instance fields are reachable only as offsets, so the names
+  below are **ours, assigned for this investigation**, not the platform's. They are written in
+  `snake_case` to keep that visible. The sole exception is `create_in_progress`, which is a real
+  field of the public `WORKER_FACTORY_BASIC_INFORMATION` and is already what
+  [hook.rs](src/trace/hook.rs) records.
+
+  Four properties matter for this investigation:
 
   1. **The create test has two independent triggers.** One is work outstanding on the completion
      port; the other is a count of user-mode release requests. `NtReleaseWorkerFactoryWorker`
@@ -193,11 +199,22 @@ same suspicion, and look for a disconfirming measurement before building on it.
      and the submit (always recovers).
   2. **A one-at-a-time gate is tested before either trigger**, so a creation believed to be in
      flight suppresses all others. That was the obvious wedge and it is **already refuted**: the
-     2026-09-27 captures record that counter as 0 in stalled processes.
-  3. **The deferral path is built to self-heal.** Each declining policy escalates a retry across
-     two deferrals and is then skipped outright, forcing a create. So a factory cannot be wedged by
-     a policy that keeps saying no -- which is what makes "the factory is never asked again" the
-     remaining shape, and why `M-T5.1`'s queue depth is the measurement that matters.
+     2026-09-27 captures record `create_in_progress` as 0 in stalled processes.
+  3. **The deferral path is built to self-heal.** Three policies can decline a create; each keeps
+     its own `policy_retry_level`, which escalates across two deferrals and then causes that policy
+     to be skipped outright, forcing the create. So a factory cannot be wedged by a policy that
+     keeps saying no -- which is what makes "the factory is never asked again" the remaining shape,
+     and why `M-T5.1`'s queue depth is the measurement that matters.
+  4. **`queued_for_deferred_create` is the current prime suspect.** A factory is pushed onto the
+     global deferred-creation list only when this per-factory flag is clear, and setting it is what
+     makes the push happen. Both of the early exits from the create routine -- the one taken when a
+     deferred request finds its retry levels already cleared, and the one taken when the basic test
+     declines -- return without clearing it. If a stall leaves it set while the factory is on no
+     list, nothing would ever queue it again, and with no workers alive nothing else would ask.
+     That is consistent with every counter we captured, including `create_in_progress` being 0.
+     **Do not treat this as established**: it is the third hypothesis in this investigation, and
+     the first two were killed by data that already existed. Look for the disconfirming measurement
+     first.
 
   Verify this structure against the shipped binary before building on it, rather than carrying it
   forward as an assumption: it was read once, and `M-T5.5` may invalidate it.
