@@ -166,7 +166,19 @@ same suspicion, and look for a disconfirming measurement before building on it.
 - [ ] **M-T5.2** -- **Establish what prompts a factory to create a worker after work is queued.**
   **Ungated 2026-09-30: `M-T5.1` returned depth 2, so this is now the live question** -- the create
   test would approve, because the port is non-empty, so the stall is not a decision to decline. It
-  is the absence of the question. Our own measurements already bound the answer: a
+  is the absence of the question.
+
+  **Narrowed 2026-09-30, and property 5 below is REFUTED.** Emitting two flags the capture had
+  always decoded and thrown away -- queued-for-deferred-create, and deferred-timer-armed -- shows
+  both **0** in 14 stalls of 14. So nothing is pending and nothing is scheduled to ask again. The
+  stalled factory reads as *perfectly idle in every field*; the only thing distinguishing it from a
+  factory with nothing to do is the two packets on its port. That is a simpler and stronger
+  statement than the wedge it replaces: not a creation that got lost, but a prompt that never
+  happened. Artifact:
+  [nothing-ever-asks-the-factory](../windows-ioring-sys/measurements/2026-09-30-nothing-ever-asks-the-factory/README.md).
+  Next measurement is `M-T5.6`.
+
+  Our own measurements already bound the answer: a
   healthy run creates a worker 0.24-0.31ms after the delivery is armed, so something on the
   queueing path does prompt it; a stalled run never does, and the only call ever observed to
   release the stall is `NtReleaseWorkerFactoryWorker` from the work-submit path, which reaches the
@@ -217,18 +229,18 @@ same suspicion, and look for a disconfirming measurement before building on it.
      told from the original association. Our teardown manufactures exactly that ambiguity, a few
      microseconds after the work is queued.
 
-  5. **`queued_for_deferred_create` is the current prime suspect for why it stays broken.** A
-     factory is pushed onto the global deferred-creation list only when this per-factory flag is
-     clear, and setting it is what makes the push happen. Both early exits above return without
-     clearing it. If a stall leaves it set while the factory sits on no list, nothing would queue
-     it again, and with no workers alive nothing else would ask -- a permanent wedge rather than a
-     missed wakeup, which is what the measurements show. Consistent with every counter we captured,
-     including `create_in_progress` being 0.
+  5. **REFUTED 2026-09-30. `queued_for_deferred_create` was the prime suspect and it reads 0.** The
+     hypothesis was that a factory stays flagged as queued for a creation nobody services, wedging
+     it permanently. Both that flag and the deferred-timer flag read **0** in 14 stalls of 14, so
+     no creation is pending and none is scheduled. Kept here, refuted rather than deleted, because
+     it was the third hypothesis this investigation has lost and the pattern is worth preserving:
+     each was killed by data that either already existed or cost one record to emit. Property 4's
+     two-step remains *unrefuted but unsupported* -- nothing measured bears on it either way, and
+     it should not be leaned on.
 
-     **Do not treat 4 or 5 as established.** They are the third hypothesis in this investigation,
-     and the first two were killed by data that already existed before they were proposed. Look for
-     the disconfirming measurement first -- `M-T5.1` is designed to be exactly that, because a
-     queue depth of zero during a stall would refute this whole account rather than support it.
+     **The standing lesson: emit more of what is already in hand before reasoning about what is
+     not.** These two flags had been decoded into the capture struct and discarded on every run for
+     three days, while the hypothesis they refute was being built.
 
   Verify this structure against the shipped binary before building on it, rather than carrying it
   forward as an assumption: it was read once, and `M-T5.5` may invalidate it.
@@ -262,3 +274,39 @@ same suspicion, and look for a disconfirming measurement before building on it.
   8400 on `hand-spin-3us`, against the 4.15 per thousand measured before the update). Later work is
   measured against 9457.
 
+
+- [ ] **M-T5.6** -- **Post a packet to the stalled pool's completion port and see whether a worker
+  appears.** The direct next measurement after `M-T5.2`'s narrowing, and it is reachable from user
+  mode with what is already built: the port handle comes from the same scan
+  `completion_port_depths` uses, and the factory's worker count is already captured.
+
+  **Why it discriminates.** Two routes reach the factory's create decision: work outstanding on the
+  port, and a count of user-mode release requests. `NtReleaseWorkerFactoryWorker` arrives on the
+  second and is measured to release the stall **every** time; queued work arrives on the first and
+  never does. That asymmetry is currently the whole remaining mystery. Posting an ordinary packet
+  exercises the first route on demand, in a process already stalled:
+  - **A worker appears** -- the insert-to-factory link is intact, and the fault is specific to how
+    the victims' packets were inserted rather than to the link itself.
+  - **No worker appears** -- the link is severed for this port. Work can arrive and nothing will
+    ever notice, which localises the fault precisely and explains why only the release path
+    recovers.
+
+  Measure by reading the factory's worker count before and after, rather than by watching for a
+  callback: a raw packet is not a real work item, so what matters is whether a **thread gets
+  created**, not whether anything sensible runs. Give it a bounded wait and record the count either
+  way, so "asked and nothing happened" is distinguishable from "never asked".
+
+  Two cautions. The post must happen **after** the existing port-depth and factory reads and
+  **before** the liveness probe, for the same reason the current ordering exists -- the probe
+  submits work and repairs the stall. And a posted packet may be dispatched as garbage by a worker
+  that does appear; that is acceptable in a process which has already failed and is about to panic,
+  but it means this arm must stay behind its own environment switch rather than running by default.
+
+- [ ] **M-T5.7** -- **Emit the rest of the factory layout before reasoning further.** `M-T5.2` was
+  narrowed by emitting two flags that had been decoded and discarded since the hooks were written,
+  and that is now the third time a refutation came from data already in hand. The capture still
+  decodes and drops several fields: the retry and idle timeouts, the infinite-wait goal, the start
+  routine and parameter, the process id, and the stack reserve and commit. None is obviously
+  interesting, which is exactly what was said about the deferred-create flags. Emit them all, once,
+  and stop guessing which will matter. Cheap: one record each, no new instrument, no new run --
+  they land in the next capture that happens for another reason.

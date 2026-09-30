@@ -942,6 +942,25 @@ fn read_one(query: Query, handle: usize) -> bool {
         info.create_in_progress as u64,
         info.inserted_into_queue as u64,
     );
+    // M-T5.2. Whether the factory believes it is queued for a deferred thread
+    // creation, and whether a deferred-create timer is armed.
+    //
+    // **These two were read and discarded for three days.** The layout has
+    // carried them since the hooks were written; nothing emitted them, so every
+    // capture so far has been silent about the one state that distinguishes the
+    // two live readings of `M-T5.1`'s result. With work queued, no workers, and
+    // no creation in progress or failed, a factory flagged as queued for
+    // deferred creation is one whose creation was scheduled and never serviced;
+    // a factory not so flagged is one nothing ever asked.
+    //
+    // Recorded as a pair because they are only meaningful together: a factory
+    // queued with no timer armed is a different state from one with both.
+    record(
+        TARGET,
+        "counts-deferred",
+        info.queued_to_ex_worker as u64,
+        info.timer_set as u64,
+    );
     record(
         TARGET,
         "counts-shutdown",

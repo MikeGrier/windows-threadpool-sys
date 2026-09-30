@@ -865,11 +865,34 @@ fn hand_rolled_trigger(variant: &str) {
     drop(ring);
 }
 
+/// EXPERIMENT (M-T5.2): the healthy control for the factory-state capture.
+///
+/// The post-mortem only fires on a stall, so every factory reading so far comes
+/// from a broken pool and there is nothing to compare it against. This records
+/// the same counters from a pool that has just worked, giving the resting value
+/// of each flag.
+///
+/// Enabled by `IORING_CAPTURE_HEALTHY` so an ordinary run is untouched. It is a
+/// *contrast*, not a matched control: this pool has already dispatched and so
+/// has a worker, where the stalled one never made its first. That difference is
+/// the point -- what is wanted is the value of these flags on a factory that is
+/// working, not a reconstruction of the stalled moment.
+fn capture_healthy_factory_state() {
+    if std::env::var_os("IORING_CAPTURE_HEALTHY").is_none() {
+        return;
+    }
+    windows_threadpool_sys::trace_record!("postmortem", "healthy-capture");
+    windows_threadpool_sys::trace::worker_factory_counts();
+    windows_threadpool_sys::trace::completion_port_depths();
+    eprintln!("{}", windows_threadpool_sys::trace::dump());
+}
+
 #[test]
 fn dropping_with_nothing_outstanding_does_not_hang() {
     let variant = std::env::var("IORING_TRIGGER").unwrap_or_default();
     if variant.starts_with("hand-") {
         hand_rolled_trigger(&variant);
+        capture_healthy_factory_state();
         return;
     }
     let ring = IoRing::new(8, 8).expect("create ring");
