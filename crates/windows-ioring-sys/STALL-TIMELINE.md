@@ -333,9 +333,34 @@ arrives before it starts, one at 3us lands in the middle of it, one at 30us
 arrives after. What that work is remains inside the pool or the kernel, beyond any
 instrument here, but its rough duration is now measured rather than assumed.
 
-The cancel call is a different shape again, and still unexplained: its poison is
-immune to elapsed time over four orders of magnitude, which looks like a state
-left behind rather than a race.
+**The cancel call and the close are now explained, from the code rather than from
+rates.** Disassembling ntdll's wait teardown
+([what-the-disassembly-says](measurements/2026-09-30-what-the-disassembly-says/README.md))
+shows all four paths converging on one primitive,
+`NtCancelWaitCompletionPacket(packet, RemoveSignaledPacket)`, and differing only
+in that second argument: the disarm passes **FALSE**, the cancel call and the
+close pass **TRUE**, and the drain never reaches the call at all. TRUE forcibly
+removes a packet that has already been delivered to the pool's completion port --
+the packet whose arrival would have made the factory create its first worker.
+
+That accounts for the cancel call's immunity to elapsed time (the removal is done
+when the call returns; waiting cannot put the packet back), for the drain being
+safe, for the disarm alone being safe, and for the symptom being a factory with
+no workers and nothing wrong with it.
+
+It does **not** account for the gap curve, and says so: it predicts no dependence
+on the disarm-to-close gap, because the race it describes is decided earlier,
+between the `SetEvent` and the disarm. The timing structure -- including the 3us
+peak -- is still open.
+
+It also settles why the shipped fix is not merely an improbability: `TpWaitForWait`
+with FALSE does not reach the dangerous primitive on any path, so it cannot remove
+a delivered packet however the timing falls.
+
+**And it corrects a premise used earlier in this investigation:** ntdll is not the
+kernel. The thread pool is overwhelmingly user-mode code in ntdll, and only the
+`Nt*` stubs transition -- `TpSetWaitEx`, `TppCancelWait`, `TpReleaseWait` and
+`TpWaitForWait` contain no `syscall` between them.
 
 **What is left is one question**, and everything outside the kernel is now
 accounted for. In a healthy run the event signals and the kernel makes a worker
