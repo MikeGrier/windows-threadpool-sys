@@ -98,16 +98,24 @@ matters at all.
 
 Both agree, and together they give the rule:
 
-**The teardown is safe if and only if it makes no cancel call and leaves a gap of
-at least a few tens of microseconds before the close. Either condition alone
-fails.**
+**The teardown needs both that it make no cancel call and that the close be well
+separated from the disarm. Either condition alone fails.**
+
+> **Refined 2026-09-30.** This section's "at least a few tens of microseconds"
+> reading implied a settling time, and a finer sweep shows that is wrong: a *short*
+> gap is worse than no gap, peaking about five times higher at 3us before decaying.
+> See [a-short-gap-is-worse-than-none](../2026-09-30-a-short-gap-is-worse-than-none/README.md),
+> which also corrects the 30us figure below from 0 to 1 failure once pooled over
+> 40008 runs. The ranking is unchanged; the mechanism implied by it is not.
 
 - Dropping the cancel call alone does nothing: with no gap it fails at the
   control's rate.
 - A gap alone does nothing: with the cancel call still made, 1ms does not help
   and neither does 10ms. That path is immune to time over four orders of
   magnitude.
-- Without the cancel call, a gap of 30us is already enough, at n = 20004.
+- Without the cancel call, a gap of 30us already gives a large reduction (see the
+  refinement above: 1 failure in 40008 once pooled, not the 0 in 20004 this run
+  alone showed).
 - The drain that M-T4.2 ships is the same cell reached honestly: no cancel, and
   blocking until the callback has run.
 

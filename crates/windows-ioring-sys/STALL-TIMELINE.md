@@ -312,19 +312,30 @@ measurement is linked.
 | the gap works by being a timer wait, or by engaging the scheduler | ruled out -- a timer sleep, a sleep at the finest timer resolution, a spin on the yield syscall and a spin on the pause instruction all reach 0 in 10002 each, against two controls at the same rate ([what-the-gap-is-made-of](measurements/2026-09-29-what-the-gap-is-made-of/README.md)) |
 | the gap and the cancel call are the same effect | ruled out -- a 2x2 over cancel x gap: neither alone moves the rate off the control's, and only the cell with both reaches zero |
 | the pool is poisoned when the wait is closed without its queued callback having run | ruled out, and it had fit every cell of that 2x2 and been *directly observed* rather than inferred -- but it predicts a graded rate, and a gap that leaves the callback pending in most of its runs still gives 0 in 10002. Whether the callback had run was a correlate of elapsed time, which a one-cell-per-corner factorial cannot distinguish from a cause |
-| the gap has to cover the queued callback's dispatch latency | ruled out -- 30us is already enough at n = 20004, and in that arm the callback runs in about one run per thousand |
+| the gap has to cover the queued callback's dispatch latency | ruled out -- 30us already gives a large reduction, and in that arm the callback runs in about one run per thousand |
+| the gap works by letting the disarm settle | ruled out -- a settling time cannot be non-monotonic, and **a 3us gap is about five times worse than no gap at all**, decaying to baseline by 7-10us. Replicated across two runs, 20004 per arm ([a-short-gap-is-worse-than-none](measurements/2026-09-30-a-short-gap-is-worse-than-none/README.md)) |
 | the cancel call can be made safe by waiting long enough afterwards | ruled out -- with the cancel call still made, 1ms and 10ms both fail at the control's rate. That path is immune to time over four orders of magnitude |
 | dropping the cancel call is sufficient on its own | ruled out -- no cancel and no gap fails at the control's rate, 22 in 20004 against 16 |
 
-**The teardown rule, as measured.** A teardown is safe if and only if it makes no
-cancel call *and* leaves a gap of at least a few tens of microseconds before the
-close; either condition alone fails
+**The teardown rule, as measured.** A teardown needs *both* that it make no cancel
+call and that the close be well separated from the disarm; either alone fails
 ([what-the-gap-is-made-of](measurements/2026-09-29-what-the-gap-is-made-of/README.md)).
-The drain that `M-T4.2` ships satisfies both. What is still unexplained is why
-either condition exists -- a close a microsecond after a disarm poisons and one
-thirty microseconds after does not, which has the shape of something needing to
-settle, while the cancel call's immunity to time has the shape of a state left
-behind rather than a race.
+The drain that `M-T4.2` ships satisfies both, blocking about 280us until the
+queued callback has run.
+
+**"Well separated" is not "after a settling time",** and reading it that way was
+wrong. Sweeping the gap finely shows the rate *rising* first: about five times the
+no-gap rate at 3us, back to baseline by 7-10us, and far below it by 30us
+([a-short-gap-is-worse-than-none](measurements/2026-09-30-a-short-gap-is-worse-than-none/README.md)).
+A short gap is worse than none. That is the shape of a **race against something
+the disarm sets in motion**, lasting a few microseconds -- a close issued at once
+arrives before it starts, one at 3us lands in the middle of it, one at 30us
+arrives after. What that work is remains inside the pool or the kernel, beyond any
+instrument here, but its rough duration is now measured rather than assumed.
+
+The cancel call is a different shape again, and still unexplained: its poison is
+immune to elapsed time over four orders of magnitude, which looks like a state
+left behind rather than a race.
 
 **What is left is one question**, and everything outside the kernel is now
 accounted for. In a healthy run the event signals and the kernel makes a worker
