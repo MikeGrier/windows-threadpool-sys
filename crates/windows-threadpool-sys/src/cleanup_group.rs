@@ -544,6 +544,11 @@ impl TimerMember<'_> {
     }
 
     /// Cancel callbacks that have not started, then wait for those that have.
+    ///
+    /// Unlike the wait member's method of the same name, this carries no
+    /// process-wide hazard. The primitive that can sever a pool's
+    /// arrival-to-factory notification operates on a *wait completion packet*,
+    /// which only a wait owns; a timer has none.
     pub fn cancel_pending(&self) {
         // SAFETY: as above.
         crate::trace_call!("WaitForThreadpoolTimerCallbacks(cancel)", self.handle, 1, {
@@ -678,6 +683,22 @@ impl WaitMember<'_> {
     }
 
     /// Cancel callbacks that have not started, then wait for those that have.
+    ///
+    /// # The cost is not local to this member
+    ///
+    /// This has the same process-wide hazard as
+    /// [`ThreadpoolWait::cancel_pending`](crate::wait::ThreadpoolWait::cancel_pending),
+    /// and for the same reason: removing an already-delivered completion packet
+    /// can permanently sever the notification from the pool's completion port to
+    /// its worker factory, after which the process's default thread pool
+    /// dispatches nothing and no later arrival recovers it.
+    ///
+    /// Owning the wait through a cleanup group does **not** avoid this. The
+    /// group's own release is safe because it drains, not because the group
+    /// protects its members -- `close_members(true)` passes the cancel through
+    /// to each member and carries the same hazard.
+    ///
+    /// Prefer [`wait`](Self::wait).
     pub fn cancel_pending(&self) {
         // SAFETY: as above.
         crate::trace_call!("WaitForThreadpoolWaitCallbacks(cancel)", self.handle, 1, {

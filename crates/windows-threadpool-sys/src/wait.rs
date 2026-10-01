@@ -811,6 +811,27 @@ impl ThreadpoolWait {
     /// wait idle: it does not suppress the re-arm of a callback that is already
     /// running. Use [`stop_and_drain`](Self::stop_and_drain) when the wait must
     /// actually be quiescent afterwards.
+    ///
+    /// # The cost is not local to this wait
+    ///
+    /// Cancelling asks the kernel to remove a completion packet that may already
+    /// have been delivered to the pool's completion port. Measured on this
+    /// workspace's reproducer, doing so can **permanently sever the notification
+    /// from that port to the worker factory**: afterwards, work can be queued to
+    /// the process's default thread pool and nothing will ever dispatch it, and
+    /// no later arrival recovers it. The damage is to the pool, not to this
+    /// object, and it outlives the wait being torn down.
+    ///
+    /// The window is small -- it needs the removal to land a few microseconds
+    /// after the packet was queued, on a port whose factory has no threads yet --
+    /// but it is reachable in ordinary use: it was found as an intermittent hang
+    /// in an unrelated test, at a rate near one run in a thousand.
+    ///
+    /// Prefer [`wait`](Self::wait) or [`stop_and_drain`](Self::stop_and_drain),
+    /// which drain instead. Draining cannot reach the primitive that removes a
+    /// delivered packet on any path, so it is safe however the timing falls.
+    /// See the workspace's `M-T5` for the measurements and for the open question
+    /// of whether this method should continue to exist.
     pub fn cancel_pending(&self) {
         crate::trace_call!("WaitForThreadpoolWaitCallbacks(cancel)", self.wait, 1, {
             // SAFETY: `wait` is valid for the lifetime of self. A cancelled wait

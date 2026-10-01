@@ -121,13 +121,22 @@ shows the cancelling form leaves the default pool unable to make its first worke
   `release_members(false)` in `Drop`, which drains, and `close_members(cancel_pending: bool)` is
   already the explicit early-release method. A member never closes itself either, so nothing in
   that path issues a close behind a disarm.
-- [ ] **M-T4.7** -- **Is a cleanup-group consumer already immune?** `M-T4.5` found the group's
-  teardown drains and that a member never closes itself, so nothing on that path issues a close
-  behind a disarm. Whether that makes it immune to the measured stall is **untested**. Run the ring
-  reproducer with the trigger's wait owned by a `CleanupGroup` instead of standing alone, against a
-  live control in the same session. A clean result would be independent evidence for the mechanism;
-  a failing one would say the group close has the same hazard inside a single kernel call, which
-  would be worth knowing before `M-T4.2` is trusted as the fix.
+- [x] **M-T4.7** -- **Answered 2026-09-30, analytically, and the answer is NO.** The item expected a
+  20000-run sweep; the question turned out to be decidable from the code. The group dispatches
+  member teardown through a vtable whose wait entry includes `TppStopWaitCallbackGeneration`, which
+  reaches `NtCancelWaitCompletionPacket` and **threads the caller's cancel-pending argument
+  straight through to `RemoveSignaledPacket`**. So a group has exactly the same drain-versus-cancel
+  structure as a standalone wait: releasing with FALSE is safe, with TRUE is not. This crate's
+  `Drop` already passes FALSE, so a consumer who only drops is safe -- not because the group
+  protects them, but because the default was already the safe one. Artifact:
+  [which-teardowns-can-still-yank](../windows-ioring-sys/measurements/2026-09-30-which-teardowns-can-still-yank/README.md).
+
+  **The first answer was the opposite and was wrong**, which is recorded in the artifact because
+  the failure mode generalises: a reachability walk over direct calls can prove reachability but
+  **cannot prove unreachability** where dispatch is indirect, and the group's release dispatches
+  through CFG-guarded indirect calls. Reading the vtable reversed the verdict. Any future use of
+  that technique must check the closure for indirect calls before relying on a negative.
+
 - [x] **M-T4.6** -- **Done 2026-09-29: the fix holds on the real path.** The 20000-run arms were a
   hand-rolled model of the teardown, not this crate's code, so the committed change had to be
   measured against `EventDelivery` itself. Two builds differing only in `ThreadpoolWait`'s teardown,
@@ -295,3 +304,41 @@ same suspicion, and look for a disconfirming measurement before building on it.
   parameter, process id, and stack reserve/commit are now emitted alongside the rest. None proved
   decisive this time -- `M-T5.6` answered the question first -- but they are in every future
   capture at the cost of a handful of records, which is the point: the guessing is over.
+
+- [ ] **M-T5.8** -- **DECISION TO RAISE: `cancel_pending` is now known to be far more dangerous
+  than its name suggests, and it is still public.** The audit in
+  [which-teardowns-can-still-yank](../windows-ioring-sys/measurements/2026-09-30-which-teardowns-can-still-yank/README.md)
+  maps every remaining path that can remove a delivered packet. Every **default** path is safe --
+  `Drop` and `stop_and_drain` drain, and the cleanup group's `Drop` releases with FALSE. The hazard
+  survives only where a caller explicitly asks to cancel:
+
+  | surface | effect when the packet is already delivered |
+  |---|---|
+  | `ThreadpoolWait::cancel_pending` | removes it |
+  | `WaitMember::cancel_pending` | removes it |
+  | `CleanupGroup::close_members(true)` | removes it, through the member vtable |
+
+  **What has changed is the cost, not the mechanism.** These were documented as discarding a
+  pending callback -- a local, understood trade. What is now measured is that removing a delivered
+  packet can permanently sever the arrival-to-factory notification for that completion port, which
+  wedges **the whole process's default thread pool**: work can then be queued and nothing will ever
+  dispatch it, and no later arrival recovers it. A caller cannot reasonably consent to that,
+  because nothing in the name or the documentation suggests the blast radius extends past the
+  object being torn down.
+
+  Options, for the engineer rather than for an assistant to pick:
+  1. **Remove them.** Honest about the finding, and `M-T4.1` already established that quiescing is
+     what callers actually want. Breaking, and forecloses a legitimate "I do not care about this
+     callback" case.
+  2. **Keep, and document the blast radius.** Cheapest, and consistent with OPTION INTEGRITY --
+     but prose is not a rung on the detection ladder, and a caller who reads the name and not the
+     paragraph still loses.
+  3. **Keep, but make it safe.** Only the close-behind-disarm with no dispatch is hazardous; a
+     cancel that first lets the queued callback drain is not a cancel. This may be a contradiction
+     in terms rather than a design.
+  4. **Gate it** behind a feature or an explicitly-named unsafe-ish constructor, so reaching it is
+     deliberate.
+
+  Coupled to **M-T4.4** (the crate-wide linear-versus-affine failfast question) and to **M-T4.8**
+  (the close is not uniform in name or existence), and should be decided with them rather than
+  piecemeal -- the same reservation the engineer already recorded for those.
