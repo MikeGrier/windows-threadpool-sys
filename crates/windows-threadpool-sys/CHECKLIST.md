@@ -305,7 +305,17 @@ same suspicion, and look for a disconfirming measurement before building on it.
   decisive this time -- `M-T5.6` answered the question first -- but they are in every future
   capture at the cost of a handful of records, which is the point: the guessing is over.
 
-- [ ] **M-T5.8** -- **DECISION TO RAISE: the removal is in the close, not only in `cancel_pending`.**
+- [x] **M-T5.8** -- **DECIDED 2026-10-01; superseded by `M-T6`.** The answer is not removal:
+  cancellation stays, renamed `try_cancel_pending` to connote the best-effort attempt the platform
+  has always actually performed, and backed by a repair that submits a work item to the affected
+  pool. Safe method gated on the `self-heal` feature, `unsafe`
+  `try_cancel_pending_no_heal_tracking` always present so that disabling the feature breaks call
+  sites loudly rather than silently removing a guarantee. Decision:
+  [DESIGN-NOTES.md](../../DESIGN-NOTES.md#cancellation-self-heals). Original text follows, and its
+  analysis stands -- in particular that removing `cancel_pending` would not have removed the
+  hazard, since the close makes the same call.
+
+- [x] ~~**M-T5.8 (original)** -- the removal is in the close, not only in `cancel_pending`.~~
 
   > **CORRECTED 2026-09-30, same day it was written.** The first version of this item claimed
   > `cancel_pending` is uniquely dangerous and asked whether to remove it. That premise is **false**
@@ -399,3 +409,59 @@ same suspicion, and look for a disconfirming measurement before building on it.
   rate over 24000 runs. Changes nothing about the fix: draining remains correct regardless, and
   this bounds when a *non*-draining teardown is dangerous.
 
+
+## M-T6 -- Cancellation self-heals
+
+Implements [Cancellation repairs the pool it may have wedged](../../DESIGN-NOTES.md#cancellation-self-heals),
+decided 2026-10-01. Consumer-facing account in
+[README-FEATURE-self-heal.md](README-FEATURE-self-heal.md); how the design was
+reached, including the branches abandoned, in
+[DESIGN-RATIONALE.md](../../DESIGN-RATIONALE.md#how-cancellation-self-heal-was-reached).
+
+Supersedes **M-T5.8**, which asked whether `cancel_pending` should be removed.
+The answer is no: it is renamed, made best-effort in name as it always was in
+behaviour, and backed by a repair.
+
+- [ ] **M-T6.1** -- **Add the `self-heal` feature, default on, and the pool registry.** A registry
+  of the pools this crate is interacting with -- entries created when an object is created against
+  a pool and released when the last object on it goes away, so the cost is proportional to use and
+  an idle process pays nothing. Each entry holds the last-dispatch stamp, the
+  cancellation-owed flag and its stamp, and a pre-created repair work object. **The repair object
+  is created at registration, never on the healing path**: creating a work object is measured not
+  to release a stall, only submitting one is, so allocation must not happen while a pool is
+  wedged.
+
+- [ ] **M-T6.2** -- **Stamp the last dispatch in every trampoline.** Work, wait, timer and I/O all
+  dispatch through a trampoline of this crate's before reaching the caller's closure; each stamps
+  its pool's slot before the call. Use the **interrupt-time counter**, not
+  `QueryPerformanceCounter`: only ordering against the cancellation is needed, and this path runs
+  for every callback, so a memory read is wanted rather than a syscall. One relaxed store.
+
+- [ ] **M-T6.3** -- **Rename to `try_cancel_pending`, and add the ungated `unsafe` sibling.**
+  `try_cancel_pending` is gated on `self-heal` and marks its pool as owing a repair;
+  `try_cancel_pending_no_heal_tracking` is `unsafe`, always present, and transfers the repair
+  obligation to the caller. Same treatment for `WaitMember`, and for `CleanupGroup::close_members`,
+  which passes the cancel through to each member. **The contract is identical in both feature
+  states** -- best-effort cancellation, the pool may stall briefly -- and only the repair latency
+  differs; do not document it as a behavioural difference.
+
+- [ ] **M-T6.4** -- **The self-heal timer.** A periodic timer on a private pool created **lazily on
+  the first cancellation**, so a consumer who never cancels never pays for a pool. Each tick, for
+  every entry owing a repair: skip when a dispatch has been stamped *after* the cancellation --
+  which is direct evidence the pool is live -- and otherwise submit the pre-created repair item.
+  The private pool is this crate's own and so is torn down with the drain discipline; a self-heal
+  pool that wedged the way it exists to repair would be the worst possible defect.
+
+- [ ] **M-T6.5** -- **Guard it, with the sabotage that matters.** The load-bearing claims are that a
+  cancellation arms a repair, that a dispatch after the cancellation suppresses it, and that the
+  repair is a submit on a pre-made object rather than a fresh one. Sabotage each: a cancel that
+  does not mark, a stamp that never updates, a heal that creates instead of submitting. **A guard
+  that passes with the mechanism disabled is worse than none** -- this was already learned once on
+  `prewarm`, where a unit test passed the full suite with the function sabotaged because a sibling
+  test had warmed the pool. Prefer an integration test where process-wide state would otherwise
+  make the assertion vacuous.
+
+- [ ] **M-T6.6** -- **Verify the `self-heal`-off build.** `cargo check --no-default-features` plus
+  whatever feature set CI uses, confirming that `try_cancel_pending` is absent, that the `unsafe`
+  sibling is present, and that no trampoline stamps. The compile error a consumer gets is the
+  designed behaviour, so it is worth asserting the shape of the off build rather than assuming it.

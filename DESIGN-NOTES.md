@@ -1045,6 +1045,110 @@ shape of any answer: **forward progress is not the alternative.** A teardown
 that cannot drain may abort, or fail fast by some other route, but it may not
 return to its caller having abandoned the callback. Bounding the wait is a
 question about which failure to take, never about whether to continue.
+
+## <a id="cancellation-self-heals"></a>Cancellation repairs the pool it may have wedged, and says so in its name
+
+**Decided 2026-10-01. This decision schedules work; the implementation is queued
+as `M-T6` in
+[crates/windows-threadpool-sys/CHECKLIST.md](crates/windows-threadpool-sys/CHECKLIST.md).**
+It settles what [Teardown drains rather than cancels](#teardown-drains) left
+open: that decision fixed the *default* paths, and left the explicitly-requested
+cancel still able to wedge a pool.
+
+### The rule
+
+1. **A safe API must not be able to stop the process's thread pool.** Memory
+   safety is not the only contract a safe signature implies. A method whose
+   failure mode is "an unrelated component in this process silently stops
+   dispatching, intermittently, for reasons invisible from the call site" is a
+   trap, not a sharp edge, because the caller can neither detect it nor bound it.
+2. **Cancellation stays**, because it is a thread-pool API that callers
+   reasonably expect, and because the platform offers it. It is renamed to
+   `try_cancel_pending`, which connotes the best-effort attempt the platform
+   actually performs -- `WaitForThreadpoolWaitCallbacks(TRUE)` has never been
+   able to cancel a callback already running.
+3. **The crate repairs what the cancel may have broken.** Cancelling records that
+   a repair is owed for that pool; a self-heal mechanism submits a work item,
+   which is the one action measured to recover the stall every time.
+4. **The repair is coalesced, not per-call.** Callers put cancellation in `Drop`
+   paths as a matter of course, so a repair on every call would charge a teardown
+   cost to a routine operation. Marking and batching is what makes the mechanism
+   affordable enough to be on by default.
+5. **Disabling it removes the safe method rather than changing its meaning.**
+   `try_cancel_pending` is gated on the `self-heal` feature;
+   `try_cancel_pending_no_heal_tracking` is `unsafe` and always present. A
+   contract that varies by feature is worse than a missing one: Cargo unifies
+   features across the graph, so a signature that changes with them compiles in
+   one dependency configuration and not another, for reasons the author cannot
+   see from their own manifest.
+
+### Why `unsafe` is the right keyword for the ungated method, and the wrong one for the gated
+
+`unsafe` is a claim about memory safety, and using it for "this might hang"
+dilutes it in a crate that wraps a genuinely unsafe API. That argument rules out
+making `try_cancel_pending` itself `unsafe` when the feature is off.
+
+It does not rule out a *separate* method, because that method's precondition is
+statable and dischargeable: **the caller must ensure the pool is repaired**, by
+submitting work to it or by knowing it is kept live. That is an obligation a
+caller can meet and a reviewer can check, which is what `unsafe` is for. The
+hazard is not the justification; the transferred obligation is.
+
+### What the feature does not change
+
+The method's **contract** is identical either way -- best-effort cancellation,
+and the pool may stall briefly. The feature changes only how quickly the stall is
+repaired: bounded by the self-heal period when on, bounded by the application's
+next work submission when off. Documenting it as a behavioural difference would
+be restatement drift waiting to happen.
+
+### The consequence that is deliberate, not a defect
+
+With the feature off, a consumer who called `try_cancel_pending` gets a
+**compile error**. That is the point. It is the only way they discover that the
+guarantee they were relying on is gone, and it names the method to reach for
+instead.
+
+### What was rejected, and why
+
+- **Removing cancellation.** It would not remove the hazard --
+  `CloseThreadpoolWait` makes the same kernel call with the same flag, so every
+  teardown reaches it. Removal only closes the path that reaches it *while
+  bypassing the drain*, which is worth doing but is a smaller claim than it
+  appears, and it costs callers an API the platform provides.
+- **Keeping the name and making it drain.** No breakage, but the name would then
+  lie, and a future reader seeing `cancel_pending` would reasonably infer
+  cancellation.
+- **Prewarming as the mitigation.** Narrows a timing window rather than removing
+  a cause, and the window reopens whenever the pool's last worker retires. See
+  [pool::prewarm_default_pool](crates/windows-threadpool-sys/src/pool.rs), which
+  survives as a hedge, not a defence.
+- **A gap between the disarm and the close.** Makes the race improbable rather
+  than impossible, which is the distinction this investigation exists to respect.
+- **An APC-driven watchdog.** A user-mode APC runs only when some thread enters
+  an alertable wait, so it would need a dedicated thread -- at which point the APC
+  earns nothing over a plain loop, while adding a self-deadlock hazard against the
+  wait's own lock.
+- **Requiring a second opt-out feature to disable.** Rejected by the engineer in
+  favour of the two-method shape, which achieves the same explicitness without a
+  protocol.
+
+### What remains unknown, and is accepted
+
+Whether the fault can recur on a pool that has gone cold again after its workers
+retired is **unanswerable from here** -- it is inside the kernel's
+queue-to-factory notification, and no instrument available to this workspace
+reaches it. The self-heal mechanism is therefore a backstop that bounds the
+damage, not a proof that the damage cannot occur. Its own pool could in principle
+share the fault; that is accepted rather than designed around, because designing
+around it would require the same unavailable answer.
+
+Full consumer-facing account, including costs and what to watch for when
+disabling, is in
+[README-FEATURE-self-heal.md](crates/windows-threadpool-sys/README-FEATURE-self-heal.md).
+How the investigation arrived here is in
+[DESIGN-RATIONALE.md](DESIGN-RATIONALE.md).
+
 ## The encoding check rejects stray control characters
 
 A form feed reached two committed source comments. The cause was a PowerShell replacement containing

@@ -112,6 +112,19 @@ the caller to remember:
 - **Teardown is ordered.** Every object disarms or cancels before draining
   callbacks, then releases its callback context last, so a callback can never
   outlive the state it captured.
+- **Teardown drains rather than discarding.** `Drop` and `stop_and_drain` let a
+  queued callback run instead of asking the kernel to throw it away. That is
+  partly because discarding work the caller asked for is not finalisation, and
+  partly because the discard can sever a completion port's notification to its
+  worker factory -- after which that pool dispatches nothing at all. Draining
+  cannot reach the primitive responsible, on any path.
+
+## Features
+
+| feature | default | what it does |
+|---|---|---|
+| `self-heal` | **on** | Repairs a thread pool that an explicitly-requested cancellation may have wedged, and provides the safe `try_cancel_pending`. See [README-FEATURE-self-heal.md](README-FEATURE-self-heal.md) before turning it off -- the hazard it covers is silent, intermittent, and lands on components that never called the API. |
+| `trace` | off | In-process tracing of pool operations, plus worker-factory and completion-port introspection. Diagnostic; reads layouts Microsoft does not publish. |
 
 ## Relationship to `windows-overlapped-io-sys`
 
