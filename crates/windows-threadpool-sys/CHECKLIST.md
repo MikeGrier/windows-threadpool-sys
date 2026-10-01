@@ -69,6 +69,14 @@ shows the cancelling form leaves the default pool unable to make its first worke
   reintroduces the hazard that
   [Teardown drains rather than cancels](../../DESIGN-NOTES.md#teardown-drains) exists to prevent.
 
+  **Per-type flags, decided 2026-10-01.** The alternative considered was to derive the answer from
+  live state the way `ThreadpoolIo` does, which needs no flag and cannot report an obligation that
+  is not owed. It does not carry. `ThreadpoolTimer::is_set` stays true after a one-shot fires, so
+  it would report against a quiescent timer; `ThreadpoolWait` and `ThreadpoolWork` have no such
+  query at all, and giving them one means tracking armed-ness and outstanding submissions the
+  crate does not currently keep. A uniform obligation across the five types was judged more costly
+  than it is worth.
+
   **Guard it by sabotage**, both directions: a `Drop` that reports when the caller *did* close, and
   one that stays silent when the caller did not. Assert the report's presence or absence, not its
   text.
@@ -76,6 +84,39 @@ shows the cancelling form leaves the default pool unable to make its first worke
   **Gated on `M-T4.9`**, which decides which diagnostic channel carries an obligation report. This
   report is addressed to a developer who will not have the `trace` feature enabled, which is the
   crux of that decision -- picking a channel here would pre-empt it.
+
+- [ ] **M-T4.10** -- **Extract the re-arm suppression that `ThreadpoolWait` and `ThreadpoolTimer`
+  each implement separately.**
+
+  `WaitContext` in [wait.rs](src/wait.rs) and `TimerContext` in [timer.rs](src/timer.rs) carry the
+  same mechanism under the same name: a `suppress_rearm: Mutex<u32>`, a poison-recovering
+  `suppression()` accessor, a `suppress_and_disarm()` that raises the count and disarms under one
+  acquisition, and a `release_suppression()`. Their doc comments are near-identical, down to the
+  argument for why it is a count rather than a flag. The arming paths consult it the same way too:
+  take the lock, do nothing if the count is non-zero, otherwise arm while still holding it.
+
+  This is the mechanism that stops a drain completing with the object armed again, which is the
+  property [Teardown drains rather than cancels](../../DESIGN-NOTES.md#teardown-drains) rests on.
+  Two implementations of it is two places for a later change to reach one and miss the other.
+
+  **What to build.** One `pub(crate)` type holding the mutex and the count, embedded as a field in
+  both contexts, with inherent methods -- not a trait, because there are two clients and nothing
+  needs to be generic over them. The native calls differ (`SetThreadpoolWait` against
+  `SetThreadpoolTimer`), so they stay at the call sites; what moves is the lock discipline, which
+  is the part that is actually identical.
+
+  **`ThreadpoolPeriodicTimer` is not a client** and gains no field: the OS repeats its timer, so it
+  has no deferred re-arm to suppress.
+
+  **Keep each trace record on the side of the lock it is on now.** Both types deliberately emit
+  before acquiring, so that a re-arm parked on the mutex can be told from one that never arrived,
+  and the comments at those sites say so. An extraction that pulls them inside the shared type
+  erases that distinction.
+
+  **Guard it by sabotage.** Both types already have tests covering the suppression; confirm they
+  are load-bearing by making the shared `suppress_and_disarm` raise the count without disarming,
+  and checking that a test on *each* type goes red. One red test would mean the other type's
+  coverage is incidental.
 
 - [ ] **M-T4.8** -- **DECISION TO RAISE: the synchronous close is not uniform, in name or in
   existence.**
@@ -93,10 +134,13 @@ shows the cancelling form leaves the default pool unable to make its first worke
   `ThreadpoolIo`; `close_members(cancel_pending: bool)` on `CleanupGroup`; and **nothing named as
   such on `ThreadpoolWork`**, whose `wait()` happens to be the drain.
 
-  This blocks any uniform flag or fail-fast, because there is no uniform method to attach the
-  obligation to. `run_down` and `close_members` have good reasons to differ -- one waits on an
-  operation registry, the other releases a whole group -- so the question is whether they are
-  renamed, given a common alias, or left alone with the obligation defined per type.
+  **The obligation half is settled.** `M-T4.3` defines it per type, decided 2026-10-01, so this no
+  longer blocks that item. `M-T4.4` is still gated on it, because a linear type needs a uniform
+  method to be linear about.
+
+  What remains is naming. `run_down` and `close_members` have good reasons to differ -- one waits
+  on an operation registry, the other releases a whole group -- so the question is whether they are
+  renamed, given a common alias, or left as they are.
 
 - [ ] **M-T4.9** -- **DECISION TO RAISE: which diagnostic channel carries an obligation report.**
 
