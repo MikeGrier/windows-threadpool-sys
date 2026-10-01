@@ -42,38 +42,8 @@ shows the cancelling form leaves the default pool unable to make its first worke
 - [x] **M-T4.3** -- Report at `Drop` when the caller did not close synchronously. -> [completed
   2026-10-01](COMPLETED-CHECKLIST.md#m-t43)
 
-- [ ] **M-T4.10** -- **Extract the re-arm suppression that `ThreadpoolWait` and `ThreadpoolTimer`
-  each implement separately.**
-
-  `WaitContext` in [wait.rs](src/wait.rs) and `TimerContext` in [timer.rs](src/timer.rs) carry the
-  same mechanism under the same name: a `suppress_rearm: Mutex<u32>`, a poison-recovering
-  `suppression()` accessor, a `suppress_and_disarm()` that raises the count and disarms under one
-  acquisition, and a `release_suppression()`. Their doc comments are near-identical, down to the
-  argument for why it is a count rather than a flag. The arming paths consult it the same way too:
-  take the lock, do nothing if the count is non-zero, otherwise arm while still holding it.
-
-  This is the mechanism that stops a drain completing with the object armed again, which is the
-  property [Teardown drains rather than cancels](../../DESIGN-NOTES.md#teardown-drains) rests on.
-  Two implementations of it is two places for a later change to reach one and miss the other.
-
-  **What to build.** One `pub(crate)` type holding the mutex and the count, embedded as a field in
-  both contexts, with inherent methods -- not a trait, because there are two clients and nothing
-  needs to be generic over them. The native calls differ (`SetThreadpoolWait` against
-  `SetThreadpoolTimer`), so they stay at the call sites; what moves is the lock discipline, which
-  is the part that is actually identical.
-
-  **`ThreadpoolPeriodicTimer` is not a client** and gains no field: the OS repeats its timer, so it
-  has no deferred re-arm to suppress.
-
-  **Keep each trace record on the side of the lock it is on now.** Both types deliberately emit
-  before acquiring, so that a re-arm parked on the mutex can be told from one that never arrived,
-  and the comments at those sites say so. An extraction that pulls them inside the shared type
-  erases that distinction.
-
-  **Guard it by sabotage.** Both types already have tests covering the suppression; confirm they
-  are load-bearing by making the shared `suppress_and_disarm` raise the count without disarming,
-  and checking that a test on *each* type goes red. One red test would mean the other type's
-  coverage is incidental.
+- [x] **M-T4.10** -- Extract the re-arm suppression that `ThreadpoolWait` and `ThreadpoolTimer`
+  each implemented separately. -> [completed 2026-10-01](COMPLETED-CHECKLIST.md#m-t410)
 
 - [ ] **M-T4.8** -- **DECISION TO RAISE: the synchronous close is not uniform, in name or in
   existence.**

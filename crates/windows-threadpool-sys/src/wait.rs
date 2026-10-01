@@ -20,9 +20,10 @@
 use std::io;
 use std::os::windows::io::{AsHandle, AsRawHandle, BorrowedHandle, FromRawHandle, OwnedHandle};
 use std::ptr;
-use std::sync::Mutex;
 use std::sync::atomic::{AtomicIsize, Ordering};
 use std::time::Duration;
+
+use crate::rearm::RearmSuppression;
 
 use windows_sys::Win32::Foundation::{FALSE, FILETIME, HANDLE, TRUE, WAIT_TIMEOUT};
 use windows_sys::Win32::System::Threading::{
@@ -314,24 +315,15 @@ impl WaitResult {
 struct WaitContext {
     wait: AtomicIsize,
     handle: HANDLE,
-    /// How many callers are currently suppressing re-arming: zero means allowed.
+    /// Stops a callback re-arming this wait once a teardown has begun.
     ///
-    /// Arming takes this lock and does nothing while the count is non-zero, so a
-    /// callback that re-arms cannot start watching again after a disarm from
-    /// outside: without it, a drain could complete with the object armed again,
-    /// and for `Drop` that meant closing the object and freeing its context with
-    /// a fresh callback queued against them.
-    ///
-    /// A count rather than a flag because suppression has two users with
-    /// different lifetimes: [`ThreadpoolWait::stop_and_drain`] raises it and
-    /// lowers it again, while `Drop` raises it permanently. With a flag, a
-    /// `stop_and_drain` finishing would clear a suppression that another
-    /// concurrent one still needed.
-    ///
-    /// The lock is only ever held across the native `SetThreadpoolWait` call,
-    /// never across a callback drain, which would deadlock a callback that
-    /// happened to be blocked on it.
-    suppress_rearm: Mutex<u32>,
+    /// Arming takes this lock and does nothing while the count is non-zero, so
+    /// a callback that re-arms cannot start watching again after a disarm from
+    /// outside. Its two users here are [`ThreadpoolWait::stop_and_drain`],
+    /// which raises and lowers it, and `Drop`, which raises it permanently --
+    /// the asymmetry [`RearmSuppression`] is a count for. The lock is only ever
+    /// held across the native `SetThreadpoolWait` call.
+    rearm: RearmSuppression,
     /// Whether the object is armed with nothing having drained it.
     ///
     /// A dispatch settles it because `SetThreadpoolWait` arms for exactly one
@@ -346,9 +338,7 @@ struct WaitContext {
 impl WaitContext {
     /// Lock the suppression count, recovering from a panicking holder.
     fn suppression(&self) -> std::sync::MutexGuard<'_, u32> {
-        self.suppress_rearm
-            .lock()
-            .unwrap_or_else(|poison| poison.into_inner())
+        self.rearm.lock()
     }
 
     /// Start suppressing re-arming, and disarm under the same acquisition.
@@ -357,21 +347,21 @@ impl WaitContext {
     /// callback: a re-arm either lands entirely before this, or is suppressed by
     /// it. The lock is released before any drain.
     fn suppress_and_disarm(&self) {
-        let mut suppressed = self.suppression();
-        *suppressed = suppressed.saturating_add(1);
-        let wait = self.wait.load(Ordering::Acquire);
-        crate::trace_record!("wait", "suppress-and-disarm", wait, *suppressed);
-        if wait != 0 {
+        self.rearm.suppress_and(|suppressed| {
+            let wait = self.wait.load(Ordering::Acquire);
+            crate::trace_record!("wait", "suppress-and-disarm", wait, suppressed);
+            if wait == 0 {
+                return;
+            }
             // SAFETY: `wait` is this object's live PTP_WAIT, published before any
             // callback could run and valid until Drop closes it.
             unsafe { disarm_raw(wait) };
-        }
+        });
     }
 
     /// Stop suppressing re-arming.
     fn release_suppression(&self) {
-        let mut suppressed = self.suppression();
-        *suppressed = suppressed.saturating_sub(1);
+        self.rearm.release();
     }
 }
 
@@ -722,7 +712,7 @@ impl ThreadpoolWait {
         let context = Box::into_raw(Box::new(WaitContext {
             wait: AtomicIsize::new(0),
             handle: target.raw(),
-            suppress_rearm: Mutex::new(0),
+            rearm: RearmSuppression::new(),
             obligation: crate::obligation::CloseObligation::new(),
             callback: Box::new(callback),
         }));

@@ -213,6 +213,8 @@ pub(crate) mod obligation;
 #[cfg(windows)]
 pub mod pool;
 #[cfg(windows)]
+pub(crate) mod rearm;
+#[cfg(windows)]
 pub mod timer;
 
 /// A trace for defects that only appear under concurrency, compiled out

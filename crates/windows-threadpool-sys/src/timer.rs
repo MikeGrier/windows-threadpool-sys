@@ -38,9 +38,14 @@ pub use periodic::{PeriodicTick, ThreadpoolPeriodicTimer};
 use std::cell::Cell;
 use std::io;
 use std::ptr;
-use std::sync::Mutex;
 use std::sync::atomic::{AtomicIsize, Ordering};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
+
+use crate::rearm::RearmSuppression;
+/// Only the test-only re-arm observer still needs this directly; the
+/// suppression count moved to [`RearmSuppression`].
+#[cfg(test)]
+use std::sync::Mutex;
 
 use windows_sys::Win32::Foundation::{FALSE, FILETIME, TRUE};
 use windows_sys::Win32::System::Threading::{
@@ -155,25 +160,18 @@ pub(crate) unsafe fn disarm_raw(timer: PTP_TIMER) {
 /// from inside a callback needs the object the callback belongs to.
 pub(crate) struct TimerContext {
     pub(crate) timer: AtomicIsize,
-    /// How many callers are currently suppressing re-arming: zero means allowed.
+    /// Stops a callback re-arming this timer once a teardown has begun.
     ///
     /// Applying a deferred re-arm takes this lock and does nothing while the
     /// count is non-zero. Deferring the re-arm to after the callback returns --
     /// which is what makes the delay run from the end of the firing -- moves it
     /// *past* any disarm performed from outside, so without this a drain could
-    /// complete with a due time installed. For `Drop` that meant closing the
-    /// object and freeing its context with a fresh callback queued against it.
-    ///
-    /// A count rather than a flag because suppression has two users with
-    /// different lifetimes: [`ThreadpoolTimer::stop_and_drain`] raises it and
-    /// lowers it again, while `Drop` raises it permanently. With a flag, a
-    /// `stop_and_drain` finishing would clear a suppression that another
-    /// concurrent one still needed.
-    ///
-    /// The lock is only ever held across the native `SetThreadpoolTimer` call,
-    /// never across a callback drain, which would deadlock a callback that
-    /// happened to be blocked on it.
-    suppress_rearm: Mutex<u32>,
+    /// complete with a due time installed. Its two users here are
+    /// [`ThreadpoolTimer::stop_and_drain`], which raises and lowers it, and
+    /// `Drop`, which raises it permanently -- the asymmetry
+    /// [`RearmSuppression`] is a count for. The lock is only ever held across
+    /// the native `SetThreadpoolTimer` call.
+    rearm: RearmSuppression,
     /// Whether the timer has a due time that nothing has drained.
     ///
     /// A firing settles it because this type is one-shot: each arming produces
@@ -195,9 +193,7 @@ pub(crate) struct TimerContext {
 impl TimerContext {
     /// Lock the suppression count, recovering from a panicking holder.
     fn suppression(&self) -> std::sync::MutexGuard<'_, u32> {
-        self.suppress_rearm
-            .lock()
-            .unwrap_or_else(|poison| poison.into_inner())
+        self.rearm.lock()
     }
 
     /// Start suppressing re-arming, and disarm under the same acquisition.
@@ -206,21 +202,21 @@ impl TimerContext {
     /// callback: a deferred re-arm either lands entirely before this, or is
     /// suppressed by it. The lock is released before any drain.
     fn suppress_and_disarm(&self) {
-        let mut suppressed = self.suppression();
-        *suppressed = suppressed.saturating_add(1);
-        let timer = self.timer.load(Ordering::Acquire);
-        crate::trace_record!("timer", "suppress-and-disarm", timer, *suppressed);
-        if timer != 0 {
+        self.rearm.suppress_and(|suppressed| {
+            let timer = self.timer.load(Ordering::Acquire);
+            crate::trace_record!("timer", "suppress-and-disarm", timer, suppressed);
+            if timer == 0 {
+                return;
+            }
             // SAFETY: `timer` is this object's live PTP_TIMER, published before
             // any callback could run and valid until Drop closes it.
             unsafe { disarm_raw(timer) };
-        }
+        });
     }
 
     /// Stop suppressing re-arming.
     fn release_suppression(&self) {
-        let mut suppressed = self.suppression();
-        *suppressed = suppressed.saturating_sub(1);
+        self.rearm.release();
     }
 }
 
@@ -496,7 +492,7 @@ impl ThreadpoolTimer {
     {
         let context = Box::into_raw(Box::new(TimerContext {
             timer: AtomicIsize::new(0),
-            suppress_rearm: Mutex::new(0),
+            rearm: RearmSuppression::new(),
             obligation: crate::obligation::CloseObligation::new(),
             #[cfg(test)]
             rearm_observer: Mutex::new(None),

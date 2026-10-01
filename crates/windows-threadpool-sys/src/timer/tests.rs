@@ -595,6 +595,55 @@ fn rearming_outside_teardown_is_applied() {
     assert_eq!(*outcomes.lock().unwrap(), vec![true]);
 }
 
+/// `stop_and_drain` lifts its own suppression before returning, so a deferred
+/// re-arm requested afterwards is applied again.
+///
+/// This is the only test that covers the lifting. The obvious candidate,
+/// [`a_timer_is_reusable_after_stop_and_drain`], re-arms through
+/// [`ThreadpoolTimer::set_after`] -- which does *not* consult the suppression --
+/// so it passes whether or not the count was ever lowered. And
+/// [`rearming_outside_teardown_is_applied`] never drains first, so its count is
+/// zero throughout.
+#[test]
+fn a_deferred_rearm_is_applied_again_after_stop_and_drain() {
+    let outcomes = Arc::new(Mutex::new(Vec::new()));
+    let fires = Fires::new();
+    let counter = Arc::clone(&fires);
+
+    let timer = ThreadpoolTimer::new(
+        move |firing| {
+            // Re-arm only on the firing after the drain, so the recorded
+            // outcome names that one and no other.
+            if counter.count() == 1 {
+                firing.rearm_after(Duration::from_millis(1));
+            }
+            counter.record();
+        },
+        None,
+    )
+    .expect("create timer");
+    timer.observe_rearms(&outcomes);
+
+    // First firing: does not re-arm, so the timer is idle when this returns.
+    timer.set_after(Duration::from_millis(1));
+    fires.wait_for(1);
+    timer.stop_and_drain();
+
+    // Second firing, after the drain. Its deferred re-arm is discarded if the
+    // suppression `stop_and_drain` raised was never lowered -- and the third
+    // firing it schedules would then never happen.
+    timer.set_after(Duration::from_millis(1));
+    fires.wait_for(3);
+    timer.stop_and_drain();
+
+    assert_eq!(
+        *outcomes.lock().unwrap(),
+        vec![true],
+        "stop_and_drain must lift its own suppression, or every later deferred \
+         re-arm is silently discarded"
+    );
+}
+
 /// A callback that asks to re-arm while `Drop` is tearing down must not leave a
 /// due time installed behind it. Deferring the re-arm to after the callback
 /// returns -- which is what makes the delay run from the end of the firing --

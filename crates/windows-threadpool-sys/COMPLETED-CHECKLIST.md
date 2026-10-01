@@ -477,3 +477,32 @@ red and nothing else, which is what shows those two tests are not measuring the 
 that follows. The end-to-end emission check in
 [tests/obligation_report.rs](tests/obligation_report.rs) runs only under a narrowed trace and
 announces a skip otherwise; deleting one type's `Drop` report turns it red.
+
+## Moved 2026-10-01 12:30:30 -04:00 -- M-T4.10, one re-arm suppression instead of two
+
+### <a id="m-t410"></a>M-T4.10 -- Extract the re-arm suppression that `ThreadpoolWait` and `ThreadpoolTimer` each implemented separately. *(completed 2026-10-01 12:30:30 -04:00)*
+
+`RearmSuppression` in [src/rearm.rs](src/rearm.rs) now owns the `Mutex<u32>`, the poison
+recovery, and the saturating arithmetic. Each context keeps a thin `suppress_and_disarm` that
+supplies its own native call and trace record through a closure, so the per-type parts stayed
+where they were and every call site is unchanged. `ThreadpoolPeriodicTimer` is still not a
+client: the pool repeats its timer, so it has no deferred re-arm to suppress.
+
+**The extraction found a hole in the existing tests, which is the part worth remembering.** The
+item predicted that sabotaging the shared mechanism would turn a test red on each type. For the
+*suppress* half that happened -- raising the count without disarming turned two wait tests and
+two timer tests red. For the *release* half **nothing went red at all**.
+
+The reason is recorded in [What that exemption cost the tests, and how it was
+found](../../DESIGN-NOTES.md#teardown-drains): `arm` and `set_after` deliberately bypass the
+suppression, so `a_wait_is_reusable_after_stop_and_drain` and its timer twin -- the tests whose
+names suggest they cover this -- pass whether or not the count was ever lowered. The lift is only
+observable through a callback-side re-arm after a completed drain, and no test did that.
+
+`a_callback_can_rearm_again_after_stop_and_drain` and
+`a_deferred_rearm_is_applied_again_after_stop_and_drain` close it. Both go red under a `release`
+that never lowers the count, so the guard now exists on each type in both directions.
+
+Releasing the suppression is the only behaviour distinguishing `stop_and_drain` from `Drop`,
+which raises and never releases -- so it had been, until this, a mechanism whose sole
+distinguishing behaviour nothing checked.

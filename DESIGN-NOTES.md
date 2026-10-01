@@ -886,6 +886,26 @@ alongside so the incidental cancellation is not mistaken for a contract and quie
 This is the honest shape of the decision: a documented precondition is a weaker thing than an enforced one, and
 saying so is better than either overclaiming or paying for machinery nobody needs.
 
+### What that exemption cost the tests, and how it was found
+
+Because `arm` and `set_after` bypass the suppression, a test that re-arms
+through them cannot observe whether `stop_and_drain` lifted the suppression it
+raised -- it passes either way. So `a_wait_is_reusable_after_stop_and_drain` and
+`a_timer_is_reusable_after_stop_and_drain`, despite their names, never covered
+the lifting, and nothing else did either: the lift is only observable through a
+*callback-side* re-arm issued after a completed drain.
+
+Found 2026-10-01, when `M-T4.10` extracted the suppression into one type and a
+sabotage that raised the count but never lowered it turned **no** existing wait
+or timer test red. `a_callback_can_rearm_again_after_stop_and_drain` and
+`a_deferred_rearm_is_applied_again_after_stop_and_drain` close it, and both go
+red under that sabotage.
+
+The general point is worth more than the instance: `stop_and_drain` releasing
+the suppression is the *only* thing distinguishing it from `Drop`, which raises
+and never releases. A mechanism whose sole distinguishing behaviour is untested
+is one a refactor can quietly delete.
+
 ## <a id="teardown-drains"></a>Teardown drains rather than cancels, `Drop` blocks until it is finished, and an undischarged obligation is reported
 
 **Decided 2026-09-28. This decision schedules work; the implementation is

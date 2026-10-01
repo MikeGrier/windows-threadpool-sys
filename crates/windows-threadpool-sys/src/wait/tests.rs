@@ -664,6 +664,63 @@ fn rearming_outside_teardown_is_honoured() {
     assert_eq!(*outcomes.lock().unwrap(), vec![true]);
 }
 
+/// `stop_and_drain` lifts its own suppression before returning, so a callback
+/// that re-arms afterwards is honoured again.
+///
+/// This is the only test that covers the lifting. The obvious candidate,
+/// [`a_wait_is_reusable_after_stop_and_drain`], re-arms through
+/// [`ThreadpoolWait::arm`] -- which deliberately does *not* consult the
+/// suppression -- so it passes whether or not the count was ever lowered. And
+/// [`rearming_outside_teardown_is_honoured`] never drains first, so its count is
+/// zero throughout. Only a callback-side re-arm after a completed drain can tell
+/// the difference, which is what this does.
+#[test]
+fn a_callback_can_rearm_again_after_stop_and_drain() {
+    let outcomes = Arc::new(Mutex::new(Vec::new()));
+    let recorder = Arc::clone(&outcomes);
+    let started = Activations::new();
+    let entered = Arc::clone(&started);
+    // Selects the activation *after* the drain, atomically for the reason given
+    // on `rearming_outside_teardown_is_honoured`.
+    let selector = Arc::new(AtomicUsize::new(0));
+    let pick = Arc::clone(&selector);
+
+    let wait = ThreadpoolWait::new(
+        event(true),
+        move |activation| {
+            if pick.fetch_add(1, Ordering::SeqCst) == 1 {
+                recorder
+                    .lock()
+                    .unwrap()
+                    .push(activation.rearm_reporting(None));
+            }
+            entered.record(activation.result());
+        },
+        None,
+    )
+    .expect("create wait");
+
+    // First activation: does not re-arm, so the wait is idle when this returns.
+    wait.arm(None);
+    signal(wait.handle());
+    started.wait_for(1);
+    wait.stop_and_drain();
+
+    // Second activation, after the drain. Its re-arm is discarded if the
+    // suppression `stop_and_drain` raised was never lowered.
+    wait.arm(None);
+    signal(wait.handle());
+    started.wait_for(2);
+    wait.stop_and_drain();
+
+    assert_eq!(
+        *outcomes.lock().unwrap(),
+        vec![true],
+        "stop_and_drain must lift its own suppression, or every later \
+         callback-side re-arm is silently discarded"
+    );
+}
+
 /// A callback that re-arms while `Drop` is tearing down must not leave the
 /// object armed behind it: the drain would then return with an activation still
 /// possible, and the close and context free would race a fresh callback.
