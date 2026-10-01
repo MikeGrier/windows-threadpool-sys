@@ -41,6 +41,21 @@ shows the cancelling form leaves the default pool unable to make its first worke
 - [ ] **M-T4.3** -- **The discharge flag, and what it is allowed to decide.** Investigated
   2026-09-28; findings below are measured from the source, not proposed.
 
+  > **Two notes added 2026-10-01, after `M-T6` was designed.**
+  >
+  > **It is a different flag from self-heal's, and they must not be conflated.** This one is
+  > *per object*, records whether the caller closed synchronously, and exists so `Drop` can decide
+  > whether to **say** anything. `M-T6`'s is *per pool*, records that a repair is owed, and exists
+  > so the self-heal timer can decide whether to **submit** anything. Same word, different
+  > lifetime, different owner, different consequence. Whichever lands second should avoid naming
+  > that invites a reader to assume one mechanism.
+  >
+  > **The rule below survives `M-T6` and is reinforced by it.** "The flag gates the report, never
+  > the work" is exactly the discipline `M-T6.4` follows when it skips a repair: the suppression
+  > there rests on a *dispatch having been observed*, which is positive evidence the pool is live,
+  > never on a flag asserting that nothing needs doing. A flag that asserts an absence can go
+  > stale; an observation of a dispatch cannot.
+
   **`ThreadpoolIo` already implements this whole pattern** and is the precedent rather than a gap.
   Its `Drop` reads `outstanding()`, and when that is non-zero it reports on a diagnostic channel,
   names the method the caller should have used, then makes the block terminate and blocks. So the
@@ -72,7 +87,17 @@ shows the cancelling form leaves the default pool unable to make its first worke
   decide whether to say anything.
 
 - [ ] **M-T4.8** -- **DECISION TO RAISE: the synchronous close is not uniform, in name or in
-  existence.** Found while investigating M-T4.3. Four shapes across five types:
+  existence.**
+
+  > **Re-inventory after `M-T6` lands.** That milestone adds `try_cancel_pending` and
+  > `try_cancel_pending_no_heal_tracking` to `ThreadpoolWait`, `WaitMember` and -- through
+  > `close_members` -- `CleanupGroup`, so the surface this item is taking an inventory of grows
+  > before the decision is taken. Deciding now would be deciding against a list that is about to
+  > change. `M-T6.3` is also the first time this crate has deliberately paired a safe and an
+  > `unsafe` form of the same operation, which is a precedent worth weighing here rather than
+  > discovering later.
+
+  Found while investigating M-T4.3. Four shapes across five types:
   `stop_and_drain` on `ThreadpoolWait`, `ThreadpoolTimer` and `PeriodicTimer`; `run_down` on
   `ThreadpoolIo`; `close_members(cancel_pending: bool)` on `CleanupGroup`; and **nothing named as
   such on `ThreadpoolWork`**, whose `wait()` happens to be the drain.
@@ -83,6 +108,14 @@ shows the cancelling form leaves the default pool unable to make its first worke
   renamed, given a common alias, or left alone with the obligation defined per type.
 
 - [ ] **M-T4.9** -- **DECISION TO RAISE: which diagnostic channel carries an obligation report.**
+
+  > **`M-T6` adds a third candidate consumer**, which strengthens the case already made below. A
+  > self-heal that fires -- or one that is asked for and finds the feature off -- is exactly a
+  > report addressed to a developer rather than to an investigator, and the `trace` feature
+  > compiles to nothing for that audience. Decide the rule once and apply it to the obligation
+  > report and the self-heal report together, rather than letting `M-T6` pick a channel by default
+  > and set an unexamined precedent.
+
   The crate has two and no stated rule. `ThreadpoolIo::drop` uses `eprintln!`; everything else uses
   `trace_record!`, and [trace.rs](src/trace.rs)'s own module docs open with "Why this is not
   `eprintln!`".
@@ -94,6 +127,13 @@ shows the cancelling form leaves the default pool unable to make its first worke
   it, so a trace-only report would be invisible to exactly the audience it is for.
 - [ ] **M-T4.4** -- **DECISION TO RAISE, reserved by the engineer 2026-09-28 as CRATE-WIDE: a
   fail-fast that forces the caller to have closed, making these types linear rather than affine.**
+
+  > **`M-T5.8` set a relevant precedent 2026-10-01**, without settling this. Faced with an
+  > operation that could not be made safe, the crate did not reach for linearity -- it paired a
+  > safe form with an `unsafe` sibling carrying a statable obligation, and let a feature decide
+  > which exists. That is a different answer to "how do we make the caller take responsibility"
+  > than a linear type is, and it is now shipping. Weigh it as an alternative here rather than
+  > treating linearity as the only way to bind a caller to a protocol.
 
   **Not to be made piecemeal, and if made, made uniformly.** That is a constraint on the work, not
   a note about it: implementing it for `ThreadpoolWait` alone -- the type the M26.13 measurement
@@ -161,6 +201,23 @@ queued callback must have run" (refuted by a graded gap sweep) and "a creation-i
 stuck" (refuted by a 2026-09-27 capture recording that counter as 0). Treat any third with the
 same suspicion, and look for a disconfirming measurement before building on it.
 
+**CLOSED 2026-10-01, by decision rather than by arrival at an answer.** Three hypotheses were
+refuted in the end, the third by two flags the capture had been decoding and discarding for days.
+What the milestone established is the fault's *shape* -- the port is healthy, the factory is
+healthy, and the notification between them is lost -- plus its preconditions, its blast radius, and
+what recovers it. What it did not establish is **why**, which is inside the kernel's
+queue-to-factory notification and beyond any instrument available here.
+
+The engineer's judgement was that continuing would require fixing the kernel seam, and that the
+pattern is now understood well enough to avoid. So the remaining questions -- `M-T5.2`, `M-T5.3`,
+`M-T5.4`, `M-T5.10` -- are closed as not-pursued, each with its reason recorded rather than left
+looking like an unfinished measurement. **None of them gates the remedy**: the drain is structural
+and does not depend on the mechanism, and `M-T6`'s self-heal repairs by a route measured to work
+whatever the mechanism turns out to be.
+
+Standing lesson, earned three times: **emit more of what is already in hand before reasoning about
+what is not.**
+
 - [x] **M-T5.1** -- **Done 2026-09-30: the work is queued and the pool is idle beside it.** Depth
   **2** on the pool under test, in 15 captures of 15 -- exactly the two victims -- while that pool
   reports 0 workers, `may_create` 1 and `create_in_progress` 0. So the fault is **not** in delivery:
@@ -172,7 +229,19 @@ same suspicion, and look for a disconfirming measurement before building on it.
   mattered here because a silently broken probe reports "depth 0" -- the finding that would have
   sent the investigation the other way.
 
-- [ ] **M-T5.2** -- **Establish what prompts a factory to create a worker after work is queued.**
+- [x] **M-T5.2** -- **CLOSED 2026-10-01: answered as far as measurement reaches.** `M-T5.6`
+  established the shape -- the port is healthy, the factory is healthy, and the notification
+  between them is lost -- and that is the end of what any instrument available here can see. The
+  remaining "why" is inside the kernel's queue-to-factory notification, and the engineer's decision
+  was to stop there and address the fault by repair (`M-T6`) rather than by prevention.
+
+  **Closing this does not weaken the fix.** The drain is structural and does not depend on knowing
+  the mechanism; self-heal repairs by a route measured to work regardless of it. What is given up
+  is the explanation, not the remedy.
+
+  Original text follows; its property 5 is refuted and the refutation is part of the record.
+
+- [x] ~~**M-T5.2 (original)** -- Establish what prompts a factory to create a worker after work is queued.~~
   **Ungated 2026-09-30: `M-T5.1` returned depth 2, so this is now the live question** -- the create
   test would approve, because the port is non-empty, so the stall is not a decision to decline. It
   is the absence of the question.
@@ -254,7 +323,14 @@ same suspicion, and look for a disconfirming measurement before building on it.
   Verify this structure against the shipped binary before building on it, rather than carrying it
   forward as an assumption: it was read once, and `M-T5.5` may invalidate it.
 
-- [ ] **M-T5.3** -- **Is the hazard window anchored to the queueing or to the disarm?** A run was
+- [x] **M-T5.3** -- **NOT PURSUED, by decision 2026-10-01.** The question only mattered for
+  locating the mechanism, and the engineer's decision was to stop at the kernel seam and address
+  the fault by repair instead (`M-T6`). Anchoring the window more precisely would not change the
+  repair, the drain, or anything a consumer does. Recorded rather than deleted because the arms
+  were built and verified, so anyone who later wants the answer starts from a known position
+  rather than from scratch. Original text follows.
+
+- [x] ~~**M-T5.3 (original)** -- Is the hazard window anchored to the queueing or to the disarm?~~ A run was
   built and started for this and stopped at 45% to free the machine; redo it when a quiet machine
   is available. Two arm families place the packet removal the same distance after `SetEvent` while
   putting the delay on opposite sides of the disarm: `SetEvent -> disarm -> spin N -> close`
@@ -263,8 +339,14 @@ same suspicion, and look for a disconfirming measurement before building on it.
   to place the removal at matching times (4-5us, 12us, 32us) before the run started, so the arms
   are ready to rebuild.
 
-- [ ] **M-T5.4** -- **RECORDED AS BLOCKED, NOT DEFERRED: local kernel debugging is unavailable on
-  this machine.** Reading the factory's own state directly would settle `M-T5.2` outright, and
+- [x] **M-T5.4** -- **CLOSED 2026-10-01: blocked, and no longer needed.** It was queued to settle
+  `M-T5.2` by reading the factory's state directly. `M-T5.2` is now closed as far as measurement
+  reaches, and the investigation is not continuing past the kernel seam, so the blocker no longer
+  gates anything. The firmware finding below stands and is worth keeping -- it is the reason no
+  kernel-level answer was available to this investigation at all, and anyone who revisits the
+  question will hit the same wall. Original text follows.
+
+- [x] ~~**M-T5.4 (original)** -- local kernel debugging is unavailable on this machine.~~ Reading the factory's own state directly would settle `M-T5.2` outright, and
   `kd -kl` is the tool for it. It is blocked by a **firmware** condition rather than a missing
   step: `bcdedit -debug on` fails with "The value is protected by Secure Boot policy", and the
   machine reports Secure Boot enabled with VBS running and Credential Guard active. Enabling it
@@ -372,7 +454,21 @@ same suspicion, and look for a disconfirming measurement before building on it.
   I/O has no stimulus that will ever recover it, and hangs. This workspace's reproducer is the
   second kind, which is the only reason the fault was ever seen rather than shrugged off.
 
-- [ ] **M-T5.10** -- **Does the pool break again once it returns to zero workers?** The one
+- [x] **M-T5.10** -- **CLOSED 2026-10-01: unanswerable from here, and accepted.** The engineer's
+  judgement was that this is unanswerable without the kernel seam, and the investigation stopped
+  there. It is closed as a **decision**, not because an answer arrived: on everything known, a pool
+  whose last worker retires becomes vulnerable again, and `pool::prewarm_default_pool` therefore
+  narrows a window rather than removing a cause.
+
+  **`M-T6` is what makes that acceptable.** Self-heal bounds the damage without needing to know
+  whether the notification loss is permanent or edge-consumed -- it repairs by submitting work,
+  which recovers the pool either way. The design deliberately does not assume an answer to this
+  question, and the accepted residual is that the self-heal pool could in principle share the
+  fault.
+
+  Original text follows, including an instrument that must not be retried as written.
+
+- [x] ~~**M-T5.10 (original)** -- Does the pool break again once it returns to zero workers?~~ The one
   severity question `M-T5.9` could not close. Every capture observes a pool that still holds the
   worker its recovery created, because the idle timeout is 67s and no capture runs that long. If
   the notification is permanently lost rather than edge-consumed, a long-lived process is in a
@@ -430,6 +526,16 @@ behaviour, and backed by a repair.
   is created at registration, never on the healing path**: creating a work object is measured not
   to release a stall, only submitting one is, so allocation must not happen while a pool is
   wedged.
+
+  **The default pool needs a different retention rule, and this is the decision to take within the
+  item.** For a private pool, "release the entry when the last object on it goes away" is right --
+  the pool itself is going away too. The default pool is not ours and does not go away: our last
+  object dropping says nothing about whether the process is still using it, and a cancellation we
+  performed may have left it owing a repair that outlives the object that caused it. Releasing its
+  entry on the same rule would drop a pending repair on the floor at exactly the wrong moment.
+  Suggested rule, to be confirmed when implementing: the default pool's entry is retained while a
+  repair is owed, independent of object count, and the self-heal timer is what releases it once the
+  repair is discharged.
 
 - [ ] **M-T6.2** -- **Stamp the last dispatch in every trampoline.** Work, wait, timer and I/O all
   dispatch through a trampoline of this crate's before reaching the caller's closure; each stamps
