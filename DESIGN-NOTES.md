@@ -1046,6 +1046,62 @@ that cannot drain may abort, or fail fast by some other route, but it may not
 return to its caller having abandoned the callback. Bounding the wait is a
 question about which failure to take, never about whether to continue.
 
+## <a id="reports-are-trace-events"></a>A developer-facing report is a trace event, and the crate writes nothing to stderr
+
+**Decided 2026-10-01. This decision schedules work: the conversion of the one
+existing `eprintln!` is part of `M-T4.3` in
+[crates/windows-threadpool-sys/CHECKLIST.md](crates/windows-threadpool-sys/CHECKLIST.md).**
+It settles what [Teardown drains rather than cancels](#teardown-drains) named
+without answering -- that decision says an undischarged obligation is
+*reported*, and does not say where.
+
+### The rule
+
+- Every report this crate addresses to a developer is a `trace_record!` event.
+  That covers the undischarged-obligation report at `Drop` and `M-T6`'s
+  self-heal report.
+- **The crate writes nothing to stdout or stderr, in any configuration.**
+- `ThreadpoolIo::drop`'s `eprintln!` is the only existing write, and is
+  converted rather than kept as an exception.
+
+### Why
+
+A library that prints uninvited writes into a stream it does not own. A
+consumer's stderr may be a structured log, a TUI, or a pipeline stage that
+parses what arrives on it, and a crate several dependencies down cannot know
+which. The destination is the application's choice, so this crate declines to
+make it.
+
+The trace is already the crate's answer to how a developer sees what it did: it
+filters per subsystem, and it compiles to nothing when unwanted --
+[trace.rs](crates/windows-threadpool-sys/src/trace.rs)'s `not(feature = "trace")`
+module makes `record` an empty inline function.
+
+### What it costs, stated plainly
+
+The report does not reach a developer who has not enabled the `trace` feature,
+and a developer who does not know they left teardown to `Drop` has no particular
+reason to enable it. The report is available to someone investigating and absent
+for someone who is not, which is the reverse of the audience
+[Teardown drains rather than cancels](#teardown-drains) named for it.
+
+That cost was taken deliberately. It is the price of the crate not writing to a
+stream it does not own.
+
+### What was rejected, and why
+
+- **`eprintln!`, which is what `ThreadpoolIo` shipped.** It reaches the
+  developer who does not know to look, which is exactly the audience the report
+  is for. The visibility is bought with a write a consumer cannot refuse, and
+  that is what it was rejected for -- not for being ineffective.
+- **`eprintln!` by default, with a process-wide hook to redirect it.** Keeps the
+  visibility and hands the choice back, at the cost of public API -- a setter, a
+  function type, and the thread-safety rules around both -- carrying a report
+  the trace can already carry. The hook would be a second reporting channel
+  existing because the first was not used.
+- **Both channels at once.** The union of the costs, and two places for the same
+  report to drift apart.
+
 ## <a id="cancellation-self-heals"></a>Cancellation repairs the pool it may have wedged, and says so in its name
 
 **Decided 2026-10-01. This decision schedules work; the implementation is queued

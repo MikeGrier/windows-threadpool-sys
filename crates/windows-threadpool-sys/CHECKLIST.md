@@ -57,9 +57,9 @@ shows the cancelling form leaves the default pool unable to make its first worke
   | `PeriodicTimer` | `stop_and_drain` | `start`, `start_after` |
   | `ThreadpoolWork` | `wait` | `submit` |
 
-  `ThreadpoolIo` is excluded and needs no flag: `outstanding()` already tells it whether rundown
-  happened, and its `Drop` already reports, names the method the caller should have used, and then
-  blocks. It is the behaviour the other four are being brought up to, so match its wording.
+  `ThreadpoolIo` needs no flag: `outstanding()` already tells it whether rundown happened, and its
+  `Drop` already reports and then blocks. It is the behaviour the other four are being brought up
+  to -- but its report changes channel in this same item, below.
 
   **The flag decides whether to report. It must never decide whether to drain.** `Drop` drains
   every time, including when the flag says the caller already did. Skipping would be wrong because
@@ -81,9 +81,15 @@ shows the cancelling form leaves the default pool unable to make its first worke
   one that stays silent when the caller did not. Assert the report's presence or absence, not its
   text.
 
-  **Gated on `M-T4.9`**, which decides which diagnostic channel carries an obligation report. This
-  report is addressed to a developer who will not have the `trace` feature enabled, which is the
-  crux of that decision -- picking a channel here would pre-empt it.
+  **The report is a trace event**, per [A developer-facing report is a trace
+  event](../../DESIGN-NOTES.md#reports-are-trace-events): `trace_record!` on the subsystem the type
+  already traces under. That macro carries two numeric slots and no message, so the report is a
+  tagged event rather than a sentence, and there is no shared message sink to build.
+
+  **Convert `ThreadpoolIo::drop`'s `eprintln!` in the same change.** That decision makes it the
+  crate's only write to stderr, and it fires on the same occasion as the four new reports, so
+  converting it here is what leaves all five consistent. The outstanding count fits the second
+  numeric slot, so nothing survives the conversion except the English.
 
 - [ ] **M-T4.10** -- **Extract the re-arm suppression that `ThreadpoolWait` and `ThreadpoolTimer`
   each implement separately.**
@@ -142,24 +148,9 @@ shows the cancelling form leaves the default pool unable to make its first worke
   on an operation registry, the other releases a whole group -- so the question is whether they are
   renamed, given a common alias, or left as they are.
 
-- [ ] **M-T4.9** -- **DECISION TO RAISE: which diagnostic channel carries an obligation report.**
+- [x] **M-T4.9** -- Decided: a developer-facing report is a trace event, and the crate writes
+  nothing to stderr. -> [completed 2026-10-01](COMPLETED-CHECKLIST.md#m-t49)
 
-  > **`M-T6` adds a third candidate consumer**, which strengthens the case already made below. A
-  > self-heal that fires -- or one that is asked for and finds the feature off -- is exactly a
-  > report addressed to a developer rather than to an investigator, and the `trace` feature
-  > compiles to nothing for that audience. Decide the rule once and apply it to the obligation
-  > report and the self-heal report together, rather than letting `M-T6` pick a channel by default
-  > and set an unexamined precedent.
-
-  The crate has two and no stated rule. `ThreadpoolIo::drop` uses `eprintln!`; everything else uses
-  `trace_record!`, and [trace.rs](src/trace.rs)'s own module docs open with "Why this is not
-  `eprintln!`".
-
-  **That argument does not settle this case**, which is why it is a decision rather than a lookup:
-  it is about not perturbing a timing-sensitive race during observation, and an obligation report
-  at `Drop` is neither timing-sensitive nor addressed to an investigator. It is addressed to a
-  developer who will not have the `trace` feature on -- and the trace compiles to nothing without
-  it, so a trace-only report would be invisible to exactly the audience it is for.
 - [ ] **M-T4.4** -- **DECISION TO RAISE, reserved by the engineer 2026-09-28 as CRATE-WIDE: a
   fail-fast that forces the caller to have closed, making these types linear rather than affine.**
 

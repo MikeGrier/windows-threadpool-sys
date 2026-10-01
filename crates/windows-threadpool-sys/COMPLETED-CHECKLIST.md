@@ -427,3 +427,18 @@ the already-traced `io` trampoline.
 **The one gap left open deliberately:** `CallbackEnviron::set_cleanup_group` is a public raw seam
 that lets a caller install their own cleanup-group cancel callback. That function would be the
 caller's, not ours, so there is nothing here to bracket.
+## Moved 2026-10-01 11:54:34 -04:00 -- M-T4.9, which channel carries a developer-facing report
+
+### <a id="m-t49"></a>M-T4.9 -- Decided: a developer-facing report is a trace event, and the crate writes nothing to stderr. *(completed 2026-10-01 11:54:34 -04:00)*
+
+The decision, its cost, and the two alternatives rejected are recorded in [A developer-facing
+report is a trace event, and the crate writes nothing to
+stderr](../../DESIGN-NOTES.md#reports-are-trace-events).
+
+The item was raised because the crate had two channels and no rule. It is answered against the
+argument the item itself made: it held that a trace-only report would be invisible to the
+developer it is addressed to, which is true and was accepted anyway, because the visibility
+`eprintln!` buys is a write into a stream the consumer owns and cannot refuse.
+
+The conversion of `ThreadpoolIo::drop`'s `eprintln!` -- the crate's only such write -- is part of
+`M-T4.3`, which emits the four new reports on the same occasion.
