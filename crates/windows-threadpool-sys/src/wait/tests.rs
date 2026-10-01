@@ -1090,8 +1090,13 @@ fn stop_and_drain_runs_a_queued_callback_rather_than_discarding_it() {
     // Occupy the pool's only thread until this test releases it.
     let gate = Arc::new((Mutex::new(false), Condvar::new()));
     let gate_for_work = Arc::clone(&gate);
+    // Set on entry, so the test can wait for the occupier to be *running*
+    // rather than merely submitted. See the spin below for why that matters.
+    let entered = Arc::new(AtomicUsize::new(0));
+    let entered_for_work = Arc::clone(&entered);
     let occupier = crate::work::ThreadpoolWork::new(
         move || {
+            entered_for_work.fetch_add(1, Ordering::SeqCst);
             let (lock, cvar) = &*gate_for_work;
             let mut open = lock.lock().unwrap_or_else(|p| p.into_inner());
             while !*open {
@@ -1102,6 +1107,31 @@ fn stop_and_drain_runs_a_queued_callback_rather_than_discarding_it() {
     )
     .expect("create the occupying work item");
     occupier.submit();
+
+    // Block until the occupier actually holds the pool's only thread.
+    //
+    // `submit` queues; it does not dispatch. Without this the occupier and the
+    // wait's callback are two queued items on a one-thread pool and the pool
+    // may run either first -- so "the callback is queued and cannot have
+    // started" was an assumption rather than a fact, and the assertion meant to
+    // check it passes whenever *nothing* has run yet, which is also true when
+    // the occupier has not started.
+    //
+    // Measured 2026-10-01, which is how this was found: with the cancelling
+    // sabotage applied, one run reported the occupier entered and the callback
+    // already run before `drop`, and another reported the occupier never
+    // entered at all. Both let the callback run, so both made a cancelling
+    // teardown look identical to a draining one and the guard reported
+    // `survived`. See `M-T6.10`.
+    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    while entered.load(Ordering::SeqCst) == 0 {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the occupying work item never started, so the pool's only thread is \
+             not held and this test cannot measure a queued callback"
+        );
+        std::thread::yield_now();
+    }
 
     let ran = Arc::new(AtomicUsize::new(0));
     let ran_for_callback = Arc::clone(&ran);
@@ -1166,8 +1196,13 @@ fn drop_runs_a_queued_callback_rather_than_discarding_it() {
 
     let gate = Arc::new((Mutex::new(false), Condvar::new()));
     let gate_for_work = Arc::clone(&gate);
+    // Set on entry, so the test can wait for the occupier to be *running*
+    // rather than merely submitted. See the spin below for why that matters.
+    let entered = Arc::new(AtomicUsize::new(0));
+    let entered_for_work = Arc::clone(&entered);
     let occupier = crate::work::ThreadpoolWork::new(
         move || {
+            entered_for_work.fetch_add(1, Ordering::SeqCst);
             let (lock, cvar) = &*gate_for_work;
             let mut open = lock.lock().unwrap_or_else(|p| p.into_inner());
             while !*open {
@@ -1178,6 +1213,31 @@ fn drop_runs_a_queued_callback_rather_than_discarding_it() {
     )
     .expect("create the occupying work item");
     occupier.submit();
+
+    // Block until the occupier actually holds the pool's only thread.
+    //
+    // `submit` queues; it does not dispatch. Without this the occupier and the
+    // wait's callback are two queued items on a one-thread pool and the pool
+    // may run either first -- so "the callback is queued and cannot have
+    // started" was an assumption rather than a fact, and the assertion meant to
+    // check it passes whenever *nothing* has run yet, which is also true when
+    // the occupier has not started.
+    //
+    // Measured 2026-10-01, which is how this was found: with the cancelling
+    // sabotage applied, one run reported the occupier entered and the callback
+    // already run before `drop`, and another reported the occupier never
+    // entered at all. Both let the callback run, so both made a cancelling
+    // teardown look identical to a draining one and the guard reported
+    // `survived`. See `M-T6.10`.
+    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    while entered.load(Ordering::SeqCst) == 0 {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the occupying work item never started, so the pool's only thread is \
+             not held and this test cannot measure a queued callback"
+        );
+        std::thread::yield_now();
+    }
 
     let ran = Arc::new(AtomicUsize::new(0));
     let ran_for_callback = Arc::clone(&ran);

@@ -1107,6 +1107,38 @@ that cannot drain may abort, or fail fast by some other route, but it may not
 return to its caller having abandoned the callback. Bounding the wait is a
 question about which failure to take, never about whether to continue.
 
+### A test that needs a pool thread occupied must wait for the occupier to run
+
+Found 2026-10-01 investigating `M-T6.10`, after two sabotages that had been
+caught began reporting `survived`.
+
+The two teardown guards -- that `Drop` and `stop_and_drain` *run* a queued
+callback rather than discarding it -- arrange a one-thread pool, submit a work
+item that blocks, then arm and signal a wait, so the wait's callback is queued
+behind the occupier. Each then asserted `ran == 0` and called the teardown.
+
+**`submit` queues; it does not dispatch.** Nothing waited for the occupier to
+actually start, so the occupier and the wait's callback were two queued items on
+a one-thread pool and the pool could run either first. The `ran == 0` assertion
+does not detect that: it is equally true when the occupier has not started, which
+is the case it needed to exclude.
+
+So the precondition was an assumption. Measured with the cancelling sabotage
+applied: one run reported the occupier entered *and* the callback already run
+before `Drop`; another reported the occupier never entered at all. Either way the
+callback ran, so a cancelling teardown was indistinguishable from a draining one
+and the guard passed.
+
+The fix is to block until the occupier signals entry. Twenty-five consecutive
+runs of the repaired tests pass, and both now fail under their own sabotage.
+
+**The general rule is worth more than the two tests.** A test whose meaning
+depends on a pool thread being busy has to wait for evidence that it *is* busy.
+Submission is not that evidence, and an assertion that nothing has run yet cannot
+supply it. This guard had been green for weeks while proving less than it
+claimed; what exposed it was unrelated work shifting the timing, which is luck,
+not a method.
+
 ## <a id="reports-are-trace-events"></a>A developer-facing report is a trace event, and the crate writes nothing to stderr
 
 **Decided 2026-10-01. This decision schedules work: the conversion of the one

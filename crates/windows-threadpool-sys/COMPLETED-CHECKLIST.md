@@ -1023,3 +1023,34 @@ cross-test interference.
 
 **Manifest health at this commit:** 12 of 14 cases behave as declared, both controls included. The
 two exceptions are `M-T6.10`.
+
+## Moved 2026-10-01 15:39:55 -04:00 -- M-T6.10, the guard that proved less than it claimed
+
+### <a id="m-t610"></a>M-T6.10 -- The two wait-drain sabotages stopped detecting; cause found and both guards restored. *(completed 2026-10-01 15:39:55 -04:00)*
+
+The second of the two readings the item named is the right one: **the guards were always
+timing-dependent**, and unrelated work shifted the timing enough to expose it. The full account is
+in [A test that needs a pool thread occupied must wait for the occupier to
+run](../../DESIGN-NOTES.md#teardown-drains).
+
+**The cause, in one line:** `submit` queues, it does not dispatch, and nothing waited for the
+occupying work item to actually start -- so the occupier and the wait's callback were two queued
+items on a one-thread pool and the pool could run either first.
+
+The `assert_eq!(ran, 0)` that was meant to establish the precondition cannot detect that: it is
+equally true when the occupier has not started, which is exactly the case it needed to exclude.
+
+**How it was separated from the other reading.** A probe reading the counters back by asserting
+against a wrong value, with the cancelling sabotage applied: one run gave
+`(occupier_entered, ran_before_drop, ran_after_drop) = (1, 1, 1)` -- the callback had already run
+before `Drop` -- and the next, with thread-id probes, gave `(0, 0, <tid>)`: the occupier never
+entered at all. Non-determinism between consecutive runs of the same binary ruled out any
+explanation that depended on a specific change in `M-T6.1` or `M-T6.2`.
+
+**Fixed** by blocking until the occupier signals entry, in both tests. Verified three ways: both
+pass clean; both fail under their own sabotage; and twenty-five consecutive runs pass, where the
+old form could not be relied on for one.
+
+**This was not a regression introduced by `M-T6.3`.** The guard had been reporting `caught` for
+weeks while proving less than it claimed. What changed was the timing, not the strength of the
+test -- so the earlier `caught` results were luck rather than evidence.
