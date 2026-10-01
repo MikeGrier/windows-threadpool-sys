@@ -71,6 +71,10 @@ unsafe extern "system" fn io_trampoline(
     // SAFETY: context is a valid *mut IoContext for the full callback duration (see Drop).
     let ctx = unsafe { &*(context as *const IoContext) };
     crate::trace_record!("io", "trampoline-entered", overlapped as usize, io_result);
+    // Stamped before the callback, not after: a dispatch that is still running
+    // is evidence the pool is live, and a long callback must not look like
+    // silence to the self-heal.
+    ctx.registration.stamp_dispatch();
 
     let overlapped = overlapped.cast::<OVERLAPPED>();
 

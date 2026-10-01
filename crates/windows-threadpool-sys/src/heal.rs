@@ -46,7 +46,7 @@ pub(crate) fn key_of(env: Option<&CallbackEnviron<'_>>) -> PoolKey {
 // caller until that item lands.
 #[cfg(feature = "self-heal")]
 #[allow(unused_imports)]
-pub(crate) use on::{PoolEntry, Registration, entries, register, retire_idle};
+pub(crate) use on::{PoolEntry, Registration, entries, now, register, retire_idle};
 
 #[cfg(not(feature = "self-heal"))]
 pub(crate) use off::{Registration, register};
@@ -57,6 +57,11 @@ mod off {
 
     /// A registration in a build with no registry: nothing, costing nothing.
     pub(crate) struct Registration;
+
+    impl Registration {
+        /// Records nothing: with no entry there is no slot to stamp.
+        pub(crate) const fn stamp_dispatch(&self) {}
+    }
 
     /// Records nothing, because without the feature there is no repair to owe.
     pub(crate) const fn register(_key: PoolKey) -> Registration {
@@ -72,6 +77,7 @@ mod on {
     use windows_sys::Win32::System::Threading::{
         CloseThreadpoolWork, CreateThreadpoolWork, PTP_CALLBACK_INSTANCE, PTP_WORK,
     };
+    use windows_sys::Win32::System::WindowsProgramming::QueryInterruptTime;
 
     /// What this crate knows about one pool.
     ///
@@ -136,6 +142,11 @@ mod on {
             self.last_dispatch.load(Ordering::Relaxed) > at
         }
 
+        /// When a dispatch was last observed; zero if none has been.
+        pub(crate) fn last_dispatch(&self) -> u64 {
+            self.last_dispatch.load(Ordering::Relaxed)
+        }
+
         /// Mark the owed repair discharged.
         pub(crate) fn clear_repair(&self) {
             self.repair_owed_at.store(0, Ordering::Relaxed);
@@ -184,6 +195,44 @@ mod on {
         pub(crate) fn entry(&self) -> Option<&Arc<PoolEntry>> {
             self.0.as_ref()
         }
+
+        /// Note that this object's pool has just dispatched a callback.
+        ///
+        /// Called from a trampoline, so it is on the path of every callback the
+        /// crate delivers: one counter read and one relaxed store.
+        pub(crate) fn stamp_dispatch(&self) {
+            if let Some(entry) = &self.0 {
+                entry.stamp_dispatch(now());
+            }
+        }
+    }
+
+    /// The interrupt-time counter, as both stamps are measured on.
+    ///
+    /// `QueryInterruptTime` rather than `QueryPerformanceCounter` because the
+    /// only question asked of these values is which of two came first, and this
+    /// runs for every callback -- the counter is read from memory the kernel
+    /// publishes to user mode, where `QueryPerformanceCounter` may do more.
+    /// Reading `KUSER_SHARED_DATA` directly would be the same read and is how
+    /// this is often done, but it binds to a layout nothing promises; the
+    /// documented call is the specified primitive for the same value.
+    ///
+    /// # Resolution, and which way its error falls
+    ///
+    /// The counter advances on the system clock tick -- tens of milliseconds by
+    /// default -- so a dispatch and a cancellation within one tick carry equal
+    /// stamps. [`PoolEntry::dispatched_since`] compares with `>`, so equal
+    /// stamps mean "no dispatch since", and the repair is submitted. That is the
+    /// direction the error has to fall: a redundant repair costs one work
+    /// submission, where a suppressed one leaves a pool stalled. The opposite
+    /// mistake cannot happen at any resolution, because the counter never goes
+    /// backwards, so a dispatch stamp can never exceed a cancellation that
+    /// followed it.
+    pub(crate) fn now() -> u64 {
+        let mut ticks = 0_u64;
+        // SAFETY: the out-parameter is a live local for the duration of the call.
+        unsafe { QueryInterruptTime(&raw mut ticks) };
+        ticks
     }
 
     impl Drop for Registration {

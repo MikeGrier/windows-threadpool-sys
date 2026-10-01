@@ -45,7 +45,11 @@ default = ["self-heal"]
 # Turning it off removes `try_cancel_pending` rather than changing what it
 # means, so a consumer who relied on it gets a compile error naming the
 # `unsafe` sibling to reach for instead.
-self-heal = []
+# `Win32_System_WindowsProgramming` is for `QueryInterruptTime`, which stamps
+# every dispatch so the self-heal can tell a pool that is still delivering
+# callbacks from one that has stopped. Pulled in only with this feature, so a
+# consumer who turns self-heal off never compiles it.
+self-heal = ["windows-sys/Win32_System_WindowsProgramming"]
 
 # A trace for defects that only appear under concurrency. Off by default and
 # absent from the compiled output when off, because the instrument for that

@@ -20,11 +20,8 @@ behaviour, and backed by a repair.
 - [x] **M-T6.1** -- Add the `self-heal` feature, default on, and the pool registry. ->
   [completed 2026-10-01](COMPLETED-CHECKLIST.md#m-t61)
 
-- [ ] **M-T6.2** -- **Stamp the last dispatch in every trampoline.** Work, wait, timer and I/O all
-  dispatch through a trampoline of this crate's before reaching the caller's closure; each stamps
-  its pool's slot before the call. Use the **interrupt-time counter**, not
-  `QueryPerformanceCounter`: only ordering against the cancellation is needed, and this path runs
-  for every callback, so a memory read is wanted rather than a syscall. One relaxed store.
+- [x] **M-T6.2** -- Stamp the last dispatch in every trampoline. -> [completed
+  2026-10-01](COMPLETED-CHECKLIST.md#m-t62)
 
 - [ ] **M-T6.3** -- **Rename to `try_cancel_pending`, and add the ungated `unsafe` sibling.**
   `try_cancel_pending` is gated on `self-heal` and marks its pool as owing a repair;

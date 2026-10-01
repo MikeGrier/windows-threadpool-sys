@@ -587,6 +587,10 @@ unsafe extern "system" fn wait_trampoline(
     // This activation consumed the arming: the pool is no longer watching, so
     // nothing is owed unless the callback below arms it again.
     ctx.obligation.record_settled();
+    // Stamped before the callback, not after: a dispatch that is still running
+    // is evidence the pool is live, and a long callback must not look like
+    // silence to the self-heal.
+    ctx.registration.stamp_dispatch();
     let activation = WaitActivation {
         result: WaitResult::from_raw(wait_result),
         ctx,

@@ -87,6 +87,10 @@ unsafe extern "system" fn periodic_trampoline(
     // kinds, and continues so that narrowing to `timer-periodic` catches only
     // this one.
     crate::trace_record!("timer-periodic", "trampoline-entered", _timer);
+    // Stamped before the callback, not after: a dispatch that is still running
+    // is evidence the pool is live, and a long callback must not look like
+    // silence to the self-heal.
+    ctx.registration.stamp_dispatch();
     let tick = PeriodicTick { ctx };
     // Not contained: see the callback contract in the crate docs.
     (ctx.callback)(&tick);

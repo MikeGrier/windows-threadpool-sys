@@ -374,6 +374,10 @@ unsafe extern "system" fn timer_trampoline(
     // This firing consumed the arming: a one-shot produces exactly one callback
     // per arming, so nothing is owed unless the callback re-arms below.
     ctx.obligation.record_settled();
+    // Stamped before the callback, not after: a dispatch that is still running
+    // is evidence the pool is live, and a long callback must not look like
+    // silence to the self-heal.
+    ctx.registration.stamp_dispatch();
     let firing = TimerFiring {
         ctx,
         pending: Cell::new(None),

@@ -937,3 +937,33 @@ object turned 10 red; retiring an entry that still owed a repair turned exactly
 an earlier one turned exactly `the_first_cancellation_is_the_one_remembered` red. The tests assert
 properties of the entry they own rather than absolute registry counts, because the registry is
 process-wide and `cargo test` runs these as threads in one process.
+
+## Moved 2026-10-01 13:46:01 -04:00 -- M-T6.2, stamping every dispatch
+
+### <a id="m-t62"></a>M-T6.2 -- Stamp the last dispatch in every trampoline. *(completed 2026-10-01 13:46:01 -04:00)*
+
+Every trampoline calls `Registration::stamp_dispatch` before invoking the caller's closure: one
+counter read and one relaxed store. Before rather than after, so a dispatch that is still running
+counts as evidence the pool is live and a long callback does not look like silence.
+
+**Five trampolines, not the four the item named.** It listed work, wait, timer and I/O; the
+periodic timer has its own trampoline and is a fifth. All five stamp.
+
+`QueryInterruptTime` is the clock, and the reasoning -- including that reading `KUSER_SHARED_DATA`
+directly would be the same read bound to a layout nothing promises -- is in [Which clock the two
+stamps are on, and which way its error falls](../../DESIGN-NOTES.md#cancellation-self-heals). That
+section also records the resolution finding: the counter advances on the system tick, so a
+dispatch and a cancellation in the same tick carry equal stamps and the repair is submitted
+anyway. A redundant repair costs one submission; a suppressed one leaves a pool stalled, so that
+is the direction the error has to fall.
+
+**The sabotage found an unguarded dispatch kind, which is the part worth keeping.** Making the
+shared stamp a no-op turned all five stamping tests red, and moving work's stamp after the
+callback turned exactly the ordering test red. But deleting **only** the I/O trampoline's stamp
+turned *nothing* red -- across 272 lib tests, every integration test and the doctests.
+
+The obvious place for an I/O assertion is the existing real-read test, which runs on the default
+pool -- and the default pool's entry is stamped by every other test in the binary, so an assertion
+there would have passed with the stamp deleted. `an_io_completion_stamps_its_pool` uses a private
+pool nothing else touches, and asserts the entry starts at zero before submitting. Re-injecting
+the same sabotage now turns exactly that test red.

@@ -47,6 +47,10 @@ unsafe extern "system" fn work_trampoline(
     // SAFETY: context is a valid *mut WorkContext for the full callback duration (see Drop).
     let ctx = unsafe { &*(context as *const WorkContext) };
     crate::trace_record!("work", "trampoline-entered", _work);
+    // Stamped before the callback, not after: a dispatch that is still running
+    // is evidence the pool is live, and a long callback must not look like
+    // silence to the self-heal.
+    ctx.registration.stamp_dispatch();
     // Not contained: the callback contract requires that it not unwind, and a
     // callback that breaks it aborts here rather than being silently forgiven.
     (ctx.f)();

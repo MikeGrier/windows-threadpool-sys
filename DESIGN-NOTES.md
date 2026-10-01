@@ -1250,6 +1250,30 @@ instead.
   favour of the two-method shape, which achieves the same explicitness without a
   protocol.
 
+### Which clock the two stamps are on, and which way its error falls
+
+Decided 2026-10-01 implementing `M-T6.2`. Both stamps -- the last dispatch and
+the cancellation that owes a repair -- are `QueryInterruptTime`, the interrupt-time
+counter.
+
+The only question ever asked of these values is which of two came first, so a
+counter whose value the kernel publishes to user mode is enough, and this runs on
+the path of every callback the crate delivers. Reading `KUSER_SHARED_DATA`
+directly is the same read and is how this is often written; it binds to a layout
+nothing promises, where the documented call is the specified primitive for the
+same value.
+
+**The counter advances on the system clock tick**, tens of milliseconds by
+default, so a dispatch and a cancellation within one tick carry equal stamps. The
+comparison is `>`, so equal stamps read as "no dispatch since" and the repair is
+submitted.
+
+That is the direction the error has to fall. A redundant repair costs one work
+submission to a pool that did not need it; a suppressed repair leaves a pool
+stalled until the application happens to submit something. And the opposite
+mistake cannot occur at any resolution: the counter never goes backwards, so a
+dispatch stamp can never exceed a cancellation that followed it.
+
 ### How long an entry lives, and why the default pool needs no rule of its own
 
 Decided 2026-10-01 while implementing `M-T6.1`, which had expected the opposite.
