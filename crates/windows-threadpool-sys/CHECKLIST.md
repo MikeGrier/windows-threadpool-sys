@@ -75,9 +75,21 @@ behaviour, and backed by a repair.
   recorded with that decision, so this item has to say what a fail-fast means for those two rather
   than assume the uniform method covers them.
 
-  **STILL OPEN, to settle here or raise:** what it does when the object is dropped on an
-  already-unwinding path, where a panic aborts. The mechanism decision deliberately did not answer
-  it.
+  **`Drop` panics, decided 2026-10-01**, which settles the sub-question the mechanism left open.
+  A second panic on an already-unwinding path aborts, which is the right outcome rather than an
+  accident, and is consistent with the abort-on-unwind contract the crate already enforces for
+  callbacks. See [What it does: `Drop` panics, and a double panic
+  aborts](../../DESIGN-NOTES.md#fail-fast-is-a-default-off-feature).
+
+  **Drain first, then panic.** A constraint on the work: panicking before the drain would unwind
+  past the close and the context free, leaving the pool able to dispatch into a context that is
+  leaked but still live -- the abandonment the bound below forbids, reached through the mechanism
+  meant to prevent it.
+
+  **Guard it the way the callback contract is guarded.** `tests/callback_panic_aborts.rs`
+  re-executes itself as a child process, because an abort would otherwise take the test runner
+  with it; a fail-fast that aborts on an unwinding path needs the same treatment, and that file is
+  the worked example to follow rather than re-derive.
 
   **One bound is already fixed and constrains every answer: forward progress is not the
   alternative.** A teardown that cannot drain may abort, or fail fast by some other route, but it

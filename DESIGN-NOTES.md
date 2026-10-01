@@ -1235,10 +1235,40 @@ The inverse polarity -- on by default, with a feature to turn it off -- was
 rejected outright and is worth recording so it is not re-proposed: features
 cannot be subtracted, so "off" would not be expressible by a consumer at all.
 
-### Still open
+### What it does: `Drop` panics, and a double panic aborts
 
-**What it does when the object is dropped on an already-unwinding path**, where
-a panic aborts. That is the one sub-question the mechanism does not answer.
+**Decided 2026-10-01**, settling the sub-question the mechanism left open.
+
+`Drop` panics when a drain was owed. On an already-unwinding path the second
+panic aborts the process, which is Rust's defined behaviour for an unwind
+escaping a destructor during cleanup -- and is the right outcome rather than an
+accident: aborting is a failure, which the bound below permits, where returning
+quietly is an abandonment, which it does not.
+
+This is consistent with the contract the crate already enforces. A callback that
+unwinds across the FFI boundary aborts the process today, asserted for all five
+callback kinds by `tests/callback_panic_aborts.rs`, which re-executes itself as
+a child because the abort would otherwise take the test runner with it.
+
+**The drain happens first, and then the panic.** This is a constraint on the
+implementation, not a detail of it. [Teardown drains rather than
+cancels](#teardown-drains) has `Drop` drain unconditionally, with the obligation
+flag gating the *report* and never the *work*; a fail-fast that panicked before
+draining would unwind past the close and the context free, leaving the pool able
+to dispatch into a context that is leaked but still live. That is exactly the
+abandonment the bound forbids, arrived at through the mechanism meant to prevent
+it. The drain still makes the teardown safe; the panic reports the violation.
+
+**`panic = "abort"` collapses the distinction.** A consumer building with that
+profile aborts on the first panic, so the already-unwinding case does not arise
+for them at all. The reasoning above describes the unwinding profile.
+
+**It does not contradict [the trace-only reporting
+rule](#reports-are-trace-events)**, though it looks as though it might, since a
+panic message reaches stderr. A panic goes through the *application's* panic
+hook, which the application can replace; an `eprintln!` cannot be refused. That
+is the same distinction the reporting rule turns on -- the crate declines to
+choose the destination, and a panic leaves the choice where it belongs.
 
 **One bound is already fixed and constrains every answer: forward progress is
 not the alternative.** A teardown that cannot drain may abort, or fail fast by
