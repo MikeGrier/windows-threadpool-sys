@@ -45,61 +45,8 @@ shows the cancelling form leaves the default pool unable to make its first worke
 - [x] **M-T4.10** -- Extract the re-arm suppression that `ThreadpoolWait` and `ThreadpoolTimer`
   each implemented separately. -> [completed 2026-10-01](COMPLETED-CHECKLIST.md#m-t410)
 
-- [ ] **M-T4.8** -- **DECISION TO RAISE: the synchronous close is not uniform, in name or in
-  existence.**
-
-  > **Re-inventory after `M-T6` lands.** That milestone adds `try_cancel_pending` and
-  > `try_cancel_pending_no_heal_tracking` to `ThreadpoolWait`, `WaitMember` and -- through
-  > `close_members` -- `CleanupGroup`, so the surface this item is taking an inventory of grows
-  > before the decision is taken. Deciding now would be deciding against a list that is about to
-  > change. `M-T6.3` is also the first time this crate has deliberately paired a safe and an
-  > `unsafe` form of the same operation, which is a precedent worth weighing here rather than
-  > discovering later.
-
-  Found while investigating M-T4.3. Four shapes across five types:
-  `stop_and_drain` on `ThreadpoolWait`, `ThreadpoolTimer` and `PeriodicTimer`; `run_down` on
-  `ThreadpoolIo`; `close_members(cancel_pending: bool)` on `CleanupGroup`; and **nothing named as
-  such on `ThreadpoolWork`**, whose `wait()` happens to be the drain.
-
-  **The obligation half is settled.** `M-T4.3` defines it per type, decided 2026-10-01, so this no
-  longer blocks that item. `M-T4.4` is still gated on it, because a linear type needs a uniform
-  method to be linear about.
-
-  What remains is naming. `run_down` and `close_members` have good reasons to differ -- one waits
-  on an operation registry, the other releases a whole group -- so the question is whether they are
-  renamed, given a common alias, or left as they are.
-
 - [x] **M-T4.9** -- Decided: a developer-facing report is a trace event, and the crate writes
   nothing to stderr. -> [completed 2026-10-01](COMPLETED-CHECKLIST.md#m-t49)
-
-- [ ] **M-T4.4** -- **DECISION TO RAISE, reserved by the engineer 2026-09-28 as CRATE-WIDE: a
-  fail-fast that forces the caller to have closed, making these types linear rather than affine.**
-
-  > **`M-T5.8` set a relevant precedent 2026-10-01**, without settling this. Faced with an
-  > operation that could not be made safe, the crate did not reach for linearity -- it paired a
-  > safe form with an `unsafe` sibling carrying a statable obligation, and let a feature decide
-  > which exists. That is a different answer to "how do we make the caller take responsibility"
-  > than a linear type is, and it is now shipping. Weigh it as an alternative here rather than
-  > treating linearity as the only way to bind a caller to a protocol.
-
-  **Not to be made piecemeal, and if made, made uniformly.** That is a constraint on the work, not
-  a note about it: implementing it for `ThreadpoolWait` alone -- the type the M26.13 measurement
-  happens to implicate -- would leave the crate with one linear type and four affine ones, which
-  is a worse surface than either choice made consistently. Gated on **M-T4.8**, because there is
-  no uniform method to be linear *about* until the synchronous close is uniform.
-
-  **It is not greenfield.** `ThreadpoolIo` already ships a soft version: its `Drop` reports a
-  skipped rundown and then continues. A hard fail-fast changes that type's existing behaviour too,
-  so the decision is "does the crate become linear", not "do we add something new".
-
-  Still open within it: whether the fail-fast is off by default (assumed), how it is selected --
-  environment variable, constructor option, process-wide setter -- and what it does when the
-  object is dropped on an already-unwinding path, where a panic aborts.
-
-  **One bound is already fixed and constrains every answer: forward progress is not the
-  alternative.** A teardown that cannot drain may abort, or fail fast by some other route, but it
-  may not return to its caller having abandoned the callback. Bounding the wait is a question
-  about which failure to take, never about whether to continue.
 
 - [x] **M-T4.5** -- **`CleanupGroup` already complies; no change needed.** Queued on the strength
   of a grep showing both drain forms at eight sites; reading it, those are the *member* accessors
@@ -377,8 +324,8 @@ what is not.**
   2. The cost is documented on both methods as of this commit. Prose is not a rung on the detection
      ladder, so if the surface is kept, consider whether anything stronger is wanted.
 
-  Still coupled to **M-T4.4** and **M-T4.8**, and still the engineer's call rather than an
-  assistant's.
+  Still coupled to **M-T6.8** and **M-T6.7** (raised in `M-T4` as `M-T4.4` and `M-T4.8`, renumbered
+  2026-10-01), and still the engineer's call rather than an assistant's.
 
   The audit's exposure table remains correct as written -- every default path is safe, because
   `Drop` and `stop_and_drain` drain and the group releases with false -- but note *why*: not
@@ -518,3 +465,62 @@ behaviour, and backed by a repair.
   whatever feature set CI uses, confirming that `try_cancel_pending` is absent, that the `unsafe`
   sibling is present, and that no trampoline stamps. The compile error a consumer gets is the
   designed behaviour, so it is worth asserting the shape of the off build rather than assuming it.
+
+- [ ] **M-T6.7** -- **DECISION TO RAISE: the synchronous close is not uniform, in name or in
+  existence.**
+
+  > **Must follow `M-T6.3`**, which is what makes the surface final. That item adds
+  > `try_cancel_pending` and `try_cancel_pending_no_heal_tracking` to `ThreadpoolWait`,
+  > `WaitMember` and -- through `close_members` -- `CleanupGroup`, so taking this inventory before
+  > it would be taking it against a list that is about to change. `M-T6.3` is also the first time
+  > this crate has deliberately paired a safe and an `unsafe` form of the same operation, which is
+  > a precedent worth weighing here rather than discovering later.
+
+  Raised in `M-T4` while investigating `M-T4.3`, and moved here 2026-10-01 because `M-T6.3` is
+  what unblocks it. Four shapes across five types: `stop_and_drain` on `ThreadpoolWait`,
+  `ThreadpoolTimer` and `PeriodicTimer`; `run_down` on `ThreadpoolIo`;
+  `close_members(cancel_pending: bool)` on `CleanupGroup`; and **nothing named as such on
+  `ThreadpoolWork`**, whose `wait()` happens to be the drain.
+
+  **The obligation half is already settled and is not part of this.** `M-T4.3` defined it per
+  type and shipped, so what remains here is naming alone. `run_down` and `close_members` have good
+  reasons to differ -- one waits on an operation registry, the other releases a whole group -- so
+  the question is whether they are renamed, given a common alias, or left as they are.
+
+  Note that the cancel surface and the drain surface are different questions. `M-T6.3` renames the
+  former; this asks about the latter.
+
+- [ ] **M-T6.8** -- **DECISION TO RAISE, reserved by the engineer 2026-09-28 as CRATE-WIDE: a
+  fail-fast that forces the caller to have closed, making these types linear rather than affine.**
+
+  > **Gated on `M-T6.7`**, because there is no uniform method to be linear *about* until the
+  > synchronous close is uniform. Raised in `M-T4` as `M-T4.4` and moved here 2026-10-01 with the
+  > item it depends on.
+
+  > **`M-T5.8` set a relevant precedent 2026-10-01**, without settling this. Faced with an
+  > operation that could not be made safe, the crate did not reach for linearity -- it paired a
+  > safe form with an `unsafe` sibling carrying a statable obligation, and let a feature decide
+  > which exists. That is a different answer to "how do we make the caller take responsibility"
+  > than a linear type is, and it is now shipping. Weigh it as an alternative here rather than
+  > treating linearity as the only way to bind a caller to a protocol.
+
+  **Not to be made piecemeal, and if made, made uniformly.** That is a constraint on the work, not
+  a note about it: implementing it for `ThreadpoolWait` alone -- the type the M26.13 measurement
+  happens to implicate -- would leave the crate with one linear type and four affine ones, which
+  is a worse surface than either choice made consistently.
+
+  **It is not greenfield.** `ThreadpoolIo` already ships a soft version: its `Drop` reports a
+  skipped rundown and then continues. A hard fail-fast changes that type's existing behaviour too,
+  so the decision is "does the crate become linear", not "do we add something new".
+
+  `M-T4.3` has since given every type a flag recording whether a drain is owed, deliberately not
+  behind the `trace` feature, so a fail-fast has the fact it needs without new bookkeeping.
+
+  Still open within it: whether the fail-fast is off by default (assumed), how it is selected --
+  environment variable, constructor option, process-wide setter -- and what it does when the
+  object is dropped on an already-unwinding path, where a panic aborts.
+
+  **One bound is already fixed and constrains every answer: forward progress is not the
+  alternative.** A teardown that cannot drain may abort, or fail fast by some other route, but it
+  may not return to its caller having abandoned the callback. Bounding the wait is a question
+  about which failure to take, never about whether to continue.

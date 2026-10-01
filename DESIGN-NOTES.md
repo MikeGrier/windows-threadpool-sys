@@ -1092,7 +1092,7 @@ remembered.
 
 **What it costs**: one relaxed store per arming and per dispatch, and one relaxed
 load at `Drop`, in every build. It is deliberately not behind the `trace`
-feature, so a later decision needing the same fact -- `M-T4.4`'s fail-fast is the
+feature, so a later decision needing the same fact -- `M-T6.8`'s fail-fast is the
 candidate -- can read it without the instrument being compiled in.
 
 ### Still not decided: the fail-fast, and its bound
