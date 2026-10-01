@@ -806,7 +806,9 @@ impl ThreadpoolWait {
     /// Stop watching.
     ///
     /// New activations stop being queued, but a callback already queued still
-    /// runs; use [`ThreadpoolWait::cancel_pending`] to drop those as well.
+    /// runs; use `try_cancel_pending`, or
+    /// [`try_cancel_pending_no_heal_tracking`](Self::try_cancel_pending_no_heal_tracking)
+    /// in a build without the `self-heal` feature, to drop those as well.
     pub fn disarm(&self) {
         crate::trace_call!("SetThreadpoolWait(disarm)", self.wait, 0, {
             // SAFETY: `wait` is valid for the lifetime of self; a null handle is the
@@ -875,7 +877,38 @@ impl ThreadpoolWait {
     /// close has nothing to take. Draining cannot reach the removal primitive on
     /// any path. Prefer them -- but note that doing so is what makes the
     /// *subsequent close* safe, not merely this call.
-    pub fn cancel_pending(&self) {
+    /// This crate repairs the pool afterwards, which is what makes this safe to
+    /// offer. See
+    /// [README-FEATURE-self-heal.md](https://docs.rs/crate/windows-threadpool-sys/latest/source/README-FEATURE-self-heal.md).
+    #[cfg(feature = "self-heal")]
+    pub fn try_cancel_pending(&self) {
+        // SAFETY: the obligation this transfers is discharged here, by marking
+        // the pool so the self-heal repairs it.
+        unsafe { self.try_cancel_pending_no_heal_tracking() };
+        // SAFETY: the context outlives every callback and is freed only by Drop,
+        // which cannot run while this borrow of self is alive.
+        unsafe { &*self.context }.registration.owe_repair();
+    }
+
+    /// [`try_cancel_pending`](Self::try_cancel_pending) without the repair.
+    ///
+    /// Always present, including in builds with `self-heal` off, which is the
+    /// point: it is the method that still exists when the gated one does not,
+    /// and its signature says what the caller takes on.
+    ///
+    /// # Safety
+    ///
+    /// The caller must ensure the pool is repaired. Submitting any work item to
+    /// it does so; so does knowing the pool is kept live by something else.
+    /// Leaving it unrepaired can stop the pool dispatching -- which, for the
+    /// process-default pool, reaches every component in the process, including
+    /// code with no connection to this call.
+    ///
+    /// This is not a memory-safety obligation, and the keyword is not claiming
+    /// one. It is here because the obligation is statable and dischargeable by
+    /// the caller, which is what `unsafe` marks; see
+    /// [the self-heal decision](https://docs.rs/crate/windows-threadpool-sys/latest/source/DESIGN-NOTES.md).
+    pub unsafe fn try_cancel_pending_no_heal_tracking(&self) {
         crate::trace_call!("WaitForThreadpoolWaitCallbacks(cancel)", self.wait, 1, {
             // SAFETY: `wait` is valid for the lifetime of self. A cancelled wait
             // callback owns no storage, so dropping queued callbacks orphans nothing.
@@ -883,10 +916,26 @@ impl ThreadpoolWait {
         });
     }
 
+    /// Mark the pool behind a detached wait context as owing a repair.
+    ///
+    /// For [`crate::cleanup_group::CleanupGroup`], whose members hold their
+    /// context through the group rather than through a [`ThreadpoolWait`].
+    ///
+    /// # Safety
+    ///
+    /// `context` must come from [`into_parts`](Self::into_parts) on this type
+    /// and name a still-live object whose context the caller has not yet freed.
+    pub(crate) unsafe fn owe_repair(context: *mut core::ffi::c_void) {
+        // SAFETY: forwarded; the context outlives the member until the group
+        // frees it, and this only touches that object's registration.
+        let ctx = unsafe { &*context.cast::<WaitContext>() };
+        ctx.registration.owe_repair();
+    }
+
     /// Stop watching and block until the wait is idle, leaving it reusable.
     ///
     /// This exists because neither [`disarm`](Self::disarm) nor
-    /// [`cancel_pending`](Self::cancel_pending) can stop a self-re-arming wait on
+    /// `try_cancel_pending` can stop a self-re-arming wait on
     /// its own: a callback already running can call [`WaitActivation::rearm`]
     /// after a disarm from outside has taken effect. This suppresses re-arming
     /// for the duration of the call, using the same mechanism `Drop` uses, and
@@ -901,7 +950,7 @@ impl ThreadpoolWait {
     ///   during the call is discarded rather than deferred.
     ///
     /// **A queued callback runs; it is not discarded.** That is the difference
-    /// between this and [`cancel_pending`](Self::cancel_pending), and it is why
+    /// between this and `try_cancel_pending`, and it is why
     /// this can block for as long as the callback takes. See
     /// [the teardown-drains decision](../../../DESIGN-NOTES.md#teardown-drains)
     /// for why finishing the work is preferred to abandoning it.

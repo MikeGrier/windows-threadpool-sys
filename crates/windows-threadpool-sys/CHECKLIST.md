@@ -23,13 +23,34 @@ behaviour, and backed by a repair.
 - [x] **M-T6.2** -- Stamp the last dispatch in every trampoline. -> [completed
   2026-10-01](COMPLETED-CHECKLIST.md#m-t62)
 
-- [ ] **M-T6.3** -- **Rename to `try_cancel_pending`, and add the ungated `unsafe` sibling.**
-  `try_cancel_pending` is gated on `self-heal` and marks its pool as owing a repair;
-  `try_cancel_pending_no_heal_tracking` is `unsafe`, always present, and transfers the repair
-  obligation to the caller. Same treatment for `WaitMember`, and for `CleanupGroup::close_members`,
-  which passes the cancel through to each member. **The contract is identical in both feature
-  states** -- best-effort cancellation, the pool may stall briefly -- and only the repair latency
-  differs; do not document it as a behavioural difference.
+- [x] **M-T6.3** -- Rename to `try_cancel_pending`, and add the ungated `unsafe` sibling. ->
+  [completed 2026-10-01](COMPLETED-CHECKLIST.md#m-t63)
+
+- [ ] **M-T6.9** -- **Repair the one sabotage case still declared wrong: "the factory layout is
+  truncated".**
+
+  Found 2026-10-01 running [tools/run-sabotage.ps1](../../tools/run-sabotage.ps1) during `M-T6.3`,
+  which was the first run of the harness in a while. It reported **three** cases not behaving as
+  declared, all broken by this session's own commits and none noticed at the time:
+
+  - *the wait's `stop_and_drain` cancels instead of draining* -- `MANIFEST STALE: pattern found 0
+    times`. `M-T4.3` inserted a line inside the block the `find` matched. Fixed in `M-T6.3` by
+    anchoring on two lines instead of four.
+  - *the handle scan gives up immediately* -- `pattern found 2 times, expected 1`. A second
+    `const CEILING: usize = 4096;` arrived with the completion-port scan. Fixed in `M-T6.3` by
+    including the preceding doc line.
+  - *the factory layout is truncated* -- `MANIFEST DOES NOT COMPILE (tests never ran)`. **Still
+    open; this item.**
+
+  The last one needs the compiler error, which the harness does not print. Note before assuming it
+  is simply stale: if the truncated struct now fails a `const` assertion, the sabotage is being
+  *caught by the build* -- the strongest rung -- and the case should be re-declared rather than
+  repaired. Find out which before changing anything.
+
+  **The standing lesson is larger than the three cases.** Nothing re-runs this harness, so a
+  manifest silently rots as the code it patches moves, and every one of these broke in a commit
+  whose author (me) believed the guards were intact. Consider whether the sweep belongs in CI --
+  a decision for the engineer, since the full sweep costs minutes per case.
 
 - [ ] **M-T6.4** -- **The self-heal timer.** A periodic timer on a private pool created **lazily on
   the first cancellation**, so a consumer who never cancels never pays for a pool. Each tick, for

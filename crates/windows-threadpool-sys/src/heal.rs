@@ -61,6 +61,10 @@ mod off {
     impl Registration {
         /// Records nothing: with no entry there is no slot to stamp.
         pub(crate) const fn stamp_dispatch(&self) {}
+
+        /// Records nothing. Without the feature the repair obligation belongs to
+        /// the caller of `try_cancel_pending_no_heal_tracking`, not to us.
+        pub(crate) const fn owe_repair(&self) {}
     }
 
     /// Records nothing, because without the feature there is no repair to owe.
@@ -203,6 +207,18 @@ mod on {
         pub(crate) fn stamp_dispatch(&self) {
             if let Some(entry) = &self.0 {
                 entry.stamp_dispatch(now());
+            }
+        }
+
+        /// Note that a cancellation on this object's pool owes it a repair.
+        ///
+        /// Stamped *after* the cancelling call returns, not before. The question
+        /// a repair asks is whether the pool has dispatched since the removal
+        /// that may have severed its notification, and a dispatch that happened
+        /// while the removal was in progress is no evidence about afterwards.
+        pub(crate) fn owe_repair(&self) {
+            if let Some(entry) = &self.0 {
+                entry.owe_repair(now());
             }
         }
     }

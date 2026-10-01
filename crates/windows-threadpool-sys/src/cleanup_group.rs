@@ -69,8 +69,18 @@ struct OwnedResource {
     /// `CloseThreadpoolCleanupGroupMembers` runs. A no-op for kinds with no
     /// callback-driven re-arm (work, periodic timers, watched handles).
     prepare_shutdown: unsafe fn(*mut c_void),
+    /// Mark the member's pool as owing a self-heal repair, when the release is
+    /// a cancelling one. A no-op for every kind but a wait: the removal that
+    /// can sever a pool's arrival notification operates on a wait completion
+    /// packet, and only a wait owns one.
+    owe_repair: unsafe fn(*mut c_void),
     free: unsafe fn(*mut c_void),
 }
+
+/// A repair hook for a member whose release cannot wedge a pool.
+///
+/// SAFETY: takes a pointer it never dereferences.
+unsafe fn no_repair_owed(_ptr: *mut c_void) {}
 
 // SAFETY: each pointer is a `Box` the group exclusively owns and frees exactly
 // once, after the pool has released every member that could reach it.
@@ -223,6 +233,7 @@ impl CleanupGroup {
         self.adopt(OwnedResource {
             ptr: context,
             prepare_shutdown: prepare_shutdown_noop,
+            owe_repair: no_repair_owed,
             free: ThreadpoolWork::drop_context,
         });
         Ok(WorkMember {
@@ -252,6 +263,7 @@ impl CleanupGroup {
         self.adopt(OwnedResource {
             ptr: context,
             prepare_shutdown: ThreadpoolTimer::prepare_shutdown,
+            owe_repair: no_repair_owed,
             free: ThreadpoolTimer::drop_context,
         });
         Ok(TimerMember {
@@ -286,6 +298,7 @@ impl CleanupGroup {
         self.adopt(OwnedResource {
             ptr: context,
             prepare_shutdown: prepare_shutdown_noop,
+            owe_repair: no_repair_owed,
             free: ThreadpoolPeriodicTimer::drop_context,
         });
         Ok(PeriodicTimerMember {
@@ -322,6 +335,7 @@ impl CleanupGroup {
         self.adopt(OwnedResource {
             ptr: context,
             prepare_shutdown: ThreadpoolWait::prepare_shutdown,
+            owe_repair: ThreadpoolWait::owe_repair,
             free: ThreadpoolWait::drop_context,
         });
         // The target outlives the member for the same reason the context does.
@@ -332,11 +346,13 @@ impl CleanupGroup {
         self.adopt(OwnedResource {
             ptr: target.cast(),
             prepare_shutdown: prepare_shutdown_noop,
+            owe_repair: no_repair_owed,
             free: free_boxed::<WaitTarget>,
         });
         Ok(WaitMember {
             handle: raw,
             watched: target,
+            context,
             _group: PhantomData,
         })
     }
@@ -395,6 +411,15 @@ impl CleanupGroup {
                 // matches the context kind this resource holds and only
                 // suppresses/disarms that one object.
                 unsafe { (resource.prepare_shutdown)(resource.ptr) };
+                if cancel_pending {
+                    // A cancelling release passes the cancel through to every
+                    // member, so each wait among them reaches the same removal
+                    // `ThreadpoolWait::try_cancel_pending` does and owes its
+                    // pool the same repair. Marked before the release rather
+                    // than after because the members' contexts are freed by it.
+                    // SAFETY: as above; the hook matches this resource's kind.
+                    unsafe { (resource.owe_repair)(resource.ptr) };
+                }
             }
         }
 
@@ -644,6 +669,11 @@ impl PeriodicTimerMember<'_> {
 pub struct WaitMember<'group> {
     handle: PTP_WAIT,
     watched: *mut WaitTarget,
+    /// The callback context the group owns for this member.
+    ///
+    /// Held so the member can mark its own pool as owing a repair. The group
+    /// owns and frees it; this is a borrow for the member's lifetime.
+    context: *mut c_void,
     _group: PhantomData<&'group CleanupGroup>,
 }
 
@@ -687,7 +717,7 @@ impl WaitMember<'_> {
     /// # This brings a process-wide hazard forward; it does not create it
     ///
     /// Same as
-    /// [`ThreadpoolWait::cancel_pending`](crate::wait::ThreadpoolWait::cancel_pending)
+    /// [`ThreadpoolWait::try_cancel_pending_no_heal_tracking`](crate::wait::ThreadpoolWait::try_cancel_pending_no_heal_tracking)
     /// -- see there for the full account. In short: removing an already-delivered
     /// completion packet can permanently sever a pool's arrival-to-factory
     /// notification, but the member's eventual release performs the same removal
@@ -700,7 +730,28 @@ impl WaitMember<'_> {
     /// the cancel through to each member.
     ///
     /// Prefer [`wait`](Self::wait).
-    pub fn cancel_pending(&self) {
+    ///
+    /// This crate repairs the pool afterwards, which is what makes this safe to
+    /// offer.
+    #[cfg(feature = "self-heal")]
+    pub fn try_cancel_pending(&self) {
+        // SAFETY: the obligation this transfers is discharged here, by marking
+        // the pool so the self-heal repairs it.
+        unsafe { self.try_cancel_pending_no_heal_tracking() };
+        // SAFETY: the group owns this context and does not free it while this
+        // member borrows the group.
+        unsafe { ThreadpoolWait::owe_repair(self.context) };
+    }
+
+    /// [`try_cancel_pending`](Self::try_cancel_pending) without the repair.
+    ///
+    /// # Safety
+    ///
+    /// The caller must ensure the pool is repaired, by submitting any work item
+    /// to it or by knowing something else keeps it live. See
+    /// [`ThreadpoolWait::try_cancel_pending_no_heal_tracking`], whose obligation
+    /// this is.
+    pub unsafe fn try_cancel_pending_no_heal_tracking(&self) {
         // SAFETY: as above.
         crate::trace_call!("WaitForThreadpoolWaitCallbacks(cancel)", self.handle, 1, {
             // SAFETY: the handle is live until the group releases it.

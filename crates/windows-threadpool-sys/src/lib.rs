@@ -159,7 +159,8 @@
 //!
 //! Note the shape of that: **the close performs the same removal**, so no choice
 //! of entry point avoids the dangerous call. Draining does not dodge it -- it
-//! empties it. Avoiding [`wait::ThreadpoolWait::cancel_pending`] buys nothing on
+//! empties it. Avoiding
+//! [`wait::ThreadpoolWait::try_cancel_pending_no_heal_tracking`] buys nothing on
 //! its own, which is why the default paths drain rather than the hazardous call
 //! being hidden.
 //!

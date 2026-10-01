@@ -310,6 +310,119 @@ mod on {
         drop(pin);
     }
 
+    // --- M-T6.3: a cancellation marks its pool as owing a repair.
+    //
+    // The wider sabotage matrix for this -- a cancel that does not mark, a heal
+    // that creates instead of submitting -- belongs to `M-T6.5`. These pin that
+    // the two methods differ in the one way that is their whole point.
+
+    #[test]
+    fn try_cancel_pending_marks_its_pool() {
+        let pool = ThreadpoolPool::new().expect("create pool");
+        let mut env = CallbackEnviron::new();
+        env.set_pool(&pool);
+        let event = WaitableHandle::event(true, false).expect("create event");
+        let wait = ThreadpoolWait::new(event, |_| {}, Some(&mut env)).expect("create wait");
+        let entry = crate::heal::entries()
+            .into_iter()
+            .find(|e| e.key() == pool.as_raw() as usize)
+            .expect("the wait registered its pool");
+        assert_eq!(entry.repair_owed_at(), None, "nothing owed before the call");
+
+        wait.arm(None);
+        wait.try_cancel_pending();
+        assert!(
+            entry.repair_owed_at().is_some(),
+            "a cancellation may have severed this pool, so it owes a repair"
+        );
+        entry.clear_repair();
+    }
+
+    #[test]
+    fn the_untracked_sibling_leaves_the_obligation_with_the_caller() {
+        // The difference that justifies the `unsafe`: this one records nothing,
+        // so the pool is the caller's to repair.
+        let pool = ThreadpoolPool::new().expect("create pool");
+        let mut env = CallbackEnviron::new();
+        env.set_pool(&pool);
+        let event = WaitableHandle::event(true, false).expect("create event");
+        let wait = ThreadpoolWait::new(event, |_| {}, Some(&mut env)).expect("create wait");
+        let entry = crate::heal::entries()
+            .into_iter()
+            .find(|e| e.key() == pool.as_raw() as usize)
+            .expect("the wait registered its pool");
+
+        wait.arm(None);
+        // SAFETY: this test discharges the obligation by not depending on the
+        // pool afterwards; the object is dropped immediately below.
+        unsafe { wait.try_cancel_pending_no_heal_tracking() };
+        assert_eq!(
+            entry.repair_owed_at(),
+            None,
+            "the untracked form must record nothing, or the `unsafe` is a lie"
+        );
+    }
+
+    #[test]
+    fn a_cancelling_group_release_marks_a_wait_members_pool() {
+        use crate::cleanup_group::CleanupGroup;
+
+        let pool = ThreadpoolPool::new().expect("create pool");
+        let mut env = CallbackEnviron::new();
+        env.set_pool(&pool);
+        let mut group = CleanupGroup::new().expect("create group");
+        let member = group
+            .create_wait(
+                WaitableHandle::event(true, false).expect("create event"),
+                |_| {},
+                Some(&env),
+            )
+            .expect("create wait member");
+        member.arm(None);
+        let entry = crate::heal::entries()
+            .into_iter()
+            .find(|e| e.key() == pool.as_raw() as usize)
+            .expect("the member registered its pool");
+        assert_eq!(entry.repair_owed_at(), None);
+
+        group.close_members(true);
+        assert!(
+            entry.repair_owed_at().is_some(),
+            "a cancelling release passes the cancel to each member, so a wait \
+             among them owes its pool a repair"
+        );
+        entry.clear_repair();
+    }
+
+    #[test]
+    fn a_draining_group_release_marks_nothing() {
+        use crate::cleanup_group::CleanupGroup;
+
+        let pool = ThreadpoolPool::new().expect("create pool");
+        let mut env = CallbackEnviron::new();
+        env.set_pool(&pool);
+        let mut group = CleanupGroup::new().expect("create group");
+        let member = group
+            .create_wait(
+                WaitableHandle::event(true, false).expect("create event"),
+                |_| {},
+                Some(&env),
+            )
+            .expect("create wait member");
+        member.arm(None);
+        let entry = crate::heal::entries()
+            .into_iter()
+            .find(|e| e.key() == pool.as_raw() as usize)
+            .expect("the member registered its pool");
+
+        group.close_members(false);
+        assert_eq!(
+            entry.repair_owed_at(),
+            None,
+            "a draining release leaves nothing to remove, so nothing is owed"
+        );
+    }
+
     #[test]
     fn the_stamp_lands_before_the_callback_body_runs() {
         // The ordering the item asks for, asserted from inside the callback:

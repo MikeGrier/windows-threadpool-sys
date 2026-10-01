@@ -112,9 +112,11 @@
       "expect": "caught",
       "why": "The scan is what makes the factory readable in a stalled process, where no hooked call has fired and so no handle has been learned. A ceiling that stops before any real handle leaves it finding nothing, which is indistinguishable from a process with no pool -- and would have been read as exactly that.",
       "find": [
+        "    /// this is generous for a test process rather than a tuned figure.",
         "    const CEILING: usize = 4096;"
       ],
       "replace": [
+        "    /// this is generous for a test process rather than a tuned figure.",
         "    const CEILING: usize = 4;"
       ]
     },
@@ -156,7 +158,7 @@
       "replace": [
         "        // The lock is released before draining: a callback blocked on it would",
         "        // otherwise never finish, and this wait would never return.",
-        "        self.cancel_pending();",
+        "        unsafe { self.try_cancel_pending_no_heal_tracking() };",
         "        crate::trace_record!(\"wait\", \"drop-drained\", self.wait);"
       ]
     },
@@ -166,16 +168,12 @@
       "expect": "caught",
       "why": "The early-discharge method a caller uses to pay the teardown cost at a point they choose. Separate from Drop because they are separate call sites: fixing one and not the other would leave whichever the caller did not reach still discarding work. The method has been named `stop_and_drain` and implemented as a cancel since it was written.",
       "find": [
-        "        // Drained with the lock released: a callback blocked on it would",
         "        // otherwise never finish, and this would never return.",
-        "        self.wait();",
-        "        ctx.release_suppression();"
+        "        self.wait();"
       ],
       "replace": [
-        "        // Drained with the lock released: a callback blocked on it would",
         "        // otherwise never finish, and this would never return.",
-        "        self.cancel_pending();",
-        "        ctx.release_suppression();"
+        "        unsafe { self.try_cancel_pending_no_heal_tracking() };"
       ]
     },
     {

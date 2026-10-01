@@ -967,3 +967,32 @@ pool -- and the default pool's entry is stamped by every other test in the binar
 there would have passed with the stamp deleted. `an_io_completion_stamps_its_pool` uses a private
 pool nothing else touches, and asserts the entry starts at zero before submitting. Re-injecting
 the same sabotage now turns exactly that test red.
+
+## Moved 2026-10-01 14:30:28 -04:00 -- M-T6.3, the cancellation rename and its unsafe sibling
+
+### <a id="m-t63"></a>M-T6.3 -- Rename to `try_cancel_pending`, and add the ungated `unsafe` sibling. *(completed 2026-10-01 14:30:28 -04:00)*
+
+`ThreadpoolWait` and `WaitMember` each lose `cancel_pending` and gain a pair: `try_cancel_pending`,
+gated on `self-heal`, which marks its pool as owing a repair; and
+`try_cancel_pending_no_heal_tracking`, `unsafe` and always present, which does not. The contract is
+identical in both feature states -- best-effort cancellation, the pool may stall briefly -- and only
+the repair latency differs, so it is not documented as a behavioural difference.
+`CleanupGroup::close_members(true)` marks each wait member's pool through a new per-kind hook on
+`OwnedResource`.
+
+**Waits only, and the crate already says why.** The item named `WaitMember` and `close_members`
+and no other type, which matches what `TimerMember`'s own documentation records: the removal that
+can sever a pool's arrival-to-factory notification operates on a *wait completion packet*, and only
+a wait owns one. `ThreadpoolWork`, `ThreadpoolTimer` and the work/timer members keep
+`cancel_pending` unchanged. Whether that leaves the surface inconsistent is `M-T6.7`'s question.
+
+**Doc links had to avoid the gated method.** A link to `try_cancel_pending` dangles in a build with
+the feature off, so the five intra-doc links that pointed at the old name now point at
+`try_cancel_pending_no_heal_tracking`, which is always present, and name the safe one in prose.
+Verified with `cargo doc` in both feature configurations, which `cargo check` does not cover.
+
+**Running the sabotage harness found three cases broken by this session's own commits**, none
+noticed when they broke. Two are fixed here -- the `stop_and_drain` case whose `find` block
+`M-T4.3` split by inserting a line, and the handle-scan case whose single-line `find` stopped being
+unique when a second `const CEILING` arrived with the completion-port scan. The third, *the factory
+layout is truncated*, is queued as `M-T6.9`.
