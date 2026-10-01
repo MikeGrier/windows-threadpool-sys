@@ -380,3 +380,35 @@ same suspicion, and look for a disconfirming measurement before building on it.
   Viable alternative: recover a stalled process with a work submit, wait past the 67s idle timeout
   for the worker to retire, then arm a fresh wait and time it. Slow -- a handful of captures at a
   minute-plus each -- but it needs no new primitive and answers the question directly.
+
+- [ ] **M-T5.11** -- **Is the fault reachable on a pool that already has a worker?** Raised by the
+  engineer's question about whether the stuck pool has idle threads. It does not -- 12 stalled
+  captures all read total 0, waiting 0, pending 0, against 20 healthy runs reading total 1 -- and
+  that is the *only* difference between the two arms at the same instant. See
+  [the-blast-radius-is-one-pool](../windows-ioring-sys/measurements/2026-09-30-the-blast-radius-is-one-pool/README.md).
+
+  **Every stall this investigation has ever captured is of a cold pool**, because the reproducer's
+  trigger runs at 0.00004s, before the pool has dispatched anything. Whether that is incidental or
+  a precondition is untested, and the two answers have very different consequences:
+
+  - **If cold is required**, this is a startup hazard. A process that gets through its first
+    dispatch is safe while it stays busy, and the exposure is a narrow window near process start
+    plus whatever windows follow each idle-timeout expiry.
+  - **If a warm pool is also reachable**, it is a steady-state hazard and the exposure is
+    continuous.
+
+  A plausible mechanism favours the first -- the severed notification is the one asking the factory
+  to *create* a worker, and a pool with a thread parked for work does not need that question asked.
+  **Do not bind to that reading**; it is a mechanism sketch, and three hypotheses of exactly that
+  shape have already been refuted in this investigation.
+
+  Measurement: warm the default pool first (submit a work item, wait for the callback, confirm
+  `total_worker_count` is 1), *then* run the trigger. A rate indistinguishable from the cold arm
+  says warm pools are reachable; a zero over enough runs to be meaningful against the ~4 per
+  thousand the `hand-spin-3us` arm gives says cold is required. Cheap -- it reuses the existing
+  trigger and capture path, and needs only a warm-up before it.
+
+  Note the coupling to **M-T5.10**: if cold is required, then "does a recovered pool break again
+  once its workers retire" has an expected answer rather than being open, because retirement is
+  exactly what makes a warm pool cold again. Running this one first may make that one cheaper to
+  interpret.

@@ -25,6 +25,30 @@ The poked objects' *own* callbacks do not run either, so this is not a property
 of the ring, or of the particular waits, or of waits at all. The pool is simply
 not dispatching.
 
+## The stuck pool has no threads at all -- it is not idle threads going unused
+
+This distinction was got wrong once in this investigation and is worth stating
+flatly. From
+[the-default-pool-has-no-worker-at-all](../2026-09-27-the-default-pool-has-no-worker-at-all/README.md),
+reading every worker factory in the process at the stalled moment:
+
+| | the pool under test (max 768) | the other factory (max 3) |
+|---|---|---|
+| **stalled**, 12 captures | total **0**, waiting **0**, pending **0** | total 3, waiting 3 |
+| **healthy**, 20 runs | total **1**, waiting 1 | total 3, waiting 3 |
+
+Every capture in each arm is identical. The stalled pool holds **zero** threads,
+and `MayCreate` reads 1 -- it is permitted to make one and does not.
+
+**The "threads are sitting there unused" reading was investigated and refuted.**
+A crash dump showed three threads parked in `TppWorkerThread`, which looks
+exactly like idle workers declining work. They belong to the *other* factory, and
+a stack alone cannot tell the two apart. No thread alive during the stall ever
+runs a callback, in 12 of 12.
+
+So the single difference between a healthy run and a stalled one, at the same
+instant, is whether the pool has its **first** worker. It never creates it.
+
 ## Nothing off the pool stops
 
 Every capture of this process holds **two** worker factories, and only one is
@@ -64,6 +88,25 @@ pool in that configuration. It does not establish that a private pool cannot be
 damaged the same way, and no mechanism is offered here for why the default pool
 would be special. Treating "use a private pool" as a mitigation would be binding
 to an unexplained negative.
+
+## An open question this raises: is a warm pool reachable at all?
+
+**Every stall ever captured here is of a pool with zero threads that has never
+made one.** The reproducer's trigger runs at 0.00004s, before the pool has
+dispatched anything, so the whole investigation has only ever observed a *cold*
+pool.
+
+That may be incidental, or it may be the precondition. A plausible reading of the
+mechanism says the latter: the broken notification is the one that asks the
+factory to **create** a worker, and a pool that already has a worker parked for
+work does not need that question asked -- the arriving packet is handed to the
+waiting thread. If so, the fault would be a cold-start hazard only, and a pool in
+steady use would be immune.
+
+Nothing here establishes that, and it should not be assumed either way. It is the
+same question `M-T5.10` asks from the other side: that item wonders whether a
+recovered pool breaks again once its workers retire at the 67s idle timeout,
+which is exactly the moment a warm pool becomes a cold one.
 
 ## What this does not say
 
