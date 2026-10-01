@@ -46,9 +46,7 @@ pub(crate) fn key_of(env: Option<&CallbackEnviron<'_>>) -> PoolKey {
 // caller until that item lands.
 #[cfg(feature = "self-heal")]
 #[allow(unused_imports)]
-pub(crate) use on::{
-    PoolEntry, Registration, entries, now, register, repairs_run, retire_idle, tick,
-};
+pub(crate) use on::{PoolEntry, Registration, entries, now, register, retire_idle, tick};
 
 #[cfg(not(feature = "self-heal"))]
 pub(crate) use off::{Registration, register};
@@ -116,7 +114,16 @@ mod on {
 
         /// The work object a repair submits.
         pub(crate) fn repair_work(&self) -> PTP_WORK {
-            self.repair.0
+            self.repair.work
+        }
+
+        /// How many times this pool's own repair item has been dispatched.
+        ///
+        /// Only this entry's pre-created object can raise it, so a tick that
+        /// made a fresh work object and submitted that instead would leave it
+        /// at zero -- which is the claim the counter exists to guard.
+        pub(crate) fn repairs_run(&self) -> u64 {
+            self.repair.runs.load(Ordering::SeqCst)
         }
 
         /// Note that the pool dispatched a callback.
@@ -166,7 +173,21 @@ mod on {
     /// Raw rather than the safe type because the safe type registers itself,
     /// which would recurse: creating an entry would create an object, which
     /// would create an entry.
-    struct RepairWork(PTP_WORK);
+    struct RepairWork {
+        work: PTP_WORK,
+        /// How many times *this* object has been dispatched.
+        ///
+        /// Boxed so its address is stable, and handed to the work object as its
+        /// callback context, so only this entry's repair item can increment it.
+        /// That is what lets a test tell the pre-created object being submitted
+        /// from a fresh one made on the healing path: a work object created
+        /// anywhere else carries a different context and cannot touch this
+        /// counter. Per entry rather than process-wide because the registry is
+        /// shared and `cargo test` runs these as threads in one process, so a
+        /// global count could be satisfied by another test's repair and would
+        /// prove nothing about this one.
+        runs: Box<AtomicU64>,
+    }
 
     // SAFETY: a PTP_WORK is a pool object the thread pool itself uses across
     // threads; this wrapper only stores it, submits it, and closes it once.
@@ -175,11 +196,11 @@ mod on {
 
     impl Drop for RepairWork {
         fn drop(&mut self) {
-            crate::trace_record!("heal", "repair-closed", self.0);
+            crate::trace_record!("heal", "repair-closed", self.work);
             // SAFETY: created by `CreateThreadpoolWork` here, never submitted
             // concurrently with this drop (the entry is unreachable), and closed
             // exactly once.
-            unsafe { CloseThreadpoolWork(self.0) };
+            unsafe { CloseThreadpoolWork(self.work) };
         }
     }
 
@@ -189,26 +210,19 @@ mod on {
     /// stalled pool, and the callback running is only the evidence that it did.
     unsafe extern "system" fn repair_trampoline(
         _instance: PTP_CALLBACK_INSTANCE,
-        _context: *mut core::ffi::c_void,
+        context: *mut core::ffi::c_void,
         _work: PTP_WORK,
     ) {
-        REPAIRS_RUN.fetch_add(1, Ordering::SeqCst);
+        // Counted unconditionally rather than through the trace, because the
+        // trace is narrowed by an environment variable that neither the harness
+        // nor CI sets -- a check written against it would pass while observing
+        // nothing, which is the trap this crate's sabotage manifest documents.
+        //
+        // SAFETY: the context is the `runs` box of the `RepairWork` owning this
+        // object, which outlives every dispatch of it -- the close in `Drop`
+        // waits for a running callback before the box is freed.
+        unsafe { &*context.cast::<AtomicU64>() }.fetch_add(1, Ordering::SeqCst);
         crate::trace_record!("heal", "repair-ran", _work);
-    }
-
-    /// How many repair items have been dispatched by a pool.
-    ///
-    /// Counted unconditionally rather than through the trace, because the trace
-    /// is narrowed by an environment variable that neither the test harness nor
-    /// CI sets -- so a check written against it would pass while observing
-    /// nothing. This is what lets a test tell a repair that was *submitted and
-    /// ran* from one the healer decided to skip, which the owed-mark cannot:
-    /// the tick clears that mark either way.
-    static REPAIRS_RUN: AtomicU64 = AtomicU64::new(0);
-
-    /// How many repair items have run so far in this process.
-    pub(crate) fn repairs_run() -> u64 {
-        REPAIRS_RUN.load(Ordering::SeqCst)
     }
 
     /// One object's claim on a pool's entry, released when the object goes.
@@ -332,7 +346,7 @@ mod on {
             objects: AtomicUsize::new(1),
             repair,
         });
-        crate::trace_record!("heal", "entry-created", key, entry.repair.0);
+        crate::trace_record!("heal", "entry-created", key, entry.repair.work);
         entries.push(Arc::clone(&entry));
         Registration(Some(entry))
     }
@@ -478,6 +492,11 @@ mod on {
 
     /// Make the work object a repair for this pool will submit.
     fn create_repair(key: PoolKey) -> Option<RepairWork> {
+        // Allocated before the work object, so its address can be the context.
+        let runs = Box::new(AtomicU64::new(0));
+        let context: *mut core::ffi::c_void = std::ptr::from_ref(runs.as_ref())
+            .cast::<core::ffi::c_void>()
+            .cast_mut();
         let mut env = crate::callback_env::CallbackEnviron::new();
         // SAFETY: a non-zero key names a live pool -- the caller is creating an
         // object against it in this call -- and the environment is used only for
@@ -485,22 +504,16 @@ mod on {
         unsafe { env.set_pool_raw(key as isize) };
         let work = crate::trace_call!("CreateThreadpoolWork", key, 0, {
             // SAFETY: the trampoline matches the required ABI, the context is
-            // null and never dereferenced, and the environment is live for this
-            // call.
-            unsafe {
-                CreateThreadpoolWork(
-                    Some(repair_trampoline),
-                    core::ptr::null_mut(),
-                    env.as_mut_ptr(),
-                )
-            }
+            // the `runs` box moved into the returned value below, and the
+            // environment is live for this call.
+            unsafe { CreateThreadpoolWork(Some(repair_trampoline), context, env.as_mut_ptr()) }
         });
         // `PTP_WORK` is an opaque handle rather than a pointer, so failure is a
         // zero value, not a null one.
         if work == 0 {
             None
         } else {
-            Some(RepairWork(work))
+            Some(RepairWork { work, runs })
         }
     }
 }

@@ -35,14 +35,8 @@ behaviour, and backed by a repair.
 - [x] **M-T6.4** -- The self-heal timer. -> [completed
   2026-10-01](COMPLETED-CHECKLIST.md#m-t64)
 
-- [ ] **M-T6.5** -- **Guard it, with the sabotage that matters.** The load-bearing claims are that a
-  cancellation arms a repair, that a dispatch after the cancellation suppresses it, and that the
-  repair is a submit on a pre-made object rather than a fresh one. Sabotage each: a cancel that
-  does not mark, a stamp that never updates, a heal that creates instead of submitting. **A guard
-  that passes with the mechanism disabled is worse than none** -- this was already learned once on
-  `prewarm`, where a unit test passed the full suite with the function sabotaged because a sibling
-  test had warmed the pool. Prefer an integration test where process-wide state would otherwise
-  make the assertion vacuous.
+- [x] **M-T6.5** -- Guard it, with the sabotage that matters. -> [completed
+  2026-10-01](COMPLETED-CHECKLIST.md#m-t65)
 
 - [ ] **M-T6.6** -- **Verify the `self-heal`-off build.** `cargo check --no-default-features` plus
   whatever feature set CI uses, confirming that `try_cancel_pending` is absent, that the `unsafe`

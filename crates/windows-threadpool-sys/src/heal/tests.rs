@@ -441,7 +441,7 @@ mod on {
             .find(|e| e.key() == pool.as_raw() as usize)
             .expect("the wait registered its pool");
 
-        let before = crate::heal::repairs_run();
+        assert_eq!(entry.repairs_run(), 0, "nothing repaired on this pool yet");
         wait.arm(None);
         wait.try_cancel_pending();
         assert!(
@@ -449,13 +449,23 @@ mod on {
             "the cancel marks the pool"
         );
 
-        // Waiting on the repair having *run* rather than on the mark being
-        // cleared. The tick clears that mark whether it submitted a repair or
-        // decided to skip one, so a test that waited on it would pass with the
-        // submission removed -- which is the whole behaviour under test.
-        spin_until("a repair to be submitted and dispatched", || {
-            crate::heal::repairs_run() > before
-        });
+        // Waiting on *this entry's own* repair object having been dispatched,
+        // which pins two things weaker assertions cannot.
+        //
+        // Not the owed mark: the tick clears that whether it submitted a repair
+        // or decided to skip one, so a test waiting on it passes with the
+        // submission deleted -- the whole behaviour under test.
+        //
+        // Not a process-wide count either: the registry is shared and these run
+        // as threads in one process, so another test's repair could satisfy it.
+        // This counter is reached through this entry's work object's own
+        // context, so a tick that *created* a fresh object and submitted that
+        // instead would leave it at zero -- which is the measured claim that
+        // creating does not release a stall and only submitting does.
+        spin_until(
+            "this pool's pre-created repair item to be dispatched",
+            || entry.repairs_run() > 0,
+        );
         spin_until("the healer to discharge the mark", || {
             entry.repair_owed_at().is_none()
         });
@@ -483,11 +493,10 @@ mod on {
             entry.dispatched_since(10),
             "a dispatch after the cancellation is what the skip rests on"
         );
-        let before = crate::heal::repairs_run();
         crate::heal::tick();
         assert_eq!(
-            crate::heal::repairs_run(),
-            before,
+            entry.repairs_run(),
+            0,
             "the pool dispatched after the cancellation, so no repair is owed \
              to it and none must be submitted -- asserted on the repair having \
              run rather than on the mark, which the tick clears either way"

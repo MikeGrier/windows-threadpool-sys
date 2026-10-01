@@ -198,6 +198,47 @@
       "replace": [
         "    NoTrampoline = 30,"
       ]
+    },
+    {
+      "name": "a cancellation does not arm a repair",
+      "file": "src/heal.rs",
+      "expect": "caught",
+      "why": "The first of the three claims the self-heal rests on. `try_cancel_pending` is a safe method only because the crate repairs the pool the cancel may have wedged, and the repair begins with the mark. A cancel that does not mark leaves the pool to be fixed by whatever the application happens to submit next, which for a program built on waits, timers and I/O is nothing.",
+      "find": [
+        "                entry.owe_repair(now());"
+      ],
+      "replace": [
+        "                let _ = entry;"
+      ]
+    },
+    {
+      "name": "a dispatch never updates its pool's stamp",
+      "file": "src/heal.rs",
+      "expect": "caught",
+      "why": "The second claim. A dispatch observed after the cancellation is the only evidence the healer has that a pool is still delivering callbacks, and it is what makes the mechanism affordable: without it every cancellation would cost a repair submission. A stamp that never updates turns the skip off, so every marked pool is repaired whether it needs it or not.",
+      "find": [
+        "                entry.stamp_dispatch(now());"
+      ],
+      "replace": [
+        "                let _ = entry;"
+      ]
+    },
+    {
+      "name": "the heal creates a work object instead of submitting the pre-created one",
+      "file": "src/heal.rs",
+      "expect": "caught",
+      "why": "The third claim, and the one that is easiest to break while looking correct. Creating a work object was measured NOT to release a stalled pool; only submitting one is. So the repair object is made when the pool is registered, and the healing path must do nothing but submit it. The patch below still submits something, and on a real pool would still release the stall -- which is why the guard is tied to the entry's OWN repair object through its callback context, not to a count of repairs in general.",
+      "whyNotNullContext": "The fresh object is given its own valid counter rather than a null context. With null the trampoline dereferences it and the process aborts, which the harness scores as caught -- but by a crash, not by a test noticing, and this repository treats a crash-caught mutant as an uncovered one.",
+      "find": [
+        "            unsafe { SubmitThreadpoolWork(entry.repair_work()) };"
+      ],
+      "replace": [
+        "            unsafe {",
+        "                let ctx: *mut core::ffi::c_void = Box::into_raw(Box::new(AtomicU64::new(0))).cast();",
+        "                let fresh = CreateThreadpoolWork(Some(repair_trampoline), ctx, std::ptr::null());",
+        "                if fresh != 0 { SubmitThreadpoolWork(fresh); }",
+        "            }"
+      ]
     }
   ]
 }

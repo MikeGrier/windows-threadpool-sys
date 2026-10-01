@@ -1080,3 +1080,33 @@ a trace record, because the trace is narrowed by an environment variable that ne
 nor CI sets, which is the same trap this crate's sabotage manifest already documents. With that,
 deleting the submit turns the end-to-end test red, and making the liveness check never fire turns
 the skip test red.
+
+## Moved 2026-10-01 16:31:04 -04:00 -- M-T6.5, the sabotage that matters
+
+### <a id="m-t65"></a>M-T6.5 -- Guard it, with the sabotage that matters. *(completed 2026-10-01 16:31:04 -04:00)*
+
+All three load-bearing claims are now sabotage-verified **through the manifest**, not only by hand,
+which is the distinction `M-T6.9` was about: a hand-verification is discarded, and only
+[sabotage.json](sabotage.json) re-runs.
+
+| claim | sabotage | result |
+|---|---|---|
+| a cancellation arms a repair | the cancel never marks its pool | 3 tests red |
+| a dispatch after it suppresses the repair | the stamp never updates | caught |
+| the repair submits a **pre-created** object | the heal creates a fresh one and submits that | caught |
+
+**The third claim had no guard at all, and the counter written for `M-T6.4` could not have given
+it one.** That counter was process-wide, so it was satisfied by *any* repair running -- including
+one from a fresh object, which is exactly the mutation this claim forbids, and including another
+test's repair, since the registry is shared and these run as threads in one process.
+
+The fix carries both: the counter moved onto the entry and is reached through its work object's
+own callback **context**, so only that entry's pre-created object can raise it. A fresh object
+carries a different context and cannot.
+
+**The first attempt at that sabotage was scored `caught` for the wrong reason** and is recorded in
+the manifest so it is not re-introduced. Giving the fresh work object a null context made the
+trampoline dereference it and abort the process, which the harness scores as caught -- but by a
+crash, not by a test noticing, and this repository treats a crash-caught mutant as uncovered. The
+case now gives the fresh object its own valid counter, so it fails deterministically on an
+assertion instead.
