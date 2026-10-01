@@ -26,31 +26,37 @@ behaviour, and backed by a repair.
 - [x] **M-T6.3** -- Rename to `try_cancel_pending`, and add the ungated `unsafe` sibling. ->
   [completed 2026-10-01](COMPLETED-CHECKLIST.md#m-t63)
 
-- [ ] **M-T6.9** -- **Repair the one sabotage case still declared wrong: "the factory layout is
-  truncated".**
+- [x] **M-T6.9** -- Repair the one sabotage case still declared wrong. -> [completed
+  2026-10-01](COMPLETED-CHECKLIST.md#m-t69)
 
-  Found 2026-10-01 running [tools/run-sabotage.ps1](../../tools/run-sabotage.ps1) during `M-T6.3`,
-  which was the first run of the harness in a while. It reported **three** cases not behaving as
-  declared, all broken by this session's own commits and none noticed at the time:
+- [ ] **M-T6.10** -- **The two wait-drain sabotages stopped detecting, and the reason is not yet
+  known.**
 
-  - *the wait's `stop_and_drain` cancels instead of draining* -- `MANIFEST STALE: pattern found 0
-    times`. `M-T4.3` inserted a line inside the block the `find` matched. Fixed in `M-T6.3` by
-    anchoring on two lines instead of four.
-  - *the handle scan gives up immediately* -- `pattern found 2 times, expected 1`. A second
-    `const CEILING: usize = 4096;` arrived with the completion-port scan. Fixed in `M-T6.3` by
-    including the preceding doc line.
-  - *the factory layout is truncated* -- `MANIFEST DOES NOT COMPILE (tests never ran)`. **Still
-    open; this item.**
+  Found 2026-10-01 by the full sweep at the end of `M-T6.9`. *the wait's `Drop` cancels instead of
+  draining* and *the wait's `stop_and_drain` cancels instead of draining* both report **survived**.
+  The first of those was **caught** in the sweep three commits earlier, so this is a regression in
+  the guard, not a case that was always broken.
 
-  The last one needs the compiler error, which the harness does not print. Note before assuming it
-  is simply stale: if the truncated struct now fails a `const` assertion, the sabotage is being
-  *caught by the build* -- the strongest rung -- and the case should be re-declared rather than
-  repaired. Find out which before changing anything.
+  **What has been measured, so the next session does not repeat it:**
 
-  **The standing lesson is larger than the three cases.** Nothing re-runs this harness, so a
-  manifest silently rots as the code it patches moves, and every one of these broke in a commit
-  whose author (me) believed the guards were intact. Consider whether the sweep belongs in CI --
-  a decision for the engineer, since the full sweep costs minutes per case.
+  - The injected body is textually equivalent to the one it replaced -- `cancel_pending` and
+    `try_cancel_pending_no_heal_tracking` compile to the same
+    `WaitForThreadpoolWaitCallbacks(wait, TRUE)` -- so the `M-T6.3` rename is not the cause.
+  - It is **not** cross-test interference: with the sabotage applied,
+    `drop_runs_a_queued_callback_rather_than_discarding_it` passes when run alone under `--exact`.
+  - The callback **runs**; it is not discarded. Probed by asserting against a wrong value to read
+    the counter back: `ran == 1` with the cancel in place.
+
+  So the test's precondition -- the pool's only thread occupied, the callback queued and not
+  started when `Drop` begins -- no longer holds at the moment the cancel happens. Two readings fit
+  and have not been separated: something in `M-T6.1`/`M-T6.2` changed when that thread is free, or
+  the cancel itself blocks until the pool can service it, the queued callback runs first, and the
+  guard was always timing-dependent. **The second reading would be the more serious finding**, and
+  would mean these two cases need rewriting rather than repairing.
+
+  **This is a lost proof, not a lost behaviour.** The teardown still drains -- the shipped code is
+  unchanged and the suite is green. What has gone is the evidence that it would be noticed if it
+  stopped.
 
 - [ ] **M-T6.4** -- **The self-heal timer.** A periodic timer on a private pool created **lazily on
   the first cancellation**, so a consumer who never cancels never pays for a pool. Each tick, for

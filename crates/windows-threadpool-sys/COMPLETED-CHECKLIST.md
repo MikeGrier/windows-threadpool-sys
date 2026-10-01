@@ -996,3 +996,30 @@ noticed when they broke. Two are fixed here -- the `stop_and_drain` case whose `
 `M-T4.3` split by inserting a line, and the handle-scan case whose single-line `find` stopped being
 unique when a second `const CEILING` arrived with the completion-port scan. The third, *the factory
 layout is truncated*, is queued as `M-T6.9`.
+
+## Moved 2026-10-01 15:32:42 -04:00 -- M-T6.9, the last mis-declared sabotage case
+
+### <a id="m-t69"></a>M-T6.9 -- Repair the one sabotage case still declared wrong. *(completed 2026-10-01 15:32:42 -04:00)*
+
+The case was *the factory layout is truncated*, reporting `MANIFEST DOES NOT COMPILE`.
+
+**It was neither of the two possibilities the item anticipated.** Not a stale `find`, and not a
+sabotage being caught by a `const` assertion -- the check the item asked for before repairing.
+Applying the patch by hand and reading the compiler output gave five `E0609: no field ... on type
+Basic` errors: the five fields it deletes had **acquired readers** when the factory snapshot began
+emitting them, so the patch became a compile error instead of the runtime failure it exists to
+produce.
+
+Repaired by keeping the defect and changing how it is reached. The recorded defect is a struct of
+the wrong *size*, which makes the query reject every call; the case now pads the struct through
+`_tail`, which nothing reads, rather than deleting fields that now have consumers. Renamed to *the
+factory layout is the wrong size* to match. Verified: the repaired case reports `caught`.
+
+**The full sweep then found a regression the item had not asked about**, which is why it was worth
+running rather than stopping at the one case. Two wait-drain sabotages now report `survived`, and
+one of them was `caught` three commits earlier. Queued as `M-T6.10` with everything already
+measured, including that the callback runs rather than being discarded and that it is not
+cross-test interference.
+
+**Manifest health at this commit:** 12 of 14 cases behave as declared, both controls included. The
+two exceptions are `M-T6.10`.

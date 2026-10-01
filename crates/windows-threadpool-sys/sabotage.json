@@ -90,20 +90,19 @@
       ]
     },
     {
-      "name": "the factory layout is truncated",
+      "name": "the factory layout is the wrong size",
       "file": "src/trace/hook.rs",
       "expect": "caught",
-      "why": "The query rejects a buffer whose length does not match the information class, so a struct that is the wrong SIZE fails every call while looking exactly like a process that has no worker factory. This defect was real -- it was the first draft, and it made the scan report nothing on a machine where the scan works. Dropping the tail fields reproduces it.",
+      "why": "The query rejects a buffer whose length does not match the information class, so a struct that is the wrong SIZE fails every call while looking exactly like a process that has no worker factory. This defect was real -- it was the first draft, and it made the scan report nothing on a machine where the scan works. Padding the struct reproduces it: `_tail` has no readers, so the size changes and nothing else does.",
+      "whyNotTruncation": "This case used to DELETE the five fields from `start_routine` to `stack_commit`, which was the original defect's own shape. That stopped working on 2026-10-01: those fields acquired readers when the factory snapshot began emitting them, so the patch became a compile error (E0609, five times) instead of the runtime failure it is meant to produce, and the harness reported MANIFEST DOES NOT COMPILE. Checked before repairing, per M-T6.9: the patch was not being caught by a const assertion, which would have meant re-declaring the case rather than repairing it. Growing the struct through a field nothing reads produces the same wrong size with no such coupling.",
       "find": [
-        "    start_routine: usize,",
-        "    start_parameter: usize,",
-        "    process_id: usize,",
-        "    stack_reserve: usize,",
-        "    stack_commit: usize,",
-        "    last_thread_creation_status: i32,"
+        "    _tail: u32,",
+        "}"
       ],
       "replace": [
-        "    last_thread_creation_status: i32,"
+        "    _tail: u32,",
+        "    _sabotage_padding: [u64; 4],",
+        "}"
       ]
     },
     {
