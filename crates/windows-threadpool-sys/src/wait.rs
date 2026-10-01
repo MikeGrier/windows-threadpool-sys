@@ -819,10 +819,20 @@ impl ThreadpoolWait {
     /// (`IopCancelWaitCompletionPacket` with `RemoveSignaledPacket` set).
     /// Measured on this workspace's reproducer, a removal that lands a few
     /// microseconds after the packet was queued, on a port whose factory has no
-    /// threads yet, can **permanently sever the notification from that port to
-    /// the worker factory**: work can then be queued to the process's default
-    /// thread pool and nothing will ever dispatch it, and no later arrival
-    /// recovers it.
+    /// threads yet, can **sever the notification from that port to the worker
+    /// factory**.
+    ///
+    /// The scope of that is one pool -- but it is the whole of that pool, not
+    /// this wait and not waits as a kind. Measured during such a stall: already
+    /// armed waits, a freshly armed and signalled wait, a fresh timer, and a
+    /// completed overlapped read all fail to dispatch. A second pool in the same
+    /// process is unaffected. Since the pool normally affected is the **default**
+    /// one, the practical reach is every component in the process that did not
+    /// explicitly create its own -- including code that has nothing to do with
+    /// the caller.
+    ///
+    /// Submitting a work item recovers it, because that reaches the factory by a
+    /// route the broken notification is not on. Nothing else observed does.
     ///
     /// **But this method is not the only way to reach that, and on the measured
     /// evidence it is not even the usual one.** `CloseThreadpoolWait` performs

@@ -34,9 +34,19 @@ stall, and the two victims each arm one. So the work that never arrives is
 sitting in the port, and the pool that would run it has no threads, is permitted
 to make one, and is not making one.
 
-The second factory in the process (the private pool the reproducer's control arms
-create) reports depth 0 throughout, which is the expected reading for a factory
-with nothing to do and is recorded as the within-capture contrast.
+A **second worker factory** in the same process reports depth 0 throughout and
+keeps three workers parked, healthy, for the whole stall. It is the
+within-capture contrast, and it is the scope evidence: the fault is confined to
+one pool.
+
+> **Corrected 2026-09-30.** This paragraph originally identified that factory as
+> "the private pool the reproducer's control arms create". **It is not ours.**
+> The reproducer creates no private pool -- it has no `ThreadpoolPool`, no
+> `CreateThreadpool`, no thread-count call anywhere -- and the second factory is
+> present from 0.002s in *healthy* runs of the same binary. It carries a maximum
+> of 3 threads and a 30s idle timeout, against the default pool's 768 and 67s.
+> What creates it is not established here; that it is not this workspace's code,
+> and that it goes on working while the default pool is dead, are.
 
 ## What this settles
 
