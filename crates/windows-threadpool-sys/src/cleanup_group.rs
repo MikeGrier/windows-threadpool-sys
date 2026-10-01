@@ -743,7 +743,11 @@ impl WaitMember<'_> {
         unsafe { ThreadpoolWait::owe_repair(self.context) };
     }
 
-    /// [`try_cancel_pending`](Self::try_cancel_pending) without the repair.
+    /// `try_cancel_pending` without the repair.
+    ///
+    /// Not a link, deliberately: the method it would name does not exist in a
+    /// build with `self-heal` off, and this one does, so the link would dangle
+    /// in exactly the configuration this method exists for.
     ///
     /// # Safety
     ///

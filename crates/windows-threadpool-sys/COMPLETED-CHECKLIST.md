@@ -1110,3 +1110,34 @@ trampoline dereference it and abort the process, which the harness scores as cau
 crash, not by a test noticing, and this repository treats a crash-caught mutant as uncovered. The
 case now gives the fresh object its own valid counter, so it fails deterministically on an
 assertion instead.
+
+## Moved 2026-10-01 16:47:46 -04:00 -- M-T6.6, the self-heal-off build
+
+### <a id="m-t66"></a>M-T6.6 -- Verify the `self-heal`-off build. *(completed 2026-10-01 16:47:46 -04:00)*
+
+The item asked for the shape of the off build to be **asserted rather than assumed**, which it now
+is at three rungs:
+
+- **The build.** A `const` assertion that the feature-off `Registration` is zero-sized. Five types
+  carry it as a field and five trampolines call its methods unconditionally, so a byte there would
+  charge every one of them for a feature that is off. Verified load-bearing: giving the type a
+  `u8` fails compilation with the assertion's own message.
+- **Doctests.** `FeatureShapeDoctests` in [src/heal.rs](src/heal.rs) asserts the safe method exists
+  when the feature is on, that the `unsafe` sibling exists either way, and -- via `compile_fail` --
+  that a call to a method the type does not have is an error. The `compile_fail` case names a
+  *made-up* method deliberately: one naming the real gated method would start passing for the wrong
+  reason as soon as the feature was on.
+- **CI.** A `threadpool-no-self-heal` job, mirroring the existing `--no-default-features` jobs for
+  `windows-ioring-sys` and `windows-placement-probe`.
+
+**The CI job was the necessary part, and it caught a defect on its first run.** Nothing else here
+builds this configuration: every `--workspace` step takes the default set, and `--all-features`
+turns the feature back on, so `--no-default-features` became unbuilt the moment `self-heal` was
+made default-on in `M-T6.1`.
+
+What it found was mine, from `M-T6.3`: both `try_cancel_pending_no_heal_tracking` doc comments
+linked `Self::try_cancel_pending`, which does not exist in the build those methods exist *for*.
+That commit's message claims the links were verified with `cargo doc` in both configurations --
+true, and insufficient, because plain `cargo doc` reports a broken intra-doc link as a **warning**.
+The job runs it with `-D rustdoc::broken_intra_doc_links`, which is what turns it into a failure.
+Both links are now plain code spans with the reason recorded at each site.

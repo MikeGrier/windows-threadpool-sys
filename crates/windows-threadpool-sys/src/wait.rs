@@ -880,6 +880,15 @@ impl ThreadpoolWait {
     /// This crate repairs the pool afterwards, which is what makes this safe to
     /// offer. See
     /// [README-FEATURE-self-heal.md](https://docs.rs/crate/windows-threadpool-sys/latest/source/README-FEATURE-self-heal.md).
+    ///
+    /// # Availability
+    ///
+    /// Requires the `self-heal` feature, which is on by default. Without it this
+    /// method does not exist and a call to it fails to compile, naming
+    /// [`try_cancel_pending_no_heal_tracking`](Self::try_cancel_pending_no_heal_tracking)
+    /// as what to reach for instead. That is the designed behaviour, not an
+    /// oversight: a guarantee you were relying on has been removed, and a
+    /// compile error is the only way you find that out.
     #[cfg(feature = "self-heal")]
     pub fn try_cancel_pending(&self) {
         // SAFETY: the obligation this transfers is discharged here, by marking
@@ -890,7 +899,11 @@ impl ThreadpoolWait {
         unsafe { &*self.context }.registration.owe_repair();
     }
 
-    /// [`try_cancel_pending`](Self::try_cancel_pending) without the repair.
+    /// `try_cancel_pending` without the repair.
+    ///
+    /// Not a link, deliberately: the method it would name does not exist in a
+    /// build with `self-heal` off, and this one does, so the link would dangle
+    /// in exactly the configuration this method exists for.
     ///
     /// Always present, including in builds with `self-heal` off, which is the
     /// point: it is the method that still exists when the gated one does not,

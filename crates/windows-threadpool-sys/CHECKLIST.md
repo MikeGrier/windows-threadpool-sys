@@ -38,10 +38,8 @@ behaviour, and backed by a repair.
 - [x] **M-T6.5** -- Guard it, with the sabotage that matters. -> [completed
   2026-10-01](COMPLETED-CHECKLIST.md#m-t65)
 
-- [ ] **M-T6.6** -- **Verify the `self-heal`-off build.** `cargo check --no-default-features` plus
-  whatever feature set CI uses, confirming that `try_cancel_pending` is absent, that the `unsafe`
-  sibling is present, and that no trampoline stamps. The compile error a consumer gets is the
-  designed behaviour, so it is worth asserting the shape of the off build rather than assuming it.
+- [x] **M-T6.6** -- Verify the `self-heal`-off build. -> [completed
+  2026-10-01](COMPLETED-CHECKLIST.md#m-t66)
 
 - [ ] **M-T6.7** -- **DECISION TO RAISE: the synchronous close is not uniform, in name or in
   existence.**

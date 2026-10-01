@@ -58,6 +58,17 @@ mod off {
     /// A registration in a build with no registry: nothing, costing nothing.
     pub(crate) struct Registration;
 
+    /// "Costing nothing" is the claim, so it is checked by the build.
+    ///
+    /// Five types carry this as a field and five trampolines call its methods,
+    /// unconditionally -- the call sites have no `cfg` on them, which is the
+    /// point of the type existing in both configurations. If it ever gained a
+    /// byte, every one of those would start paying for a feature that is off.
+    const _: () = assert!(
+        size_of::<Registration>() == 0,
+        "the feature-off registration must be zero-sized"
+    );
+
     impl Registration {
         /// Records nothing: with no entry there is no slot to stamp.
         pub(crate) const fn stamp_dispatch(&self) {}
@@ -517,6 +528,61 @@ mod on {
         }
     }
 }
+
+/// The shape of the API in each feature configuration, asserted by the build.
+///
+/// The item that queued this (`M-T6.6`) asked for the off build to be checked
+/// rather than assumed. A `cargo check` run by hand does that once; these run
+/// wherever the crate's doctests run, in whichever configuration it was built
+/// with, so neither half can rot unnoticed.
+///
+/// With `self-heal` **on**, the safe method exists:
+///
+/// ```
+/// # #[cfg(feature = "self-heal")]
+/// # fn main() -> std::io::Result<()> {
+/// use windows_threadpool_sys::wait::{ThreadpoolWait, WaitableHandle};
+/// let wait = ThreadpoolWait::new(WaitableHandle::event(true, false)?, |_| {}, None)?;
+/// wait.try_cancel_pending();
+/// # Ok(())
+/// # }
+/// # #[cfg(not(feature = "self-heal"))]
+/// # fn main() {}
+/// ```
+///
+/// With `self-heal` **off**, it does not, and calling it is a compile error --
+/// which is the designed behaviour rather than an oversight. This is written as
+/// a `compile_fail` test of a *made-up* method name so that it fails for the
+/// same reason in both configurations; a `compile_fail` naming the real method
+/// would start passing for the wrong reason the moment the feature was on.
+///
+/// ```compile_fail
+/// use windows_threadpool_sys::wait::{ThreadpoolWait, WaitableHandle};
+/// let wait = ThreadpoolWait::new(
+///     WaitableHandle::event(true, false).unwrap(),
+///     |_| {},
+///     None,
+/// )
+/// .unwrap();
+/// wait.no_such_cancellation_method();
+/// ```
+///
+/// The `unsafe` sibling is present either way, which is what makes it the one a
+/// consumer can always reach for:
+///
+/// ```
+/// # fn main() -> std::io::Result<()> {
+/// use windows_threadpool_sys::wait::{ThreadpoolWait, WaitableHandle};
+/// let wait = ThreadpoolWait::new(WaitableHandle::event(true, false)?, |_| {}, None)?;
+/// // SAFETY: nothing here depends on the pool afterwards, and the object is
+/// // dropped immediately, so the repair obligation is discharged by not
+/// // relying on what it would have repaired.
+/// unsafe { wait.try_cancel_pending_no_heal_tracking() };
+/// # Ok(())
+/// # }
+/// ```
+#[cfg(doctest)]
+pub(crate) struct FeatureShapeDoctests;
 
 #[cfg(test)]
 mod tests;
