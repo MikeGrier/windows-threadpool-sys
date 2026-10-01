@@ -45,35 +45,39 @@ behaviour, and backed by a repair.
   with `run_down` and `close_members` deliberately left alone. -> [completed
   2026-10-01](COMPLETED-CHECKLIST.md#m-t67)
 
-- [ ] **M-T6.8** -- **DECISION TO RAISE, reserved by the engineer 2026-09-28 as CRATE-WIDE: a
-  fail-fast that forces the caller to have closed, making these types linear rather than affine.**
+- [x] **M-T6.8** -- Decided: the fail-fast is a default-off `fail-fast` Cargo feature that arms it
+  directly. -> [completed 2026-10-01](COMPLETED-CHECKLIST.md#m-t68)
 
-  > **Gated on `M-T6.7`**, because there is no uniform method to be linear *about* until the
-  > synchronous close is uniform. Raised in `M-T4` as `M-T4.4` and moved here 2026-10-01 with the
-  > item it depends on.
+- [ ] **M-T6.11** -- **Implement the teardown fail-fast.**
 
-  > **`M-T5.8` set a relevant precedent 2026-10-01**, without settling this. Faced with an
-  > operation that could not be made safe, the crate did not reach for linearity -- it paired a
-  > safe form with an `unsafe` sibling carrying a statable obligation, and let a feature decide
-  > which exists. That is a different answer to "how do we make the caller take responsibility"
-  > than a linear type is, and it is now shipping. Weigh it as an alternative here rather than
-  > treating linearity as the only way to bind a caller to a protocol.
+  The mechanism is settled by [The teardown fail-fast is a default-off Cargo feature that arms it
+  directly](../../DESIGN-NOTES.md#fail-fast-is-a-default-off-feature): a `fail-fast` feature, off
+  by default, which when enabled arms the fail-fast with no second runtime switch. The accepted
+  cost -- feature unification means any crate in the graph enabling it changes teardown behaviour
+  for every crate in the graph -- is recorded there, including why the inverse polarity was
+  rejected outright and why gating availability instead was declined.
+
+  **What to build.** At `Drop`, when the obligation flag says a drain is owed, fail fast instead of
+  reporting. `M-T4.3` already put that flag on every type and deliberately kept it outside the
+  `trace` feature, so the fact is there without new bookkeeping; what changes is what `Drop` does
+  with it.
 
   **Not to be made piecemeal, and if made, made uniformly.** That is a constraint on the work, not
   a note about it: implementing it for `ThreadpoolWait` alone -- the type the M26.13 measurement
-  happens to implicate -- would leave the crate with one linear type and four affine ones, which
-  is a worse surface than either choice made consistently.
+  happens to implicate -- would leave the crate with one linear type and the rest affine, which is
+  a worse surface than either choice made consistently.
 
   **It is not greenfield.** `ThreadpoolIo` already ships a soft version: its `Drop` reports a
-  skipped rundown and then continues. A hard fail-fast changes that type's existing behaviour too,
-  so the decision is "does the crate become linear", not "do we add something new".
+  skipped rundown and then continues. A hard fail-fast changes that type's existing behaviour too.
 
-  `M-T4.3` has since given every type a flag recording whether a drain is owed, deliberately not
-  behind the `trace` feature, so a fail-fast has the fact it needs without new bookkeeping.
+  **`M-T6.7` gave the crate a uniform `stop_and_drain`, but not across all six types.**
+  `ThreadpoolIo::run_down` and `CleanupGroup::close_members` keep their own names for reasons
+  recorded with that decision, so this item has to say what a fail-fast means for those two rather
+  than assume the uniform method covers them.
 
-  Still open within it: whether the fail-fast is off by default (assumed), how it is selected --
-  environment variable, constructor option, process-wide setter -- and what it does when the
-  object is dropped on an already-unwinding path, where a panic aborts.
+  **STILL OPEN, to settle here or raise:** what it does when the object is dropped on an
+  already-unwinding path, where a panic aborts. The mechanism decision deliberately did not answer
+  it.
 
   **One bound is already fixed and constrains every answer: forward progress is not the
   alternative.** A teardown that cannot drain may abort, or fail fast by some other route, but it

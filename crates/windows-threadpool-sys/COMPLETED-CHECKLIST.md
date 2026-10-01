@@ -1166,3 +1166,24 @@ timer test green: its callback returned immediately, so the drain could land bet
 a plain `disarm` also leaves the timer idle. Both callbacks now sleep, so the drain begins while
 one is in flight and the re-arm it asks for is one the suppression has to discard -- which is the
 pattern the standalone tests already used. With that, the same sabotage turns both red.
+
+## Moved 2026-10-01 17:20:28 -04:00 -- M-T6.8, how the fail-fast is selected
+
+### <a id="m-t68"></a>M-T6.8 -- Decided: the fail-fast is a default-off `fail-fast` Cargo feature that arms it directly. *(completed 2026-10-01 17:20:28 -04:00)*
+
+Decided by the engineer. The rule, the accepted cost, and what was declined are in [The teardown
+fail-fast is a default-off Cargo feature that arms it
+directly](../../DESIGN-NOTES.md#fail-fast-is-a-default-off-feature). The implementation is
+`M-T6.11`.
+
+**This item asked only for the mechanism, and that is all it settled.** Two of the three
+sub-questions it carried are now answered -- off by default, and selected by a Cargo feature. The
+third, what happens when the object is dropped on an already-unwinding path where a panic aborts,
+is deliberately still open and moves to the implementation item.
+
+**The discussion is worth keeping because the rejected options were rejected for different
+reasons.** The inverse polarity -- on by default with a feature to turn it off -- is not merely
+undesirable but *inexpressible*: Cargo features cannot be subtracted, so a consumer could never
+say "not for me". Gating availability rather than behaviour, which would have removed the
+unification leak entirely by keeping the fail-fast inert until the application armed it, is a
+viable design that was declined in favour of one mechanism rather than two.

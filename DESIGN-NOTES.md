@@ -1195,6 +1195,56 @@ stream it does not own.
 - **Both channels at once.** The union of the costs, and two places for the same
   report to drift apart.
 
+## <a id="fail-fast-is-a-default-off-feature"></a>The teardown fail-fast is a default-off Cargo feature that arms it directly
+
+**Decided 2026-10-01** by the engineer. This decision settles the *mechanism*;
+the implementation is queued separately, and one sub-question below is still
+open.
+
+### The rule
+
+A `fail-fast` Cargo feature, **off by default**. Enabling it arms the fail-fast
+directly -- there is no second runtime switch to throw.
+
+### The cost, accepted knowingly rather than discovered later
+
+Cargo features are additive and unified across a dependency graph. So if any
+crate in a build enables `fail-fast`, **every** crate in that build gets it,
+including code that never called this crate's API and whose author cannot see
+the manifest that enabled it. And a consumer cannot decline it:
+`default-features = false` governs one dependency edge, not the union, so there
+is no way to express "not for me".
+
+Two things bound that. The feature is off by default, so the leak only exists in
+a graph where somebody deliberately turned it on; and the realistic enabler is a
+top-level binary configuring its own test or CI build, which is the intended
+use. A library enabling it would be the misuse, and this is the paragraph that
+says so.
+
+### What was offered and declined
+
+Gating *availability* rather than *behaviour*: the feature compiles in the
+machinery and a knob, and the fail-fast stays inert until the application arms
+it at runtime. That removes the leak -- a dependency enabling it would cost code
+size and nothing else -- and is the same shape as
+[`self-heal`](#cancellation-self-heals), which gates which API exists rather
+than what it does. It was declined in favour of the simpler reading, which has
+one mechanism rather than two and no runtime state.
+
+The inverse polarity -- on by default, with a feature to turn it off -- was
+rejected outright and is worth recording so it is not re-proposed: features
+cannot be subtracted, so "off" would not be expressible by a consumer at all.
+
+### Still open
+
+**What it does when the object is dropped on an already-unwinding path**, where
+a panic aborts. That is the one sub-question the mechanism does not answer.
+
+**One bound is already fixed and constrains every answer: forward progress is
+not the alternative.** A teardown that cannot drain may abort, or fail fast by
+some other route, but it may not return to its caller having abandoned the
+callback.
+
 ## <a id="stop-and-drain-is-the-name"></a>`stop_and_drain` is the name of the synchronous close, and every type that drains has one
 
 **Decided 2026-10-01** by the engineer, implementing `M-T6.7`. The inventory that
