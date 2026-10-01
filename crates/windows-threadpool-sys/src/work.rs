@@ -18,6 +18,15 @@ use crate::callback_env::CallbackEnviron;
 /// Heap-allocated callback state kept alive for the lifetime of the work object.
 struct WorkContext {
     f: Box<dyn Fn() + Send + Sync + 'static>,
+    /// Whether a submission is outstanding that the caller has not waited for.
+    ///
+    /// Unlike the wait and the one-shot timer, a dispatch does not settle this:
+    /// `submit` may be called any number of times, so a trampoline entry would
+    /// have to decrement a count rather than clear a flag. The count is not
+    /// worth keeping, because a caller who never called `wait` could not have
+    /// known the work had finished -- leaving the drain to `Drop` is what they
+    /// did regardless of how the race turned out.
+    obligation: crate::obligation::CloseObligation,
 }
 
 /// Trampoline from the raw Windows callback ABI into the boxed closure.
@@ -92,6 +101,7 @@ impl ThreadpoolWork {
     {
         let ctx = Box::into_raw(Box::new(WorkContext {
             f: Box::new(callback),
+            obligation: crate::obligation::CloseObligation::new(),
         }));
 
         let env_ptr = env.map_or(ptr::null_mut(), |e| e.as_mut_ptr());
@@ -125,14 +135,24 @@ impl ThreadpoolWork {
         // measured over; without it, a `trampoline-entered` has nothing to be
         // late relative to.
         crate::trace_record!("work", "submitted", self.handle);
+        // SAFETY: the context outlives every callback and is freed only by Drop,
+        // which cannot run while this borrow of self is alive.
+        unsafe { &*self.ctx }.obligation.record_live();
     }
 
     /// Blocks until all queued and in-progress invocations have completed.
+    ///
+    /// This type has no separately-named synchronous close: this *is* the drain
+    /// that [`Drop`] would otherwise perform, so calling it discharges the
+    /// obligation `Drop` reports.
     pub fn wait(&self) {
         crate::trace_call!("WaitForThreadpoolWorkCallbacks", self.handle, 0, {
             // SAFETY: handle is valid for the lifetime of self.
             unsafe { WaitForThreadpoolWorkCallbacks(self.handle, FALSE) };
         });
+        // SAFETY: the context outlives every callback and is freed only by Drop,
+        // which cannot run while this borrow of self is alive.
+        unsafe { &*self.ctx }.obligation.record_settled();
     }
 
     /// Cancels callbacks that have not yet started, then waits for any
@@ -164,11 +184,29 @@ impl ThreadpoolWork {
         // SAFETY: forwarded from this function's own contract.
         drop(unsafe { Box::from_raw(context.cast::<WorkContext>()) });
     }
+
+    /// Whether `Drop` would report an undischarged drain obligation right now.
+    ///
+    /// Exists so the obligation's wiring can be asserted without depending on
+    /// the trace, whose filter is fixed before `main` and so cannot be narrowed
+    /// from inside a test.
+    #[cfg(test)]
+    pub(crate) fn obligation_owed(&self) -> bool {
+        // SAFETY: the context outlives every callback and is freed only by Drop.
+        unsafe { &*self.ctx }.obligation.is_owed()
+    }
 }
 
 impl Drop for ThreadpoolWork {
     fn drop(&mut self) {
         crate::trace_record!("work", "drop-begin", self.handle);
+        // Read before the drain, and emitted before it: the record marks the
+        // start of the blocking interval it is reporting, so a reader sees what
+        // the following gap is for rather than learning it afterwards.
+        // SAFETY: the context is still live; it is freed at the end of this body.
+        if unsafe { &*self.ctx }.obligation.is_owed() {
+            crate::trace_record!("work", crate::obligation::DROP_OBLIGATION_OWED, self.handle);
+        }
         crate::trace_call!("WaitForThreadpoolWorkCallbacks", self.handle, 0, {
             // Let all in-flight callbacks run to completion before freeing the context.
             // SAFETY: handle is valid until it is closed just below.

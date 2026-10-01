@@ -1034,6 +1034,47 @@ itself, so nothing in that path issues a `CloseThreadpoolWait` behind a
 untested**, and worth knowing, but it is a question about the ring crate's
 reproducer rather than a change to this one.
 
+### What the obligation flag records, and why a dispatch sometimes discharges it
+
+Implemented 2026-10-01 as `M-T4.3`. Two things about it are not obvious, and the
+plan had both wrong before the code was written.
+
+**The flag records "a drain is owed", not "the caller closed."** The second
+polarity is the one that suggests itself, and it reports against an object that
+was created and never armed -- which has no callback for `Drop` to wait on and
+nothing to say. So the initial state is "nothing owed"; arming sets it, and the
+synchronous close clears it.
+
+**A dispatch discharges it on two of the four types and not on the other two**,
+because the question the flag answers is whether anything is still outstanding:
+
+| type | does a dispatch discharge it? | why |
+|---|---|---|
+| `ThreadpoolWait` | yes | `SetThreadpoolWait` arms for exactly one activation, so once the callback has entered, the pool is no longer watching |
+| `ThreadpoolTimer` | yes | one-shot: each arming produces exactly one firing |
+| `ThreadpoolPeriodicTimer` | no | the pool re-arms from the period, so a tick leaves the timer exactly as live as it was |
+| `ThreadpoolWork` | no | `submit` may be called any number of times, so one entry cannot clear a flag standing for all of them |
+
+Without that distinction the report fires on a wait that was armed once, ran its
+callback, and was dropped -- an ordinary sequence with nothing left to drain.
+
+`IsThreadpoolTimerSet` cannot stand in for the one-shot timer's flag: it stays
+true after the timer expires, so it cannot separate a timer that already fired
+from one still waiting to.
+
+**The flag lives on the heap callback context, not on the owning struct**, which
+is forced rather than chosen: the trampoline is what discharges it on the first
+two types, and a trampoline receives only the context pointer.
+
+`ThreadpoolIo` carries no flag. `outstanding()` already answers the same question
+from live state -- the one case in the crate where it can be asked rather than
+remembered.
+
+**What it costs**: one relaxed store per arming and per dispatch, and one relaxed
+load at `Drop`, in every build. It is deliberately not behind the `trace`
+feature, so a later decision needing the same fact -- `M-T4.4`'s fail-fast is the
+candidate -- can read it without the instrument being compiled in.
+
 ### Still not decided: the fail-fast, and its bound
 
 Off by default, and its selection -- environment variable, constructor option,

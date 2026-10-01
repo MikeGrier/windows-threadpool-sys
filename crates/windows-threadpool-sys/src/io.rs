@@ -520,10 +520,20 @@ impl Drop for ThreadpoolIo {
             // this single site, then make the block terminate: because this
             // object owns the handle, cancelling guarantees every outstanding
             // operation delivers its callback.
-            eprintln!(
-                "windows-threadpool-sys: ThreadpoolIo dropped with {count} operation(s) still \
-                 outstanding; call cancel_all() and run_down() before dropping to control when \
-                 this blocks."
+            //
+            // The report is a trace event rather than the `eprintln!` this
+            // shipped with, per [A developer-facing report is a trace
+            // event](../../../DESIGN-NOTES.md#reports-are-trace-events). The
+            // outstanding count rides in the second numeric slot, so the only
+            // thing the conversion cost is the English. This type needs no
+            // `CloseObligation`: `outstanding()` answers the same question from
+            // live state, which is why the other four types carry a flag and
+            // this one does not.
+            crate::trace_record!(
+                "io",
+                crate::obligation::DROP_OBLIGATION_OWED,
+                self.tp_io,
+                count
             );
             let _ = self.cancel_all();
             self.live.wait_until_empty();

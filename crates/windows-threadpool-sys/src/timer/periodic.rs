@@ -21,6 +21,14 @@ use crate::timer::{absolute_filetime, arm_raw, disarm_raw, millis_u32, relative_
 /// from inside a callback needs the object the callback belongs to.
 struct PeriodicContext {
     timer: AtomicIsize,
+    /// Whether the timer has a schedule that nothing has drained.
+    ///
+    /// A tick does **not** settle this, which is where this type parts company
+    /// with the one-shot timer and the wait. Those are armed for exactly one
+    /// activation, so a dispatch leaves nothing behind; here the pool re-arms
+    /// from the period, so the timer is just as live after a tick as before it.
+    /// Only stopping it settles this.
+    obligation: crate::obligation::CloseObligation,
     callback: Box<dyn Fn(&PeriodicTick<'_>) + Send + Sync + 'static>,
 }
 
@@ -260,6 +268,7 @@ impl ThreadpoolPeriodicTimer {
 
         let context = Box::into_raw(Box::new(PeriodicContext {
             timer: AtomicIsize::new(0),
+            obligation: crate::obligation::CloseObligation::new(),
             callback: Box::new(callback),
         }));
         let env_ptr = env.map_or(ptr::null_mut(), |e| e.as_mut_ptr());
@@ -312,6 +321,7 @@ impl ThreadpoolPeriodicTimer {
     /// Subsequent ticks follow every [`ThreadpoolPeriodicTimer::period`]. A zero
     /// `first_delay` makes the first tick due immediately.
     pub fn start_after(&self, first_delay: Duration) {
+        self.record_live();
         // SAFETY: timer is valid for the lifetime of self.
         unsafe {
             arm_raw(
@@ -328,6 +338,7 @@ impl ThreadpoolPeriodicTimer {
     /// Unlike a relative first delay, an absolute one passes through sleep and
     /// hibernation.
     pub fn start_at(&self, when: SystemTime) {
+        self.record_live();
         // SAFETY: timer is valid for the lifetime of self.
         unsafe {
             arm_raw(
@@ -345,6 +356,7 @@ impl ThreadpoolPeriodicTimer {
     /// with other expirations and wake the processor less often, trading timing
     /// precision for power.
     pub fn start_with_window(&self, first_delay: Duration, window: Duration) {
+        self.record_live();
         // SAFETY: timer is valid for the lifetime of self.
         unsafe {
             arm_raw(
@@ -416,6 +428,23 @@ impl ThreadpoolPeriodicTimer {
         // The stop above is what makes this terminate: with no period left to
         // re-queue from, the drain has a finite backlog to run out.
         self.wait();
+        // Settled after the drain. `PeriodicTick::stop` only ever stops, so
+        // unlike the one-shot timer there is no re-arm that could have landed
+        // during the drain and nothing to suppress.
+        // SAFETY: the context outlives every tick and is freed only by Drop,
+        // which cannot run while this borrow of self is alive.
+        unsafe { &*self.context }.obligation.record_settled();
+    }
+
+    /// Note that a start has made this timer live, so `Drop` owes a drain.
+    ///
+    /// One site for the `start*` methods, which differ only in how they compute
+    /// the first due time. `start` is not among them: it delegates to
+    /// `start_after`.
+    fn record_live(&self) {
+        // SAFETY: the context outlives every tick and is freed only by Drop,
+        // which cannot run while this borrow of self is alive.
+        unsafe { &*self.context }.obligation.record_live();
     }
 
     /// Give up ownership, returning the raw object, its callback context, and
@@ -440,6 +469,17 @@ impl ThreadpoolPeriodicTimer {
         // SAFETY: forwarded from this function's own contract.
         drop(unsafe { Box::from_raw(context.cast::<PeriodicContext>()) });
     }
+
+    /// Whether `Drop` would report an undischarged drain obligation right now.
+    ///
+    /// Exists so the obligation's wiring can be asserted without depending on
+    /// the trace, whose filter is fixed before `main` and so cannot be narrowed
+    /// from inside a test.
+    #[cfg(test)]
+    pub(crate) fn obligation_owed(&self) -> bool {
+        // SAFETY: the context outlives every tick and is freed only by Drop.
+        unsafe { &*self.context }.obligation.is_owed()
+    }
 }
 
 impl Drop for ThreadpoolPeriodicTimer {
@@ -447,6 +487,17 @@ impl Drop for ThreadpoolPeriodicTimer {
         // Stop before draining, or the timer would queue a fresh tick while the
         // drain is in progress and never settle.
         crate::trace_record!("timer-periodic", "drop-begin", self.timer);
+        // Read before the stop and drain, and necessarily so: `stop_and_drain`
+        // below settles the obligation, so asking afterwards would always find
+        // nothing owed.
+        // SAFETY: the context is still live; it is freed at the end of this body.
+        if unsafe { &*self.context }.obligation.is_owed() {
+            crate::trace_record!(
+                "timer-periodic",
+                crate::obligation::DROP_OBLIGATION_OWED,
+                self.timer
+            );
+        }
         self.stop_and_drain();
         crate::trace_record!("timer-periodic", "drop-drained", self.timer);
 

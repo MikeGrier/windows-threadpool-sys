@@ -209,6 +209,8 @@ pub mod cleanup_group;
 #[cfg(windows)]
 pub mod io;
 #[cfg(windows)]
+pub(crate) mod obligation;
+#[cfg(windows)]
 pub mod pool;
 #[cfg(windows)]
 pub mod timer;

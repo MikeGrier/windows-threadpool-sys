@@ -174,6 +174,15 @@ pub(crate) struct TimerContext {
     /// never across a callback drain, which would deadlock a callback that
     /// happened to be blocked on it.
     suppress_rearm: Mutex<u32>,
+    /// Whether the timer has a due time that nothing has drained.
+    ///
+    /// A firing settles it because this type is one-shot: each arming produces
+    /// exactly one callback, so once that callback has entered, no further one
+    /// is coming. `IsThreadpoolTimerSet` is no help here -- it stays true after
+    /// a one-shot expires, so it cannot tell a timer that already fired from one
+    /// still waiting to. A callback that re-arms sets this again when the
+    /// deferred request is applied.
+    obligation: crate::obligation::CloseObligation,
     /// Records, for tests, whether each deferred re-arm was actually applied.
     ///
     /// The suppression this observes happens after the callback returns and
@@ -338,6 +347,9 @@ impl TimerFiring<'_> {
         // SAFETY: `timer` is this object's live PTP_TIMER, published before any
         // callback could run.
         unsafe { arm_raw(timer, due, 0, 0) };
+        // Set after the arming, under the same lock: a request the suppression
+        // rejected returns above and must not claim the timer is live.
+        self.ctx.obligation.record_live();
         drop(suppressed);
         crate::trace_record!("timer", "rearm-left", timer);
         Some(true)
@@ -357,6 +369,9 @@ unsafe extern "system" fn timer_trampoline(
     // SAFETY: context is a valid *mut TimerContext for the full callback duration.
     let ctx = unsafe { &*(context as *const TimerContext) };
     crate::trace_record!("timer", "trampoline-entered", _timer);
+    // This firing consumed the arming: a one-shot produces exactly one callback
+    // per arming, so nothing is owed unless the callback re-arms below.
+    ctx.obligation.record_settled();
     let firing = TimerFiring {
         ctx,
         pending: Cell::new(None),
@@ -482,6 +497,7 @@ impl ThreadpoolTimer {
         let context = Box::into_raw(Box::new(TimerContext {
             timer: AtomicIsize::new(0),
             suppress_rearm: Mutex::new(0),
+            obligation: crate::obligation::CloseObligation::new(),
             #[cfg(test)]
             rearm_observer: Mutex::new(None),
             callback: Box::new(callback),
@@ -519,6 +535,7 @@ impl ThreadpoolTimer {
     /// The delay counts only time the system is awake. A zero delay makes the
     /// timer due immediately.
     pub fn set_after(&self, delay: Duration) {
+        self.record_live();
         // SAFETY: timer is valid for the lifetime of self.
         unsafe { arm_raw(self.timer, relative_filetime(delay), 0, 0) };
     }
@@ -530,6 +547,7 @@ impl ThreadpoolTimer {
     /// fires promptly on resume. An instant already in the past fires
     /// immediately.
     pub fn set_at(&self, when: SystemTime) {
+        self.record_live();
         // SAFETY: timer is valid for the lifetime of self.
         unsafe { arm_raw(self.timer, absolute_filetime(when), 0, 0) };
     }
@@ -540,8 +558,19 @@ impl ThreadpoolTimer {
     /// group this timer with other expirations and wake the processor less
     /// often. A larger window trades timing precision for power.
     pub fn set_after_with_window(&self, delay: Duration, window: Duration) {
+        self.record_live();
         // SAFETY: timer is valid for the lifetime of self.
         unsafe { arm_raw(self.timer, relative_filetime(delay), 0, millis_u32(window)) };
+    }
+
+    /// Note that an arming has made this timer live, so `Drop` owes a drain.
+    ///
+    /// One site for the three `set_*` methods, which differ only in how they
+    /// compute a due time.
+    fn record_live(&self) {
+        // SAFETY: the context outlives every callback and is freed only by Drop,
+        // which cannot run while this borrow of self is alive.
+        unsafe { &*self.context }.obligation.record_live();
     }
 
     /// Stop the timer.
@@ -655,6 +684,10 @@ impl ThreadpoolTimer {
         // Drained with the lock released: a callback blocked on it would
         // otherwise never finish, and this would never return.
         self.wait();
+        // Settled after the drain: a callback running during it may have asked
+        // to re-arm, and the suppression discards that request, so the timer
+        // really is idle here. A later `set_*` makes it live again.
+        ctx.obligation.record_settled();
         ctx.release_suppression();
     }
 
@@ -677,6 +710,17 @@ impl ThreadpoolTimer {
     pub(crate) unsafe fn drop_context(context: *mut core::ffi::c_void) {
         // SAFETY: forwarded from this function's own contract.
         drop(unsafe { Box::from_raw(context.cast::<TimerContext>()) });
+    }
+
+    /// Whether `Drop` would report an undischarged drain obligation right now.
+    ///
+    /// Exists so the obligation's wiring can be asserted without depending on
+    /// the trace, whose filter is fixed before `main` and so cannot be narrowed
+    /// from inside a test.
+    #[cfg(test)]
+    pub(crate) fn obligation_owed(&self) -> bool {
+        // SAFETY: the context outlives every callback and is freed only by Drop.
+        unsafe { &*self.context }.obligation.is_owed()
     }
 
     /// Suppress this member's deferred re-arm and disarm it, before a
@@ -716,6 +760,11 @@ impl Drop for ThreadpoolTimer {
         // Raised and never released: unlike `stop_and_drain`, there is no
         // afterwards for this object.
         crate::trace_record!("timer", "drop-begin", self.timer);
+        // Read before the disarm and drain, and emitted before them: the record
+        // marks the start of the blocking interval it reports.
+        if ctx.obligation.is_owed() {
+            crate::trace_record!("timer", crate::obligation::DROP_OBLIGATION_OWED, self.timer);
+        }
         ctx.suppress_and_disarm();
         // The lock is released before draining: a callback blocked on it would
         // otherwise never finish, and this wait would never return.

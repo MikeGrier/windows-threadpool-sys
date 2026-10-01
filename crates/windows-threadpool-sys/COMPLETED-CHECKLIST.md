@@ -442,3 +442,38 @@ developer it is addressed to, which is true and was accepted anyway, because the
 
 The conversion of `ThreadpoolIo::drop`'s `eprintln!` -- the crate's only such write -- is part of
 `M-T4.3`, which emits the four new reports on the same occasion.
+
+## Moved 2026-10-01 12:08:01 -04:00 -- M-T4.3, the undischarged-obligation report
+
+### <a id="m-t43"></a>M-T4.3 -- Report at `Drop` when the caller did not close synchronously. *(completed 2026-10-01 12:08:01 -04:00)*
+
+Implemented as `CloseObligation` in [src/obligation.rs](src/obligation.rs), carried on the heap
+callback context of `ThreadpoolWait`, `ThreadpoolTimer`, `ThreadpoolPeriodicTimer` and
+`ThreadpoolWork`, and reported as a `drop-obligation-owed` trace event. `ThreadpoolIo`'s
+`eprintln!` -- the crate's only write to stderr -- was converted to the same event in the same
+change, per [M-T4.9](#m-t49).
+
+**The plan had two things wrong, and writing the code is what surfaced them.** Both are recorded
+in [What the obligation flag records, and why a dispatch sometimes discharges
+it](../../DESIGN-NOTES.md#teardown-drains):
+
+- The item's table had the polarity inverted -- it set the flag on the *close* and cleared it on
+  *arming*, which reports against an object that was created and never armed. The flag records
+  that a drain is owed, so the quiet state is the initial one.
+- The item treated the four types as one rule. They are two: a dispatch discharges the obligation
+  on the wait and the one-shot timer, because each is armed for exactly one activation, and does
+  not on the periodic timer (the pool re-arms it) or on work (`submit` is repeatable). Without
+  that split the report fires on a wait that was armed once, ran, and was dropped.
+
+The item also assumed the flag could live on the owning struct. It cannot: the trampoline is what
+discharges it on two of the types, and a trampoline receives only the context pointer.
+
+**Guarded in both directions and sabotage-verified five ways.** The wiring tests in
+[src/obligation/tests.rs](src/obligation/tests.rs) read the flag directly rather than the trace,
+because the trace's filter is fixed before `main` and a trace-reading assertion would pass
+silently in an ordinary `cargo test`. Inverting `record_live` turned 9 red; inverting
+`record_settled` turned 10 red; removing each trampoline's discharge turned exactly its own test
+red and nothing else, which is what shows those two tests are not measuring the `stop_and_drain`
+that follows. The end-to-end emission check in
+[tests/obligation_report.rs](tests/obligation_report.rs) runs only under a narrowed trace and
+announces a skip otherwise; deleting one type's `Drop` report turns it red.

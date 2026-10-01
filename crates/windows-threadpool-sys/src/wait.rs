@@ -332,6 +332,14 @@ struct WaitContext {
     /// never across a callback drain, which would deadlock a callback that
     /// happened to be blocked on it.
     suppress_rearm: Mutex<u32>,
+    /// Whether the object is armed with nothing having drained it.
+    ///
+    /// A dispatch settles it because `SetThreadpoolWait` arms for exactly one
+    /// activation: once the callback has entered, the object is no longer
+    /// watching, so there is nothing for `Drop` to wait on and nothing to
+    /// report. A callback that re-arms sets it again, which is why this is
+    /// cleared at trampoline entry rather than on the way out.
+    obligation: crate::obligation::CloseObligation,
     callback: Box<dyn Fn(&WaitActivation<'_>) + Send + Sync + 'static>,
 }
 
@@ -516,6 +524,10 @@ impl WaitActivation<'_> {
         // callback could run, and `handle` is owned by that object so it is
         // still open. The timeout, if any, is a live stack value for the call.
         unsafe { arm_raw(wait, self.ctx.handle, timeout) };
+        // Set after the arming, under the same lock: a re-arm that the
+        // suppression rejected returns above and must not claim the object is
+        // live, because it is not.
+        self.ctx.obligation.record_live();
         drop(suppressed);
         crate::trace_record!("wait", "rearm-left", wait, self.ctx.handle as usize);
         true
@@ -576,6 +588,9 @@ unsafe extern "system" fn wait_trampoline(
     crate::trace_record!("wait", "trampoline-entered", _wait, wait_result);
     // SAFETY: context is a valid *mut WaitContext for the full callback duration.
     let ctx = unsafe { &*(context as *const WaitContext) };
+    // This activation consumed the arming: the pool is no longer watching, so
+    // nothing is owed unless the callback below arms it again.
+    ctx.obligation.record_settled();
     let activation = WaitActivation {
         result: WaitResult::from_raw(wait_result),
         ctx,
@@ -708,6 +723,7 @@ impl ThreadpoolWait {
             wait: AtomicIsize::new(0),
             handle: target.raw(),
             suppress_rearm: Mutex::new(0),
+            obligation: crate::obligation::CloseObligation::new(),
             callback: Box::new(callback),
         }));
         let env_ptr = env.map_or(ptr::null_mut(), |e| e.as_mut_ptr());
@@ -774,6 +790,9 @@ impl ThreadpoolWait {
     /// should watch a manual-reset event kept in agreement with the state it
     /// reports, which is level-triggered and so has no signal to lose.
     pub fn arm(&self, timeout: Option<Duration>) {
+        // SAFETY: the context outlives every callback and is freed only by Drop,
+        // which cannot run while this borrow of self is alive.
+        unsafe { &*self.context }.obligation.record_live();
         // SAFETY: `wait` is valid for the lifetime of self, and the handle is
         // owned by self so it is still open.
         unsafe { arm_raw(self.wait, self.target.raw(), timeout) };
@@ -901,6 +920,11 @@ impl ThreadpoolWait {
         // Drained with the lock released: a callback blocked on it would
         // otherwise never finish, and this would never return.
         self.wait();
+        // Settled after the drain, not before: a callback running during it may
+        // have asked to re-arm, and the suppression discards that request, so
+        // the object really is idle here. Releasing the suppression below lets a
+        // later `arm` make it live again, which sets this afresh.
+        ctx.obligation.record_settled();
         ctx.release_suppression();
     }
 
@@ -928,6 +952,17 @@ impl ThreadpoolWait {
     pub(crate) unsafe fn drop_context(context: *mut core::ffi::c_void) {
         // SAFETY: forwarded from this function's own contract.
         drop(unsafe { Box::from_raw(context.cast::<WaitContext>()) });
+    }
+
+    /// Whether `Drop` would report an undischarged drain obligation right now.
+    ///
+    /// Exists so the obligation's wiring can be asserted without depending on
+    /// the trace, whose filter is fixed before `main` and so cannot be narrowed
+    /// from inside a test.
+    #[cfg(test)]
+    pub(crate) fn obligation_owed(&self) -> bool {
+        // SAFETY: the context outlives every callback and is freed only by Drop.
+        unsafe { &*self.context }.obligation.is_owed()
     }
 
     /// Suppress this member's re-arm and disarm it, before a
@@ -966,6 +1001,12 @@ impl Drop for ThreadpoolWait {
         // Raised and never released: unlike `stop_and_drain`, there is no
         // afterwards for this object.
         crate::trace_record!("wait", "drop-begin", self.wait, self.target.raw() as usize);
+        // Read before the disarm and drain, and emitted before them: the record
+        // marks the start of the blocking interval it reports, so a reader sees
+        // what the following gap is for rather than learning it afterwards.
+        if ctx.obligation.is_owed() {
+            crate::trace_record!("wait", crate::obligation::DROP_OBLIGATION_OWED, self.wait);
+        }
         ctx.suppress_and_disarm();
         // The lock is released before draining: a callback blocked on it would
         // otherwise never finish, and this wait would never return.

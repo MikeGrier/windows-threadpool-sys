@@ -39,57 +39,8 @@ shows the cancelling form leaves the default pool unable to make its first worke
   asymmetry itself is pinned by
   `disarming_cancels_a_queued_tick_which_a_waits_disarm_does_not`, and sabotaged by inverting it.
 
-- [ ] **M-T4.3** -- **Report at `Drop` when the caller did not close synchronously.**
-
-  Every teardown in this crate blocks to drain. `Drop` is a poor place for that, because where it
-  lands in the caller's control flow is often accidental, so each type also exposes a synchronous
-  method doing the same drain at a point the caller chooses. This item adds the report that tells
-  a developer they left it to `Drop`.
-
-  **What to build.** An `AtomicBool` on each of the four types below, set by the synchronous close
-  and cleared by anything that makes the object live again. `Drop` drains unconditionally, then
-  reports if the flag is clear.
-
-  | type | sets it | clears it |
-  |---|---|---|
-  | `ThreadpoolWait` | `stop_and_drain` | `arm` |
-  | `ThreadpoolTimer` | `stop_and_drain` | `set_after`, `set_at`, `set_after_with_window` |
-  | `PeriodicTimer` | `stop_and_drain` | `start`, `start_after` |
-  | `ThreadpoolWork` | `wait` | `submit` |
-
-  `ThreadpoolIo` needs no flag: `outstanding()` already tells it whether rundown happened, and its
-  `Drop` already reports and then blocks. It is the behaviour the other four are being brought up
-  to -- but its report changes channel in this same item, below.
-
-  **The flag decides whether to report. It must never decide whether to drain.** `Drop` drains
-  every time, including when the flag says the caller already did. Skipping would be wrong because
-  the flag records a past event on a `Sync` type whose close takes `&self`: another thread may arm
-  the object immediately after `stop_and_drain` returns, so "drained" does not mean "quiescent".
-  Skipping a drain on an object that really is quiescent saves almost nothing, and getting it wrong
-  reintroduces the hazard that
-  [Teardown drains rather than cancels](../../DESIGN-NOTES.md#teardown-drains) exists to prevent.
-
-  **Per-type flags, decided 2026-10-01.** The alternative considered was to derive the answer from
-  live state the way `ThreadpoolIo` does, which needs no flag and cannot report an obligation that
-  is not owed. It does not carry. `ThreadpoolTimer::is_set` stays true after a one-shot fires, so
-  it would report against a quiescent timer; `ThreadpoolWait` and `ThreadpoolWork` have no such
-  query at all, and giving them one means tracking armed-ness and outstanding submissions the
-  crate does not currently keep. A uniform obligation across the five types was judged more costly
-  than it is worth.
-
-  **Guard it by sabotage**, both directions: a `Drop` that reports when the caller *did* close, and
-  one that stays silent when the caller did not. Assert the report's presence or absence, not its
-  text.
-
-  **The report is a trace event**, per [A developer-facing report is a trace
-  event](../../DESIGN-NOTES.md#reports-are-trace-events): `trace_record!` on the subsystem the type
-  already traces under. That macro carries two numeric slots and no message, so the report is a
-  tagged event rather than a sentence, and there is no shared message sink to build.
-
-  **Convert `ThreadpoolIo::drop`'s `eprintln!` in the same change.** That decision makes it the
-  crate's only write to stderr, and it fires on the same occasion as the four new reports, so
-  converting it here is what leaves all five consistent. The outstanding count fits the second
-  numeric slot, so nothing survives the conversion except the English.
+- [x] **M-T4.3** -- Report at `Drop` when the caller did not close synchronously. -> [completed
+  2026-10-01](COMPLETED-CHECKLIST.md#m-t43)
 
 - [ ] **M-T4.10** -- **Extract the re-arm suppression that `ThreadpoolWait` and `ThreadpoolTimer`
   each implement separately.**
