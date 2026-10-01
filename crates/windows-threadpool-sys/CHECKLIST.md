@@ -41,29 +41,9 @@ behaviour, and backed by a repair.
 - [x] **M-T6.6** -- Verify the `self-heal`-off build. -> [completed
   2026-10-01](COMPLETED-CHECKLIST.md#m-t66)
 
-- [ ] **M-T6.7** -- **DECISION TO RAISE: the synchronous close is not uniform, in name or in
-  existence.**
-
-  > **Must follow `M-T6.3`**, which is what makes the surface final. That item adds
-  > `try_cancel_pending` and `try_cancel_pending_no_heal_tracking` to `ThreadpoolWait`,
-  > `WaitMember` and -- through `close_members` -- `CleanupGroup`, so taking this inventory before
-  > it would be taking it against a list that is about to change. `M-T6.3` is also the first time
-  > this crate has deliberately paired a safe and an `unsafe` form of the same operation, which is
-  > a precedent worth weighing here rather than discovering later.
-
-  Raised in `M-T4` while investigating `M-T4.3`, and moved here 2026-10-01 because `M-T6.3` is
-  what unblocks it. Four shapes across five types: `stop_and_drain` on `ThreadpoolWait`,
-  `ThreadpoolTimer` and `PeriodicTimer`; `run_down` on `ThreadpoolIo`;
-  `close_members(cancel_pending: bool)` on `CleanupGroup`; and **nothing named as such on
-  `ThreadpoolWork`**, whose `wait()` happens to be the drain.
-
-  **The obligation half is already settled and is not part of this.** `M-T4.3` defined it per
-  type and shipped, so what remains here is naming alone. `run_down` and `close_members` have good
-  reasons to differ -- one waits on an operation registry, the other releases a whole group -- so
-  the question is whether they are renamed, given a common alias, or left as they are.
-
-  Note that the cancel surface and the drain surface are different questions. `M-T6.3` renames the
-  former; this asks about the latter.
+- [x] **M-T6.7** -- Decided: `stop_and_drain` is the name, added to the four types that lacked it,
+  with `run_down` and `close_members` deliberately left alone. -> [completed
+  2026-10-01](COMPLETED-CHECKLIST.md#m-t67)
 
 - [ ] **M-T6.8** -- **DECISION TO RAISE, reserved by the engineer 2026-09-28 as CRATE-WIDE: a
   fail-fast that forces the caller to have closed, making these types linear rather than affine.**

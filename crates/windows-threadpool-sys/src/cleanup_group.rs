@@ -268,6 +268,7 @@ impl CleanupGroup {
         });
         Ok(TimerMember {
             handle,
+            context,
             _group: PhantomData,
         })
     }
@@ -507,6 +508,16 @@ impl WorkMember<'_> {
         });
     }
 
+    /// Stop accepting work and block until none is queued or executing.
+    ///
+    /// As on [`ThreadpoolWork`], there is nothing to *stop* -- a submission
+    /// cannot be withdrawn, only waited for -- so this is exactly
+    /// [`wait`](Self::wait). The name exists so a caller tearing down a mixed
+    /// set of objects can reach for one method.
+    pub fn stop_and_drain(&self) {
+        self.wait();
+    }
+
     /// Cancel invocations that have not started, then wait for those that have.
     pub fn cancel_pending(&self) {
         // SAFETY: as above.
@@ -524,6 +535,12 @@ impl WorkMember<'_> {
 #[derive(Debug)]
 pub struct TimerMember<'group> {
     handle: PTP_TIMER,
+    /// The callback context the group owns for this member.
+    ///
+    /// Held so the member can run the same `stop_and_drain` its standalone twin
+    /// does, suppression and all. The group owns and frees it; this is a borrow
+    /// for the member's lifetime.
+    context: *mut c_void,
     _group: PhantomData<&'group CleanupGroup>,
 }
 
@@ -566,6 +583,21 @@ impl TimerMember<'_> {
             // SAFETY: the handle is live until the group releases it.
             unsafe { WaitForThreadpoolTimerCallbacks(self.handle, FALSE) };
         });
+    }
+
+    /// Stop the timer and block until no firing is queued or executing.
+    ///
+    /// The same drain [`ThreadpoolTimer::stop_and_drain`] performs, including
+    /// suppressing a re-arm a running callback asks for: without that the drain
+    /// could return with a due time installed, which is the whole reason the
+    /// standalone type has this method rather than only `disarm` and `wait`.
+    ///
+    /// Added because a member that lacked it was not the equivalent of its
+    /// standalone twin that [`CleanupGroup::create_timer`] says it is.
+    pub fn stop_and_drain(&self) {
+        // SAFETY: the group owns this context and does not free it while this
+        // member borrows the group, and `handle` is the object it belongs to.
+        unsafe { ThreadpoolTimer::stop_and_drain_parts(self.context, self.handle) };
     }
 
     /// Cancel callbacks that have not started, then wait for those that have.
@@ -729,6 +761,21 @@ impl WaitMember<'_> {
     /// not because the group protects its members; `close_members(true)` passes
     /// the cancel through to each member.
     ///
+    /// Stop watching and block until no callback is queued or executing.
+    ///
+    /// The same drain [`ThreadpoolWait::stop_and_drain`] performs, including
+    /// suppressing a re-arm a running callback asks for: without that the drain
+    /// could return with the object armed again, which is the whole reason the
+    /// standalone type has this method rather than only `disarm` and `wait`.
+    ///
+    /// Added because a member that lacked it was not the equivalent of its
+    /// standalone twin that [`CleanupGroup::create_wait`] says it is.
+    pub fn stop_and_drain(&self) {
+        // SAFETY: the group owns this context and does not free it while this
+        // member borrows the group, and `handle` is the object it belongs to.
+        unsafe { ThreadpoolWait::stop_and_drain_parts(self.context, self.handle) };
+    }
+
     /// Prefer [`wait`](Self::wait).
     ///
     /// This crate repairs the pool afterwards, which is what makes this safe to

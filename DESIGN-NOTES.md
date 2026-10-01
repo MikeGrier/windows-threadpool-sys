@@ -1195,6 +1195,46 @@ stream it does not own.
 - **Both channels at once.** The union of the costs, and two places for the same
   report to drift apart.
 
+## <a id="stop-and-drain-is-the-name"></a>`stop_and_drain` is the name of the synchronous close, and every type that drains has one
+
+**Decided 2026-10-01** by the engineer, implementing `M-T6.7`. The inventory that
+prompted it was taken after `M-T6.3` settled the cancel surface.
+
+### The rule
+
+Every type whose teardown drains offers `stop_and_drain`. `ThreadpoolWork`,
+`WorkMember`, `TimerMember` and `WaitMember` gained one; nothing was renamed.
+
+`ThreadpoolIo::run_down` and `CleanupGroup::close_members(bool)` keep their own
+names and were deliberately not aliased. Both do something a per-object drain
+does not -- one waits on an operation registry, the other releases a whole group
+-- so a shared name would claim an equivalence that is not there.
+
+### Why additive rather than a rename
+
+A rename costs every existing caller and buys a consistency that an added method
+also buys. `wait()` keeps its meaning on the work types, where it always was the
+drain; `stop_and_drain` is simply the name a caller can rely on across types
+without knowing which of them has something to stop.
+
+### What the inventory found that the item had not recorded
+
+`TimerMember` and `WaitMember` had **no** synchronous close at all, while
+`PeriodicTimerMember` did and both of their standalone twins did. Since
+`create_timer` and `create_wait` are documented as equivalent to the standalone
+constructors, moving an object into a cleanup group silently lost the method
+that makes its teardown deterministic -- `disarm(); wait();` is not the same
+thing, which the crate's own tests already pin.
+
+So the member additions are not naming work. They are a missing capability,
+found by taking the inventory the decision required.
+
+### A caution for `M-T6.8`
+
+The uniform method now exists, which is what that item was gated on. It is *not*
+uniform across all six types -- `run_down` and `close_members` remain -- so a
+linearity decision still has to say what it means for those two.
+
 ## <a id="cancellation-self-heals"></a>Cancellation repairs the pool it may have wedged, and says so in its name
 
 **Decided 2026-10-01. This decision schedules work; the implementation is queued

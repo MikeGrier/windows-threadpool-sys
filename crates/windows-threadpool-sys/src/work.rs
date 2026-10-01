@@ -170,6 +170,20 @@ impl ThreadpoolWork {
         unsafe { &*self.ctx }.obligation.record_settled();
     }
 
+    /// Stop accepting work and block until none is queued or executing.
+    ///
+    /// The drain every type in this crate offers under this name, so a caller
+    /// tearing down a mixed set of objects can reach for one method.
+    ///
+    /// There is nothing to *stop* on a work object -- a submission cannot be
+    /// withdrawn, only waited for -- so this is exactly [`wait`](Self::wait),
+    /// which is why that method is documented as this type's drain. The name
+    /// exists because a caller should not have to know which of this crate's
+    /// types has something to stop.
+    pub fn stop_and_drain(&self) {
+        self.wait();
+    }
+
     /// Cancels callbacks that have not yet started, then waits for any
     /// currently-executing invocations to finish.
     pub fn cancel_pending(&self) {

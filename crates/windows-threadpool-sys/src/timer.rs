@@ -690,11 +690,32 @@ impl ThreadpoolTimer {
     pub fn stop_and_drain(&self) {
         // SAFETY: the context outlives every callback and is freed only by Drop,
         // which cannot run while this borrow of self is alive.
-        let ctx = unsafe { &*self.context };
+        unsafe { Self::stop_and_drain_parts(self.context.cast(), self.timer) };
+    }
+
+    /// [`stop_and_drain`](Self::stop_and_drain) against a detached context.
+    ///
+    /// One body rather than two, so this type and the cleanup-group member that
+    /// wraps the same object cannot drift apart: the suppression discipline here
+    /// is what makes the drain mean anything, and a second copy of it is a
+    /// second place for a later change to reach one and miss the other.
+    ///
+    /// # Safety
+    ///
+    /// `context` must come from [`into_parts`](Self::into_parts) on this type
+    /// and name a still-live object whose context the caller has not yet freed,
+    /// and `timer` must be that object.
+    pub(crate) unsafe fn stop_and_drain_parts(context: *mut core::ffi::c_void, timer: PTP_TIMER) {
+        // SAFETY: forwarded from this function's own contract.
+        let ctx = unsafe { &*context.cast::<TimerContext>() };
         ctx.suppress_and_disarm();
         // Drained with the lock released: a callback blocked on it would
         // otherwise never finish, and this would never return.
-        self.wait();
+        crate::trace_call!("WaitForThreadpoolTimerCallbacks", timer, 0, {
+            // SAFETY: `timer` is live, and waiting without cancelling cannot
+            // orphan any storage.
+            unsafe { WaitForThreadpoolTimerCallbacks(timer, FALSE) };
+        });
         // Settled after the drain: a callback running during it may have asked
         // to re-arm, and the suppression discards that request, so the timer
         // really is idle here. A later `set_*` makes it live again.

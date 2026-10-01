@@ -999,3 +999,127 @@ fn a_group_releases_default_and_custom_close_members_together() {
         "both members' resources are released"
     );
 }
+
+// --- M-T6.7: the members' synchronous close, added so a member is the
+// equivalent of its standalone twin that `create_*` says it is.
+
+/// A member's `stop_and_drain` quiesces a self-re-arming timer.
+///
+/// The property that makes it worth having rather than aliasing `wait`: a
+/// callback asking to re-arm while the drain is in progress must have that
+/// request discarded, or the drain returns with a due time installed. Asserted
+/// through `is_set`, which is `false` only once nothing is scheduled.
+#[test]
+fn a_timer_members_stop_and_drain_quiesces_a_self_rearming_timer() {
+    let group = CleanupGroup::new().expect("create group");
+    let fires = Arc::new(AtomicUsize::new(0));
+    let counter = Arc::clone(&fires);
+    let timer = group
+        .create_timer(
+            move |firing| {
+                counter.fetch_add(1, Ordering::SeqCst);
+                // Long enough that the drain below starts while this callback
+                // is still running, so the re-arm it asks for afterwards is one
+                // the suppression has to discard. Without the sleep the drain
+                // can land between firings, where a plain `disarm` would also
+                // leave the timer idle and the test would prove nothing -- the
+                // same precondition failure recorded in `M-T6.10`.
+                std::thread::sleep(Duration::from_millis(60));
+                firing.rearm_after(Duration::from_millis(1));
+            },
+            None,
+        )
+        .expect("create timer member");
+
+    timer.set_after(Duration::ZERO);
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while fires.load(Ordering::SeqCst) == 0 {
+        assert!(Instant::now() < deadline, "the timer never fired");
+        std::thread::sleep(Duration::from_millis(1));
+    }
+
+    timer.stop_and_drain();
+    assert!(
+        !timer.is_set(),
+        "a re-arm asked for during the drain must be discarded, or this returns \
+         with the timer still scheduled"
+    );
+    let settled = fires.load(Ordering::SeqCst);
+    std::thread::sleep(Duration::from_millis(150));
+    assert_eq!(
+        fires.load(Ordering::SeqCst),
+        settled,
+        "the timer kept firing after stop_and_drain"
+    );
+}
+
+/// A member's `stop_and_drain` quiesces a self-re-arming wait.
+///
+/// The wait has no `is_set`, so quiescence is asserted the way the standalone
+/// type's test asserts it: the activation count stops moving.
+#[test]
+fn a_wait_members_stop_and_drain_quiesces_a_self_rearming_wait() {
+    let group = CleanupGroup::new().expect("create group");
+    let seen = Arc::new(AtomicUsize::new(0));
+    let counter = Arc::clone(&seen);
+    let event = WaitableHandle::event(true, false).expect("create event");
+    let raw = event.handle().as_raw_handle();
+    let wait = group
+        .create_wait(
+            event,
+            move |activation| {
+                counter.fetch_add(1, Ordering::SeqCst);
+                // As in the timer case above: the drain must begin while this
+                // callback is running, or the re-arm it asks for is not one the
+                // suppression had to discard.
+                std::thread::sleep(Duration::from_millis(60));
+                activation.rearm(None);
+            },
+            None,
+        )
+        .expect("create wait member");
+
+    wait.arm(None);
+    // SAFETY: a live, manual-reset event this test owns; it stays signalled, so
+    // each re-arm activates again.
+    unsafe { SetEvent(raw) };
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while seen.load(Ordering::SeqCst) == 0 {
+        assert!(Instant::now() < deadline, "the wait never activated");
+        std::thread::sleep(Duration::from_millis(1));
+    }
+
+    wait.stop_and_drain();
+    let settled = seen.load(Ordering::SeqCst);
+    std::thread::sleep(Duration::from_millis(150));
+    assert_eq!(
+        seen.load(Ordering::SeqCst),
+        settled,
+        "a re-arm asked for during the drain must be discarded, or the wait is \
+         still watching a signalled event when this returns"
+    );
+}
+
+/// A work member's `stop_and_drain` is its drain, under the shared name.
+#[test]
+fn a_work_members_stop_and_drain_runs_what_was_submitted() {
+    let group = CleanupGroup::new().expect("create group");
+    let ran = Arc::new(AtomicUsize::new(0));
+    let counter = Arc::clone(&ran);
+    let work = group
+        .create_work(
+            move || {
+                counter.fetch_add(1, Ordering::SeqCst);
+            },
+            None,
+        )
+        .expect("create work member");
+
+    work.submit();
+    work.stop_and_drain();
+    assert_eq!(
+        ran.load(Ordering::SeqCst),
+        1,
+        "the drain must run the submitted callback, not return before it"
+    );
+}

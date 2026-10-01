@@ -1141,3 +1141,28 @@ That commit's message claims the links were verified with `cargo doc` in both co
 true, and insufficient, because plain `cargo doc` reports a broken intra-doc link as a **warning**.
 The job runs it with `-D rustdoc::broken_intra_doc_links`, which is what turns it into a failure.
 Both links are now plain code spans with the reason recorded at each site.
+
+## Moved 2026-10-01 17:12:52 -04:00 -- M-T6.7, the name of the synchronous close
+
+### <a id="m-t67"></a>M-T6.7 -- Decided: `stop_and_drain` is the name, added to the four types that lacked it, with `run_down` and `close_members` deliberately left alone. *(completed 2026-10-01 17:12:52 -04:00)*
+
+Decided by the engineer; the rule and what was rejected are in [`stop_and_drain` is the name of the
+synchronous close](../../DESIGN-NOTES.md#stop-and-drain-is-the-name). Additive: `ThreadpoolWork`,
+`WorkMember`, `TimerMember` and `WaitMember` gained the method, nothing was renamed.
+
+**The inventory found a missing capability, not just a naming inconsistency.** `TimerMember` and
+`WaitMember` had no synchronous close at all, while `PeriodicTimerMember` did and both of their
+standalone twins did -- so moving an object into a cleanup group silently lost the method that
+makes its teardown deterministic, despite `create_timer` and `create_wait` being documented as
+equivalent to the standalone constructors. That is why the member additions carry the real
+suppression rather than aliasing `wait`.
+
+To keep the member and standalone forms from drifting, each type now has **one** body:
+`stop_and_drain_parts` takes a detached context, and the standalone method calls it.
+
+**One of the two new tests was vacuous, caught by sabotage, and failed for the reason `M-T6.10`
+recorded.** Dropping the suppression from both member drains turned the wait test red and left the
+timer test green: its callback returned immediately, so the drain could land between firings where
+a plain `disarm` also leaves the timer idle. Both callbacks now sleep, so the drain begins while
+one is in flight and the re-arm it asks for is one the suppression has to discard -- which is the
+pattern the standalone tests already used. With that, the same sabotage turns both red.
