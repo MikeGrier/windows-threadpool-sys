@@ -381,34 +381,21 @@ same suspicion, and look for a disconfirming measurement before building on it.
   for the worker to retire, then arm a fresh wait and time it. Slow -- a handful of captures at a
   minute-plus each -- but it needs no new primitive and answers the question directly.
 
-- [ ] **M-T5.11** -- **Is the fault reachable on a pool that already has a worker?** Raised by the
-  engineer's question about whether the stuck pool has idle threads. It does not -- 12 stalled
-  captures all read total 0, waiting 0, pending 0, against 20 healthy runs reading total 1 -- and
-  that is the *only* difference between the two arms at the same instant. See
-  [the-blast-radius-is-one-pool](../windows-ioring-sys/measurements/2026-09-30-the-blast-radius-is-one-pool/README.md).
+- [x] **M-T5.11** -- **Done 2026-09-30: a warm pool does not stall. This is a cold-start hazard.**
+  Warming the pool first -- one work item, its callback confirmed to have run, so a worker provably
+  exists -- gives **0 failures in 24000** against a cold control's **66**. A delay-matched cold arm
+  that pays 400us without warming (more than warming's measured 223-304us) still fails at the cold
+  rate, so it is the worker and not the elapsed time. Every warm run is individually confirmed, and
+  the arm aborts rather than proceed if its warm-up fails. Artifact:
+  [a-warm-pool-does-not-stall](../windows-ioring-sys/measurements/2026-09-30-a-warm-pool-does-not-stall/README.md).
 
-  **Every stall this investigation has ever captured is of a cold pool**, because the reproducer's
-  trigger runs at 0.00004s, before the pool has dispatched anything. Whether that is incidental or
-  a precondition is untested, and the two answers have very different consequences:
+  **Exposure is therefore bounded**: near process start, before the pool's first dispatch, and
+  after each idle-timeout expiry when the last worker retires (67s for the default pool). A process
+  keeping its pool busy is not exposed between those points. This fits the mechanism -- the severed
+  notification is the one asking the factory to *create* a worker, and a pool with a thread already
+  parked does not need that question asked -- but the fit is corroboration, not proof.
 
-  - **If cold is required**, this is a startup hazard. A process that gets through its first
-    dispatch is safe while it stays busy, and the exposure is a narrow window near process start
-    plus whatever windows follow each idle-timeout expiry.
-  - **If a warm pool is also reachable**, it is a steady-state hazard and the exposure is
-    continuous.
+  Does **not** establish that a warm pool is unreachable by any trigger, only by this one at this
+  rate over 24000 runs. Changes nothing about the fix: draining remains correct regardless, and
+  this bounds when a *non*-draining teardown is dangerous.
 
-  A plausible mechanism favours the first -- the severed notification is the one asking the factory
-  to *create* a worker, and a pool with a thread parked for work does not need that question asked.
-  **Do not bind to that reading**; it is a mechanism sketch, and three hypotheses of exactly that
-  shape have already been refuted in this investigation.
-
-  Measurement: warm the default pool first (submit a work item, wait for the callback, confirm
-  `total_worker_count` is 1), *then* run the trigger. A rate indistinguishable from the cold arm
-  says warm pools are reachable; a zero over enough runs to be meaningful against the ~4 per
-  thousand the `hand-spin-3us` arm gives says cold is required. Cheap -- it reuses the existing
-  trigger and capture path, and needs only a warm-up before it.
-
-  Note the coupling to **M-T5.10**: if cold is required, then "does a recovered pool break again
-  once its workers retire" has an expected answer rather than being open, because retirement is
-  exactly what makes a warm pool cold again. Running this one first may make that one cheaper to
-  interpret.
