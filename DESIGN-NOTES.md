@@ -1265,10 +1265,15 @@ for them at all. The reasoning above describes the unwinding profile.
 
 **It does not contradict [the trace-only reporting
 rule](#reports-are-trace-events)**, though it looks as though it might, since a
-panic message reaches stderr. A panic goes through the *application's* panic
-hook, which the application can replace; an `eprintln!` cannot be refused. That
-is the same distinction the reporting rule turns on -- the crate declines to
-choose the destination, and a panic leaves the choice where it belongs.
+panic message reaches stderr.
+
+**This crate is not what writes it.** A panic raises a condition; what reaches
+stderr is written by the runtime's panic hook, which belongs to the application
+and which the application can replace. The rule forbids *this crate* writing
+into a stream it does not own, and panicking writes nothing -- it hands the
+condition to the one piece of code entitled to decide what becomes of it. An
+`eprintln!` is the opposite on both counts: this crate doing the writing, and a
+consumer with no way to refuse it.
 
 **One bound is already fixed and constrains every answer: forward progress is
 not the alternative.** A teardown that cannot drain may abort, or fail fast by
