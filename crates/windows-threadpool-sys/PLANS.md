@@ -6,4 +6,4 @@ Completed checklists are recorded in
 
 | Path to CHECKLIST.md | Status | Brief description | Design Notes |
 |---|---|---|---|
-| [CHECKLIST.md](CHECKLIST.md) | in progress | M-T4: teardown drains rather than cancels, `Drop` blocks until it is finished, and an undischarged obligation is reported | [DESIGN-NOTES.md](../../DESIGN-NOTES.md#teardown-drains) |
+| [CHECKLIST.md](CHECKLIST.md) | in progress | M-T6: cancellation repairs the pool it may have wedged, and says so in its name | [DESIGN-NOTES.md](../../DESIGN-NOTES.md#cancellation-self-heals) |
