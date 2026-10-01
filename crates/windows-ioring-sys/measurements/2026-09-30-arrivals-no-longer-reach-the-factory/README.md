@@ -47,8 +47,21 @@ that process, not of the stimulus.
 - **The port is fine.** It accepts packets and its depth grows correctly.
 - **The factory is fine.** It reads as perfectly idle in every field and it
   creates a worker on demand when reached by the other route.
-- **What is broken is the connection between them**, and it is *persistent*, not
-  a missed edge -- a fresh arrival is ignored exactly as the original ones were.
+- **What is broken is the connection between them** -- a fresh arrival is ignored
+  exactly as the original ones were.
+
+> **Corrected 2026-09-30.** This bullet originally continued "and it is
+> *persistent*, not a missed edge". **That is not established and this
+> measurement cannot establish it.** The posted packet went onto a queue that was
+> already non-empty, and two models fit that result equally well: a notification
+> that is permanently gone, and one that fires on an empty-to-non-empty
+> transition whose edge the removal consumed while leaving the queue non-empty.
+> Both predict "post, get no worker" here. Ruling out the second needed an
+> experiment this one did not run.
+>
+> The severity question that distinction decides is nonetheless **answered**, by
+> a different route -- see
+> [what-a-process-does-after-the-stall](../2026-09-30-what-a-process-does-after-the-stall/README.md).
 
 That also explains the asymmetry this investigation has carried unexplained since
 the beginning: `NtReleaseWorkerFactoryWorker` recovers the stall every time
@@ -59,9 +72,11 @@ user-mode release requests, which does not depend on the severed link.
 
 Why that link breaks. It is inside the kernel's queue-to-factory notification,
 and no instrument available here reaches it. What is now established is its
-*shape*: a per-port, persistent loss of notification, caused by removing a
-delivered packet a few microseconds after it was queued, on a port whose factory
-has no threads yet.
+*shape*: a per-port loss of notification that lasts at least as long as the queue
+stays non-empty, caused by removing a delivered packet a few microseconds after
+it was queued, on a port whose factory has no threads yet. Whether it outlives
+the queue emptying is a separate question, answered in
+[what-a-process-does-after-the-stall](../2026-09-30-what-a-process-does-after-the-stall/README.md).
 
 The `M-T5.3` question -- whether the hazard window is anchored to the queueing or
 to the disarm -- is worth more now than when it was parked, because the answer

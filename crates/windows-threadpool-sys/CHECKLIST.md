@@ -347,3 +347,36 @@ same suspicion, and look for a disconfirming measurement before building on it.
   in
   [which-teardowns-can-still-yank](../windows-ioring-sys/measurements/2026-09-30-which-teardowns-can-still-yank/README.md)
   maps every remaining path that can remove a delivered packet, and its table stands.
+
+- [x] **M-T5.9** -- **Done 2026-09-30: severity characterised, and the "end of execution" reading is
+  wrong.** The fault did not present at the end of execution -- the trigger finished, and the
+  damage blocked work that arrived afterwards. Continued use does **not** hide it: a fresh wait, a
+  fresh timer and a completed overlapped read each leave the pool stalled for a full two-second
+  window. Only a work submit recovers it, and recovery is complete -- a brand-new wait armed after
+  it dispatches in microseconds, in 63 captures across six experiments. Artifact:
+  [what-a-process-does-after-the-stall](../windows-ioring-sys/measurements/2026-09-30-what-a-process-does-after-the-stall/README.md).
+
+  **The consequence worth carrying forward is that the fault is camouflaged, not benign.** A
+  program that submits work items near its waits sees a latency spike bounded by the interval to
+  the next submit -- easy to mistake for scheduler jitter. A program using only waits, timers and
+  I/O has no stimulus that will ever recover it, and hangs. This workspace's reproducer is the
+  second kind, which is the only reason the fault was ever seen rather than shrugged off.
+
+- [ ] **M-T5.10** -- **Does the pool break again once it returns to zero workers?** The one
+  severity question `M-T5.9` could not close. Every capture observes a pool that still holds the
+  worker its recovery created, because the idle timeout is 67s and no capture runs that long. If
+  the notification is permanently lost rather than edge-consumed, a long-lived process is in a
+  permanent stop-start state -- working while a worker happens to be alive, stopping each time the
+  pool drains -- rather than having had one bad moment.
+
+  **The obvious experiment hangs and must not be retried as written.** Draining the stalled pool's
+  completion port with `GetQueuedCompletionStatus` at a zero timeout, to make a genuine
+  empty-to-non-empty transition, does not return: six workers sat fifteen minutes with no progress
+  and captured nothing. The instrument was removed rather than kept behind a warning. A plain
+  `GetQueuedCompletionStatus` is not a safe way to inspect a thread pool's own port whatever the
+  timeout says; `NtQueryIoCompletion` reads the depth without disturbing it, which is what the
+  surviving instruments use.
+
+  Viable alternative: recover a stalled process with a work submit, wait past the 67s idle timeout
+  for the worker to retire, then arm a fresh wait and time it. Slow -- a handful of captures at a
+  minute-plus each -- but it needs no new primitive and answers the question directly.
