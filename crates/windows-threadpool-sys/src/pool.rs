@@ -284,8 +284,25 @@ impl Drop for ThreadpoolPool {
 /// control: another library, or a dependency, tearing a wait down badly during
 /// your process's startup.
 ///
-/// Whether that is worth one resident thread is the caller's decision, which is
-/// why this is opt-in and not done automatically.
+/// # It is opt-in, and this crate never calls it for you
+///
+/// Nothing in this crate warms the pool on your behalf -- not `ThreadpoolWait::new`,
+/// not any other constructor. Three reasons, in order of weight:
+///
+/// 1. **It is a process-wide side effect.** A thread created here belongs to the
+///    default pool, which is shared with every other component in the process. A
+///    library that silently adds a resident thread to a pool it does not own has
+///    made a decision that was not its to make.
+/// 2. **This crate's own teardowns do not need it.** They drain, so they never
+///    remove a delivered packet. Calling this automatically would protect against
+///    *other* code while implying that this crate's paths required it.
+/// 3. **It would be a surprising cost in the common case.** Most callers create a
+///    wait and never tear it down badly; charging all of them a thread for a
+///    hazard they do not have is the wrong default.
+///
+/// Whether the protection is worth one resident thread is a judgement about the
+/// process as a whole, which the caller is in a position to make and this crate
+/// is not.
 ///
 /// # What was ruled out
 ///
@@ -295,6 +312,26 @@ impl Drop for ThreadpoolPool {
 /// process**. The default pool's minimum cannot be set. A private
 /// [`ThreadpoolPool`] can have [`set_min_threads`](ThreadpoolPool::set_min_threads)
 /// applied to it, but that is a different pool.
+///
+/// # It always submits, and does not check first
+///
+/// The obvious optimisation is to read the worker count and skip the work item
+/// when the pool is already warm. It is not done, for two reasons, and the first
+/// is simply that it is slower. Measured on the development machine: prewarming
+/// an already-warm pool costs about 27us, while the query needed to decide to
+/// skip it costs about 204us, because there is no way to ask "how many workers
+/// does the default pool have" without scanning the handle space. The skip would
+/// cost roughly seven times what it saves.
+///
+/// The second reason outlasts the first. That query reads a layout Microsoft
+/// does not publish, and this crate confines such reads to the `trace` feature.
+/// A misread returning a plausible non-zero would make this function skip the
+/// warm-up and report success, leaving the caller believing they are protected
+/// when they are not -- the exact failure this exists to prevent. An
+/// unconditional submit cannot be wrong that way.
+///
+/// [`crate::trace::worker_factory_snapshot`] exposes the counts for a caller who
+/// wants them for their own reasons.
 ///
 /// # Returns
 ///
