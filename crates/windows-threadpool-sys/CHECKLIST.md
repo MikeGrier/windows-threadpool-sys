@@ -305,40 +305,45 @@ same suspicion, and look for a disconfirming measurement before building on it.
   decisive this time -- `M-T5.6` answered the question first -- but they are in every future
   capture at the cost of a handful of records, which is the point: the guessing is over.
 
-- [ ] **M-T5.8** -- **DECISION TO RAISE: `cancel_pending` is now known to be far more dangerous
-  than its name suggests, and it is still public.** The audit in
+- [ ] **M-T5.8** -- **DECISION TO RAISE: the removal is in the close, not only in `cancel_pending`.**
+
+  > **CORRECTED 2026-09-30, same day it was written.** The first version of this item claimed
+  > `cancel_pending` is uniquely dangerous and asked whether to remove it. That premise is **false**
+  > and this workspace's own committed data said so before the item was written:
+  > [cancel-and-gap-are-both-required.csv](../windows-ioring-sys/measurements/2026-09-29-what-the-gap-is-made-of/cancel-and-gap-are-both-required.csv)
+  > records `hand-nocancel` -- an arm that **makes no cancel call at all** -- failing 22 times in
+  > 20004, against `hand-control`'s 16 with the cancel. Dropping the cancel changes nothing
+  > measurable, because `CloseThreadpoolWait` performs the same removal, through the same kernel
+  > routine (`IopCancelWaitCompletionPacket`) with the same `RemoveSignaledPacket` flag, whenever it
+  > finds a packet still outstanding.
+  >
+  > **So removing `cancel_pending` would not remove the hazard**, and the four options the item
+  > originally offered were all answers to the wrong question.
+
+  What the measurements actually support: the removal happens at whichever call first finds a
+  delivered packet. `cancel_pending` does it if called; otherwise the close does it, and **every**
+  wait teardown ends in a close. The hazard is the removal landing a few microseconds after the
+  packet was queued, on a port whose factory has no threads yet.
+
+  That makes the shipped fix the *only* shape of fix available, rather than one option among
+  several: a drain lets the queued callback run, which clears the association, after which the
+  close has nothing to take. It does not avoid the dangerous call -- it empties it.
+
+  The decision that remains is narrower and is about surface rather than safety:
+
+  1. `cancel_pending` still exists on waits and wait members, and its honest description is now
+     "performs the teardown's removal earlier, removing the chance for the callback to run first."
+     That is a much less attractive proposition than its name suggests, and arguably has no
+     remaining use case -- but it is not the hazard's cause and removing it buys no safety.
+  2. The cost is documented on both methods as of this commit. Prose is not a rung on the detection
+     ladder, so if the surface is kept, consider whether anything stronger is wanted.
+
+  Still coupled to **M-T4.4** and **M-T4.8**, and still the engineer's call rather than an
+  assistant's.
+
+  The audit's exposure table remains correct as written -- every default path is safe, because
+  `Drop` and `stop_and_drain` drain and the group releases with false -- but note *why*: not
+  because those paths avoid the removal, but because they leave nothing for it to remove. The audit
+  in
   [which-teardowns-can-still-yank](../windows-ioring-sys/measurements/2026-09-30-which-teardowns-can-still-yank/README.md)
-  maps every remaining path that can remove a delivered packet. Every **default** path is safe --
-  `Drop` and `stop_and_drain` drain, and the cleanup group's `Drop` releases with FALSE. The hazard
-  survives only where a caller explicitly asks to cancel:
-
-  | surface | effect when the packet is already delivered |
-  |---|---|
-  | `ThreadpoolWait::cancel_pending` | removes it |
-  | `WaitMember::cancel_pending` | removes it |
-  | `CleanupGroup::close_members(true)` | removes it, through the member vtable |
-
-  **What has changed is the cost, not the mechanism.** These were documented as discarding a
-  pending callback -- a local, understood trade. What is now measured is that removing a delivered
-  packet can permanently sever the arrival-to-factory notification for that completion port, which
-  wedges **the whole process's default thread pool**: work can then be queued and nothing will ever
-  dispatch it, and no later arrival recovers it. A caller cannot reasonably consent to that,
-  because nothing in the name or the documentation suggests the blast radius extends past the
-  object being torn down.
-
-  Options, for the engineer rather than for an assistant to pick:
-  1. **Remove them.** Honest about the finding, and `M-T4.1` already established that quiescing is
-     what callers actually want. Breaking, and forecloses a legitimate "I do not care about this
-     callback" case.
-  2. **Keep, and document the blast radius.** Cheapest, and consistent with OPTION INTEGRITY --
-     but prose is not a rung on the detection ladder, and a caller who reads the name and not the
-     paragraph still loses.
-  3. **Keep, but make it safe.** Only the close-behind-disarm with no dispatch is hazardous; a
-     cancel that first lets the queued callback drain is not a cancel. This may be a contradiction
-     in terms rather than a design.
-  4. **Gate it** behind a feature or an explicitly-named unsafe-ish constructor, so reaching it is
-     deliberate.
-
-  Coupled to **M-T4.4** (the crate-wide linear-versus-affine failfast question) and to **M-T4.8**
-  (the close is not uniform in name or existence), and should be decided with them rather than
-  piecemeal -- the same reservation the engineer already recorded for those.
+  maps every remaining path that can remove a delivered packet, and its table stands.

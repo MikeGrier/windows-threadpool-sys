@@ -812,26 +812,35 @@ impl ThreadpoolWait {
     /// running. Use [`stop_and_drain`](Self::stop_and_drain) when the wait must
     /// actually be quiescent afterwards.
     ///
-    /// # The cost is not local to this wait
+    /// # This brings a process-wide hazard forward; it does not create it
     ///
     /// Cancelling asks the kernel to remove a completion packet that may already
-    /// have been delivered to the pool's completion port. Measured on this
-    /// workspace's reproducer, doing so can **permanently sever the notification
-    /// from that port to the worker factory**: afterwards, work can be queued to
-    /// the process's default thread pool and nothing will ever dispatch it, and
-    /// no later arrival recovers it. The damage is to the pool, not to this
-    /// object, and it outlives the wait being torn down.
+    /// have been delivered to the pool's completion port
+    /// (`IopCancelWaitCompletionPacket` with `RemoveSignaledPacket` set).
+    /// Measured on this workspace's reproducer, a removal that lands a few
+    /// microseconds after the packet was queued, on a port whose factory has no
+    /// threads yet, can **permanently sever the notification from that port to
+    /// the worker factory**: work can then be queued to the process's default
+    /// thread pool and nothing will ever dispatch it, and no later arrival
+    /// recovers it.
     ///
-    /// The window is small -- it needs the removal to land a few microseconds
-    /// after the packet was queued, on a port whose factory has no threads yet --
-    /// but it is reachable in ordinary use: it was found as an intermittent hang
-    /// in an unrelated test, at a rate near one run in a thousand.
+    /// **But this method is not the only way to reach that, and on the measured
+    /// evidence it is not even the usual one.** `CloseThreadpoolWait` performs
+    /// the same removal, through the same kernel routine with the same flag,
+    /// whenever it finds a packet still outstanding -- so a teardown that never
+    /// calls this method reaches the hazard anyway. In the reproducer, dropping
+    /// the cancel entirely changed nothing measurable: 22 failures in 20004
+    /// without it against 16 with it.
     ///
-    /// Prefer [`wait`](Self::wait) or [`stop_and_drain`](Self::stop_and_drain),
-    /// which drain instead. Draining cannot reach the primitive that removes a
-    /// delivered packet on any path, so it is safe however the timing falls.
-    /// See the workspace's `M-T5` for the measurements and for the open question
-    /// of whether this method should continue to exist.
+    /// What this method does is perform the removal *earlier*, which removes any
+    /// chance for the callback to run first.
+    ///
+    /// The fix is therefore not to avoid this method but to leave nothing to
+    /// remove: [`wait`](Self::wait) and [`stop_and_drain`](Self::stop_and_drain)
+    /// let the queued callback run, which clears the association, after which the
+    /// close has nothing to take. Draining cannot reach the removal primitive on
+    /// any path. Prefer them -- but note that doing so is what makes the
+    /// *subsequent close* safe, not merely this call.
     pub fn cancel_pending(&self) {
         crate::trace_call!("WaitForThreadpoolWaitCallbacks(cancel)", self.wait, 1, {
             // SAFETY: `wait` is valid for the lifetime of self. A cancelled wait

@@ -912,6 +912,32 @@ which stands in every other respect.
    did not drain earlier. A fail-fast response to that is available and **off
    by default**.
 
+### Strengthened 2026-09-30 by a second, independent reason
+
+This decision was taken on the semantic argument above -- discarding work the
+caller asked for is not finalisation -- and that argument stands on its own.
+Measurement since has found that draining is also the **only available fix** for
+a process-wide hazard, which was not known when the rule was written.
+
+Cancelling asks the kernel to remove a completion packet that may already have
+been delivered (`IopCancelWaitCompletionPacket` with `RemoveSignaledPacket` set).
+A removal landing a few microseconds after the packet was queued, on a port whose
+worker factory has no threads yet, can permanently sever that port's
+arrival-to-factory notification: the process's default thread pool then
+dispatches nothing, and no later arrival recovers it.
+
+The part that makes this a reason for *this* rule rather than merely a reason to
+avoid an API: **`CloseThreadpoolWait` makes the same call with the same flag**, so
+every teardown reaches it and no choice of entry point avoids it. Draining works
+not by avoiding the dangerous call but by emptying it -- the queued callback runs,
+dispatch clears the association, and the close finds nothing to take. A delay
+before the close only makes the race improbable, which is why the gap that was
+measured to work was never a candidate fix.
+
+Measurements and the full call chain are in
+[crates/windows-ioring-sys/STALL-TIMELINE.md](crates/windows-ioring-sys/STALL-TIMELINE.md)
+and the artifacts it links.
+
 ### Why the earlier reasoning does not survive
 
 The decision above rejected `wait()` on measured grounds: "after `disarm();

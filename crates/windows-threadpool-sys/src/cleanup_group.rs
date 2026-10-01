@@ -684,19 +684,20 @@ impl WaitMember<'_> {
 
     /// Cancel callbacks that have not started, then wait for those that have.
     ///
-    /// # The cost is not local to this member
+    /// # This brings a process-wide hazard forward; it does not create it
     ///
-    /// This has the same process-wide hazard as
-    /// [`ThreadpoolWait::cancel_pending`](crate::wait::ThreadpoolWait::cancel_pending),
-    /// and for the same reason: removing an already-delivered completion packet
-    /// can permanently sever the notification from the pool's completion port to
-    /// its worker factory, after which the process's default thread pool
-    /// dispatches nothing and no later arrival recovers it.
+    /// Same as
+    /// [`ThreadpoolWait::cancel_pending`](crate::wait::ThreadpoolWait::cancel_pending)
+    /// -- see there for the full account. In short: removing an already-delivered
+    /// completion packet can permanently sever a pool's arrival-to-factory
+    /// notification, but the member's eventual release performs the same removal
+    /// anyway, so avoiding this call does not avoid the hazard. Draining does,
+    /// because it leaves nothing to remove.
     ///
-    /// Owning the wait through a cleanup group does **not** avoid this. The
-    /// group's own release is safe because it drains, not because the group
-    /// protects its members -- `close_members(true)` passes the cancel through
-    /// to each member and carries the same hazard.
+    /// Owning the wait through a cleanup group does **not** change this. The
+    /// group's own `Drop` is safe because it releases with cancel-pending false,
+    /// not because the group protects its members; `close_members(true)` passes
+    /// the cancel through to each member.
     ///
     /// Prefer [`wait`](Self::wait).
     pub fn cancel_pending(&self) {

@@ -6,7 +6,24 @@ a delivered completion packet, and therefore still reach the fault
 describes. Listings in [teardown-paths-disasm.txt](teardown-paths-disasm.txt) and
 [cleanup-group-vtable.txt](cleanup-group-vtable.txt).
 
-Read from ntdll 10.0.26100.9278.
+Read from ntdll 10.0.26100.9278 and ntoskrnl 10.0.26100.9457.
+
+## The call chain, named end to end
+
+Every path below converges on one kernel routine, which is why none of them can
+be made safe by choosing a different user-mode entry point:
+
+| layer | symbol |
+|---|---|
+| public | `WaitForThreadpoolWaitCallbacks(wait, TRUE)` / `CloseThreadpoolWait(wait)` |
+| ntdll | `TpWaitForWait` -> `TppCancelWait`, and `TpReleaseWait` |
+| ntdll stub | `NtCancelWaitCompletionPacket` |
+| kernel entry | `NtCancelWaitCompletionPacket` |
+| **kernel implementation** | **`IopCancelWaitCompletionPacket`** |
+
+Siblings in the same family, for orientation: `NtCreateWaitCompletionPacket`,
+`NtAssociateWaitCompletionPacket`, `IopCloseWaitCompletionPacket`,
+`IopFreeWaitCompletionPacket`, `IopWaitCompletionPacketObjectType`.
 
 ## The shipped fix is structural, and this is the check of that claim
 
@@ -25,19 +42,37 @@ drain is the fix and a delay is not.
 
 ## The exposure map
 
-Every path in this crate that can still pass `RemoveSignaledPacket = TRUE`:
-
-| path | reaches the yank? | on a default path? |
+| path | can remove a delivered packet? | on a default path? |
 |---|---|---|
-| `ThreadpoolWait::drop` | no -- drains | yes, and safe |
-| `ThreadpoolWait::stop_and_drain` | no -- drains | yes, and safe |
+| `ThreadpoolWait::drop` | no | yes, and safe |
+| `ThreadpoolWait::stop_and_drain` | no | yes, and safe |
 | `CleanupGroup::drop` -> release with cancel FALSE | no | yes, and safe |
-| `ThreadpoolWait::cancel_pending` | **yes** | no -- caller must ask |
-| `WaitMember::cancel_pending` | **yes** | no -- caller must ask |
-| `CleanupGroup::close_members(true)` | **yes** | no -- caller must ask |
+| `ThreadpoolWait::cancel_pending` | yes | no -- caller must ask |
+| `WaitMember::cancel_pending` | yes | no -- caller must ask |
+| `CleanupGroup::close_members(true)` | yes | no -- caller must ask |
+| **`CloseThreadpoolWait`, on every teardown** | **yes** | **unavoidable** |
 
-**Every default path is safe. The hazard is reachable only when a caller
-explicitly asks to cancel rather than drain.**
+**Every default path is safe -- but not because it avoids the removal.** The last
+row is the one that matters and the first version of this section omitted it.
+
+`CloseThreadpoolWait` performs the same removal, through the same kernel routine
+(`IopCancelWaitCompletionPacket`) with the same flag, whenever it finds a packet
+still outstanding. Every wait teardown ends in a close, so **every** teardown
+reaches the dangerous call. The safe paths are safe because by the time the close
+runs there is nothing left to remove: a drain lets the queued callback run, and
+dispatch clears the association.
+
+This workspace's own data had already said the cancel is not the cause:
+[cancel-and-gap-are-both-required.csv](../2026-09-29-what-the-gap-is-made-of/cancel-and-gap-are-both-required.csv)
+records `hand-nocancel` -- making no cancel call at all -- failing 22 times in
+20004, against 16 with the cancel. Dropping the cancel changes nothing
+measurable. What `cancel_pending` does is perform the removal *earlier*, which
+removes the chance for the callback to run first.
+
+**The practical consequence**: avoiding `cancel_pending` buys no safety, and
+removing it from the API would buy none either. Draining is not one fix among
+several -- it is the only available shape of fix, because it is the only thing
+that empties the call the teardown cannot avoid making.
 
 ## M-T4.7: a cleanup-group consumer is NOT immune
 
