@@ -423,6 +423,99 @@ mod on {
         );
     }
 
+    // --- M-T6.4: the healer actually repairs.
+
+    #[test]
+    fn the_healer_submits_a_repair_for_a_cancelled_pool() {
+        // End to end: cancel, then wait for the healer's own timer to run the
+        // repair work item. The repair's callback is this crate's, not the
+        // test's, so what is observed is the submission arriving -- which is the
+        // action measured to release the stall.
+        let pool = ThreadpoolPool::new().expect("create pool");
+        let mut env = CallbackEnviron::new();
+        env.set_pool(&pool);
+        let event = WaitableHandle::event(true, false).expect("create event");
+        let wait = ThreadpoolWait::new(event, |_| {}, Some(&mut env)).expect("create wait");
+        let entry = crate::heal::entries()
+            .into_iter()
+            .find(|e| e.key() == pool.as_raw() as usize)
+            .expect("the wait registered its pool");
+
+        let before = crate::heal::repairs_run();
+        wait.arm(None);
+        wait.try_cancel_pending();
+        assert!(
+            entry.repair_owed_at().is_some(),
+            "the cancel marks the pool"
+        );
+
+        // Waiting on the repair having *run* rather than on the mark being
+        // cleared. The tick clears that mark whether it submitted a repair or
+        // decided to skip one, so a test that waited on it would pass with the
+        // submission removed -- which is the whole behaviour under test.
+        spin_until("a repair to be submitted and dispatched", || {
+            crate::heal::repairs_run() > before
+        });
+        spin_until("the healer to discharge the mark", || {
+            entry.repair_owed_at().is_none()
+        });
+    }
+
+    #[test]
+    fn a_tick_skips_a_pool_that_has_dispatched_since_the_cancellation() {
+        // The coalescing rule, driven directly rather than through the timer:
+        // a dispatch after the cancellation is evidence the pool is live, so no
+        // repair is submitted. Asserted through the mark being cleared without
+        // the work object having been submitted -- the pool is this test's and
+        // nothing else can touch it.
+        let pool = ThreadpoolPool::new().expect("create pool");
+        let mut env = CallbackEnviron::new();
+        env.set_pool(&pool);
+        let work = ThreadpoolWork::new(|| {}, Some(&mut env)).expect("create work");
+        let entry = crate::heal::entries()
+            .into_iter()
+            .find(|e| e.key() == pool.as_raw() as usize)
+            .expect("the work registered its pool");
+
+        entry.owe_repair(10);
+        entry.stamp_dispatch(11);
+        assert!(
+            entry.dispatched_since(10),
+            "a dispatch after the cancellation is what the skip rests on"
+        );
+        let before = crate::heal::repairs_run();
+        crate::heal::tick();
+        assert_eq!(
+            crate::heal::repairs_run(),
+            before,
+            "the pool dispatched after the cancellation, so no repair is owed \
+             to it and none must be submitted -- asserted on the repair having \
+             run rather than on the mark, which the tick clears either way"
+        );
+        assert_eq!(
+            entry.repair_owed_at(),
+            None,
+            "the tick must discharge the mark it decided not to act on, or it \
+             would reconsider the same pool forever"
+        );
+        drop(work);
+    }
+
+    #[test]
+    fn a_tick_leaves_a_pool_alone_when_nothing_is_owed() {
+        let pool = ThreadpoolPool::new().expect("create pool");
+        let mut env = CallbackEnviron::new();
+        env.set_pool(&pool);
+        let work = ThreadpoolWork::new(|| {}, Some(&mut env)).expect("create work");
+        let entry = crate::heal::entries()
+            .into_iter()
+            .find(|e| e.key() == pool.as_raw() as usize)
+            .expect("the work registered its pool");
+        crate::heal::tick();
+        assert_eq!(entry.repair_owed_at(), None);
+        drop(work);
+    }
+
     #[test]
     fn the_stamp_lands_before_the_callback_body_runs() {
         // The ordering the item asks for, asserted from inside the callback:

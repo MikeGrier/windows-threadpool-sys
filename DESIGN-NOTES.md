@@ -1330,6 +1330,32 @@ alive long enough to *receive* that repair. Retiring it would close the repair
 object, let the pool go, and discard an owed repair at the one moment it
 matters. The retention is bounded by a single self-heal period.
 
+### The healer's cadence, and why it never stops once started
+
+Decided 2026-10-01 implementing `M-T6.4`. A 250 ms period with a 250 ms
+coalescing window, so the repair latency is bounded at roughly their sum. What
+is being bounded is a pool that would otherwise stay undeliverable until the
+application happened to submit work -- which, for a program built on waits,
+timers and I/O, is never. The window is there because a repair is not urgent to
+the millisecond, and it lets the system group the wakeup rather than take one of
+its own.
+
+**It is created lazily on the first cancellation**, so a consumer who never
+cancels creates no pool and no thread.
+
+**Once started it runs until the process exits.** Stopping when nothing is owed
+would be cheaper, and it is not safe without a lock the cancellation path should
+not have to pay for: a tick that found nothing owed could stop the timer *after*
+a concurrent cancellation had marked its pool and asked for the healer, leaving
+a repair owed with nothing left to deliver it. Of the two mistakes available, a
+coalesced tick on an idle process is much the cheaper.
+
+The healer's own pool registers itself, like any other pool this crate creates
+an object against. That costs one entry and one unused repair object, and it is
+left that way rather than special-cased: the alternative is an exception in
+`register` whose only purpose is to save an allocation that is made once per
+process.
+
 ### What remains unknown, and is accepted
 
 Whether the fault can recur on a pool that has gone cold again after its workers

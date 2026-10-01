@@ -46,7 +46,9 @@ pub(crate) fn key_of(env: Option<&CallbackEnviron<'_>>) -> PoolKey {
 // caller until that item lands.
 #[cfg(feature = "self-heal")]
 #[allow(unused_imports)]
-pub(crate) use on::{PoolEntry, Registration, entries, now, register, retire_idle};
+pub(crate) use on::{
+    PoolEntry, Registration, entries, now, register, repairs_run, retire_idle, tick,
+};
 
 #[cfg(not(feature = "self-heal"))]
 pub(crate) use off::{Registration, register};
@@ -78,8 +80,10 @@ mod on {
     use super::PoolKey;
     use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
     use std::sync::{Arc, Mutex, OnceLock};
+    use std::time::Duration;
     use windows_sys::Win32::System::Threading::{
         CloseThreadpoolWork, CreateThreadpoolWork, PTP_CALLBACK_INSTANCE, PTP_WORK,
+        SubmitThreadpoolWork,
     };
     use windows_sys::Win32::System::WindowsProgramming::QueryInterruptTime;
 
@@ -188,7 +192,23 @@ mod on {
         _context: *mut core::ffi::c_void,
         _work: PTP_WORK,
     ) {
+        REPAIRS_RUN.fetch_add(1, Ordering::SeqCst);
         crate::trace_record!("heal", "repair-ran", _work);
+    }
+
+    /// How many repair items have been dispatched by a pool.
+    ///
+    /// Counted unconditionally rather than through the trace, because the trace
+    /// is narrowed by an environment variable that neither the test harness nor
+    /// CI sets -- so a check written against it would pass while observing
+    /// nothing. This is what lets a test tell a repair that was *submitted and
+    /// ran* from one the healer decided to skip, which the owed-mark cannot:
+    /// the tick clears that mark either way.
+    static REPAIRS_RUN: AtomicU64 = AtomicU64::new(0);
+
+    /// How many repair items have run so far in this process.
+    pub(crate) fn repairs_run() -> u64 {
+        REPAIRS_RUN.load(Ordering::SeqCst)
     }
 
     /// One object's claim on a pool's entry, released when the object goes.
@@ -219,6 +239,13 @@ mod on {
         pub(crate) fn owe_repair(&self) {
             if let Some(entry) = &self.0 {
                 entry.owe_repair(now());
+                // After the mark, never before: the healer's first tick must
+                // not be able to run before the entry it exists to repair says
+                // it is owed one.
+                //
+                // Called without the registry lock held -- creating the healer
+                // registers its own pool, which takes that lock.
+                ensure_running();
             }
         }
     }
@@ -350,6 +377,103 @@ mod on {
     /// that may be wedged, which must not be done holding a process-wide lock.
     pub(crate) fn entries() -> Vec<Arc<PoolEntry>> {
         locked().clone()
+    }
+
+    /// How often the healer looks for a pool owing a repair.
+    ///
+    /// With [`HEAL_WINDOW`] this bounds the repair latency at roughly their sum.
+    /// The thing being bounded is a pool that would otherwise stay undeliverable
+    /// until the application happened to submit work -- which, for a program
+    /// built on waits, timers and I/O, is never.
+    const HEAL_PERIOD: Duration = Duration::from_millis(250);
+
+    /// Coalescing tolerance the system may add to each tick.
+    ///
+    /// A repair is not urgent to the millisecond, and this lets the system group
+    /// the wakeup with others rather than taking one of its own.
+    const HEAL_WINDOW: Duration = Duration::from_millis(250);
+
+    /// The private pool and timer that perform repairs.
+    ///
+    /// Held in a `static` and never dropped, which is deliberate: Rust does not
+    /// run destructors for statics, so there is no teardown path to get wrong,
+    /// and the alternative -- tearing down a thread pool at process exit while
+    /// callbacks may still be dispatching -- is the hazard this whole mechanism
+    /// exists to avoid.
+    struct Healer {
+        _pool: crate::pool::ThreadpoolPool,
+        _timer: crate::timer::ThreadpoolPeriodicTimer,
+    }
+
+    // SAFETY: both members are Send + Sync; this only keeps them alive.
+    unsafe impl Send for Healer {}
+    unsafe impl Sync for Healer {}
+
+    /// Start the healer if it is not already running.
+    ///
+    /// Lazy, so a consumer who never cancels never creates a pool or a thread.
+    ///
+    /// **Once started it runs until the process exits**, rather than stopping
+    /// when nothing is owed. Stopping would be cheaper and is not safe without a
+    /// lock the cancel path should not pay for: a tick that found nothing owed
+    /// could stop the timer *after* a concurrent cancellation had marked its
+    /// pool and asked for the healer, leaving a repair owed with nothing to
+    /// deliver it. A coalesced tick is the cheaper of the two mistakes.
+    fn ensure_running() {
+        static HEALER: OnceLock<Option<Healer>> = OnceLock::new();
+        HEALER.get_or_init(|| {
+            let pool = crate::pool::ThreadpoolPool::new().ok()?;
+            // One thread is enough: a tick submits and returns.
+            pool.set_max_threads(1).ok()?;
+            // Scoped so the environment's borrow of `pool` ends before `pool`
+            // is moved into the value the static keeps. The borrow is real --
+            // `set_pool` ties the environment to the pool it names -- and only
+            // the construction needs it.
+            let timer = {
+                let mut env = crate::callback_env::CallbackEnviron::new();
+                env.set_pool(&pool);
+                crate::timer::ThreadpoolPeriodicTimer::new(
+                    HEAL_PERIOD,
+                    |_tick| tick(),
+                    Some(&mut env),
+                )
+                .ok()?
+            };
+            timer.start_with_window(HEAL_PERIOD, HEAL_WINDOW);
+            crate::trace_record!("heal", "healer-started", pool.as_raw());
+            Some(Healer {
+                _pool: pool,
+                _timer: timer,
+            })
+        });
+    }
+
+    /// One pass over the registry: repair what is owed, skip what is alive.
+    pub(crate) fn tick() {
+        for entry in entries() {
+            let Some(owed_at) = entry.repair_owed_at() else {
+                continue;
+            };
+            if entry.dispatched_since(owed_at) {
+                // Direct evidence the pool is still delivering callbacks, so
+                // whatever the cancellation may have done, it did not stop it.
+                crate::trace_record!("heal", "repair-unnecessary", entry.key());
+                entry.clear_repair();
+                continue;
+            }
+            // The one action measured to release the stall every time. The work
+            // object was made when the pool was registered, so this allocates
+            // nothing and makes one call -- which matters because the pool it is
+            // aimed at may already be wedged.
+            crate::trace_record!("heal", "repair-submitted", entry.key(), entry.repair_work());
+            // SAFETY: the work object was created by `create_repair` for this
+            // entry and is alive while the entry is, which this `Arc` ensures.
+            unsafe { SubmitThreadpoolWork(entry.repair_work()) };
+            entry.clear_repair();
+        }
+        // Entries kept alive only by an owed repair become retirable once it is
+        // discharged, and this is the only place that can notice.
+        retire_idle();
     }
 
     /// Make the work object a repair for this pool will submit.

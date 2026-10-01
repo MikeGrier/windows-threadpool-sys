@@ -1054,3 +1054,29 @@ old form could not be relied on for one.
 **This was not a regression introduced by `M-T6.3`.** The guard had been reporting `caught` for
 weeks while proving less than it claimed. What changed was the timing, not the strength of the
 test -- so the earlier `caught` results were luck rather than evidence.
+
+## Moved 2026-10-01 15:49:10 -04:00 -- M-T6.4, the self-heal timer
+
+### <a id="m-t64"></a>M-T6.4 -- The self-heal timer. *(completed 2026-10-01 15:49:10 -04:00)*
+
+A periodic timer on a private pool, created lazily on the first cancellation, so a consumer who
+never cancels creates no pool and no thread. Each tick walks the registry: a pool that has
+dispatched since its cancellation is skipped, because that is direct evidence it is still
+delivering callbacks; otherwise the pre-created repair item is submitted. Either way the mark is
+discharged, and `retire_idle` then retires entries kept alive only by it.
+
+The cadence -- 250 ms with a 250 ms coalescing window -- and the decision that the healer never
+stops once started are recorded in [The healer's cadence, and why it never stops once
+started](../../DESIGN-NOTES.md#cancellation-self-heals), together with why stopping is not safe
+without a lock the cancellation path should not pay for.
+
+**Both guards were vacuous when first written, and the sabotage is what showed it.** The tick
+clears the owed mark whether it submits a repair or decides to skip one, so a test that waited on
+the mark passes under *either* mutation. The end-to-end test would have gone green with the
+submission deleted, and the skip test would have gone green with the liveness check removed.
+
+Fixed by counting repairs that actually **ran** -- a counter in the repair trampoline rather than
+a trace record, because the trace is narrowed by an environment variable that neither the harness
+nor CI sets, which is the same trap this crate's sabotage manifest already documents. With that,
+deleting the submit turns the end-to-end test red, and making the liveness check never fire turns
+the skip test red.

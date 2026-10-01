@@ -32,12 +32,8 @@ behaviour, and backed by a repair.
 - [x] **M-T6.10** -- The two wait-drain sabotages stopped detecting; cause found and both guards
   restored. -> [completed 2026-10-01](COMPLETED-CHECKLIST.md#m-t610)
 
-- [ ] **M-T6.4** -- **The self-heal timer.** A periodic timer on a private pool created **lazily on
-  the first cancellation**, so a consumer who never cancels never pays for a pool. Each tick, for
-  every entry owing a repair: skip when a dispatch has been stamped *after* the cancellation --
-  which is direct evidence the pool is live -- and otherwise submit the pre-created repair item.
-  The private pool is this crate's own and so is torn down with the drain discipline; a self-heal
-  pool that wedged the way it exists to repair would be the worst possible defect.
+- [x] **M-T6.4** -- The self-heal timer. -> [completed
+  2026-10-01](COMPLETED-CHECKLIST.md#m-t64)
 
 - [ ] **M-T6.5** -- **Guard it, with the sabotage that matters.** The load-bearing claims are that a
   cancellation arms a repair, that a dispatch after the cancellation suppresses it, and that the
