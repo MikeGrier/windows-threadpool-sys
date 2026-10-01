@@ -38,53 +38,44 @@ shows the cancelling form leaves the default pool unable to make its first worke
   than left looking verified. No guard was written that could not discriminate; instead the
   asymmetry itself is pinned by
   `disarming_cancels_a_queued_tick_which_a_waits_disarm_does_not`, and sabotaged by inverting it.
-- [ ] **M-T4.3** -- **The discharge flag, and what it is allowed to decide.** Investigated
-  2026-09-28; findings below are measured from the source, not proposed.
 
-  > **Two notes added 2026-10-01, after `M-T6` was designed.**
-  >
-  > **It is a different flag from self-heal's, and they must not be conflated.** This one is
-  > *per object*, records whether the caller closed synchronously, and exists so `Drop` can decide
-  > whether to **say** anything. `M-T6`'s is *per pool*, records that a repair is owed, and exists
-  > so the self-heal timer can decide whether to **submit** anything. Same word, different
-  > lifetime, different owner, different consequence. Whichever lands second should avoid naming
-  > that invites a reader to assume one mechanism.
-  >
-  > **The rule below survives `M-T6` and is reinforced by it.** "The flag gates the report, never
-  > the work" is exactly the discipline `M-T6.4` follows when it skips a repair: the suppression
-  > there rests on a *dispatch having been observed*, which is positive evidence the pool is live,
-  > never on a flag asserting that nothing needs doing. A flag that asserts an absence can go
-  > stale; an observation of a dispatch cannot.
+- [ ] **M-T4.3** -- **Report at `Drop` when the caller did not close synchronously.**
 
-  **`ThreadpoolIo` already implements this whole pattern** and is the precedent rather than a gap.
-  Its `Drop` reads `outstanding()`, and when that is non-zero it reports on a diagnostic channel,
-  names the method the caller should have used, then makes the block terminate and blocks. So the
-  work here is generalising one type's existing behaviour to the rest, not inventing it.
+  Every teardown in this crate blocks to drain. `Drop` is a poor place for that, because where it
+  lands in the caller's control flow is often accidental, so each type also exposes a synchronous
+  method doing the same drain at a point the caller chooses. This item adds the report that tells
+  a developer they left it to `Drop`.
 
-  **`io` needs no flag because it has a derived signal.** `outstanding()` is a real observable of
-  whether rundown happened. The other four have no equivalent, which is what the flag is for.
+  **What to build.** An `AtomicBool` on each of the four types below, set by the synchronous close
+  and cleared by anything that makes the object live again. `Drop` drains unconditionally, then
+  reports if the flag is clear.
 
-  **The flag goes on the struct, not the context.** `Drop` holds `&mut self`; callbacks never read
-  it; and the clearing methods take `&self` on `Sync` types, so it is an `AtomicBool` on the
-  struct. Set by the synchronous close, cleared by anything that re-arms:
-
-  | type | synchronous close sets it | these clear it |
+  | type | sets it | clears it |
   |---|---|---|
   | `ThreadpoolWait` | `stop_and_drain` | `arm` |
   | `ThreadpoolTimer` | `stop_and_drain` | `set_after`, `set_at`, `set_after_with_window` |
   | `PeriodicTimer` | `stop_and_drain` | `start`, `start_after` |
-  | `ThreadpoolWork` | `wait` -- see M-T4.8, it has no named close | `submit` |
-  | `ThreadpoolIo` | `run_down` | -- derived from `outstanding()`, no flag |
+  | `ThreadpoolWork` | `wait` | `submit` |
 
-  **The flag must gate the REPORT, never the WORK.** This is the load-bearing finding. If `Drop`
-  skips the drain because the flag is set, then a stale flag silently skips finalisation -- and it
-  can be stale, because the root
-  [DESIGN-NOTES.md](../../DESIGN-NOTES.md#the-suppression-covers-the-callbacks-re-arm-not-an-external-one)
-  already records that a concurrent external `arm` is not excluded from `stop_and_drain`. That
-  would reintroduce exactly the hazard
-  [the decision](../../DESIGN-NOTES.md#teardown-drains) forbids, in exchange for saving a drain on
-  an already-quiescent object, which is nearly free. So: always drain; consult the flag only to
-  decide whether to say anything.
+  `ThreadpoolIo` is excluded and needs no flag: `outstanding()` already tells it whether rundown
+  happened, and its `Drop` already reports, names the method the caller should have used, and then
+  blocks. It is the behaviour the other four are being brought up to, so match its wording.
+
+  **The flag decides whether to report. It must never decide whether to drain.** `Drop` drains
+  every time, including when the flag says the caller already did. Skipping would be wrong because
+  the flag records a past event on a `Sync` type whose close takes `&self`: another thread may arm
+  the object immediately after `stop_and_drain` returns, so "drained" does not mean "quiescent".
+  Skipping a drain on an object that really is quiescent saves almost nothing, and getting it wrong
+  reintroduces the hazard that
+  [Teardown drains rather than cancels](../../DESIGN-NOTES.md#teardown-drains) exists to prevent.
+
+  **Guard it by sabotage**, both directions: a `Drop` that reports when the caller *did* close, and
+  one that stays silent when the caller did not. Assert the report's presence or absence, not its
+  text.
+
+  **Gated on `M-T4.9`**, which decides which diagnostic channel carries an obligation report. This
+  report is addressed to a developer who will not have the `trace` feature enabled, which is the
+  crux of that decision -- picking a channel here would pre-empt it.
 
 - [ ] **M-T4.8** -- **DECISION TO RAISE: the synchronous close is not uniform, in name or in
   existence.**
