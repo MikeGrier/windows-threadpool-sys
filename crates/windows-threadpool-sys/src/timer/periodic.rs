@@ -29,6 +29,12 @@ struct PeriodicContext {
     /// from the period, so the timer is just as live after a tick as before it.
     /// Only stopping it settles this.
     obligation: crate::obligation::CloseObligation,
+    /// This object's claim on its pool's self-heal entry.
+    ///
+    /// On the context rather than on `ThreadpoolPeriodicTimer` so the trampoline
+    /// can reach it to stamp a dispatch (`M-T6.2`), and so it survives
+    /// `into_parts` into a cleanup-group member.
+    registration: crate::heal::Registration,
     callback: Box<dyn Fn(&PeriodicTick<'_>) + Send + Sync + 'static>,
 }
 
@@ -266,9 +272,14 @@ impl ThreadpoolPeriodicTimer {
             ));
         }
 
+        // Read before `env` is consumed below, and registered before the object
+        // exists: the entry must be able to repair this pool from the moment
+        // anything of ours can dispatch on it.
+        let registration = crate::heal::register(crate::heal::key_of(env.as_deref()));
         let context = Box::into_raw(Box::new(PeriodicContext {
             timer: AtomicIsize::new(0),
             obligation: crate::obligation::CloseObligation::new(),
+            registration,
             callback: Box::new(callback),
         }));
         let env_ptr = env.map_or(ptr::null_mut(), |e| e.as_mut_ptr());

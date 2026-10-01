@@ -9,7 +9,7 @@
 use std::marker::PhantomData;
 
 use windows_sys::Win32::System::Threading::{
-    PTP_CLEANUP_GROUP, PTP_CLEANUP_GROUP_CANCEL_CALLBACK, TP_CALLBACK_ENVIRON_V3,
+    PTP_CLEANUP_GROUP, PTP_CLEANUP_GROUP_CANCEL_CALLBACK, PTP_POOL, TP_CALLBACK_ENVIRON_V3,
     TP_CALLBACK_ENVIRON_V3_0, TP_CALLBACK_PRIORITY, TP_CALLBACK_PRIORITY_HIGH,
     TP_CALLBACK_PRIORITY_LOW, TP_CALLBACK_PRIORITY_NORMAL,
 };
@@ -159,6 +159,23 @@ impl<'pool> CallbackEnviron<'pool> {
     /// Use [`CallbackEnviron::clear_pool`] to go back to the default pool.
     pub fn set_pool(&mut self, pool: &'pool ThreadpoolPool) {
         self.inner.Pool = pool.as_raw();
+    }
+
+    /// Name a pool by its raw `PTP_POOL`, without the borrow [`set_pool`] takes.
+    ///
+    /// For [`crate::heal`], which holds pools by key rather than by reference:
+    /// its repair object must be created against the same pool as the object
+    /// whose registration created the entry, and at that point all it has is the
+    /// key copied out of the caller's environment.
+    ///
+    /// # Safety
+    ///
+    /// `pool` must be zero, or a live `PTP_POOL` that outlives every use of this
+    /// environment. [`set_pool`](Self::set_pool) takes a borrow precisely so
+    /// safe code cannot get this wrong; this bypasses that and the caller owns
+    /// the obligation instead.
+    pub(crate) unsafe fn set_pool_raw(&mut self, pool: PTP_POOL) {
+        self.inner.Pool = pool;
     }
 
     /// Clear the pool selection, so objects created with this environment use

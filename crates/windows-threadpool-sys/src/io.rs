@@ -46,6 +46,11 @@ use crate::callback_env::CallbackEnviron;
 /// operation and waited for every executing callback.
 struct IoContext {
     live: Arc<OperationRegistry>,
+    /// This object's claim on its pool's self-heal entry.
+    ///
+    /// On the context rather than on `ThreadpoolIo` so the trampoline can reach
+    /// it to stamp a dispatch (`M-T6.2`).
+    registration: crate::heal::Registration,
     callback: Box<dyn Fn(&IoCompletion) + Send + Sync + 'static>,
 }
 
@@ -222,8 +227,13 @@ impl ThreadpoolIo {
     {
         let handle = endpoint.into_handle();
         let live = Arc::new(OperationRegistry::new());
+        // Read before `env` is consumed below, and registered before the object
+        // exists: the entry must be able to repair this pool from the moment
+        // anything of ours can dispatch on it.
+        let registration = crate::heal::register(crate::heal::key_of(env.as_deref()));
         let context = Box::into_raw(Box::new(IoContext {
             live: Arc::clone(&live),
+            registration,
             callback: Box::new(callback),
         }));
 

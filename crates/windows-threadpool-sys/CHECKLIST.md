@@ -17,24 +17,8 @@ Supersedes **M-T5.8**, which asked whether `cancel_pending` should be removed.
 The answer is no: it is renamed, made best-effort in name as it always was in
 behaviour, and backed by a repair.
 
-- [ ] **M-T6.1** -- **Add the `self-heal` feature, default on, and the pool registry.** A registry
-  of the pools this crate is interacting with -- entries created when an object is created against
-  a pool and released when the last object on it goes away, so the cost is proportional to use and
-  an idle process pays nothing. Each entry holds the last-dispatch stamp, the
-  cancellation-owed flag and its stamp, and a pre-created repair work object. **The repair object
-  is created at registration, never on the healing path**: creating a work object is measured not
-  to release a stall, only submitting one is, so allocation must not happen while a pool is
-  wedged.
-
-  **The default pool needs a different retention rule, and this is the decision to take within the
-  item.** For a private pool, "release the entry when the last object on it goes away" is right --
-  the pool itself is going away too. The default pool is not ours and does not go away: our last
-  object dropping says nothing about whether the process is still using it, and a cancellation we
-  performed may have left it owing a repair that outlives the object that caused it. Releasing its
-  entry on the same rule would drop a pending repair on the floor at exactly the wrong moment.
-  Suggested rule, to be confirmed when implementing: the default pool's entry is retained while a
-  repair is owed, independent of object count, and the self-heal timer is what releases it once the
-  repair is discharged.
+- [x] **M-T6.1** -- Add the `self-heal` feature, default on, and the pool registry. ->
+  [completed 2026-10-01](COMPLETED-CHECKLIST.md#m-t61)
 
 - [ ] **M-T6.2** -- **Stamp the last dispatch in every trampoline.** Work, wait, timer and I/O all
   dispatch through a trampoline of this crate's before reaching the caller's closure; each stamps

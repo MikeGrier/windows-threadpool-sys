@@ -902,3 +902,38 @@ what is not.**
   Does **not** establish that a warm pool is unreachable by any trigger, only by this one at this
   rate over 24000 runs. Changes nothing about the fix: draining remains correct regardless, and
   this bounds when a *non*-draining teardown is dangerous.
+
+## Moved 2026-10-01 13:29:21 -04:00 -- M-T6.1, the self-heal feature and pool registry
+
+### <a id="m-t61"></a>M-T6.1 -- Add the `self-heal` feature, default on, and the pool registry. *(completed 2026-10-01 13:29:21 -04:00)*
+
+`self-heal` is a default-on feature; [src/heal.rs](src/heal.rs) holds the registry. Each entry
+carries the last-dispatch stamp, the repair-owed stamp, a live-object count, and a work object
+created **at registration**, because creating one was measured not to release a stall and only
+submitting one is. Every object type -- work, wait, one-shot timer, periodic timer, I/O --
+registers its pool at construction, keyed by the `PTP_POOL` the caller's environment names, with
+zero meaning the process default. The registration lives on each object's heap context so a
+trampoline can reach it in `M-T6.2` and so it survives `into_parts` into a cleanup-group member.
+
+**The decision inside the item came out the other way.** The item expected the default pool to
+need a retention rule of its own. It does not: *retire an entry when it has no objects and owes
+no repair* covers both kinds, and the argument is recorded in [How long an entry lives, and why
+the default pool needs no rule of its own](../../DESIGN-NOTES.md#cancellation-self-heals).
+
+The part the plan did not anticipate is that the second clause is **required** for a private pool
+too, not merely harmless. The entry's repair object is created against its pool, and a pool is not
+freed while an object bound to it lives -- so retaining an entry that owes a repair is also what
+keeps the pool alive to receive it. The suggested special-case would have been both unnecessary
+and, applied as stated, wrong for the private case.
+
+**Best-effort registration, deliberately.** If the repair object cannot be created the pool goes
+unregistered and object creation still succeeds, because failing it would turn an unrelated
+allocation failure into a failure of the caller's actual request. What `try_cancel_pending` does
+when its pool has no entry is left to `M-T6.3`, which owns that method.
+
+**Sabotage-verified three ways**, each hitting exactly its own guard: registering without a repair
+object turned 10 red; retiring an entry that still owed a repair turned exactly
+`an_entry_owing_a_repair_outlives_its_last_object` red; and letting a later cancellation overwrite
+an earlier one turned exactly `the_first_cancellation_is_the_one_remembered` red. The tests assert
+properties of the entry they own rather than absolute registry counts, because the registry is
+process-wide and `cargo test` runs these as threads in one process.

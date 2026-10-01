@@ -1250,6 +1250,30 @@ instead.
   favour of the two-method shape, which achieves the same explicitness without a
   protocol.
 
+### How long an entry lives, and why the default pool needs no rule of its own
+
+Decided 2026-10-01 while implementing `M-T6.1`, which had expected the opposite.
+The plan reasoned that the default pool would need its own retention rule: our
+last object dropping says nothing about whether the process is still using that
+pool, whereas a private pool is going away along with the objects on it.
+
+One rule covers both. **An entry is retired when it has no objects left *and*
+owes no repair.**
+
+The asymmetry the plan saw is real, and the second clause already carries it.
+When no repair is owed, retiring the default pool's entry costs nothing -- the
+next object created on it registers again. When one is owed, the entry is
+retained until the self-heal discharges it, which is precisely the case the
+special rule was wanted for.
+
+The clause turns out to be **required** for a private pool as well, for a reason
+the plan did not anticipate: the entry's repair work object is created against
+its pool, and the thread pool does not free a pool while an object bound to it
+is alive. So retaining an entry that owes a repair is also what keeps the pool
+alive long enough to *receive* that repair. Retiring it would close the repair
+object, let the pool go, and discard an owed repair at the one moment it
+matters. The retention is bounded by a single self-heal period.
+
 ### What remains unknown, and is accepted
 
 Whether the fault can recur on a pool that has gone cold again after its workers

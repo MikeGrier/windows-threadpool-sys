@@ -207,6 +207,8 @@ pub mod callback_env;
 #[cfg(windows)]
 pub mod cleanup_group;
 #[cfg(windows)]
+pub(crate) mod heal;
+#[cfg(windows)]
 pub mod io;
 #[cfg(windows)]
 pub(crate) mod obligation;

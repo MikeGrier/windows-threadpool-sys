@@ -332,6 +332,12 @@ struct WaitContext {
     /// report. A callback that re-arms sets it again, which is why this is
     /// cleared at trampoline entry rather than on the way out.
     obligation: crate::obligation::CloseObligation,
+    /// This object's claim on its pool's self-heal entry.
+    ///
+    /// On the context rather than on `ThreadpoolWait` so the trampoline can
+    /// reach it to stamp a dispatch (`M-T6.2`), and so it survives `into_parts`
+    /// into a cleanup-group member.
+    registration: crate::heal::Registration,
     callback: Box<dyn Fn(&WaitActivation<'_>) + Send + Sync + 'static>,
 }
 
@@ -709,11 +715,16 @@ impl ThreadpoolWait {
         F: Fn(&WaitActivation<'_>) + Send + Sync + 'static,
     {
         let target = handle.into_target();
+        // Read before `env` is consumed below, and registered before the object
+        // exists: the entry must be able to repair this pool from the moment
+        // anything of ours can dispatch on it.
+        let registration = crate::heal::register(crate::heal::key_of(env.as_deref()));
         let context = Box::into_raw(Box::new(WaitContext {
             wait: AtomicIsize::new(0),
             handle: target.raw(),
             rearm: RearmSuppression::new(),
             obligation: crate::obligation::CloseObligation::new(),
+            registration,
             callback: Box::new(callback),
         }));
         let env_ptr = env.map_or(ptr::null_mut(), |e| e.as_mut_ptr());

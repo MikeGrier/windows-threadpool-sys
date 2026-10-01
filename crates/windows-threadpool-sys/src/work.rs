@@ -27,6 +27,12 @@ struct WorkContext {
     /// known the work had finished -- leaving the drain to `Drop` is what they
     /// did regardless of how the race turned out.
     obligation: crate::obligation::CloseObligation,
+    /// This object's claim on its pool's self-heal entry.
+    ///
+    /// Lives on the context rather than on `ThreadpoolWork` so the trampoline
+    /// can reach it to stamp a dispatch (`M-T6.2`), and so it survives
+    /// `into_parts` into a cleanup-group member.
+    registration: crate::heal::Registration,
 }
 
 /// Trampoline from the raw Windows callback ABI into the boxed closure.
@@ -99,9 +105,14 @@ impl ThreadpoolWork {
     where
         F: Fn() + Send + Sync + 'static,
     {
+        // Read before `env` is consumed below, and registered before the object
+        // exists: the entry must be able to repair this pool from the moment
+        // anything of ours can dispatch on it.
+        let registration = crate::heal::register(crate::heal::key_of(env.as_deref()));
         let ctx = Box::into_raw(Box::new(WorkContext {
             f: Box::new(callback),
             obligation: crate::obligation::CloseObligation::new(),
+            registration,
         }));
 
         let env_ptr = env.map_or(ptr::null_mut(), |e| e.as_mut_ptr());

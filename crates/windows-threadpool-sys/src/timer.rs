@@ -181,6 +181,12 @@ pub(crate) struct TimerContext {
     /// still waiting to. A callback that re-arms sets this again when the
     /// deferred request is applied.
     obligation: crate::obligation::CloseObligation,
+    /// This object's claim on its pool's self-heal entry.
+    ///
+    /// On the context rather than on `ThreadpoolTimer` so the trampoline can
+    /// reach it to stamp a dispatch (`M-T6.2`), and so it survives `into_parts`
+    /// into a cleanup-group member.
+    registration: crate::heal::Registration,
     /// Records, for tests, whether each deferred re-arm was actually applied.
     ///
     /// The suppression this observes happens after the callback returns and
@@ -490,10 +496,15 @@ impl ThreadpoolTimer {
     where
         F: Fn(&TimerFiring<'_>) + Send + Sync + 'static,
     {
+        // Read before `env` is consumed below, and registered before the object
+        // exists: the entry must be able to repair this pool from the moment
+        // anything of ours can dispatch on it.
+        let registration = crate::heal::register(crate::heal::key_of(env.as_deref()));
         let context = Box::into_raw(Box::new(TimerContext {
             timer: AtomicIsize::new(0),
             rearm: RearmSuppression::new(),
             obligation: crate::obligation::CloseObligation::new(),
+            registration,
             #[cfg(test)]
             rearm_observer: Mutex::new(None),
             callback: Box::new(callback),
