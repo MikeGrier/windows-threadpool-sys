@@ -504,6 +504,30 @@ mod imp {
         super::hook::port_depths()
     }
 
+    /// Every worker factory in the process, as `(handle, total, waiting,
+    /// pending)`.
+    ///
+    /// The counter this crate's stall investigation turned on: a pool that is
+    /// dispatching nothing reports **zero** total workers while still claiming
+    /// it may create one. Exposed so a caller can check the precondition that
+    /// [`prewarm_default_pool`](crate::pool::prewarm_default_pool) exists to
+    /// remove, rather than assuming it.
+    ///
+    /// **Returns all of them rather than "the default pool's", deliberately.** A
+    /// process holds more than one factory -- at least one this crate does not
+    /// create -- and there is no reliable way here to say which is the default
+    /// pool: handle ordering is not a guarantee. Naming one would be a guess
+    /// dressed as an answer, so the caller gets the population and decides.
+    ///
+    /// Empty when no factory could be read, which in a process that has used the
+    /// thread pool means the read failed rather than that there are none.
+    ///
+    /// The layout read is not published by Microsoft; it is the long-standing
+    /// community reconstruction, guarded by a test requiring self-consistency.
+    pub fn worker_factory_snapshot() -> Vec<(usize, u32, u32, u32)> {
+        super::hook::probe_all_factories()
+    }
+
     /// Post one packet to every completion port that already has work on it, and
     /// report how many were poked.
     ///
@@ -552,6 +576,11 @@ mod imp {
     pub fn completion_port_depths() -> bool {
         false
     }
+    /// Reports that this build cannot read the factory's counters, which is a
+    /// different finding from a build that read them and saw nothing.
+    pub fn worker_factory_snapshot() -> Vec<(usize, u32, u32, u32)> {
+        Vec::new()
+    }
     /// Does nothing in this build: there is no scan to find ports with.
     pub fn poke_completion_ports(_min_depth: u32) -> u32 {
         0
@@ -560,7 +589,7 @@ mod imp {
 
 pub use imp::{
     clear, completion_port_depths, dump, enabled, observe_exceptions, poke_completion_ports,
-    record, wants, worker_factory_counts,
+    record, wants, worker_factory_counts, worker_factory_snapshot,
 };
 
 /// How many records so far carry this target and this event.

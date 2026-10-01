@@ -254,5 +254,77 @@ impl Drop for ThreadpoolPool {
     }
 }
 
+/// Make the default process pool create its first worker, and block until one
+/// exists.
+///
+/// # Why this exists
+///
+/// A measured fault in the Windows thread pool needs a pool holding **zero**
+/// threads. A teardown that removes an already-delivered completion packet a few
+/// microseconds after it was queued can sever that port's notification to its
+/// worker factory, after which the pool dispatches nothing -- no wait, no timer,
+/// no I/O completion -- until something submits a work item. The factory reads as
+/// perfectly idle throughout: not paused, not shut down, permitted to create,
+/// nothing failed.
+///
+/// Warming the pool first was measured to prevent it: **0 occurrences in 24000
+/// runs warm, against 66 in 24000 cold**, with a delay-matched cold control still
+/// failing at the cold rate, so it is the worker and not the elapsed time.
+///
+/// # What it does not buy
+///
+/// **This is not a fix and does not make a bad teardown safe.** It removes one
+/// of the fault's preconditions for as long as the pool stays warm, and the pool
+/// stops being warm once it has been idle for its timeout -- 67 seconds on the
+/// machine this was measured on. A long-lived process that goes quiet becomes
+/// cold again, and this function would have to be called again to matter.
+///
+/// It does nothing about teardowns in this crate, which already drain and so
+/// never remove a delivered packet. Its value is against code you do not
+/// control: another library, or a dependency, tearing a wait down badly during
+/// your process's startup.
+///
+/// Whether that is worth one resident thread is the caller's decision, which is
+/// why this is opt-in and not done automatically.
+///
+/// # What was ruled out
+///
+/// Holding the pool warm *permanently* would be better, and is not available:
+/// `SetThreadpoolThreadMinimum` does not accept a null pool, and calling it that
+/// way does not fail -- it **raises `STATUS_INVALID_PARAMETER` and terminates the
+/// process**. The default pool's minimum cannot be set. A private
+/// [`ThreadpoolPool`] can have [`set_min_threads`](ThreadpoolPool::set_min_threads)
+/// applied to it, but that is a different pool.
+///
+/// # Returns
+///
+/// Whether a worker is confirmed to exist. A callback having run is the proof,
+/// because it ran on one. `false` means the work item could not be created or did
+/// not run within the bound, and the pool should be assumed cold.
+pub fn prewarm_default_pool() -> bool {
+    use std::sync::mpsc;
+    use std::time::Duration;
+
+    /// How long to wait for the warm-up callback. Generous: a healthy pool
+    /// creates its first worker in well under a millisecond, so reaching this
+    /// means something is already wrong.
+    const BOUND: Duration = Duration::from_secs(2);
+
+    let (tx, rx) = mpsc::channel();
+    let tx = std::sync::Mutex::new(tx);
+    let Ok(work) = crate::work::ThreadpoolWork::new(
+        move || {
+            if let Ok(tx) = tx.lock() {
+                let _ = tx.send(());
+            }
+        },
+        None,
+    ) else {
+        return false;
+    };
+    work.submit();
+    rx.recv_timeout(BOUND).is_ok()
+}
+
 #[cfg(test)]
 mod tests;

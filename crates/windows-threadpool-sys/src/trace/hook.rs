@@ -693,9 +693,61 @@ fn scan_for_factory(query: Query) -> Vec<usize> {
 /// The factory's headline counts, for the scan's guard: total workers, waiting
 /// workers, pending work.
 ///
+/// Every worker factory in the process, as `(handle, maximum, total, waiting)`.
+///
+/// The maximum is included because it is the only field here that distinguishes
+/// the factories: the default process pool's is large (768 on the machine this
+/// was developed on), and a process holds at least one other factory with a
+/// small one that this crate does not create. Without it a caller cannot tell
+/// which row is which, and an earlier version of this function that guessed by
+/// handle order produced a flaky test.
+///
+/// **Separate from [`probe_factory`] because that one picks the lowest handle**,
+/// which is a heuristic for "the default pool" and not a selection. A process
+/// holds more than one factory -- at least one this crate does not create -- and
+/// the handle ordering between them is not guaranteed. A caller that needs to be
+/// right about which factory it is looking at has to see them all.
+pub(crate) fn probe_all_factories() -> Vec<(usize, u32, u32, u32)> {
+    // (handle, thread_maximum, total_worker_count, waiting_worker_count)
+    let Some(raw) = ntdll_proc("NtQueryInformationWorkerFactory") else {
+        return Vec::new();
+    };
+    // SAFETY: the name resolved in `ntdll` and this is its documented shape.
+    let query: Query = unsafe { std::mem::transmute::<usize, Query>(raw) };
+
+    let mut out = Vec::new();
+    for handle in scan_for_factory(query) {
+        let mut info = Basic::default();
+        let mut returned = 0_u32;
+        // SAFETY: `info` is a live, correctly sized buffer; the handle just
+        // answered the same query during the scan.
+        let status = unsafe {
+            query(
+                handle,
+                WORKER_FACTORY_BASIC_INFORMATION,
+                std::ptr::from_mut(&mut info).cast(),
+                size_of::<Basic>() as u32,
+                &mut returned,
+            )
+        };
+        if status >= 0 {
+            out.push((
+                handle,
+                info.thread_maximum,
+                info.total_worker_count,
+                info.waiting_worker_count,
+            ));
+        }
+    }
+    out
+}
+
 /// Separate from [`counts`] because a guard needs values to assert on, while a
 /// capture needs records. Returning them from `counts` would tempt a caller to
 /// interpret a layout this module deliberately only records.
+///
+/// **Picks the lowest handle, which is a heuristic.** Use
+/// [`probe_all_factories`] where being right about *which* factory matters.
 #[cfg(test)]
 pub(crate) fn probe_factory() -> Option<(u32, u32, u32)> {
     let raw = ntdll_proc("NtQueryInformationWorkerFactory")?;
