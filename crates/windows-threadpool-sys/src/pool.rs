@@ -363,13 +363,27 @@ pub fn prewarm_default_pool() -> bool {
     };
     work.submit();
     let confirmed = rx.recv_timeout(BOUND).is_ok();
+    if !confirmed {
+        // Cancel before draining, on this path only.
+        //
+        // Reaching the timeout means the callback was never dispatched, which
+        // is the condition this function exists to report. Draining then waits
+        // for that same undispatched callback **with no deadline at all**, so
+        // the bounded check above would be followed by an unbounded one and the
+        // `false` this is supposed to return would never arrive. The bound
+        // would be decoration.
+        //
+        // Cancelling discards the queued invocation and waits only for one
+        // already executing, and only on this object: the warm-up callback does
+        // nothing but send on a channel, so it cannot block, and another
+        // object's stuck callback is not this call's to wait for.
+        work.cancel_pending();
+    }
     // Discharged here rather than left to the drop below. The drop would drain
     // anyway, so this adds no blocking -- but this function is the crate's own
     // use of its own protocol, and leaving the obligation undischarged makes it
-    // a reported violation like any other.
-    //
-    // Unconditional: the timeout path is exactly the one where the callback may
-    // still be queued, so it is the path that most needs the drain.
+    // a reported violation like any other. `cancel_pending` does not settle it;
+    // only the drain does, which is why this runs on both paths.
     work.stop_and_drain();
     confirmed
 }

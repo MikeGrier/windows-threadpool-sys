@@ -189,6 +189,61 @@ pub(crate) fn armed_before_main() -> bool {
     ARMED_BEFORE_MAIN.load(std::sync::atomic::Ordering::Relaxed)
 }
 
+/// Run `body` in a child process launched with the trace armed for `filter`.
+///
+/// The filter is fixed by a pre-`main` initialiser, so a test cannot narrow it
+/// for itself: the process has to be *launched* with `WINDOWS_THREADPOOL_TRACE`
+/// already set. A test whose assertions read the trace therefore has three
+/// options, and two of them are traps. Asking `wants(..)` and skipping when it
+/// is unset makes the test inert on every ordinary run and in CI -- which is
+/// what `tests/obligation_report.rs`, the pool-object lifecycle test, and both
+/// of `io::tests`' trace blocks each did, independently. Running in a shared
+/// armed process is no better: `dump` returns one process-wide buffer and
+/// `counted` only asks for a non-zero count, so a sibling test can supply the
+/// records and the assertion passes without exercising anything.
+///
+/// This is the third option, and it is one site rather than a protocol each
+/// caller re-implements -- the first two copies disagreed about how to tell a
+/// child that ran from a child that matched nothing.
+///
+/// `name` is the libtest path of the calling test, used both to select the
+/// single test the child runs and to mark which body the child should execute.
+/// The child exits with a code that means "the body reached its end", so a
+/// `--exact` that matched nothing -- a rename -- fails loudly instead of
+/// exiting 0 and reading as a pass.
+#[cfg(all(test, feature = "trace"))]
+pub(crate) fn in_a_trace_armed_child(name: &str, filter: &str, body: impl FnOnce()) {
+    /// Names the body the child should run; absent in the parent.
+    const CHILD_VAR: &str = "WTPS_TRACE_ARMED_CHILD";
+    /// The child's exit code once the body has run to the end.
+    const BODY_RAN: i32 = 7;
+
+    if std::env::var(CHILD_VAR).as_deref() == Ok(name) {
+        body();
+        std::process::exit(BODY_RAN);
+    }
+
+    let exe = std::env::current_exe().expect("locate the test binary");
+    let status = std::process::Command::new(exe)
+        .env(CHILD_VAR, name)
+        .env("WINDOWS_THREADPOOL_TRACE", filter)
+        // One test, one thread: the child's trace buffer must carry this
+        // body's records and nothing else, or the assertions can be satisfied
+        // by a sibling.
+        .args(["--exact", name, "--test-threads", "1"])
+        .status()
+        .expect("run the trace-armed child");
+    assert_eq!(
+        status.code(),
+        Some(BODY_RAN),
+        "the trace-armed child did not reach the end of `{name}` (exit {:?}). Exit 0 means \
+         `--exact {name}` matched nothing -- the test was renamed and the string passed here \
+         was not -- and any other code means the body's own assertions failed; its output is \
+         above",
+        status.code()
+    );
+}
+
 /// What one worker factory reports about itself.
 ///
 /// Named fields rather than a tuple, and that is the whole reason this type

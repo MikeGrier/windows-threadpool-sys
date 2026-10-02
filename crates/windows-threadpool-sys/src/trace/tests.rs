@@ -14,7 +14,11 @@
 use std::sync::mpsc;
 use std::time::Duration;
 
-use super::{Buffer, Record, counted, dump, enabled, wants};
+use super::{Buffer, Record, dump, enabled, wants};
+// Only the trace-armed tests read records back by target and event, and those
+// are gated on the feature that produces any.
+#[cfg(feature = "trace")]
+use super::counted;
 
 /// A record distinguishable from its neighbours by its `a` slot.
 fn record(a: u64) -> Record {
@@ -259,6 +263,11 @@ const PROBE_BOUND: Duration = Duration::from_secs(5);
 /// `rearm-requested` sites so neither is merely written; `io`'s inline
 /// completion is not reachable from a unit test here and is covered by the
 /// integration suite, where this assertion does not run.
+///
+/// Gated on `trace`: without the feature nothing records anything, so there is
+/// nothing here to assert. It was ungated while its body skipped itself on an
+/// unset filter -- a test that compiles everywhere and checks nowhere.
+#[cfg(feature = "trace")]
 #[test]
 fn every_pool_object_records_its_creation_establishment_callbacks_and_teardown() {
     // `io` is exercised by `crate::io::tests`, which already has an endpoint
@@ -378,71 +387,35 @@ fn every_pool_object_records_its_creation_establishment_callbacks_and_teardown()
             ],
         ),
     ];
-    // Re-executed with the filter armed rather than skipped when it is not.
-    //
-    // This test spent its life returning here: the trace's filter is fixed
-    // before `main`, so an ordinary `cargo test` run never armed it, the body
-    // never ran, and libtest recorded a pass. When it *was* armed, in a full
-    // suite, sibling tests supplied the records it looks for -- `counted` reads
-    // one process-wide buffer and only asks for a non-zero count -- so even
-    // then it could pass without exercising anything. Run alone with the filter
-    // on, it failed, because two of the calls it expected stopped being made
-    // when teardown changed from cancelling to draining.
-    //
-    // The child runs this one test, single-threaded, in a process whose buffer
-    // nothing else is writing to, and exits with a code that says the body
-    // actually ran -- a filter that matched nothing would exit 0 and otherwise
-    // be indistinguishable from success, which is the failure this is fixing.
-    const CHILD_VAR: &str = "WTPS_LIFECYCLE_TRACE_CHILD";
-    const BODY_RAN: i32 = 7;
-    const NAME: &str =
-        "trace::tests::every_pool_object_records_its_creation_establishment_callbacks_and_teardown";
-
-    if std::env::var(CHILD_VAR).is_err() {
-        let exe = std::env::current_exe().expect("locate the test binary");
-        let status = std::process::Command::new(exe)
-            .env(CHILD_VAR, "1")
-            .env("WINDOWS_THREADPOOL_TRACE", "*")
-            .args(["--exact", NAME, "--test-threads", "1"])
-            .status()
-            .expect("run the child");
-        assert_eq!(
-            status.code(),
-            Some(BODY_RAN),
-            "the child did not reach the end of this test's body (exit {:?}). Exit 0 means \
-             `--exact {NAME}` matched nothing -- the test was renamed and this string was not \
-             -- and any other code means the assertions below failed; its output is above",
-            status.code()
-        );
-        return;
-    }
-
-    assert!(
-        expected.iter().all(|(target, _)| wants(target)),
-        "the child was launched with the trace armed for everything but `wants` disagrees, so \
-         nothing below would be observed"
-    );
-
-    exercise_a_wait();
-    exercise_a_work_item();
-    exercise_a_timer();
-    exercise_a_periodic_timer();
-
-    for (target, events) in expected {
-        if !wants(target) {
-            continue;
-        }
-        for event in events {
+    // Run with the filter armed rather than skipped when it is not. See
+    // `trace::in_a_trace_armed_child` for why a trace assertion needs its own
+    // process, and for what this test used to do instead.
+    crate::trace::in_a_trace_armed_child(
+        "trace::tests::every_pool_object_records_its_creation_establishment_callbacks_and_teardown",
+        "*",
+        || {
             assert!(
-                counted(target, event) > 0,
-                "`{target}` recorded no `{event}`; the trace is narrowed to it and the \
-                 corresponding step has just run, so the call site is missing"
+                expected.iter().all(|(target, _)| wants(target)),
+                "the child was launched with the trace armed for everything but `wants` \
+                 disagrees, so nothing below would be observed"
             );
-        }
-    }
 
-    // Reached only by the child, and the parent requires exactly this.
-    std::process::exit(BODY_RAN);
+            exercise_a_wait();
+            exercise_a_work_item();
+            exercise_a_timer();
+            exercise_a_periodic_timer();
+
+            for (target, events) in expected {
+                for event in events {
+                    assert!(
+                        counted(target, event) > 0,
+                        "`{target}` recorded no `{event}`; the trace is narrowed to it and the \
+                         corresponding step has just run, so the call site is missing"
+                    );
+                }
+            }
+        },
+    );
 }
 
 /// One wait activation, which also drives one re-arm from the pool thread.
@@ -513,19 +486,24 @@ fn exercise_a_timer() {
             // only happen if the deferred re-arm was requested, applied, and
             // armed. Reporting on the first would race the trampoline, which
             // applies the request after the callback returns.
-            if firings.fetch_add(1, std::sync::atomic::Ordering::SeqCst) == 0 {
-                firing.rearm_after(Duration::from_millis(1));
-                return;
-            }
-            // The second request goes through the other entry point, so both
-            // `rearm-requested` call sites are executed rather than only the
-            // one that happened to be written first.
-            if firings.load(std::sync::atomic::Ordering::SeqCst) == 1 {
-                firing.rearm_at(std::time::SystemTime::now() + Duration::from_millis(1));
-                return;
-            }
-            if let Ok(tx) = tx.lock() {
-                let _ = tx.send(());
+            // Switched on the value `fetch_add` *returns* -- the count before
+            // this firing -- not on a later `load`. Reading the counter again
+            // sees the increment this firing just made, so the second firing
+            // compared 2 against 1, the `rearm_at` arm was unreachable, and the
+            // exercise finished one firing early having driven only one of the
+            // two re-arm entry points. Both emit the same event tag, so neither
+            // this test nor the trace assertion it feeds could notice.
+            match firings.fetch_add(1, std::sync::atomic::Ordering::SeqCst) {
+                0 => firing.rearm_after(Duration::from_millis(1)),
+                // The second request goes through the other entry point, so
+                // both `rearm-requested` call sites are executed rather than
+                // only the one that happened to be written first.
+                1 => firing.rearm_at(std::time::SystemTime::now() + Duration::from_millis(1)),
+                _ => {
+                    if let Ok(tx) = tx.lock() {
+                        let _ = tx.send(());
+                    }
+                }
             }
         },
         None,
@@ -790,6 +768,78 @@ fn the_trace_arms_itself_before_main() {
          install inside the first test rather than before any thread exists, which is the \
          failure this arrangement exists to prevent"
     );
+}
+
+/// Two stubs on one page are opened once, and the page is restored to what it
+/// was.
+///
+/// `VirtualProtect` reports the previous protection of the whole **page**, not
+/// of the byte range it was asked about. So a batch that saved and restored
+/// protection once per *stub* would, for two stubs sharing a page, have the
+/// second save the writable state the first had just installed -- and the last
+/// restore would leave `ntdll` writable for the rest of the process's life.
+/// That is not hypothetical here: `park`, `set-info` and `shutdown` share a
+/// page on this host.
+///
+/// Hermetic on a page this test allocates, rather than asserted against
+/// `ntdll`, because the real stubs are patched once per process and whichever
+/// test ran first would decide the answer -- the trap that
+/// `unhookable_stub_entry` exists for one finding earlier.
+#[cfg(feature = "trace")]
+#[test]
+fn stubs_sharing_a_page_are_opened_once_and_the_page_is_restored() {
+    use super::hook::{open_pages, restore_pages};
+    use windows_sys::Win32::System::Memory::{
+        MEM_COMMIT, MEM_RELEASE, MEM_RESERVE, MEMORY_BASIC_INFORMATION, PAGE_EXECUTE_READ,
+        PAGE_READWRITE, VirtualAlloc, VirtualFree, VirtualProtect, VirtualQuery,
+    };
+
+    // SAFETY: a fresh private reservation; a null return is asserted on.
+    let page = unsafe {
+        VirtualAlloc(
+            std::ptr::null(),
+            4096,
+            MEM_COMMIT | MEM_RESERVE,
+            PAGE_READWRITE,
+        )
+    };
+    assert!(!page.is_null(), "the probe page must allocate");
+
+    let mut ignored = 0_u32;
+    // SAFETY: this test's own page, giving it a known non-writable protection.
+    unsafe { VirtualProtect(page, 4096, PAGE_EXECUTE_READ, &mut ignored) };
+
+    let first = page.cast::<u8>();
+    // SAFETY: still inside the same 4 KiB page.
+    let second = unsafe { first.add(64) };
+
+    let opened = open_pages(&[first, second]).expect("the probe page opens");
+    assert_eq!(
+        opened.len(),
+        1,
+        "two addresses on one page must be opened as one page; opening per address is what \
+         makes the second save the first's temporary protection"
+    );
+    restore_pages(&opened);
+
+    // SAFETY: a live out-parameter of the right size for this page.
+    let mut info: MEMORY_BASIC_INFORMATION = unsafe { std::mem::zeroed() };
+    // SAFETY: querying this test's own page.
+    unsafe {
+        VirtualQuery(
+            page.cast_const(),
+            &mut info,
+            size_of::<MEMORY_BASIC_INFORMATION>(),
+        )
+    };
+    assert_eq!(
+        info.Protect, PAGE_EXECUTE_READ,
+        "the page was left with protection it did not start with -- a batch that restores per \
+         address rather than per page leaves executable memory writable"
+    );
+
+    // SAFETY: releasing this test's own reservation exactly once.
+    unsafe { VirtualFree(page, 0, MEM_RELEASE) };
 }
 
 /// The window for installing hooks is shut by the time any test runs.

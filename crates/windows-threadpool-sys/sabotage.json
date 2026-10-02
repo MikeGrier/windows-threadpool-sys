@@ -54,15 +54,13 @@
       "find": [
         "    let Some(index) = HOOKS.iter().position(|(_, name, _)| *name == label) else {",
         "        return Err(Refusal::NotFound);",
-        "    };",
-        "    with_others_suspended(|| install(index))"
+        "    };"
       ],
       "replace": [
         "    let index = HOOKS",
         "        .iter()",
         "        .position(|(_, name, _)| *name == label)",
-        "        .unwrap_or(0);",
-        "    with_others_suspended(|| install(index))"
+        "        .unwrap_or(0);"
       ]
     },
     {
@@ -167,12 +165,10 @@
       "expect": "caught",
       "why": "The early-discharge method a caller uses to pay the teardown cost at a point they choose. Separate from Drop because they are separate call sites: fixing one and not the other would leave whichever the caller did not reach still discarding work. The method has been named `stop_and_drain` and implemented as a cancel since it was written.",
       "find": [
-        "        // otherwise never finish, and this would never return.",
-        "        self.wait();"
+        "            unsafe { WaitForThreadpoolWaitCallbacks(wait, FALSE) };"
       ],
       "replace": [
-        "        // otherwise never finish, and this would never return.",
-        "        unsafe { self.try_cancel_pending_no_heal_tracking() };"
+        "            unsafe { WaitForThreadpoolWaitCallbacks(wait, TRUE) };"
       ]
     },
     {

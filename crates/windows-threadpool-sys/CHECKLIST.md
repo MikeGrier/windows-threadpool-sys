@@ -550,6 +550,60 @@ house rules require is what found the third.
   **The sweep this time:** two tests had the early-return shape;
   `the_exception_observer_notes_a_first_chance_exception` passes when armed.
 
+- [x] **M-T10.13** -- **Restore page protection once per page, not once per stub.** A defect
+      introduced by `M-T10.9`'s own fix, found by the fourth review round.
+
+  **The defect.** `VirtualProtect` reports the previous protection of the whole **page**, not of
+  the byte range asked about. Splitting install into prepare / commit / finish moved protection
+  to one save-and-restore per stub, so two stubs sharing a page had the second save the writable
+  state the first had just installed -- and the last restore left `ntdll` executable **and
+  writable** for the rest of the process's life. `park`, `set-info` and `shutdown` share a page on
+  this host. The single-phase install it replaced did not have this, because it protected and
+  restored around each store in turn.
+
+  **Guarded** by `stubs_sharing_a_page_are_opened_once_and_the_page_is_restored`, hermetic on a
+  page the test allocates rather than on `ntdll` -- the real stubs are patched once per process,
+  so whichever test ran first would decide the answer. Verified by sabotage.
+
+- [x] **M-T10.14** -- **Read `AlreadySignaled` only on a successful association.** The
+      `associate` hook read its out-parameter unconditionally after forwarding the call. A failed
+      `NtAssociateWaitCompletionPacket` need not have written through that pointer, or validated
+      it, so the instrument could turn an ordinary error return into an access violation raised
+      by the tracing facility itself. A failed association has nothing to report there anyway:
+      no packet was associated, and the `-leave` record already carries the status.
+
+- [x] **M-T10.15** -- **Make the periodic-timer exercise reach its second re-arm entry point.**
+      The callback switched on a `load` taken *after* its own `fetch_add`, so the second firing
+      compared 2 against 1 and the `rearm_at` arm was unreachable: the exercise finished a firing
+      early having driven only `rearm_after`, while its comment claimed both. Both entry points
+      emit the same event tag, so neither the test nor the trace assertion it feeds could notice.
+      Now switches on the value `fetch_add` returns.
+
+- [x] **M-T10.16** -- **Run every trace assertion in a trace-armed child, from one site.** The
+      sweep for `M-T10.12` asked the wrong question -- it grepped for early `return`, while
+      `io::tests`' two trace blocks are `if wants(..) { .. }` -- so both were still inert.
+
+  **Fixed at one site rather than a fourth copy.** `trace::in_a_trace_armed_child` now owns the
+  parent/child protocol; the lifecycle test and both `io::tests` blocks go through it. The first
+  two hand-written copies had already disagreed about how to distinguish a child that ran from
+  one whose filter matched nothing. Verified by sabotage: removing the `start-cancelled` record
+  fails the child on its assertion and the parent on its exit-code check.
+
+  **The real population**, found by grepping for `wants(` rather than for `return`: four sites.
+  Two were these; one is `the_filter_narrows_to_the_targets_named`, where the gating *is* the
+  subject; one is the hook records already queued as `M-T10.5`.
+
+- [x] **M-T10.17** -- **Bound the warm-up's teardown on the path where its callback never
+      arrived.** `prewarm_default_pool` timed out after two seconds and then called
+      `stop_and_drain`, which waits with no deadline for the very callback whose absence caused
+      the timeout -- so the bounded check was followed by an unbounded one and the `false` it
+      exists to return could never arrive. It now cancels the queued invocation first, on that
+      path only.
+
+  **Not covered by a test**, and stated plainly rather than papered over: reaching the timeout
+  needs a pool that has stopped dispatching, which is the stall this repository has spent `M-T7`
+  failing to produce on demand.
+
 - [ ] **M-T10.7** -- **Decide whether CI should check intra-doc links in private items.**
 
   **The gap.** The `docs` job runs `cargo doc --no-deps --all-features` without

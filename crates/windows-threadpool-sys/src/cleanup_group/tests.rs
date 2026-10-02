@@ -110,6 +110,13 @@ fn a_group_is_send_and_sync() {
 /// creates no new one. The pool is then wedged with nothing owed, from a
 /// *single* cancellation; the overlapping-cancellation race this crate already
 /// records needs two.
+///
+/// Gated on `self-heal`: the repair mark, `crate::heal::entries`, and the whole
+/// registry this reads exist only with that feature, and the `close_members`
+/// path it exercises does no marking without it. Ungated, this test did not
+/// compile under `--no-default-features` -- which the `threadpool-no-self-heal`
+/// CI job this branch adds is exactly what catches.
+#[cfg(feature = "self-heal")]
 #[test]
 fn a_cancelling_release_marks_its_pool_after_the_cancellation() {
     let pool = ThreadpoolPool::new().expect("create pool");

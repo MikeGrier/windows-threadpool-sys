@@ -268,9 +268,23 @@ macro_rules! hooks {
                     unsafe { call(a1, a2, a3, a4, a5, a6, a7, a8, a9, a10, a11, a12) }
                 };
                 record(TARGET, concat!($label, "-leave"), a1 as u64, status as u32 as u64);
-                if $label == "associate" {
-                    // SAFETY: the call has returned, so anything it wrote
-                    // through its out-parameter is finished.
+                if $label == "associate" && status >= 0 {
+                    // Only on success, and that condition is the whole of the
+                    // safety argument. `AlreadySignaled` is an out-parameter
+                    // the kernel writes through; a call that failed need not
+                    // have written it and need not have validated the pointer
+                    // at all. Reading regardless turns an ordinary error
+                    // return -- a bad handle, say -- into an access violation
+                    // raised by the *instrument*, which is the one thing a
+                    // diagnostic must never do to the program it observes.
+                    //
+                    // A failed association has nothing to report here anyway:
+                    // no packet was associated, so there was no object whose
+                    // signalled state could have been observed. The `-leave`
+                    // record above already carries the status.
+                    //
+                    // SAFETY: the call returned success, so the kernel wrote
+                    // through the out-parameter and has finished with it.
                     let flag = unsafe { already_signalled(a8) };
                     record(TARGET, "associate-already-signalled", flag, a3 as u64);
                 }
@@ -504,8 +518,6 @@ struct Prepared {
     entry: *mut u8,
     /// The fourteen bytes to store over it.
     patch: [u8; PATCH_LEN],
-    /// The page protection to put back afterwards.
-    restore: u32,
 }
 
 /// Resolve, recognise, and make ready to patch -- all of it outside any
@@ -515,8 +527,7 @@ struct Prepared {
 /// `ntdll` exactly as it was.
 fn prepare(index: usize) -> Result<Prepared, Refusal> {
     use windows_sys::Win32::System::Memory::{
-        MEM_COMMIT, MEM_RESERVE, PAGE_EXECUTE_READ, PAGE_EXECUTE_READWRITE, PAGE_READWRITE,
-        VirtualAlloc, VirtualProtect,
+        MEM_COMMIT, MEM_RESERVE, PAGE_EXECUTE_READ, PAGE_READWRITE, VirtualAlloc, VirtualProtect,
     };
 
     let (symbol, _, hook) = HOOKS[index];
@@ -574,29 +585,90 @@ fn prepare(index: usize) -> Result<Prepared, Refusal> {
     patch[1] = 0x25;
     patch[6..].copy_from_slice(&(hook as usize).to_le_bytes());
 
-    // Opened here, not in the suspended window. `VirtualProtect` is a system
-    // call that takes process-wide memory-manager state; the window must
-    // contain no such call. The page is left writable across the window and
-    // restored by `finish` after the resume.
-    let mut restore = 0_u32;
-    // SAFETY: `entry` is a live code page in this process.
-    let opened = unsafe {
-        VirtualProtect(
-            entry.cast(),
-            PATCH_LEN,
-            PAGE_EXECUTE_READWRITE,
-            &mut restore,
-        )
-    };
-    if opened == 0 {
-        return Err(Refusal::NotWritable);
+    // Note what is deliberately NOT done here: opening the target page for
+    // writing. `VirtualProtect` acts on whole pages, so two stubs that share
+    // one page cannot each own its protection -- see `open_pages`.
+    Ok(Prepared { entry, patch })
+}
+
+/// A page whose protection this batch changed, and what it was before.
+pub(super) struct OpenedPage {
+    base: *mut core::ffi::c_void,
+    restore: u32,
+}
+
+/// Page size, asked of the system rather than assumed.
+fn page_size() -> usize {
+    use windows_sys::Win32::System::SystemInformation::{GetSystemInfo, SYSTEM_INFO};
+
+    // SAFETY: a live out-parameter of the right type.
+    let mut info: SYSTEM_INFO = unsafe { std::mem::zeroed() };
+    // SAFETY: as above; no other preconditions.
+    unsafe { GetSystemInfo(&mut info) };
+    info.dwPageSize as usize
+}
+
+/// Make every page the batch will write to writable, once per page.
+///
+/// **Once per page is the whole point.** `VirtualProtect` reports the previous
+/// protection of the *page*, not of the byte range asked about, so a per-stub
+/// save is wrong as soon as two hooked stubs share a page -- and they do: on
+/// this host `park`, `set-info` and `shutdown` land on one page. The second
+/// stub would save `PAGE_EXECUTE_READWRITE`, because the first had just made it
+/// so, and restoring in order would leave `ntdll` writable for the rest of the
+/// process's life. An earlier revision of this module did exactly that; the
+/// single-phase install it replaced did not, because it protected and restored
+/// around each store in turn.
+///
+/// Returns `None` when any page could not be opened, having restored the ones
+/// it already had. Partial success is not useful here: the batch is a
+/// diagnostic that either installs or refuses.
+pub(super) fn open_pages(entries: &[*mut u8]) -> Option<Vec<OpenedPage>> {
+    use windows_sys::Win32::System::Memory::{PAGE_EXECUTE_READWRITE, VirtualProtect};
+
+    let size = page_size();
+    let mut bases: Vec<usize> = Vec::new();
+    for &entry in entries {
+        // A fourteen-byte patch can straddle a boundary, so both pages count.
+        let first = entry as usize & !(size - 1);
+        let last = (entry as usize + PATCH_LEN - 1) & !(size - 1);
+        let mut base = first;
+        loop {
+            if !bases.contains(&base) {
+                bases.push(base);
+            }
+            if base == last {
+                break;
+            }
+            base += size;
+        }
     }
 
-    Ok(Prepared {
-        entry,
-        patch,
-        restore,
-    })
+    let mut opened: Vec<OpenedPage> = Vec::with_capacity(bases.len());
+    for base in bases {
+        let base = base as *mut core::ffi::c_void;
+        let mut restore = 0_u32;
+        // SAFETY: a live code page in this process, asked about by page base.
+        let ok = unsafe { VirtualProtect(base, size, PAGE_EXECUTE_READWRITE, &mut restore) };
+        if ok == 0 {
+            restore_pages(&opened);
+            return None;
+        }
+        opened.push(OpenedPage { base, restore });
+    }
+    Some(opened)
+}
+
+/// Put every page's protection back, once per page.
+pub(super) fn restore_pages(opened: &[OpenedPage]) {
+    use windows_sys::Win32::System::Memory::VirtualProtect;
+
+    let size = page_size();
+    for page in opened {
+        let mut ignored = 0_u32;
+        // SAFETY: restoring the protection `open_pages` changed on this page.
+        unsafe { VirtualProtect(page.base, size, page.restore, &mut ignored) };
+    }
 }
 
 /// Store the patch. **This is the whole of what runs with threads suspended.**
@@ -614,32 +686,22 @@ unsafe fn commit(prepared: &Prepared) {
     }
 }
 
-/// Put the page protection back and flush the instruction cache, after the
-/// resume.
+/// Flush the instruction cache for one patched stub, after the resume.
 ///
-/// **The flush is after the resume deliberately.** It is a system call and so
-/// may not run inside the window. That is sound on this target: the bytes were
-/// stored while every other thread was stopped, so no thread can have observed
-/// a half-written patch, and resuming a thread is a context switch, which is
-/// serialising -- a resumed thread cannot go on executing a stale prefetch of
-/// the old stub.
+/// **After the resume deliberately.** It is a system call and so may not run
+/// inside the window. That is sound on this target: the bytes were stored while
+/// every other thread was stopped, so no thread can have observed a half-written
+/// patch, and resuming a thread is a context switch, which is serialising -- a
+/// resumed thread cannot go on executing a stale prefetch of the old stub.
+///
+/// Page protection is **not** restored here. That is per-page and belongs to
+/// the batch; see [`restore_pages`].
 ///
 /// SAFETY: `prepared` must come from [`prepare`] and have been committed.
 unsafe fn finish(prepared: &Prepared) {
     use windows_sys::Win32::System::Diagnostics::Debug::FlushInstructionCache;
-    use windows_sys::Win32::System::Memory::VirtualProtect;
     use windows_sys::Win32::System::Threading::GetCurrentProcess;
 
-    let mut ignored = 0_u32;
-    // SAFETY: restoring the protection `prepare` changed.
-    unsafe {
-        VirtualProtect(
-            prepared.entry.cast(),
-            PATCH_LEN,
-            prepared.restore,
-            &mut ignored,
-        )
-    };
     // SAFETY: no preconditions beyond a live process handle.
     unsafe { FlushInstructionCache(GetCurrentProcess(), prepared.entry.cast(), PATCH_LEN) };
 }
@@ -667,24 +729,52 @@ unsafe fn finish(prepared: &Prepared) {
 /// So the window now holds [`commit`] and nothing else.
 fn install_batch(chosen: &[usize]) -> Vec<(usize, Result<(), Refusal>)> {
     // Phase one, with everything still running: resolve, recognise, allocate
-    // the trampolines, and open the target pages.
-    let prepared: Vec<(usize, Result<Prepared, Refusal>)> = chosen
+    // the trampolines.
+    let mut prepared: Vec<(usize, Result<Prepared, Refusal>)> = chosen
         .iter()
         .map(|&index| (index, prepare(index)))
         .collect();
+
+    // Phase one and a half, still running: open every page the stores will land
+    // on, **once per page** rather than once per stub.
+    let targets: Vec<*mut u8> = prepared
+        .iter()
+        .filter_map(|(_, outcome)| outcome.as_ref().ok().map(|ready| ready.entry))
+        .collect();
+    let opened = if targets.is_empty() {
+        Some(Vec::new())
+    } else {
+        open_pages(&targets)
+    };
+    let Some(opened) = opened else {
+        // Nothing has been written and `open_pages` has already restored
+        // whatever it managed to open, so refusing every entry is the whole of
+        // the cleanup.
+        for (_, outcome) in &mut prepared {
+            if outcome.is_ok() {
+                *outcome = Err(Refusal::NotWritable);
+            }
+        }
+        return prepared
+            .into_iter()
+            .map(|(index, outcome)| (index, outcome.map(|_| ())))
+            .collect();
+    };
 
     // Phase two, with every other thread stopped: stores only.
     with_others_suspended(|| {
         for (_, outcome) in &prepared {
             if let Ok(ready) = outcome {
-                // SAFETY: prepared by `prepare`, whose page is open for writing.
+                // SAFETY: prepared by `prepare`, on a page `open_pages` made
+                // writable and has not yet restored.
                 unsafe { commit(ready) };
             }
         }
     });
 
-    // Phase three, running again: restore protection and flush.
-    prepared
+    // Phase three, running again: flush each patched stub, then put every
+    // page's protection back exactly once.
+    let outcomes: Vec<(usize, Result<(), Refusal>)> = prepared
         .into_iter()
         .map(|(index, outcome)| {
             let result = match outcome {
@@ -697,7 +787,9 @@ fn install_batch(chosen: &[usize]) -> Vec<(usize, Result<(), Refusal>)> {
             };
             (index, result)
         })
-        .collect()
+        .collect();
+    restore_pages(&opened);
+    outcomes
 }
 
 /// The worker factory handle learned so far, or zero.

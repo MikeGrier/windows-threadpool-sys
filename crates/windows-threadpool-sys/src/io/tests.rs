@@ -128,13 +128,23 @@ fn immediate_failure_returns_the_operation_and_balances_the_start() {
     // callback. Without the record, this operation's `started` would read as a
     // dispatch that never arrived -- which is exactly the shape of the defect
     // the trace is being used to chase.
-    if crate::trace::wants("io") {
-        assert!(
-            crate::trace::counted("io", "start-cancelled") > 0,
-            "`io` recorded no `start-cancelled`; the trace is narrowed to it and a start has \
-             just been balanced with no callback, so the call site is missing"
-        );
-    }
+    // Asserted in a child launched with the trace armed, not behind a `wants`
+    // check that is false on every ordinary run. See
+    // `trace::in_a_trace_armed_child`: this block was inert for its whole life,
+    // which is the same defect found and fixed in three other places before
+    // anybody swept for the rest of them.
+    #[cfg(feature = "trace")]
+    crate::trace::in_a_trace_armed_child(
+        "io::tests::immediate_failure_returns_the_operation_and_balances_the_start",
+        "io",
+        || {
+            assert!(
+                crate::trace::counted("io", "start-cancelled") > 0,
+                "`io` recorded no `start-cancelled`; the trace is narrowed to it and a start \
+                 has just been balanced with no callback, so the call site is missing"
+            );
+        },
+    );
 
     drop(tp);
     let _ = std::fs::remove_file(&path);
@@ -245,32 +255,38 @@ fn pending_read_completes_through_the_callback() {
 
     // The `io` object's whole life, asserted here because this test already
     // owns the only real overlapped exercise in the crate -- and after the drop
-    // above, so the teardown stages are in the trace by the time it reads. It
-    // checks only when the process environment has narrowed the trace to `io`;
-    // the filter is read once per process, so a test cannot set it without
-    // racing every other test in the binary. See
+    // above, so the teardown stages are in the trace by the time it reads.
+    //
+    // Run in a child launched with the trace armed. This used to be a `wants`
+    // check, which is false on every ordinary run and in CI, so it asserted
+    // nothing for its whole life. See `trace::in_a_trace_armed_child`, and
     // `crate::trace::tests::every_pool_object_records_its_creation_establishment_callbacks_and_teardown`,
     // which carries the same reasoning for the other four objects.
-    if crate::trace::wants("io") {
-        for event in [
-            "created",
-            "started",
-            "trampoline-entered",
-            "trampoline-left",
-            "rundown-begin",
-            "rundown-ended",
-            "drop-begin",
-            "drop-drained",
-            "drop-closed",
-        ] {
-            assert!(
-                crate::trace::counted("io", event) > 0,
-                "`io` recorded no `{event}`; the trace is narrowed to it and an object has just \
-                 been created, started, dispatched, run down and dropped, so the call site is \
-                 missing"
-            );
-        }
-    }
+    #[cfg(feature = "trace")]
+    crate::trace::in_a_trace_armed_child(
+        "io::tests::pending_read_completes_through_the_callback",
+        "io",
+        || {
+            for event in [
+                "created",
+                "started",
+                "trampoline-entered",
+                "trampoline-left",
+                "rundown-begin",
+                "rundown-ended",
+                "drop-begin",
+                "drop-drained",
+                "drop-closed",
+            ] {
+                assert!(
+                    crate::trace::counted("io", event) > 0,
+                    "`io` recorded no `{event}`; the trace is narrowed to it and an object has \
+                     just been created, started, dispatched, run down and dropped, so the call \
+                     site is missing"
+                );
+            }
+        },
+    );
 
     let _ = std::fs::remove_file(&path);
 }
