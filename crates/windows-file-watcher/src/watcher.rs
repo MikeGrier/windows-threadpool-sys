@@ -1136,6 +1136,27 @@ impl Resume for WatcherInner {
     }
 }
 
+impl Drop for WatcherInner {
+    fn drop(&mut self) {
+        // The ordinary path reaches teardown through `stop()`, which is
+        // idempotent -- so this costs nothing when it has already run, and
+        // discharges the obligations when it has not. Reached when the last
+        // `Arc<WatcherInner>` goes without a `stop()` having happened first.
+        //
+        // Each of these drains would be made by field drop anyway, so none of
+        // it is new blocking. What it adds is that the obligation is settled
+        // rather than left to `Drop`, which `windows-threadpool-sys` reports
+        // and, under its `fail-fast` feature, panics on.
+        self.teardown_endpoint();
+        if let Some(work) = self.resume_work.get() {
+            work.stop_and_drain();
+        }
+        if let Some(timer) = self.retry_timer.get() {
+            timer.stop_and_drain();
+        }
+    }
+}
+
 /// A detailed watcher over one directory.
 ///
 /// Owns the directory handle (through the thread pool's I/O object) and keeps a

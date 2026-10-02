@@ -165,7 +165,7 @@ enum Subscription {
         /// Fires the next `Request::Retry`. Created once at registration and
         /// re-armed (never recreated) across however many attempts this
         /// subscription needs before it establishes.
-        retry_timer: ThreadpoolTimer,
+        retry_timer: RetryTimer,
         /// The standing fault-question reservation (D-27/D-28), present iff
         /// this subscription can ever need one.
         fault_slot: Option<StandingSlot>,
@@ -808,7 +808,7 @@ fn awaits_open_answer(retry: RetryMode, has_fault_slot: bool) -> bool {
 fn make_retry_timer(
     core_ref: &Arc<OnceLock<Weak<Core>>>,
     watch: WatchId,
-) -> io::Result<ThreadpoolTimer> {
+) -> io::Result<RetryTimer> {
     let core_ref = Arc::clone(core_ref);
     ThreadpoolTimer::new(
         move |_firing| {
@@ -818,6 +818,30 @@ fn make_retry_timer(
         },
         None,
     )
+    .map(RetryTimer)
+}
+
+/// A retry timer that drains itself when it goes.
+///
+/// A newtype rather than a bare [`ThreadpoolTimer`] because a subscription's
+/// timer is dropped at several scattered points -- when it establishes, when it
+/// fails permanently, and when the monitor shuts down -- and an armed timer owes
+/// a drain at every one of them. Field drop would make that drain anyway, so
+/// this adds no blocking; what it adds is that the obligation cannot be left
+/// undischarged at a site somebody forgot, which `windows-threadpool-sys`
+/// reports and, under its `fail-fast` feature, panics on.
+struct RetryTimer(ThreadpoolTimer);
+
+impl RetryTimer {
+    fn set_after(&self, delay: Duration) {
+        self.0.set_after(delay);
+    }
+}
+
+impl Drop for RetryTimer {
+    fn drop(&mut self) {
+        self.0.stop_and_drain();
+    }
 }
 
 /// Park a subscription as `Pending` after a retryable open failure (D-22),

@@ -231,6 +231,11 @@ impl<T: Send + 'static> Drop for Servicer<T> {
         // One teardown implementation with two triggers; `shut_down` is
         // idempotent, so an explicit call beforehand costs nothing.
         self.shut_down();
+        // The doorbell is submitted, so it owes a drain. Field drop would make
+        // that drain anyway -- this adds no blocking -- but leaving it there
+        // leaves the obligation undischarged, which `windows-threadpool-sys`
+        // reports and, under its `fail-fast` feature, panics on.
+        self.work.stop_and_drain();
     }
 }
 
