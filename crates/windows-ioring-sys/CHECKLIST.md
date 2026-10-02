@@ -209,34 +209,9 @@ nobody updates.
 - [x] **M26.14.3** -- Taken, and taken the way this item proposed: `windows-threadpool-sys` adopted
   the draining teardown. -> [completed 2026-10-01](COMPLETED-CHECKLIST.md#m26143)
 
-- [ ] **M26.15** -- **Re-run the stall at scale against the shipped draining teardown, and settle
-  the unresolved entry either way.** Queued 2026-10-01, when `M26.14.3`'s decision landed.
-
-  **What is and is not established.** `M26.14.2` measured a drain in place of a cancel at 0 failures
-  in 20000 against a control's 10 -- but that was *this reproducer with a patched teardown*, not the
-  shipped crate. `windows-threadpool-sys` has since shipped the drain for real, and nothing has run
-  this crate's stall against it. The remedy is believed to work on evidence that predates the thing
-  it is now a remedy *in*.
-
-  **A green suite run is not that evidence, and must not be mistaken for it.** The stall's measured
-  rate is on the order of 13 in 4000, so an ordinary `cargo test` passing says almost nothing: the
-  arm has to be sized against the rate. Re-run the same reproducer, at the same scale and with the
-  same positive control the earlier measurements used, so the result is comparable to the figures
-  already on record rather than a fresh and unrelatable number.
-
-  **It needs a control that can still fail.** If the shipped drain really closes it, every arm goes
-  to zero -- and a measurement in which nothing can fail cannot distinguish "fixed" from "the
-  reproducer stopped reproducing". Keep an arm that forces the old cancelling teardown (reachable
-  through `try_cancel_pending`), and require it to still fail, or the zero proves nothing.
-
-  **On success:** move the entry out of [UNRESOLVED-TEST-FAILURES.md](UNRESOLVED-TEST-FAILURES.md)
-  into [RESOLVED-TEST-FAILURES.md](RESOLVED-TEST-FAILURES.md) under a dated heading, per the
-  repository's rule that a resolved failure is moved rather than deleted -- and note there that this
-  is the *second* time that file has carried a fix for this stall, the first being `D-68`, which
-  `M26.13` overturned.
-
-  **On failure:** the drain is not sufficient, which is a finding against the current explanation
-  rather than against the decision, and `M26.13`'s diagnostics become live again.
+- [x] **M26.15** -- Re-measured: control 12 in 4000, current 0 in 12000, and the stall's entry moved
+  to [RESOLVED-TEST-FAILURES.md](RESOLVED-TEST-FAILURES.md). The item's own premise was wrong and is
+  corrected in the archive. -> [completed 2026-10-01](COMPLETED-CHECKLIST.md#m2615)
 
 - [ ] **M26.14** -- **The ioring tests leak their temp files, and nothing cleans up.** `temp_file` in
   [tests/event_delivery.rs](tests/event_delivery.rs) builds a path under the system temp directory

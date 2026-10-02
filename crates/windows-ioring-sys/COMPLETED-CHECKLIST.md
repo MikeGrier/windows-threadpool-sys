@@ -5594,3 +5594,78 @@ against a control's 10 -- but that was the *reproducer* with a patched teardown,
 crate. Nothing has yet re-run this crate's stall at scale against the shipped drain. Queued as
 `M26.15`, and until it reports, the entry in
 [UNRESOLVED-TEST-FAILURES.md](UNRESOLVED-TEST-FAILURES.md) stands.
+
+## <a id="moved-2026-10-01-m2615"></a>Moved 2026-10-01 21:47:17 -04:00 -- M26.15, re-measuring the stall against the shipped drain
+
+### <a id="m2615"></a>M26.15 -- Re-measured: control 12 in 4000, current 0 in 12000, and the stall's entry moved to RESOLVED-TEST-FAILURES.md. *(completed 2026-10-01 21:47:17 -04:00)*
+
+The item as it stood, including the premise that turned out to be false:
+> - [ ] **M26.15** -- **Re-run the stall at scale against the shipped draining teardown, and settle
+>   the unresolved entry either way.** Queued 2026-10-01, when `M26.14.3`'s decision landed.
+>
+>   **What is and is not established.** `M26.14.2` measured a drain in place of a cancel at 0 failures
+>   in 20000 against a control's 10 -- but that was *this reproducer with a patched teardown*, not the
+>   shipped crate. `windows-threadpool-sys` has since shipped the drain for real, and nothing has run
+>   this crate's stall against it. The remedy is believed to work on evidence that predates the thing
+>   it is now a remedy *in*.
+>
+>   **A green suite run is not that evidence, and must not be mistaken for it.** The stall's measured
+>   rate is on the order of 13 in 4000, so an ordinary `cargo test` passing says almost nothing: the
+>   arm has to be sized against the rate. Re-run the same reproducer, at the same scale and with the
+>   same positive control the earlier measurements used, so the result is comparable to the figures
+>   already on record rather than a fresh and unrelatable number.
+>
+>   **It needs a control that can still fail.** If the shipped drain really closes it, every arm goes
+>   to zero -- and a measurement in which nothing can fail cannot distinguish "fixed" from "the
+>   reproducer stopped reproducing". Keep an arm that forces the old cancelling teardown (reachable
+>   through `try_cancel_pending`), and require it to still fail, or the zero proves nothing.
+>
+>   **On success:** move the entry out of [UNRESOLVED-TEST-FAILURES.md](UNRESOLVED-TEST-FAILURES.md)
+>   into [RESOLVED-TEST-FAILURES.md](RESOLVED-TEST-FAILURES.md) under a dated heading, per the
+>   repository's rule that a resolved failure is moved rather than deleted -- and note there that this
+>   is the *second* time that file has carried a fix for this stall, the first being `D-68`, which
+>   `M26.13` overturned.
+>
+>   **On failure:** the drain is not sufficient, which is a finding against the current explanation
+>   rather than against the decision, and `M26.13`'s diagnostics become live again.
+>
+
+#### Correction: this item's central premise was false
+
+**"Nothing has re-run this crate's stall against the shipped drain" was wrong when it was
+written**, on 2026-10-01, and nothing in the tree had changed to make it so -- the evidence was
+already committed and was not looked for.
+[2026-09-29-the-fix-on-the-real-path](measurements/2026-09-29-the-fix-on-the-real-path/README.md)
+had measured exactly that: the committed drain, on the real `EventDelivery` path, at 33 failures
+in 10000 reverted runs against 0 in 70000 drained. The item was written from `M26.14.2`'s
+hand-rolled model and from the absence of a *later* measurement that in fact existed one directory
+away.
+
+The mistake is worth recording rather than quietly fixing, because it is the cheap kind to repeat:
+the claim was about **what the repository already knows**, which is checkable by reading it, and it
+was asserted from the shape of the argument instead. `measurements/` is the artifact that answers
+such a question, and was not consulted before the gap was declared.
+
+#### What the run did establish
+
+The narrower question the item should have asked. The 2026-09-29 measurement was taken against the
+`M-T4` build, and three things have changed the teardown path since: `M-T6` added the default-on
+self-heal, whose repair timer **submits a work item** -- the one action `M26.13.3` found ends the
+stall, so a mechanism that could mask the failure rather than leave it absent; `M-T6.3` renamed the
+cancelling form; and `EventDelivery` gained its own draining `Drop` on 2026-10-01.
+
+Measured in
+[2026-10-01-the-fix-still-holds-after-the-self-heal](measurements/2026-10-01-the-fix-still-holds-after-the-self-heal/README.md):
+the control reproduces at 12 in 4000, inside the range every earlier capture of that arm reported,
+and the current build reports 0 in 12000. Under an unchanged rate, 12000 runs would be expected to
+produce about 36 failures.
+
+The control was run **first** and from the same tree, because a zero on its own cannot distinguish
+a fix from a reproducer that has stopped reproducing. Both control patches were made with a tool
+that fails on a missing anchor and read back out of the source before building, per the procedure
+adopted after a silent `.Replace()` voided a 60000-run measurement.
+
+**Left open deliberately:** the run did not instrument whether any self-heal repair fired, so "the
+self-heal did not mask anything" rests on the mechanism -- a repair is only owed after a
+cancellation, and the drain records none -- rather than on a measurement. A `--no-default-features`
+arm would settle it, and is not queued, because nothing currently depends on the answer.
