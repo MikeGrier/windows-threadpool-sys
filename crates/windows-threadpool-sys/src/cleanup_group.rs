@@ -158,6 +158,16 @@ pub struct CleanupGroup {
     /// release returns, and a latched release would then skip them -- leaking
     /// their contexts and closing the group with live members.
     resources: Mutex<Vec<OwnedResource>>,
+    /// Test-only: run between preparing the members and releasing them.
+    ///
+    /// Stands in for the self-heal's tick arriving in that interval, which is
+    /// the only way to observe *when* a cancelling release marks its pools.
+    /// Both orderings leave a mark outstanding once the release has returned,
+    /// so an end-state assertion cannot tell them apart; something has to act
+    /// inside the window. Per-group rather than a static, because `cargo test`
+    /// runs these as threads of one process.
+    #[cfg(test)]
+    before_release: Mutex<Option<Box<dyn Fn() + Send + Sync>>>,
 }
 
 // SAFETY: PTP_CLEANUP_GROUP is a kernel-managed object usable from any thread,
@@ -183,7 +193,22 @@ impl CleanupGroup {
         Ok(Self {
             group,
             resources: Mutex::new(Vec::new()),
+            #[cfg(test)]
+            before_release: Mutex::new(None),
         })
+    }
+
+    /// Install the test-only hook that runs just before the native release.
+    ///
+    /// See the field's documentation for why observing that instant is the
+    /// only way to pin the order in which a cancelling release marks its
+    /// pools.
+    #[cfg(test)]
+    pub(crate) fn on_before_release(&self, hook: impl Fn() + Send + Sync + 'static) {
+        *self
+            .before_release
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner()) = Some(Box::new(hook));
     }
 
     /// Build the environment a member is created with, layering this group on
@@ -412,15 +437,17 @@ impl CleanupGroup {
                 // matches the context kind this resource holds and only
                 // suppresses/disarms that one object.
                 unsafe { (resource.prepare_shutdown)(resource.ptr) };
-                if cancel_pending {
-                    // A cancelling release passes the cancel through to every
-                    // member, so each wait among them reaches the same removal
-                    // `ThreadpoolWait::try_cancel_pending` does and owes its
-                    // pool the same repair. Marked before the release rather
-                    // than after because the members' contexts are freed by it.
-                    // SAFETY: as above; the hook matches this resource's kind.
-                    unsafe { (resource.owe_repair)(resource.ptr) };
-                }
+            }
+        }
+
+        #[cfg(test)]
+        {
+            let hook = self
+                .before_release
+                .lock()
+                .unwrap_or_else(|poison| poison.into_inner());
+            if let Some(hook) = hook.as_ref() {
+                hook();
             }
         }
 
@@ -450,6 +477,34 @@ impl CleanupGroup {
                 .lock()
                 .unwrap_or_else(|poison| poison.into_inner()),
         );
+        if cancel_pending {
+            for resource in resources.iter() {
+                // A cancelling release passes the cancel through to every
+                // member, so each wait among them reaches the same removal
+                // `ThreadpoolWait::try_cancel_pending` does and owes its pool
+                // the same repair.
+                //
+                // Marked **after** the release returns, matching the standalone
+                // cancel path, and before the contexts are freed below -- which
+                // is why this loop sits between the two rather than beside
+                // either.
+                //
+                // An earlier version marked before the release, justified by
+                // the claim that the native call frees the contexts. It does
+                // not: this function frees them, in the loop immediately after
+                // this one. Marking first left a window in which the healer
+                // could see the mark, find the pool still dispatching, clear it
+                // as repaired, and then have the real cancellation happen with
+                // no mark outstanding -- an unrepaired wedge from a *single*
+                // cancellation, where the race this crate already documents
+                // needs two.
+                //
+                // SAFETY: the contexts are still alive -- nothing is freed
+                // until the loop below -- and each hook matches the context
+                // kind this resource holds.
+                unsafe { (resource.owe_repair)(resource.ptr) };
+            }
+        }
         for resource in resources {
             // SAFETY: every member has been released, so no callback can still
             // reach this allocation; each is freed exactly once here.

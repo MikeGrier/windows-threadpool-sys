@@ -496,6 +496,23 @@ house rules require is what found the third.
   **Fixed** by splitting install into prepare / commit / finish: everything that can take a lock
   happens while the process is still running, and the window holds a single fourteen-byte store.
 
+- [x] **M-T10.10** -- **Mark a cancelling group release's repairs after the cancellation, not
+      before.** Found by the third review round.
+
+  **The defect.** `CleanupGroup::close_members(true)` marked each member's pool as owing a repair
+  *before* calling `CloseThreadpoolCleanupGroupMembers`, justified in a comment by the claim that
+  the native release frees the member contexts. It does not -- this crate frees them, in the loop
+  immediately after. So the justification was false and the ordering it bought was harmful: the
+  healer could see the mark, find the pool still dispatching, clear it as repaired, and then the
+  real cancellation would happen with no mark outstanding. An unrepaired wedge from a **single**
+  cancellation, where the overlapping-cancellation race already recorded in `M-T9.2` needs two.
+
+  **Guarded.** `a_cancelling_release_marks_its_pool_after_the_cancellation` installs a test-only
+  hook that clears the mark at the instant before the native release, standing in for the healer's
+  tick landing there -- which is necessary because both orderings leave a mark outstanding once
+  the release has returned, so no end-state assertion can tell them apart. Verified by sabotage:
+  restoring the old ordering fails it.
+
 - [ ] **M-T10.7** -- **Decide whether CI should check intra-doc links in private items.**
 
   **The gap.** The `docs` job runs `cargo doc --no-deps --all-features` without

@@ -97,6 +97,72 @@ fn a_group_is_send_and_sync() {
 
 // --- members run normally ---
 
+/// A cancelling release marks its pools **after** the cancellation, not before.
+///
+/// Both orderings leave a mark outstanding once `close_members` has returned,
+/// so the end state cannot tell them apart. The hook stands in for the
+/// self-heal's tick landing in the interval between them: it clears the mark at
+/// the instant just before the native release.
+///
+/// With the mark placed first -- as it was, justified by a claim that the
+/// native release frees the member contexts, which this crate's own code does
+/// afterwards instead -- the tick clears it and the cancellation that follows
+/// creates no new one. The pool is then wedged with nothing owed, from a
+/// *single* cancellation; the overlapping-cancellation race this crate already
+/// records needs two.
+#[test]
+fn a_cancelling_release_marks_its_pool_after_the_cancellation() {
+    let pool = ThreadpoolPool::new().expect("create pool");
+    let mut env = CallbackEnviron::new();
+    env.set_pool(&pool);
+    let key = pool.as_raw() as usize;
+
+    let mut group = CleanupGroup::new().expect("create group");
+    {
+        let wait = group
+            .create_wait(event(), |_| {}, Some(&mut env))
+            .expect("create wait member");
+        wait.arm(None);
+    }
+
+    let entry = crate::heal::entries()
+        .into_iter()
+        .find(|e| e.key() == key)
+        .expect("the wait member registered its pool");
+    entry.clear_repair();
+
+    let cleared = Arc::new(AtomicBool::new(false));
+    let ticked = Arc::clone(&cleared);
+    group.on_before_release(move || {
+        if let Some(entry) = crate::heal::entries().into_iter().find(|e| e.key() == key) {
+            entry.clear_repair();
+        }
+        ticked.store(true, Ordering::SeqCst);
+    });
+
+    group.close_members(true);
+
+    assert!(
+        cleared.load(Ordering::SeqCst),
+        "the hook never ran, so this test proved nothing about the ordering"
+    );
+    // A missing entry is the same answer as an unmarked one, not a different
+    // failure: an entry that holds no objects and owes no repair is retired, so
+    // marking too early loses the pool from the registry entirely rather than
+    // leaving it there with nothing owed.
+    let entry = crate::heal::entries().into_iter().find(|e| e.key() == key);
+    let owed = entry.as_ref().and_then(|found| found.repair_owed_at());
+    if let Some(found) = entry.as_ref() {
+        found.clear_repair();
+    }
+    assert!(
+        owed.is_some(),
+        "a repair cleared during the release left the cancellation unmarked, so the pool it may \
+         have wedged owes nothing and the self-heal will never visit it (entry present: {})",
+        entry.is_some()
+    );
+}
+
 #[test]
 fn a_work_member_runs() {
     let ran = Ran::new();
