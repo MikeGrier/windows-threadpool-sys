@@ -559,6 +559,47 @@ jobs:
           RUST_BACKTRACE: 1
         run: cargo run -p windows-ioring-sys --example epoch_log --release --locked
 
+  threadpool-no-self-heal:
+    name: windows-threadpool-sys (no self-heal feature)
+    runs-on: windows-latest
+    # `self-heal` is on by default, so this configuration is built by nothing
+    # else here: every `--workspace` step takes the default set, and
+    # `--all-features` turns the feature back on.
+    #
+    # It is a promised configuration rather than an incidental one. Turning the
+    # feature off deliberately REMOVES `try_cancel_pending` instead of changing
+    # what it means, so a consumer who relied on it gets a compile error naming
+    # the `unsafe` sibling to reach for -- see README-FEATURE-self-heal.md. That
+    # promise is only worth making if the build it describes is known to work.
+    #
+    # The crate's own doctests assert the shape of the API in whichever
+    # configuration they are built with, so running them here is what checks the
+    # off half; `cargo test --workspace` elsewhere only ever checks the on half.
+    env:
+      RUSTUP_TOOLCHAIN: stable
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+      - name: cargo build
+        run: cargo build -p windows-threadpool-sys --all-targets --no-default-features --locked
+      - name: cargo clippy
+        run: cargo clippy -p windows-threadpool-sys --all-targets --no-default-features --locked -- -D warnings
+      - name: cargo test
+        env:
+          RUST_BACKTRACE: 1
+          RUST_LIB_BACKTRACE: 1
+        run: cargo test -p windows-threadpool-sys --no-default-features --locked --no-fail-fast
+      # The `docs` job documents `--all-features` only, so a link into a gated
+      # item resolves there and dangles here. `try_cancel_pending` is gated, and
+      # several places name it, so this is the job that keeps those links honest.
+      - name: cargo doc (deny broken intra-doc links)
+        env:
+          RUSTDOCFLAGS: "-D rustdoc::broken_intra_doc_links -D rustdoc::private_intra_doc_links"
+        run: cargo doc -p windows-threadpool-sys --no-deps --no-default-features --locked
+
   placement-probe-no-serde:
     name: windows-placement-probe (no serde feature)
     runs-on: windows-latest

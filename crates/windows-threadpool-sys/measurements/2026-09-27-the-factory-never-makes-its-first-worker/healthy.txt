@@ -1,0 +1,88 @@
+
+running 1 test
+  trace (oldest first):
+      0.132316s t2176584 wfactory               installed                                 0      0
+      0.132320s t2176584 wfactory               installed                                 1      0
+      0.132321s t2176584 wfactory               installed                                 2      0
+      0.132321s t2176584 wfactory               installed                                 6      0
+      0.135402s t2182044 delivery               event-attached                          216      0
+      0.135408s t2182044 syscall-enter          CreateThreadpoolWait                      0      0
+      0.135411s t2182044 syscall-leave          CreateThreadpoolWait                      0      0
+      0.135413s t2182044 wait                   created                              2505912816320    216
+      0.135415s t2182044 syscall-enter          SetThreadpoolWait                    2505912816320    216
+      0.135416s t2182044 wfactory               associate-enter                         220     32
+      0.135417s t2182044 wfactory               associate-leave                         220      0
+      0.135418s t2182044 wfactory               associate-already-signalled               0    216
+      0.135418s t2182044 syscall-leave          SetThreadpoolWait                    2505912816320    216
+      0.135419s t2182044 wait                   armed                                2505912816320    216
+      0.135419s t2182044 delivery               armed                                     0      0
+      0.135439s t2182044 delivery               setup-signalled                         212      0
+      0.135670s t2178528 wfactory               ready-enter                              28 2505911238976
+      0.135672s t2178528 wfactory               ready-leave                              28      0
+      0.135673s t2178528 wfactory               park-enter                               28 2505912825776
+      0.135675s t2178528 wfactory               park-leave                               28      0
+      0.135676s t2178528 wait                   trampoline-entered                   2505912816320      0
+      0.135677s t2178528 delivery               callback-entered                          0      0
+      0.135714s t2178528 wait                   rearm-entered                        2505912816320      0
+      0.135714s t2178528 syscall-enter          SetThreadpoolWait                    2505912816320    216
+      0.135715s t2178528 wfactory               associate-enter                         220     32
+      0.135723s t2178528 wfactory               associate-leave                         220      0
+      0.135724s t2178528 wfactory               associate-already-signalled               1    216
+      0.135724s t2178528 syscall-leave          SetThreadpoolWait                    2505912816320    216
+      0.135725s t2178528 wait                   armed                                2505912816320    216
+      0.135725s t2178528 wait                   rearm-left                           2505912816320    216
+      0.135726s t2178528 delivery               callback-left                             0      0
+      0.135726s t2178528 wait                   trampoline-left                      2505912816320      0
+      0.135727s t2178528 wfactory               park-enter                               28 2505912825776
+      0.135728s t2178528 wfactory               park-leave                               28      0
+      0.135729s t2178528 wait                   trampoline-entered                   2505912816320      0
+      0.135729s t2178528 delivery               callback-entered                          0      0
+      0.135729s t2178528 wait                   rearm-entered                        2505912816320      0
+      0.135730s t2178528 syscall-enter          SetThreadpoolWait                    2505912816320    216
+      0.135730s t2178528 wfactory               associate-enter                         220     32
+      0.135731s t2178528 wfactory               associate-leave                         220      0
+      0.135731s t2178528 wfactory               associate-already-signalled               0    216
+      0.135731s t2178528 syscall-leave          SetThreadpoolWait                    2505912816320    216
+      0.135731s t2178528 wait                   armed                                2505912816320    216
+      0.135732s t2178528 wait                   rearm-left                           2505912816320    216
+      0.135732s t2178528 delivery               callback-left                             0      0
+      0.135732s t2178528 wait                   trampoline-left                      2505912816320      0
+      0.135732s t2178528 wfactory               park-enter                               28 2505912825776
+      0.135744s t2182044 wfactory               fired                                     0      3
+      0.135745s t2182044 wfactory               fired                                     2      1
+      0.135746s t2182044 wfactory               fired                                     6      3
+      0.135750s t2182044 wfactory               factory-found                            28      1
+      0.135761s t2182044 wfactory               factory-found                           144      2
+      0.135959s t2182044 wfactory               factories-seen                            2      0
+      0.135960s t2182044 wfactory               counts-status                             0    120
+      0.135960s t2182044 wfactory               counts-total                              1     28
+      0.135960s t2182044 wfactory               counts-waiting                            1      0
+      0.135961s t2182044 wfactory               counts-pending                            0      0
+      0.135963s t2182044 wfactory               counts-release                            0     28
+      0.135963s t2182044 wfactory               counts-binding                            1     28
+      0.135963s t2182044 wfactory               counts-min-max                            0    768
+      0.135963s t2182044 wfactory               counts-paused                             0     28
+      0.135964s t2182044 wfactory               counts-may-create                         0     28
+      0.135964s t2182044 wfactory               counts-creating                           0      0
+      0.135964s t2182044 wfactory               counts-shutdown                           0     28
+      0.135964s t2182044 wfactory               counts-last-create-status                 0      0
+      0.135964s t2182044 wfactory               counts-idle-timeout-ms                67000      0
+      0.135965s t2182044 wfactory               counts-status                             0    120
+      0.135965s t2182044 wfactory               counts-total                              3    144
+      0.135965s t2182044 wfactory               counts-waiting                            3      0
+      0.135965s t2182044 wfactory               counts-pending                            0      0
+      0.135966s t2182044 wfactory               counts-release                            0    144
+      0.135966s t2182044 wfactory               counts-binding                            1    144
+      0.135966s t2182044 wfactory               counts-min-max                            0      3
+      0.135966s t2182044 wfactory               counts-paused                             0    144
+      0.135966s t2182044 wfactory               counts-may-create                         0    144
+      0.135966s t2182044 wfactory               counts-creating                           0      0
+      0.135967s t2182044 wfactory               counts-shutdown                           0    144
+      0.135967s t2182044 wfactory               counts-last-create-status                 0      0
+      0.135967s t2182044 wfactory               counts-idle-timeout-ms                30000      0
+      0.135968s t2182044 postmortem             factory-read                              1      0
+
+test completions_are_delivered_on_pool_threads_without_the_submitting_thread_waiting ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 6 filtered out; finished in 0.00s
+

@@ -656,3 +656,129 @@ configurations rather than to modified and unmodified code -- the model must rep
 where the wrap is reachable, and must come back green where it is not (total pushes bounded below
 the wrap, or a single producer, which has no race to lose). `M30.2` carries that as its criteria 2
 and 3.
+
+## <a id="how-cancellation-self-heal-was-reached"></a>How the cancellation self-heal design was reached
+
+Records the route to
+[Cancellation repairs the pool it may have wedged](DESIGN-NOTES.md#cancellation-self-heals),
+including the branches that were taken and abandoned. Several were abandoned
+because a measurement contradicted them, and those are worth keeping: the same
+ideas are attractive enough to be re-proposed.
+
+### The investigation reversed itself three times
+
+Each hypothesis fitted the evidence available when it was formed, and each was
+killed by a measurement that could have been made earlier. The pattern is the
+most transferable thing the investigation produced.
+
+1. **"The pool is poisoned when a wait is closed without its queued callback
+   having run."** Fitted every cell of a two-by-two factorial and was directly
+   observed rather than inferred. It also predicts a *graded* failure rate, and
+   a gap arm that leaves the callback pending in almost every run still reaches
+   zero. Whether the callback had run was a correlate of elapsed time, which a
+   factorial with one cell per corner cannot separate from a cause.
+2. **"A creation-in-progress gate is stuck."** Refuted by a capture taken three
+   days earlier that had already recorded that counter as zero.
+3. **"The factory stays flagged as queued for a deferred create."** Refuted by
+   two flags the capture had been decoding into its struct and discarding on
+   every run, for three days, while the hypothesis was being built.
+
+The standing lesson, now recorded in the checklist: **emit more of what is
+already in hand before reasoning about what is not.**
+
+### Why the fix is a drain and not a gap
+
+A gap of a few tens of microseconds between the disarm and the close also
+prevents the fault. It was never a candidate, for a reason that survives the
+later discovery that the gap curve is **not monotonic** -- a 3us gap is about five
+times *worse* than no gap at all, which rules out the settling-time reading the
+gap would have been justified by.
+
+The deciding argument is structural rather than statistical. Disassembling
+ntdll's teardown shows every path converging on one kernel routine,
+`IopCancelWaitCompletionPacket`, and differing only in whether they ask it to
+remove an already-delivered packet. The drain branch
+(`WaitForThreadpoolWaitCallbacks` with `fCancelPendingCallbacks` false) reaches
+`TppWorkWait`, whose entire reachable closure is seven functions containing no
+indirect dispatch and not the removal primitive. A gap makes the race
+improbable; the drain makes it unreachable.
+
+### Why removing cancellation would not have been enough
+
+An early framing held that `cancel_pending` was uniquely dangerous and should be
+removed. **That premise was false**, and the data refuting it was already
+committed: an arm making no cancel call at all fails at the same rate as one that
+does, because `CloseThreadpoolWait` performs the same removal through the same
+routine with the same flag. Every teardown reaches the dangerous call.
+
+What removing cancellation would achieve is narrower -- closing the only path that
+reaches the removal *while bypassing the drain*. Worth doing, but not the
+hazard's cause, and not worth the cost of withdrawing an API the platform
+provides.
+
+### Why prewarming is a hedge and not a mitigation
+
+The fault requires a pool holding **zero** threads, which is a real narrowing:
+warming the pool first gives zero occurrences in 24000 runs against 66 cold, with
+a delay-matched control still failing at the cold rate, so it is the worker and
+not the elapsed time.
+
+But warmth decays. A pool's last worker retires after its idle timeout, and the
+exposure reopens. Holding it warm permanently is not available on the default
+pool: `SetThreadpoolThreadMinimum` does not accept it, and calling it that way
+does not fail -- it raises `STATUS_INVALID_PARAMETER` and terminates the process.
+
+So prewarming narrows a window rather than removing a cause.
+`pool::prewarm_default_pool` survives for callers who want the narrowing, and its
+documentation says plainly that it is not a defence. **It was built because the
+measurement made it possible, not because a need for it had been established** --
+noted here because that is the reverse of the usual trap and was identified as
+such during review.
+
+### Why self-heal rather than prevention
+
+Prevention requires knowing the mechanism, and the mechanism is inside the
+kernel's queue-to-factory notification. The decision to stop looking was taken
+deliberately: the remaining question is unanswerable with any instrument
+available here, and the engineer's position was that code has defects and the
+pattern is now understood well enough to avoid.
+
+Repair does not require the mechanism. Submitting a work item recovers the stall
+every time, in every capture, because it reaches the worker factory by a route
+the lost notification is not on. That asymmetry -- queued work never recovers it,
+a work submit always does -- was the investigation's most persistent puzzle, and
+it dissolved once the two routes were identified in the disassembly.
+
+### Why coalesced rather than per-call repair
+
+Repairing inside `try_cancel_pending` would be simpler, synchronous, and immune
+to the self-heal pool itself being wedged. It was the initial proposal.
+
+It was rejected on cost: callers put cancellation in `Drop` paths as a matter of
+course, so a work submission on every call charges a teardown-sized cost to a
+routine operation. Marking and batching over a timer period makes the mechanism
+cheap enough to be on by default, which is worth more than the synchronous
+repair's stronger guarantee.
+
+The accepted consequence is that the self-heal pool could in principle share the
+fault it repairs. Designing around that would require knowing whether a warm pool
+is immune, which is the unanswerable question above.
+
+### Why an APC watchdog was rejected
+
+A user-mode APC runs only when some thread enters an alertable wait, so a
+watchdog built on one would need a dedicated thread to drive it -- at which point
+the APC earns nothing over a plain loop, while adding a self-deadlock hazard
+against the wait's own SRW lock if an APC interrupts a thread mid-teardown. A
+private thread pool with a periodic timer achieves the same thing with no thread
+of our own and no new hazard.
+
+### Why the dispatch timestamp is sound
+
+A callback running proves the pool dispatched, which proves it is not wedged.
+Comparing the last dispatch against the *cancellation's* timestamp -- not against
+wall-clock recency -- means the evidence can only ever cause a repair to be
+skipped when the pool demonstrably worked after the cancel. The interrupt-time
+counter is used rather than `QueryPerformanceCounter` because only ordering is
+needed, and it is a memory read rather than a syscall on a path that runs for
+every callback.

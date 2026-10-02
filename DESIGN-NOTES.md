@@ -837,6 +837,8 @@ these, a test could only assert that teardown terminated, which it does with the
 
 ## Quiescing without dropping is `stop_and_drain`, and it covers the callback only
 
+**Partly superseded by [Teardown drains rather than cancels](#teardown-drains).** The choice of cancel_pending recorded below is reversed; everything else here -- the suppression depth count, why disarm(); wait(); alone is not quiescence, and the limit on an external arm -- stands.
+
 `ThreadpoolTimer` and `ThreadpoolWait` both let a callback re-arm from inside itself, so "stop this and wait
 until it is idle" is not expressible as disarm-plus-drain. `wait()` demonstrably does not do it: after
 `disarm(); wait();` a self-re-arming timer was measured still set and firing, because the deferred re-arm is
@@ -883,6 +885,679 @@ alongside so the incidental cancellation is not mistaken for a contract and quie
 
 This is the honest shape of the decision: a documented precondition is a weaker thing than an enforced one, and
 saying so is better than either overclaiming or paying for machinery nobody needs.
+
+### What that exemption cost the tests, and how it was found
+
+Because `arm` and `set_after` bypass the suppression, a test that re-arms
+through them cannot observe whether `stop_and_drain` lifted the suppression it
+raised -- it passes either way. So `a_wait_is_reusable_after_stop_and_drain` and
+`a_timer_is_reusable_after_stop_and_drain`, despite their names, never covered
+the lifting, and nothing else did either: the lift is only observable through a
+*callback-side* re-arm issued after a completed drain.
+
+Found 2026-10-01, when `M-T4.10` extracted the suppression into one type and a
+sabotage that raised the count but never lowered it turned **no** existing wait
+or timer test red. `a_callback_can_rearm_again_after_stop_and_drain` and
+`a_deferred_rearm_is_applied_again_after_stop_and_drain` close it, and both go
+red under that sabotage.
+
+The general point is worth more than the instance: `stop_and_drain` releasing
+the suppression is the *only* thing distinguishing it from `Drop`, which raises
+and never releases. A mechanism whose sole distinguishing behaviour is untested
+is one a refactor can quietly delete.
+
+## <a id="teardown-drains"></a>Teardown drains rather than cancels, `Drop` blocks until it is finished, and an undischarged obligation is reported
+
+**Decided 2026-09-28, and implemented as `M-T4`.** Whether that work is done is a question
+[crates/windows-threadpool-sys/COMPLETED-CHECKLIST.md](crates/windows-threadpool-sys/COMPLETED-CHECKLIST.md)
+answers; this decision deliberately does not restate it, because a status sentence here is one
+nobody updates -- as this one was not, for the three days between the work landing and a reader
+noticing. It amends the `cancel_pending` half of
+[Quiescing without dropping is `stop_and_drain`](#quiescing-without-dropping-is-stop_and_drain-and-it-covers-the-callback-only),
+which stands in every other respect.
+
+### The rule
+
+1. **`Drop` blocks until the object's callbacks are finished, and control flow
+   never leaves it with the resources unsynchronised.** Leaking is not an
+   acceptable alternative.
+2. **Teardown drains rather than cancels**: `WaitForThreadpool*Callbacks` with
+   `fCancelPendingCallbacks` **FALSE**, not TRUE. A queued callback is work the
+   caller asked for, and discarding it is not "finalised".
+3. **The caller can pay the cost earlier, at a point they choose.** `Drop` is
+   the worst place to meet a blocking call, because its position in the
+   caller's control flow is often accidental. Every object that blocks in
+   `Drop` also exposes a synchronous method doing the same drain on demand.
+4. **A drain that happens in `Drop` is a discharged obligation worth
+   reporting.** The object records on the diagnostic channel that the caller
+   did not drain earlier. A fail-fast response to that is available and **off
+   by default**.
+
+### Strengthened 2026-09-30 by a second, independent reason
+
+This decision was taken on the semantic argument above -- discarding work the
+caller asked for is not finalisation -- and that argument stands on its own.
+Measurement since has found that draining is also the **only available fix** for
+a process-wide hazard, which was not known when the rule was written.
+
+Cancelling asks the kernel to remove a completion packet that may already have
+been delivered (`IopCancelWaitCompletionPacket` with `RemoveSignaledPacket` set).
+A removal landing a few microseconds after the packet was queued, on a port whose
+worker factory has no threads yet, can permanently sever that port's
+arrival-to-factory notification: the process's default thread pool then
+dispatches nothing, and no later arrival recovers it.
+
+The part that makes this a reason for *this* rule rather than merely a reason to
+avoid an API: **`CloseThreadpoolWait` makes the same call with the same flag**, so
+every teardown reaches it and no choice of entry point avoids it. Draining works
+not by avoiding the dangerous call but by emptying it -- the queued callback runs,
+dispatch clears the association, and the close finds nothing to take. A delay
+before the close only makes the race improbable, which is why the gap that was
+measured to work was never a candidate fix.
+
+Measurements and the full call chain are in
+[crates/windows-threadpool-sys/STALL-TIMELINE.md](crates/windows-threadpool-sys/STALL-TIMELINE.md)
+and the artifacts it links.
+
+### Why the earlier reasoning does not survive
+
+The decision above rejected `wait()` on measured grounds: "after `disarm();
+wait();` a self-re-arming timer was measured still set and firing, because the
+deferred re-arm is applied after the callback returns, which is after the
+external disarm."
+
+That measurement is correct and it is **not** the configuration teardown uses.
+It has no suppression raised. `stop_and_drain` and `Drop` both raise the
+suppression *first*, and the suppression exists precisely to refuse a re-arm
+requested by a callback that runs during the drain. With it raised, letting the
+callback run is safe: it asks to re-arm, and the ask is refused. The reason to
+prefer cancelling therefore applies to bare `disarm(); wait();` and not to the
+teardown path, where the objection had already been answered by the mechanism
+sitting one line above it.
+
+The same section's other argument now points the other way. It declined to rely
+on the pool dropping a trampoline-armed callback during an in-flight cancel,
+because "no SDK contract promises that". Draining needs no such promise: a
+callback that runs is a callback that ran.
+
+### The measurement that forced it
+
+[2026-09-28-closing-too-soon-after-the-disarm](crates/windows-threadpool-sys/measurements/2026-09-28-closing-too-soon-after-the-disarm/README.md):
+a `CloseThreadpoolWait` issued close behind a `SetThreadpoolWait(NULL)` leaves
+the default pool's worker factory unable to make its first worker. Replacing
+the cancelling drain with a draining one gave **0 failures in 20000 runs
+against a control's 10**.
+
+That is a workaround with a mechanism-shaped hint, not a diagnosis, and it is
+not the whole reason. The rest is that **the crate was already inconsistent and
+the object that cancels is the one in the failing path**:
+
+| object | `Drop` uses |
+|---|---|
+| `ThreadpoolWork` | FALSE -- drains |
+| `ThreadpoolIo` | FALSE -- drains |
+| `ThreadpoolWait` | TRUE -- cancels |
+| `ThreadpoolTimer` | TRUE -- cancels |
+| `PeriodicTimer` | TRUE -- cancels, via `stop_and_drain` |
+
+This is not a new policy. It is the one `work` and `io` already follow, applied
+to the three that do not.
+
+**And `stop_and_drain` does not drain.** On all three it calls
+`cancel_pending`, the TRUE form. The name has said "drain" and the body has
+said "cancel" since it was written.
+
+### What it costs, stated plainly
+
+**A draining teardown can block forever where a cancelling one could not.** If a
+queued callback never runs -- the pool wedged, or the callback waiting on
+something the dropping thread holds -- `Drop` does not return. Accepted
+deliberately: a hang is a visible failure with a stack, an abandoned callback is
+an invisible one. Rules 3 and 4 exist to make that affordable, by letting the
+caller drain where a hang is diagnosable and making it loud when they did not.
+
+### `stop_and_drain` changes rather than gaining a sibling
+
+**Decided.** It always should have drained; the name was right and the body was
+wrong. It is a breaking behavioural change to a published crate -- a call that
+discarded queued callbacks will run them, and will block until they finish --
+and it ships as one rather than as a second method a reader has to tell apart
+from the first.
+
+### `CleanupGroup` already complies, and is not part of this work
+
+It was queued for review on the strength of a grep showing both drain forms at
+eight sites in `cleanup_group.rs`. Reading it, those eight are the *member*
+accessors -- `WaitMember::wait` against `WaitMember::cancel_pending` and the
+same pair for work and the two timers -- which are caller-facing choices, the
+same both-forms-exposed pattern the standalone types have. They are not
+teardown.
+
+The group's own teardown is `CloseThreadpoolCleanupGroupMembers`, reached
+through `release_members`, and `Drop` calls it with `cancel_pending` **false**:
+
+```rust
+impl Drop for CleanupGroup {
+    fn drop(&mut self) {
+        // Let queued callbacks run, matching the default of `close_members`.
+        self.release_members(false);
+```
+
+So it already drains. `close_members(cancel_pending: bool)` is also already the
+method requirement 3 asks for: an explicit, synchronous release at a point the
+caller picks, with the choice in the caller's hands and the draining form as
+what `Drop` does when they do not.
+
+A member is also structurally unlike the standalone case: it never closes
+itself, so nothing in that path issues a `CloseThreadpoolWait` behind a
+`SetThreadpoolWait(NULL)`. The group close does both inside one kernel call.
+**Whether that makes a cleanup-group consumer immune to the measured stall is
+untested**, and worth knowing, but it is a question about the ring crate's
+reproducer rather than a change to this one.
+
+### What the obligation flag records, and why a dispatch sometimes discharges it
+
+Implemented 2026-10-01 as `M-T4.3`. Two things about it are not obvious, and the
+plan had both wrong before the code was written.
+
+**The flag records "a drain is owed", not "the caller closed."** The second
+polarity is the one that suggests itself, and it reports against an object that
+was created and never armed -- which has no callback for `Drop` to wait on and
+nothing to say. So the initial state is "nothing owed"; arming sets it, and the
+synchronous close clears it.
+
+**A dispatch discharges it on two of the four types and not on the other two**,
+because the question the flag answers is whether anything is still outstanding:
+
+| type | does a dispatch discharge it? | why |
+|---|---|---|
+| `ThreadpoolWait` | yes | `SetThreadpoolWait` arms for exactly one activation, so once the callback has entered, the pool is no longer watching |
+| `ThreadpoolTimer` | yes | one-shot: each arming produces exactly one firing |
+| `ThreadpoolPeriodicTimer` | no | the pool re-arms from the period, so a tick leaves the timer exactly as live as it was |
+| `ThreadpoolWork` | no | `submit` may be called any number of times, so one entry cannot clear a flag standing for all of them |
+
+Without that distinction the report fires on a wait that was armed once, ran its
+callback, and was dropped -- an ordinary sequence with nothing left to drain.
+
+`IsThreadpoolTimerSet` cannot stand in for the one-shot timer's flag: it stays
+true after the timer expires, so it cannot separate a timer that already fired
+from one still waiting to.
+
+**The flag lives on the heap callback context, not on the owning struct**, which
+is forced rather than chosen: the trampoline is what discharges it on the first
+two types, and a trampoline receives only the context pointer.
+
+`ThreadpoolIo` carries no flag. `outstanding()` already answers the same question
+from live state -- the one case in the crate where it can be asked rather than
+remembered.
+
+**What it costs**: one relaxed store per arming and per dispatch, and one relaxed
+load at `Drop`, in every build. It is deliberately not behind the `trace`
+feature, so a later decision needing the same fact -- `M-T6.8`'s fail-fast is the
+candidate -- can read it without the instrument being compiled in.
+
+### Still not decided: the fail-fast, and its bound
+
+Off by default, and its selection -- environment variable, constructor option,
+process-wide setter -- is open, as is what it does when the object is dropped
+on an already-unwinding path, where a panic aborts.
+
+Whether an *indefinite* hang is reasonable is also open. What is settled is the
+shape of any answer: **forward progress is not the alternative.** A teardown
+that cannot drain may abort, or fail fast by some other route, but it may not
+return to its caller having abandoned the callback. Bounding the wait is a
+question about which failure to take, never about whether to continue.
+
+### A test that needs a pool thread occupied must wait for the occupier to run
+
+Found 2026-10-01 investigating `M-T6.10`, after two sabotages that had been
+caught began reporting `survived`.
+
+The two teardown guards -- that `Drop` and `stop_and_drain` *run* a queued
+callback rather than discarding it -- arrange a one-thread pool, submit a work
+item that blocks, then arm and signal a wait, so the wait's callback is queued
+behind the occupier. Each then asserted `ran == 0` and called the teardown.
+
+**`submit` queues; it does not dispatch.** Nothing waited for the occupier to
+actually start, so the occupier and the wait's callback were two queued items on
+a one-thread pool and the pool could run either first. The `ran == 0` assertion
+does not detect that: it is equally true when the occupier has not started, which
+is the case it needed to exclude.
+
+So the precondition was an assumption. Measured with the cancelling sabotage
+applied: one run reported the occupier entered *and* the callback already run
+before `Drop`; another reported the occupier never entered at all. Either way the
+callback ran, so a cancelling teardown was indistinguishable from a draining one
+and the guard passed.
+
+The fix is to block until the occupier signals entry. Twenty-five consecutive
+runs of the repaired tests pass, and both now fail under their own sabotage.
+
+**The general rule is worth more than the two tests.** A test whose meaning
+depends on a pool thread being busy has to wait for evidence that it *is* busy.
+Submission is not that evidence, and an assertion that nothing has run yet cannot
+supply it. This guard had been green for weeks while proving less than it
+claimed; what exposed it was unrelated work shifting the timing, which is luck,
+not a method.
+
+## <a id="reports-are-trace-events"></a>A developer-facing report is a trace event, and the crate writes nothing to stderr
+
+**Decided 2026-10-01. This decision schedules work: the conversion of the one
+existing `eprintln!` is part of `M-T4.3` in
+[crates/windows-threadpool-sys/CHECKLIST.md](crates/windows-threadpool-sys/CHECKLIST.md).**
+It settles what [Teardown drains rather than cancels](#teardown-drains) named
+without answering -- that decision says an undischarged obligation is
+*reported*, and does not say where.
+
+### The rule
+
+- Every report this crate addresses to a developer is a `trace_record!` event.
+  That covers the undischarged-obligation report at `Drop` and `M-T6`'s
+  self-heal report.
+- **The crate writes nothing to stdout or stderr, in any configuration.**
+- `ThreadpoolIo::drop`'s `eprintln!` is the only existing write, and is
+  converted rather than kept as an exception.
+
+### Why
+
+A library that prints uninvited writes into a stream it does not own. A
+consumer's stderr may be a structured log, a TUI, or a pipeline stage that
+parses what arrives on it, and a crate several dependencies down cannot know
+which. The destination is the application's choice, so this crate declines to
+make it.
+
+The trace is already the crate's answer to how a developer sees what it did: it
+filters per subsystem, and it compiles to nothing when unwanted --
+[trace.rs](crates/windows-threadpool-sys/src/trace.rs)'s `not(feature = "trace")`
+module makes `record` an empty inline function.
+
+### What it costs, stated plainly
+
+The report does not reach a developer who has not enabled the `trace` feature,
+and a developer who does not know they left teardown to `Drop` has no particular
+reason to enable it. The report is available to someone investigating and absent
+for someone who is not, which is the reverse of the audience
+[Teardown drains rather than cancels](#teardown-drains) named for it.
+
+That cost was taken deliberately. It is the price of the crate not writing to a
+stream it does not own.
+
+### What was rejected, and why
+
+- **`eprintln!`, which is what `ThreadpoolIo` shipped.** It reaches the
+  developer who does not know to look, which is exactly the audience the report
+  is for. The visibility is bought with a write a consumer cannot refuse, and
+  that is what it was rejected for -- not for being ineffective.
+- **`eprintln!` by default, with a process-wide hook to redirect it.** Keeps the
+  visibility and hands the choice back, at the cost of public API -- a setter, a
+  function type, and the thread-safety rules around both -- carrying a report
+  the trace can already carry. The hook would be a second reporting channel
+  existing because the first was not used.
+- **Both channels at once.** The union of the costs, and two places for the same
+  report to drift apart.
+
+## <a id="fail-fast-is-a-default-off-feature"></a>The teardown fail-fast is a default-off Cargo feature that arms it directly
+
+**Decided 2026-10-01** by the engineer. This decision settles the *mechanism*;
+the implementation is queued separately, and one sub-question below is still
+open.
+
+### The rule
+
+A `fail-fast` Cargo feature, **off by default**. Enabling it arms the fail-fast
+directly -- there is no second runtime switch to throw.
+
+### The cost, accepted knowingly rather than discovered later
+
+Cargo features are additive and unified across a dependency graph. So if any
+crate in a build enables `fail-fast`, **every** crate in that build gets it,
+including code that never called this crate's API and whose author cannot see
+the manifest that enabled it. And a consumer cannot decline it:
+`default-features = false` governs one dependency edge, not the union, so there
+is no way to express "not for me".
+
+Two things bound that. The feature is off by default, so the leak only exists in
+a graph where somebody deliberately turned it on; and the realistic enabler is a
+top-level binary configuring its own test or CI build, which is the intended
+use. A library enabling it would be the misuse, and this is the paragraph that
+says so.
+
+### What was offered and declined
+
+Gating *availability* rather than *behaviour*: the feature compiles in the
+machinery and a knob, and the fail-fast stays inert until the application arms
+it at runtime. That removes the leak -- a dependency enabling it would cost code
+size and nothing else -- and is the same shape as
+[`self-heal`](#cancellation-self-heals), which gates which API exists rather
+than what it does. It was declined in favour of the simpler reading, which has
+one mechanism rather than two and no runtime state.
+
+The inverse polarity -- on by default, with a feature to turn it off -- was
+rejected outright and is worth recording so it is not re-proposed: features
+cannot be subtracted, so "off" would not be expressible by a consumer at all.
+
+### What it does: `Drop` panics, and a double panic aborts
+
+**Decided 2026-10-01**, settling the sub-question the mechanism left open.
+
+`Drop` panics when a drain was owed. On an already-unwinding path the second
+panic aborts the process, which is Rust's defined behaviour for an unwind
+escaping a destructor during cleanup -- and is the right outcome rather than an
+accident: aborting is a failure, which the bound below permits, where returning
+quietly is an abandonment, which it does not.
+
+This is consistent with the contract the crate already enforces. A callback that
+unwinds across the FFI boundary aborts the process today, asserted for all five
+callback kinds by `tests/callback_panic_aborts.rs`, which re-executes itself as
+a child because the abort would otherwise take the test runner with it.
+
+**The drain happens first, and then the panic.** This is a constraint on the
+implementation, not a detail of it. [Teardown drains rather than
+cancels](#teardown-drains) has `Drop` drain unconditionally, with the obligation
+flag gating the *report* and never the *work*; a fail-fast that panicked before
+draining would unwind past the close and the context free, leaving the pool able
+to dispatch into a context that is leaked but still live. That is exactly the
+abandonment the bound forbids, arrived at through the mechanism meant to prevent
+it. The drain still makes the teardown safe; the panic reports the violation.
+
+**`panic = "abort"` collapses the distinction.** A consumer building with that
+profile aborts on the first panic, so the already-unwinding case does not arise
+for them at all. The reasoning above describes the unwinding profile.
+
+**It does not contradict [the trace-only reporting
+rule](#reports-are-trace-events)**, though it looks as though it might, since a
+panic message reaches stderr.
+
+**This crate is not what writes it.** A panic raises a condition; what reaches
+stderr is written by the runtime's panic hook, which belongs to the application
+and which the application can replace. The rule forbids *this crate* writing
+into a stream it does not own, and panicking writes nothing -- it hands the
+condition to the one piece of code entitled to decide what becomes of it. An
+`eprintln!` is the opposite on both counts: this crate doing the writing, and a
+consumer with no way to refuse it.
+
+**One bound is already fixed and constrains every answer: forward progress is
+not the alternative.** A teardown that cannot drain may abort, or fail fast by
+some other route, but it may not return to its caller having abandoned the
+callback.
+
+### The two types whose close is not named `stop_and_drain`
+
+[`stop_and_drain` is the name of the synchronous close](#stop-and-drain-is-the-name)
+records why `ThreadpoolIo` and `CleanupGroup` keep their own names, so the
+fail-fast has to say what it means for each rather than assume the uniform
+method covers them.
+
+**`ThreadpoolIo::run_down` is that type's discharge, and the fail-fast binds to
+it.** The obligation is not a flag on this type: its `Drop` reads
+`outstanding()`, the live count of operations the kernel still owns, and fails
+fast when that is non-zero. So the condition is the same one the soft report
+already used, and the call that clears it is `run_down`. The panic names
+`run_down` rather than `stop_and_drain` for exactly this reason -- a message
+naming a method the type does not have would send a reader looking for an API
+that was deliberately not given to it.
+
+**`CleanupGroup` is out of scope, and that is a decision rather than an
+omission.** It has no per-object obligation to report: it owns members, and each
+member's own teardown is what owes a drain. `M-T4.5` found its `Drop` already
+drains with `cancel_pending = false`, so there is nothing it leaves to chance for
+a fail-fast to catch. Adding one would mean inventing a group-level obligation
+that no mechanism currently records, which is a larger change than this item and
+one nothing yet asks for.
+
+### Arming it found the workspace was not conformant, which is the feature working
+
+The feature is unified across the dependency graph, so `--all-features` -- how
+this repository's CI and its sabotage harness both run -- arms it for **every**
+crate here, not only for the one that defines it. Turning it on for the first
+time therefore measured the whole workspace against the protocol
+`windows-threadpool-sys` publishes, and the workspace did not pass: 34 test
+failures across `windows-file-watcher`, `windows-ioring-sys`,
+`windows-file-enumeration-sys`, and this crate's own tests and published
+examples.
+
+**Every one was a real undischarged obligation, not a false positive.** Each
+site left a blocking drain to `Drop` that it could have made itself. Field drop
+performs that drain either way, so making it explicit added no blocking
+anywhere -- what it added is that the obligation is settled rather than silently
+carried.
+
+**Two of them were this crate's own rustdoc examples**, which is the worst place
+for it: an example is what a consumer copies, so a published example that does
+not drain teaches the violation. They now show `stop_and_drain`.
+
+**Where a type's teardown sites were scattered, the drain went into a newtype
+rather than into each site.** `windows-file-watcher`'s retry timer is dropped
+when a subscription establishes, when it fails permanently, and when the monitor
+shuts down; a `RetryTimer` wrapper whose own `Drop` drains makes the obligation
+impossible to leave at a site somebody forgot, which enumerating the sites would
+not.
+
+**No separate CI job was added, deliberately.** The existing `--all-features`
+jobs arm the feature by construction, so it is already built, tested and linted
+on every run -- unlike the feature-*off* configuration, which `M-T6.6` had to add
+a job for precisely because no existing job selected it.
+
+**A consumer outside this repository is still free to leave teardown to `Drop`.**
+That is the supported behaviour with the feature off, and it remains the default.
+What the sweep established is that *this* workspace no longer relies on it.
+
+## <a id="stop-and-drain-is-the-name"></a>`stop_and_drain` is the name of the synchronous close, and every type that drains has one
+
+**Decided 2026-10-01** by the engineer, implementing `M-T6.7`. The inventory that
+prompted it was taken after `M-T6.3` settled the cancel surface.
+
+### The rule
+
+Every type whose teardown drains offers `stop_and_drain`. `ThreadpoolWork`,
+`WorkMember`, `TimerMember` and `WaitMember` gained one; nothing was renamed.
+
+`ThreadpoolIo::run_down` and `CleanupGroup::close_members(bool)` keep their own
+names and were deliberately not aliased. Both do something a per-object drain
+does not -- one waits on an operation registry, the other releases a whole group
+-- so a shared name would claim an equivalence that is not there.
+
+### Why additive rather than a rename
+
+A rename costs every existing caller and buys a consistency that an added method
+also buys. `wait()` keeps its meaning on the work types, where it always was the
+drain; `stop_and_drain` is simply the name a caller can rely on across types
+without knowing which of them has something to stop.
+
+### What the inventory found that the item had not recorded
+
+`TimerMember` and `WaitMember` had **no** synchronous close at all, while
+`PeriodicTimerMember` did and both of their standalone twins did. Since
+`create_timer` and `create_wait` are documented as equivalent to the standalone
+constructors, moving an object into a cleanup group silently lost the method
+that makes its teardown deterministic -- `disarm(); wait();` is not the same
+thing, which the crate's own tests already pin.
+
+So the member additions are not naming work. They are a missing capability,
+found by taking the inventory the decision required.
+
+### A caution for `M-T6.8`
+
+The uniform method now exists, which is what that item was gated on. It is *not*
+uniform across all six types -- `run_down` and `close_members` remain -- so a
+linearity decision still has to say what it means for those two.
+
+## <a id="cancellation-self-heals"></a>Cancellation repairs the pool it may have wedged, and says so in its name
+
+**Decided 2026-10-01. This decision schedules work; the implementation is queued
+as `M-T6` in
+[crates/windows-threadpool-sys/CHECKLIST.md](crates/windows-threadpool-sys/CHECKLIST.md).**
+It settles what [Teardown drains rather than cancels](#teardown-drains) left
+open: that decision fixed the *default* paths, and left the explicitly-requested
+cancel still able to wedge a pool.
+
+### The rule
+
+1. **A safe API must not be able to stop the process's thread pool.** Memory
+   safety is not the only contract a safe signature implies. A method whose
+   failure mode is "an unrelated component in this process silently stops
+   dispatching, intermittently, for reasons invisible from the call site" is a
+   trap, not a sharp edge, because the caller can neither detect it nor bound it.
+2. **Cancellation stays**, because it is a thread-pool API that callers
+   reasonably expect, and because the platform offers it. It is renamed to
+   `try_cancel_pending`, which connotes the best-effort attempt the platform
+   actually performs -- `WaitForThreadpoolWaitCallbacks(TRUE)` has never been
+   able to cancel a callback already running.
+3. **The crate repairs what the cancel may have broken.** Cancelling records that
+   a repair is owed for that pool; a self-heal mechanism submits a work item,
+   which is the one action measured to recover the stall every time.
+4. **The repair is coalesced, not per-call.** Callers put cancellation in `Drop`
+   paths as a matter of course, so a repair on every call would charge a teardown
+   cost to a routine operation. Marking and batching is what makes the mechanism
+   affordable enough to be on by default.
+5. **Disabling it removes the safe method rather than changing its meaning.**
+   `try_cancel_pending` is gated on the `self-heal` feature;
+   `try_cancel_pending_no_heal_tracking` is `unsafe` and always present. A
+   contract that varies by feature is worse than a missing one: Cargo unifies
+   features across the graph, so a signature that changes with them compiles in
+   one dependency configuration and not another, for reasons the author cannot
+   see from their own manifest.
+
+### Why `unsafe` is the right keyword for the ungated method, and the wrong one for the gated
+
+`unsafe` is a claim about memory safety, and using it for "this might hang"
+dilutes it in a crate that wraps a genuinely unsafe API. That argument rules out
+making `try_cancel_pending` itself `unsafe` when the feature is off.
+
+It does not rule out a *separate* method, because that method's precondition is
+statable and dischargeable: **the caller must ensure the pool is repaired**, by
+submitting work to it or by knowing it is kept live. That is an obligation a
+caller can meet and a reviewer can check, which is what `unsafe` is for. The
+hazard is not the justification; the transferred obligation is.
+
+### What the feature does not change
+
+The method's **contract** is identical either way -- best-effort cancellation,
+and the pool may stall briefly. The feature changes only how quickly the stall is
+repaired: bounded by the self-heal period when on, bounded by the application's
+next work submission when off. Documenting it as a behavioural difference would
+be restatement drift waiting to happen.
+
+### The consequence that is deliberate, not a defect
+
+With the feature off, a consumer who called `try_cancel_pending` gets a
+**compile error**. That is the point. It is the only way they discover that the
+guarantee they were relying on is gone, and it names the method to reach for
+instead.
+
+### What was rejected, and why
+
+- **Removing cancellation.** It would not remove the hazard --
+  `CloseThreadpoolWait` makes the same kernel call with the same flag, so every
+  teardown reaches it. Removal only closes the path that reaches it *while
+  bypassing the drain*, which is worth doing but is a smaller claim than it
+  appears, and it costs callers an API the platform provides.
+- **Keeping the name and making it drain.** No breakage, but the name would then
+  lie, and a future reader seeing `cancel_pending` would reasonably infer
+  cancellation.
+- **Prewarming as the mitigation.** Narrows a timing window rather than removing
+  a cause, and the window reopens whenever the pool's last worker retires. See
+  [pool::prewarm_default_pool](crates/windows-threadpool-sys/src/pool.rs), which
+  survives as a hedge, not a defence.
+- **A gap between the disarm and the close.** Makes the race improbable rather
+  than impossible, which is the distinction this investigation exists to respect.
+- **An APC-driven watchdog.** A user-mode APC runs only when some thread enters
+  an alertable wait, so it would need a dedicated thread -- at which point the APC
+  earns nothing over a plain loop, while adding a self-deadlock hazard against the
+  wait's own lock.
+- **Requiring a second opt-out feature to disable.** Rejected by the engineer in
+  favour of the two-method shape, which achieves the same explicitness without a
+  protocol.
+
+### Which clock the two stamps are on, and which way its error falls
+
+Decided 2026-10-01 implementing `M-T6.2`. Both stamps -- the last dispatch and
+the cancellation that owes a repair -- are `QueryInterruptTime`, the interrupt-time
+counter.
+
+The only question ever asked of these values is which of two came first, so a
+counter whose value the kernel publishes to user mode is enough, and this runs on
+the path of every callback the crate delivers. Reading `KUSER_SHARED_DATA`
+directly is the same read and is how this is often written; it binds to a layout
+nothing promises, where the documented call is the specified primitive for the
+same value.
+
+**The counter advances on the system clock tick**, tens of milliseconds by
+default, so a dispatch and a cancellation within one tick carry equal stamps. The
+comparison is `>`, so equal stamps read as "no dispatch since" and the repair is
+submitted.
+
+That is the direction the error has to fall. A redundant repair costs one work
+submission to a pool that did not need it; a suppressed repair leaves a pool
+stalled until the application happens to submit something. And the opposite
+mistake cannot occur at any resolution: the counter never goes backwards, so a
+dispatch stamp can never exceed a cancellation that followed it.
+
+### How long an entry lives, and why the default pool needs no rule of its own
+
+Decided 2026-10-01 while implementing `M-T6.1`, which had expected the opposite.
+The plan reasoned that the default pool would need its own retention rule: our
+last object dropping says nothing about whether the process is still using that
+pool, whereas a private pool is going away along with the objects on it.
+
+One rule covers both. **An entry is retired when it has no objects left *and*
+owes no repair.**
+
+The asymmetry the plan saw is real, and the second clause already carries it.
+When no repair is owed, retiring the default pool's entry costs nothing -- the
+next object created on it registers again. When one is owed, the entry is
+retained until the self-heal discharges it, which is precisely the case the
+special rule was wanted for.
+
+The clause turns out to be **required** for a private pool as well, for a reason
+the plan did not anticipate: the entry's repair work object is created against
+its pool, and the thread pool does not free a pool while an object bound to it
+is alive. So retaining an entry that owes a repair is also what keeps the pool
+alive long enough to *receive* that repair. Retiring it would close the repair
+object, let the pool go, and discard an owed repair at the one moment it
+matters. The retention is bounded by a single self-heal period.
+
+### The healer's cadence, and why it never stops once started
+
+Decided 2026-10-01 implementing `M-T6.4`. A 250 ms period with a 250 ms
+coalescing window, so the repair latency is bounded at roughly their sum. What
+is being bounded is a pool that would otherwise stay undeliverable until the
+application happened to submit work -- which, for a program built on waits,
+timers and I/O, is never. The window is there because a repair is not urgent to
+the millisecond, and it lets the system group the wakeup rather than take one of
+its own.
+
+**It is created lazily on the first cancellation**, so a consumer who never
+cancels creates no pool and no thread.
+
+**Once started it runs until the process exits.** Stopping when nothing is owed
+would be cheaper, and it is not safe without a lock the cancellation path should
+not have to pay for: a tick that found nothing owed could stop the timer *after*
+a concurrent cancellation had marked its pool and asked for the healer, leaving
+a repair owed with nothing left to deliver it. Of the two mistakes available, a
+coalesced tick on an idle process is much the cheaper.
+
+The healer's own pool registers itself, like any other pool this crate creates
+an object against. That costs one entry and one unused repair object, and it is
+left that way rather than special-cased: the alternative is an exception in
+`register` whose only purpose is to save an allocation that is made once per
+process.
+
+### What remains unknown, and is accepted
+
+Whether the fault can recur on a pool that has gone cold again after its workers
+retired is **unanswerable from here** -- it is inside the kernel's
+queue-to-factory notification, and no instrument available to this workspace
+reaches it. The self-heal mechanism is therefore a backstop that bounds the
+damage, not a proof that the damage cannot occur. Its own pool could in principle
+share the fault; that is accepted rather than designed around, because designing
+around it would require the same unavailable answer.
+
+Full consumer-facing account, including costs and what to watch for when
+disabling, is in
+[README-FEATURE-self-heal.md](crates/windows-threadpool-sys/README-FEATURE-self-heal.md).
+How the investigation arrived here is in
+[DESIGN-RATIONALE.md](DESIGN-RATIONALE.md).
 
 ## The encoding check rejects stray control characters
 

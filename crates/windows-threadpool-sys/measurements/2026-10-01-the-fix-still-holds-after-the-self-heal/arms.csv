@@ -1,0 +1,3 @@
+build,teardown,runs,failures,notes
+control,cancel,4000,12,"M-T4.2 undone in ThreadpoolWait::drop and EventDelivery's explicit drain removed; patches verified in source before the build"
+current,drain,12000,0,"committed tree at 3b1ba0af, default features, so self-heal is on"

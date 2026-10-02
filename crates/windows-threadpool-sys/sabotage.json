@@ -1,0 +1,283 @@
+{
+  "package": "windows-threadpool-sys",
+  "description": "Sabotages for the ntdll inline-hook facility in src/trace/hook.rs -- the stub recogniser that makes patching safe, the trampoline that rebuilds the displaced system call, and the table column that decides which calls carry a worker factory handle. Run with tools/run-sabotage.ps1; see tools/README-sabotage.md for the format and for why the results are read the way they are.",
+  "notCoveredHere": "The trace RECORDS a hook emits are deliberately absent from this manifest. They are asserted by the same test, but only when WINDOWS_THREADPOOL_TRACE is set in the environment, and neither this harness nor CI sets it -- so a sabotage that removed the `record` calls would be reported SURVIVED for a guard that does in fact exist. That is the feature-gate trap this repository already documents, arriving through an environment variable rather than a cargo feature. The guard those assertions back is the `fired` counter, which is unconditional and IS swept below. Making the record assertions reachable needs the traced tests to run somewhere, which is queued as M-T4.1 in CHECKLIST.md.",
+  "testArgs": [
+    "--all-features"
+  ],
+  "whyTestArgs": "--all-features, because the whole hook module is behind the `trace` feature. Without it the module is not compiled, every sabotage lands in code that does not exist, and the sweep reports SURVIVED for guards that are present and working.",
+  "sabotages": [
+    {
+      "name": "the trampoline omits the system call",
+      "file": "src/trace/hook.rs",
+      "expect": "caught",
+      "why": "The trampoline rebuilds the displaced stub from the system call number. Replacing the two-byte `syscall` with NOPs leaves a trampoline that returns whatever was in eax without entering the kernel, so the hooked call silently stops doing anything. This is the failure that would make every hooked measurement a fiction while the process kept running, so the guard has to notice it by the call's own results rather than by a crash.",
+      "find": [
+        "    stub[8] = 0x0F;",
+        "    stub[9] = 0x05;"
+      ],
+      "replace": [
+        "    stub[8] = 0x90;",
+        "    stub[9] = 0x90;"
+      ]
+    },
+    {
+      "name": "the recogniser accepts anything",
+      "file": "src/trace/hook.rs",
+      "expect": "caught",
+      "why": "The recogniser is the entire safety argument for patching another module's code: it is what stops a jump being planted over instructions nobody decoded. A version that returns true unconditionally would happily corrupt any export whose name resolved.",
+      "find": [
+        "    head[..4] == PREFIX_HEAD && head[8..16] == PREFIX_TAIL"
+      ],
+      "replace": [
+        "    let _ = (head, PREFIX_HEAD, PREFIX_TAIL);",
+        "    true"
+      ]
+    },
+    {
+      "name": "the recogniser pins the system call number",
+      "file": "src/trace/hook.rs",
+      "expect": "caught",
+      "why": "The four system-call-number bytes are the one part of the stub that legitimately varies, between functions and between Windows builds. A recogniser that matched them too would refuse every stub but the one it was written against -- a failure that looks like safety and is in fact a facility that never works. This is the opposite direction from the sabotage above, and a guard that only tested one of them would pass either way.",
+      "find": [
+        "    head[..4] == PREFIX_HEAD && head[8..16] == PREFIX_TAIL"
+      ],
+      "replace": [
+        "    head[..8] == [0x4C, 0x8B, 0xD1, 0xB8, 0xE6, 0x01, 0x00, 0x00] && head[8..16] == PREFIX_TAIL"
+      ]
+    },
+    {
+      "name": "an unknown hook label falls back to the first entry",
+      "file": "src/trace/hook.rs",
+      "expect": "caught",
+      "why": "A typo in WINDOWS_THREADPOOL_TRACE_HOOKS must refuse, not silently patch whichever stub happens to be first in the table. The first entry is the worker park, the hottest path in the pool, so this mistake would be both invisible and maximally perturbing.",
+      "find": [
+        "    let Some(index) = HOOKS.iter().position(|(_, name, _)| *name == label) else {",
+        "        return Err(Refusal::NotFound);",
+        "    };",
+        "    with_others_suspended(|| install(index))"
+      ],
+      "replace": [
+        "    let index = HOOKS",
+        "        .iter()",
+        "        .position(|(_, name, _)| *name == label)",
+        "        .unwrap_or(0);",
+        "    with_others_suspended(|| install(index))"
+      ]
+    },
+    {
+      "name": "the fired counter never increments",
+      "file": "src/trace/hook.rs",
+      "expect": "caught",
+      "why": "The counter is what makes the facility's guard run on a machine with no trace environment set. Removing the increment is indistinguishable, to every unconditional assertion, from a jump that was never planted -- which is exactly the state the guard exists to rule out.",
+      "find": [
+        "                FIRED[$index].fetch_add(1, Ordering::Relaxed);"
+      ],
+      "replace": [
+        "                let _ = &FIRED[$index];"
+      ]
+    },
+    {
+      "name": "every hooked call is taken to carry a factory handle",
+      "file": "src/trace/hook.rs",
+      "expect": "caught",
+      "why": "Only the worker-factory calls have a factory handle in their first argument. Ignoring the table column that says so lets a stub with an out-pointer there install itself as the handle, after which the factory counters describe whatever that pointer was -- an error that reports itself as a plain query failure and would be read as the factory's own answer. This sabotage is here because the defect was real: it was in the first draft of the module and was caught while writing the table, not by a test.",
+      "find": [
+        "                if $carries_handle && a1 != 0 {"
+      ],
+      "replace": [
+        "                if a1 != 0 {"
+      ]
+    },
+    {
+      "name": "the factory layout is the wrong size",
+      "file": "src/trace/hook.rs",
+      "expect": "caught",
+      "why": "The query rejects a buffer whose length does not match the information class, so a struct that is the wrong SIZE fails every call while looking exactly like a process that has no worker factory. This defect was real -- it was the first draft, and it made the scan report nothing on a machine where the scan works. Padding the struct reproduces it: `_tail` has no readers, so the size changes and nothing else does.",
+      "whyNotTruncation": "This case used to DELETE the five fields from `start_routine` to `stack_commit`, which was the original defect's own shape. That stopped working on 2026-10-01: those fields acquired readers when the factory snapshot began emitting them, so the patch became a compile error (E0609, five times) instead of the runtime failure it is meant to produce, and the harness reported MANIFEST DOES NOT COMPILE. Checked before repairing, per M-T6.9: the patch was not being caught by a const assertion, which would have meant re-declaring the case rather than repairing it. Growing the struct through a field nothing reads produces the same wrong size with no such coupling.",
+      "find": [
+        "    _tail: u32,",
+        "}"
+      ],
+      "replace": [
+        "    _tail: u32,",
+        "    _sabotage_padding: [u64; 4],",
+        "}"
+      ]
+    },
+    {
+      "name": "the handle scan gives up immediately",
+      "file": "src/trace/hook.rs",
+      "expect": "caught",
+      "why": "The scan is what makes the factory readable in a stalled process, where no hooked call has fired and so no handle has been learned. A ceiling that stops before any real handle leaves it finding nothing, which is indistinguishable from a process with no pool -- and would have been read as exactly that.",
+      "find": [
+        "    /// this is generous for a test process rather than a tuned figure.",
+        "    const CEILING: usize = 4096;"
+      ],
+      "replace": [
+        "    /// this is generous for a test process rather than a tuned figure.",
+        "    const CEILING: usize = 4;"
+      ]
+    },
+    {
+      "name": "the pre-main initialiser is dropped by the linker",
+      "file": "src/trace.rs",
+      "expect": "caught",
+      "why": "`#[used]` is what stops the linker discarding a static nothing references, and `.CRT$XCU` is what makes the CRT call it before main. Getting either wrong still builds: the instrument silently reverts to installing hooks lazily, which in the investigation this was built for lands 0.12s into the process, long after the fault is established. Renaming the section reproduces exactly that -- a working build whose initialiser never runs.",
+      "find": [
+        "#[unsafe(link_section = \".CRT$XCU\")]"
+      ],
+      "replace": [
+        "#[unsafe(link_section = \".CRT$XCZ_not_an_initialiser\")]"
+      ]
+    },
+    {
+      "name": "the suspended window allocates",
+      "file": "src/trace/hook.rs",
+      "expect": "survives",
+      "why": "A DELIBERATE control, and the one entry here that documents a hazard the tests cannot see. Dropping the reservation on `held` makes the push allocate while other threads are suspended, and a thread suspended holding the allocator lock can never give it back -- a deadlock. It survives because the tests install hooks from a process whose other threads are not holding that lock at that instant, so the defect is real and the suite is blind to it. It is recorded here so the reservation is not removed as redundant by a future reader; the argument for it is in the comment at the call site, not in a test.",
+      "find": [
+        "    let mut held: Vec<*mut core::ffi::c_void> = Vec::with_capacity(ids.len());"
+      ],
+      "replace": [
+        "    let mut held: Vec<*mut core::ffi::c_void> = Vec::new();"
+      ]
+    },
+    {
+      "name": "the wait's Drop cancels instead of draining",
+      "file": "src/wait.rs",
+      "expect": "caught",
+      "why": "The teardown-drains decision: Drop must run a queued callback, not discard it. This is the exact defect the M26.13 investigation measured -- the cancelling form leaves the default pool unable to make its first worker. Both forms leave the object quiescent, so only a guard asserting the callback RAN can tell them apart, which is why the tests that were already here could not.",
+      "find": [
+        "        // The lock is released before draining: a callback blocked on it would",
+        "        // otherwise never finish, and this wait would never return.",
+        "        self.wait();",
+        "        crate::trace_record!(\"wait\", \"drop-drained\", self.wait);"
+      ],
+      "replace": [
+        "        // The lock is released before draining: a callback blocked on it would",
+        "        // otherwise never finish, and this wait would never return.",
+        "        unsafe { self.try_cancel_pending_no_heal_tracking() };",
+        "        crate::trace_record!(\"wait\", \"drop-drained\", self.wait);"
+      ]
+    },
+    {
+      "name": "the wait's stop_and_drain cancels instead of draining",
+      "file": "src/wait.rs",
+      "expect": "caught",
+      "why": "The early-discharge method a caller uses to pay the teardown cost at a point they choose. Separate from Drop because they are separate call sites: fixing one and not the other would leave whichever the caller did not reach still discarding work. The method has been named `stop_and_drain` and implemented as a cancel since it was written.",
+      "find": [
+        "        // otherwise never finish, and this would never return.",
+        "        self.wait();"
+      ],
+      "replace": [
+        "        // otherwise never finish, and this would never return.",
+        "        unsafe { self.try_cancel_pending_no_heal_tracking() };"
+      ]
+    },
+    {
+      "name": "the timer's disarm is taken to leave a queued tick alone",
+      "file": "src/timer/tests.rs",
+      "expect": "caught",
+      "why": "Pins the asymmetry that decides whether this crate's timer teardown can distinguish draining from cancelling: SetThreadpoolTimer(NULL) discards a queued tick where SetThreadpoolWait(NULL) does not. Inverting the expectation must fail, because the whole argument for leaving the timer's drain form unverified rests on this being measured rather than assumed.",
+      "find": [
+        "        outcomes[1], 0,"
+      ],
+      "replace": [
+        "        outcomes[1], 1,"
+      ]
+    },
+    {
+      "name": "CONTROL: a refusal reason is renumbered",
+      "file": "src/trace/hook.rs",
+      "expect": "survives",
+      "why": "The control this manifest needs. The numeric value of a refusal reason is carried into a trace record and never compared against anything, so changing it cannot break a test. A sweep in which this were CAUGHT would mean the suite is sensitive to something other than behaviour, and the CAUGHT results above would be worth no more than this one.",
+      "find": [
+        "    NoTrampoline = 3,"
+      ],
+      "replace": [
+        "    NoTrampoline = 30,"
+      ]
+    },
+    {
+      "name": "a cancellation does not arm a repair",
+      "file": "src/heal.rs",
+      "expect": "caught",
+      "why": "The first of the three claims the self-heal rests on. `try_cancel_pending` is a safe method only because the crate repairs the pool the cancel may have wedged, and the repair begins with the mark. A cancel that does not mark leaves the pool to be fixed by whatever the application happens to submit next, which for a program built on waits, timers and I/O is nothing.",
+      "find": [
+        "                entry.owe_repair(now());"
+      ],
+      "replace": [
+        "                let _ = entry;"
+      ]
+    },
+    {
+      "name": "a dispatch never updates its pool's stamp",
+      "file": "src/heal.rs",
+      "expect": "caught",
+      "why": "The second claim. A dispatch observed after the cancellation is the only evidence the healer has that a pool is still delivering callbacks, and it is what makes the mechanism affordable: without it every cancellation would cost a repair submission. A stamp that never updates turns the skip off, so every marked pool is repaired whether it needs it or not.",
+      "find": [
+        "                entry.stamp_dispatch(now());"
+      ],
+      "replace": [
+        "                let _ = entry;"
+      ]
+    },
+    {
+      "name": "the heal creates a work object instead of submitting the pre-created one",
+      "file": "src/heal.rs",
+      "expect": "caught",
+      "why": "The third claim, and the one that is easiest to break while looking correct. Creating a work object was measured NOT to release a stalled pool; only submitting one is. So the repair object is made when the pool is registered, and the healing path must do nothing but submit it. The patch below still submits something, and on a real pool would still release the stall -- which is why the guard is tied to the entry's OWN repair object through its callback context, not to a count of repairs in general.",
+      "whyNotNullContext": "The fresh object is given its own valid counter rather than a null context. With null the trampoline dereferences it and the process aborts, which the harness scores as caught -- but by a crash, not by a test noticing, and this repository treats a crash-caught mutant as an uncovered one.",
+      "find": [
+        "            unsafe { SubmitThreadpoolWork(entry.repair_work()) };"
+      ],
+      "replace": [
+        "            unsafe {",
+        "                let ctx: *mut core::ffi::c_void = Box::into_raw(Box::new(AtomicU64::new(0))).cast();",
+        "                let fresh = CreateThreadpoolWork(Some(repair_trampoline), ctx, std::ptr::null());",
+        "                if fresh != 0 { SubmitThreadpoolWork(fresh); }",
+        "            }"
+      ]
+    },
+    {
+      "name": "the teardown fail-fast panics before the drain instead of after it",
+      "file": "src/wait.rs",
+      "expect": "caught",
+      "why": "The ordering constraint the fail-fast is built around. Panicking before the drain unwinds past the disarm, the drain, `CloseThreadpoolWait` and the context free -- so the pool goes on watching a handle the unwinding field drop has already closed, and the queued callback is abandoned. That is the exact abandonment the feature exists to prevent, reached through the mechanism meant to prevent it, so a fail-fast placed here is worse than none at all.",
+      "whyNotTheLateCall": "This inserts an early call rather than moving the late one, so it is a single-site edit the harness can check for uniqueness. The early panic fires first, so the late call is never reached and the effect is the same as moving it.",
+      "whyAssertionNotCrash": "Caught by `the_drain_runs_before_the_panic` in tests/fail_fast_teardown.rs, which snapshots the callback count the instant the panic surfaces and asserts on it *before* joining the releasing thread. Both orderings end with the callback having run -- the leaked watch still fires it -- so only the timing separates them, and asserting after the join would let the crash from that leaked watch pre-empt the assertion and turn a precise failure into a bare abort.",
+      "find": [
+        "            crate::trace_record!(\"wait\", crate::obligation::DROP_OBLIGATION_OWED, self.wait);"
+      ],
+      "replace": [
+        "            crate::trace_record!(\"wait\", crate::obligation::DROP_OBLIGATION_OWED, self.wait);",
+        "            crate::obligation::fail_fast_if_owed(owed, \"ThreadpoolWait\", \"stop_and_drain\");"
+      ]
+    },
+    {
+      "name": "the teardown fail-fast never fires",
+      "file": "src/obligation.rs",
+      "expect": "caught",
+      "why": "The rejecting direction. A fail-fast that is compiled in but never panics leaves the whole feature inert while every build and every feature-shape assertion still passes, so nothing except a test that observes the panic can tell the difference.",
+      "find": [
+        "    if owed {"
+      ],
+      "replace": [
+        "    if false && owed {"
+      ]
+    },
+    {
+      "name": "the teardown fail-fast fires when nothing is owed",
+      "file": "src/obligation.rs",
+      "expect": "caught",
+      "why": "The accepting direction, which is the half that usually goes untested. A fail-fast that panics on every drop satisfies every assertion that it fires when a drain is owed, while making the feature unusable: a caller who discharged the obligation correctly would still be punished for it.",
+      "find": [
+        "    if owed {"
+      ],
+      "replace": [
+        "    if true || owed {"
+      ]
+    }
+  ]
+}

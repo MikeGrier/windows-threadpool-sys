@@ -1,0 +1,139 @@
+Windows 10 Version 26200 MP (16 procs) Free x64
+Product: WinNt, suite: SingleUserTS
+Edition build lab: 26100.1.amd64fre.ge_release.240331-1435
+Debug session time: Sun Sep 27 16:19:43.000 2026 (UTC - 4:00)
+System Uptime: 17 days 13:43:06.864
+Process Uptime: 0 days 0:00:12.000
+...........
+This dump file has an exception of interest stored in it.
+The stored exception information can be accessed via .ecxr
+(18c6e0.18c594): Wake debugger - code 80000007 (first/second chance not available)
+
++------------------------------------------------------------------------+
+| This target supports Hardware-enforced Stack Protection. A HW based    |
+| "Shadow Stack" may be available to assist in debugging and analysis.   |
+| Evaluate the CetBacktrace extension object on a thread to get started. |
+| See aka.ms/userhsp for more info.                                      |
+|                                                                        |
+| dx @$curthread.CetBacktrace                                            | 
+|                                                                        |
++------------------------------------------------------------------------+
+
+For analysis of this file, run !analyze -v
+ntdll!NtWaitForAlertByThreadId+0x14:
+00007ffb`28ba4a14 c3              ret
+0:000> cdb: Reading initial command '.symfix; .reload /f; ~*k12; q'
+.*** WARNING: Unable to verify checksum for event_delivery-1c8ea13c73a39ca2.exe
+......
+
+Press ctrl-c (cdb, kd, ntsd) or ctrl-break (windbg) to abort symbol loads that take too long.
+Run !sym noisy before .reload to track down problems loading symbols.
+
+....
+
+************* Symbol Loading Error Summary **************
+Module name            Error
+event_delivery-1c8ea13 The system cannot find the file specified
+
+You can troubleshoot most symbol related issues by turning on symbol loading diagnostics (!sym noisy) and repeating the command that caused symbols to be loaded.
+You should also verify that your symbol search path (.sympath) is correct.
+
+.  0  Id: 18c6e0.18c594 Suspend: 0 Teb: 000000f9`f06d5000 Unfrozen "main"
+Child-SP          RetAddr               Call Site
+000000f9`f05deb48 00007ffb`28ad8273     ntdll!ZwWaitForAlertByThreadId+0x14
+(Inline Function) --------`--------     ntdll!RtlpWaitOnAddressWithTimeout+0xf6
+(Inline Function) --------`--------     ntdll!RtlpWaitOnAddress+0x1f4
+000000f9`f05deb50 00007ffb`2642e298     ntdll!RtlWaitOnAddress+0x213
+000000f9`f05debc0 00007ff7`c42760c5     KERNELBASE!WaitOnAddress+0x38
+000000f9`f05dec00 00007ff7`c420e8af     event_delivery_1c8ea13c73a39ca2+0xb60c5
+000000f9`f05dec40 00007ff7`c4220164     event_delivery_1c8ea13c73a39ca2+0x4e8af
+000000f9`f05dece0 00007ff7`c422cf6e     event_delivery_1c8ea13c73a39ca2+0x60164
+000000f9`f05def00 00007ff7`c42130c8     event_delivery_1c8ea13c73a39ca2+0x6cf6e
+000000f9`f05df830 00007ff7`c41e8d15     event_delivery_1c8ea13c73a39ca2+0x530c8
+000000f9`f05dfaf0 00007ff7`c41f30bb     event_delivery_1c8ea13c73a39ca2+0x28d15
+000000f9`f05dfb20 00007ff7`c41ed43e     event_delivery_1c8ea13c73a39ca2+0x330bb
+000000f9`f05dfb60 00007ff7`c41c5741     event_delivery_1c8ea13c73a39ca2+0x2d43e
+000000f9`f05dfba0 00007ff7`c427ccb0     event_delivery_1c8ea13c73a39ca2+0x5741
+000000f9`f05dfbe0 00007ff7`c41c572a     event_delivery_1c8ea13c73a39ca2+0xbccb0
+000000f9`f05dfc70 00007ff7`c41ecfa9     event_delivery_1c8ea13c73a39ca2+0x572a
+000000f9`f05dfcd0 00007ff7`c429b8bf     event_delivery_1c8ea13c73a39ca2+0x2cfa9
+000000f9`f05dfd00 00007ffb`268fcd87     event_delivery_1c8ea13c73a39ca2+0xdb8bf
+
+   1  Id: 18c6e0.18c734 Suspend: 0 Teb: 000000f9`f06d7000 Unfrozen
+Child-SP          RetAddr               Call Site
+000000f9`f08ff668 00007ffb`28a5a65e     ntdll!ZwWaitForWorkViaWorkerFactory+0x14
+000000f9`f08ff670 00007ffb`268fcd87     ntdll!TppWorkerThread+0x37e
+000000f9`f08ff9d0 00007ffb`28aecaec     kernel32!BaseThreadInitThunk+0x17
+000000f9`f08ffa00 00000000`00000000     ntdll!RtlUserThreadStart+0x2c
+
+   2  Id: 18c6e0.18c708 Suspend: 0 Teb: 000000f9`f06d9000 Unfrozen
+Child-SP          RetAddr               Call Site
+000000f9`f09ff708 00007ffb`28a5a65e     ntdll!ZwWaitForWorkViaWorkerFactory+0x14
+000000f9`f09ff710 00007ffb`268fcd87     ntdll!TppWorkerThread+0x37e
+000000f9`f09ffa70 00007ffb`28aecaec     kernel32!BaseThreadInitThunk+0x17
+000000f9`f09ffaa0 00000000`00000000     ntdll!RtlUserThreadStart+0x2c
+
+   3  Id: 18c6e0.18c724 Suspend: 0 Teb: 000000f9`f06db000 Unfrozen
+Child-SP          RetAddr               Call Site
+000000f9`f0aff698 00007ffb`28a5a65e     ntdll!ZwWaitForWorkViaWorkerFactory+0x14
+000000f9`f0aff6a0 00007ffb`268fcd87     ntdll!TppWorkerThread+0x37e
+000000f9`f0affa00 00007ffb`28aecaec     kernel32!BaseThreadInitThunk+0x17
+000000f9`f0affa30 00000000`00000000     ntdll!RtlUserThreadStart+0x2c
+
+   4  Id: 18c6e0.18c6dc Suspend: 0 Teb: 000000f9`f06dd000 Unfrozen "completions_are_delivered_on_pool_threads_without_the_submitting_thread_waiting"
+Child-SP          RetAddr               Call Site
+000000f9`f0cfe538 00007ffb`28ad8273     ntdll!ZwWaitForAlertByThreadId+0x14
+(Inline Function) --------`--------     ntdll!RtlpWaitOnAddressWithTimeout+0xf6
+(Inline Function) --------`--------     ntdll!RtlpWaitOnAddress+0x1f4
+000000f9`f0cfe540 00007ffb`2642e298     ntdll!RtlWaitOnAddress+0x213
+000000f9`f0cfe5b0 00007ff7`c429e6d4     KERNELBASE!WaitOnAddress+0x38
+000000f9`f0cfe5f0 00007ff7`c41dbd70     event_delivery_1c8ea13c73a39ca2+0xde6d4
+000000f9`f0cfe670 00007ff7`c41c71da     event_delivery_1c8ea13c73a39ca2+0x1bd70
+000000f9`f0cfe6f0 00007ff7`c41ec185     event_delivery_1c8ea13c73a39ca2+0x71da
+000000f9`f0cfec30 00007ff7`c41c9548     event_delivery_1c8ea13c73a39ca2+0x2c185
+000000f9`f0cff340 00007ff7`c41f3a52     event_delivery_1c8ea13c73a39ca2+0x9548
+000000f9`f0cff380 00007ff7`c41ff4a0     event_delivery_1c8ea13c73a39ca2+0x33a52
+000000f9`f0cff3d0 00007ff7`c420d36b     event_delivery_1c8ea13c73a39ca2+0x3f4a0
+000000f9`f0cff410 00007ff7`c4207d4d     event_delivery_1c8ea13c73a39ca2+0x4d36b
+000000f9`f0cffaa0 00007ff7`c42113b5     event_delivery_1c8ea13c73a39ca2+0x47d4d
+000000f9`f0cffc30 00007ff7`c42841e3     event_delivery_1c8ea13c73a39ca2+0x513b5
+000000f9`f0cffcf0 00007ffb`268fcd87     event_delivery_1c8ea13c73a39ca2+0xc41e3
+000000f9`f0cffda0 00007ffb`28aecaec     kernel32!BaseThreadInitThunk+0x17
+000000f9`f0cffdd0 00000000`00000000     ntdll!RtlUserThreadStart+0x2c
+
+   5  Id: 18c6e0.18c690 Suspend: 0 Teb: 000000f9`f06df000 Unfrozen "completions_queued_before_handover_are_still_delivered"
+Child-SP          RetAddr               Call Site
+000000f9`f0efd748 00007ffb`26372773     ntdll!ZwWaitForMultipleObjects+0x14
+000000f9`f0efd750 00007ffb`26372641     KERNELBASE!WaitForMultipleObjectsEx+0x123
+000000f9`f0efda40 00007ff7`c4283bf4     KERNELBASE!WaitForMultipleObjects+0x11
+000000f9`f0efda80 00007ff7`c4278400     event_delivery_1c8ea13c73a39ca2+0xc3bf4
+000000f9`f0efdba0 00007ff7`c41c7dd5     event_delivery_1c8ea13c73a39ca2+0xb8400
+000000f9`f0efdcf0 00007ff7`c41dbe05     event_delivery_1c8ea13c73a39ca2+0x7dd5
+000000f9`f0efe0d0 00007ff7`c429e636     event_delivery_1c8ea13c73a39ca2+0x1be05
+000000f9`f0efe130 00007ff7`c41dbbf0     event_delivery_1c8ea13c73a39ca2+0xde636
+000000f9`f0efe1b0 00007ff7`c41c5aba     event_delivery_1c8ea13c73a39ca2+0x1bbf0
+000000f9`f0efe230 00007ff7`c41e9afc     event_delivery_1c8ea13c73a39ca2+0x5aba
+000000f9`f0efe770 00007ff7`c41c94b8     event_delivery_1c8ea13c73a39ca2+0x29afc
+000000f9`f0efeec0 00007ff7`c41f3962     event_delivery_1c8ea13c73a39ca2+0x94b8
+000000f9`f0efef00 00007ff7`c41ff4a0     event_delivery_1c8ea13c73a39ca2+0x33962
+000000f9`f0efef50 00007ff7`c420d36b     event_delivery_1c8ea13c73a39ca2+0x3f4a0
+000000f9`f0efef90 00007ff7`c4207d4d     event_delivery_1c8ea13c73a39ca2+0x4d36b
+000000f9`f0eff620 00007ff7`c42113b5     event_delivery_1c8ea13c73a39ca2+0x47d4d
+000000f9`f0eff7b0 00007ff7`c42841e3     event_delivery_1c8ea13c73a39ca2+0x513b5
+000000f9`f0eff870 00007ffb`268fcd87     event_delivery_1c8ea13c73a39ca2+0xc41e3
+quit:
+NatVis script unloaded from 'Q:\dbg\Visualizers\atlmfc.natvis'
+NatVis script unloaded from 'Q:\dbg\Visualizers\concurrency.natvis'
+NatVis script unloaded from 'Q:\dbg\Visualizers\cpp_rest.natvis'
+NatVis script unloaded from 'Q:\dbg\Visualizers\ObjectiveC.natvis'
+NatVis script unloaded from 'Q:\dbg\Visualizers\stl.natvis'
+NatVis script unloaded from 'Q:\dbg\Visualizers\TAEF.natvis'
+NatVis script unloaded from 'Q:\dbg\Visualizers\utl.natvis'
+NatVis script unloaded from 'Q:\dbg\Visualizers\wil.natvis'
+NatVis script unloaded from 'Q:\dbg\Visualizers\Windows.Data.Json.natvis'
+NatVis script unloaded from 'Q:\dbg\Visualizers\Windows.Devices.Geolocation.natvis'
+NatVis script unloaded from 'Q:\dbg\Visualizers\Windows.Devices.Sensors.natvis'
+NatVis script unloaded from 'Q:\dbg\Visualizers\Windows.Media.natvis'
+NatVis script unloaded from 'Q:\dbg\Visualizers\windows.natvis'
+NatVis script unloaded from 'Q:\dbg\Visualizers\WindowsInternal.natvis'
+NatVis script unloaded from 'Q:\dbg\Visualizers\winrt.natvis'

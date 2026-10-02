@@ -1,0 +1,6 @@
+"arm","what","filters","runs","failures","seconds"
+"A","3-test reproducer: 2 victims + trigger","completions_ dropping_with","4000","16","359"
+"B","whole binary, all 7 tests","(none)","4000","18","382"
+"C","2 victims, no trigger","completions_","4000","0","273"
+"D","1 victim + trigger","completions_are_delivered dropping_with","4000","8","324"
+"A2","as A, after clearing the temp directory","completions_ dropping_with","4000","13","362"

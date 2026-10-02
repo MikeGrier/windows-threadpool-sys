@@ -1,0 +1,13 @@
+== TppWaitpCleanupGroupMemberVFuncs @ 0x7ffacac53d60  (12 slots)
+  [ 0] 0x00007ffacab629a0  TppFreeWait
+  [ 1] 0x00007ffacab5fbd0  TppAlpcpCallbackEpilog
+  [ 2] 0x00007ffacabc2140  TppStopWaitCallbackGeneration
+  [ 3] 0x00007ffacaaf8b50  TppWorkCancelPendingCallbacks
+  [ 4] 0x00000000001e001c  0x1e001c (unnamed)
+  [ 5] 0x00007ffacac604d8  RtlpIntegerChars+0xb8
+  [ 6] 0x0000000000140012  0x140012 (unnamed)
+  [ 7] 0x00007ffacac604f8  RtlpIntegerChars+0xd8
+  [ 8] 0x0000000000160014  0x160014 (unnamed)
+  [ 9] 0x00007ffacac60510  RtlpIntegerChars+0xf0
+  [10] 0x0000000000140012  0x140012 (unnamed)
+  [11] 0x00007ffacac604c0  RtlpIntegerChars+0xa0

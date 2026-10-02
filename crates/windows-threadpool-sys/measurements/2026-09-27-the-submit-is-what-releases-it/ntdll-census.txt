@@ -1,0 +1,24 @@
+ntdll.dll 10.0.26100.9278 (WinBuild.160101.0800) -- every ntdll!Tp* / ntdll!Tpp* function disassembled (189 of them)
+and grepped for the worker-factory and kernel-delivery syscalls.
+
+Functions that call NtReleaseWorkerFactoryWorker (ask the factory to release a worker):
+  TpPostTask
+  TppPrepareDirectParams
+  TppWorkCallbackPrologRelease
+  TppWorkPost
+
+Kernel-delivery registration and the worker park:
+  NtAssociateWaitCompletionPacket  <-  TppInitializeTimerSubQueue
+  NtAssociateWaitCompletionPacket  <-  TppSetupNextWait
+  NtAssociateWaitCompletionPacket  <-  TppTimerQueueExpiration
+  NtAssociateWaitCompletionPacket  <-  TpSetWaitEx
+  NtCancelWaitCompletionPacket  <-  TppCancelWait
+  NtCancelWaitCompletionPacket  <-  TppWaitTimerExpiration
+  NtCancelWaitCompletionPacket  <-  TpReleaseWait
+  NtCancelWaitCompletionPacket  <-  TpSetWaitEx
+  NtCreateWaitCompletionPacket  <-  TpAllocWait
+  NtCreateWaitCompletionPacket  <-  TppInitializeTimerSubQueue
+  NtSetTimer2  <-  TppTimerQueueExpiration
+  NtSetTimer2  <-  TppUpdateSubQueueTimer
+  NtWaitForWorkViaWorkerFactory  <-  TppWorkerThread
+  NtWorkerFactoryWorkerReady  <-  TppWorkerThread

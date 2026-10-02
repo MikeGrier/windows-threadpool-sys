@@ -1,0 +1,12 @@
+run,arm,gap_us,cancel_call,runs,failures,ms_per_run
+bracket,hand-control,1,yes,20004,14,163.4
+bracket,hand-nocancel,0,no,20004,15,164.1
+bracket,hand-spin-3us,3,no,20004,89,183.0
+bracket,hand-spin-10us,10,no,20004,11,162.4
+bracket,hand-spin-30us,30,no,20004,0,160.4
+shape,hand-nocancel,0,no,20004,20,253.4
+shape,hand-spin-3us,3,no,20004,77,266.7
+shape,hand-spin-5us,5,no,20004,47,259.1
+shape,hand-spin-7us,7,no,20004,14,250.5
+shape,hand-spin-10us,10,no,20004,8,249.2
+shape,hand-spin-30us,30,no,20004,1,248.3

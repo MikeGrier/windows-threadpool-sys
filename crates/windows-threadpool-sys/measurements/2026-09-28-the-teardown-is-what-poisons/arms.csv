@@ -1,0 +1,6 @@
+"arm","trigger","runs","failures"
+"default","ring + EventDelivery, dropped","4000","11"
+"none","nothing","4000","0"
+"ring-only","ring created and dropped, no delivery","4000","0"
+"leak","ring + EventDelivery, never dropped","4000","0"
+"x4","four create-and-drop cycles","4000","26"

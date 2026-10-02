@@ -1,0 +1,791 @@
+
+running 3 tests
+event_delivery-72db8b12e992df73.exe : hand_rolled_trigger: variant=hand-spin-3us cancel=false gap_us=3
+At Q:\github\windows-threadpool-sys\.scratch\depth-worker.ps1:21 char:10
++   $out = & $Exe completions_ dropping_with --nocapture 2>&1 | Out-Str ...
++          ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: (hand_rolled_tri...=false gap_us=3:String) [], RemoteException
+    + FullyQualifiedErrorId : NativeCommandError
+ 
+test dropping_with_nothing_outstanding_does_not_hang ... ok
+M26.9 delivery stalled: completions_queued_before_handover_are_still_delivered (every completion was already queued 
+before the handover, so the kernel had nothing left to do -- a stall here is in the signal or the pool, never in the 
+device)
+  delivered      : 0 of 8
+  callbacks run  : 8 -- times the pool invoked the callback. Equal to delivered means everything the callback received 
+reached this thread; greater means the gap is between the callback and the channel.
+  outstanding    : 8 -- the ring's own count, which decrements on pop, and the pop happens inside the callback. So it 
+cannot on its own separate 'the kernel has not finished' from 'the callback never ran'.
+  arrival times  : []
+  inter-arrival  : []
+  waited         : 5s before giving up
+  post-mortem    : waiting a further 10s to see whether it is late rather than lost; the line below is the answer
+  trace (oldest first):
+      0.000915s t33744  delivery               setup-signalled                         224      0
+      0.001517s t33728  delivery               event-attached                          256      0
+      0.001520s t33728  syscall-enter          CreateThreadpoolWait                      0      0
+      0.001526s t33728  syscall-leave          CreateThreadpoolWait                      0      0
+      0.001527s t33728  wait                   created                              2436539328272    256
+      0.001527s t33728  syscall-enter          SetThreadpoolWait                    2436539328272    256
+      0.001531s t33728  syscall-leave          SetThreadpoolWait                    2436539328272    256
+      0.001532s t33728  wait                   armed                                2436539328272    256
+      0.001532s t33728  delivery               armed                                     0      0
+      0.001535s t33728  delivery               setup-signalled                         252      0
+      0.001664s t33736  delivery               event-attached                          272      0
+      0.001666s t33736  syscall-enter          CreateThreadpoolWait                      0      0
+      0.001671s t33736  syscall-leave          CreateThreadpoolWait                      0      0
+      0.001672s t33736  wait                   created                              2436539347040    272
+      0.001673s t33736  syscall-enter          SetThreadpoolWait                    2436539347040    272
+      0.001676s t33736  syscall-leave          SetThreadpoolWait                    2436539347040    272
+      0.001677s t33736  wait                   armed                                2436539347040    272
+      0.001677s t33736  delivery               armed                                     0      0
+      0.001680s t33736  delivery               setup-signalled                         268      8
+      5.013131s t33728  postmortem             delivery-wait-expired                     0      0
+      5.013132s t33728  postmortem             outstanding-begin                         0      0
+      5.013134s t33728  postmortem             outstanding-read                          8      0
+      5.013175s t33728  wfactory               factory-found                            28      1
+      5.013238s t33728  wfactory               factory-found                           156      2
+      5.013486s t33736  postmortem             delivery-wait-expired                     0      0
+      5.013487s t33736  postmortem             outstanding-begin                         0      0
+      5.013488s t33736  postmortem             outstanding-read                          8      0
+      5.013573s t33736  wfactory               factory-found                            28      1
+      5.013602s t33736  wfactory               factory-found                           156      2
+      5.013852s t33736  wfactory               factories-seen                            2      0
+      5.013853s t33736  wfactory               counts-status                             0    120
+      5.013854s t33736  wfactory               counts-total                              0     28
+      5.013854s t33736  wfactory               counts-waiting                            0      0
+      5.013854s t33736  wfactory               counts-pending                            0      0
+      5.013855s t33736  wfactory               counts-release                            0     28
+      5.013855s t33736  wfactory               counts-binding                            1     28
+      5.013855s t33736  wfactory               counts-min-max                            0    768
+      5.013855s t33736  wfactory               counts-paused                             0     28
+      5.013856s t33736  wfactory               counts-may-create                         1     28
+      5.013856s t33736  wfactory               counts-creating                           0      0
+      5.013856s t33736  wfactory               counts-shutdown                           0     28
+      5.013856s t33736  wfactory               counts-last-create-status                 0      0
+      5.013857s t33736  wfactory               counts-idle-timeout-ms                67000      0
+      5.013857s t33736  wfactory               counts-status                             0    120
+      5.013858s t33736  wfactory               counts-total                              3    156
+      5.013858s t33736  wfactory               counts-waiting                            3      0
+      5.013858s t33736  wfactory               counts-pending                            0      0
+      5.013858s t33736  wfactory               counts-release                            0    156
+      5.013859s t33736  wfactory               counts-binding                            1    156
+      5.013859s t33736  wfactory               counts-min-max                            0      3
+      5.013859s t33736  wfactory               counts-paused                             0    156
+      5.013859s t33736  wfactory               counts-may-create                         0    156
+      5.013860s t33736  wfactory               counts-creating                           0      0
+      5.013860s t33736  wfactory               counts-shutdown                           0    156
+      5.013860s t33736  wfactory               counts-last-create-status                 0      0
+      5.013860s t33736  wfactory               counts-idle-timeout-ms                30000      0
+      5.013877s t33736  wfactory               port-depth                                2     32
+      5.013892s t33736  wfactory               port-depth                                0    152
+      5.014172s t33736  wfactory               ports-seen                                2      0
+      5.014174s t33736  postmortem             probe-begin                               0      0
+      5.014178s t33736  syscall-enter          CreateThreadpoolWork                      0      0
+      5.014180s t33736  syscall-leave          CreateThreadpoolWork                      0      0
+      5.014181s t33736  work                   created                              2436539334192      0
+      5.014181s t33736  syscall-enter          SubmitThreadpoolWork                 2436539334192      0
+      5.014305s t33736  syscall-leave          SubmitThreadpoolWork                 2436539334192      0
+      5.014306s t33736  work                   submitted                            2436539334192      0
+      5.015601s t37232  wait                   trampoline-entered                   2436539347040      0
+      5.015603s t37232  delivery               callback-entered                          0      0
+      5.015617s t33728  wfactory               factories-seen                            2      0
+      5.015621s t33728  wfactory               counts-status                             0    120
+      5.015622s t33728  wfactory               counts-total                              1     28
+      5.015622s t33728  wfactory               counts-waiting                            0      0
+      5.015623s t33728  wfactory               counts-pending                            1      0
+      5.015623s t33728  wfactory               counts-release                            1     28
+      5.015623s t33728  wfactory               counts-binding                            1     28
+      5.015624s t33728  wfactory               counts-min-max                            0    768
+      5.015624s t33728  wfactory               counts-paused                             0     28
+      5.015624s t33728  wfactory               counts-may-create                         1     28
+      5.015624s t33728  wfactory               counts-creating                           1      1
+      5.015625s t33728  wfactory               counts-shutdown                           0     28
+      5.015625s t33728  wfactory               counts-last-create-status                 0      0
+      5.015625s t33728  wfactory               counts-idle-timeout-ms                67000      0
+      5.015628s t33728  wfactory               counts-status                             0    120
+      5.015628s t33728  wfactory               counts-total                              3    156
+      5.015628s t33728  wfactory               counts-waiting                            3      0
+      5.015629s t33728  wfactory               counts-pending                            0      0
+      5.015629s t33728  wfactory               counts-release                            0    156
+      5.015629s t33728  wfactory               counts-binding                            1    156
+      5.015629s t33728  wfactory               counts-min-max                            0      3
+      5.015629s t33728  wfactory               counts-paused                             0    156
+      5.015630s t33728  wfactory               counts-may-create                         0    156
+      5.015630s t33728  wfactory               counts-creating                           0      0
+      5.015630s t33728  wfactory               counts-shutdown                           0    156
+      5.015631s t33728  wfactory               counts-last-create-status                 0      0
+      5.015631s t33728  wfactory               counts-idle-timeout-ms                30000      0
+      5.015637s t37232  wait                   rearm-entered                        2436539347040      0
+      5.015638s t37232  syscall-enter          SetThreadpoolWait                    2436539347040    272
+      5.015642s t37232  syscall-leave          SetThreadpoolWait                    2436539347040    272
+      5.015642s t37232  wait                   armed                                2436539347040    272
+      5.015642s t37232  wait                   rearm-left                           2436539347040    272
+      5.015643s t37232  delivery               callback-left                             0      0
+      5.015643s t37232  wait                   trampoline-left                      2436539347040      0
+      5.015645s t37232  work                   trampoline-entered                   2436539334192      0
+      5.015663s t33728  wfactory               port-depth                                1     32
+      5.015669s t37232  work                   trampoline-left                      2436539334192      0
+      5.015670s t37232  wait                   trampoline-entered                   2436539328272      0
+      5.015671s t37232  delivery               callback-entered                          0      0
+      5.015679s t33736  postmortem             work-probe-answered                       1      0
+      5.015681s t33736  work                   drop-begin                           2436539334192      0
+      5.015681s t33736  syscall-enter          WaitForThreadpoolWorkCallbacks       2436539334192      0
+      5.015682s t33736  syscall-leave          WaitForThreadpoolWorkCallbacks       2436539334192      0
+      5.015682s t33736  work                   drop-drained                         2436539334192      0
+      5.015683s t33736  syscall-enter          CloseThreadpoolWork                  2436539334192      0
+      5.015695s t33736  syscall-leave          CloseThreadpoolWork                  2436539334192      0
+      5.015698s t33736  work                   drop-closed                          2436539334192      0
+      5.015703s t37232  wait                   rearm-entered                        2436539328272      0
+      5.015704s t37232  syscall-enter          SetThreadpoolWait                    2436539328272    256
+      5.015705s t33736  syscall-enter          CreateThreadpoolWait                      0      0
+      5.015708s t37232  syscall-leave          SetThreadpoolWait                    2436539328272    256
+      5.015708s t37232  wait                   armed                                2436539328272    256
+      5.015709s t37232  wait                   rearm-left                           2436539328272    256
+      5.015709s t33736  syscall-leave          CreateThreadpoolWait                      0      0
+      5.015709s t37232  delivery               callback-left                             0      0
+      5.015709s t33736  wait                   created                              2436539353344    280
+      5.015710s t37232  wait                   trampoline-left                      2436539328272      0
+      5.015710s t33736  syscall-enter          SetThreadpoolWait                    2436539353344    280
+      5.015712s t33736  syscall-leave          SetThreadpoolWait                    2436539353344    280
+      5.015712s t33736  wait                   armed                                2436539353344    280
+      5.015714s t37232  wait                   trampoline-entered                   2436539328272      0
+      5.015714s t37232  delivery               callback-entered                          0      0
+      5.015715s t37232  wait                   rearm-entered                        2436539328272      0
+      5.015715s t33728  wfactory               port-depth                                0    152
+      5.015716s t37232  syscall-enter          SetThreadpoolWait                    2436539328272    256
+      5.015719s t37232  syscall-leave          SetThreadpoolWait                    2436539328272    256
+      5.015719s t37232  wait                   armed                                2436539328272    256
+      5.015719s t37232  wait                   rearm-left                           2436539328272    256
+      5.015720s t37232  delivery               callback-left                             0      0
+      5.015720s t37232  wait                   trampoline-left                      2436539328272      0
+      5.015724s t37232  wait                   trampoline-entered                   2436539353344      0
+      5.015726s t37232  wait                   trampoline-left                      2436539353344      0
+      5.015729s t33736  postmortem             wait-probe-signalled                    280      0
+      5.015730s t33736  postmortem             wait-probe-answered                       1      0
+      5.015731s t33736  wait                   drop-begin                           2436539353344    280
+      5.015732s t33736  wait                   suppress-and-disarm                  2436539353344      1
+      5.015732s t33736  syscall-enter          SetThreadpoolWait(disarm)            2436539353344      0
+      5.015732s t33736  syscall-leave          SetThreadpoolWait(disarm)            2436539353344      0
+      5.015733s t33736  wait                   disarmed                             2436539353344      0
+      5.015733s t33736  syscall-enter          WaitForThreadpoolWaitCallbacks       2436539353344      0
+      5.015734s t33736  syscall-leave          WaitForThreadpoolWaitCallbacks       2436539353344      0
+      5.015734s t33736  wait                   drop-drained                         2436539353344      0
+      5.015734s t33736  syscall-enter          CloseThreadpoolWait                  2436539353344      0
+      5.015738s t33736  syscall-leave          CloseThreadpoolWait                  2436539353344      0
+      5.015739s t33736  wait                   drop-closed                          2436539353344    280
+      5.015744s t33736  postmortem             probe-left                                1      1
+
+  pool liveness  : work item ran: true; a fresh wait ran: true (both within 2s)
+
+thread 'completions_queued_before_handover_are_still_delivered' (33736) panicked at 
+crates\windows-ioring-sys\tests\event_delivery.rs:357:13:
+M26.9 delivery stalled: completions_queued_before_handover_are_still_delivered (every completion was already queued 
+before the handover, so the kernel had nothing left to do -- a stall here is in the signal or the pool, never in the 
+device)
+  delivered      : 0 of 8
+  callbacks run  : 8 -- times the pool invoked the callback. Equal to delivered means everything the callback received 
+reached this thread; greater means the gap is between the callback and the channel.
+  outstanding    : 8 -- the ring's own count, which decrements on pop, and the pop happens inside the callback. So it 
+cannot on its own separate 'the kernel has not finished' from 'the callback never ran'.
+  arrival times  : []
+  inter-arrival  : []
+  waited         : 5s before giving up
+  post-mortem    : it arrived, 3.6??s past the bound
+  trace (oldest first):
+      0.000915s t33744  delivery               setup-signalled                         224      0
+      0.001517s t33728  delivery               event-attached                          256      0
+      0.001520s t33728  syscall-enter          CreateThreadpoolWait                      0      0
+      0.001526s t33728  syscall-leave          CreateThreadpoolWait                      0      0
+      0.001527s t33728  wait                   created                              2436539328272    256
+      0.001527s t33728  syscall-enter          SetThreadpoolWait                    2436539328272    256
+      0.001531s t33728  syscall-leave          SetThreadpoolWait                    2436539328272    256
+      0.001532s t33728  wait                   armed                                2436539328272    256
+      0.001532s t33728  delivery               armed                                     0      0
+      0.001535s t33728  delivery               setup-signalled                         252      0
+      0.001664s t33736  delivery               event-attached                          272      0
+      0.001666s t33736  syscall-enter          CreateThreadpoolWait                      0      0
+      0.001671s t33736  syscall-leave          CreateThreadpoolWait                      0      0
+      0.001672s t33736  wait                   created                              2436539347040    272
+      0.001673s t33736  syscall-enter          SetThreadpoolWait                    2436539347040    272
+      0.001676s t33736  syscall-leave          SetThreadpoolWait                    2436539347040    272
+      0.001677s t33736  wait                   armed                                2436539347040    272
+      0.001677s t33736  delivery               armed                                     0      0
+      0.001680s t33736  delivery               setup-signalled                         268      8
+      5.013131s t33728  postmortem             delivery-wait-expired                     0      0
+      5.013132s t33728  postmortem             outstanding-begin                         0      0
+      5.013134s t33728  postmortem             outstanding-read                          8      0
+      5.013175s t33728  wfactory               factory-found                            28      1
+      5.013238s t33728  wfactory               factory-found                           156      2
+      5.013486s t33736  postmortem             delivery-wait-expired                     0      0
+      5.013487s t33736  postmortem             outstanding-begin                         0      0
+      5.013488s t33736  postmortem             outstanding-read                          8      0
+      5.013573s t33736  wfactory               factory-found                            28      1
+      5.013602s t33736  wfactory               factory-found                           156      2
+      5.013852s t33736  wfactory               factories-seen                            2      0
+      5.013853s t33736  wfactory               counts-status                             0    120
+      5.013854s t33736  wfactory               counts-total                              0     28
+      5.013854s t33736  wfactory               counts-waiting                            0      0
+      5.013854s t33736  wfactory               counts-pending                            0      0
+      5.013855s t33736  wfactory               counts-release                            0     28
+      5.013855s t33736  wfactory               counts-binding                            1     28
+      5.013855s t33736  wfactory               counts-min-max                            0    768
+      5.013855s t33736  wfactory               counts-paused                             0     28
+      5.013856s t33736  wfactory               counts-may-create                         1     28
+      5.013856s t33736  wfactory               counts-creating                           0      0
+      5.013856s t33736  wfactory               counts-shutdown                           0     28
+      5.013856s t33736  wfactory               counts-last-create-status                 0      0
+      5.013857s t33736  wfactory               counts-idle-timeout-ms                67000      0
+      5.013857s t33736  wfactory               counts-status                             0    120
+      5.013858s t33736  wfactory               counts-total                              3    156
+      5.013858s t33736  wfactory               counts-waiting                            3      0
+      5.013858s t33736  wfactory               counts-pending                            0      0
+      5.013858s t33736  wfactory               counts-release                            0    156
+      5.013859s t33736  wfactory               counts-binding                            1    156
+      5.013859s t33736  wfactory               counts-min-max                            0      3
+      5.013859s t33736  wfactory               counts-paused                             0    156
+      5.013859s t33736  wfactory               counts-may-create                         0    156
+      5.013860s t33736  wfactory               counts-creating                           0      0
+      5.013860s t33736  wfactory               counts-shutdown                           0    156
+      5.013860s t33736  wfactory               counts-last-create-status                 0      0
+      5.013860s t33736  wfactory               counts-idle-timeout-ms                30000      0
+      5.013877s t33736  wfactory               port-depth                                2     32
+      5.013892s t33736  wfactory               port-depth                                0    152
+      5.014172s t33736  wfactory               ports-seen                                2      0
+      5.014174s t33736  postmortem             probe-begin                               0      0
+      5.014178s t33736  syscall-enter          CreateThreadpoolWork                      0      0
+      5.014180s t33736  syscall-leave          CreateThreadpoolWork                      0      0
+      5.014181s t33736  work                   created                              2436539334192      0
+      5.014181s t33736  syscall-enter          SubmitThreadpoolWork                 2436539334192      0
+      5.014305s t33736  syscall-leave          SubmitThreadpoolWork                 2436539334192      0
+      5.014306s t33736  work                   submitted                            2436539334192      0
+      5.015601s t37232  wait                   trampoline-entered                   2436539347040      0
+      5.015603s t37232  delivery               callback-entered                          0      0
+      5.015617s t33728  wfactory               factories-seen                            2      0
+      5.015621s t33728  wfactory               counts-status                             0    120
+      5.015622s t33728  wfactory               counts-total                              1     28
+      5.015622s t33728  wfactory               counts-waiting                            0      0
+      5.015623s t33728  wfactory               counts-pending                            1      0
+      5.015623s t33728  wfactory               counts-release                            1     28
+      5.015623s t33728  wfactory               counts-binding                            1     28
+      5.015624s t33728  wfactory               counts-min-max                            0    768
+      5.015624s t33728  wfactory               counts-paused                             0     28
+      5.015624s t33728  wfactory               counts-may-create                         1     28
+      5.015624s t33728  wfactory               counts-creating                           1      1
+      5.015625s t33728  wfactory               counts-shutdown                           0     28
+      5.015625s t33728  wfactory               counts-last-create-status                 0      0
+      5.015625s t33728  wfactory               counts-idle-timeout-ms                67000      0
+      5.015628s t33728  wfactory               counts-status                             0    120
+      5.015628s t33728  wfactory               counts-total                              3    156
+      5.015628s t33728  wfactory               counts-waiting                            3      0
+      5.015629s t33728  wfactory               counts-pending                            0      0
+      5.015629s t33728  wfactory               counts-release                            0    156
+      5.015629s t33728  wfactory               counts-binding                            1    156
+      5.015629s t33728  wfactory               counts-min-max                            0      3
+      5.015629s t33728  wfactory               counts-paused                             0    156
+      5.015630s t33728  wfactory               counts-may-create                         0    156
+      5.015630s t33728  wfactory               counts-creating                           0      0
+      5.015630s t33728  wfactory               counts-shutdown                           0    156
+      5.015631s t33728  wfactory               counts-last-create-status                 0      0
+      5.015631s t33728  wfactory               counts-idle-timeout-ms                30000      0
+      5.015637s t37232  wait                   rearm-entered                        2436539347040      0
+      5.015638s t37232  syscall-enter          SetThreadpoolWait                    2436539347040    272
+      5.015642s t37232  syscall-leave          SetThreadpoolWait                    2436539347040    272
+      5.015642s t37232  wait                   armed                                2436539347040    272
+      5.015642s t37232  wait                   rearm-left                           2436539347040    272
+      5.015643s t37232  delivery               callback-left                             0      0
+      5.015643s t37232  wait                   trampoline-left                      2436539347040      0
+      5.015645s t37232  work                   trampoline-entered                   2436539334192      0
+      5.015663s t33728  wfactory               port-depth                                1     32
+      5.015669s t37232  work                   trampoline-left                      2436539334192      0
+      5.015670s t37232  wait                   trampoline-entered                   2436539328272      0
+      5.015671s t37232  delivery               callback-entered                          0      0
+      5.015679s t33736  postmortem             work-probe-answered                       1      0
+      5.015681s t33736  work                   drop-begin                           2436539334192      0
+      5.015681s t33736  syscall-enter          WaitForThreadpoolWorkCallbacks       2436539334192      0
+      5.015682s t33736  syscall-leave          WaitForThreadpoolWorkCallbacks       2436539334192      0
+      5.015682s t33736  work                   drop-drained                         2436539334192      0
+      5.015683s t33736  syscall-enter          CloseThreadpoolWork                  2436539334192      0
+      5.015695s t33736  syscall-leave          CloseThreadpoolWork                  2436539334192      0
+      5.015698s t33736  work                   drop-closed                          2436539334192      0
+      5.015703s t37232  wait                   rearm-entered                        2436539328272      0
+      5.015704s t37232  syscall-enter          SetThreadpoolWait                    2436539328272    256
+      5.015705s t33736  syscall-enter          CreateThreadpoolWait                      0      0
+      5.015708s t37232  syscall-leave          SetThreadpoolWait                    2436539328272    256
+      5.015708s t37232  wait                   armed                                2436539328272    256
+      5.015709s t37232  wait                   rearm-left                           2436539328272    256
+      5.015709s t33736  syscall-leave          CreateThreadpoolWait                      0      0
+      5.015709s t37232  delivery               callback-left                             0      0
+      5.015709s t33736  wait                   created                              2436539353344    280
+      5.015710s t37232  wait                   trampoline-left                      2436539328272      0
+      5.015710s t33736  syscall-enter          SetThreadpoolWait                    2436539353344    280
+      5.015712s t33736  syscall-leave          SetThreadpoolWait                    2436539353344    280
+      5.015712s t33736  wait                   armed                                2436539353344    280
+      5.015714s t37232  wait                   trampoline-entered                   2436539328272      0
+      5.015714s t37232  delivery               callback-entered                          0      0
+      5.015715s t37232  wait                   rearm-entered                        2436539328272      0
+      5.015715s t33728  wfactory               port-depth                                0    152
+      5.015716s t37232  syscall-enter          SetThreadpoolWait                    2436539328272    256
+      5.015719s t37232  syscall-leave          SetThreadpoolWait                    2436539328272    256
+      5.015719s t37232  wait                   armed                                2436539328272    256
+      5.015719s t37232  wait                   rearm-left                           2436539328272    256
+      5.015720s t37232  delivery               callback-left                             0      0
+      5.015720s t37232  wait                   trampoline-left                      2436539328272      0
+      5.015724s t37232  wait                   trampoline-entered                   2436539353344      0
+      5.015726s t37232  wait                   trampoline-left                      2436539353344      0
+      5.015729s t33736  postmortem             wait-probe-signalled                    280      0
+      5.015730s t33736  postmortem             wait-probe-answered                       1      0
+      5.015731s t33736  wait                   drop-begin                           2436539353344    280
+      5.015732s t33736  wait                   suppress-and-disarm                  2436539353344      1
+      5.015732s t33736  syscall-enter          SetThreadpoolWait(disarm)            2436539353344      0
+      5.015732s t33736  syscall-leave          SetThreadpoolWait(disarm)            2436539353344      0
+      5.015733s t33736  wait                   disarmed                             2436539353344      0
+      5.015733s t33736  syscall-enter          WaitForThreadpoolWaitCallbacks       2436539353344      0
+      5.015734s t33736  syscall-leave          WaitForThreadpoolWaitCallbacks       2436539353344      0
+      5.015734s t33736  wait                   drop-drained                         2436539353344      0
+      5.015734s t33736  syscall-enter          CloseThreadpoolWait                  2436539353344      0
+      5.015738s t33736  syscall-leave          CloseThreadpoolWait                  2436539353344      0
+      5.015739s t33736  wait                   drop-closed                          2436539353344    280
+      5.015744s t33736  postmortem             probe-left                                1      1
+      5.017275s t33736  postmortem             second-wait-begin                         0      0
+      5.017281s t33736  postmortem             second-wait-ended                         6      0
+
+  pool liveness  : work item ran: true; a fresh wait ran: true (both within 2s)M26.9 delivery stalled: 
+completions_are_delivered_on_pool_threads_without_the_submitting_thread_waiting
+  delivered      : 0 of 8
+  callbacks run  : 8 -- times the pool invoked the callback. Equal to delivered means everything the callback received 
+reached this thread; greater means the gap is between the callback and the channel.
+  outstanding    : 8 -- the ring's own count, which decrements on pop, and the pop happens inside the callback. So it 
+cannot on its own separate 'the kernel has not finished' from 'the callback never ran'.
+  arrival times  : []
+  inter-arrival  : []
+  waited         : 5s before giving up
+  post-mortem    : waiting a further 10s to see whether it is late rather than lost; the line below is the answer
+  trace (oldest first):
+      0.000915s t33744  delivery               setup-signalled                         224      0
+      0.001517s t33728  delivery               event-attached                          256      0
+      0.001520s t33728  syscall-enter          CreateThreadpoolWait                      0      0
+      0.001526s t33728  syscall-leave          CreateThreadpoolWait                      0      0
+      0.001527s t33728  wait                   created                              2436539328272    256
+      0.001527s t33728  syscall-enter          SetThreadpoolWait                    2436539328272    256
+      0.001531s t33728  syscall-leave          SetThreadpoolWait                    2436539328272    256
+      0.001532s t33728  wait                   armed                                2436539328272    256
+      0.001532s t33728  delivery               armed                                     0      0
+      0.001535s t33728  delivery               setup-signalled                         252      0
+      0.001664s t33736  delivery               event-attached                          272      0
+      0.001666s t33736  syscall-enter          CreateThreadpoolWait                      0      0
+      0.001671s t33736  syscall-leave          CreateThreadpoolWait                      0      0
+      0.001672s t33736  wait                   created                              2436539347040    272
+      0.001673s t33736  syscall-enter          SetThreadpoolWait                    2436539347040    272
+      0.001676s t33736  syscall-leave          SetThreadpoolWait                    2436539347040    272
+      0.001677s t33736  wait                   armed                                2436539347040    272
+      0.001677s t33736  delivery               armed                                     0      0
+      0.001680s t33736  delivery               setup-signalled                         268      8
+      5.013131s t33728  postmortem             delivery-wait-expired                     0      0
+      5.013132s t33728  postmortem             outstanding-begin                         0      0
+      5.013134s t33728  postmortem             outstanding-read                          8      0
+      5.013175s t33728  wfactory               factory-found                            28      1
+      5.013238s t33728  wfactory               factory-found                           156      2
+      5.013486s t33736  postmortem             delivery-wait-expired                     0      0
+      5.013487s t33736  postmortem             outstanding-begin                         0      0
+      5.013488s t33736  postmortem             outstanding-read                          8      0
+      5.013573s t33736  wfactory               factory-found                            28      1
+      5.013602s t33736  wfactory               factory-found                           156      2
+      5.013852s t33736  wfactory               factories-seen                            2      0
+      5.013853s t33736  wfactory               counts-status                             0    120
+      5.013854s t33736  wfactory               counts-total                              0     28
+      5.013854s t33736  wfactory               counts-waiting                            0      0
+      5.013854s t33736  wfactory               counts-pending                            0      0
+      5.013855s t33736  wfactory               counts-release                            0     28
+      5.013855s t33736  wfactory               counts-binding                            1     28
+      5.013855s t33736  wfactory               counts-min-max                            0    768
+      5.013855s t33736  wfactory               counts-paused                             0     28
+      5.013856s t33736  wfactory               counts-may-create                         1     28
+      5.013856s t33736  wfactory               counts-creating                           0      0
+      5.013856s t33736  wfactory               counts-shutdown                           0     28
+      5.013856s t33736  wfactory               counts-last-create-status                 0      0
+      5.013857s t33736  wfactory               counts-idle-timeout-ms                67000      0
+      5.013857s t33736  wfactory               counts-status                             0    120
+      5.013858s t33736  wfactory               counts-total                              3    156
+      5.013858s t33736  wfactory               counts-waiting                            3      0
+      5.013858s t33736  wfactory               counts-pending                            0      0
+      5.013858s t33736  wfactory               counts-release                            0    156
+      5.013859s t33736  wfactory               counts-binding                            1    156
+      5.013859s t33736  wfactory               counts-min-max                            0      3
+      5.013859s t33736  wfactory               counts-paused                             0    156
+      5.013859s t33736  wfactory               counts-may-create                         0    156
+      5.013860s t33736  wfactory               counts-creating                           0      0
+      5.013860s t33736  wfactory               counts-shutdown                           0    156
+      5.013860s t33736  wfactory               counts-last-create-status                 0      0
+      5.013860s t33736  wfactory               counts-idle-timeout-ms                30000      0
+      5.013877s t33736  wfactory               port-depth                                2     32
+      5.013892s t33736  wfactory               port-depth                                0    152
+      5.014172s t33736  wfactory               ports-seen                                2      0
+      5.014174s t33736  postmortem             probe-begin                               0      0
+      5.014178s t33736  syscall-enter          CreateThreadpoolWork                      0      0
+      5.014180s t33736  syscall-leave          CreateThreadpoolWork                      0      0
+      5.014181s t33736  work                   created                              2436539334192      0
+      5.014181s t33736  syscall-enter          SubmitThreadpoolWork                 2436539334192      0
+      5.014305s t33736  syscall-leave          SubmitThreadpoolWork                 2436539334192      0
+      5.014306s t33736  work                   submitted                            2436539334192      0
+      5.015601s t37232  wait                   trampoline-entered                   2436539347040      0
+      5.015603s t37232  delivery               callback-entered                          0      0
+      5.015617s t33728  wfactory               factories-seen                            2      0
+      5.015621s t33728  wfactory               counts-status                             0    120
+      5.015622s t33728  wfactory               counts-total                              1     28
+      5.015622s t33728  wfactory               counts-waiting                            0      0
+      5.015623s t33728  wfactory               counts-pending                            1      0
+      5.015623s t33728  wfactory               counts-release                            1     28
+      5.015623s t33728  wfactory               counts-binding                            1     28
+      5.015624s t33728  wfactory               counts-min-max                            0    768
+      5.015624s t33728  wfactory               counts-paused                             0     28
+      5.015624s t33728  wfactory               counts-may-create                         1     28
+      5.015624s t33728  wfactory               counts-creating                           1      1
+      5.015625s t33728  wfactory               counts-shutdown                           0     28
+      5.015625s t33728  wfactory               counts-last-create-status                 0      0
+      5.015625s t33728  wfactory               counts-idle-timeout-ms                67000      0
+      5.015628s t33728  wfactory               counts-status                             0    120
+      5.015628s t33728  wfactory               counts-total                              3    156
+      5.015628s t33728  wfactory               counts-waiting                            3      0
+      5.015629s t33728  wfactory               counts-pending                            0      0
+      5.015629s t33728  wfactory               counts-release                            0    156
+      5.015629s t33728  wfactory               counts-binding                            1    156
+      5.015629s t33728  wfactory               counts-min-max                            0      3
+      5.015629s t33728  wfactory               counts-paused                             0    156
+      5.015630s t33728  wfactory               counts-may-create                         0    156
+      5.015630s t33728  wfactory               counts-creating                           0      0
+      5.015630s t33728  wfactory               counts-shutdown                           0    156
+      5.015631s t33728  wfactory               counts-last-create-status                 0      0
+      5.015631s t33728  wfactory               counts-idle-timeout-ms                30000      0
+      5.015637s t37232  wait                   rearm-entered                        2436539347040      0
+      5.015638s t37232  syscall-enter          SetThreadpoolWait                    2436539347040    272
+      5.015642s t37232  syscall-leave          SetThreadpoolWait                    2436539347040    272
+      5.015642s t37232  wait                   armed                                2436539347040    272
+      5.015642s t37232  wait                   rearm-left                           2436539347040    272
+      5.015643s t37232  delivery               callback-left                             0      0
+      5.015643s t37232  wait                   trampoline-left                      2436539347040      0
+      5.015645s t37232  work                   trampoline-entered                   2436539334192      0
+      5.015663s t33728  wfactory               port-depth                                1     32
+      5.015669s t37232  work                   trampoline-left                      2436539334192      0
+      5.015670s t37232  wait                   trampoline-entered                   2436539328272      0
+      5.015671s t37232  delivery               callback-entered                          0      0
+      5.015679s t33736  postmortem             work-probe-answered                       1      0
+      5.015681s t33736  work                   drop-begin                           2436539334192      0
+      5.015681s t33736  syscall-enter          WaitForThreadpoolWorkCallbacks       2436539334192      0
+      5.015682s t33736  syscall-leave          WaitForThreadpoolWorkCallbacks       2436539334192      0
+      5.015682s t33736  work                   drop-drained                         2436539334192      0
+      5.015683s t33736  syscall-enter          CloseThreadpoolWork                  2436539334192      0
+      5.015695s t33736  syscall-leave          CloseThreadpoolWork                  2436539334192      0
+      5.015698s t33736  work                   drop-closed                          2436539334192      0
+      5.015703s t37232  wait                   rearm-entered                        2436539328272      0
+      5.015704s t37232  syscall-enter          SetThreadpoolWait                    2436539328272    256
+      5.015705s t33736  syscall-enter          CreateThreadpoolWait                      0      0
+      5.015708s t37232  syscall-leave          SetThreadpoolWait                    2436539328272    256
+      5.015708s t37232  wait                   armed                                2436539328272    256
+      5.015709s t37232  wait                   rearm-left                           2436539328272    256
+      5.015709s t33736  syscall-leave          CreateThreadpoolWait                      0      0
+      5.015709s t37232  delivery               callback-left                             0      0
+      5.015709s t33736  wait                   created                              2436539353344    280
+      5.015710s t37232  wait                   trampoline-left                      2436539328272      0
+      5.015710s t33736  syscall-enter          SetThreadpoolWait                    2436539353344    280
+      5.015712s t33736  syscall-leave          SetThreadpoolWait                    2436539353344    280
+      5.015712s t33736  wait                   armed                                2436539353344    280
+      5.015714s t37232  wait                   trampoline-entered                   2436539328272      0
+      5.015714s t37232  delivery               callback-entered                          0      0
+      5.015715s t37232  wait                   rearm-entered                        2436539328272      0
+      5.015715s t33728  wfactory               port-depth                                0    152
+      5.015716s t37232  syscall-enter          SetThreadpoolWait                    2436539328272    256
+      5.015719s t37232  syscall-leave          SetThreadpoolWait                    2436539328272    256
+      5.015719s t37232  wait                   armed                                2436539328272    256
+      5.015719s t37232  wait                   rearm-left                           2436539328272    256
+      5.015720s t37232  delivery               callback-left                             0      0
+      5.015720s t37232  wait                   trampoline-left                      2436539328272      0
+      5.015724s t37232  wait                   trampoline-entered                   2436539353344      0
+      5.015726s t37232  wait                   trampoline-left                      2436539353344      0
+      5.015729s t33736  postmortem             wait-probe-signalled                    280      0
+      5.015730s t33736  postmortem             wait-probe-answered                       1      0
+      5.015731s t33736  wait                   drop-begin                           2436539353344    280
+      5.015732s t33736  wait                   suppress-and-disarm                  2436539353344      1
+      5.015732s t33736  syscall-enter          SetThreadpoolWait(disarm)            2436539353344      0
+      5.015732s t33736  syscall-leave          SetThreadpoolWait(disarm)            2436539353344      0
+      5.015733s t33736  wait                   disarmed                             2436539353344      0
+      5.015733s t33736  syscall-enter          WaitForThreadpoolWaitCallbacks       2436539353344      0
+      5.015734s t33736  syscall-leave          WaitForThreadpoolWaitCallbacks       2436539353344      0
+      5.015734s t33736  wait                   drop-drained                         2436539353344      0
+      5.015734s t33736  syscall-enter          CloseThreadpoolWait                  2436539353344      0
+      5.015738s t33736  syscall-leave          CloseThreadpoolWait                  2436539353344      0
+      5.015739s t33736  wait                   drop-closed                          2436539353344    280
+      5.015744s t33736  postmortem             probe-left                                1      1
+      5.017275s t33736  postmortem             second-wait-begin                         0      0
+test completions_queued_before_handover_are_still_delivered ... FAILED
+      5.017281s t33736  postmortem             second-wait-ended                         6      0
+      5.017848s t33728  wfactory               ports-seen                                2      0
+      5.017850s t33728  postmortem             probe-begin                               0      0
+      5.017853s t33728  syscall-enter          CreateThreadpoolWork                      0      0
+      5.017855s t33728  syscall-leave          CreateThreadpoolWork                      0      0
+      5.017856s t33728  work                   created                              2436539329280      0
+      5.017856s t33728  syscall-enter          SubmitThreadpoolWork                 2436539329280      0
+      5.017890s t33728  syscall-leave          SubmitThreadpoolWork                 2436539329280      0
+      5.017891s t33728  work                   submitted                            2436539329280      0
+      5.018791s t37284  work                   trampoline-entered                   2436539329280      0
+      5.018818s t37284  work                   trampoline-left                      2436539329280      0
+      5.018824s t33728  postmortem             work-probe-answered                       1      0
+      5.018825s t33728  work                   drop-begin                           2436539329280      0
+      5.018826s t33728  syscall-enter          WaitForThreadpoolWorkCallbacks       2436539329280      0
+      5.018827s t33728  syscall-leave          WaitForThreadpoolWorkCallbacks       2436539329280      0
+      5.018832s t33728  work                   drop-drained                         2436539329280      0
+      5.018833s t33728  syscall-enter          CloseThreadpoolWork                  2436539329280      0
+      5.018835s t33728  syscall-leave          CloseThreadpoolWork                  2436539329280      0
+      5.018838s t33728  work                   drop-closed                          2436539329280      0
+      5.018846s t33728  syscall-enter          CreateThreadpoolWait                      0      0
+      5.018851s t33728  syscall-leave          CreateThreadpoolWait                      0      0
+      5.018851s t33728  wait                   created                              2436539329280    280
+      5.018852s t33728  syscall-enter          SetThreadpoolWait                    2436539329280    280
+      5.018856s t33728  syscall-leave          SetThreadpoolWait                    2436539329280    280
+      5.018856s t33728  wait                   armed                                2436539329280    280
+      5.018873s t33728  postmortem             wait-probe-signalled                    280      0
+      5.018887s t37284  wait                   trampoline-entered                   2436539329280      0
+      5.018897s t37284  wait                   trampoline-left                      2436539329280      0
+      5.018903s t33728  postmortem             wait-probe-answered                       1      0
+      5.018904s t33728  wait                   drop-begin                           2436539329280    280
+      5.018905s t33728  wait                   suppress-and-disarm                  2436539329280      1
+      5.018905s t33728  syscall-enter          SetThreadpoolWait(disarm)            2436539329280      0
+      5.018906s t33728  syscall-leave          SetThreadpoolWait(disarm)            2436539329280      0
+      5.018906s t33728  wait                   disarmed                             2436539329280      0
+      5.018907s t33728  syscall-enter          WaitForThreadpoolWaitCallbacks       2436539329280      0
+      5.018907s t33728  syscall-leave          WaitForThreadpoolWaitCallbacks       2436539329280      0
+      5.018908s t33728  wait                   drop-drained                         2436539329280      0
+      5.018908s t33728  syscall-enter          CloseThreadpoolWait                  2436539329280      0
+      5.018913s t33728  syscall-leave          CloseThreadpoolWait                  2436539329280      0
+      5.018915s t33728  wait                   drop-closed                          2436539329280    280
+      5.018921s t33728  postmortem             probe-left                                1      1
+
+
+  pool liveness  : note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+work item ran: true; a fresh wait ran: true (both within 2s)
+
+thread 'completions_are_delivered_on_pool_threads_without_the_submitting_thread_waiting' (33728) panicked at 
+crates\windows-ioring-sys\tests\event_delivery.rs:357:13:
+M26.9 delivery stalled: completions_are_delivered_on_pool_threads_without_the_submitting_thread_waiting
+  delivered      : 0 of 8
+  callbacks run  : 8 -- times the pool invoked the callback. Equal to delivered means everything the callback received 
+reached this thread; greater means the gap is between the callback and the channel.
+  outstanding    : 8 -- the ring's own count, which decrements on pop, and the pop happens inside the callback. So it 
+cannot on its own separate 'the kernel has not finished' from 'the callback never ran'.
+  arrival times  : []
+  inter-arrival  : []
+  waited         : 5s before giving up
+  post-mortem    : it arrived, 3.8??s past the bound
+  trace (oldest first):
+      0.000915s t33744  delivery               setup-signalled                         224      0
+      0.001517s t33728  delivery               event-attached                          256      0
+      0.001520s t33728  syscall-enter          CreateThreadpoolWait                      0      0
+      0.001526s t33728  syscall-leave          CreateThreadpoolWait                      0      0
+      0.001527s t33728  wait                   created                              2436539328272    256
+      0.001527s t33728  syscall-enter          SetThreadpoolWait                    2436539328272    256
+      0.001531s t33728  syscall-leave          SetThreadpoolWait                    2436539328272    256
+      0.001532s t33728  wait                   armed                                2436539328272    256
+      0.001532s t33728  delivery               armed                                     0      0
+      0.001535s t33728  delivery               setup-signalled                         252      0
+      0.001664s t33736  delivery               event-attached                          272      0
+      0.001666s t33736  syscall-enter          CreateThreadpoolWait                      0      0
+      0.001671s t33736  syscall-leave          CreateThreadpoolWait                      0      0
+      0.001672s t33736  wait                   created                              2436539347040    272
+      0.001673s t33736  syscall-enter          SetThreadpoolWait                    2436539347040    272
+      0.001676s t33736  syscall-leave          SetThreadpoolWait                    2436539347040    272
+      0.001677s t33736  wait                   armed                                2436539347040    272
+      0.001677s t33736  delivery               armed                                     0      0
+      0.001680s t33736  delivery               setup-signalled                         268      8
+      5.013131s t33728  postmortem             delivery-wait-expired                     0      0
+      5.013132s t33728  postmortem             outstanding-begin                         0      0
+      5.013134s t33728  postmortem             outstanding-read                          8      0
+      5.013175s t33728  wfactory               factory-found                            28      1
+      5.013238s t33728  wfactory               factory-found                           156      2
+      5.013486s t33736  postmortem             delivery-wait-expired                     0      0
+      5.013487s t33736  postmortem             outstanding-begin                         0      0
+      5.013488s t33736  postmortem             outstanding-read                          8      0
+      5.013573s t33736  wfactory               factory-found                            28      1
+      5.013602s t33736  wfactory               factory-found                           156      2
+      5.013852s t33736  wfactory               factories-seen                            2      0
+      5.013853s t33736  wfactory               counts-status                             0    120
+      5.013854s t33736  wfactory               counts-total                              0     28
+      5.013854s t33736  wfactory               counts-waiting                            0      0
+      5.013854s t33736  wfactory               counts-pending                            0      0
+      5.013855s t33736  wfactory               counts-release                            0     28
+      5.013855s t33736  wfactory               counts-binding                            1     28
+      5.013855s t33736  wfactory               counts-min-max                            0    768
+      5.013855s t33736  wfactory               counts-paused                             0     28
+      5.013856s t33736  wfactory               counts-may-create                         1     28
+      5.013856s t33736  wfactory               counts-creating                           0      0
+      5.013856s t33736  wfactory               counts-shutdown                           0     28
+      5.013856s t33736  wfactory               counts-last-create-status                 0      0
+      5.013857s t33736  wfactory               counts-idle-timeout-ms                67000      0
+      5.013857s t33736  wfactory               counts-status                             0    120
+      5.013858s t33736  wfactory               counts-total                              3    156
+      5.013858s t33736  wfactory               counts-waiting                            3      0
+      5.013858s t33736  wfactory               counts-pending                            0      0
+      5.013858s t33736  wfactory               counts-release                            0    156
+      5.013859s t33736  wfactory               counts-binding                            1    156
+      5.013859s t33736  wfactory               counts-min-max                            0      3
+      5.013859s t33736  wfactory               counts-paused                             0    156
+      5.013859s t33736  wfactory               counts-may-create                         0    156
+      5.013860s t33736  wfactory               counts-creating                           0      0
+      5.013860s t33736  wfactory               counts-shutdown                           0    156
+      5.013860s t33736  wfactory               counts-last-create-status                 0      0
+      5.013860s t33736  wfactory               counts-idle-timeout-ms                30000      0
+      5.013877s t33736  wfactory               port-depth                                2     32
+      5.013892s t33736  wfactory               port-depth                                0    152
+      5.014172s t33736  wfactory               ports-seen                                2      0
+      5.014174s t33736  postmortem             probe-begin                               0      0
+      5.014178s t33736  syscall-enter          CreateThreadpoolWork                      0      0
+      5.014180s t33736  syscall-leave          CreateThreadpoolWork                      0      0
+      5.014181s t33736  work                   created                              2436539334192      0
+      5.014181s t33736  syscall-enter          SubmitThreadpoolWork                 2436539334192      0
+      5.014305s t33736  syscall-leave          SubmitThreadpoolWork                 2436539334192      0
+      5.014306s t33736  work                   submitted                            2436539334192      0
+      5.015601s t37232  wait                   trampoline-entered                   2436539347040      0
+      5.015603s t37232  delivery               callback-entered                          0      0
+      5.015617s t33728  wfactory               factories-seen                            2      0
+      5.015621s t33728  wfactory               counts-status                             0    120
+      5.015622s t33728  wfactory               counts-total                              1     28
+      5.015622s t33728  wfactory               counts-waiting                            0      0
+      5.015623s t33728  wfactory               counts-pending                            1      0
+      5.015623s t33728  wfactory               counts-release                            1     28
+      5.015623s t33728  wfactory               counts-binding                            1     28
+      5.015624s t33728  wfactory               counts-min-max                            0    768
+      5.015624s t33728  wfactory               counts-paused                             0     28
+      5.015624s t33728  wfactory               counts-may-create                         1     28
+      5.015624s t33728  wfactory               counts-creating                           1      1
+      5.015625s t33728  wfactory               counts-shutdown                           0     28
+      5.015625s t33728  wfactory               counts-last-create-status                 0      0
+      5.015625s t33728  wfactory               counts-idle-timeout-ms                67000      0
+      5.015628s t33728  wfactory               counts-status                             0    120
+      5.015628s t33728  wfactory               counts-total                              3    156
+      5.015628s t33728  wfactory               counts-waiting                            3      0
+      5.015629s t33728  wfactory               counts-pending                            0      0
+      5.015629s t33728  wfactory               counts-release                            0    156
+      5.015629s t33728  wfactory               counts-binding                            1    156
+      5.015629s t33728  wfactory               counts-min-max                            0      3
+      5.015629s t33728  wfactory               counts-paused                             0    156
+      5.015630s t33728  wfactory               counts-may-create                         0    156
+      5.015630s t33728  wfactory               counts-creating                           0      0
+      5.015630s t33728  wfactory               counts-shutdown                           0    156
+      5.015631s t33728  wfactory               counts-last-create-status                 0      0
+      5.015631s t33728  wfactory               counts-idle-timeout-ms                30000      0
+      5.015637s t37232  wait                   rearm-entered                        2436539347040      0
+      5.015638s t37232  syscall-enter          SetThreadpoolWait                    2436539347040    272
+      5.015642s t37232  syscall-leave          SetThreadpoolWait                    2436539347040    272
+      5.015642s t37232  wait                   armed                                2436539347040    272
+      5.015642s t37232  wait                   rearm-left                           2436539347040    272
+      5.015643s t37232  delivery               callback-left                             0      0
+      5.015643s t37232  wait                   trampoline-left                      2436539347040      0
+      5.015645s t37232  work                   trampoline-entered                   2436539334192      0
+      5.015663s t33728  wfactory               port-depth                                1     32
+      5.015669s t37232  work                   trampoline-left                      2436539334192      0
+      5.015670s t37232  wait                   trampoline-entered                   2436539328272      0
+      5.015671s t37232  delivery               callback-entered                          0      0
+      5.015679s t33736  postmortem             work-probe-answered                       1      0
+      5.015681s t33736  work                   drop-begin                           2436539334192      0
+      5.015681s t33736  syscall-enter          WaitForThreadpoolWorkCallbacks       2436539334192      0
+      5.015682s t33736  syscall-leave          WaitForThreadpoolWorkCallbacks       2436539334192      0
+      5.015682s t33736  work                   drop-drained                         2436539334192      0
+      5.015683s t33736  syscall-enter          CloseThreadpoolWork                  2436539334192      0
+      5.015695s t33736  syscall-leave          CloseThreadpoolWork                  2436539334192      0
+      5.015698s t33736  work                   drop-closed                          2436539334192      0
+      5.015703s t37232  wait                   rearm-entered                        2436539328272      0
+      5.015704s t37232  syscall-enter          SetThreadpoolWait                    2436539328272    256
+      5.015705s t33736  syscall-enter          CreateThreadpoolWait                      0      0
+      5.015708s t37232  syscall-leave          SetThreadpoolWait                    2436539328272    256
+      5.015708s t37232  wait                   armed                                2436539328272    256
+      5.015709s t37232  wait                   rearm-left                           2436539328272    256
+      5.015709s t33736  syscall-leave          CreateThreadpoolWait                      0      0
+      5.015709s t37232  delivery               callback-left                             0      0
+      5.015709s t33736  wait                   created                              2436539353344    280
+      5.015710s t37232  wait                   trampoline-left                      2436539328272      0
+      5.015710s t33736  syscall-enter          SetThreadpoolWait                    2436539353344    280
+      5.015712s t33736  syscall-leave          SetThreadpoolWait                    2436539353344    280
+      5.015712s t33736  wait                   armed                                2436539353344    280
+      5.015714s t37232  wait                   trampoline-entered                   2436539328272      0
+      5.015714s t37232  delivery               callback-entered                          0      0
+      5.015715s t37232  wait                   rearm-entered                        2436539328272      0
+      5.015715s t33728  wfactory               port-depth                                0    152
+      5.015716s t37232  syscall-enter          SetThreadpoolWait                    2436539328272    256
+      5.015719s t37232  syscall-leave          SetThreadpoolWait                    2436539328272    256
+      5.015719s t37232  wait                   armed                                2436539328272    256
+      5.015719s t37232  wait                   rearm-left                           2436539328272    256
+      5.015720s t37232  delivery               callback-left                             0      0
+      5.015720s t37232  wait                   trampoline-left                      2436539328272      0
+      5.015724s t37232  wait                   trampoline-entered                   2436539353344      0
+      5.015726s t37232  wait                   trampoline-left                      2436539353344      0
+      5.015729s t33736  postmortem             wait-probe-signalled                    280      0
+      5.015730s t33736  postmortem             wait-probe-answered                       1      0
+      5.015731s t33736  wait                   drop-begin                           2436539353344    280
+      5.015732s t33736  wait                   suppress-and-disarm                  2436539353344      1
+      5.015732s t33736  syscall-enter          SetThreadpoolWait(disarm)            2436539353344      0
+      5.015732s t33736  syscall-leave          SetThreadpoolWait(disarm)            2436539353344      0
+      5.015733s t33736  wait                   disarmed                             2436539353344      0
+      5.015733s t33736  syscall-enter          WaitForThreadpoolWaitCallbacks       2436539353344      0
+      5.015734s t33736  syscall-leave          WaitForThreadpoolWaitCallbacks       2436539353344      0
+      5.015734s t33736  wait                   drop-drained                         2436539353344      0
+test completions_are_delivered_on_pool_threads_without_the_submitting_thread_waiting ... FAILED
+
+failures:
+
+failures:
+    completions_are_delivered_on_pool_threads_without_the_submitting_thread_waiting
+    completions_queued_before_handover_are_still_delivered
+
+test result: FAILED. 1 passed; 2 failed; 0 ignored; 0 measured; 4 filtered out; finished in 5.12s
+
+      5.015734s t33736  syscall-enter          CloseThreadpoolWait                  2436539353344      0
+      5.015738s t33736  syscall-leave          CloseThreadpoolWait                  2436539353344      0
+      5.015739s t33736  wait                   drop-closed                          2436539353344    280
+      5.015744s t33736  postmortem             probe-left                                1      1
+      5.017275s t33736  postmortem             second-wait-begin                         0      0
+      5.017281s t33736  postmortem             second-wait-ended                         6      0
+      5.017848s t33728  wfactory               ports-seen                                2      0
+      5.017850s t33728  postmortem             probe-begin                               0      0
+      5.017853s t33728  syscall-enter          CreateThreadpoolWork                      0      0
+      5.017855s t33728  syscall-leave          CreateThreadpoolWork                      0      0
+      5.017856s t33728  work                   created                              2436539329280      0
+      5.017856s t33728  syscall-enter          SubmitThreadpoolWork                 2436539329280      0
+      5.017890s t33728  syscall-leave          SubmitThreadpoolWork                 2436539329280      0
+      5.017891s t33728  work                   submitted                            2436539329280      0
+      5.018791s t37284  work                   trampoline-entered                   2436539329280      0
+      5.018818s t37284  work                   trampoline-left                      2436539329280      0
+      5.018824s t33728  postmortem             work-probe-answered                       1      0
+      5.018825s t33728  work                   drop-begin                           2436539329280      0
+      5.018826s t33728  syscall-enter          WaitForThreadpoolWorkCallbacks       2436539329280      0
+      5.018827s t33728  syscall-leave          WaitForThreadpoolWorkCallbacks       2436539329280      0
+      5.018832s t33728  work                   drop-drained                         2436539329280      0
+      5.018833s t33728  syscall-enter          CloseThreadpoolWork                  2436539329280      0
+      5.018835s t33728  syscall-leave          CloseThreadpoolWork                  2436539329280      0
+      5.018838s t33728  work                   drop-closed                          2436539329280      0
+      5.018846s t33728  syscall-enter          CreateThreadpoolWait                      0      0
+      5.018851s t33728  syscall-leave          CreateThreadpoolWait                      0      0
+      5.018851s t33728  wait                   created                              2436539329280    280
+      5.018852s t33728  syscall-enter          SetThreadpoolWait                    2436539329280    280
+      5.018856s t33728  syscall-leave          SetThreadpoolWait                    2436539329280    280
+      5.018856s t33728  wait                   armed                                2436539329280    280
+      5.018873s t33728  postmortem             wait-probe-signalled                    280      0
+      5.018887s t37284  wait                   trampoline-entered                   2436539329280      0
+      5.018897s t37284  wait                   trampoline-left                      2436539329280      0
+      5.018903s t33728  postmortem             wait-probe-answered                       1      0
+      5.018904s t33728  wait                   drop-begin                           2436539329280    280
+      5.018905s t33728  wait                   suppress-and-disarm                  2436539329280      1
+      5.018905s t33728  syscall-enter          SetThreadpoolWait(disarm)            2436539329280      0
+      5.018906s t33728  syscall-leave          SetThreadpoolWait(disarm)            2436539329280      0
+      5.018906s t33728  wait                   disarmed                             2436539329280      0
+      5.018907s t33728  syscall-enter          WaitForThreadpoolWaitCallbacks       2436539329280      0
+      5.018907s t33728  syscall-leave          WaitForThreadpoolWaitCallbacks       2436539329280      0
+      5.018908s t33728  wait                   drop-drained                         2436539329280      0
+      5.018908s t33728  syscall-enter          CloseThreadpoolWait                  2436539329280      0
+      5.018913s t33728  syscall-leave          CloseThreadpoolWait                  2436539329280      0
+      5.018915s t33728  wait                   drop-closed                          2436539329280    280
+      5.018921s t33728  postmortem             probe-left                                1      1
+      5.083944s t33736  exception              raised                               3765269347 140715078140362
+      5.083969s t33728  postmortem             second-wait-begin                         0      0
+      5.083976s t33728  postmortem             second-wait-ended                         8      0
+
+  pool liveness  : work item ran: true; a fresh wait ran: true (both within 2s)
+

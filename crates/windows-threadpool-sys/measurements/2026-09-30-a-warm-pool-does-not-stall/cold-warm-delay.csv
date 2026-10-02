@@ -1,0 +1,4 @@
+"arm","runs","fail","per_1000","warmed","ms_per_run"
+"hand-spin-3us","12000","40","3.33","0","74.6"
+"hand-spin-3us-delay","12000","31","2.58","0","70.9"
+"hand-spin-3us-warm","12000","0","0","12000","58.1"

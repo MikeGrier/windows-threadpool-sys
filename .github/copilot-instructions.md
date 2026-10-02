@@ -2115,7 +2115,7 @@ This applies to any feature whose output may plausibly need to be retargeted lat
 CLI output, log output, diagnostic output, generated artifacts.
 
 <!-- tpu-mcp:setup:begin -->
-<!-- tpu-mcp:setup:version=4.0.2 -->
+<!-- tpu-mcp:setup:version=6.0.0 -->
 
 ## File I/O — use `tpu_*` MCP tools, never PowerShell or shell
 
@@ -2164,15 +2164,15 @@ differences.
 | `tpu_create_file` | creating a NEW file — fails if the path already exists |
 | `tpu_write_file` | replacing an existing text file's full contents |
 | `tpu_append_file` | appending text to an existing file |
-| `tpu_replace_in_file` | literal (default) or regex substitution — pass `regex: true` to opt into regex matching; a run that matches nothing is an error |
+| `tpu_replace_in_file` | literal (default) or regex substitution — pass `regex: true` to opt into regex matching; a run that matches nothing is an error; pass `ops: […]` for several substitutions in one atomic write |
 | `tpu_edit_file` | targeted insert/delete/splice at known line numbers |
 | `tpu_validate_file` | pre-flight assertion that a file is in the expected state |
-| `tpu_count_file` | line / word / char / byte / pattern counts |
+| `tpu_count_file` | line / word / char / byte / pattern counts, plus `line_ending` and exact `lf_count` / `crlf_count` / `cr_count` |
 | `tpu_find` | encoding-aware grep across files and globs (pass `glob` to filter a directory walk, e.g. `path: "DIR", glob: "**/*.ndjson"`) |
 | `tpu_copy_file` | copy a file or recursively copy a tree (resilient: per-entry warnings, never aborts mid-walk by default) |
 | `tpu_render_file` | populate a file from a `{{TOKEN}}` template |
 | `tpu_stat_file` | verify a write actually persisted (mtime / size) |
-| `tpu_doctor` | scan files/dirs/globs for mojibake or encoding damage; optionally repair with `fix: "peel"` |
+| `tpu_doctor` | conformance check: scan files/dirs/globs for mojibake, encoding damage, **and line-ending mismatches**; repair with `fix: "peel" \| "eol" \| "all"` |
 | `tpu_setup` | (re)write this guidance block into the active `copilot-instructions.md` |
 
 ### When to use each
@@ -2193,10 +2193,127 @@ differences.
   no escaping needed) over `tpu_edit_file` when the target text is unique,
   because line numbers can shift between reads. Use `tpu_edit_file` when
   you have just read the file and know exact line offsets. Every text
-  payload — `content`, `text`, `replacement`, an op's `data` — is written
+  payload — `content`, `replacement`, an op's `data` — is written
   **verbatim**: backslashes are never collapsed, so no tpu tool needs
   pre-doubled escapes. (`tpu_replace_in_file` accepts an opt-in
   `expand_escapes: true` for callers that deliberately double-escape.)
+- **Line-mode `tpu_edit_file` edits are targeted** — an insert / delete /
+  splice at line numbers rewrites only the lines it touches. Every other
+  line is preserved byte-for-byte, including its original terminator and
+  encoding. Only the edited or inserted lines get a freshly synthesised
+  terminator, matching the file's detected convention (or an explicit
+  `line_ending`). (One exception: appending past an unterminated final line
+  first terminates that line, so the appended text cannot weld onto it.)
+  Consequently a `line_ending` on `tpu_edit_file` re-ends only the touched
+  lines — it does **not** convert the whole file. To normalise every line
+  ending, rewrite the file with `tpu_write_file` or run `tpu_replace_in_file`
+  with a `line_ending` (both operate on the whole file).
+- **Verifying line endings — use `tpu_count_file` or `tpu_doctor`, never a
+  shell.** Two different questions, two different tools:
+  - *"What is actually in the file?"* → `tpu_count_file`. Its stats always
+    include `lf_count`, `crlf_count`, and `cr_count` — positive byte
+    evidence that a write landed as intended. `line_ending` is `LF`, `CRLF`,
+    `CR`, or **`MIXED`** when more than one convention is present; a mixed
+    file is never reported as its dominant convention, because a single
+    stray CRLF in an LF-only repo is a file git rejects at commit.
+  - *"Is this file committable?"* → `tpu_doctor`. It judges the file against
+    the repository's own policy (`.gitattributes` / `core.autocrlf` /
+    `core.eol`) and answers with a top-level `verdict` of `"clean"` or
+    `"issues"`. `verdict` and `total_issues` describe what the scan *found*,
+    so a `fix` run that repaired everything still reports `"issues"`; what is
+    left afterwards is `total_unresolved`, plus a per-file `unresolved`. Add
+    `quiet: true` for just the verdict and the offending
+    paths. This is the conformance check — reach for it before falling back
+    to PowerShell `ReadAllBytes` and counting `0x0D`. (From a shell, the
+    same report comes from `tpu doctor <path> --message-format=json` as one
+    structured NDJSON record; the older `--format=json` still prints a
+    standalone pretty document. `tpu doctor` exits 1 when anything is
+    unresolved and 0 when nothing is, so a `--fix` run that repairs
+    everything it finds succeeds and the command works as a commit gate.)
+- **`eol_warning` on a mutating tool means the write left a non-conforming
+  file** — `tpu_create_file` / `tpu_write_file` / `tpu_replace_in_file` /
+  `tpu_edit_file` / `tpu_append_file` / `tpu_render_file` add an
+  `eol_warning` field to the status trailer when the resulting file's line
+  endings disagree with git's expectation for that path, or are mixed with no
+  policy to judge them by.
+  The write still succeeded; on a real write, a plain `"status":"success"`
+  without this field is what means "committable". Preview modes
+  (`count: true`, `dry_run: true`, `tpu_append_file` with `diff: true`)
+  write nothing, so they never carry it. For a replace preview, read
+  `line_endings.after` instead; `tpu_append_file`'s preview answers only
+  `would_write`, so ask `tpu_count_file` or `tpu_doctor` about its line
+  endings.
+  Repair with `tpu_doctor` and `fix: "eol"`.
+- **Several substitutions to one file — use `ops`, never a shell loop.**
+  `tpu_replace_in_file` takes an `ops` array instead of a top-level
+  `pattern`/`replacement`; each entry accepts the same fields plus an
+  optional `label`. This is the tool for a bulk rename or a mechanical
+  refactor, and it is the case that most often tempts an agent into
+  PowerShell — don't go there. The ops run **in order against the evolving
+  buffer** (a later op sees earlier ops' output) and land as **one** atomic
+  write: one `.bak`, one mtime bump, one `content_version` — when the
+  resulting bytes differ, which an identity substitution's do not. If any op
+  matches
+  zero times without its own `allow_no_match: true`, the **whole batch** is
+  refused and the file is left untouched, so a batch can never leave a
+  half-transformed file. `count: true` and `dry_run: true` are exempt — they
+  write nothing, so zero is a legitimate answer and the preview succeeds with
+  the tally. That refusal is *unconditional* for a real write:
+  unlike the single-op form, a `line_ending` override does **not** exempt it,
+  because converting terminators says nothing about whether your patterns
+  were right. The response carries the per-op tally as
+  `"ops":[{"label":"…","count":N},…]` next to the total `count` — that tally
+  *is* the verification, so no follow-up probe is needed. There is no
+  changed-region echo in batch mode (a region's line numbers would refer to
+  an intermediate buffer); pass `diff: true` for a whole-file old/new diff.
+  The CLI takes the identical array: `tpu replace FILE --ops ops.json`
+  (or `--ops -` for stdin) parses the same objects with the same code, so a
+  batch moves between the two unchanged. Every per-op field (`label`,
+  `pattern`, `replacement`, `regex`, `multiline`, `allow_no_match`, the
+  `*_format` channels) is **rejected** at the top level alongside `ops`,
+  because applying none of them silently is how a batch quietly does the
+  wrong thing.
+- **Verifying a replace — read the response, don't re-read the file.**
+  Every `tpu_replace_in_file` reply (including `count: true` and
+  `dry_run: true`) carries `"line_endings"` with a **before and after**
+  terminator census: `{"uniformity":"uniform"|"mixed"|"none","dominant":…,
+  "line_count":N,"lf":N,"crlf":N,"cr":N}` for each. It costs nothing — the
+  census is taken during the decode the substitution already performs.
+  - `"normalized": true` means the write collapsed a **mixed** file onto one
+    convention. A replace rewrites the *whole* file, so every terminator is
+    re-emitted in the target convention even when your substitution had
+    nothing to do with line endings. This is the single most common source
+    of "why did my diff touch every line" — now it says so.
+  - `count: true` also reports `"would_write"` — whether the bytes on disk
+    would actually change. Ask it rather than inferring from `count`: a
+    `line_ending` override rewrites a file with zero substitutions, and an
+    identity substitution changes nothing with a non-zero one.
+  - Pass `changed_line_details: true` for `changed_line_details`: one entry
+    per differing line with `old_line`/`new_line` (null for a pure
+    insertion/deletion) and `old_text`/`new_text`. Positions name real lines
+    of the real before/after files, so this works for a batch too. Capped by
+    `changed_line_details_max` (default 50), with
+    `changed_line_details_truncated: true` when the cap is hit. Asking for it
+    and finding nothing gives an empty array, not a missing key. Batch mode
+    turns this on by default because it has no changed-region echo — unless
+    `diff: true` asked for a whole-file diff instead, and never under
+    `count: true`, which performs no substitution and so has nothing to
+    image; asking for details there explicitly is an error, not an empty
+    answer. (Not to be confused with the integer `changed_lines` already in
+    the trailer, which is only the size estimate that gates the echo.)
+- **A match is not a write** — the status trailer carries `"wrote"`. An
+  identity substitution matches and reports a non-zero `count`, but produces
+  byte-identical output, which the write path skips: no `.bak`, no mtime
+  bump. The changed-region echo still shows the match (it describes what
+  matched, not what changed), so `wrote: false` is what tells you the file is
+  untouched.
+- **An empty literal pattern is refused** — it would match at every byte
+  position and splice the replacement between every character of the file,
+  reporting a large and entirely plausible count. Pass `regex: true` if an
+  empty pattern is genuinely what you want. Patterns are matched against an
+  LF-normalised view and are themselves normalised, so a pattern containing a
+  literal CRLF matches a CRLF file — you never need to account for line
+  endings in a pattern.
 - **A replace that matches nothing is an error** — `tpu_replace_in_file`
   returns `{"status":"error"}` when `pattern` matches zero times, and leaves
   the file completely untouched (mtime preserved, no `.bak`). This is
@@ -2206,7 +2323,8 @@ differences.
   genuinely idempotent re-run — the response then carries `count: 0` and a
   `warning`. `count: true` and `dry_run: true` are exempt (zero is a
   legitimate answer for an introspection mode), as is a `line_ending`
-  override, which rewrites the file even with zero substitutions. A real
+  override, which rewrites the file even with zero substitutions. (That
+  override exemption is single-op only — see the `ops` bullet above.) A real
   write always reports `count`, so no follow-up `count: true` call is needed
   to confirm how many substitutions landed.
 - **Writes that should be guarded** — pass `validate: [{ "selector":
@@ -2300,11 +2418,27 @@ between the header and trailer.
   A `tpu_replace_in_file` whose `pattern` matched zero times is instead an
   error trailer naming the count, with the file left untouched — see
   "A replace that matches nothing is an error" above.
+  Any of the six text-writing tools (`tpu_create_file` / `tpu_write_file` /
+  `tpu_replace_in_file` / `tpu_edit_file` / `tpu_append_file` /
+  `tpu_render_file`) may also carry `"eol_warning":"..."` — the write landed,
+  but the resulting file's line endings do not conform (see the `eol_warning`
+  bullet above).
+  A `tpu_replace_in_file` batch (`ops`) additionally reports
+  `"ops":[{"label":…,"count":N},…]` in every mode — real write, `count:true`,
+  and `dry_run:true` alike — and omits the changed-region echo.
+  Every `tpu_replace_in_file` reply also carries `"line_endings"`
+  (before/after census plus `normalized`), and `"changed_line_details"` when
+  asked for — see "Verifying a replace" above.
   Preview modes do not stamp the file and return a reduced trailer:
   `diff:true` adds unified diff lines before the status (full stamp still present for write/replace/edit).
-  `dry_run:true` (replace only): optional diff lines, then `{"status":"success","changed":true|false}`.
-  `count:true` (replace only): `{"status":"success","count":N}`.
-  `append diff:true`: diff lines when changed, then `{"status":"success","file":"...","changed":true|false}`.
+  `dry_run:true` (replace only): optional diff lines, then `{"status":"success","changed":true|false,"would_write":true|false}`
+  — the two are the same value; prefer `would_write`, which is the name every
+  preview mode uses.
+  `count:true` (replace only): `{"status":"success","count":N,"would_write":true|false}`.
+  `append diff:true`: diff lines when the text differs, then `{"status":"success","file":"...","changed":true|false,"would_write":true|false}`
+  — both are the byte-level answer, so a `line_ending` override that rewrites
+  every terminator reports true even though the diff (taken in LF space) is
+  empty.
   `tpu_replace_in_file` on a real write additionally reports `"changed_lines":N` in the status —
   the sum, over every match, of `(old span line count) + (new text line count)`; this is a
   cheap per-match total, NOT a deduplicated count of unique file lines, so two matches on the
@@ -2351,43 +2485,77 @@ Workflow:
    `fix: "peel"`. Only files whose peel produces *strictly fewer* mojibake
    matches are rewritten; the prior content is preserved at `<file>.bak`.
    Re-run `tpu_doctor` after the repair to confirm the report is clean.
+   When a flagged file's peel is declined (`peel_suggested: false` despite
+   having `mojibake_matches`), `peel_declined_reason` explains why — e.g.
+   the peel would itself produce invalid UTF-8, or would not reduce (or
+   would increase) the match count, typically because other legitimate
+   multi-byte UTF-8 text elsewhere in the file would be corrupted by a
+   whole-file reverse-decode. That file needs manual repair; don't treat
+   the unset `repaired` flag as a tool failure.
 4. **Don't paper over it**: if a file legitimately contains mojibake
    digraphs (test fixtures, regex sources, documentation about mojibake),
    add the line `encoding-check: allow-mojibake` (typically inside a
-   comment) — `tpu_doctor` and the write-time guard will treat it as
-   clean.
+   comment) — `tpu_doctor` and the write-time guard will honour the
+   opt-out (it is never counted toward `total_issues` or exit-code
+   failures). This is **not** silent, though: if the file would otherwise
+   have been flagged, it still appears in `tpu_doctor`'s `files` array with
+   `mojibake_marker_suppressed` (and/or `replacement_char_marker_suppressed`)
+   set to the count that was hidden, and the top-level
+   `total_marker_suppressed` reports how many files that applied to across
+   the whole scan. The marker covers mojibake and replacement-character
+   diagnostics only — a git line-ending mismatch is a separate concern and
+   is still reported for a marked file. A file with the marker but genuinely
+   nothing to suppress
+   is omitted entirely, same as any other clean file. If you see a nonzero
+   `total_marker_suppressed`, don't assume the marker was placed
+   correctly — a file that merely *discusses* the marker string in prose
+   (rather than opting out real, adjacent corruption) will also suppress
+   whatever mojibake happens to be nearby, since the marker is a
+   whole-file substring match, not scoped to a region.
 
 The write-time guard in `tpu_write_file` / `tpu_append_file` /
 `tpu_replace_in_file` / `tpu_edit_file` already refuses to *introduce* new
 mojibake (pre-existing damage passes through). If you genuinely intend to
 write curated mojibake fixtures, pass `allow_mojibake: true`.
 
-### When line endings disagree with git (CRLF / LF)
+### Git worktree encoding and line endings
 
-A separate, git-aware condition: a file's on-disk line endings can differ
-from what git would materialise in the working tree for that path (per
-`.gitattributes` `text`/`eol` attributes and `core.autocrlf` / `core.eol`).
-This is *not* mojibake — the bytes are valid — but it produces noisy diffs
-and "whole file changed" churn.
+For files in a Git worktree, TPU automatically discovers the nearest repository
+and resolves `.gitattributes` with gitoxide. `working-tree-encoding` controls
+decoding, strict re-encoding, and BOM policy. `text`/`eol` attributes and
+`core.autocrlf` / `core.eol` determine a definite working-tree line ending when
+Git provides one.
 
-Detection is **opt-in per call** via a `git_root` argument (an absolute path
-to the repository root; there is no upward auto-discovery):
+Discovery and open repository handles are cached per tool operation, so a glob
+rooted above multiple repositories opens each worktree at most once. Caches are
+refreshed between operations so repository and configuration changes are
+observed. `git_root` remains a legacy read-advisory hint; encoding and mutation
+policy use nearest-repository discovery.
 
-1. **Detect on read**: pass `git_root` to `tpu_read_file`, `tpu_read_head`,
-   or `tpu_read_tail`. When the file's endings differ from git's expectation
-   the response is prefixed with a single `note:` line and the unchanged
-   content follows.
-2. **Report / repair with doctor**: call `tpu_doctor` with `git_root` to
-   list mismatched files (each flagged with an `eol_mismatch` object). Pass
-   `fix: "eol"` to normalise line endings only, or `fix: "all"` to also peel
-   mojibake. `eol`/`all` require `git_root`; the rewrite is atomic with a
-   `<file>.bak` backup and UTF-16 files are skipped.
-3. **Normalise on write (off by default)**: when the server is started with
-   line-ending normalisation enabled (the `tpu-mcp.normalizeLineEndings` VS Code
-   setting, the `--eol-normalize` flag, or the `TPU_EOL_NORMALIZE` env var),
-   mutating tools given a `git_root` denormalise to git's expected
-   convention unless an explicit `line_ending` is supplied. This is **off by
-   default** so writes never silently rewrite endings without opt-in.
+Policy is resolved independently for each path as it is processed. Multi-file
+operations do not snapshot or lock `.gitattributes` for their full duration.
+Concurrent attribute edits may therefore cause paths resolved before and after
+the edit to use different policies; resolution failures remain per-file errors
+rather than silent defaults.
+
+1. **Read**: text tools decode using `working-tree-encoding`;
+   `tpu_read_file`, `tpu_read_head`, and `tpu_read_tail` also prefix a `note:`
+   when on-disk endings disagree with Git's expectation.
+2. **Write**: text mutations strictly re-encode in the declared worktree
+   encoding, enforce its BOM rules, and normalise all endings when Git supplies
+   a definite convention. An explicit `line_ending` takes precedence.
+   **Exception:** line-mode `tpu_edit_file` is *targeted* — it rewrites only the
+   lines it touches and preserves every other line's original terminator, so it
+   re-ends only edited / inserted / appended lines rather than the whole file
+   (see the `tpu_edit_file` bullet above). It still enforces the required BOM.
+3. **Report / repair with doctor**: `tpu_doctor` lists mismatches with an
+   `eol_mismatch` object, whose `actual` names the *offending* ending rather
+   than the dominant one — a mostly-LF file with a few CRLFs is still flagged.
+   `fix: "eol"` normalises endings only; `fix: "all"` also peels mojibake.
+   Repairs are atomic, retain a `<file>.bak`, and support UTF-16. Each file
+   reports `mojibake_repaired`, `eol_repaired`, and their union `any_repaired`,
+   so a successful EOL fix is never misread as a no-op from the legacy
+   mojibake-only `repaired` field.
 
 ### File encoding
 

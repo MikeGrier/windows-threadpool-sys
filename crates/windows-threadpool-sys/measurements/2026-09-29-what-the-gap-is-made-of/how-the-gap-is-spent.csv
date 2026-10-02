@@ -1,0 +1,7 @@
+"arm","runs","fail","per_1000","ms_per_run"
+"hand-control","10002","8","0.8","516.4"
+"hand-hires","10002","0","0","516.9"
+"hand-sleep","10002","0","0","518.4"
+"hand-sleep-after","10002","8","0.8","518.9"
+"hand-spinpause","10002","0","0","513.7"
+"hand-spinyield","10002","0","0","514"
