@@ -174,6 +174,9 @@ impl<'pool> CallbackEnviron<'pool> {
     /// environment. [`set_pool`](Self::set_pool) takes a borrow precisely so
     /// safe code cannot get this wrong; this bypasses that and the caller owns
     /// the obligation instead.
+    // The only caller is the self-heal repair path, so this is genuinely
+    // unused when that feature is off.
+    #[cfg_attr(not(feature = "self-heal"), allow(dead_code))]
     pub(crate) unsafe fn set_pool_raw(&mut self, pool: PTP_POOL) {
         self.inner.Pool = pool;
     }
