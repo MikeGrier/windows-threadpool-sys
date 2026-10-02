@@ -730,6 +730,32 @@ house rules require is what found the third.
 
   Recorded in [DESIGN-NOTES.md](../../DESIGN-NOTES.md#a-cancellation-allocates-its-own-repair-rather-than-giving-up).
 
+- [x] **M-T10.26** -- **Release a trampoline page when the batch that prepared it is refused.** The
+      seventh review round, and its only finding. `prepare` allocates a 4 KiB executable page per
+      hook and publishes it into `TRAMPOLINES[index]` before the batch knows whether it will commit,
+      because the patch it builds points at that page. Both post-preparation refusals -- `open_pages`
+      failing, and the quiesce failing after all its attempts -- returned with the pages still
+      allocated and still published. Bounded at one page per hook and once per process, but a leak.
+
+  **The obvious fix would have introduced a use-after-free, which is why it is not the one taken.**
+  `prepare` publishes unconditionally, so if an index were already installed its live, patched stub
+  would be jumping through the slot this preparation just overwrote; freeing there would release a
+  page a running hook is inside. `discard_prepared` therefore releases only when it found the slot
+  **empty**, and restores the displaced pointer otherwise. Only the test-only `install_by_label` can
+  reach the non-empty case -- `install_requested` runs the batch once per process behind `DONE` --
+  but the branch exists because the function must be correct for its callers rather than for the one
+  that happens to exist today.
+
+  **Verified on the real path rather than by reading.** Forcing `open_pages` to return `None` and
+  running the hook test printed `DISCARD index=5 previous=0 slot_now=0` and reported `NotWritable`:
+  the cleanup runs, takes the releasing branch, and clears the slot before the free. Neither refusal
+  branch is reachable from a test without that kind of injection, which is pre-existing and remains
+  true.
+
+  The macro's `SAFETY` note that the slot is "never cleared" was corrected in the same change; it is
+  now cleared on exactly one path, and the comment states why that cannot race a call already inside
+  the hook body.
+
 - [ ] **M-T10.7** -- **Decide whether CI should check intra-doc links in private items.**
 
   **The gap.** The `docs` job runs `cargo doc --no-deps --all-features` without

@@ -328,7 +328,10 @@ macro_rules! hooks {
                 record(TARGET, concat!($label, "-enter"), a1 as u64, a2 as u64);
                 let raw = TRAMPOLINES[$index].load(Ordering::Relaxed);
                 // SAFETY: non-zero only after `install` wrote an executable
-                // stub there, and never cleared.
+                // stub there. It is cleared only by `discard_prepared`, and
+                // only on the path where the slot was empty beforehand -- which
+                // means no stub was ever patched to reach this body, so a clear
+                // cannot race a call that is already here.
                 let status = if raw == 0 {
                     0
                 } else {
@@ -693,6 +696,15 @@ struct Prepared {
     entry: *mut u8,
     /// The fourteen bytes to store over it.
     patch: [u8; PATCH_LEN],
+    /// Which hook this is, so a discarded preparation can find its slot.
+    index: usize,
+    /// The trampoline page this preparation allocated and published.
+    trampoline: *mut core::ffi::c_void,
+    /// What `TRAMPOLINES[index]` held before this preparation published over
+    /// it. Zero means no install had ever succeeded for this hook, which is
+    /// what makes the page safe to release if the batch is refused -- see
+    /// [`discard_prepared`].
+    previous: usize,
 }
 
 /// Resolve, recognise, and make ready to patch -- all of it outside any
@@ -771,7 +783,7 @@ fn prepare(index: usize) -> Result<Prepared, Refusal> {
         unsafe { VirtualFree(page, 0, MEM_RELEASE) };
         return Err(Refusal::TrampolineNotExecutable);
     }
-    TRAMPOLINES[index].store(page as usize, Ordering::Release);
+    let previous = TRAMPOLINES[index].swap(page as usize, Ordering::Release);
 
     // The patch: `jmp qword ptr [rip+0]`, destination inline behind it.
     let mut patch = [0_u8; PATCH_LEN];
@@ -782,7 +794,54 @@ fn prepare(index: usize) -> Result<Prepared, Refusal> {
     // Note what is deliberately NOT done here: opening the target page for
     // writing. `VirtualProtect` acts on whole pages, so two stubs that share
     // one page cannot each own its protection -- see `open_pages`.
-    Ok(Prepared { entry, patch })
+    Ok(Prepared {
+        entry,
+        patch,
+        index,
+        trampoline: page,
+        previous,
+    })
+}
+
+/// Release a preparation the batch decided not to install.
+///
+/// [`prepare`] publishes its trampoline before the batch knows whether it will
+/// commit, because the patch it builds points at that page. A batch that then
+/// refuses used to return with the page still allocated and still published:
+/// permanently reserved, never jumped to, and invisible -- bounded at one page
+/// per hook, but a leak.
+///
+/// **The page is released only when this preparation found the slot empty.**
+/// A non-zero `previous` means some earlier install already published a
+/// trampoline for this hook, and an earlier install that succeeded also patched
+/// the stub -- so the stub is live, it has been jumping through this slot, and a
+/// thread may be inside the page right now or about to load it. Freeing there
+/// would be a use-after-free on a running hook, which is a far worse defect than
+/// the leak being fixed. That case restores the pointer it displaced and keeps
+/// the page.
+///
+/// Only `install_by_label`, which is test-only, can reach the non-zero case:
+/// `install_requested` runs `install_batch` once per process behind `DONE`, so
+/// every slot it sees is zero. The branch is here because the function must be
+/// correct for its callers rather than for the one that happens to exist.
+///
+/// With `previous` zero the stub was never patched -- a successful install
+/// publishes the trampoline before it writes the stub, so an empty slot means no
+/// write ever happened -- and the hook is therefore unreachable. Nothing can be
+/// executing the page, and clearing the slot cannot be observed by a hook body.
+#[cold]
+fn discard_prepared(ready: &Prepared) {
+    use windows_sys::Win32::System::Memory::{MEM_RELEASE, VirtualFree};
+
+    if ready.previous != 0 {
+        TRAMPOLINES[ready.index].store(ready.previous, Ordering::Release);
+        return;
+    }
+    TRAMPOLINES[ready.index].store(0, Ordering::Release);
+    // SAFETY: this module's own reservation from `prepare`, released exactly
+    // once -- the slot it was published in is cleared above and no stub was
+    // ever patched to jump here, so nothing can reach it.
+    unsafe { VirtualFree(ready.trampoline, 0, MEM_RELEASE) };
 }
 
 /// A page whose protection this batch changed, and what it was before.
@@ -942,10 +1001,12 @@ fn install_batch(chosen: &[usize]) -> Vec<(usize, Result<(), Refusal>)> {
     };
     let Some(opened) = opened else {
         // Nothing has been written and `open_pages` has already restored
-        // whatever it managed to open, so refusing every entry is the whole of
-        // the cleanup.
+        // whatever it managed to open. The trampolines are the rest of the
+        // cleanup: `prepare` allocated and published one per entry that got
+        // this far, and no stub was patched to use any of them.
         for (_, outcome) in &mut prepared {
-            if outcome.is_ok() {
+            if let Ok(ready) = outcome {
+                discard_prepared(ready);
                 *outcome = Err(Refusal::NotWritable);
             }
         }
@@ -967,16 +1028,21 @@ fn install_batch(chosen: &[usize]) -> Vec<(usize, Result<(), Refusal>)> {
     })
     .is_some();
     if !committed {
-        // Not quiesced, so nothing was written. Restore the pages and refuse
-        // every entry rather than reporting an install that did not happen.
+        // Not quiesced, so nothing was written. Restore the pages, release the
+        // trampolines nothing will now jump through, and refuse every entry
+        // rather than reporting an install that did not happen.
         restore_pages(&opened);
         return prepared
             .into_iter()
             .map(|(index, outcome)| {
-                (
-                    index,
-                    outcome.and(Err(Refusal::NotQuiesced)).map(|_: Prepared| ()),
-                )
+                let outcome = match outcome {
+                    Ok(ready) => {
+                        discard_prepared(&ready);
+                        Err(Refusal::NotQuiesced)
+                    }
+                    Err(why) => Err(why),
+                };
+                (index, outcome)
             })
             .collect();
     }
