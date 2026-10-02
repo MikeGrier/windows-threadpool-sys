@@ -120,7 +120,7 @@ fn a_cancelling_release_marks_its_pool_after_the_cancellation() {
     let mut group = CleanupGroup::new().expect("create group");
     {
         let wait = group
-            .create_wait(event(), |_| {}, Some(&mut env))
+            .create_wait(event(), |_| {}, Some(&env))
             .expect("create wait member");
         wait.arm(None);
     }

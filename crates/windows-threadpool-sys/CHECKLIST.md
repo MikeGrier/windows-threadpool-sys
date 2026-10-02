@@ -513,6 +513,43 @@ house rules require is what found the third.
   the release has returned, so no end-state assertion can tell them apart. Verified by sabotage:
   restoring the old ordering fails it.
 
+- [x] **M-T10.11** -- **Give the worker-factory snapshot named fields.** Found by the third review
+      round.
+
+  **The defect.** `worker_factory_snapshot` returned `(usize, u32, u32, u32)` and its doc comment
+  described `(handle, total, waiting, pending)` -- every field after the handle shifted by one
+  from what the code returns, which is the handle, the thread *maximum*, the total workers and the
+  waiting workers. A caller who believed the comment read the configured maximum as the number of
+  workers that exist, so a cold or stalled pool looked fully staffed: the exact inverse of the
+  reading the data is gathered for. There is no `pending` field at all.
+
+  **Fixed at the build rung, not in the comment.** The return type is now
+  `WorkerFactorySnapshot` with named fields, so the mismatch is unrepresentable. Nothing could
+  have caught the tuple version: both halves type-check, and a tuple carries no statement about
+  which field is which for anything to check against. The consuming tests destructured correctly,
+  which is why the suite stayed green and the defect lived only in what a reader was told.
+
+- [x] **M-T10.12** -- **Make the lifecycle trace test run, and expect what teardown actually
+      calls.** Found by the third review round; the same inertness as `M-T10.2`, which was fixed
+      without sweeping for siblings.
+
+  **Two defects, one hiding the other.** The test early-returned when the trace filter was unset,
+  which is every ordinary run and every CI run. Underneath that, it expected
+  `WaitForThreadpoolWaitCallbacks(cancel)` and `WaitForThreadpoolTimerCallbacks(cancel)` -- forms
+  that only `try_cancel_pending` makes, and that teardown stopped making when it changed from
+  cancelling to draining. Run alone with the filter armed it failed; run in a full armed suite it
+  passed, because sibling tests supplied those records into the one process-wide buffer and
+  `counted` only asks for a non-zero count.
+
+  **Fixed** by re-executing the one test single-threaded in a child with the filter set, and by
+  correcting the two expectations. The child exits with a distinctive code, so a filter that
+  matched nothing -- a rename -- fails loudly instead of exiting 0 and looking like a pass.
+  Verified by sabotage in both directions: the old labels fail the body, and a wrong test name
+  fails the parent.
+
+  **The sweep this time:** two tests had the early-return shape;
+  `the_exception_observer_notes_a_first_chance_exception` passes when armed.
+
 - [ ] **M-T10.7** -- **Decide whether CI should check intra-doc links in private items.**
 
   **The gap.** The `docs` job runs `cargo doc --no-deps --all-features` without

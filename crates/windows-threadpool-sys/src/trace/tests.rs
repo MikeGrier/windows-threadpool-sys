@@ -336,7 +336,12 @@ fn every_pool_object_records_its_creation_establishment_callbacks_and_teardown()
             &[
                 "CreateThreadpoolWait",
                 "SetThreadpoolWait",
-                "WaitForThreadpoolWaitCallbacks(cancel)",
+                // The drain, not the cancel: teardown passes FALSE since the
+                // teardown-drains decision, so the `(cancel)` form is now made
+                // only by `try_cancel_pending`, which this exercise does not
+                // call. Expecting it here was a leftover that the early return
+                // below kept invisible.
+                "WaitForThreadpoolWaitCallbacks",
                 "CloseThreadpoolWait",
                 "CreateThreadpoolWork",
                 "SubmitThreadpoolWork",
@@ -344,7 +349,8 @@ fn every_pool_object_records_its_creation_establishment_callbacks_and_teardown()
                 "CloseThreadpoolWork",
                 "CreateThreadpoolTimer",
                 "SetThreadpoolTimer",
-                "WaitForThreadpoolTimerCallbacks(cancel)",
+                // The drain, not the cancel -- see the wait entry above.
+                "WaitForThreadpoolTimerCallbacks",
                 "CloseThreadpoolTimer",
             ],
         ),
@@ -353,7 +359,12 @@ fn every_pool_object_records_its_creation_establishment_callbacks_and_teardown()
             &[
                 "CreateThreadpoolWait",
                 "SetThreadpoolWait",
-                "WaitForThreadpoolWaitCallbacks(cancel)",
+                // The drain, not the cancel: teardown passes FALSE since the
+                // teardown-drains decision, so the `(cancel)` form is now made
+                // only by `try_cancel_pending`, which this exercise does not
+                // call. Expecting it here was a leftover that the early return
+                // below kept invisible.
+                "WaitForThreadpoolWaitCallbacks",
                 "CloseThreadpoolWait",
                 "CreateThreadpoolWork",
                 "SubmitThreadpoolWork",
@@ -361,14 +372,56 @@ fn every_pool_object_records_its_creation_establishment_callbacks_and_teardown()
                 "CloseThreadpoolWork",
                 "CreateThreadpoolTimer",
                 "SetThreadpoolTimer",
-                "WaitForThreadpoolTimerCallbacks(cancel)",
+                // The drain, not the cancel -- see the wait entry above.
+                "WaitForThreadpoolTimerCallbacks",
                 "CloseThreadpoolTimer",
             ],
         ),
     ];
-    if !expected.iter().any(|(target, _)| wants(target)) {
+    // Re-executed with the filter armed rather than skipped when it is not.
+    //
+    // This test spent its life returning here: the trace's filter is fixed
+    // before `main`, so an ordinary `cargo test` run never armed it, the body
+    // never ran, and libtest recorded a pass. When it *was* armed, in a full
+    // suite, sibling tests supplied the records it looks for -- `counted` reads
+    // one process-wide buffer and only asks for a non-zero count -- so even
+    // then it could pass without exercising anything. Run alone with the filter
+    // on, it failed, because two of the calls it expected stopped being made
+    // when teardown changed from cancelling to draining.
+    //
+    // The child runs this one test, single-threaded, in a process whose buffer
+    // nothing else is writing to, and exits with a code that says the body
+    // actually ran -- a filter that matched nothing would exit 0 and otherwise
+    // be indistinguishable from success, which is the failure this is fixing.
+    const CHILD_VAR: &str = "WTPS_LIFECYCLE_TRACE_CHILD";
+    const BODY_RAN: i32 = 7;
+    const NAME: &str =
+        "trace::tests::every_pool_object_records_its_creation_establishment_callbacks_and_teardown";
+
+    if std::env::var(CHILD_VAR).is_err() {
+        let exe = std::env::current_exe().expect("locate the test binary");
+        let status = std::process::Command::new(exe)
+            .env(CHILD_VAR, "1")
+            .env("WINDOWS_THREADPOOL_TRACE", "*")
+            .args(["--exact", NAME, "--test-threads", "1"])
+            .status()
+            .expect("run the child");
+        assert_eq!(
+            status.code(),
+            Some(BODY_RAN),
+            "the child did not reach the end of this test's body (exit {:?}). Exit 0 means \
+             `--exact {NAME}` matched nothing -- the test was renamed and this string was not \
+             -- and any other code means the assertions below failed; its output is above",
+            status.code()
+        );
         return;
     }
+
+    assert!(
+        expected.iter().all(|(target, _)| wants(target)),
+        "the child was launched with the trace armed for everything but `wants` disagrees, so \
+         nothing below would be observed"
+    );
 
     exercise_a_wait();
     exercise_a_work_item();
@@ -387,6 +440,9 @@ fn every_pool_object_records_its_creation_establishment_callbacks_and_teardown()
             );
         }
     }
+
+    // Reached only by the child, and the parent requires exactly this.
+    std::process::exit(BODY_RAN);
 }
 
 /// One wait activation, which also drives one re-arm from the pool thread.

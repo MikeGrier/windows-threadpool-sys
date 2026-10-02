@@ -18,7 +18,7 @@
 #![cfg(feature = "trace")]
 
 use windows_threadpool_sys::pool::prewarm_default_pool;
-use windows_threadpool_sys::trace::worker_factory_snapshot;
+use windows_threadpool_sys::trace::{WorkerFactorySnapshot, worker_factory_snapshot};
 
 /// Smallest thread maximum that identifies the default process pool.
 ///
@@ -29,11 +29,11 @@ use windows_threadpool_sys::trace::worker_factory_snapshot;
 const DEFAULT_POOL_MIN_MAXIMUM: u32 = 64;
 
 /// The default pool's `(total, waiting)` worker counts.
-fn default_pool(snapshot: &[(usize, u32, u32, u32)]) -> Option<(u32, u32)> {
+fn default_pool(snapshot: &[WorkerFactorySnapshot]) -> Option<(u32, u32)> {
     snapshot
         .iter()
-        .find(|(_, maximum, _, _)| *maximum >= DEFAULT_POOL_MIN_MAXIMUM)
-        .map(|(_, _, total, waiting)| (*total, *waiting))
+        .find(|factory| factory.thread_maximum >= DEFAULT_POOL_MIN_MAXIMUM)
+        .map(|factory| (factory.total_workers, factory.waiting_workers))
 }
 
 #[test]

@@ -985,7 +985,7 @@ fn scan_for_factory(query: Query) -> Vec<usize> {
 /// holds more than one factory -- at least one this crate does not create -- and
 /// the handle ordering between them is not guaranteed. A caller that needs to be
 /// right about which factory it is looking at has to see them all.
-pub(crate) fn probe_all_factories() -> Vec<(usize, u32, u32, u32)> {
+pub(crate) fn probe_all_factories() -> Vec<crate::trace::WorkerFactorySnapshot> {
     // (handle, thread_maximum, total_worker_count, waiting_worker_count)
     let Some(raw) = ntdll_proc("NtQueryInformationWorkerFactory") else {
         return Vec::new();
@@ -1009,12 +1009,12 @@ pub(crate) fn probe_all_factories() -> Vec<(usize, u32, u32, u32)> {
             )
         };
         if status >= 0 {
-            out.push((
+            out.push(crate::trace::WorkerFactorySnapshot {
                 handle,
-                info.thread_maximum,
-                info.total_worker_count,
-                info.waiting_worker_count,
-            ));
+                thread_maximum: info.thread_maximum,
+                total_workers: info.total_worker_count,
+                waiting_workers: info.waiting_worker_count,
+            });
         }
     }
     out

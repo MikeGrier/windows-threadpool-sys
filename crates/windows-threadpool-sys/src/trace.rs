@@ -189,6 +189,40 @@ pub(crate) fn armed_before_main() -> bool {
     ARMED_BEFORE_MAIN.load(std::sync::atomic::Ordering::Relaxed)
 }
 
+/// What one worker factory reports about itself.
+///
+/// Named fields rather than a tuple, and that is the whole reason this type
+/// exists. The counts were returned as `(usize, u32, u32, u32)` and the doc
+/// comment describing them drifted by one position -- it promised
+/// `(handle, total, waiting, pending)` against a function returning the
+/// maximum, the total and the waiting count. A caller who believed the comment
+/// read the *configured maximum* as the number of workers that exist, so a cold
+/// or stalled pool looked fully staffed: the precise inverse of the reading
+/// this data is gathered for.
+///
+/// Nothing caught it, because nothing could: both halves type-check, the tests
+/// happened to destructure positionally and correctly, and a tuple carries no
+/// statement about which field is which for anybody to check against. A field
+/// name is checked by the compiler on every use.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct WorkerFactorySnapshot {
+    /// The factory's handle, as an opaque identity for matching rows.
+    pub handle: usize,
+    /// The thread count this factory is configured never to exceed.
+    ///
+    /// Large for the default process pool -- derived from the processor count
+    /// -- and small for the other factory a process carries, which is what
+    /// makes it usable for telling them apart.
+    pub thread_maximum: u32,
+    /// How many worker threads exist right now.
+    ///
+    /// **Zero on a pool that has never dispatched**, which is the observation
+    /// the stall investigation turned on.
+    pub total_workers: u32,
+    /// How many of those workers are parked waiting for work.
+    pub waiting_workers: u32,
+}
+
 #[cfg(feature = "trace")]
 mod imp {
     use std::sync::Mutex;
@@ -528,8 +562,10 @@ mod imp {
         super::hook::port_depths()
     }
 
-    /// Every worker factory in the process, as `(handle, total, waiting,
-    /// pending)`.
+    /// Every worker factory in the process.
+    ///
+    /// See [`WorkerFactorySnapshot`](super::WorkerFactorySnapshot) for the
+    /// fields, and for why they are named rather than positional.
     ///
     /// The counter this crate's stall investigation turned on: a pool that is
     /// dispatching nothing reports **zero** total workers while still claiming
@@ -548,7 +584,7 @@ mod imp {
     ///
     /// The layout read is not published by Microsoft; it is the long-standing
     /// community reconstruction, guarded by a test requiring self-consistency.
-    pub fn worker_factory_snapshot() -> Vec<(usize, u32, u32, u32)> {
+    pub fn worker_factory_snapshot() -> Vec<super::WorkerFactorySnapshot> {
         super::hook::probe_all_factories()
     }
 
@@ -602,7 +638,7 @@ mod imp {
     }
     /// Reports that this build cannot read the factory's counters, which is a
     /// different finding from a build that read them and saw nothing.
-    pub fn worker_factory_snapshot() -> Vec<(usize, u32, u32, u32)> {
+    pub fn worker_factory_snapshot() -> Vec<super::WorkerFactorySnapshot> {
         Vec::new()
     }
     /// Does nothing in this build: there is no scan to find ports with.
