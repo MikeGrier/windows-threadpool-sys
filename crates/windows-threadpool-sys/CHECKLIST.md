@@ -229,14 +229,15 @@ READMEs cite them and renumbering would orphan every citation.
 
 ## M-T8 -- Pool placement
 
-Opened 2026-10-01 by `windows-ioring-sys`' `M27.1` census, which walked what a topology realizer
-would need from that crate and found exactly one gap -- and it is here, not there. See
-[REALIZATION-CENSUS.md](../windows-ioring-sys/REALIZATION-CENSUS.md).
+Opened 2026-10-01. It was found by a census in `windows-ioring-sys` that has since been retired
+along with the question it served -- see
+[that crate's archive](../windows-ioring-sys/COMPLETED-CHECKLIST.md#moved-2026-10-01-m27-retired).
 
-> **-> CROSS-COMPONENT PREREQUISITE:** raised by component `crates/windows-ioring-sys` -> `M27` ->
-> `M27.1`. That crate's `M27.2` closes its own realization gaps and is gated on the planner's
-> `EP-1+.6`; this item is **not** gated on either, because a pool whose threads can be placed is
-> useful to anyone, not only to a realizer.
+**The finding outlived its origin, and this item does not depend on it.** The gap is stated below
+from the measured surfaces rather than by citing the retired document, so nothing here rests on
+work that was withdrawn. A pool whose threads can be placed is useful to anyone; that was true
+before a realizer was imagined and remains true now that the realizer is understood to be a
+component nobody has written.
 
 - [ ] **M-T8.1** -- **Decide whether this crate expresses thread placement, and if so where.**
 

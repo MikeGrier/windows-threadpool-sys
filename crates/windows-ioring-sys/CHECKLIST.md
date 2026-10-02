@@ -25,59 +25,29 @@ with no current obligation, not an unfinished milestone. Which milestones are op
 headings below say; this preamble deliberately does not restate it, because a second copy is one
 nobody updates.
 
-## M27 -- What this crate owes the topology planner
+## M27 -- Placement questions a consumer can answer on their own hardware
 
-**Re-planned 2026-09-23, the same day it was written.** M27 was originally "Adaptivity: the benefit
-without the architectural commitment", and asked whether *this crate* should derive a partition for a
-consumer who expresses no preference. That was the wrong owner, and the checklist rules require
-saying so rather than quietly rewriting it. The adaptivity the
-[adoption thesis](../../DESIGN-NOTES.md#the-adoption-thesis) asks for is delivered by
-[topology-planner](../topology-planner/COMPONENT.md), which takes a dataflow description of the
-application and returns one or more suggested realizations
-([EP-D-6](../topology-planner/DESIGN-NOTES.md#ep-d-6)). Had the original M27.1 been answered here it
-would have grown a second, weaker policy surface beside the one that component exists to provide --
-the `outermost_partitioning_cache` defect again, where a policy answer lands in a crate whose job is
-something else.
+**Re-planned 2026-10-01, and most of this milestone retired.** M27 previously asked what this crate
+owes a topology realizer, and carried a census (`M27.1`) and a gap-closing item (`M27.2`) against
+the plan vocabulary. Both are retired: see
+[COMPLETED-CHECKLIST.md](COMPLETED-CHECKLIST.md#moved-2026-10-01-m27-retired).
 
-> **-> CROSS-COMPONENT PREREQUISITE:** `M27.1` and `M27.2` are gated on component
-> `crates/topology-planner` -> `M1+` -> `EP-1+.5` and `EP-1+.6`, which decide the plan vocabulary
-> this crate would be realized from. See [CHECKLIST.md](../topology-planner/CHECKLIST.md).
+**The reason is structural, not a judgement that the work is unimportant.** The realizer is a
+distinct component -- [EP-D-5](../topology-planner/DESIGN-NOTES.md#ep-d-5) places it outside this
+crate, depending on `topology-model` and the runtime crates -- and it does not exist. This crate
+fundamentally delivers a safe API over `IoRing`. If a realizer turns out to need API it does not
+have, that is the ordinary lifecycle of a dependency asking its layer for something, worked out
+when it happens by the component that discovered the need. It is not a standing obligation this
+crate carries on behalf of a consumer nobody has written.
 
-**What survives here is the realization end, not the policy end.** The planner emits a plan; the
-outward adapter realizes it as buffers, rings and threads
-([EP-D-5](../topology-planner/DESIGN-NOTES.md#ep-d-5)). That adapter is a separate crate, but it can
-only build what this crate exposes, and nothing has ever checked that what it exposes is sufficient.
-[D-8](DESIGN-NOTES.md#d-8) is untouched by all of this: policy stays out of this crate, and being
-*constructible from* a policy decision made elsewhere is the opposite of taking one.
+[D-8](DESIGN-NOTES.md#d-8) is untouched by all of this: policy stays out of this crate.
 
-- [x] **M27.1** -- Census done: one gap, and it is not in this crate. Caller-buffer placement is
-  already covered by `NumaBuffer`; the ring's own queue memory is a Win32 limit; what is missing is
-  thread placement, which belongs a layer down. -> [completed 2026-10-01](COMPLETED-CHECKLIST.md#m271)
+- [x] **M27.1** -- Retired with `M27.2`; the census it produced found no gap in this crate, and its
+  one finding is queued where it belongs. ->
+  [retired 2026-10-01](COMPLETED-CHECKLIST.md#moved-2026-10-01-m27-retired)
 
-  Full census: [REALIZATION-CENSUS.md](REALIZATION-CENSUS.md).
-
-  > **-> CROSS-COMPONENT HANDOFF:** the gap is queued as component `crates/windows-threadpool-sys`
-  > -> `M-T8` -> `M-T8.1` (`Decide whether this crate expresses thread placement, and if so where`).
-  > See [CHECKLIST.md](../windows-threadpool-sys/CHECKLIST.md).
-
-- [ ] **M27.2** -- **Still gated on the planner's `EP-1+.6`; its verification half is done.**
-
-  **The verification half, done 2026-10-01.**
-  [realization_from_a_plan.rs](tests/realization_from_a_plan.rs) realizes a plan-shaped description
-  against a synthetic machine using only the public API, which is what `M27.1`'s "covered" verdicts
-  rested on -- they were reached by reading signatures, and now a test builds the arrangement
-  instead. The stand-in plan type is local to that file, so nothing public binds to a vocabulary
-  that is not settled. Sabotage-checked: swapping the two queue depths inside the realizer fails the
-  depth assertion by name.
-
-  **The gap-closing half has nothing to close, and that is why it stays open rather than closing.**
-  The census named one gap and it is `windows-threadpool-sys`' (`M-T8.1`); the ring-memory one is a
-  Win32 limit. But the census walked the four facts *as `M27.1` described them*, not a settled
-  vocabulary -- so whether `EP-1+.6` names a fact nobody has walked is exactly what this item is
-  waiting to find out. Closing it now would assert the vocabulary adds nothing.
-
-  Unchanged when it resumes: each gap is an input a caller supplies, never a choice this crate
-  makes.
+- [x] **M27.2** -- Retired: a gap-closing item for gaps a non-existent consumer has not asked for.
+  -> [retired 2026-10-01](COMPLETED-CHECKLIST.md#moved-2026-10-01-m27-retired)
 
 - [ ] **M27.3** -- Give a consumer the means to answer placement questions on their own hardware.
   **Not gated on the planner** -- it is the client-side half of the thesis, and it is what lets a
