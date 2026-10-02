@@ -1404,6 +1404,89 @@ statements inside `record_live_before` fails exactly those two tests and leaves
 the other eighteen passing; restoring the direct call at one of the former sites
 fails to compile with `E0624`.
 
+## <a id="hot-patching-is-exclusive"></a>Hot-patching is exclusive, and the inline hooks spend that exclusivity knowingly
+
+**Decided 2026-10-02** by the engineer, from a review finding against
+`trace/hook.rs`. The finding was about a patch window; the decision is about
+something larger that the window is a symptom of.
+
+### The rule
+
+The inline hooks in `trace/hook.rs` are documented as a hazard and left as they
+are. They are not made safe to combine with another hot patcher, because they
+cannot be: the documentation is the whole of the mitigation, and the opt-in is
+where it is enforced.
+
+### What the hazard actually is
+
+A review raised that suspending a thread does not place its instruction pointer
+*outside* the fourteen bytes about to be overwritten, so a thread stopped inside
+that range resumes into jump-displacement data. That is true, and it is the
+narrower half of the problem.
+
+The larger half is that **inline hooking is a process-exclusive facility and
+there is exactly one slot per stub.** The technique works by rewriting an entry
+point and keeping the displaced original somewhere only the patcher knows about.
+It has no way to share and no way to negotiate: a second patcher writes its jump
+over the first one's, and the trampoline it builds captures *that jump* rather
+than the stub Windows shipped. The bytes at an entry point carry no record of
+who wrote them, so nothing in the mechanism can notice.
+
+So a process that sets `WINDOWS_THREADPOOL_TRACE_HOOKS` has given up
+hot-patching those stubs for the rest of its life, and cannot take it back --
+this module never unhooks, because removing a patch while a thread is inside it
+is a crash with no diagnosis. Anything else that would patch the same `ntdll`
+entry points is in conflict with it, and whichever patched second decides what
+the program does.
+
+The recogniser is asymmetric about this and it is worth being precise. It makes
+this module a well-behaved *second* patcher: `install` refuses a target that is
+not an unmodified stub, so arriving after somebody else is a recorded refusal
+rather than a corrupted chain. It does nothing about arriving *first*, which is
+the direction a pre-`main` installer always takes, and the direction in which
+the other patcher has no defence unless it happens to check too.
+
+### Why documenting is the right answer rather than engineering around it
+
+There is no version of inline hooking that composes. Relocating a trapped
+instruction pointer into a trampoline would close the patch window, and would
+not make two patchers able to share a stub -- the exclusivity is a property of
+the technique, not of this implementation, so the expensive fix buys the smaller
+half of the problem and leaves the larger half exactly where it was.
+
+The cost is therefore better spent on making the choice visible at the moment
+somebody makes it. That is already a deliberate double opt-in -- the `trace`
+feature plus a separate environment variable, because tracing observes and this
+modifies -- and what it was missing was a statement of what the second opt-in
+spends. The module docs, the variable's own documentation, and the README now
+carry it.
+
+### The patch window, narrowed by where installation happens
+
+The window the review found does not arise on the supported path, and this is a
+fact about the code rather than a mitigation taken on trust. Installation runs
+from the `.CRT$XCU` initialiser, during CRT startup, before `main` and so before
+the harness or the pool has created a thread; `install_requested` installs at
+most once; and `armed_before_main` is asserted by a test rather than assumed.
+With no other threads in existence, no instruction pointer can be inside the
+range.
+
+What remains is `install_by_label`, which is `#[cfg(test)]` and patches a live
+process. Its suspension is a mitigation and not a proof: it closes the window in
+which a thread is *running* through the range, not the one in which a thread is
+already stopped inside it. That path is also now serialized against itself, for
+a different reason recorded with `M-T10.3`.
+
+### What a consumer who needs another patcher should do
+
+Leave `WINDOWS_THREADPOOL_TRACE_HOOKS` unset. Everything the crate reports
+without it -- the trace itself, the obligation reports, the self-heal stamps --
+observes and patches nothing. The hooked measurements are for a diagnostic run
+on a process whose other instrumentation is known, which is the setting they
+were built for and the only one in which their answers can be trusted anyway:
+an agent that patched the same stubs first would already have changed what the
+hooks observe.
+
 ## <a id="stop-and-drain-is-the-name"></a>`stop_and_drain` is the name of the synchronous close, and every type that drains has one
 
 **Decided 2026-10-01** by the engineer, implementing `M-T6.7`. The inventory that

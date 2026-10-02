@@ -52,6 +52,56 @@
 //!   feature *and* the process must set `WINDOWS_THREADPOOL_TRACE_HOOKS`.
 //!   Patching another module's code is not something a library may do because
 //!   a consumer happened to turn tracing on.
+//!
+//! # What enabling this costs the process, permanently
+//!
+//! **There is one hot-patch slot per stub per process, and this takes it.**
+//! Inline hooking works by rewriting the first bytes of an entry point and
+//! keeping the displaced original somewhere only the patcher knows about. The
+//! technique has no way to share: a second patcher that arrives later writes
+//! its own jump over the first one's, and the trampoline it builds captures
+//! *this module's* jump instead of the stub Windows shipped. Nothing in the
+//! mechanism detects that, because there is nothing to detect it with -- the
+//! bytes at an entry point carry no record of who wrote them.
+//!
+//! So a process that sets `WINDOWS_THREADPOOL_TRACE_HOOKS` has given up
+//! hot-patching those stubs for the rest of its life, and it cannot take that
+//! back: this module never unhooks, for the reason given above. Anything else
+//! that would patch the same `ntdll` entry points -- an APM or profiling
+//! agent, an endpoint-security product, a Detours-style interposer, another
+//! copy of this facility in a different dependency -- is in conflict with it,
+//! and whichever patched second decides what the program does.
+//!
+//! The recogniser makes this module a well-behaved *second* patcher and does
+//! nothing for the first case. [`install`] refuses a target that is not an
+//! unmodified stub, so arriving after somebody else yields a recorded refusal
+//! rather than a corrupted chain. Arriving *before* them is the direction with
+//! no defence, and it is the direction a pre-`main` installer always takes.
+//!
+//! **This is accepted rather than engineered around.** See [the decision in
+//! DESIGN-NOTES.md](../../../../DESIGN-NOTES.md#hot-patching-is-exclusive) for why,
+//! and for what a consumer who needs a different patcher should do instead.
+//!
+//! # The patch window, and why the supported path does not have one
+//!
+//! Writing fourteen bytes over code that another thread may be executing is
+//! the standing hazard of this technique, and suspending the other threads
+//! does not remove it: a suspended thread's instruction pointer can be
+//! *inside* the range about to be overwritten, and it resumes into what is now
+//! jump-displacement data.
+//!
+//! The supported path does not reach that, because it patches when the process
+//! has no other threads. Installation happens from the `.CRT$XCU` initialiser
+//! in [`super`], which runs during CRT startup -- before `main`, and so before
+//! the test harness or the pool has created a thread. `armed_before_main` is
+//! asserted by a test rather than assumed, and `install_requested` installs at
+//! most once, so there is no later path that arms the hooks with threads
+//! running.
+//!
+//! What remains is `install_by_label`, which is `#[cfg(test)]` and does patch
+//! a live process. The suspension it performs is a mitigation and not a proof:
+//! it closes the window in which a thread is *running* through the range, not
+//! the one in which a thread is already stopped inside it.
 
 use std::sync::atomic::{AtomicU32, AtomicUsize, Ordering};
 
@@ -588,6 +638,10 @@ pub(crate) fn install_by_label(label: &str) -> Result<(), Refusal> {
 /// tracing observes, this modifies another module's code, and the second must
 /// never follow from the first.
 ///
+/// **Setting it gives up hot-patching these stubs for the life of the
+/// process**, and the patch is never removed. See [what enabling this costs
+/// the process](self#what-enabling-this-costs-the-process-permanently).
+///
 /// **`park` is the expensive one.** It brackets every worker park and unpark,
 /// which is the pool's hottest path, and a measurement that installs it must
 /// report the failure rate it saw alongside a run that did not -- an
@@ -763,7 +817,7 @@ fn scan_for_factory(query: Query) -> Vec<usize> {
 /// which row is which, and an earlier version of this function that guessed by
 /// handle order produced a flaky test.
 ///
-/// **Separate from [`probe_factory`] because that one picks the lowest handle**,
+/// **Separate from `probe_factory` because that one picks the lowest handle**,
 /// which is a heuristic for "the default pool" and not a selection. A process
 /// holds more than one factory -- at least one this crate does not create -- and
 /// the handle ordering between them is not guaranteed. A caller that needs to be

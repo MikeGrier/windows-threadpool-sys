@@ -412,20 +412,29 @@ house rules require is what found the third.
   cheap change makes unrepresentable is worth closing; what is not acceptable is recording it as
   measured when it was not.
 
-- [ ] **M-T10.4** -- **DECISION TO RAISE: whether hot-patching a running process is a hazard this
-      crate accepts.**
+- [x] **M-T10.4** -- **DECIDED 2026-10-02: hot-patching is exclusive, and the inline hooks spend
+      that exclusivity knowingly.** Documented as a hazard rather than engineered around, and
+      recorded as [Hot-patching is
+      exclusive](../../DESIGN-NOTES.md#hot-patching-is-exclusive).
 
-  **The finding.** `trace/hook.rs` overwrites a 14-byte region of a running stub after suspending
-  the other threads. Suspension does not place a thread's instruction pointer *outside* that
-  region: a thread stopped at an instruction boundary inside the overwritten range resumes into
-  what is now jump-displacement data.
+  **The decision reframed the finding, and the reframing is the useful part.** The review raised
+  a patch window: suspension does not place a thread's instruction pointer *outside* the fourteen
+  bytes being overwritten. True, and the narrower half. The larger half is that inline hooking is
+  **process-exclusive** -- one slot per stub, no way to share or negotiate, and a second patcher
+  captures the first one's jump as though it were the original. Setting
+  `WINDOWS_THREADPOOL_TRACE_HOOKS` therefore gives up hot-patching those stubs for the life of
+  the process, and the crate never undoes it.
 
-  **Why this is a decision and not a bug to fix.** The cost of closing it (relocating trapped IPs
-  into a trampoline, or constraining installation to a point at which no other thread can be
-  inside a stub) is real, and whether it is worth paying depends on something the engineer owns:
-  whether these hooks are diagnostic-only instruments that a developer installs deliberately, or
-  a facility a consumer may install under load. The reviewer's confidence that the hazard exists
-  is high; this item is about what to do with it, not whether it is there.
+  **Why documenting beats fixing.** Relocating trapped instruction pointers would close the
+  window and would not make two patchers able to share a stub, because the exclusivity belongs to
+  the technique and not to this implementation. The expensive fix buys the smaller half. The cost
+  is better spent making the choice visible where it is made, which is what this item did: the
+  module docs own the statement, the variable's own documentation and the README point at it.
+
+  **The window itself is narrower than reported.** Installation runs from the `.CRT$XCU`
+  initialiser before `main`, so no other thread exists to be inside the range; `armed_before_main`
+  is asserted by a test rather than assumed. What remains is `install_by_label`, which is
+  `#[cfg(test)]`.
 
 - [x] **M-T10.6** -- **Stop the recogniser's live canary reading a stub a sibling test has
       patched.** Found while trying to reproduce `M-T10.3`'s reported hang, which is the only
@@ -447,6 +456,21 @@ house rules require is what found the third.
   **Fixed** by giving the canary `unhookable_stub_entry()`, an `ntdll` export deliberately absent
   from `HOOKS` and asserted to be absent, so this module cannot patch it however many hooks a run
   installs.
+
+- [ ] **M-T10.7** -- **Decide whether CI should check intra-doc links in private items.**
+
+  **The gap.** The `docs` job runs `cargo doc --no-deps --all-features` without
+  `--document-private-items`, so rustdoc never resolves links written in the docs of private
+  modules and functions. Two broken ones had accumulated unnoticed and were found only because
+  `M-T10.4` ran the stricter form by hand: `callback_env.rs` linked a bare `set_pool` where the
+  associated-item path was needed, and `hook.rs` linked a `#[cfg(test)]` function that does not
+  exist in a documentation build. Both are fixed; nothing stops the next two.
+
+  **Why it is a decision rather than an obvious yes.** `--document-private-items` also surfaces
+  links that are correct for a maintainer reading the source but meaningless in published docs,
+  and this crate's private modules carry a lot of prose. Turning it on in CI may mean either
+  accepting that noise or rewriting those links to a form that satisfies a build nobody reads.
+  Worth weighing against simply running it by hand when a private module's docs are edited.
 
 - [ ] **M-T10.5** -- **Make the hook tests' trace-record assertions reachable, so a sabotage can
       reach them.**

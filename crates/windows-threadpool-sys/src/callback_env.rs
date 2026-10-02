@@ -161,7 +161,8 @@ impl<'pool> CallbackEnviron<'pool> {
         self.inner.Pool = pool.as_raw();
     }
 
-    /// Name a pool by its raw `PTP_POOL`, without the borrow [`set_pool`] takes.
+    /// Name a pool by its raw `PTP_POOL`, without the borrow
+    /// [`CallbackEnviron::set_pool`] takes.
     ///
     /// For [`crate::heal`], which holds pools by key rather than by reference:
     /// its repair object must be created against the same pool as the object

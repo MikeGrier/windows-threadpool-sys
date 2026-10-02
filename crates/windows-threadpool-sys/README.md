@@ -124,7 +124,27 @@ the caller to remember:
 | feature | default | what it does |
 |---|---|---|
 | `self-heal` | **on** | Repairs a thread pool that an explicitly-requested cancellation may have wedged, and provides the safe `try_cancel_pending`. See [README-FEATURE-self-heal.md](README-FEATURE-self-heal.md) before turning it off -- the hazard it covers is silent, intermittent, and lands on components that never called the API. |
-| `trace` | off | In-process tracing of pool operations, plus worker-factory and completion-port introspection. Diagnostic; reads layouts Microsoft does not publish. |
+| `trace` | off | In-process tracing of pool operations, plus worker-factory and completion-port introspection. Diagnostic; reads layouts Microsoft does not publish. Tracing alone observes and modifies nothing; the inline hooks below need a second opt-in. |
+
+### The inline hooks are a second opt-in, and they are exclusive
+
+Some of what `trace` can report is reachable only by hooking `ntdll` syscall
+stubs, which this crate does by rewriting the first bytes of the entry point.
+That needs the `trace` feature **and** the environment variable
+`WINDOWS_THREADPOOL_TRACE_HOOKS`; turning on `trace` by itself never patches
+anything.
+
+**Setting that variable gives up hot-patching those stubs for the life of the
+process, and the crate never undoes it.** There is one hot-patch slot per stub:
+a second patcher that arrives later writes over this one's jump and captures it
+as though it were the original, and nothing in the mechanism can detect that.
+Anything else that patches the same entry points -- an APM or profiling agent,
+an endpoint-security product, a Detours-style interposer -- is in conflict, and
+whichever patched second decides what the program does.
+
+Use it in a diagnostic run you control, not in a process that carries another
+patcher. The reasoning, and what to reach for instead, is in
+[DESIGN-NOTES.md](../../DESIGN-NOTES.md#hot-patching-is-exclusive).
 
 ## Relationship to `windows-overlapped-io-sys`
 
