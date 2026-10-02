@@ -62,6 +62,30 @@ nobody updates.
   from the pool thread; a callback that drains under a mutex the test thread also takes; and
   `CloseIoRing` releasing the kernel's reference to a still-armed event.
 
+  **Re-planned 2026-10-01: a remedy shipped, so this item is no longer the thing standing between
+  the suite and a clean run.** `M26.14.1` and `M26.14.2` found the entry -- the trigger's teardown,
+  closing a wait too soon after disarming it with a *cancel* -- and `M26.14.3`'s decision was taken:
+  `windows-threadpool-sys` now drains instead, which `M26.14.2` measured at 0 in 20000 against a
+  control's 10. So the experiments below are now **diagnostic rather than remedial**. They would say
+  *why* the kernel loses the worker; they are no longer the route to making the tests pass, and
+  `M26.15` is what establishes whether they still describe a live failure at all.
+
+  **Experiment 3 is withdrawn as a remedy.** "Adopt a private pool, or keep looking?" was explicitly
+  a workaround ahead of a diagnosis; the diagnosis arrived and produced a fix that costs no design
+  change, so the workaround's questions -- who owns the pool, one per delivery or shared, what it
+  means for a caller's own environment -- no longer need answering to get past this. It is kept
+  below only as the record of what was considered.
+
+  **DECISION TO RAISE, not to take: park experiments 0, 1 and 2, or keep them live?** They ask a
+  real question nobody has answered -- what leaves the worker factory with no worker -- and this
+  item has already established that ETW cannot separate the two candidate explanations, that the
+  `DISPATCHER` flag needs elevation, and that no public provider describes a completion packet
+  reaching a port. Against that: the fix has shipped, so the work buys understanding rather than
+  working software. Parking them in `M-inf` beside `M26.14.4` would be consistent with how that
+  item was treated; keeping them here says the diagnosis is still owed. Not taken here, because
+  "stop investigating a kernel behaviour we cannot explain" is the engineer's call, not this
+  item's.
+
   **The remaining experiments**, in order:
   0. **Arm a wait on an already-signalled event at process start, and see whether it is ever
      delivered.** The question is unchanged -- separate `the pool would never have dispatched in
@@ -182,30 +206,38 @@ nobody updates.
 
 - [x] **M26.14.2** -- Closing the wait too soon after disarming it is the poison: a 1ms gap between the disarm and the close, or a true drain in place of a cancel, each give 0 in 20000 against a control's 10. -> [completed 2026-09-28](COMPLETED-CHECKLIST.md#m26142)
 
-- [ ] **M26.14.3** -- **DECISION TO RAISE, not to take: adopt the draining teardown in
-  `windows-threadpool-sys`?** `M26.14.2` found that `ThreadpoolWait`'s drop -- disarm, then
-  `WaitForThreadpoolWaitCallbacks` with `fCancelPendingCallbacks` **TRUE**, then close -- is what
-  poisons, and that passing **FALSE** instead prevents it entirely (0 in 20000 against 10).
+- [x] **M26.14.3** -- Taken, and taken the way this item proposed: `windows-threadpool-sys` adopted
+  the draining teardown. -> [completed 2026-10-01](COMPLETED-CHECKLIST.md#m26143)
 
-  **It is a one-argument change and a real semantic one, which is why it is a decision rather than
-  a fix.** Cancelling returns promptly and abandons a pending callback; draining blocks until that
-  callback has actually run. A drop that waits for a callback can deadlock a caller whose callback
-  needs something the dropping thread holds -- and this crate's `Drop` is not a place a caller can
-  see a deadlock coming. Questions that belong to the engineer, not to this item: whether drop may
-  block at all, whether the draining form should be opt-in on a builder rather than the default,
-  what it means for `stop_and_drain` and `cancel_pending` which already expose both shapes, and
-  whether the suppression machinery that exists to make drop safe is still needed if drop drains.
+- [ ] **M26.15** -- **Re-run the stall at scale against the shipped draining teardown, and settle
+  the unresolved entry either way.** Queued 2026-10-01, when `M26.14.3`'s decision landed.
 
-  **Do not ship the sleep.** The 1ms gap works equally well in the measurement and is the worse of
-  the two: it is a timing constant with no principle behind it, no established threshold, and it
-  would sit in a teardown path forever.
+  **What is and is not established.** `M26.14.2` measured a drain in place of a cancel at 0 failures
+  in 20000 against a control's 10 -- but that was *this reproducer with a patched teardown*, not the
+  shipped crate. `windows-threadpool-sys` has since shipped the drain for real, and nothing has run
+  this crate's stall against it. The remedy is believed to work on evidence that predates the thing
+  it is now a remedy *in*.
 
-- [ ] **M26.14.4** -- **Find the threshold, if the draining teardown is not adopted.** `M26.14.2`
-  used 1ms because it is about 80x the natural 12us gap; nothing establishes what the minimum is.
-  A sweep -- 0, 10us, 50us, 100us, 500us, 1ms, interleaved at 20000 each -- would say whether the
-  window is microseconds or milliseconds, which is itself evidence about what the close races.
-  Gated on `M26.14.3`: if the draining teardown is adopted the sleep never ships and this is only
-  of diagnostic interest.
+  **A green suite run is not that evidence, and must not be mistaken for it.** The stall's measured
+  rate is on the order of 13 in 4000, so an ordinary `cargo test` passing says almost nothing: the
+  arm has to be sized against the rate. Re-run the same reproducer, at the same scale and with the
+  same positive control the earlier measurements used, so the result is comparable to the figures
+  already on record rather than a fresh and unrelatable number.
+
+  **It needs a control that can still fail.** If the shipped drain really closes it, every arm goes
+  to zero -- and a measurement in which nothing can fail cannot distinguish "fixed" from "the
+  reproducer stopped reproducing". Keep an arm that forces the old cancelling teardown (reachable
+  through `try_cancel_pending`), and require it to still fail, or the zero proves nothing.
+
+  **On success:** move the entry out of [UNRESOLVED-TEST-FAILURES.md](UNRESOLVED-TEST-FAILURES.md)
+  into [RESOLVED-TEST-FAILURES.md](RESOLVED-TEST-FAILURES.md) under a dated heading, per the
+  repository's rule that a resolved failure is moved rather than deleted -- and note there that this
+  is the *second* time that file has carried a fix for this stall, the first being `D-68`, which
+  `M26.13` overturned.
+
+  **On failure:** the drain is not sufficient, which is a finding against the current explanation
+  rather than against the decision, and `M26.13`'s diagnostics become live again.
+
 - [ ] **M26.14** -- **The ioring tests leak their temp files, and nothing cleans up.** `temp_file` in
   [tests/event_delivery.rs](tests/event_delivery.rs) builds a path under the system temp directory
   and no test removes it; each run of the M26.13 reproducer leaves two behind, and roughly thirty
@@ -422,3 +454,17 @@ every consumer names the type -- which means the migration order matters more th
 - [x] **M28.5** -- `observe_tokenless_push` retired; the outer `None` has two causes the caller distinguishes, recorded as `D-75` and asserted both ways. -> [completed 2026-09-26](COMPLETED-CHECKLIST.md#m285)
 
 - [x] **M28.6** -- Swept what the break made false: `D-4` and `D-55` amended, six live example claims corrected, and three defects found in `d.3`'s own prose sweep. -> [completed 2026-09-26](COMPLETED-CHECKLIST.md#m286)
+
+## M-inf -- Diagnostic work with no gating deliverable
+
+- [ ] **M26.14.4** -- **Find the threshold the close races.** `M26.14.2` used 1ms because it is
+  about 80x the natural 12us gap; nothing establishes what the minimum is. A sweep -- 0, 10us,
+  50us, 100us, 500us, 1ms, interleaved at 20000 each -- would say whether the window is
+  microseconds or milliseconds, which is itself evidence about what the close races.
+
+  **Moved here 2026-10-01, when its gate resolved the "never ships" way.** This item was gated on
+  `M26.14.3` and said so itself: if the draining teardown were adopted, the sleep never ships and
+  the sweep is only of diagnostic interest. It was adopted, so that is where this now sits -- not
+  cancelled, because the question it asks is about the *kernel* window the close races, which the
+  drain avoids rather than explains, and that remains the one thing about this stall nobody has
+  been able to see directly.

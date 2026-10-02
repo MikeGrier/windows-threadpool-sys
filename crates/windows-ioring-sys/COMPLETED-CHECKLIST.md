@@ -5535,3 +5535,62 @@ about this crate's own surface rather than about storage at all.
 
 - [x] **M28.8** -- `RingContract::in_flight` added; two hand-written copies deleted. The drain loops it named turned out not to depend on it -- `P-4` does. -> [completed 2026-09-26](COMPLETED-CHECKLIST.md#m288)
 
+
+## <a id="moved-2026-10-01-m26143"></a>Moved 2026-10-01 21:26:40 -04:00 -- M26.14.3, the draining-teardown decision
+
+### <a id="m26143"></a>M26.14.3 -- Taken, and taken the way this item proposed: `windows-threadpool-sys` adopted the draining teardown. *(completed 2026-10-01 21:26:40 -04:00)*
+
+The item as it stood when the decision was taken:
+
+> - [ ] **M26.14.3** -- **DECISION TO RAISE, not to take: adopt the draining teardown in
+>   `windows-threadpool-sys`?** `M26.14.2` found that `ThreadpoolWait`'s drop -- disarm, then
+>   `WaitForThreadpoolWaitCallbacks` with `fCancelPendingCallbacks` **TRUE**, then close -- is what
+>   poisons, and that passing **FALSE** instead prevents it entirely (0 in 20000 against 10).
+>
+>   **It is a one-argument change and a real semantic one, which is why it is a decision rather than
+>   a fix.** Cancelling returns promptly and abandons a pending callback; draining blocks until that
+>   callback has actually run. A drop that waits for a callback can deadlock a caller whose callback
+>   needs something the dropping thread holds -- and this crate's `Drop` is not a place a caller can
+>   see a deadlock coming. Questions that belong to the engineer, not to this item: whether drop may
+>   block at all, whether the draining form should be opt-in on a builder rather than the default,
+>   what it means for `stop_and_drain` and `cancel_pending` which already expose both shapes, and
+>   whether the suppression machinery that exists to make drop safe is still needed if drop drains.
+>
+>   **Do not ship the sleep.** The 1ms gap works equally well in the measurement and is the worse of
+>   the two: it is a timing constant with no principle behind it, no established threshold, and it
+>   would sit in a teardown path forever.
+>
+
+#### The decision, taken 2026-10-01
+
+**Adopted.** `windows-threadpool-sys` drains rather than cancels, recorded as [Teardown drains
+rather than cancels](../../DESIGN-NOTES.md#teardown-drains) and implemented as `M-T4`. Verified in
+the shipped source rather than inferred from the decision: `ThreadpoolWait::drop` disarms and then
+calls `WaitForThreadpoolWaitCallbacks` with **FALSE**, and the only remaining **TRUE** is the
+explicitly named `try_cancel_pending_no_heal_tracking`.
+
+Each of the four questions this item reserved for the engineer was answered, rather than left
+implicit:
+
+- **May drop block at all?** Yes, unconditionally -- rule 1 of that decision makes leaving an
+  object unsynchronised unacceptable, so the blocking is the point rather than a side effect.
+- **Opt-in on a builder, or the default?** Draining is the default. Cancelling survives as an
+  explicit, differently named call (`try_cancel_pending`, renamed by `M-T6.3` to say in its name
+  that it is best-effort), so a caller who wants the prompt-return shape asks for it.
+- **What does it mean for `stop_and_drain` and `cancel_pending`?** `M-T6.7` made `stop_and_drain`
+  the uniform name of the synchronous close across every type that drains; `M-T6.3` renamed the
+  cancelling form and backed it with a self-heal repair, because a cancellation is what can sever
+  the pool.
+- **Is the suppression machinery still needed if drop drains?** Yes. `Drop` still raises the
+  re-arm suppression before draining -- without it a callback could re-arm during the drain and the
+  drain could return with the object armed. `M-T4.10` extracted it into a shared `RearmSuppression`
+  rather than retiring it.
+
+**The sleep was not shipped**, as this item required.
+
+**What this item did not do, and what still owes a measurement.** The decision was taken partly on
+this crate's evidence -- `M26.14.2` measured a drain in place of a cancel at 0 failures in 20000
+against a control's 10 -- but that was the *reproducer* with a patched teardown, not the shipped
+crate. Nothing has yet re-run this crate's stall at scale against the shipped drain. Queued as
+`M26.15`, and until it reports, the entry in
+[UNRESOLVED-TEST-FAILURES.md](UNRESOLVED-TEST-FAILURES.md) stands.

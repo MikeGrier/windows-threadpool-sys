@@ -908,10 +908,11 @@ is one a refactor can quietly delete.
 
 ## <a id="teardown-drains"></a>Teardown drains rather than cancels, `Drop` blocks until it is finished, and an undischarged obligation is reported
 
-**Decided 2026-09-28. This decision schedules work; the implementation is
-queued as `M-T4` in
-[crates/windows-threadpool-sys/CHECKLIST.md](crates/windows-threadpool-sys/CHECKLIST.md)
-and is not yet done.** It amends the `cancel_pending` half of
+**Decided 2026-09-28, and implemented as `M-T4`.** Whether that work is done is a question
+[crates/windows-threadpool-sys/COMPLETED-CHECKLIST.md](crates/windows-threadpool-sys/COMPLETED-CHECKLIST.md)
+answers; this decision deliberately does not restate it, because a status sentence here is one
+nobody updates -- as this one was not, for the three days between the work landing and a reader
+noticing. It amends the `cancel_pending` half of
 [Quiescing without dropping is `stop_and_drain`](#quiescing-without-dropping-is-stop_and_drain-and-it-covers-the-callback-only),
 which stands in every other respect.
 
