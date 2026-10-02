@@ -60,6 +60,36 @@ impl CloseObligation {
     }
 }
 
+/// Fail fast, if the `fail-fast` feature is on and a drain was owed.
+///
+/// Called at the **very end** of a `Drop`, after the drain, the close, and the
+/// context free. That placement is the whole constraint: a panic unwinds, so
+/// anything left after it would be skipped, and skipping the close would leave
+/// the pool able to dispatch into a context nothing frees. The panic reports
+/// the violation; it must not cause one. See [The teardown fail-fast is a
+/// default-off Cargo feature](../../../DESIGN-NOTES.md#fail-fast-is-a-default-off-feature).
+///
+/// `owed` is read *before* the drain by every caller, because a callback
+/// dispatched during the drain settles the obligation -- asking afterwards
+/// would find nothing owed on exactly the objects that owed something.
+///
+/// One site for the message rather than five, so the wording a consumer sees
+/// cannot differ by which type they dropped.
+pub(crate) fn fail_fast_if_owed(owed: bool, type_name: &str, close: &str) {
+    #[cfg(feature = "fail-fast")]
+    if owed {
+        panic!(
+            "windows-threadpool-sys: {type_name} was dropped with a drain still owed. Call \
+             {close}() at a point you choose, rather than leaving the blocking drain to `Drop`. \
+             This panic is the `fail-fast` feature; with it off the drop reports and continues."
+        );
+    }
+    #[cfg(not(feature = "fail-fast"))]
+    {
+        let _ = (owed, type_name, close);
+    }
+}
+
 /// The event every type emits when it finds an obligation owed at `Drop`.
 ///
 /// One constant rather than the string at five call sites, so the tag a consumer

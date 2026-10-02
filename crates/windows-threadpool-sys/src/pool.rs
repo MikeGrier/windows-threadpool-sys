@@ -69,7 +69,9 @@ struct Limits {
 ///
 /// let timer = ThreadpoolTimer::new(|_firing| {}, Some(&mut env))?;
 /// timer.set_after(Duration::from_millis(1));
-/// timer.wait();
+/// // Discharges the drain this timer owes, at a point you choose rather than
+/// // leaving the blocking teardown to `Drop`.
+/// timer.stop_and_drain();
 /// # Ok::<(), std::io::Error>(())
 /// ```
 ///
@@ -360,7 +362,16 @@ pub fn prewarm_default_pool() -> bool {
         return false;
     };
     work.submit();
-    rx.recv_timeout(BOUND).is_ok()
+    let confirmed = rx.recv_timeout(BOUND).is_ok();
+    // Discharged here rather than left to the drop below. The drop would drain
+    // anyway, so this adds no blocking -- but this function is the crate's own
+    // use of its own protocol, and leaving the obligation undischarged makes it
+    // a reported violation like any other.
+    //
+    // Unconditional: the timeout path is exactly the one where the callback may
+    // still be queued, so it is the path that most needs the drain.
+    work.stop_and_drain();
+    confirmed
 }
 
 #[cfg(test)]

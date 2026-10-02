@@ -133,6 +133,9 @@ mod on {
         /// Only this entry's pre-created object can raise it, so a tick that
         /// made a fresh work object and submitted that instead would leave it
         /// at zero -- which is the claim the counter exists to guard.
+        // Read only by tests: the lib-only build has no caller, so without this
+        // the dead-code warning fires in the configuration CI builds.
+        #[cfg(test)]
         pub(crate) fn repairs_run(&self) -> u64 {
             self.repair.runs.load(Ordering::SeqCst)
         }
@@ -169,6 +172,8 @@ mod on {
         }
 
         /// When a dispatch was last observed; zero if none has been.
+        // Read only by tests -- see the note on `repairs_run`.
+        #[cfg(test)]
         pub(crate) fn last_dispatch(&self) -> u64 {
             self.last_dispatch.load(Ordering::Relaxed)
         }
@@ -197,6 +202,10 @@ mod on {
         /// shared and `cargo test` runs these as threads in one process, so a
         /// global count could be satisfied by another test's repair and would
         /// prove nothing about this one.
+        // Never read through this field: it is held for its *address*, which is
+        // the work object's callback context, and for the lifetime that keeps
+        // that address valid. The counter is read through the context instead.
+        #[allow(dead_code)]
         runs: Box<AtomicU64>,
     }
 
@@ -241,6 +250,11 @@ mod on {
 
     impl Registration {
         /// The entry, when the pool could be registered.
+        // No caller yet in any configuration. Kept because it is the only way
+        // to reach the entry a registration holds, which the repair paths need
+        // as they grow; silenced rather than deleted so the accessor stays
+        // available instead of being re-derived later.
+        #[allow(dead_code)]
         pub(crate) fn entry(&self) -> Option<&Arc<PoolEntry>> {
             self.0.as_ref()
         }

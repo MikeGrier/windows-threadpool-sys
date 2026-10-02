@@ -794,7 +794,11 @@ impl Drop for ThreadpoolTimer {
         crate::trace_record!("timer", "drop-begin", self.timer);
         // Read before the disarm and drain, and emitted before them: the record
         // marks the start of the blocking interval it reports.
-        if ctx.obligation.is_owed() {
+        // Captured, not re-read later: a firing dispatched during the drain
+        // below settles the obligation, and the context is freed before the
+        // fail-fast, so this must be a value rather than a borrow.
+        let owed = ctx.obligation.is_owed();
+        if owed {
             crate::trace_record!("timer", crate::obligation::DROP_OBLIGATION_OWED, self.timer);
         }
         ctx.suppress_and_disarm();
@@ -814,6 +818,9 @@ impl Drop for ThreadpoolTimer {
         // SAFETY: nothing can reach the context again; free it exactly once.
         unsafe { drop(Box::from_raw(self.context)) };
         crate::trace_record!("timer", "drop-closed", self.timer);
+        // Last, after the drain, the close and the context free: a panic
+        // unwinds, so anything after it would be skipped.
+        crate::obligation::fail_fast_if_owed(owed, "ThreadpoolTimer", "stop_and_drain");
     }
 }
 

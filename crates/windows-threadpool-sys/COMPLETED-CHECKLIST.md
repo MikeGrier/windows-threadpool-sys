@@ -1187,3 +1187,84 @@ undesirable but *inexpressible*: Cargo features cannot be subtracted, so a consu
 say "not for me". Gating availability rather than behaviour, which would have removed the
 unification leak entirely by keeping the fail-fast inert until the application armed it, is a
 viable design that was declined in favour of one mechanism rather than two.
+
+## Moved 2026-10-01 20:42:11 -04:00 -- M-T6.11, the teardown fail-fast
+
+### <a id="m-t611"></a>M-T6.11 -- Implement the teardown fail-fast: all five owning types panic at `Drop` when a drain is owed, after draining, and the whole workspace was made conformant. *(completed 2026-10-01 20:42:11 -04:00)*
+
+The mechanism is settled by [The teardown fail-fast is a default-off Cargo feature that arms it
+directly](../../DESIGN-NOTES.md#fail-fast-is-a-default-off-feature): a `fail-fast` feature, off
+by default, which when enabled arms the fail-fast with no second runtime switch. The accepted
+cost -- feature unification means any crate in the graph enabling it changes teardown behaviour
+for every crate in the graph -- is recorded there, including why the inverse polarity was
+rejected outright and why gating availability instead was declined.
+
+**What to build.** At `Drop`, when the obligation flag says a drain is owed, fail fast instead of
+reporting. `M-T4.3` already put that flag on every type and deliberately kept it outside the
+`trace` feature, so the fact is there without new bookkeeping; what changes is what `Drop` does
+with it.
+
+**Not to be made piecemeal, and if made, made uniformly.** That is a constraint on the work, not
+a note about it: implementing it for `ThreadpoolWait` alone -- the type the M26.13 measurement
+happens to implicate -- would leave the crate with one linear type and the rest affine, which is
+a worse surface than either choice made consistently.
+
+**It is not greenfield.** `ThreadpoolIo` already ships a soft version: its `Drop` reports a
+skipped rundown and then continues. A hard fail-fast changes that type's existing behaviour too.
+
+**`M-T6.7` gave the crate a uniform `stop_and_drain`, but not across all six types.**
+`ThreadpoolIo::run_down` and `CleanupGroup::close_members` keep their own names for reasons
+recorded with that decision, so this item has to say what a fail-fast means for those two rather
+than assume the uniform method covers them.
+
+**`Drop` panics, decided 2026-10-01**, which settles the sub-question the mechanism left open.
+A second panic on an already-unwinding path aborts, which is the right outcome rather than an
+accident, and is consistent with the abort-on-unwind contract the crate already enforces for
+callbacks. See [What it does: `Drop` panics, and a double panic
+aborts](../../DESIGN-NOTES.md#fail-fast-is-a-default-off-feature).
+
+**Drain first, then panic.** A constraint on the work: panicking before the drain would unwind
+past the close and the context free, leaving the pool able to dispatch into a context that is
+leaked but still live -- the abandonment the bound below forbids, reached through the mechanism
+meant to prevent it.
+
+**Guard it the way the callback contract is guarded.** `tests/callback_panic_aborts.rs`
+re-executes itself as a child process, because an abort would otherwise take the test runner
+with it; a fail-fast that aborts on an unwinding path needs the same treatment, and that file is
+the worked example to follow rather than re-derive.
+
+**One bound is already fixed and constrains every answer: forward progress is not the
+alternative.** A teardown that cannot drain may abort, or fail fast by some other route, but it
+may not return to its caller having abandoned the callback. Bounding the wait is a question
+about which failure to take, never about whether to continue.
+
+#### What implementing it found
+
+The two questions the item posed are answered in [The two types whose close is not named
+`stop_and_drain`](../../DESIGN-NOTES.md#fail-fast-is-a-default-off-feature): `run_down` is
+`ThreadpoolIo`'s discharge and the panic names it, and `CleanupGroup` is deliberately out of
+scope because it has no per-object obligation to report.
+
+**Arming it measured the whole workspace, and the workspace did not pass.** Feature unification
+means `--all-features` -- how CI and the sabotage harness both run -- arms this for every crate
+here. The first armed run failed across four crates, every failure a real undischarged
+obligation rather than a false positive, including two of this crate's own published rustdoc
+examples. All were made conformant; see [Arming it found the workspace was not
+conformant](../../DESIGN-NOTES.md#fail-fast-is-a-default-off-feature).
+
+**A failing list from an aborting run is a sample, not a population.** Early runs aborted
+partway -- a `Drop` panic landing inside an already-unwinding test -- so libtest never printed a
+summary and each "complete" failure list was a truncation. Converging took five runs. This is
+worth remembering for any future sweep under this feature.
+
+**The first ordering guard was vacuous, and the sabotage is what said so.** Asserting that the
+queued callback *ran* cannot distinguish the two orders: a panic placed before the drain unwinds
+past `CloseThreadpoolWait`, so the pool goes on watching a leaked context and the callback still
+runs, just later and unsupervised. Only the *timing* separates them, so the guard now snapshots
+the count the instant the panic surfaces and asserts before joining the releasing thread. Three
+cases in [sabotage.json](sabotage.json) hold this down: the panic placed before the drain, a
+fail-fast that never fires, and one that fires when nothing is owed.
+
+**No separate CI job was added**, deliberately: the existing `--all-features` jobs arm the
+feature by construction, unlike the feature-*off* configuration that `M-T6.6` had to add a job
+for.

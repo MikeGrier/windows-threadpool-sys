@@ -1280,6 +1280,67 @@ not the alternative.** A teardown that cannot drain may abort, or fail fast by
 some other route, but it may not return to its caller having abandoned the
 callback.
 
+### The two types whose close is not named `stop_and_drain`
+
+[`stop_and_drain` is the name of the synchronous close](#stop-and-drain-is-the-name)
+records why `ThreadpoolIo` and `CleanupGroup` keep their own names, so the
+fail-fast has to say what it means for each rather than assume the uniform
+method covers them.
+
+**`ThreadpoolIo::run_down` is that type's discharge, and the fail-fast binds to
+it.** The obligation is not a flag on this type: its `Drop` reads
+`outstanding()`, the live count of operations the kernel still owns, and fails
+fast when that is non-zero. So the condition is the same one the soft report
+already used, and the call that clears it is `run_down`. The panic names
+`run_down` rather than `stop_and_drain` for exactly this reason -- a message
+naming a method the type does not have would send a reader looking for an API
+that was deliberately not given to it.
+
+**`CleanupGroup` is out of scope, and that is a decision rather than an
+omission.** It has no per-object obligation to report: it owns members, and each
+member's own teardown is what owes a drain. `M-T4.5` found its `Drop` already
+drains with `cancel_pending = false`, so there is nothing it leaves to chance for
+a fail-fast to catch. Adding one would mean inventing a group-level obligation
+that no mechanism currently records, which is a larger change than this item and
+one nothing yet asks for.
+
+### Arming it found the workspace was not conformant, which is the feature working
+
+The feature is unified across the dependency graph, so `--all-features` -- how
+this repository's CI and its sabotage harness both run -- arms it for **every**
+crate here, not only for the one that defines it. Turning it on for the first
+time therefore measured the whole workspace against the protocol
+`windows-threadpool-sys` publishes, and the workspace did not pass: 34 test
+failures across `windows-file-watcher`, `windows-ioring-sys`,
+`windows-file-enumeration-sys`, and this crate's own tests and published
+examples.
+
+**Every one was a real undischarged obligation, not a false positive.** Each
+site left a blocking drain to `Drop` that it could have made itself. Field drop
+performs that drain either way, so making it explicit added no blocking
+anywhere -- what it added is that the obligation is settled rather than silently
+carried.
+
+**Two of them were this crate's own rustdoc examples**, which is the worst place
+for it: an example is what a consumer copies, so a published example that does
+not drain teaches the violation. They now show `stop_and_drain`.
+
+**Where a type's teardown sites were scattered, the drain went into a newtype
+rather than into each site.** `windows-file-watcher`'s retry timer is dropped
+when a subscription establishes, when it fails permanently, and when the monitor
+shuts down; a `RetryTimer` wrapper whose own `Drop` drains makes the obligation
+impossible to leave at a site somebody forgot, which enumerating the sites would
+not.
+
+**No separate CI job was added, deliberately.** The existing `--all-features`
+jobs arm the feature by construction, so it is already built, tested and linted
+on every run -- unlike the feature-*off* configuration, which `M-T6.6` had to add
+a job for precisely because no existing job selected it.
+
+**A consumer outside this repository is still free to leave teardown to `Drop`.**
+That is the supported behaviour with the feature off, and it remains the default.
+What the sweep established is that *this* workspace no longer relies on it.
+
 ## <a id="stop-and-drain-is-the-name"></a>`stop_and_drain` is the name of the synchronous close, and every type that drains has one
 
 **Decided 2026-10-01** by the engineer, implementing `M-T6.7`. The inventory that

@@ -580,6 +580,14 @@ impl Drop for ThreadpoolIo {
         // nothing after it can: the handle's close is the field drop that runs
         // the instant this body returns, with no code of ours in between.
         crate::trace_record!("io", "drop-closed", self.tp_io, self.raw_handle() as usize);
+        // Last, after the rundown, the close and the context free: a panic
+        // unwinds, so anything after it would be skipped; the endpoint handle
+        // still closes, because field drops run even when `Drop::drop` unwinds.
+        //
+        // `count` was read at the top, before the cancel and the wait emptied
+        // the registry -- reading it here would find zero on exactly the objects
+        // that owed a rundown.
+        crate::obligation::fail_fast_if_owed(count > 0, "ThreadpoolIo", "run_down");
     }
 }
 

@@ -239,6 +239,45 @@
         "                if fresh != 0 { SubmitThreadpoolWork(fresh); }",
         "            }"
       ]
+    },
+    {
+      "name": "the teardown fail-fast panics before the drain instead of after it",
+      "file": "src/wait.rs",
+      "expect": "caught",
+      "why": "The ordering constraint the fail-fast is built around. Panicking before the drain unwinds past the disarm, the drain, `CloseThreadpoolWait` and the context free -- so the pool goes on watching a handle the unwinding field drop has already closed, and the queued callback is abandoned. That is the exact abandonment the feature exists to prevent, reached through the mechanism meant to prevent it, so a fail-fast placed here is worse than none at all.",
+      "whyNotTheLateCall": "This inserts an early call rather than moving the late one, so it is a single-site edit the harness can check for uniqueness. The early panic fires first, so the late call is never reached and the effect is the same as moving it.",
+      "whyAssertionNotCrash": "Caught by `the_drain_runs_before_the_panic` in tests/fail_fast_teardown.rs, which snapshots the callback count the instant the panic surfaces and asserts on it *before* joining the releasing thread. Both orderings end with the callback having run -- the leaked watch still fires it -- so only the timing separates them, and asserting after the join would let the crash from that leaked watch pre-empt the assertion and turn a precise failure into a bare abort.",
+      "find": [
+        "            crate::trace_record!(\"wait\", crate::obligation::DROP_OBLIGATION_OWED, self.wait);"
+      ],
+      "replace": [
+        "            crate::trace_record!(\"wait\", crate::obligation::DROP_OBLIGATION_OWED, self.wait);",
+        "            crate::obligation::fail_fast_if_owed(owed, \"ThreadpoolWait\", \"stop_and_drain\");"
+      ]
+    },
+    {
+      "name": "the teardown fail-fast never fires",
+      "file": "src/obligation.rs",
+      "expect": "caught",
+      "why": "The rejecting direction. A fail-fast that is compiled in but never panics leaves the whole feature inert while every build and every feature-shape assertion still passes, so nothing except a test that observes the panic can tell the difference.",
+      "find": [
+        "    if owed {"
+      ],
+      "replace": [
+        "    if false && owed {"
+      ]
+    },
+    {
+      "name": "the teardown fail-fast fires when nothing is owed",
+      "file": "src/obligation.rs",
+      "expect": "caught",
+      "why": "The accepting direction, which is the half that usually goes untested. A fail-fast that panics on every drop satisfies every assertion that it fires when a drain is owed, while making the feature unusable: a caller who discharged the obligation correctly would still be punished for it.",
+      "find": [
+        "    if owed {"
+      ],
+      "replace": [
+        "    if true || owed {"
+      ]
     }
   ]
 }

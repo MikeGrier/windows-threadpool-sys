@@ -124,6 +124,9 @@ fn arming_a_wait_owes_a_drain() {
     let wait = ThreadpoolWait::new(event, |_| {}, None).expect("create wait");
     wait.arm(None);
     assert!(wait.obligation_owed());
+    // Assert first, then discharge: the crate obeys the protocol it publishes,
+    // which `fail-fast` turns from a convention into a build that proves it.
+    wait.stop_and_drain();
 }
 
 #[test]
@@ -189,6 +192,7 @@ fn a_wait_rearmed_from_its_callback_owes_again() {
     wait_for("the wait to fire", || fired.load(Ordering::SeqCst) >= 1);
     // The callback re-armed, so the object is live again and Drop would block.
     wait_for("the re-arm to land", || wait.obligation_owed());
+    wait.stop_and_drain();
 }
 
 #[test]

@@ -239,6 +239,9 @@ fn a_self_rearming_callback_never_overlaps() {
         1,
         "a self-rearming one-shot must never run concurrently with itself"
     );
+    // `disarm` plus `wait` stops the ticks but does not settle the obligation;
+    // the close is still owed.
+    timer.stop_and_drain();
 }
 
 /// Re-arming at the *start* of a slow callback must still not overlap, because
@@ -278,6 +281,7 @@ fn rearming_early_in_a_slow_callback_still_does_not_overlap() {
         1,
         "re-arming early must not let the next firing start before this one ends"
     );
+    timer.stop_and_drain();
 }
 
 /// The last request in a firing wins, rather than each one arming separately.
@@ -368,7 +372,10 @@ fn set_at_a_far_future_instant_does_not_fire() {
     assert!(timer.is_set());
     std::thread::sleep(Duration::from_millis(50));
     assert_eq!(fires.count(), 0, "a far-future timer must not fire yet");
-    timer.disarm();
+    // `disarm` is not a drain -- it stops the next tick without settling the
+    // obligation -- so the close is still owed, and under `fail-fast` the
+    // crate is held to the protocol it publishes.
+    timer.stop_and_drain();
 }
 
 // --- disarming ---
@@ -382,6 +389,7 @@ fn disarming_before_firing_prevents_the_callback() {
     assert!(!timer.is_set(), "disarm must clear the armed state");
     std::thread::sleep(Duration::from_millis(50));
     assert_eq!(fires.count(), 0);
+    timer.stop_and_drain();
 }
 
 #[test]
@@ -720,6 +728,10 @@ fn drop_waits_for_an_executing_callback() {
 }
 
 /// Dropping a timer whose callback re-arms must terminate: Drop disarms first.
+// Dropping an armed timer is this test's subject, so it must keep doing exactly
+// that. Under `fail-fast` that drop is *required* to panic, so the armed
+// behaviour is guarded by the child-process test instead.
+#[cfg(not(feature = "fail-fast"))]
 #[test]
 fn drop_of_a_self_rearming_timer_terminates() {
     let started = Instant::now();
@@ -744,6 +756,8 @@ fn drop_of_a_self_rearming_timer_terminates() {
     );
 }
 
+// Dropping an armed timer is this test's subject -- see the note above.
+#[cfg(not(feature = "fail-fast"))]
 #[test]
 fn drop_while_armed_but_not_yet_fired_is_clean() {
     let (timer, fires) = counting_timer();
@@ -893,6 +907,11 @@ fn disarming_cancels_a_queued_tick_which_a_waits_disarm_does_not() {
         timer.wait();
         std::thread::sleep(Duration::from_millis(100));
         outcomes.push(ran.load(Ordering::SeqCst));
+        timer.stop_and_drain();
+        // A dispatch settles the obligation for a wait and a one-shot timer,
+        // but never for work: a work object can be submitted again, so the
+        // drain stays the caller's regardless of what has already run.
+        occupier.stop_and_drain();
     }
     assert_eq!(
         outcomes[0], 1,

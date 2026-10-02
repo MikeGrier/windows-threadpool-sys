@@ -371,6 +371,10 @@ fn a_tick_can_stop_the_timer() {
 
 /// Dropping a running timer must terminate: `Drop` stops before draining, so the
 /// timer cannot requeue itself forever.
+// Dropping a started timer is this test's subject, so it must keep doing exactly
+// that. Under `fail-fast` that drop is *required* to panic, so the armed
+// behaviour is guarded by the child-process test instead.
+#[cfg(not(feature = "fail-fast"))]
 #[test]
 fn drop_of_a_running_timer_terminates() {
     let started = Instant::now();
@@ -387,6 +391,8 @@ fn drop_of_a_running_timer_terminates() {
 }
 
 /// Drop must wait for an executing tick before freeing the context.
+// Dropping a started timer is this test's subject -- see the note above.
+#[cfg(not(feature = "fail-fast"))]
 #[test]
 fn drop_waits_for_an_executing_tick() {
     let done = Arc::new(AtomicUsize::new(0));
@@ -419,6 +425,8 @@ fn drop_waits_for_an_executing_tick() {
     );
 }
 
+// Dropping a started timer is this test's subject -- see the note above.
+#[cfg(not(feature = "fail-fast"))]
 #[test]
 fn drop_while_started_but_not_yet_ticked_is_clean() {
     let (timer, fires) = counting_timer(Duration::from_secs(3_600));

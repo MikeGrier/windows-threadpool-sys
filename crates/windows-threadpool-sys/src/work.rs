@@ -233,7 +233,10 @@ impl Drop for ThreadpoolWork {
         // start of the blocking interval it is reporting, so a reader sees what
         // the following gap is for rather than learning it afterwards.
         // SAFETY: the context is still live; it is freed at the end of this body.
-        if unsafe { &*self.ctx }.obligation.is_owed() {
+        // Captured, not re-read later: the context is freed before the
+        // fail-fast, so this must be a value rather than a borrow.
+        let owed = unsafe { &*self.ctx }.obligation.is_owed();
+        if owed {
             crate::trace_record!("work", crate::obligation::DROP_OBLIGATION_OWED, self.handle);
         }
         crate::trace_call!("WaitForThreadpoolWorkCallbacks", self.handle, 0, {
@@ -249,6 +252,9 @@ impl Drop for ThreadpoolWork {
         // SAFETY: nothing can reach the context again; free it exactly once.
         unsafe { drop(Box::from_raw(self.ctx)) };
         crate::trace_record!("work", "drop-closed", self.handle);
+        // Last, after the drain, the close and the context free: a panic
+        // unwinds, so anything after it would be skipped.
+        crate::obligation::fail_fast_if_owed(owed, "ThreadpoolWork", "stop_and_drain");
     }
 }
 

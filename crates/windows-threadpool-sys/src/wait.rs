@@ -671,8 +671,9 @@ unsafe extern "system" fn wait_trampoline(
 ///     std::thread::sleep(std::time::Duration::from_millis(5));
 /// }
 ///
-/// wait.disarm();
-/// wait.wait();
+/// // Disarms and drains in one step, discharging the drain this wait owes
+/// // rather than leaving the blocking teardown to `Drop`.
+/// wait.stop_and_drain();
 /// assert!(seen.load(Ordering::SeqCst) >= 1);
 /// # Ok::<(), std::io::Error>(())
 /// ```
@@ -1092,7 +1093,13 @@ impl Drop for ThreadpoolWait {
         // Read before the disarm and drain, and emitted before them: the record
         // marks the start of the blocking interval it reports, so a reader sees
         // what the following gap is for rather than learning it afterwards.
-        if ctx.obligation.is_owed() {
+        // Captured, not re-read later: a callback dispatched during the drain
+        // below settles the obligation, so asking afterwards would find nothing
+        // owed on exactly the objects that owed something. The context is also
+        // freed before the fail-fast, so this must be a value rather than a
+        // borrow.
+        let owed = ctx.obligation.is_owed();
+        if owed {
             crate::trace_record!("wait", crate::obligation::DROP_OBLIGATION_OWED, self.wait);
         }
         ctx.suppress_and_disarm();
@@ -1121,6 +1128,10 @@ impl Drop for ThreadpoolWait {
         // drop -- a reader who sees a gap there is looking at one of those three
         // and not at something unrecorded.
         crate::trace_record!("wait", "drop-closed", self.wait, self.target.raw() as usize);
+        // Last, after the drain, the close and the context free. A panic
+        // unwinds, so anything after it would be skipped; the target handle
+        // still closes, because field drops run even when `Drop::drop` unwinds.
+        crate::obligation::fail_fast_if_owed(owed, "ThreadpoolWait", "stop_and_drain");
     }
 }
 

@@ -336,6 +336,10 @@ mod on {
             "a cancellation may have severed this pool, so it owes a repair"
         );
         entry.clear_repair();
+        // The cancel does not discharge the obligation -- it severs the pool's
+        // watch without draining this object -- so the drain is still the
+        // caller's to make, and under `fail-fast` the crate makes it.
+        wait.stop_and_drain();
     }
 
     #[test]
@@ -361,6 +365,7 @@ mod on {
             None,
             "the untracked form must record nothing, or the `unsafe` is a lie"
         );
+        wait.stop_and_drain();
     }
 
     #[test]
@@ -469,6 +474,7 @@ mod on {
         spin_until("the healer to discharge the mark", || {
             entry.repair_owed_at().is_none()
         });
+        wait.stop_and_drain();
     }
 
     #[test]

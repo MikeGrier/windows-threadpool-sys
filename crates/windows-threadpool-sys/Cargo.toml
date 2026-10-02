@@ -36,6 +36,20 @@ windows-overlapped-io-sys = { version = "0.1.3", path = "../windows-overlapped-i
 [features]
 default = ["self-heal"]
 
+# Turns the undischarged-obligation report at `Drop` into a panic, making these
+# types linear rather than affine: a caller who leaves the blocking drain to
+# `Drop` fails instead of being told about it.
+#
+# OFF by default, and enabling it arms the fail-fast directly. Cargo features
+# are additive and unified, so any crate in a build that enables this changes
+# teardown behaviour for EVERY crate in that build -- including code that never
+# called this API, and whose author cannot see the manifest that enabled it. A
+# consumer cannot decline it either: `default-features = false` governs one
+# dependency edge, not the union. Enabling it is therefore a decision for a
+# top-level binary configuring its own test or CI build; a library enabling it
+# is the misuse. See DESIGN-NOTES.md.
+fail-fast = []
+
 # Repairs a pool that a cancellation may have left unable to make its first
 # worker, by submitting a work item to it -- the one action measured to release
 # that stall every time. On by default, and the reason `try_cancel_pending` can

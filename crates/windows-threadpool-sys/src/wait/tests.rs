@@ -242,6 +242,10 @@ fn a_rearming_callback_activates_repeatedly() {
         results.iter().all(|r| *r == WaitResult::Signalled),
         "every activation should be a signal, got {results:?}"
     );
+    // `disarm` is not a drain -- it stops the next activation without settling
+    // the obligation -- so the close is still owed, and under `fail-fast` the
+    // crate is held to the protocol it publishes.
+    wait.stop_and_drain();
 }
 
 /// A callback that does not rearm stops watching after one activation.
@@ -310,6 +314,7 @@ fn disarming_prevents_activation() {
     signal(wait.handle());
     std::thread::sleep(Duration::from_millis(60));
     assert_eq!(seen.count(), 0, "a disarmed wait must not activate");
+    wait.stop_and_drain();
 }
 
 #[test]
@@ -595,6 +600,10 @@ fn drop_waits_for_an_executing_callback() {
 }
 
 /// Dropping a wait whose callback rearms must terminate: Drop disarms first.
+// Dropping an armed wait is this test's subject, so it must keep doing exactly
+// that. Under `fail-fast` that drop is *required* to panic, so the armed
+// behaviour is guarded by the child-process test instead.
+#[cfg(not(feature = "fail-fast"))]
 #[test]
 fn drop_of_a_rearming_wait_terminates() {
     let started = std::time::Instant::now();
@@ -769,6 +778,8 @@ fn rearming_during_teardown_is_suppressed() {
     );
 }
 
+// Dropping an armed wait is this test's subject -- see the note above.
+#[cfg(not(feature = "fail-fast"))]
 #[test]
 fn drop_while_armed_but_not_signalled_is_clean() {
     let (wait, seen) = recording_wait(true);
@@ -1019,6 +1030,9 @@ fn the_default_path_still_closes_with_close_handle() {
     wait.arm(None);
     signal(wait.handle());
     wait.wait();
+    // `wait` blocks for the callback but does not settle the obligation; the
+    // drop under test here is the handle close, which still happens below.
+    wait.stop_and_drain();
     drop(wait);
 }
 
@@ -1178,6 +1192,9 @@ fn stop_and_drain_runs_a_queued_callback_rather_than_discarding_it() {
          assert here"
     );
     releaser.join().expect("the releasing thread finished");
+    // A dispatch never settles a work item's obligation -- it can be submitted
+    // again -- so the occupier owes a drain even though its callback returned.
+    occupier.stop_and_drain();
 }
 
 /// `Drop` runs a queued callback too, not only `stop_and_drain`.
@@ -1186,6 +1203,8 @@ fn stop_and_drain_runs_a_queued_callback_rather_than_discarding_it() {
 /// raises the suppression permanently and never releases it, so a change that
 /// fixed one and not the other would leave the teardown that actually matters
 /// -- the one a caller reaches by doing nothing -- still discarding work.
+// Dropping an armed wait is this test's subject -- see the note above.
+#[cfg(not(feature = "fail-fast"))]
 #[test]
 fn drop_runs_a_queued_callback_rather_than_discarding_it() {
     let pool = ThreadpoolPool::new().expect("create the private pool");
@@ -1276,4 +1295,7 @@ fn drop_runs_a_queued_callback_rather_than_discarding_it() {
         "Drop must run the queued callback, not discard it"
     );
     releaser.join().expect("the releasing thread finished");
+    // A dispatch never settles a work item's obligation -- it can be submitted
+    // again -- so the occupier owes a drain even though its callback returned.
+    occupier.stop_and_drain();
 }

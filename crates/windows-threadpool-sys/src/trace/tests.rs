@@ -684,6 +684,9 @@ fn the_factory_scan_finds_the_pool_and_reads_plausible_counts() {
     work.submit();
     rx.recv_timeout(PROBE_BOUND)
         .expect("the default pool ran the callback");
+    // A dispatch never settles a work item's obligation -- it can be submitted
+    // again -- so the drain is owed even though the callback has run.
+    work.stop_and_drain();
 
     let (total, waiting, pending) =
         probe_factory().expect("the scan must find the worker factory of a process that has one");

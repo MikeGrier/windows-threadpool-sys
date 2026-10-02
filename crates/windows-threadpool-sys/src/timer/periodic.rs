@@ -506,7 +506,12 @@ impl Drop for ThreadpoolPeriodicTimer {
         // below settles the obligation, so asking afterwards would always find
         // nothing owed.
         // SAFETY: the context is still live; it is freed at the end of this body.
-        if unsafe { &*self.context }.obligation.is_owed() {
+        // Captured, not re-read later: `stop_and_drain` below settles the
+        // obligation by itself, and the context is freed before the fail-fast,
+        // so this must be a value rather than a borrow.
+        // SAFETY: the context is still live; it is freed at the end of this body.
+        let owed = unsafe { &*self.context }.obligation.is_owed();
+        if owed {
             crate::trace_record!(
                 "timer-periodic",
                 crate::obligation::DROP_OBLIGATION_OWED,
@@ -525,6 +530,9 @@ impl Drop for ThreadpoolPeriodicTimer {
         // SAFETY: nothing can reach the context again; free it exactly once.
         unsafe { drop(Box::from_raw(self.context)) };
         crate::trace_record!("timer-periodic", "drop-closed", self.timer);
+        // Last, after the drain, the close and the context free: a panic
+        // unwinds, so anything after it would be skipped.
+        crate::obligation::fail_fast_if_owed(owed, "ThreadpoolPeriodicTimer", "stop_and_drain");
     }
 }
 
