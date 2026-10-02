@@ -478,6 +478,24 @@ house rules require is what found the third.
   `refused-after-seal`. Guarded by `the_hook_installation_window_is_shut_before_any_test_runs`,
   verified by sabotage.
 
+- [x] **M-T10.9** -- **Take no process lock while the other threads are suspended.** Found by the
+      third review round.
+
+  **The defect.** The suspended window took three process-wide locks: the allocator (through
+  `ntdll_proc`'s owned name, and through the suspend loop consuming its enumeration vector by
+  value so the `Vec` was freed with threads already stopped), the loader (`GetModuleHandleA`,
+  `GetProcAddress`), and the memory manager (`VirtualAlloc`, `VirtualProtect`). A thread stopped
+  holding any of them can never give it back.
+
+  **The shape is the lesson, again.** The window's own comment said "Nothing in here may
+  allocate", and the enumeration vectors were reserved ahead of time for exactly that reason, with
+  a control in `sabotage.json` recording it -- while the install the window wrapped called the
+  loader three lines later. The rule was stated at the allocation somebody noticed rather than at
+  the window it belongs to.
+
+  **Fixed** by splitting install into prepare / commit / finish: everything that can take a lock
+  happens while the process is still running, and the window holds a single fourteen-byte store.
+
 - [ ] **M-T10.7** -- **Decide whether CI should check intra-doc links in private items.**
 
   **The gap.** The `docs` job runs `cargo doc --no-deps --all-features` without

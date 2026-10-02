@@ -461,7 +461,11 @@ fn with_others_suspended<T>(patch: impl FnOnce() -> T) -> T {
     // allocation here would deadlock the process with no thread able to run.
     // The first version of this function pushed into an unreserved vector and
     // had exactly that bug.
-    for id in ids {
+    // Iterated by reference, not consumed: `for id in ids` would drop the
+    // vector at the end of this loop, which is a `free` -- and so an allocator
+    // lock -- taken with every other thread already stopped. It is dropped at
+    // the end of the function instead, once they are running again.
+    for &id in &ids {
         // SAFETY: no preconditions; a null return is skipped.
         let thread = unsafe { OpenThread(THREAD_SUSPEND_RESUME, 0, id) };
         if thread.is_null() {
@@ -478,25 +482,42 @@ fn with_others_suspended<T>(patch: impl FnOnce() -> T) -> T {
 
     let outcome = patch();
 
-    for thread in held {
+    for &thread in &held {
         // SAFETY: suspended by this function, opened for this access.
         unsafe { ResumeThread(thread) };
         // SAFETY: nothing else refers to this handle.
         unsafe { CloseHandle(thread) };
     }
+    // Both vectors are dropped here, after the resume, for the reason given at
+    // the suspend loop above.
+    drop(held);
+    drop(ids);
     outcome
 }
-/// Plant a jump over one `ntdll` stub, after checking it is one.
+/// Everything one install needs, resolved and allocated before any thread is
+/// suspended.
 ///
-/// Returns the refusal reason when nothing was patched. Every refusal leaves
+/// This type exists because of what must *not* happen inside the suspended
+/// window. See [`install_batch`].
+struct Prepared {
+    /// The stub being patched.
+    entry: *mut u8,
+    /// The fourteen bytes to store over it.
+    patch: [u8; PATCH_LEN],
+    /// The page protection to put back afterwards.
+    restore: u32,
+}
+
+/// Resolve, recognise, and make ready to patch -- all of it outside any
+/// suspension.
+///
+/// Returns the refusal reason when nothing can be patched. Every refusal leaves
 /// `ntdll` exactly as it was.
-fn install(index: usize) -> Result<(), Refusal> {
-    use windows_sys::Win32::System::Diagnostics::Debug::FlushInstructionCache;
+fn prepare(index: usize) -> Result<Prepared, Refusal> {
     use windows_sys::Win32::System::Memory::{
         MEM_COMMIT, MEM_RESERVE, PAGE_EXECUTE_READ, PAGE_EXECUTE_READWRITE, PAGE_READWRITE,
         VirtualAlloc, VirtualProtect,
     };
-    use windows_sys::Win32::System::Threading::GetCurrentProcess;
 
     let (symbol, _, hook) = HOOKS[index];
     let Some(entry) = ntdll_proc(symbol) else {
@@ -553,32 +574,130 @@ fn install(index: usize) -> Result<(), Refusal> {
     patch[1] = 0x25;
     patch[6..].copy_from_slice(&(hook as usize).to_le_bytes());
 
-    let mut before = 0_u32;
-    // Everything from here to the resume must not allocate, record, or take a
-    // lock: other threads are stopped and may hold any of them.
-    // No suspension here: every caller wraps this in `with_others_suspended`,
-    // and nesting it would restore the per-hook snapshot this batching exists
-    // to remove.
-    let patched = (|| {
-        // SAFETY: `entry` is a live code page in this process.
-        let opened =
-            unsafe { VirtualProtect(entry.cast(), PATCH_LEN, PAGE_EXECUTE_READWRITE, &mut before) };
-        if opened == 0 {
-            return false;
-        }
-        // SAFETY: the page is writable for the length being written.
-        unsafe { std::ptr::copy_nonoverlapping(patch.as_ptr(), entry, PATCH_LEN) };
-        let mut ignored = 0_u32;
-        // SAFETY: restoring the protection just changed.
-        unsafe { VirtualProtect(entry.cast(), PATCH_LEN, before, &mut ignored) };
-        // SAFETY: no preconditions beyond a live process handle.
-        unsafe { FlushInstructionCache(GetCurrentProcess(), entry.cast(), PATCH_LEN) };
-        true
-    })();
-    if !patched {
+    // Opened here, not in the suspended window. `VirtualProtect` is a system
+    // call that takes process-wide memory-manager state; the window must
+    // contain no such call. The page is left writable across the window and
+    // restored by `finish` after the resume.
+    let mut restore = 0_u32;
+    // SAFETY: `entry` is a live code page in this process.
+    let opened = unsafe {
+        VirtualProtect(
+            entry.cast(),
+            PATCH_LEN,
+            PAGE_EXECUTE_READWRITE,
+            &mut restore,
+        )
+    };
+    if opened == 0 {
         return Err(Refusal::NotWritable);
     }
-    Ok(())
+
+    Ok(Prepared {
+        entry,
+        patch,
+        restore,
+    })
+}
+
+/// Store the patch. **This is the whole of what runs with threads suspended.**
+///
+/// A plain fourteen-byte store: no system call, no allocation, no lock, and
+/// nothing that can block. That is the point of splitting the install in three
+/// -- see [`install_batch`].
+///
+/// SAFETY: `prepared` must come from [`prepare`], whose page is still open for
+/// writing and whose entry is a recognised stub.
+unsafe fn commit(prepared: &Prepared) {
+    // SAFETY: the page was made writable by `prepare` for exactly this length.
+    unsafe {
+        std::ptr::copy_nonoverlapping(prepared.patch.as_ptr(), prepared.entry, PATCH_LEN);
+    }
+}
+
+/// Put the page protection back and flush the instruction cache, after the
+/// resume.
+///
+/// **The flush is after the resume deliberately.** It is a system call and so
+/// may not run inside the window. That is sound on this target: the bytes were
+/// stored while every other thread was stopped, so no thread can have observed
+/// a half-written patch, and resuming a thread is a context switch, which is
+/// serialising -- a resumed thread cannot go on executing a stale prefetch of
+/// the old stub.
+///
+/// SAFETY: `prepared` must come from [`prepare`] and have been committed.
+unsafe fn finish(prepared: &Prepared) {
+    use windows_sys::Win32::System::Diagnostics::Debug::FlushInstructionCache;
+    use windows_sys::Win32::System::Memory::VirtualProtect;
+    use windows_sys::Win32::System::Threading::GetCurrentProcess;
+
+    let mut ignored = 0_u32;
+    // SAFETY: restoring the protection `prepare` changed.
+    unsafe {
+        VirtualProtect(
+            prepared.entry.cast(),
+            PATCH_LEN,
+            prepared.restore,
+            &mut ignored,
+        )
+    };
+    // SAFETY: no preconditions beyond a live process handle.
+    unsafe { FlushInstructionCache(GetCurrentProcess(), prepared.entry.cast(), PATCH_LEN) };
+}
+
+/// Install every hook in `chosen`, suspending the other threads only for the
+/// stores.
+///
+/// **Why this is three phases rather than one.** Patching live code requires
+/// every other thread to be stopped, and a thread stopped while holding a
+/// process-wide lock can never give it back -- so anything inside that window
+/// which takes such a lock deadlocks the process with nothing able to run.
+/// A single-phase install took three of them: the allocator, through
+/// `ntdll_proc`'s owned name and the trampoline reservation; the **loader**,
+/// through `GetModuleHandleA` and `GetProcAddress`; and the memory manager,
+/// through `VirtualAlloc` and `VirtualProtect`.
+///
+/// An earlier version knew about the first of those -- the enumeration vectors
+/// are reserved ahead of time for exactly that reason, and `sabotage.json`
+/// carries a control recording it -- and missed the other two, which sat in
+/// the function the window was wrapped around. Reserving a vector while calling
+/// the loader three lines later is the shape of partial fix this repository
+/// keeps producing: the rule was stated at the allocation it was noticed at
+/// rather than at the window it belongs to.
+///
+/// So the window now holds [`commit`] and nothing else.
+fn install_batch(chosen: &[usize]) -> Vec<(usize, Result<(), Refusal>)> {
+    // Phase one, with everything still running: resolve, recognise, allocate
+    // the trampolines, and open the target pages.
+    let prepared: Vec<(usize, Result<Prepared, Refusal>)> = chosen
+        .iter()
+        .map(|&index| (index, prepare(index)))
+        .collect();
+
+    // Phase two, with every other thread stopped: stores only.
+    with_others_suspended(|| {
+        for (_, outcome) in &prepared {
+            if let Ok(ready) = outcome {
+                // SAFETY: prepared by `prepare`, whose page is open for writing.
+                unsafe { commit(ready) };
+            }
+        }
+    });
+
+    // Phase three, running again: restore protection and flush.
+    prepared
+        .into_iter()
+        .map(|(index, outcome)| {
+            let result = match outcome {
+                Ok(ready) => {
+                    // SAFETY: prepared above and just committed.
+                    unsafe { finish(&ready) };
+                    Ok(())
+                }
+                Err(why) => Err(why),
+            };
+            (index, result)
+        })
+        .collect()
 }
 
 /// The worker factory handle learned so far, or zero.
@@ -667,7 +786,11 @@ pub(crate) fn install_by_label(label: &str) -> Result<(), Refusal> {
     let Some(index) = HOOKS.iter().position(|(_, name, _)| *name == label) else {
         return Err(Refusal::NotFound);
     };
-    with_others_suspended(|| install(index))
+    install_batch(&[index])
+        .into_iter()
+        .next()
+        .expect("one index in, one outcome out")
+        .1
 }
 
 /// Install the hooks named by `WINDOWS_THREADPOOL_TRACE_HOOKS`, once.
@@ -732,20 +855,13 @@ pub(crate) fn install_requested() {
     // process -- measured at about 0.12 s each. Paying that per hook put the
     // last of six installs 0.73 s into the process. Batching makes it one
     // payment however many hooks are asked for.
-    let outcomes = with_others_suspended(|| {
-        let mut done = [None; HOOKS.len()];
-        for &index in &chosen {
-            done[index] = Some(install(index));
-        }
-        done
-    });
+    let outcomes = install_batch(&chosen);
     // Recorded after the resume. Nothing may take the trace lock while another
     // thread is stopped, possibly holding it.
-    for index in chosen {
-        match outcomes[index] {
-            Some(Ok(())) => record(TARGET, "installed", index as u64, 0),
-            Some(Err(why)) => record(TARGET, "refused", index as u64, why as u64),
-            None => {}
+    for (index, outcome) in outcomes {
+        match outcome {
+            Ok(()) => record(TARGET, "installed", index as u64, 0),
+            Err(why) => record(TARGET, "refused", index as u64, why as u64),
         }
     }
 }
