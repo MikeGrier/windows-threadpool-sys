@@ -90,9 +90,10 @@ mod on {
     use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
     use std::sync::{Arc, Mutex, OnceLock};
     use std::time::Duration;
+    use windows_sys::Win32::Foundation::FALSE;
     use windows_sys::Win32::System::Threading::{
         CloseThreadpoolWork, CreateThreadpoolWork, PTP_CALLBACK_INSTANCE, PTP_WORK,
-        SubmitThreadpoolWork,
+        SubmitThreadpoolWork, WaitForThreadpoolWorkCallbacks,
     };
     use windows_sys::Win32::System::WindowsProgramming::QueryInterruptTime;
 
@@ -205,6 +206,11 @@ mod on {
         // Never read through this field: it is held for its *address*, which is
         // the work object's callback context, and for the lifetime that keeps
         // that address valid. The counter is read through the context instead.
+        //
+        // That lifetime is only long enough because `Drop` drains the work
+        // object before closing it. An earlier revision of this comment claimed
+        // the close itself waited for a running callback; `CloseThreadpoolWork`
+        // does no such thing, and the drain is what makes the claim true.
         #[allow(dead_code)]
         runs: Box<AtomicU64>,
     }
@@ -216,10 +222,35 @@ mod on {
 
     impl Drop for RepairWork {
         fn drop(&mut self) {
+            // Drained before the close, and the order is the whole of this
+            // impl's correctness.
+            //
+            // `runs` is a `Box` whose *address* is this work object's callback
+            // context, and the field drop below frees it the instant this body
+            // returns. `CloseThreadpoolWork` does not wait: it frees the work
+            // object asynchronously once outstanding callbacks finish, so a
+            // repair that has been submitted and not yet dispatched would run
+            // afterwards and `fetch_add` through freed heap.
+            //
+            // The window is not theoretical. `tick` submits, clears the mark,
+            // and then calls `retire_idle`, which can drop the last `Arc` to
+            // this entry microseconds later -- and the pool it just submitted
+            // to is by construction the one suspected of not dispatching
+            // promptly, so the callback is *most* likely to be late on exactly
+            // the path that frees its context.
+            //
+            // `ThreadpoolWork::drop` has always done this correctly; this one
+            // did not, and two comments here asserted otherwise.
+            //
+            // SAFETY: `work` was created by `CreateThreadpoolWork` here and is
+            // closed exactly once. Waiting without cancelling cannot orphan
+            // anything: the callback owns no storage.
+            crate::trace_call!("WaitForThreadpoolWorkCallbacks", self.work, 0, {
+                unsafe { WaitForThreadpoolWorkCallbacks(self.work, FALSE) };
+            });
             crate::trace_record!("heal", "repair-closed", self.work);
-            // SAFETY: created by `CreateThreadpoolWork` here, never submitted
-            // concurrently with this drop (the entry is unreachable), and closed
-            // exactly once.
+            // SAFETY: as above, and no callback can still be running after the
+            // drain, so the context the field drop frees is unreachable.
             unsafe { CloseThreadpoolWork(self.work) };
         }
     }
@@ -383,14 +414,23 @@ mod on {
     /// recorded with `M-T6.1`. Retiring an entry that still owes a repair would
     /// drop the repair at exactly the moment it is needed.
     fn release(entry: &Arc<PoolEntry>) {
-        let mut entries = locked();
-        let remaining = entry.objects.fetch_sub(1, Ordering::Relaxed) - 1;
-        if remaining > 0 || entry.repair_owed_at().is_some() {
-            crate::trace_record!("heal", "released", entry.key, remaining);
-            return;
-        }
-        crate::trace_record!("heal", "entry-retired", entry.key, remaining);
-        entries.retain(|held| held.key != entry.key);
+        // Moved out rather than dropped in place; see `retire_idle`.
+        let retired: Vec<Arc<PoolEntry>> = {
+            let mut entries = locked();
+            let remaining = entry.objects.fetch_sub(1, Ordering::Relaxed) - 1;
+            if remaining > 0 || entry.repair_owed_at().is_some() {
+                crate::trace_record!("heal", "released", entry.key, remaining);
+                return;
+            }
+            crate::trace_record!("heal", "entry-retired", entry.key, remaining);
+            let (out, keep) = entries
+                .iter()
+                .cloned()
+                .partition(|held| held.key == entry.key);
+            *entries = keep;
+            out
+        };
+        drop(retired);
     }
 
     /// Retire every entry that has no objects and owes no repair.
@@ -398,15 +438,29 @@ mod on {
     /// For the self-heal timer (`M-T6.4`), which is what discharges a repair and
     /// so is what makes a retained entry retirable again.
     pub(crate) fn retire_idle() {
-        let mut entries = locked();
-        entries.retain(|entry| {
-            let keep =
-                entry.objects.load(Ordering::Relaxed) > 0 || entry.repair_owed_at().is_some();
-            if !keep {
-                crate::trace_record!("heal", "entry-retired", entry.key, 0);
-            }
-            keep
-        });
+        // The retired entries are moved out under the lock and dropped after it
+        // is released.
+        //
+        // Dropping the last `Arc` in place would run `RepairWork::drop`, which
+        // now drains the work object before closing it -- and that drain waits
+        // on a pool this feature only touches because it is suspected of not
+        // dispatching. Holding the process-wide registry lock across such a
+        // wait would let one wedged pool stall every other pool's registration
+        // and release.
+        let retired: Vec<Arc<PoolEntry>> = {
+            let mut entries = locked();
+            let (out, keep) = entries.iter().cloned().partition(|entry| {
+                let idle =
+                    entry.objects.load(Ordering::Relaxed) == 0 && entry.repair_owed_at().is_none();
+                if idle {
+                    crate::trace_record!("heal", "entry-retired", entry.key, 0);
+                }
+                idle
+            });
+            *entries = keep;
+            out
+        };
+        drop(retired);
     }
 
     /// Every entry currently registered.

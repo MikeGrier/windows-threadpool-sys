@@ -227,6 +227,33 @@ READMEs cite them and renumbering would orphan every citation.
   to [RESOLVED-TEST-FAILURES.md](../windows-ioring-sys/RESOLVED-TEST-FAILURES.md). The item's own premise was wrong and is
   corrected in the archive. -> [completed 2026-10-01](../windows-ioring-sys/COMPLETED-CHECKLIST.md#m2615)
 
+## M-T9 -- Guard the repair object's teardown
+
+Opened 2026-10-01 by a code review of this branch, which found a use-after-free in `RepairWork::drop`
+that the whole test suite and a full sabotage sweep had both missed.
+
+- [ ] **M-T9.1** -- **Write the test that would have caught the repair-object use-after-free.**
+
+  **What the defect was.** `RepairWork::drop` called `CloseThreadpoolWork` without draining first,
+  then freed the `Box<AtomicU64>` whose *address* is that work object's callback context.
+  `CloseThreadpoolWork` does not wait -- it frees the work object asynchronously once outstanding
+  callbacks finish -- so a repair submitted and not yet dispatched would `fetch_add` through freed
+  heap. Fixed by draining before the close, mirroring `ThreadpoolWork::drop`, which had always done
+  it correctly.
+
+  **Why nothing caught it, which is the part worth fixing.** Every test in `heal/tests.rs` holds its
+  own `Arc<PoolEntry>` clone, and usually a live object too, so the entry is never retired while a
+  repair is in flight -- the precise condition the defect needs. The sabotage manifest inherited the
+  same blind spot. A guard has to drop the last `Arc` between the submit and the dispatch.
+
+  **`windows-guard-alloc` is the instrument**, and is already a workspace member: a guarded
+  allocation for the counter would fault on the write rather than silently corrupting whatever took
+  the freed block. Reaching the window reliably may need the repair trampoline to be delayed under
+  a test-only hook, since the race is microseconds wide.
+
+  **Sabotage it**: with the drain removed the guard must fail, and the failure must be the write
+  through freed memory rather than a timeout -- a crash-caught mutant is treated as uncovered here.
+
 ## M-T8 -- Pool placement
 
 Opened 2026-10-01. It was found by a census in `windows-ioring-sys` that has since been retired
