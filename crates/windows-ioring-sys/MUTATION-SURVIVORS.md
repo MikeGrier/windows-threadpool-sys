@@ -1,5 +1,14 @@
 # Mutation survivors: windows-ioring-sys (M18.3, resolved in M18.4)
 
+> **Superseded in part by `M28` (2026-09-26).** This is a dated capture and its
+> figures are not edited to match later code. Read it knowing that
+> `M28.4.1d.3` retired `Token` and `Token::claim_if` entirely, so the
+> "Claim identity" section below and the `token.rs` entries describe items that
+> no longer exist -- the two `claim_if` impls it names are
+> `PendingFileRegistration` and `PendingBufferRegistration`, which are a
+> different mechanism and do survive. Nothing here should be actioned without
+> checking the item is still there.
+
 `cargo-mutants`, run over the crate with `--all-features`. M18.3 produced the
 triage below; M18.4 resolved it, and the outcome per category is recorded
 against each heading.

@@ -1,0 +1,4 @@
+arm,suite_outcome,leftover_files,notes
+before,all passing,25,"temp dir cleared first; 5 completion-event, 2 event-delivery, rest scattered"
+after,all passing,0,"TempPath guard in tests/common/mod.rs, 14 files converted"
+after,one test panics with its handle open,0,"deliberate panic! after the open; exit 101; that site had no removal at all before"
