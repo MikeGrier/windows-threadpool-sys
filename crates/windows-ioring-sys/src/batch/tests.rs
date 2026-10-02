@@ -191,13 +191,14 @@ fn a_pending_buffer_registration_claims_only_its_own_completion() {
     // one leaves `-> 1` indistinguishable -- both of which survived in turn
     // while this test was being written.
     for expected in 0..2 {
-        let burned = crate::Token::new(ring.accounting_mut(), vec![0_u8; 1]).expect("mint a token");
+        let burned = ring
+            .accounting_mut()
+            .reserve_user_data()
+            .expect("reserve a UserData");
         assert_eq!(
-            burned.id(),
-            expected,
+            burned, expected,
             "a fresh ring hands out UserData from zero, in order"
         );
-        drop(burned);
         ring.record_completion();
     }
 
@@ -253,7 +254,7 @@ fn a_pending_buffer_registration_claims_only_its_own_completion() {
     // paths use, and it is only reachable by submitting against an index.
     let mut batch = Batch::new(&mut ring);
     let out_of_range = unsafe {
-        batch.read_registered_raw(
+        batch.read_registered_raw_owned(
             std::ptr::null_mut(),
             &buffers,
             crate::RegisteredSpan {
@@ -261,6 +262,7 @@ fn a_pending_buffer_registration_claims_only_its_own_completion() {
                 offset: 0,
                 len: 8,
             },
+            (),
             0,
             PushOptions::new(),
         )
@@ -283,16 +285,15 @@ fn submit_reports_how_many_operations_it_queued() {
         .expect("open fixture");
     let handle = std::os::windows::io::AsRawHandle::as_raw_handle(&file);
 
-    let mut ring = IoRing::new(16, 16).expect("create ring");
-    let mut tokens = Vec::new();
+    let mut ring = IoRing::<Vec<u8>>::with_inventory(16, 16).expect("create ring");
     let mut batch = Batch::new(&mut ring);
     for index in 0..3_u64 {
         // SAFETY: `file` outlives every operation -- all three are drained
         // before this test returns.
-        let token =
-            unsafe { batch.read_raw(handle, vec![0_u8; 512], index * 512, PushOptions::new()) }
-                .expect("queue read");
-        tokens.push(token);
+        unsafe {
+            batch.read_raw_owned(handle, vec![0_u8; 512], (), index * 512, PushOptions::new())
+        }
+        .expect("queue read");
     }
     assert_eq!(
         batch.submit().expect("submit"),
@@ -303,12 +304,9 @@ fn submit_reports_how_many_operations_it_queued() {
     // Drain so the ring can be dropped with nothing outstanding.
     let mut popped = 0;
     while popped < 3 {
-        while let Some(completion) = ring.try_pop().expect("pop") {
+        while let Some((completion, held)) = ring.try_pop().expect("pop") {
             let _ = completion.result();
-            if let Some(position) = tokens.iter().position(|t| t.id() == completion.user_data()) {
-                let token = tokens.swap_remove(position);
-                let _ = token.claim_if(&completion);
-            }
+            assert!(held.is_some(), "the ring was holding this read's buffer");
             popped += 1;
         }
     }
@@ -347,8 +345,8 @@ fn dropping_a_registration_with_work_outstanding_is_refused() {
     let mut batch = Batch::new(&mut ring);
     // SAFETY: `file` outlives this operation; the token is leaked below so the
     // buffer stays alive for as long as the kernel may write into it.
-    let token = unsafe {
-        batch.read_registered_raw(
+    unsafe {
+        batch.read_registered_raw_owned(
             handle,
             &buffers,
             crate::RegisteredSpan {
@@ -356,14 +354,15 @@ fn dropping_a_registration_with_work_outstanding_is_refused() {
                 offset: 0,
                 len: 512,
             },
+            (),
             0,
             PushOptions::new(),
         )
     }
     .expect("queue registered read");
     batch.submit_and_wait(1, 5_000).expect("submit");
-    // Deliberately never claimed, so the buffer stays outstanding.
-    std::mem::forget(token);
+    // Deliberately never popped, so the buffer stays outstanding: the ring
+    // holds the lease until a pop retires the entry.
 
     // Dropped last and explicitly: a panic raised while some *other* unwind is
     // already in progress would abort instead of failing the test.

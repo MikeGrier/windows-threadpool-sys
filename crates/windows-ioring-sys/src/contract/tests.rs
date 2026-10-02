@@ -7,13 +7,12 @@
 //! is one its reader learns to skip. The "does not fire" cases are therefore
 //! written as deliberately as the "does fire" ones.
 
-use super::{RingContract, Violation};
+use super::{FINISHED_HISTORY, RingContract, Violation};
 
 /// A complete, legal lifecycle: pushed, completed, claimed.
 fn full_cycle(contract: &mut RingContract, user_data: usize) {
     contract.observe_push(user_data);
     contract.observe_completion(user_data);
-    contract.observe_claim(user_data);
 }
 
 #[test]
@@ -47,45 +46,44 @@ fn a_push_that_never_completes_is_reported() {
     );
 }
 
+// Three tests stood here, and `D-74` retired all three with the model they
+// described: an unclaimed completion reported as a leak, and two forms of
+// *deliberate* leak that were accepted because they were stated. None of them
+// can be written now -- there is no token to abandon, so no distinction
+// between a stated leak and an unstated one, and `Violation::LeakedToken` is
+// gone with the difference.
+//
+// What replaces them is the pair below. The settlement rule changed shape
+// rather than disappearing: completion used to be *provisional*, corrected by
+// a claim, and is now terminal. Both directions are asserted, because a test
+// that only showed completion settling would pass just as well against an
+// oracle that settled everything.
+
 #[test]
-fn a_completion_claimed_by_nothing_is_reported_as_a_leak() {
-    // This is `Appender::claim`'s real defect, in miniature: a completion was
-    // observed, the token was never claimed, and the arena slot it held is
-    // gone for the life of the process. Nothing else in the crate notices.
+fn a_completion_settles_its_operation() {
+    // The replacement for the leak tests. A completion is terminal now: there
+    // is no second report the caller must make, so observing one is the whole
+    // story and quiescence follows.
     let mut contract = RingContract::new();
     contract.observe_push(7);
     contract.observe_completion(7);
-    // No claim.
+
+    assert_eq!(contract.check_quiescent(), Vec::new());
+}
+
+#[test]
+fn a_push_without_a_completion_is_still_outstanding() {
+    // The other direction, and the reason the pair exists. Settling on
+    // completion must not mean settling on anything: an operation that never
+    // completed is the one thing quiescence is there to catch, and it is
+    // reported as `Outstanding` rather than excused.
+    let mut contract = RingContract::new();
+    contract.observe_push(11);
 
     assert_eq!(
         contract.check_quiescent(),
-        vec![Violation::LeakedToken { user_data: 7 }]
+        vec![Violation::Outstanding { user_data: 11 }]
     );
-}
-
-#[test]
-fn a_deliberate_leak_is_not_reported() {
-    // Leaking is legitimate when it is *stated* -- it is what keeps a buffer
-    // alive when a caller cannot prove the kernel is done. The difference
-    // between a stated and an unstated leak is the whole point.
-    let mut contract = RingContract::new();
-    contract.observe_push(9);
-    contract.observe_completion(9);
-    contract.observe_deliberate_leak(9);
-
-    assert_eq!(contract.check_quiescent(), Vec::new());
-}
-
-#[test]
-fn a_deliberate_leak_before_any_completion_is_also_accepted() {
-    // A token abandoned while its operation is still in flight is the
-    // canonical reason leaking exists: the kernel may still be reading the
-    // buffer, so the memory must outlive the caller's knowledge of it.
-    let mut contract = RingContract::new();
-    contract.observe_push(11);
-    contract.observe_deliberate_leak(11);
-
-    assert_eq!(contract.check_quiescent(), Vec::new());
 }
 
 #[test]
@@ -202,10 +200,14 @@ fn every_violation_is_reported_rather_than_only_the_first() {
     // fixing a symptom.
     let mut contract = RingContract::new();
     contract.observe_push(1); // never completes
-    contract.observe_push(2);
-    contract.observe_completion(2); // never claimed
+    contract.observe_push(2); // nor does this one
     contract.observe_buffer(0, 3); // still in use
 
+    // Two *kinds* of violation, and more than one of the first kind. The
+    // middle case used to be a completion that was never claimed, which
+    // `D-74` made impossible -- so a second never-completing push replaces it
+    // rather than the count being lowered, because "several" is what this
+    // test is about.
     let violations = contract.check_quiescent();
     assert_eq!(violations.len(), 3, "got {violations:?}");
 }
@@ -251,7 +253,7 @@ fn a_tokenless_operation_is_complete_once_it_completes() {
     // Found by binding the real backpressure test in `submission_lifecycle.rs`
     // to this contract (M16.2), which pushes nothing but raw flushes.
     let mut contract = RingContract::new();
-    contract.observe_tokenless_push(1);
+    contract.observe_push(1);
     contract.observe_completion(1);
 
     assert_eq!(contract.check_quiescent(), Vec::new());
@@ -261,7 +263,7 @@ fn a_tokenless_operation_is_complete_once_it_completes() {
 fn a_tokenless_operation_that_never_completes_is_still_reported() {
     // Owning no token does not excuse it from the one-SQE-one-completion rule.
     let mut contract = RingContract::new();
-    contract.observe_tokenless_push(2);
+    contract.observe_push(2);
 
     assert_eq!(
         contract.check_quiescent(),
@@ -272,7 +274,7 @@ fn a_tokenless_operation_that_never_completes_is_still_reported() {
 #[test]
 fn a_tokenless_operation_completing_twice_is_still_a_duplicate() {
     let mut contract = RingContract::new();
-    contract.observe_tokenless_push(3);
+    contract.observe_push(3);
     contract.observe_completion(3);
     contract.observe_completion(3);
 
@@ -295,7 +297,7 @@ fn a_push_that_was_rejected_is_simply_never_observed() {
     // Nothing in the API enforces this -- it is a rule about what a caller
     // reports -- so it is written down as a test to make the intent legible.
     let mut contract = RingContract::new();
-    contract.observe_tokenless_push(1);
+    contract.observe_push(1);
     contract.observe_completion(1);
     // A second push was attempted here and rejected with queue-full. It is
     // deliberately not observed.
@@ -333,5 +335,107 @@ fn busy_registered_buffers_are_reported_in_index_order() {
     assert_eq!(
         reported, expected,
         "busy buffers must be reported by ascending index, and the quiet one omitted"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// M28.2: what the oracle costs to run.
+//
+// The three tests below are the only ones here that assert about *memory*
+// rather than about violations, and they exist because the defect M28.2 fixed
+// was invisible to every other test in this file: a claimed operation was kept
+// forever, and a suite that runs a handful of operations cannot tell that from
+// one that keeps none.
+// ---------------------------------------------------------------------------
+
+/// A finished operation stops being tracked at all.
+///
+/// The direct statement of the fix. Before `M28.2` a claim rewrote the entry
+/// to `Completed` and left it in the map, so this assertion would have found
+/// three.
+#[test]
+fn a_finished_operation_stops_being_tracked() {
+    let mut contract = RingContract::new();
+    full_cycle(&mut contract, 1);
+    full_cycle(&mut contract, 2);
+    full_cycle(&mut contract, 3);
+
+    assert!(
+        contract.operations.is_empty(),
+        "a claimed operation must leave the tracking map, found: {:?}",
+        contract.operations
+    );
+    // And the fix must not have been bought by weakening the oracle.
+    assert_eq!(contract.check_quiescent(), Vec::new());
+}
+
+/// Tracking follows concurrency, not uptime.
+///
+/// The property a long-running consumer actually needs, and the one the old
+/// shape broke. Ten thousand sequential operations are *one* operation's worth
+/// of concurrency, so nothing should accumulate -- while the history stays
+/// capped whatever the count.
+#[test]
+fn the_tracking_map_follows_concurrency_not_uptime() {
+    let mut contract = RingContract::new();
+    let cycles = FINISHED_HISTORY * 4;
+    for user_data in 0..cycles {
+        full_cycle(&mut contract, user_data);
+    }
+
+    assert!(
+        contract.operations.is_empty(),
+        "{cycles} sequential operations left {} tracked",
+        contract.operations.len()
+    );
+    assert!(
+        contract.finished.len() <= FINISHED_HISTORY,
+        "the history must stay capped at {FINISHED_HISTORY}, found {}",
+        contract.finished.len()
+    );
+    assert_eq!(
+        contract.finished.len(),
+        contract.finished_set.len(),
+        "the queue and its membership index must stay in step, or eviction \
+         leaks entries out of one and not the other"
+    );
+    assert_eq!(contract.check_quiescent(), Vec::new());
+}
+
+/// The bound's price, asserted rather than only documented.
+///
+/// A duplicate inside the window is named precisely; one that has fallen out
+/// of it is still **reported**, under the weaker name. Both halves matter: the
+/// first is what the window is for, and the second is the honest statement
+/// that nothing is silently missed past it.
+#[test]
+fn a_duplicate_is_named_precisely_within_the_window_and_still_reported_beyond_it() {
+    let mut contract = RingContract::new();
+
+    // `oldest` is pushed out of the history by the cycles that follow it.
+    let oldest = 0_usize;
+    full_cycle(&mut contract, oldest);
+    for user_data in 1..=FINISHED_HISTORY {
+        full_cycle(&mut contract, user_data);
+    }
+    let recent = FINISHED_HISTORY;
+
+    contract.observe_completion(recent);
+    assert!(
+        contract
+            .violations()
+            .contains(&Violation::DuplicateCompletion { user_data: recent }),
+        "a duplicate still inside the window is a duplicate: {:?}",
+        contract.violations()
+    );
+
+    contract.observe_completion(oldest);
+    assert!(
+        contract
+            .violations()
+            .contains(&Violation::UnexpectedCompletion { user_data: oldest }),
+        "a duplicate that has fallen out of the window is still reported, \
+         under the weaker name: {:?}",
+        contract.violations()
     );
 }

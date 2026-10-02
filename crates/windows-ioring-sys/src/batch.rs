@@ -19,8 +19,8 @@ use windows_sys::Win32::Storage::FileSystem::{
 
 use crate::buf::{IoBuf, IoBufMut};
 use crate::error::check;
-use crate::ring::{Completion, IoRing, Op, RingId};
-use crate::token::Token;
+use crate::ring::{Completion, Entry, Held, IoRing, Op, RingId};
+use crate::token::OperationId;
 
 /// Per-push options shared across every op builder (M3.2).
 #[derive(Clone, Copy, Debug, Default)]
@@ -90,7 +90,7 @@ impl PushOptions {
     /// does not make those writes durable.
     ///
     /// A flush does not take its barrier decision from here, for exactly that
-    /// reason: [`Batch::flush`] requires a [`FlushCoverage`] instead, so the
+    /// reason: [`Batch::flush_owned`] requires a [`FlushCoverage`] instead, so the
     /// choice cannot be inherited from a default (M12.1, D-25).
     pub fn drain_preceding(mut self, drain: bool) -> Self {
         self.drain_preceding = drain;
@@ -109,7 +109,7 @@ impl PushOptions {
 /// Whether a flush covers the operations queued before it (M12.1, D-23 in
 /// `DESIGN-NOTES.md`).
 ///
-/// This is a **required argument** on [`Batch::flush`] and
+/// This is a **required argument** on [`Batch::flush_owned`] and
 /// [`Batch::flush_raw`] rather than a field of [`PushOptions`], because there
 /// is no defensible default. An unflagged flush does *not* cover preceding
 /// writes: it is an ordinary operation competing with them, and it frequently
@@ -130,7 +130,7 @@ impl PushOptions {
 ///   flush does not execute until every operation outstanding *on the ring*
 ///   when it was reached has **completed** -- whatever file each one targets,
 ///   and whoever queued it (D-47, measured over roughly 4,500 trials).
-/// - **The flush names one file.** [`Batch::flush`] takes a [`FileTarget`], so
+/// - **The flush names one file.** [`Batch::flush_owned`] takes a [`FileTarget`], so
 ///   what a syncing [`FlushMode`] pushes to stable media is that file's data
 ///   and the device cache behind it.
 ///
@@ -416,14 +416,14 @@ impl From<RegisteredFile> for FileRef {
 /// having to prove it outlives every operation pushed against it (M8, PR
 /// #20 review response).
 ///
-/// Backed by `Arc<OwnedHandle>` rather than [`Token`]'s exclusive-ownership
+/// Backed by `Arc<OwnedHandle>` rather than an exclusive-ownership
 /// shape: unlike a buffer, one handle is legitimately the target of many
 /// concurrent pushes, so what must survive until every one of them
 /// completes is a *reference*, not sole ownership. Every safe push method
-/// (e.g. [`Batch::read`], as opposed to its `_raw` sibling) clones this
-/// `Arc` into the same [`Token`] that already tracks the operation's own
-/// payload, so the underlying handle survives until that token is claimed
-/// or leaked (D-4 in `DESIGN-NOTES.md`), regardless of what the caller does
+/// (e.g. [`Batch::read_owned`], as opposed to its `_raw` sibling) clones this
+/// `Arc` into the same inventory entry that already tracks the operation's own
+/// payload, so the underlying handle survives until the ring returns that
+/// entry at its pop (D-4 in `DESIGN-NOTES.md`), regardless of what the caller does
 /// with its own clone.
 #[derive(Clone, Debug)]
 pub struct SharedFile(Arc<OwnedHandle>);
@@ -477,10 +477,10 @@ mod sealed {
 /// `RegisteredFile` is an index into a table the ring itself owns, minted by
 /// this crate and checked against the minting ring, so there is nothing for a
 /// caller to keep alive. Both are therefore safe to push, and neither needs
-/// `unsafe` -- which is why [`Batch::read`] and its siblings are generic over
+/// `unsafe` -- which is why [`Batch::read_owned`] and its siblings are generic over
 /// this trait rather than hardcoding `SharedFile`.
 ///
-/// [`Guard`](FileTarget::Guard) is what the returned [`Token`] holds until the
+/// [`Guard`](FileTarget::Guard) is what the ring holds until the
 /// operation's completion is observed. For `SharedFile` that is a clone of its
 /// `Arc`, which is what makes the handle outlive the operation; for
 /// `RegisteredFile` there is nothing to keep alive, so it is the (`Copy`)
@@ -492,14 +492,20 @@ mod sealed {
 /// alive, which is precisely the unsoundness the `_raw` pushes make a caller
 /// take responsibility for with `unsafe`.
 pub trait FileTarget: sealed::Sealed {
-    /// What the operation's [`Token`] must hold until its completion is
+    /// What the ring must hold for the operation until its completion is
     /// observed.
-    type Guard: Send + 'static;
+    /// What keeps the file valid while the operation runs.
+    ///
+    /// `Into<FileGuard>` is expressible only because this trait is **sealed**
+    /// (`D-73`): both implementors are this crate's, so the ring can hold a
+    /// guard in a concrete slot instead of a third generic parameter every
+    /// consumer would have to name.
+    type Guard: Send + 'static + Into<crate::ring::FileGuard>;
 
     /// How this target addresses its file.
     fn as_file_ref(&self) -> FileRef;
 
-    /// Produce the value the [`Token`] will hold for the operation's
+    /// Produce the value the ring will hold for the operation's
     /// duration.
     fn guard(&self) -> Self::Guard;
 }
@@ -591,7 +597,7 @@ impl PendingFileRegistration {
     ///
     /// The inner `Result` is `Err` if the registration itself failed --
     /// nothing is lost, since no owned resource was ever handed over for
-    /// this op (M5.1, unlike [`Token`]).
+    /// this op (M5.1, unlike an inventory entry).
     pub fn claim_if(self, completion: &Completion) -> Result<io::Result<RegisteredFiles>, Self> {
         if completion.user_data() != self.user_data || completion.ring_id() != self.ring_id {
             return Err(self);
@@ -643,12 +649,12 @@ enum KernelAccess {
     ReadsBuffer,
 }
 
-/// A marker a [`Token`] owns while a registered-buffer-indexed read or write
+/// A marker the ring holds while a registered-buffer-indexed read or write
 /// is outstanding (M5.2, M5.3).
 ///
 /// Decrements [`RegisteredBuffers`]'s count **for the one buffer the
-/// operation addressed** only when actually claimed: dropping an unclaimed
-/// token forgets this like any other value a `Token` holds, which correctly
+/// operation addressed** only when the ring returns the entry: an entry the
+/// ring forgets rather than returns takes this with it, which correctly
 /// leaves the registration believing that use is still outstanding, since
 /// nothing proved otherwise.
 ///
@@ -724,8 +730,8 @@ impl<B: IoBufMut> RegisteredBuffers<B> {
     /// # Why it can refuse
     ///
     /// Because otherwise it is a data race with the kernel, reachable from
-    /// entirely safe code. [`Batch::read_registered`] takes
-    /// `&RegisteredBuffers` and returns a [`Token`] holding only a
+    /// entirely safe code. [`Batch::read_registered_owned`] takes
+    /// `&RegisteredBuffers` and holds only a
     /// [`RegisteredUse`] -- no borrow of this registration outlives the push.
     /// So without the check below, this sequence compiles with no `unsafe`
     /// anywhere and reads memory the kernel is concurrently writing:
@@ -765,7 +771,7 @@ impl<B: IoBufMut> RegisteredBuffers<B> {
     /// written, in arbitrary order -- and only become meaningful once the
     /// completion is observed. Earlier or later is always available.
     ///
-    /// It does not restrict an arena. A [`Token`] holds a [`RegisteredUse`],
+    /// It does not restrict an arena. An entry holds a [`RegisteredUse`],
     /// not a borrow of this registration, so the shared borrow ends when the
     /// push returns; a caller may still read or fill *quiet* buffers while
     /// operations are outstanding against their neighbours, which is what makes
@@ -780,7 +786,7 @@ impl<B: IoBufMut> RegisteredBuffers<B> {
     /// the bytes of a write in flight are stable, and the kernel is reading
     /// them too.
     ///
-    /// A count returns to zero only when a [`Token`] is claimed against a real
+    /// A count returns to zero only when a completion is popped against a real
     /// popped [`Completion`], so "not outstanding" means the operation was
     /// *observed* to finish, never merely assumed to have.
     ///
@@ -817,8 +823,8 @@ impl<B: IoBufMut> RegisteredBuffers<B> {
     /// ```
     ///
     /// Reading a *quiet* buffer while an operation is outstanding against a
-    /// neighbour is still allowed, because a [`Token`] borrows nothing from the
-    /// registration -- that is the arena pattern, and it must keep working:
+    /// neighbour is still allowed, because the ring's hold on a registration
+    /// is per-buffer -- that is the arena pattern, and it must keep working:
     ///
     /// ```no_run
     /// # use windows_ioring_sys::{Batch, IoRing, PushOptions, RegisteredBuffers, RegisteredSpan, SharedFile};
@@ -829,10 +835,9 @@ impl<B: IoBufMut> RegisteredBuffers<B> {
     /// #     span: RegisteredSpan,
     /// # ) -> std::io::Result<()> {
     /// let mut batch = Batch::new(ring);
-    /// let token = batch.read_registered(file, arena, span, 0, PushOptions::new())?;
+    /// batch.read_registered_owned(file, arena, span, (), 0, PushOptions::new())?;
     /// batch.submit()?;
     /// let _neighbour = arena.get(1)?;        // a different, quiet buffer
-    /// # let _ = token;
     /// # Ok(())
     /// # }
     /// ```
@@ -841,8 +846,8 @@ impl<B: IoBufMut> RegisteredBuffers<B> {
     ///
     /// [`io::ErrorKind::InvalidInput`] if `i` is out of range for this
     /// registration, or [`io::ErrorKind::WouldBlock`] if a read is still
-    /// outstanding into that buffer -- pop its completion and claim its token
-    /// first.
+    /// outstanding into that buffer -- pop its completion first, which is what
+    /// returns the buffer.
     pub fn get(&mut self, i: u32) -> io::Result<&[u8]> {
         let index = usize::try_from(i).map_err(|_| {
             io::Error::new(
@@ -862,8 +867,7 @@ impl<B: IoBufMut> RegisteredBuffers<B> {
                 io::ErrorKind::WouldBlock,
                 format!(
                     "buffer {i} still has {kernel_writes} read(s) outstanding into it; the kernel \
-                     may be writing through it. Pop the completion and claim its token before \
-                     reading this buffer."
+                     may be writing through it. Pop its completion before reading this buffer."
                 ),
             ));
         }
@@ -914,8 +918,8 @@ impl<B: IoBufMut> RegisteredBuffers<B> {
     ///
     /// `&mut self` is not on its own enough either. It excludes concurrent
     /// `&self` borrows, but an operation already in flight holds no borrow at
-    /// all -- [`Batch::write_registered`] takes `&RegisteredBuffers` for the
-    /// length of the call, and the [`Token`] it returns keeps only a
+    /// all -- [`Batch::write_registered_owned`] takes `&RegisteredBuffers` for the
+    /// length of the call, and the entry it creates keeps only a
     /// [`RegisteredUse`]. So the compiler would happily allow mutation of a
     /// buffer the kernel is reading through right now, which is a data race
     /// with the kernel.
@@ -926,7 +930,7 @@ impl<B: IoBufMut> RegisteredBuffers<B> {
     /// the point of counting per buffer -- an arena a caller refills has to
     /// be able to prepare buffer 5 while buffer 2 is still being written.
     ///
-    /// A count returns to zero only when a [`Token`] is claimed against a
+    /// A count returns to zero only when a completion is popped against a
     /// real popped [`Completion`], so "not outstanding" means the operation
     /// was *observed* to finish, never merely assumed to have.
     ///
@@ -936,8 +940,8 @@ impl<B: IoBufMut> RegisteredBuffers<B> {
     ///
     /// [`io::ErrorKind::InvalidInput`] if `i` is out of range for this
     /// registration, or [`io::ErrorKind::WouldBlock`] if an operation is
-    /// still outstanding against that buffer -- pop its completion and claim
-    /// its token first.
+    /// still outstanding against that buffer -- pop its completion first,
+    /// which is what returns the buffer.
     pub fn get_mut(&mut self, i: u32) -> io::Result<&mut [u8]> {
         let index = usize::try_from(i).map_err(|_| {
             io::Error::new(
@@ -957,8 +961,8 @@ impl<B: IoBufMut> RegisteredBuffers<B> {
                 io::ErrorKind::WouldBlock,
                 format!(
                     "buffer {i} still has {outstanding} operation(s) outstanding; the kernel may \
-                     be reading or writing through it. Pop the completion and claim its token \
-                     before filling this buffer."
+                     be reading or writing through it. Pop its completion before filling this \
+                     buffer."
                 ),
             ));
         }
@@ -1114,7 +1118,7 @@ pub struct RegisteredSpan {
 /// A [`Batch::register_buffers`] push not yet matched to its completion.
 ///
 /// `buffers` is `ManuallyDrop` and this type's own `Drop` is deliberately
-/// empty, mirroring [`Token`] (PR #20 review response): the registration is
+/// empty, mirroring the inventory (PR #20 review response): the registration is
 /// already queued via `BuildIoRingRegisterBuffers` the instant
 /// [`Batch::register_buffers`] returns, before any completion is observed,
 /// so a caller that drops this without ever matching a completion has no
@@ -1214,14 +1218,14 @@ impl<B: IoBufMut> std::fmt::Debug for PendingBufferRegistration<B> {
 /// queues its SQE the instant it succeeds -- there is no rewind -- so
 /// `Batch` submits on [`Drop`] rather than leaving queued SQEs for some
 /// later, unrelated submit to discover (D-5).
-pub struct Batch<'ring> {
-    ring: &'ring mut IoRing,
+pub struct Batch<'ring, T = (), X = ()> {
+    ring: &'ring mut IoRing<T, X>,
     submitted: bool,
 }
 
-impl<'ring> Batch<'ring> {
+impl<'ring, T, X> Batch<'ring, T, X> {
     /// Open a batch over `ring`.
-    pub fn new(ring: &'ring mut IoRing) -> Self {
+    pub fn new(ring: &'ring mut IoRing<T, X>) -> Self {
         Self {
             ring,
             submitted: false,
@@ -1241,7 +1245,7 @@ impl<'ring> Batch<'ring> {
 
     /// Queue a read of `buffer.bytes_len()` bytes from `file` at `offset`.
     ///
-    /// Prefer [`Batch::read`] unless `file` needs to address a raw
+    /// Prefer [`Batch::read_owned`] unless `file` needs to address a raw
     /// `FileRef` directly, without `SharedFile`'s `Arc` bookkeeping.
     ///
     /// # Safety
@@ -1249,7 +1253,7 @@ impl<'ring> Batch<'ring> {
     /// If `file` is [`FileRef::Raw`], the handle must be valid, opened with
     /// read access, and must remain valid -- not closed, not reused for a
     /// different object -- until this operation's completion is observed
-    /// (via a popped [`Completion`] or [`Token::claim_if`]) or until the
+    /// (via a popped [`Completion`]) or until the
     /// ring runs down (M8, PR #20 review response). A [`FileRef::Registered`]
     /// target needs none of this.
     ///
@@ -1262,114 +1266,38 @@ impl<'ring> Batch<'ring> {
     /// auto-flushed -- see [`Batch`]'s own docs); or any other error from
     /// `BuildIoRingReadFile`. On any error the buffer is dropped normally,
     /// not leaked or handed back.
-    pub unsafe fn read_raw<B: IoBufMut>(
-        &mut self,
-        file: impl Into<FileRef>,
-        mut buffer: B,
-        offset: u64,
-        options: PushOptions,
-    ) -> io::Result<Token<B>> {
-        self.require(Op::Read)?;
-        let len = checked_len(buffer.bytes_len())?;
-        let address = buffer.stable_mut_ptr().cast::<c_void>();
-        let target = handle_ref(file.into(), self.ring.ring_id())?;
-        let token = Token::new(self.ring.accounting_mut(), buffer)?;
-        let user_data = token.id();
-        // SAFETY: `self.ring`'s handle is live; `address` is `IoBufMut`'s
-        // promised stable, exclusively-owned pointer, valid for `len` bytes
-        // until `token` is claimed; `file` is the caller's to keep alive,
-        // forwarded from this function's own contract.
-        let hr = unsafe {
-            crate::sys::build_read(
-                self.ring.raw_handle(),
-                target,
-                raw_buffer_ref(address),
-                len,
-                offset,
-                user_data,
-                options.sqe_flags(),
-            )
-        };
-        self.finish_push(hr, token)
-    }
-
-    /// As [`Batch::read_raw`], but safe: `file` is a [`SharedFile`] rather
-    /// than a bare [`FileRef`], so the pushed operation keeps its own clone
-    /// of the handle alive regardless of what the caller does with its
-    /// copy. The returned token yields `(buffer, file)` once claimed.
+    /// Queue a write whose buffer the **ring** holds (`D-71`, `D-73`).
     ///
-    /// # Errors
-    ///
-    /// As [`Batch::read_raw`], plus [`io::ErrorKind::InvalidInput`] if `file`
-    /// is a [`RegisteredFile`] from a different ring.
-    pub fn read<B: IoBufMut, F: FileTarget>(
-        &mut self,
-        file: &F,
-        mut buffer: B,
-        offset: u64,
-        options: PushOptions,
-    ) -> io::Result<Token<(B, F::Guard)>> {
-        self.require(Op::Read)?;
-        let len = checked_len(buffer.bytes_len())?;
-        let address = buffer.stable_mut_ptr().cast::<c_void>();
-        let target = handle_ref(file.as_file_ref(), self.ring.ring_id())?;
-        let token = Token::new(self.ring.accounting_mut(), (buffer, file.guard()))?;
-        let user_data = token.id();
-        // SAFETY: `self.ring`'s handle is live; `address` is `IoBufMut`'s
-        // promised stable, exclusively-owned pointer, valid for `len` bytes
-        // until `token` is claimed; `target` stays valid at least that long
-        // too, because `token` holds `file`'s guard -- a clone of the `Arc`
-        // for a `SharedFile`, and nothing needing to be kept alive at all for
-        // a `RegisteredFile`, whose index names the ring's own table.
-        let hr = unsafe {
-            crate::sys::build_read(
-                self.ring.raw_handle(),
-                target,
-                raw_buffer_ref(address),
-                len,
-                offset,
-                user_data,
-                options.sqe_flags(),
-            )
-        };
-        self.finish_push(hr, token)
-    }
-
-    /// Queue a write of `buffer.bytes_len()` bytes to `file` at `offset`.
-    ///
-    /// `caching` is `FILE_WRITE_FLAGS`; see [`WriteCaching`], and note that
-    /// write-through is a cache directive rather than a durability guarantee.
-    /// Durability comes from [`Batch::flush`] with
-    /// [`FlushCoverage::CoversPrecedingOperations`], never from a write flag.
-    ///
-    /// Prefer [`Batch::write`] unless `file` needs to address a raw
-    /// `FileRef` directly, without `SharedFile`'s `Arc` bookkeeping.
+    /// The inventory counterpart to [`Batch::write_raw_owned`].
     ///
     /// # Safety
     ///
-    /// As [`Batch::read_raw`]'s, for a write-access handle.
+    /// As [`Batch::write_raw_owned`].
     ///
     /// # Errors
     ///
-    /// As [`Batch::read_raw`], plus any error from `BuildIoRingWriteFile`.
-    pub unsafe fn write_raw<B: IoBuf>(
+    /// As [`Batch::write_raw_owned`].
+    pub unsafe fn write_raw_owned(
         &mut self,
         file: impl Into<FileRef>,
-        buffer: B,
+        buffer: T,
+        extra: X,
         offset: u64,
         options: PushOptions,
         caching: WriteCaching,
-    ) -> io::Result<Token<B>> {
+    ) -> io::Result<OperationId>
+    where
+        T: IoBuf,
+    {
         self.require(Op::Write)?;
         let len = checked_len(buffer.bytes_len())?;
-        let address = buffer.stable_ptr().cast_mut().cast::<c_void>();
+        let address = buffer.stable_ptr().cast::<c_void>().cast_mut();
         let target = handle_ref(file.into(), self.ring.ring_id())?;
-        let token = Token::new(self.ring.accounting_mut(), buffer)?;
-        let user_data = token.id();
-        // SAFETY: `address` is `IoBuf`'s promised stable pointer, valid for
-        // `len` bytes until `token` is claimed; the kernel only reads
-        // through it for a write, so the cast away from `const` does not
-        // authorize mutation. `file` is the caller's to keep alive.
+        let (user_data, id) = self.begin_owned()?;
+        // SAFETY: as `write_raw` -- `address` is `IoBuf`'s promised stable
+        // pointer, valid for `len` bytes, and stays valid across the move into
+        // the inventory because that stability is the trait's contract rather
+        // than a property of where the value lives.
         let hr = unsafe {
             crate::sys::build_write(
                 self.ring.raw_handle(),
@@ -1382,33 +1310,86 @@ impl<'ring> Batch<'ring> {
                 options.sqe_flags(),
             )
         };
-        self.finish_push(hr, token)
+        self.finish_owned(hr, id, Some(buffer), extra, Held::default())
     }
 
-    /// As [`Batch::write_raw`], but safe: `file` is a [`SharedFile`] rather
-    /// than a bare [`FileRef`]. The returned token yields `(buffer, file)`
-    /// once claimed.
+    /// Queue a read against a guarded file, with the **ring** holding both the
+    /// buffer and the guard (`D-73`).
+    ///
+    /// The inventory counterpart to [`Batch::read_owned`]. The guard goes into the
+    /// ring's own slot rather than into `T`, which is what keeps the caller's
+    /// parameters free of this crate's internals.
     ///
     /// # Errors
     ///
-    /// As [`Batch::write_raw`], plus [`io::ErrorKind::InvalidInput`] if `file`
-    /// is a [`RegisteredFile`] from a different ring.
-    pub fn write<B: IoBuf, F: FileTarget>(
+    /// As [`Batch::read_owned`].
+    pub fn read_owned<F: FileTarget>(
         &mut self,
         file: &F,
-        buffer: B,
+        mut buffer: T,
+        extra: X,
+        offset: u64,
+        options: PushOptions,
+    ) -> io::Result<OperationId>
+    where
+        T: IoBufMut,
+    {
+        self.require(Op::Read)?;
+        let len = checked_len(buffer.bytes_len())?;
+        let address = buffer.stable_mut_ptr().cast::<c_void>();
+        let target = handle_ref(file.as_file_ref(), self.ring.ring_id())?;
+        let (user_data, id) = self.begin_owned()?;
+        let held = Held {
+            guard: Some(file.guard().into()),
+            registration: None,
+        };
+        // SAFETY: as `read` -- `target` stays valid at least as long as the
+        // operation, because the ring holds `file`'s guard until the pop that
+        // completes it.
+        let hr = unsafe {
+            crate::sys::build_read(
+                self.ring.raw_handle(),
+                target,
+                raw_buffer_ref(address),
+                len,
+                offset,
+                user_data,
+                options.sqe_flags(),
+            )
+        };
+        self.finish_owned(hr, id, Some(buffer), extra, held)
+    }
+
+    /// Queue a write against a guarded file, with the **ring** holding both
+    /// the buffer and the guard (`D-73`).
+    ///
+    /// The inventory counterpart to [`Batch::write_owned`].
+    ///
+    /// # Errors
+    ///
+    /// As [`Batch::write_owned`].
+    pub fn write_owned<F: FileTarget>(
+        &mut self,
+        file: &F,
+        buffer: T,
+        extra: X,
         offset: u64,
         options: PushOptions,
         caching: WriteCaching,
-    ) -> io::Result<Token<(B, F::Guard)>> {
+    ) -> io::Result<OperationId>
+    where
+        T: IoBuf,
+    {
         self.require(Op::Write)?;
         let len = checked_len(buffer.bytes_len())?;
-        let address = buffer.stable_ptr().cast_mut().cast::<c_void>();
+        let address = buffer.stable_ptr().cast::<c_void>().cast_mut();
         let target = handle_ref(file.as_file_ref(), self.ring.ring_id())?;
-        let token = Token::new(self.ring.accounting_mut(), (buffer, file.guard()))?;
-        let user_data = token.id();
-        // SAFETY: as `write_raw`'s; `target` stays valid at least as long as
-        // `token`'s hold on `file`'s guard does (see `Batch::read`).
+        let (user_data, id) = self.begin_owned()?;
+        let held = Held {
+            guard: Some(file.guard().into()),
+            registration: None,
+        };
+        // SAFETY: as `write`.
         let hr = unsafe {
             crate::sys::build_write(
                 self.ring.raw_handle(),
@@ -1421,7 +1402,106 @@ impl<'ring> Batch<'ring> {
                 options.sqe_flags(),
             )
         };
-        self.finish_push(hr, token)
+        self.finish_owned(hr, id, Some(buffer), extra, held)
+    }
+
+    /// Reserve an identity for an inventory push.
+    ///
+    /// Split from [`Batch::finish_owned`] because the identity has to exist
+    /// *before* the SQE is built -- the kernel echoes it back -- while what
+    /// the ring holds is only decided once the build has succeeded.
+    fn begin_owned(&mut self) -> io::Result<(usize, OperationId)> {
+        let user_data = self.ring.accounting_mut().reserve_user_data()?;
+        Ok((user_data, OperationId::new(user_data, self.ring.ring_id())))
+    }
+
+    /// The shared tail of every inventory push: stow on success, release the
+    /// reservation and hand the payload back on failure.
+    ///
+    /// The failure path is the mirror image of [`Batch::finish_push`]'s, and
+    /// for the same reason. A `Build*` that fails queued no SQE, so nothing
+    /// will ever complete to reclaim what it holds -- which makes dropping
+    /// normally correct here, where leaking is correct once the kernel has
+    /// seen the address.
+    fn finish_owned(
+        &mut self,
+        hr: windows_sys::core::HRESULT,
+        id: OperationId,
+        payload: Option<T>,
+        extra: X,
+        held: Held,
+    ) -> io::Result<OperationId> {
+        match check(hr) {
+            Ok(()) => {
+                self.ring.stow(
+                    id,
+                    Entry {
+                        payload,
+                        extra,
+                        held,
+                    },
+                );
+                Ok(id)
+            }
+            Err(error) => {
+                self.ring.cancel_reservation();
+                drop((payload, held));
+                Err(error)
+            }
+        }
+    }
+
+    /// Queue a read whose buffer the **ring** holds, returning the operation's
+    /// name (`D-71`, `D-73`).
+    ///
+    /// The inventory counterpart to [`Batch::read_raw_owned`]. The caller hands over
+    /// the buffer and its sidecar and receives an [`OperationId`], which names
+    /// the operation and grants nothing; the buffer comes back from
+    /// [`IoRing::try_pop`] and from nowhere else. A consumer that never
+    /// holds a token cannot lose one, which is the whole of `D-55`.
+    ///
+    /// # Safety
+    ///
+    /// As [`Batch::read_raw_owned`]: the caller keeps `file` valid until the
+    /// operation completes.
+    ///
+    /// # Errors
+    ///
+    /// As [`Batch::read_raw_owned`]. On any error the buffer is returned to the
+    /// caller inside the error-free path's `Err`, rather than stowed -- the
+    /// SQE never queued, so nothing will ever complete to reclaim it.
+    pub unsafe fn read_raw_owned(
+        &mut self,
+        file: impl Into<FileRef>,
+        mut buffer: T,
+        extra: X,
+        offset: u64,
+        options: PushOptions,
+    ) -> io::Result<OperationId>
+    where
+        T: IoBufMut,
+    {
+        self.require(Op::Read)?;
+        let len = checked_len(buffer.bytes_len())?;
+        let address = buffer.stable_mut_ptr().cast::<c_void>();
+        let target = handle_ref(file.into(), self.ring.ring_id())?;
+        let (user_data, id) = self.begin_owned()?;
+        // SAFETY: as `read_raw` -- `address` is `IoBufMut`'s promised stable
+        // pointer, valid for `len` bytes, and it stays valid across the move
+        // into the inventory below because that stability is the trait's
+        // contract rather than a property of where the value lives.
+        let hr = unsafe {
+            crate::sys::build_read(
+                self.ring.raw_handle(),
+                target,
+                raw_buffer_ref(address),
+                len,
+                offset,
+                user_data,
+                options.sqe_flags(),
+            )
+        };
+        self.finish_owned(hr, id, Some(buffer), extra, Held::default())
     }
 
     /// Refuse a [`RegisteredBuffers`] that did not come from this batch's own
@@ -1442,30 +1522,6 @@ impl<'ring> Batch<'ring> {
         }
     }
 
-    /// Reclaim `token`'s value and release its reservation if `hr` failed,
-    /// or hand `token` back unchanged on success -- the shared tail of every
-    /// push in this module.
-    fn finish_push<T: Send + 'static>(
-        &mut self,
-        hr: windows_sys::core::HRESULT,
-        token: Token<T>,
-    ) -> io::Result<Token<T>> {
-        match check(hr) {
-            Ok(()) => Ok(token),
-            Err(error) => {
-                // The SQE was never queued: reclaim and drop the value
-                // normally instead of leaking it (this crate's own code
-                // knows the op never reached the kernel, so an unconditional
-                // `claim` is sound here -- unlike `claim_if`, which requires
-                // a real popped `Completion`), and release the reservation
-                // so it does not count against rundown.
-                let _ = token.claim();
-                self.ring.cancel_reservation();
-                Err(error)
-            }
-        }
-    }
-
     /// Queue a flush of `file`'s buffered data.
     ///
     /// `coverage` decides whether this flush covers the operations queued
@@ -1477,8 +1533,8 @@ impl<'ring> Batch<'ring> {
     /// makes nothing durable, whatever `coverage` says.
     ///
     /// There is no buffer, so this returns the raw `UserData` identity
-    /// rather than a [`Token`]: nothing owns a buffer for a completion to
-    /// hand back. Prefer [`Batch::flush`] unless `file` needs to address a
+    /// rather than an inventory entry: nothing owns a buffer for a completion to
+    /// hand back. Prefer [`Batch::flush_owned`] unless `file` needs to address a
     /// raw `FileRef` directly.
     ///
     /// # A flush is the ring's only durability primitive
@@ -1518,7 +1574,7 @@ impl<'ring> Batch<'ring> {
     ///
     /// # Safety
     ///
-    /// As [`Batch::read_raw`]'s, for a [`FileRef::Raw`] target.
+    /// As [`Batch::read_raw_owned`]'s, for a [`FileRef::Raw`] target.
     ///
     /// # Errors
     ///
@@ -1554,33 +1610,34 @@ impl<'ring> Batch<'ring> {
         Ok(user_data)
     }
 
-    /// As [`Batch::flush_raw`], but safe: `file` is a [`FileTarget`] -- a
-    /// [`SharedFile`] or a [`RegisteredFile`] -- and the returned [`Token`]
-    /// (rather than a bare `UserData`) holds its guard until this
-    /// operation's completion is observed.
+    /// Queue a raw flush, with the **ring** holding the sidecar (`D-73`).
     ///
-    /// `coverage` is required for the reason [`FlushCoverage`] documents: an
-    /// unflagged flush does not cover preceding writes (D-23), so there is no
-    /// default spelling of this call that is safe to inherit. `mode` selects
-    /// how much is flushed and whether the device is synced at all; see
-    /// [`FlushMode`].
+    /// The inventory counterpart to [`Batch::flush_raw`]. There is no buffer
+    /// and no guard -- a raw handle is the caller's to keep alive, exactly as
+    /// for [`Batch::flush_raw`] -- so the entry exists purely to carry
+    /// `extra`. That is not a degenerate case: a flush that cannot say which
+    /// group of writes it belongs to forces the caller back into the
+    /// side-table this API exists to remove.
+    ///
+    /// # Safety
+    ///
+    /// As [`Batch::flush_raw`].
     ///
     /// # Errors
     ///
-    /// As [`Batch::flush_raw`], plus [`io::ErrorKind::InvalidInput`] if
-    /// `file` is a [`RegisteredFile`] from a different ring.
-    pub fn flush<F: FileTarget>(
+    /// As [`Batch::flush_raw`].
+    pub unsafe fn flush_raw_owned(
         &mut self,
-        file: &F,
+        file: impl Into<FileRef>,
+        extra: X,
         coverage: FlushCoverage,
         mode: FlushMode,
-    ) -> io::Result<Token<F::Guard>> {
+    ) -> io::Result<OperationId> {
         self.require(Op::Flush)?;
-        let target = handle_ref(file.as_file_ref(), self.ring.ring_id())?;
-        let token = Token::new(self.ring.accounting_mut(), file.guard())?;
-        let user_data = token.id();
-        // SAFETY: `target` stays valid at least as long as `token`'s hold on
-        // `file`'s guard does (see `Batch::read`); there is no buffer.
+        let target = handle_ref(file.into(), self.ring.ring_id())?;
+        let (user_data, id) = self.begin_owned()?;
+        // SAFETY: as `flush_raw` -- `file` is the caller's to keep alive,
+        // forwarded from this function's own contract; there is no buffer.
         let hr = unsafe {
             crate::sys::build_flush(
                 self.ring.raw_handle(),
@@ -1590,7 +1647,87 @@ impl<'ring> Batch<'ring> {
                 coverage.sqe_flags(),
             )
         };
-        self.finish_push(hr, token)
+        self.finish_owned(
+            hr,
+            id,
+            None,
+            extra,
+            Held {
+                guard: None,
+                registration: None,
+            },
+        )
+    }
+
+    /// Queue a flush, with the **ring** holding the file guard (`D-73`).
+    ///
+    /// The inventory counterpart to [`Batch::flush_owned`]. There is no buffer, so
+    /// nothing comes back as a payload -- the pop yields `None` for it, which
+    /// is the shape `M28.5` will settle for the tokenless pushes generally.
+    /// The guard still has to outlive the operation, and the ring is what
+    /// holds it.
+    ///
+    /// # Errors
+    ///
+    /// As [`Batch::flush_owned`].
+    pub fn flush_owned<F: FileTarget>(
+        &mut self,
+        file: &F,
+        extra: X,
+        coverage: FlushCoverage,
+        mode: FlushMode,
+    ) -> io::Result<OperationId> {
+        self.require(Op::Flush)?;
+        let target = handle_ref(file.as_file_ref(), self.ring.ring_id())?;
+        let (user_data, id) = self.begin_owned()?;
+        let held = Held {
+            guard: Some(file.guard().into()),
+            registration: None,
+        };
+        // SAFETY: as `flush` -- `target` stays valid at least as long as the
+        // ring's hold on `file`'s guard, which lasts until the pop that
+        // completes this operation.
+        let hr = unsafe {
+            crate::sys::build_flush(
+                self.ring.raw_handle(),
+                target,
+                mode.raw(),
+                user_data,
+                coverage.sqe_flags(),
+            )
+        };
+        self.finish_owned(hr, id, None, extra, held)
+    }
+
+    /// Queue a cancellation, with the **ring** holding the file guard
+    /// (`D-73`).
+    ///
+    /// The inventory counterpart to [`Batch::cancel_owned`]. `target` is the
+    /// `UserData` of the operation to cancel --
+    /// [`OperationId::user_data`](crate::OperationId::user_data) is where a
+    /// caller gets one, which is the whole reason a push returns a name at
+    /// all.
+    ///
+    /// # Errors
+    ///
+    /// As [`Batch::cancel_owned`].
+    pub fn cancel_owned<F: FileTarget>(
+        &mut self,
+        file: &F,
+        target: usize,
+        extra: X,
+    ) -> io::Result<OperationId> {
+        self.require(Op::Cancel)?;
+        let handle = handle_ref(file.as_file_ref(), self.ring.ring_id())?;
+        let (user_data, id) = self.begin_owned()?;
+        let held = Held {
+            guard: Some(file.guard().into()),
+            registration: None,
+        };
+        // SAFETY: as `cancel`.
+        let hr =
+            unsafe { crate::sys::build_cancel(self.ring.raw_handle(), handle, target, user_data) };
+        self.finish_owned(hr, id, None, extra, held)
     }
 
     /// Queue cancellation of the operation identified by `target` (the
@@ -1601,12 +1738,12 @@ impl<'ring> Batch<'ring> {
     /// outstanding. Cancelling a target that has already completed -- or
     /// was never outstanding -- reports `ERROR_NOT_FOUND` through *this*
     /// completion rather than failing to build (M3.6). Prefer
-    /// [`Batch::cancel`] unless `file` needs to address a raw `FileRef`
+    /// [`Batch::cancel_owned`] unless `file` needs to address a raw `FileRef`
     /// directly.
     ///
     /// # Safety
     ///
-    /// As [`Batch::read_raw`]'s, for a [`FileRef::Raw`] target.
+    /// As [`Batch::read_raw_owned`]'s, for a [`FileRef::Raw`] target.
     ///
     /// # Errors
     ///
@@ -1632,37 +1769,6 @@ impl<'ring> Batch<'ring> {
             return Err(error);
         }
         Ok(user_data)
-    }
-
-    /// As [`Batch::cancel_raw`], but safe: `file` is a [`SharedFile`], and
-    /// the returned [`Token`] keeps `file`'s clone alive until this
-    /// operation's completion is observed.
-    ///
-    /// A cancel is a request, not a guarantee (M10.2): `target` may complete
-    /// normally regardless, and this push produces its *own* completion in
-    /// addition to the target's, so a cancelled operation yields two. A
-    /// result of `ERROR_NOT_FOUND` on this push's own completion means
-    /// `target` was no longer outstanding -- a normal race, not a caller
-    /// error.
-    ///
-    /// # Errors
-    ///
-    /// As [`Batch::cancel_raw`].
-    pub fn cancel<F: FileTarget>(
-        &mut self,
-        file: &F,
-        target: usize,
-    ) -> io::Result<Token<F::Guard>> {
-        self.require(Op::Cancel)?;
-        let handle = handle_ref(file.as_file_ref(), self.ring.ring_id())?;
-        let token = Token::new(self.ring.accounting_mut(), file.guard())?;
-        let user_data = token.id();
-        // SAFETY: `handle` stays valid at least as long as `token`'s hold on
-        // `file`'s guard does (see `Batch::read`);
-        // `BuildIoRingCancelRequest` takes no SQE-flags parameter.
-        let hr =
-            unsafe { crate::sys::build_cancel(self.ring.raw_handle(), handle, target, user_data) };
-        self.finish_push(hr, token)
     }
 
     /// Queue registration of `handles` as a ring's file-handle table (M5.1).
@@ -1847,43 +1953,58 @@ impl<'ring> Batch<'ring> {
     /// `span`'s byte offset of `registration`'s buffer at `span.buffer_index`,
     /// instead of handing over a fresh owned buffer (M5.2).
     ///
-    /// The returned [`Token`] must be claimed once its completion is
-    /// observed, exactly like [`Batch::read`]'s -- but claiming it recovers
+    /// The entry is retired once its completion is
+    /// observed, exactly like [`Batch::read_owned`]'s -- but claiming it recovers
     /// no buffer, only releases this use against `registration`'s own drop
     /// check (M5.3). Read the transferred bytes back from `registration`
     /// itself afterward, for example via a caller-side accessor into the
-    /// buffer it was constructed from. Prefer [`Batch::read_registered`]
+    /// buffer it was constructed from. Prefer [`Batch::read_registered_owned`]
     /// unless `file` needs to address a raw `FileRef` directly.
     ///
     /// # Safety
     ///
-    /// As [`Batch::read_raw`]'s.
+    /// As [`Batch::read_raw_owned`]'s.
     ///
     /// # Errors
     ///
-    /// As [`Batch::read_raw`], plus [`io::ErrorKind::InvalidInput`] if
+    /// As [`Batch::read_raw_owned`], plus [`io::ErrorKind::InvalidInput`] if
     /// `span.buffer_index` is out of range for `registration`.
-    pub unsafe fn read_registered_raw<B: IoBufMut>(
+    /// Queue a read into a registered buffer, with the **ring** holding the
+    /// registration's use count (`D-73`).
+    ///
+    /// The inventory counterpart to [`Batch::read_registered_raw_owned`]. The buffer
+    /// belongs to the registration rather than to the caller, so there is no
+    /// payload to give back -- what the ring holds is the *use*, which keeps
+    /// the registration from being torn down while the kernel is writing into
+    /// it. That is `Held.registration`, released at the pop that completes
+    /// this operation.
+    ///
+    /// # Safety
+    ///
+    /// As [`Batch::read_registered_raw_owned`].
+    ///
+    /// # Errors
+    ///
+    /// As [`Batch::read_registered_raw_owned`].
+    pub unsafe fn read_registered_raw_owned<B: IoBufMut>(
         &mut self,
         file: impl Into<FileRef>,
         registration: &RegisteredBuffers<B>,
         span: RegisteredSpan,
+        extra: X,
         file_offset: u64,
         options: PushOptions,
-    ) -> io::Result<Token<RegisteredUse>> {
+    ) -> io::Result<OperationId> {
         self.require(Op::Read)?;
         self.check_registration_ring(registration)?;
         let target = handle_ref(file.into(), self.ring.ring_id())?;
         let index = registration.checked_span(span)?;
-        let token = Token::new(
-            self.ring.accounting_mut(),
-            registration.begin_use(span, KernelAccess::WritesBuffer),
-        )?;
-        let user_data = token.id();
-        // SAFETY: `self.ring`'s handle is live; `index` was just checked
-        // against `registration`, whose buffer stays put until it drops;
-        // `file` is the caller's to keep alive, forwarded from this
-        // function's own contract.
+        let (user_data, id) = self.begin_owned()?;
+        let held = Held {
+            guard: None,
+            registration: Some(registration.begin_use(span, KernelAccess::WritesBuffer)),
+        };
+        // SAFETY: as `read_registered_raw`.
         let hr = unsafe {
             crate::sys::build_read(
                 self.ring.raw_handle(),
@@ -1895,46 +2016,37 @@ impl<'ring> Batch<'ring> {
                 options.sqe_flags(),
             )
         };
-        self.finish_push(hr, token)
+        self.finish_owned(hr, id, None, extra, held)
     }
 
-    /// As [`Batch::read_registered_raw`], but safe: `file` is a
-    /// [`FileTarget`] rather than a bare [`FileRef`]. The returned token
-    /// yields `(RegisteredUse, guard)` once claimed.
+    /// Queue a read into a registered buffer against a guarded file, with the
+    /// **ring** holding both the use and the guard (`D-73`).
     ///
-    /// Passing a [`RegisteredFile`] here is the fully-registered form --
-    /// registered file *and* registered buffer, neither costing a handle
-    /// lookup nor a buffer pin per operation -- which before M10.4 the safe
-    /// API could not express at all.
+    /// The inventory counterpart to [`Batch::read_registered_owned`], and the only
+    /// shape that fills both halves of `Held`.
     ///
     /// # Errors
     ///
-    /// As [`Batch::read_registered_raw`], plus
-    /// [`io::ErrorKind::InvalidInput`] if `file` is a [`RegisteredFile`] from
-    /// a different ring.
-    pub fn read_registered<B: IoBufMut, F: FileTarget>(
+    /// As [`Batch::read_registered_owned`].
+    pub fn read_registered_owned<B: IoBufMut, F: FileTarget>(
         &mut self,
         file: &F,
         registration: &RegisteredBuffers<B>,
         span: RegisteredSpan,
+        extra: X,
         file_offset: u64,
         options: PushOptions,
-    ) -> io::Result<Token<(RegisteredUse, F::Guard)>> {
+    ) -> io::Result<OperationId> {
         self.require(Op::Read)?;
         self.check_registration_ring(registration)?;
         let target = handle_ref(file.as_file_ref(), self.ring.ring_id())?;
         let index = registration.checked_span(span)?;
-        let token = Token::new(
-            self.ring.accounting_mut(),
-            (
-                registration.begin_use(span, KernelAccess::WritesBuffer),
-                file.guard(),
-            ),
-        )?;
-        let user_data = token.id();
-        // SAFETY: `index` was just checked against `registration`, whose
-        // buffer stays put until it drops; `target` stays valid at least as
-        // long as `token`'s hold on `file`'s guard does (see `Batch::read`).
+        let (user_data, id) = self.begin_owned()?;
+        let held = Held {
+            guard: Some(file.guard().into()),
+            registration: Some(registration.begin_use(span, KernelAccess::WritesBuffer)),
+        };
+        // SAFETY: as `read_registered`.
         let hr = unsafe {
             crate::sys::build_read(
                 self.ring.raw_handle(),
@@ -1946,44 +2058,64 @@ impl<'ring> Batch<'ring> {
                 options.sqe_flags(),
             )
         };
-        self.finish_push(hr, token)
+        self.finish_owned(hr, id, None, extra, held)
     }
 
     /// Queue a write of `span.len` bytes to `file` at `file_offset`, from
     /// `span`'s byte offset of `registration`'s buffer at `span.buffer_index`
     /// (M5.2).
     ///
-    /// As [`Batch::read_registered_raw`], but for `BuildIoRingWriteFile`.
-    /// Prefer [`Batch::write_registered`] unless `file` needs to address a
+    /// As [`Batch::read_registered_raw_owned`], but for `BuildIoRingWriteFile`.
+    /// Prefer [`Batch::write_registered_owned`] unless `file` needs to address a
     /// raw `FileRef` directly.
     ///
     /// # Safety
     ///
-    /// As [`Batch::read_registered_raw`]'s.
+    /// As [`Batch::read_registered_raw_owned`]'s.
     ///
     /// # Errors
     ///
-    /// As [`Batch::read_registered_raw`].
-    pub unsafe fn write_registered_raw<B: IoBufMut>(
+    /// As [`Batch::read_registered_raw_owned`].
+    /// Queue a write from a registered buffer, with the **ring** holding the
+    /// registration's use count (`D-73`).
+    ///
+    /// The inventory counterpart to [`Batch::write_registered_raw_owned`].
+    ///
+    /// # Safety
+    ///
+    /// As [`Batch::write_registered_raw_owned`].
+    ///
+    /// # Errors
+    ///
+    /// As [`Batch::write_registered_raw_owned`].
+    /// `BuildIoRingWriteFile`'s own parameters, plus the sidecar the inventory
+    /// carries. Collapsing them into a struct would hide which are the
+    /// kernel's and which are this crate's, which is the distinction a reader
+    /// of a push most needs. `sys.rs` takes the same view for the same reason.
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "mirrors the Win32 call plus the inventory sidecar"
+    )]
+    pub unsafe fn write_registered_raw_owned<B: IoBufMut>(
         &mut self,
         file: impl Into<FileRef>,
         registration: &RegisteredBuffers<B>,
         span: RegisteredSpan,
+        extra: X,
         file_offset: u64,
         options: PushOptions,
         caching: WriteCaching,
-    ) -> io::Result<Token<RegisteredUse>> {
+    ) -> io::Result<OperationId> {
         self.require(Op::Write)?;
         self.check_registration_ring(registration)?;
         let target = handle_ref(file.into(), self.ring.ring_id())?;
         let index = registration.checked_span(span)?;
-        let token = Token::new(
-            self.ring.accounting_mut(),
-            registration.begin_use(span, KernelAccess::ReadsBuffer),
-        )?;
-        let user_data = token.id();
-        // SAFETY: as `read_registered_raw`; the kernel only reads through
-        // this reference for a write.
+        let (user_data, id) = self.begin_owned()?;
+        let held = Held {
+            guard: None,
+            registration: Some(registration.begin_use(span, KernelAccess::ReadsBuffer)),
+        };
+        // SAFETY: as `write_registered_raw`.
         let hr = unsafe {
             crate::sys::build_write(
                 self.ring.raw_handle(),
@@ -1996,44 +2128,45 @@ impl<'ring> Batch<'ring> {
                 options.sqe_flags(),
             )
         };
-        self.finish_push(hr, token)
+        self.finish_owned(hr, id, None, extra, held)
     }
 
-    /// As [`Batch::write_registered_raw`], but safe: `file` is a
-    /// [`FileTarget`] rather than a bare [`FileRef`]. The returned token
-    /// yields `(RegisteredUse, guard)` once claimed.
+    /// Queue a write from a registered buffer against a guarded file, with the
+    /// **ring** holding both the use and the guard (`D-73`).
     ///
-    /// Passing a [`RegisteredFile`] here is the fully-registered form, as
-    /// for [`Batch::read_registered`].
+    /// The inventory counterpart to [`Batch::write_registered_owned`].
     ///
     /// # Errors
     ///
-    /// As [`Batch::write_registered_raw`], plus
-    /// [`io::ErrorKind::InvalidInput`] if `file` is a [`RegisteredFile`] from
-    /// a different ring.
-    pub fn write_registered<B: IoBufMut, F: FileTarget>(
+    /// As [`Batch::write_registered_owned`].
+    /// `BuildIoRingWriteFile`'s own parameters, plus the sidecar the inventory
+    /// carries. Collapsing them into a struct would hide which are the
+    /// kernel's and which are this crate's, which is the distinction a reader
+    /// of a push most needs. `sys.rs` takes the same view for the same reason.
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "mirrors the Win32 call plus the inventory sidecar"
+    )]
+    pub fn write_registered_owned<B: IoBufMut, F: FileTarget>(
         &mut self,
         file: &F,
         registration: &RegisteredBuffers<B>,
         span: RegisteredSpan,
+        extra: X,
         file_offset: u64,
         options: PushOptions,
         caching: WriteCaching,
-    ) -> io::Result<Token<(RegisteredUse, F::Guard)>> {
+    ) -> io::Result<OperationId> {
         self.require(Op::Write)?;
         self.check_registration_ring(registration)?;
         let target = handle_ref(file.as_file_ref(), self.ring.ring_id())?;
         let index = registration.checked_span(span)?;
-        let token = Token::new(
-            self.ring.accounting_mut(),
-            (
-                registration.begin_use(span, KernelAccess::ReadsBuffer),
-                file.guard(),
-            ),
-        )?;
-        let user_data = token.id();
-        // SAFETY: as `read_registered`'s; the kernel only reads through
-        // this reference for a write.
+        let (user_data, id) = self.begin_owned()?;
+        let held = Held {
+            guard: Some(file.guard().into()),
+            registration: Some(registration.begin_use(span, KernelAccess::ReadsBuffer)),
+        };
+        // SAFETY: as `write_registered`.
         let hr = unsafe {
             crate::sys::build_write(
                 self.ring.raw_handle(),
@@ -2046,7 +2179,7 @@ impl<'ring> Batch<'ring> {
                 options.sqe_flags(),
             )
         };
-        self.finish_push(hr, token)
+        self.finish_owned(hr, id, None, extra, held)
     }
 
     /// Submit everything queued so far, returning the number of entries the
@@ -2131,8 +2264,7 @@ impl<'ring> Batch<'ring> {
         Ok(submitted)
     }
 }
-
-impl Drop for Batch<'_> {
+impl<T, X> Drop for Batch<'_, T, X> {
     fn drop(&mut self) {
         if !self.submitted {
             // Best-effort: Drop cannot propagate an error, and a batch that

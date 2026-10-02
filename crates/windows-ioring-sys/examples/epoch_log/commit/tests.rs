@@ -61,7 +61,7 @@ fn commit_and_pop(
     let closed = committer
         .commit(ring, file.as_raw_handle())
         .expect("push the commit");
-    let completion = ring
+    let (completion, _held) = ring
         .pop_within(WAIT)
         .expect("pop_within")
         .expect("the commit's completion arrives well inside the bound");
@@ -251,7 +251,7 @@ fn a_completion_that_belongs_to_someone_else_is_not_claimed() {
     }
     .expect("queue a flush nobody is tracking");
     batch.submit().expect("submit");
-    let foreign = ring
+    let (foreign, _held) = ring
         .pop_within(WAIT)
         .expect("pop_within")
         .expect("the foreign flush completes");

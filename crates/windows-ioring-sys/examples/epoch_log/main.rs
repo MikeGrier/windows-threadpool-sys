@@ -91,7 +91,7 @@ use std::os::windows::io::AsRawHandle;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex, mpsc};
 
-use append::{Appender, SLOT_LEN, SLOTS};
+use append::{AppendRing, Appender, SLOT_LEN, SLOTS};
 use checkpoint::Checkpointer;
 use commit::{Committer, Epoch};
 use contract::{CONTRACT, Clause};
@@ -248,7 +248,7 @@ fn run_log<O: io::Write, E: io::Write>(
         .truncate(true)
         .open(checkpoint_path)?;
 
-    let mut ring = IoRing::new(64, 128)?;
+    let mut ring = AppendRing::with_inventory(64, 128)?;
     // Decided from the log's own handle, before the arena exists: the
     // documented FSCTL takes a file handle directly, so the node the arena
     // should prefer is answerable without a device-tree walk.
@@ -266,7 +266,7 @@ fn run_log<O: io::Write, E: io::Write>(
     // the log's own: `EventDelivery` owns its ring's completion event, and a
     // second waiter on that event is what D-21 rules out.
     let checkpointer = Checkpointer::new(
-        IoRing::new(8, 16)?,
+        IoRing::<Vec<u8>>::with_inventory(8, 16)?,
         checkpoint_file.as_raw_handle(),
         Arc::clone(&reclaimer),
     )?;
@@ -499,10 +499,10 @@ fn run_log<O: io::Write, E: io::Write>(
     }
 
     // Conservation, once everything has quiesced (M16.2). Every append that
-    // queued completed exactly once, and every token was claimed -- the second
-    // half being what returns its arena slot. A slot leaked here would not
-    // show up as an error at all: the arena would simply run dry `SLOTS`
-    // appends later, somewhere else, with nothing pointing back to the cause.
+    // queued completed exactly once, and the pop that observed each completion
+    // is what returned its arena slot. A slot leaked here would not show up as
+    // an error at all: the arena would simply run dry `SLOTS` appends later,
+    // somewhere else, with nothing pointing back to the cause.
     appender.contract().assert_quiescent();
 
     let durable_through = committer
@@ -743,7 +743,7 @@ fn verify<O: io::Write, E: io::Write>(
               choice between wakeup strategies selectable at run time"
 )]
 fn await_durable_fused(
-    ring: &mut IoRing,
+    ring: &mut AppendRing,
     appender: &mut Appender,
     committer: &mut Committer,
     epoch: Epoch,
@@ -819,18 +819,31 @@ fn collect_reclaim<O: io::Write, E: io::Write>(
 /// Pop every completion currently available, routing each to whichever of the
 /// two owns it.
 fn drain(
-    ring: &mut IoRing,
+    ring: &mut AppendRing,
     appender: &mut Appender,
     committer: &mut Committer,
 ) -> io::Result<usize> {
     let mut popped = 0;
-    while let Some(completion) = ring.try_pop()? {
-        // A completion belongs to exactly one of the two, so the short-circuit
-        // is the dispatch: if the appender claimed it the committer is never
-        // asked, and a completion neither recognises is left uncounted rather
-        // than silently attributed.
-        if appender.claim(&completion)? || committer.claim(&completion)?.is_some() {
-            popped += 1;
+    while let Some((completion, held)) = ring.try_pop()? {
+        // The ring says which of the two owns it. An append carries its arena
+        // slot as the sidecar; a commit is a raw flush and carries nothing.
+        //
+        // This used to be a short-circuit -- offer the completion to the
+        // appender, then the committer, and count it if either accepted --
+        // which asked each claimant to recognise its own work by looking it up.
+        // The dispatch is now a property of the completion rather than a search
+        // over two side tables, and a completion neither recognises is still
+        // left uncounted rather than silently attributed.
+        match held {
+            Some((_payload, slot)) => {
+                appender.claim(&completion, slot)?;
+                popped += 1;
+            }
+            None => {
+                if committer.claim(&completion)?.is_some() {
+                    popped += 1;
+                }
+            }
         }
     }
     Ok(popped)

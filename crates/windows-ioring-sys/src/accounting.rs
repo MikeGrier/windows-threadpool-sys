@@ -34,7 +34,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 /// A ring's identity, unique for the process's lifetime (PR #20 review
 /// response): every value a ring hands out that later gets checked back
-/// against it -- a [`crate::Token`], a [`crate::RegisteredFile`], a
+/// against it -- an inventory entry, a [`crate::RegisteredFile`], a
 /// [`crate::RegisteredBuffers`] -- carries the id of the ring that minted
 /// it, and every [`crate::Completion`] carries the id of the ring that
 /// popped it.
@@ -90,7 +90,7 @@ impl Accounting {
         }
     }
 
-    /// This ring's own identity, for stamping onto every [`crate::Token`] and
+    /// This ring's own identity, for stamping onto every [`crate::OperationId`] and
     /// registration it mints and checking against on use.
     pub(crate) fn ring_id(&self) -> RingId {
         self.ring_id
@@ -122,7 +122,7 @@ impl Accounting {
 
     /// Record that one outstanding operation's completion has been observed
     /// (a real `IORING_CQE` was popped for it), whether or not a live
-    /// [`crate::Token`] was still around to claim it.
+    /// the ring was still holding something for it.
     pub(crate) fn record_completion(&mut self) {
         self.outstanding = self.outstanding.saturating_sub(1);
     }

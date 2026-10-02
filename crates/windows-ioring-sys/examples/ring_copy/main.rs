@@ -14,6 +14,7 @@ mod policy;
 use std::io;
 use std::os::windows::io::AsRawHandle;
 use std::path::PathBuf;
+use std::time::{Duration, Instant};
 
 use policy::Policy;
 use windows_sys::Win32::Foundation::HANDLE;
@@ -23,6 +24,13 @@ use windows_sys::Win32::Storage::FileSystem::{
 use windows_topology_sys::MachineMemoryTopology;
 
 const DEFAULT_CHUNK_LEN: usize = 1024 * 1024;
+
+/// Rounds `--compare` runs when `--rounds` is not given.
+///
+/// Three, so a policy has a fastest, a slowest and a middle -- one run cannot
+/// show a spread, and a spread is the only handle this sample offers on whether
+/// two arrangements were distinguished at all.
+const DEFAULT_ROUNDS: usize = 3;
 
 /// The single sink every line of this sample's output goes through
 /// (repository "Architectural pre-steps" rule: never call `println!`/
@@ -72,6 +80,10 @@ struct Args {
     remote_placement: bool,
     topology_path: Option<PathBuf>,
     chunk_len: usize,
+    /// Price every policy, not just the chosen one (`M27.3`).
+    compare: bool,
+    /// How many times each policy is run in `--compare`.
+    rounds: usize,
 }
 
 fn parse_args() -> Result<Args, String> {
@@ -80,6 +92,8 @@ fn parse_args() -> Result<Args, String> {
     let mut remote_placement = false;
     let mut topology_path = None;
     let mut chunk_len = DEFAULT_CHUNK_LEN;
+    let mut compare = false;
+    let mut rounds = DEFAULT_ROUNDS;
 
     let mut args = std::env::args().skip(1);
     while let Some(arg) = args.next() {
@@ -119,6 +133,16 @@ fn parse_args() -> Result<Args, String> {
                 }
                 chunk_len = parsed;
             }
+            "--compare" => compare = true,
+            "--rounds" => {
+                let value = args.next().ok_or("--rounds needs a value")?;
+                rounds = value
+                    .parse()
+                    .map_err(|_| format!("invalid --rounds {value:?}"))?;
+                if rounds == 0 {
+                    return Err("--rounds must be at least 1".to_string());
+                }
+            }
             other => positional.push(other.to_string()),
         }
     }
@@ -126,7 +150,7 @@ fn parse_args() -> Result<Args, String> {
     let mut positional = positional.into_iter();
     let source = positional.next().ok_or(
         "usage: ring_copy <source> <destination> [--policy NAME] [--placement local|remote] \
-         [--topology PATH] [--chunk-size BYTES]",
+         [--topology PATH] [--chunk-size BYTES] [--compare] [--rounds N]",
     )?;
     let destination = positional.next().ok_or("missing <destination>")?;
 
@@ -137,6 +161,8 @@ fn parse_args() -> Result<Args, String> {
         remote_placement,
         topology_path,
         chunk_len,
+        compare,
+        rounds,
     })
 }
 
@@ -172,6 +198,208 @@ fn same_file(a: &std::fs::File, b: &std::fs::File) -> io::Result<bool> {
         Ok((info.dwVolumeSerialNumber, index))
     }
     Ok(identity(a)? == identity(b)?)
+}
+
+/// What one arrangement cost on this machine.
+struct ArrangementRun {
+    policy: Policy,
+    domains: usize,
+    degraded: bool,
+    /// Wall time for the whole arrangement, not the sum of its domains.
+    ///
+    /// The domains run concurrently, so summing them would count the same
+    /// seconds once per domain and make a wider arrangement look slower the
+    /// more parallelism it was given.
+    wall: Duration,
+    bytes: u64,
+}
+
+/// Run one arrangement end to end and time it.
+///
+/// Extracted from `main` so `--compare` can price the alternatives through the
+/// identical path the chosen policy takes. A comparison whose arms do not share
+/// a code path measures the difference between the arms' code as much as
+/// between the arrangements.
+#[allow(clippy::too_many_arguments)]
+fn run_arrangement(
+    policy: Policy,
+    topology: &MachineMemoryTopology,
+    remote_placement: bool,
+    source: SendHandle,
+    destination: SendHandle,
+    source_len: u64,
+    chunk_len: usize,
+) -> io::Result<ArrangementRun> {
+    let (domains, degraded) = policy.select(topology);
+    let plans = plan::build_plan(topology, &domains)?;
+    let domain_count = plans.len() as u64;
+    let per_domain = source_len.div_ceil(domain_count.max(1));
+
+    let started = Instant::now();
+    let reports: Vec<io::Result<engine::DomainReport>> = std::thread::scope(|scope| {
+        let handles: Vec<_> = plans
+            .iter()
+            .enumerate()
+            .map(|(index, domain_plan)| {
+                let start = per_domain * index as u64;
+                let end = (start + per_domain).min(source_len);
+                let numa_node = if remote_placement {
+                    match plan::remote_numa_node(topology, domain_plan.local_numa_node) {
+                        plan::RemoteNode::Other(node) => Some(node),
+                        plan::RemoteNode::SameAsLocal
+                        | plan::RemoteNode::Unnamed
+                        | plan::RemoteNode::LocalUnknown => domain_plan.local_numa_node,
+                    }
+                } else {
+                    domain_plan.local_numa_node
+                };
+                scope.spawn(move || {
+                    let source = source;
+                    let destination = destination;
+                    engine::copy_domain(
+                        domain_plan,
+                        source.0,
+                        destination.0,
+                        start..end,
+                        chunk_len,
+                        numa_node,
+                    )
+                })
+            })
+            .collect();
+        handles
+            .into_iter()
+            .map(|handle| handle.join().expect("domain thread panicked"))
+            .collect()
+    });
+    let wall = started.elapsed();
+
+    let mut bytes = 0;
+    for report in reports {
+        bytes += report?.bytes_copied;
+    }
+
+    Ok(ArrangementRun {
+        policy,
+        domains: plans.len(),
+        degraded,
+        wall,
+        bytes,
+    })
+}
+
+fn throughput_mib_s(bytes: u64, wall: Duration) -> f64 {
+    (bytes as f64 / (1024.0 * 1024.0)) / wall.as_secs_f64().max(f64::EPSILON)
+}
+
+/// Price every policy on this machine and report what each cost.
+///
+/// # This reports; it does not conclude
+///
+/// No arm is marked as best and no recommendation is printed, per OPTION
+/// INTEGRITY. Which arrangement a consumer wants depends on what they value --
+/// throughput, isolation, predictability under load -- and this sample cannot
+/// know that. It says what happened on the machine in hand and stops.
+fn compare_arrangements(
+    report: &mut Report<io::Stdout, io::Stderr>,
+    args: &Args,
+    topology: &MachineMemoryTopology,
+    source: SendHandle,
+    destination: SendHandle,
+    source_len: u64,
+) -> io::Result<()> {
+    let policies = Policy::ALL;
+    let mut runs: Vec<Vec<ArrangementRun>> = (0..policies.len()).map(|_| Vec::new()).collect();
+
+    report.line(format_args!(
+        "comparing {} arrangements over {} round(s):",
+        policies.len(),
+        args.rounds
+    ));
+
+    for round in 0..args.rounds {
+        // The order rotates each round. Back-to-back runs of the same file are
+        // not independent -- the first pass warms the filesystem cache and
+        // every later one benefits -- so a fixed order would hand that
+        // advantage to the same policy every time and bake it into the result.
+        // Rotating does not remove the effect; it stops it being *attributed*
+        // to one arm.
+        for offset in 0..policies.len() {
+            let index = (offset + round) % policies.len();
+            let run = run_arrangement(
+                policies[index],
+                topology,
+                args.remote_placement,
+                source,
+                destination,
+                source_len,
+                args.chunk_len,
+            )?;
+            runs[index].push(run);
+        }
+    }
+
+    report.line(format_args!(""));
+    report.line(format_args!(
+        "  {:<10} {:>8}  {:>15}  {:>15}  {:>15}",
+        "policy", "domains", "fastest", "slowest", "median"
+    ));
+
+    for per_policy in &runs {
+        let mut rates: Vec<f64> = per_policy
+            .iter()
+            .map(|run| throughput_mib_s(run.bytes, run.wall))
+            .collect();
+        rates.sort_by(f64::total_cmp);
+        let median = rates[rates.len() / 2];
+        let first = &per_policy[0];
+
+        // Named from the run rather than from a parallel array, so a row cannot
+        // come to label itself with a policy it did not use.
+        report.line(format_args!(
+            "  {:<10} {:>8}  {:>9.1} MiB/s  {:>9.1} MiB/s  {:>9.1} MiB/s{}",
+            format!("{:?}", first.policy),
+            first.domains,
+            rates[rates.len() - 1],
+            rates[0],
+            median,
+            if first.degraded { "  (degraded)" } else { "" }
+        ));
+    }
+
+    report.line(format_args!(""));
+    report.line(format_args!(
+        "what these figures include: the filesystem cache, whatever else this machine was doing, \
+         and this sample's own chunking. They are what the arrangements cost here, today, on this \
+         file -- not a property of the policies."
+    ));
+    report.line(format_args!(
+        "what they cannot separate: an arrangement that is genuinely better from one that ran \
+         while the machine was quieter. The spread between fastest and slowest within a policy is \
+         the handle on that -- where it overlaps another policy's spread, this run did not \
+         distinguish them."
+    ));
+    report.line(format_args!(
+        "no arm is marked best, deliberately. Which of these a consumer wants depends on what \
+         they value, and that is theirs to decide against their own workload."
+    ));
+
+    let degraded: Vec<&ArrangementRun> = runs
+        .iter()
+        .filter_map(|per_policy| per_policy.first())
+        .filter(|run| run.degraded || run.domains == 1)
+        .collect();
+    if !degraded.is_empty() {
+        report.line(format_args!(""));
+        report.line(format_args!(
+            "note: {} of these arrangements produced a single domain or fell back to one. Those \
+             rows are this machine reporting that it cannot express that arrangement, which is \
+             information about the host rather than about the policy.",
+            degraded.len()
+        ));
+    }
+
+    Ok(())
 }
 
 fn main() -> io::Result<()> {
@@ -307,6 +535,18 @@ fn main() -> io::Result<()> {
             }
             plan::RemoteNode::Other(_) => {}
         }
+    }
+
+    if args.compare {
+        compare_arrangements(
+            &mut report,
+            &args,
+            &topology,
+            source_handle,
+            destination_handle,
+            source_len,
+        )?;
+        return Ok(());
     }
 
     let domain_count = plans.len() as u64;
