@@ -6165,3 +6165,36 @@ one on this host. `ByCache`'s slowest round came in far below its median while `
 close together -- which is the cold first pass showing up exactly where the rotation is designed to
 expose it rather than hide it. A reader who took the medians alone would have missed it, which is
 why the spread is printed beside them.
+
+## <a id="moved-2026-10-01-m27"></a>Moved 2026-10-01 23:29:13 -04:00 -- M27, the last open milestone
+
+Completes this crate's checklist. `M27.1` and `M27.2` were retired rather than finished -- the
+reasoning is in the [earlier group](#moved-2026-10-01-m27-retired) -- and `M27.3` shipped
+`ring_copy --compare`.
+
+### M27 -- Placement questions a consumer can answer on their own hardware
+
+**Re-planned 2026-10-01, and most of this milestone retired.** M27 previously asked what this crate
+owes a topology realizer, and carried a census (`M27.1`) and a gap-closing item (`M27.2`) against
+the plan vocabulary. Both are retired: see
+[COMPLETED-CHECKLIST.md](COMPLETED-CHECKLIST.md#moved-2026-10-01-m27-retired).
+
+**The reason is structural, not a judgement that the work is unimportant.** The realizer is a
+distinct component -- [EP-D-5](../topology-planner/DESIGN-NOTES.md#ep-d-5) places it outside this
+crate, depending on `topology-model` and the runtime crates -- and it does not exist. This crate
+fundamentally delivers a safe API over `IoRing`. If a realizer turns out to need API it does not
+have, that is the ordinary lifecycle of a dependency asking its layer for something, worked out
+when it happens by the component that discovered the need. It is not a standing obligation this
+crate carries on behalf of a consumer nobody has written.
+
+[D-8](DESIGN-NOTES.md#d-8) is untouched by all of this: policy stays out of this crate.
+
+- [x] **M27.1** -- Retired with `M27.2`; the census it produced found no gap in this crate, and its
+  one finding is queued where it belongs. ->
+  [retired 2026-10-01](COMPLETED-CHECKLIST.md#moved-2026-10-01-m27-retired)
+
+- [x] **M27.2** -- Retired: a gap-closing item for gaps a non-existent consumer has not asked for.
+  -> [retired 2026-10-01](COMPLETED-CHECKLIST.md#moved-2026-10-01-m27-retired)
+
+- [x] **M27.3** -- `ring_copy --compare` prices every policy on the machine in hand and reports
+  what each cost, with no verdict. -> [completed 2026-10-01](COMPLETED-CHECKLIST.md#m273)
