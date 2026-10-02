@@ -227,6 +227,39 @@ READMEs cite them and renumbering would orphan every citation.
   to [RESOLVED-TEST-FAILURES.md](../windows-ioring-sys/RESOLVED-TEST-FAILURES.md). The item's own premise was wrong and is
   corrected in the archive. -> [completed 2026-10-01](../windows-ioring-sys/COMPLETED-CHECKLIST.md#m2615)
 
+## M-T8 -- Pool placement
+
+Opened 2026-10-01 by `windows-ioring-sys`' `M27.1` census, which walked what a topology realizer
+would need from that crate and found exactly one gap -- and it is here, not there. See
+[REALIZATION-CENSUS.md](../windows-ioring-sys/REALIZATION-CENSUS.md).
+
+> **-> CROSS-COMPONENT PREREQUISITE:** raised by component `crates/windows-ioring-sys` -> `M27` ->
+> `M27.1`. That crate's `M27.2` closes its own realization gaps and is gated on the planner's
+> `EP-1+.6`; this item is **not** gated on either, because a pool whose threads can be placed is
+> useful to anyone, not only to a realizer.
+
+- [ ] **M-T8.1** -- **Decide whether this crate expresses thread placement, and if so where.**
+
+  **The gap, stated as measured.** An `IoRing` has no thread of its own; completion delivery runs on
+  a pool reached through `CallbackEnviron`. A caller can already give a domain its own pool with a
+  bounded thread count -- `ThreadpoolPool` offers `new`, `set_min_threads`, `set_max_threads` -- and
+  `CallbackEnviron` offers `set_pool`, `clear_pool`, `set_priority`, `set_runs_long`. None of those
+  says which processor a pool's threads run on, so "pin this domain to processor P" has no
+  expression anywhere in this workspace.
+
+  **Why this is a decision and not a fix.** Win32 offers no pool-affinity call. The reachable
+  alternatives are a per-callback `SetThreadAffinityMask`, which places the *callback* rather than
+  the *pool* and must be undone before the thread returns to the pool; or a dedicated thread outside
+  the pool, which is a different execution model and not this crate's current one. Choosing between
+  them decides what this crate is, so it is raised rather than taken.
+
+  **Do not answer it by growing a thread.** `windows-ioring-sys` deliberately has none, and the
+  census records that the gap should close here rather than be worked around by that crate acquiring
+  one.
+
+  **`M-T7.1` is unrelated and does not gate this.** That item is the pool *stall*; this is pool
+  *placement*. They share a crate and nothing else.
+
 ## M-inf -- Diagnostic work with no gating deliverable
 
 - [ ] **M-T-inf.1** (was `M26.14.4`) -- **Find the threshold the close races.** `M26.14.2` used 1ms because it is

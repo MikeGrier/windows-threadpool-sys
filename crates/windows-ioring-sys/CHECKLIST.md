@@ -50,13 +50,15 @@ only build what this crate exposes, and nothing has ever checked that what it ex
 [D-8](DESIGN-NOTES.md#d-8) is untouched by all of this: policy stays out of this crate, and being
 *constructible from* a policy decision made elsewhere is the opposite of taking one.
 
-- [ ] **M27.1** -- **Census what a realizer would need from this crate, against the plan vocabulary,
-  and name what is missing.** A plan states which processor a domain pins to, which memory node its
-  pool allocates from, how many queues of which types, and where each channel's buffer lives. Walk
-  each of those to the public API that would realize it and record the gaps. `NumaBuffer`
-  ([D-51](DESIGN-NOTES.md#d-51)) is one half of the pool answer and arrived this month; the ring's
-  own construction takes no placement input at all. **The output is a gap list, not an API** --
-  proposing surface before the plan vocabulary is settled would be binding to a draft.
+- [x] **M27.1** -- Census done: one gap, and it is not in this crate. Caller-buffer placement is
+  already covered by `NumaBuffer`; the ring's own queue memory is a Win32 limit; what is missing is
+  thread placement, which belongs a layer down. -> [completed 2026-10-01](COMPLETED-CHECKLIST.md#m271)
+
+  Full census: [REALIZATION-CENSUS.md](REALIZATION-CENSUS.md).
+
+  > **-> CROSS-COMPONENT HANDOFF:** the gap is queued as component `crates/windows-threadpool-sys`
+  > -> `M-T8` -> `M-T8.1` (`Decide whether this crate expresses thread placement, and if so where`).
+  > See [CHECKLIST.md](../windows-threadpool-sys/CHECKLIST.md).
 
 - [ ] **M27.2** -- **Gated on `M27.1` and on the planner's `EP-1+.6`.** Close the gaps the census
   names, as ordinary capability on this crate with no policy attached. Each gap is an input a caller

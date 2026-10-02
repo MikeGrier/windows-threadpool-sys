@@ -5952,3 +5952,58 @@ every consumer names the type -- which means the migration order matters more th
 - [x] **M28.5** -- `observe_tokenless_push` retired; the outer `None` has two causes the caller distinguishes, recorded as `D-75` and asserted both ways. -> [completed 2026-09-26](COMPLETED-CHECKLIST.md#m285)
 
 - [x] **M28.6** -- Swept what the break made false: `D-4` and `D-55` amended, six live example claims corrected, and three defects found in `d.3`'s own prose sweep. -> [completed 2026-09-26](COMPLETED-CHECKLIST.md#m286)
+
+## <a id="moved-2026-10-01-m271"></a>Moved 2026-10-01 22:42 -04:00 -- M27.1, the realizer census
+
+### <a id="m271"></a>M27.1 -- Census done: one gap, and it is not in this crate. *(completed 2026-10-01 22:42 -04:00)*
+
+The item as it stood:
+> - [ ] **M27.1** -- **Census what a realizer would need from this crate, against the plan vocabulary,
+>   and name what is missing.** A plan states which processor a domain pins to, which memory node its
+>   pool allocates from, how many queues of which types, and where each channel's buffer lives. Walk
+>   each of those to the public API that would realize it and record the gaps. `NumaBuffer`
+>   ([D-51](DESIGN-NOTES.md#d-51)) is one half of the pool answer and arrived this month; the ring's
+>   own construction takes no placement input at all. **The output is a gap list, not an API** --
+>   proposing surface before the plan vocabulary is settled would be binding to a draft.
+>
+
+#### The gate was examined rather than obeyed or ignored
+
+The item carried a `CROSS-COMPONENT PREREQUISITE` on the planner's `EP-1+.5` and `EP-1+.6`, and
+both are still open. They were read before proceeding, and they do not bind a census:
+
+- **`EP-1+.5`** decides the *type* of stage 1's connectivity graph and which crate holds it.
+- **`EP-1+.6`** decides that the answer is plural and what a candidate carries beyond the
+  arrangement.
+
+Neither changes what a realizer needs **from this crate**: a realizer consuming one candidate or
+five still supplies the same construction inputs, and the four physical facts the census walks are
+enumerated in `M27.1`'s own text rather than drawn from a type that does not exist yet. The gate
+binds `M27.2`, which proposes surface -- binding an API to a draft vocabulary is precisely the
+failure it names -- and a gap list binds nothing.
+
+Recorded rather than quietly decided, because the prerequisite is the engineer's and this is a
+reading of it: if the intent was that *nothing* under `M27` proceeds until the vocabulary lands,
+this census was taken early and the finding stands independently of when it was taken.
+
+#### The finding, and what it was not
+
+**One gap, and it is not in this crate** -- which is not what the item expected. `M27.1` was
+written anticipating this crate would be found short, and the two things it is short of turn out to
+be someone else's:
+
+- **Thread placement** has no expression anywhere in the workspace. Measured surfaces:
+  `ThreadpoolPool` offers `new` / `set_min_threads` / `set_max_threads`; `CallbackEnviron` offers
+  `set_pool` / `clear_pool` / `set_priority` / `set_runs_long`. A domain can get its own pool with a
+  bounded thread count; it cannot say which processor runs it. Queued as `M-T8.1` in
+  [windows-threadpool-sys](../windows-threadpool-sys/CHECKLIST.md).
+- **The ring's own queue memory** takes no placement input because `CreateIoRing` has no parameter
+  for one -- a version, two sizes, and required/advisory flag words. That is a platform limit to
+  state, not a gap to close.
+
+**Two expectations in the item were corrected by looking.** It said `NumaBuffer` is "one half of the
+pool answer": it is the *whole* of the caller-buffer answer, because
+[numa_buffer_io.rs](src/numa_buffer_io.rs) implements `IoBuf` and `IoBufMut` for it, so a node-bound
+allocation is pushed and registered like any other buffer with no new surface at all. And it said
+"the ring's own construction takes no placement input at all", which is exactly right -- but the
+reason is the platform, not an omission here.
