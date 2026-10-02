@@ -70,12 +70,23 @@ pub struct EventDelivery<T = (), X = ()> {
     // the time `ring`'s last reference drops below and runs
     // `IoRing::run_down` then `CloseIoRing`, no callback can still be
     // touching it (M4.3).
-    #[allow(
-        dead_code,
-        reason = "held only for its Drop side effect and ordering relative to `ring`"
-    )]
     wait: ThreadpoolWait,
     ring: Arc<Mutex<IoRing<T, X>>>,
+}
+
+impl<T, X> Drop for EventDelivery<T, X> {
+    fn drop(&mut self) {
+        // The wait is armed, so it owes a drain. Field drop would make that
+        // drain anyway -- this adds no blocking -- but leaving it to `Drop`
+        // leaves the obligation undischarged, which `windows-threadpool-sys`
+        // reports and, under its `fail-fast` feature, panics on.
+        //
+        // Draining here rather than relying on the field order *strengthens*
+        // the guarantee described above: this body runs before any field is
+        // dropped, so no callback can be touching the ring by the time `ring`
+        // is released, which is what `M4.3` requires.
+        self.wait.stop_and_drain();
+    }
 }
 
 impl<T: Send + 'static, X: Send + 'static> EventDelivery<T, X> {
