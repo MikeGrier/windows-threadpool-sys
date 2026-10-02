@@ -604,6 +604,62 @@ house rules require is what found the third.
   needs a pool that has stopped dispatching, which is the stall this repository has spent `M-T7`
   failing to produce on demand.
 
+- [x] **M-T10.19** -- **Handle the failures the patch path assumed away, and check the branch the
+      trampoline does not rebuild.** Three findings from the fifth review round, all in
+      `trace/hook.rs`, two of them the same recorded rule broken twice.
+
+  **Two unchecked failable calls**, against [A failable call has its failure handled,
+  always](../../DESIGN-NOTES.md#a-failable-call-has-its-failure-handled-always). The trampoline
+  page's `VirtualProtect` result was discarded and the pointer published regardless, so a failure
+  left the hook jumping into a page the processor will not execute. And `with_others_suspended`
+  skipped past a thread it could not open or suspend and patched anyway -- while that thread was
+  still running through the bytes being overwritten, which is the precondition the suspension
+  exists to establish. Both now refuse, with their own `Refusal` variants.
+
+  **The refusal had to learn a distinction, and a test is what taught it.** Refusing on every
+  failure made `install_by_label` fail in an ordinary test process, because the thread snapshot is
+  taken while the process runs and a pool starting and finishing workers routinely leaves a listed
+  thread gone before `OpenThread` reaches it. `ERROR_INVALID_PARAMETER` names that case, and a
+  thread that does not exist cannot be executing the bytes -- so it is skipped and everything else
+  refuses.
+
+  **An assumption the module did not admit to.** The recognised stub tests a shared-data byte and
+  branches past `syscall`; the trampoline rebuilds only the fall-through, so "the same call by
+  construction" held while that bit is clear and not otherwise. It is clear on ordinary x64, which
+  is why it went unstated -- an observation about this machine rather than a property of the
+  technique. `syscall_path_is_direct` now reads it, derived from the recogniser's own bytes rather
+  than written out a second time, and an install refuses when it is set.
+
+- [x] **M-T10.20** -- **Stop the fail-fast and the cancellation safety claim promising more than
+      they detect.** Two findings from the fifth review round that are not defects in the code but
+      in what it says.
+
+  **The fail-fast** records an outstanding *arming*, not "this `Drop` blocked". A dispatch settles
+  it for a wait and a one-shot timer while `Drop` still waits for that callback, so dropping
+  during an executing callback drains without reporting -- and `CleanupGroup` carries no
+  obligation flag at all. Both now stated at the one site that owns the message.
+
+  **`try_cancel_pending`** is documented as safe because the crate repairs the pool afterwards.
+  On a pool whose repair item could not be created there is no entry and nothing repairs it, and
+  `owe_repair` returned in silence. It now records `cancel-untracked`, and both statements of the
+  claim name the exception.
+
+- [ ] **M-T10.18** -- **DECISION TO RAISE: what `try_cancel_pending` should do on a pool it cannot
+      repair.**
+
+  **Why this is open rather than fixed.** `heal::register` is best-effort: if the repair work item
+  cannot be created the pool goes unregistered, and a later `try_cancel_pending` performs the
+  removal with nothing to repair it. `M-T10.20` made that visible -- it records `cancel-untracked`
+  instead of returning in silence -- but what the API should *do* is a choice between options that
+  trade differently, and it is the engineer's: carry on as now; return whether the repair is
+  tracked so a caller can react; or refuse the cancellation, which is safest for the pool and
+  silently does not do what the caller asked.
+
+  **It was queued nowhere until now.** `heal::register`'s comment deferred it to `M-T6.3`, which
+  closed on 2026-10-01 -- the cancellation rename and its unsafe sibling -- without deciding it.
+  This is the second dangling pointer of this shape found on this branch, after `sabotage.json`'s
+  reference to the same closed item.
+
 - [ ] **M-T10.7** -- **Decide whether CI should check intra-doc links in private items.**
 
   **The gap.** The `docs` job runs `cargo doc --no-deps --all-features` without

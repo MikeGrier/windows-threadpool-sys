@@ -883,7 +883,12 @@ impl ThreadpoolWait {
     /// any path. Prefer them -- but note that doing so is what makes the
     /// *subsequent close* safe, not merely this call.
     /// This crate repairs the pool afterwards, which is what makes this safe to
-    /// offer. See
+    /// offer -- with one exception, stated because a guarantee with an unstated
+    /// hole is worse than one that names it: if this object's pool could not be
+    /// registered for repair when the object was created, which happens only
+    /// when creating the repair work item itself failed, there is nothing to
+    /// repair it and the cancellation proceeds anyway. That case records
+    /// `cancel-untracked` on the `heal` target. See
     /// [README-FEATURE-self-heal.md](https://docs.rs/crate/windows-threadpool-sys/latest/source/README-FEATURE-self-heal.md).
     ///
     /// # Availability

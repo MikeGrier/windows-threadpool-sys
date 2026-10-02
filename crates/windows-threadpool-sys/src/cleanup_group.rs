@@ -833,7 +833,10 @@ impl WaitMember<'_> {
 
     /// Prefer [`wait`](Self::wait).
     ///
-    /// This crate repairs the pool afterwards, which is what makes this safe to
+    /// This crate repairs the pool afterwards -- except on a pool whose repair
+    /// item could not be created, where the cancellation proceeds with nothing
+    /// to repair it and records `cancel-untracked`; see
+    /// [`crate::heal::register`] -- which is what makes this safe to
     /// offer.
     #[cfg(feature = "self-heal")]
     pub fn try_cancel_pending(&self) {

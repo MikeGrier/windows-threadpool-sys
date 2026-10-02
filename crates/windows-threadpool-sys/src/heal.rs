@@ -307,7 +307,20 @@ mod on {
         /// that may have severed its notification, and a dispatch that happened
         /// while the removal was in progress is no evidence about afterwards.
         pub(crate) fn owe_repair(&self) {
-            if let Some(entry) = &self.0 {
+            let Some(entry) = &self.0 else {
+                // No entry, so no repair -- and this is the one path on which
+                // the cancellation's safety claim does not hold. It used to
+                // return in silence, which made a pool that may have been
+                // wedged indistinguishable from one that was repaired.
+                //
+                // Recorded rather than fixed here because what the *API*
+                // should do about it is a decision, and the comment on
+                // `register` deferred it to `M-T6.3` -- an item that has since
+                // closed without deciding it. It is now `M-T10.18`.
+                crate::trace_record!("heal", "cancel-untracked", 0);
+                return;
+            };
+            {
                 entry.owe_repair(now());
                 // After the mark, never before: the healer's first tick must
                 // not be able to run before the entry it exists to repair says
@@ -377,8 +390,15 @@ mod on {
     /// **Best-effort.** If the repair work object cannot be created the pool goes
     /// unregistered and the returned registration is empty; object creation still
     /// succeeds, because failing it would turn an unrelated allocation failure
-    /// into a failure of the caller's actual request. What `try_cancel_pending`
-    /// should do when its pool has no entry is `M-T6.3`'s to decide.
+    /// into a failure of the caller's actual request.
+    ///
+    /// A cancellation on such a pool is then performed with nothing to repair
+    /// it, which is the one case where `try_cancel_pending`'s safety claim does
+    /// not hold. `Registration::owe_repair` records `cancel-untracked` when it
+    /// happens, so it is visible rather than silent. What the *API* should do
+    /// about it is `M-T10.18`'s to decide -- this comment deferred it to
+    /// `M-T6.3`, which closed on 2026-10-01 without deciding it, so the
+    /// question was queued nowhere for as long as that pointer stood.
     pub(crate) fn register(key: PoolKey) -> Registration {
         let mut entries = locked();
         if let Some(entry) = entries.iter().find(|entry| entry.key == key) {

@@ -34,6 +34,16 @@
 //! trampoline this module writes is `mov r10,rcx; mov eax,ssn; syscall; ret`,
 //! which is the same call by construction rather than by copy.
 //!
+//! **With one condition, which is checked rather than assumed.** The stub
+//! above is not straight-line: it tests a byte in shared data and branches
+//! past `syscall` when that bit is set. The trampoline rebuilds the
+//! fall-through only, so "the same call by construction" holds while the bit
+//! is clear and not otherwise. It is clear on ordinary x64, which is why this
+//! went unstated for several revisions -- an observation about the machine in
+//! hand rather than a property of the technique. `syscall_path_is_direct`
+//! reads it, and an install refuses rather than silently changing which path
+//! the process takes into the kernel.
+//!
 //! **The recognition is the safety property, and it is enforced.**
 //! [`install`] refuses any target whose first sixteen bytes are not that
 //! prefix, with the four system-call-number bytes wildcarded. A future Windows
@@ -158,6 +168,44 @@ pub(crate) fn installation_window_sealed() -> bool {
 const PREFIX_HEAD: [u8; 4] = [0x4C, 0x8B, 0xD1, 0xB8];
 const PREFIX_TAIL: [u8; 8] = [0xF6, 0x04, 0x25, 0x08, 0x03, 0xFE, 0x7F, 0x01];
 const SSN_AT: usize = 4;
+
+/// The shared-data byte the recognised stub tests, derived from the pattern
+/// that recognises it rather than written out a second time.
+///
+/// `PREFIX_TAIL` *is* `test byte ptr [7FFE0308h], 1`: bytes 3..7 are the
+/// little-endian address and byte 7 is the mask. Taking both from there means
+/// the check below cannot drift from the shape it is checking.
+const SHARED_FLAG_ADDRESS: usize = u32::from_le_bytes([
+    PREFIX_TAIL[3],
+    PREFIX_TAIL[4],
+    PREFIX_TAIL[5],
+    PREFIX_TAIL[6],
+]) as usize;
+const SHARED_FLAG_MASK: u8 = PREFIX_TAIL[7];
+
+/// Whether the recognised stub's branch falls through to `syscall`.
+///
+/// **This is the trampoline's unstated premise, made a checked one.** The stub
+/// does not go straight to `syscall`: it tests a byte in shared data and takes
+/// an alternate path when that bit is set. The trampoline this module builds
+/// is `mov r10,rcx; mov eax,ssn; syscall; ret`, which reproduces only the
+/// fall-through -- so it is the same call by construction *when the bit is
+/// clear*, and a different one when it is not. The recogniser matches those
+/// test bytes and then ignores what they select.
+///
+/// The bit is clear on ordinary x64, which is why nothing has noticed. That is
+/// an observation about this machine, not a property of the technique, and
+/// binding to it silently is what the house rule against depending on
+/// incidental behaviour forbids. So it is read, and an install refuses when it
+/// is set rather than quietly rewriting which path the process takes into the
+/// kernel.
+fn syscall_path_is_direct() -> bool {
+    // SAFETY: `KUSER_SHARED_DATA` is mapped read-only at a fixed address in
+    // every user-mode process on Windows, and this reads one byte inside it.
+    // Volatile because the kernel owns the page and may change it.
+    let flag = unsafe { std::ptr::read_volatile(SHARED_FLAG_ADDRESS as *const u8) };
+    flag & SHARED_FLAG_MASK == 0
+}
 /// `jmp qword ptr [rip+0]` followed by the eight-byte destination.
 const PATCH_LEN: usize = 14;
 
@@ -173,6 +221,26 @@ pub(crate) enum Refusal {
     NoTrampoline = 3,
     /// The entry point could not be made writable.
     NotWritable = 4,
+    /// The trampoline page could not be made executable.
+    ///
+    /// Separate from [`NoTrampoline`](Self::NoTrampoline), which is a failed
+    /// allocation: here the page exists and holds the rebuilt stub, but the
+    /// call that would let it be *executed* did not succeed. Installing anyway
+    /// would plant a jump into memory the processor refuses to run.
+    TrampolineNotExecutable = 5,
+    /// The stub's branch does not fall through to `syscall` on this system.
+    ///
+    /// The trampoline reproduces the fall-through only, so it would be a
+    /// different call from the one it replaced. See
+    /// [`syscall_path_is_direct`].
+    IndirectSyscallPath = 7,
+    /// Some thread could not be stopped, so the process was not quiesced.
+    ///
+    /// The entire safety argument for writing over live code is that nothing
+    /// is executing the bytes being written. A thread this module failed to
+    /// open or suspend is still running, so that argument does not hold and
+    /// nothing is patched.
+    NotQuiesced = 6,
 }
 
 /// Forwarding shape for every hooked stub.
@@ -396,9 +464,14 @@ pub(crate) unsafe fn is_syscall_stub(entry: *const u8) -> bool {
 /// hold the trace buffer's lock, and taking it here would deadlock the process
 /// with no thread able to release it. `patch` therefore returns its outcome
 /// and the caller records it afterwards.
-fn with_others_suspended<T>(patch: impl FnOnce() -> T) -> T {
+///
+/// Returns `None` without running `patch` when any thread could not be stopped.
+/// Every thread this call did suspend is resumed either way.
+fn with_others_suspended<T>(patch: impl FnOnce() -> T) -> Option<T> {
     use std::sync::Mutex;
-    use windows_sys::Win32::Foundation::{CloseHandle, INVALID_HANDLE_VALUE};
+    use windows_sys::Win32::Foundation::{
+        CloseHandle, ERROR_INVALID_PARAMETER, GetLastError, INVALID_HANDLE_VALUE,
+    };
     use windows_sys::Win32::System::Diagnostics::ToolHelp::{
         CreateToolhelp32Snapshot, TH32CS_SNAPTHREAD, THREADENTRY32, Thread32First, Thread32Next,
     };
@@ -479,22 +552,47 @@ fn with_others_suspended<T>(patch: impl FnOnce() -> T) -> T {
     // vector at the end of this loop, which is a `free` -- and so an allocator
     // lock -- taken with every other thread already stopped. It is dropped at
     // the end of the function instead, once they are running again.
+    // A thread this loop cannot stop is a thread that is still running, and
+    // "nothing is executing the bytes being written" is the whole of why this
+    // is allowed to write over live code. Both failures used to `continue`,
+    // which discarded the precondition rather than the thread and patched
+    // anyway.
+    //
+    // **One of the two failures is benign and has to be told apart**, or this
+    // refuses almost every live install: the snapshot is taken while the
+    // process runs, so a thread listed in it can exit before `OpenThread`
+    // reaches it, and a pool that is starting and finishing workers does that
+    // routinely. `ERROR_INVALID_PARAMETER` is how `OpenThread` reports a
+    // thread id that no longer names anything -- and a thread that does not
+    // exist is not executing the bytes about to be written, which is exactly
+    // the property being established. Any other failure is a thread that is
+    // there and could not be opened, and that refuses.
+    //
+    // Measured: refusing both made `install_by_label` fail in an ordinary test
+    // process, which is what sent this back for the distinction.
+    let mut quiesced = true;
     for &id in &ids {
-        // SAFETY: no preconditions; a null return is skipped.
+        // SAFETY: no preconditions; a null return is handled.
         let thread = unsafe { OpenThread(THREAD_SUSPEND_RESUME, 0, id) };
         if thread.is_null() {
-            continue;
+            // SAFETY: no preconditions; reports the call immediately above.
+            if unsafe { GetLastError() } == ERROR_INVALID_PARAMETER {
+                continue;
+            }
+            quiesced = false;
+            break;
         }
         // SAFETY: opened for exactly this access.
         if unsafe { SuspendThread(thread) } == u32::MAX {
             // SAFETY: nothing else refers to this handle.
             unsafe { CloseHandle(thread) };
-            continue;
+            quiesced = false;
+            break;
         }
         held.push(thread);
     }
 
-    let outcome = patch();
+    let outcome = if quiesced { Some(patch()) } else { None };
 
     for &thread in &held {
         // SAFETY: suspended by this function, opened for this access.
@@ -527,7 +625,8 @@ struct Prepared {
 /// `ntdll` exactly as it was.
 fn prepare(index: usize) -> Result<Prepared, Refusal> {
     use windows_sys::Win32::System::Memory::{
-        MEM_COMMIT, MEM_RESERVE, PAGE_EXECUTE_READ, PAGE_READWRITE, VirtualAlloc, VirtualProtect,
+        MEM_COMMIT, MEM_RELEASE, MEM_RESERVE, PAGE_EXECUTE_READ, PAGE_READWRITE, VirtualAlloc,
+        VirtualFree, VirtualProtect,
     };
 
     let (symbol, _, hook) = HOOKS[index];
@@ -541,6 +640,11 @@ fn prepare(index: usize) -> Result<Prepared, Refusal> {
     // SAFETY: an exported entry point has at least this many readable bytes.
     if !unsafe { is_syscall_stub(entry) } {
         return Err(Refusal::NotAStub);
+    }
+    // Recognising the shape is not enough: the shape contains a branch, and
+    // the trampoline rebuilds only one side of it.
+    if !syscall_path_is_direct() {
+        return Err(Refusal::IndirectSyscallPath);
     }
     // SAFETY: as above.
     let head = unsafe { std::slice::from_raw_parts(entry, 16) };
@@ -576,7 +680,20 @@ fn prepare(index: usize) -> Result<Prepared, Refusal> {
     unsafe { std::ptr::copy_nonoverlapping(stub.as_ptr(), page.cast::<u8>(), stub.len()) };
     let mut was = 0_u32;
     // SAFETY: `page` is this module's own reservation.
-    unsafe { VirtualProtect(page, 4096, PAGE_EXECUTE_READ, &mut was) };
+    let executable = unsafe { VirtualProtect(page, 4096, PAGE_EXECUTE_READ, &mut was) };
+    if executable == 0 {
+        // Checked, where it used to be discarded. The trampoline pointer was
+        // published regardless, so a failure here left the hook installed and
+        // jumping into a page the processor will not execute -- an access
+        // violation raised by the instrument, inside the first hooked call.
+        // See [A failable call has its failure handled,
+        // always](../../../../DESIGN-NOTES.md#a-failable-call-has-its-failure-handled-always).
+        //
+        // SAFETY: this module's own reservation, released exactly once, and
+        // never published -- `TRAMPOLINES[index]` is still whatever it was.
+        unsafe { VirtualFree(page, 0, MEM_RELEASE) };
+        return Err(Refusal::TrampolineNotExecutable);
+    }
     TRAMPOLINES[index].store(page as usize, Ordering::Release);
 
     // The patch: `jmp qword ptr [rip+0]`, destination inline behind it.
@@ -762,7 +879,7 @@ fn install_batch(chosen: &[usize]) -> Vec<(usize, Result<(), Refusal>)> {
     };
 
     // Phase two, with every other thread stopped: stores only.
-    with_others_suspended(|| {
+    let committed = with_others_suspended(|| {
         for (_, outcome) in &prepared {
             if let Ok(ready) = outcome {
                 // SAFETY: prepared by `prepare`, on a page `open_pages` made
@@ -770,7 +887,22 @@ fn install_batch(chosen: &[usize]) -> Vec<(usize, Result<(), Refusal>)> {
                 unsafe { commit(ready) };
             }
         }
-    });
+    })
+    .is_some();
+    if !committed {
+        // Not quiesced, so nothing was written. Restore the pages and refuse
+        // every entry rather than reporting an install that did not happen.
+        restore_pages(&opened);
+        return prepared
+            .into_iter()
+            .map(|(index, outcome)| {
+                (
+                    index,
+                    outcome.and(Err(Refusal::NotQuiesced)).map(|_: Prepared| ()),
+                )
+            })
+            .collect();
+    }
 
     // Phase three, running again: flush each patched stub, then put every
     // page's protection back exactly once.

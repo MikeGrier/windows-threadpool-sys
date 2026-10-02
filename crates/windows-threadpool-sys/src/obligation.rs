@@ -110,6 +110,24 @@ impl CloseObligation {
 ///
 /// One site for the message rather than five, so the wording a consumer sees
 /// cannot differ by which type they dropped.
+///
+/// # What this does not catch, stated rather than left to be discovered
+///
+/// The flag records an **outstanding arming**, not "this `Drop` blocked". A
+/// dispatch settles it for a wait and a one-shot timer -- the pool is no longer
+/// watching once the callback has entered -- but `Drop` still waits for that
+/// callback to finish. So dropping while a callback is executing performs a
+/// blocking drain and reports nothing, and a callback that blocks for a long
+/// time is exactly the case a consumer would most want told about.
+///
+/// This is a consequence of what the flag answers, not an oversight in it:
+/// asking instead "is a callback running right now" is a question only the pool
+/// can answer, and only by being asked at the moment `Drop` has already
+/// committed to waiting. The feature therefore catches the obligation a caller
+/// *left* -- an object still armed at `Drop` -- and not every teardown that
+/// happens to block. `CleanupGroup` is outside it altogether: its teardown
+/// drains, deliberately, but it carries no obligation flag and so never
+/// reports.
 pub(crate) fn fail_fast_if_owed(owed: bool, type_name: &str, close: &str) {
     #[cfg(feature = "fail-fast")]
     if owed {
