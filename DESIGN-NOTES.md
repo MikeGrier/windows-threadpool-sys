@@ -1461,15 +1461,36 @@ modifies -- and what it was missing was a statement of what the second opt-in
 spends. The module docs, the variable's own documentation, and the README now
 carry it.
 
-### The patch window, narrowed by where installation happens
+### The patch window, and the guarantee that was not one
 
-The window the review found does not arise on the supported path, and this is a
-fact about the code rather than a mitigation taken on trust. Installation runs
-from the `.CRT$XCU` initialiser, during CRT startup, before `main` and so before
-the harness or the pool has created a thread; `install_requested` installs at
-most once; and `armed_before_main` is asserted by a test rather than assumed.
-With no other threads in existence, no instruction pointer can be inside the
-range.
+Installation runs from the `.CRT$XCU` initialiser, during CRT startup, before
+`main` and so before the harness or the pool has created a thread. With no other
+threads in existence, no instruction pointer can be inside the range, so the
+window does not arise.
+
+**An earlier revision of this decision said exactly that and was wrong**, in a
+way worth recording because the shape recurs. Installation was not performed by
+the initialiser; it sat at the end of `observe_exceptions`, which `enabled`
+calls *only when the trace is armed*. A process with
+`WINDOWS_THREADPOOL_TRACE_HOOKS` set and `WINDOWS_THREADPOOL_TRACE` unset
+therefore left the installer's once-flag unconsumed -- and `observe_exceptions`
+is public. A later call from a running process would have patched `ntdll` with
+the pool's threads already alive, which is the one case the recogniser cannot
+make safe.
+
+So the guarantee was being carried by *which function happened to call the
+installer*. That is the failure mode [Push every rule down the detection
+ladder](#detection-ladder) exists for: correct while nobody moves the call,
+silently false the moment somebody does, and invisible to every test because
+nothing was checking. It was found by a review reading the two functions
+together, not by the suite.
+
+It is now enforced rather than observed. The initialiser calls hook installation
+directly and unconditionally -- it answers to its own environment variable, not
+to whether the trace is armed -- and then seals the window; `install_requested`
+refuses afterwards and records `refused-after-seal` rather than returning
+quietly. `the_hook_installation_window_is_shut_before_any_test_runs` asserts the
+seal, and fails if the initialiser stops setting it.
 
 What remains is `install_by_label`, which is `#[cfg(test)]` and patches a live
 process. Its suspension is a mitigation and not a proof: it closes the window in

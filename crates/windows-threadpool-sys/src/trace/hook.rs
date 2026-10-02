@@ -93,10 +93,16 @@
 //! The supported path does not reach that, because it patches when the process
 //! has no other threads. Installation happens from the `.CRT$XCU` initialiser
 //! in [`super`], which runs during CRT startup -- before `main`, and so before
-//! the test harness or the pool has created a thread. `armed_before_main` is
-//! asserted by a test rather than assumed, and `install_requested` installs at
-//! most once, so there is no later path that arms the hooks with threads
-//! running.
+//! the test harness or the pool has created a thread.
+//!
+//! That is **enforced** rather than merely arranged, which it was not until a
+//! review found otherwise: installation used to sit at the end of
+//! `observe_exceptions`, a public function that `enabled` calls only when the
+//! trace is armed, so a process that asked for hooks without asking for the
+//! trace could reach the installer later with its threads already running. The
+//! initialiser now installs directly and unconditionally and then seals the
+//! window; [`install_requested`] refuses afterwards, and a test asserts the
+//! seal.
 //!
 //! What remains is `install_by_label`, which is `#[cfg(test)]` and does patch
 //! a live process. The suspension it performs is a mitigation and not a proof:
@@ -109,6 +115,40 @@ use super::record;
 
 /// The target every hook records under.
 const TARGET: &str = "wfactory";
+
+/// Whether the one-thread window for installing hooks has closed.
+///
+/// The safety argument for patching `ntdll` without relocating instruction
+/// pointers is that nothing else is running when the bytes are written. That
+/// holds only before `main`, and only the pre-`main` initialiser knows when
+/// that moment has passed -- so it says so here, and [`install_requested`]
+/// refuses afterwards.
+///
+/// This is a flag rather than a comment because the guarantee was previously
+/// carried by *which function happened to call the installer*, and that is
+/// exactly the shape of rule this repository keeps getting wrong: correct
+/// while nobody moves the call, silent when somebody does. `install_by_label`
+/// is deliberately not subject to it -- it is `#[cfg(test)]`, it patches a
+/// live process knowingly, and its hazards are documented at its definition.
+static SEALED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// Close the window in which hooks may be installed.
+///
+/// Called once, by the pre-`main` initialiser, immediately after it has given
+/// [`install_requested`] its only chance to run.
+pub(crate) fn seal_installation_window() {
+    SEALED.store(true, Ordering::SeqCst);
+}
+
+/// Whether the installation window has closed.
+///
+/// Exists so a test can assert that the pre-`main` initialiser actually sealed
+/// it. Without that assertion the seal is a line of code nothing exercises,
+/// and the guarantee would be back to resting on a call nobody checks.
+#[cfg(test)]
+pub(crate) fn installation_window_sealed() -> bool {
+    SEALED.load(Ordering::SeqCst)
+}
 
 /// The fixed part of an `ntdll` syscall stub, with the four system-call-number
 /// bytes at [`SSN_AT`] wildcarded.
@@ -652,6 +692,13 @@ pub(crate) fn install_by_label(label: &str) -> Result<(), Refusal> {
 /// index and the [`Refusal`]. A silent no-op would be indistinguishable from a
 /// hook that fired zero times.
 pub(crate) fn install_requested() {
+    if SEALED.load(Ordering::SeqCst) {
+        // Recorded rather than ignored: a refusal here means something called
+        // this after the one-thread window closed, which is a defect in the
+        // caller and must not look like "the hooks were not requested".
+        record(TARGET, "refused-after-seal", 0, 0);
+        return;
+    }
     use std::sync::atomic::AtomicBool;
     static DONE: AtomicBool = AtomicBool::new(false);
     if DONE.swap(true, Ordering::SeqCst) {

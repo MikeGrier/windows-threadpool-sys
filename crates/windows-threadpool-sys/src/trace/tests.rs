@@ -736,6 +736,36 @@ fn the_trace_arms_itself_before_main() {
     );
 }
 
+/// The window for installing hooks is shut by the time any test runs.
+///
+/// The companion to `the_trace_arms_itself_before_main`, and the one that
+/// makes the *safety* claim checkable rather than merely stated. Patching
+/// `ntdll` without relocating instruction pointers is only sound while this
+/// process has one thread, which is true before `main` and never again.
+///
+/// That used to rest on where the installer happened to be called from: it sat
+/// at the end of `observe_exceptions`, which `enabled` invokes only when the
+/// trace is armed. A process with `WINDOWS_THREADPOOL_TRACE_HOOKS` set and
+/// `WINDOWS_THREADPOOL_TRACE` unset therefore left the installer unconsumed,
+/// and `observe_exceptions` is public -- so a later call would have patched a
+/// live process with the pool's threads already running. Nothing failed,
+/// because nothing was checking.
+///
+/// Asserting the seal is what stops that returning. It fails if the
+/// initialiser stops sealing, if the seal is moved somewhere that does not run
+/// pre-`main`, or if somebody reintroduces a path that installs lazily.
+#[cfg(feature = "trace")]
+#[test]
+fn the_hook_installation_window_is_shut_before_any_test_runs() {
+    assert!(
+        super::hook::installation_window_sealed(),
+        "hook installation is still open after `main`, so a call to the public \
+         `observe_exceptions` -- or anything else reaching the installer -- could patch `ntdll` \
+         with this process's threads already running, which is the one thing the recogniser \
+         cannot make safe"
+    );
+}
+
 /// Hooking the wait registration records whether the kernel reported the
 /// object as already signalled.
 ///

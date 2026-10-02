@@ -157,11 +157,17 @@ mod hook;
 static ARM_BEFORE_MAIN: extern "C" fn() = {
     extern "C" fn arm() {
         ARMED_BEFORE_MAIN.store(true, std::sync::atomic::Ordering::Relaxed);
-        // `enabled` is the single path that arms the trace, starts its clock,
-        // installs the exception observer and requests the hooks. Calling it
-        // rather than any of those directly keeps one order of operations
-        // rather than two that have to be kept in step.
+        // `enabled` is the single path that arms the trace, starts its clock
+        // and installs the exception observer. Calling it rather than any of
+        // those directly keeps one order of operations rather than two that
+        // have to be kept in step.
         let _ = imp::enabled();
+        // Hook installation is deliberately NOT part of that path. It answers
+        // to its own environment variable, so it must happen whether or not
+        // the trace is armed -- and it must happen here, where this process
+        // still has exactly one thread. This call is also what closes the
+        // window, so there is no later path that can patch a live process.
+        imp::install_hooks_before_main();
     }
     arm
 };
@@ -474,11 +480,29 @@ mod imp {
                 Some(exception_observer),
             )
         };
-        // Planting code over `ntdll` needs its own opt-in and does nothing
-        // without one; see `trace::hook`. It is placed here so that a process
-        // that asked for hooks gets them as early as the trace itself, which
-        // for the worker factory means before the pool has any thread.
+    }
+
+    /// Install any requested `ntdll` hooks, and close the window for doing so.
+    ///
+    /// Called only from the pre-`main` initialiser, and the only caller there
+    /// ever is. Hook installation used to sit at the end of
+    /// [`observe_exceptions`], which was wrong in a way that was invisible
+    /// until someone read the two together: `enabled` calls that function only
+    /// when the trace is armed, so a process with
+    /// `WINDOWS_THREADPOOL_TRACE_HOOKS` set and `WINDOWS_THREADPOOL_TRACE`
+    /// unset left the installer's once-flag unconsumed -- and
+    /// `observe_exceptions` is public, so a later call from a running process
+    /// would then patch `ntdll` with the pool's threads already alive. The
+    /// whole safety argument for this module is that it patches before any
+    /// other thread exists; that argument was being carried by a caller rather
+    /// than by the installer.
+    ///
+    /// So installation is unconditional here -- it depends on its own variable
+    /// and not on whether the trace is armed -- and `seal_installation_window`
+    /// makes any later attempt a recorded refusal rather than a live patch.
+    pub(super) fn install_hooks_before_main() {
         super::hook::install_requested();
+        super::hook::seal_installation_window();
     }
 
     /// Record what the default pool's worker factory believes about itself.

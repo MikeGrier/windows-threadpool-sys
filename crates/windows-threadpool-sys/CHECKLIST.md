@@ -431,10 +431,14 @@ house rules require is what found the third.
   is better spent making the choice visible where it is made, which is what this item did: the
   module docs own the statement, the variable's own documentation and the README point at it.
 
-  **The window itself is narrower than reported.** Installation runs from the `.CRT$XCU`
-  initialiser before `main`, so no other thread exists to be inside the range; `armed_before_main`
-  is asserted by a test rather than assumed. What remains is `install_by_label`, which is
-  `#[cfg(test)]`.
+  **The window itself is narrower than reported -- but not for the reason this item first gave.**
+  Installation runs from the `.CRT$XCU` initialiser before `main`, so no other thread exists to be
+  inside the range. This item originally asserted that as already true; a later review found it
+  was not. Installation sat at the end of the public `observe_exceptions`, which `enabled` calls
+  only when the trace is armed, so a process with `WINDOWS_THREADPOOL_TRACE_HOOKS` set and
+  `WINDOWS_THREADPOOL_TRACE` unset could reach the installer after its threads existed. Closed by
+  `M-T10.8`, which moved installation into the initialiser and sealed the window. What remains is
+  `install_by_label`, which is `#[cfg(test)]`.
 
 - [x] **M-T10.6** -- **Stop the recogniser's live canary reading a stub a sibling test has
       patched.** Found while trying to reproduce `M-T10.3`'s reported hang, which is the only
@@ -456,6 +460,23 @@ house rules require is what found the third.
   **Fixed** by giving the canary `unhookable_stub_entry()`, an `ntdll` export deliberately absent
   from `HOOKS` and asserted to be absent, so this module cannot patch it however many hooks a run
   installs.
+
+- [x] **M-T10.8** -- **Enforce the one-thread hook-installation window at the installer.** Found
+      by the third review round, which falsified a claim `M-T10.4` had written into three
+      documents one commit earlier.
+
+  **The defect.** Hook installation sat at the end of `observe_exceptions`, which `enabled` calls
+  only when the trace is armed. A process with `WINDOWS_THREADPOOL_TRACE_HOOKS` set and
+  `WINDOWS_THREADPOOL_TRACE` unset therefore left the installer's once-flag unconsumed, and
+  `observe_exceptions` is public -- so a later call from a running process would patch `ntdll`
+  with the pool's threads alive, the one case the recogniser cannot make safe.
+
+  **The shape is the lesson.** The guarantee was carried by *which function happened to call the
+  installer*: correct while nobody moved the call, silently false afterwards, and checked by
+  nothing. Fixed by moving installation into the pre-`main` initialiser, unconditionally and
+  independent of the trace, then sealing the window; `install_requested` now refuses and records
+  `refused-after-seal`. Guarded by `the_hook_installation_window_is_shut_before_any_test_runs`,
+  verified by sabotage.
 
 - [ ] **M-T10.7** -- **Decide whether CI should check intra-doc links in private items.**
 
