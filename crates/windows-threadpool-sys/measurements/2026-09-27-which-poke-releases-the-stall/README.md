@@ -19,7 +19,7 @@ or whether any pool activity would do.
 
 ## Method
 
-One temporary edit to [event_delivery.rs](../../tests/event_delivery.rs),
+One temporary edit to [event_delivery.rs](../../../windows-ioring-sys/tests/event_delivery.rs),
 reverted afterwards. In the post-mortem -- which runs only on a failing run,
 after the test has already given up -- both failing threads perform, in step:
 

@@ -14,7 +14,7 @@ crate's `ThreadpoolWait`.
 ## Arms
 
 The same reproducer -- the three-test subset of
-[event_delivery.rs](../../tests/event_delivery.rs), run in a fresh process,
+[event_delivery.rs](../../../windows-ioring-sys/tests/event_delivery.rs), run in a fresh process,
 scored by exit code -- against two builds that differ only in `ThreadpoolWait`'s
 teardown:
 

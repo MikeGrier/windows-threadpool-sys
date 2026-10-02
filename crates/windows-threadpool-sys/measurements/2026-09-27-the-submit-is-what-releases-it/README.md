@@ -111,7 +111,7 @@ worker for a packet it had. Nothing here establishes the cause.
 ## How it was run
 
 The three reproducer tests in
-[tests/event_delivery.rs](../../tests/event_delivery.rs) were left untouched;
+[tests/event_delivery.rs](../../../windows-ioring-sys/tests/event_delivery.rs) were left untouched;
 `pool_liveness()` was temporarily given a sleep, governed by
 `IORING_STALL_SUBMIT_DELAY_MS`, between creating the work object and submitting
 it. The binary was looped 4000 times per arm with `WINDOWS_THREADPOOL_TRACE='*'`

@@ -956,7 +956,7 @@ before the close only makes the race improbable, which is why the gap that was
 measured to work was never a candidate fix.
 
 Measurements and the full call chain are in
-[crates/windows-ioring-sys/STALL-TIMELINE.md](crates/windows-ioring-sys/STALL-TIMELINE.md)
+[crates/windows-threadpool-sys/STALL-TIMELINE.md](crates/windows-threadpool-sys/STALL-TIMELINE.md)
 and the artifacts it links.
 
 ### Why the earlier reasoning does not survive
@@ -982,7 +982,7 @@ callback that runs is a callback that ran.
 
 ### The measurement that forced it
 
-[2026-09-28-closing-too-soon-after-the-disarm](crates/windows-ioring-sys/measurements/2026-09-28-closing-too-soon-after-the-disarm/README.md):
+[2026-09-28-closing-too-soon-after-the-disarm](crates/windows-threadpool-sys/measurements/2026-09-28-closing-too-soon-after-the-disarm/README.md):
 a `CloseThreadpoolWait` issued close behind a `SetThreadpoolWait(NULL)` leaves
 the default pool's worker factory unable to make its first worker. Replacing
 the cancelling drain with a draining one gave **0 failures in 20000 runs

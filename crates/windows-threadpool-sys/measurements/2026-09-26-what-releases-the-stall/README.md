@@ -40,7 +40,7 @@ the one in three hundred recorded before this trace existed:
 
 ## What was varied
 
-Two temporary edits to [event_delivery.rs](../../tests/event_delivery.rs), each
+Two temporary edits to [event_delivery.rs](../../../windows-ioring-sys/tests/event_delivery.rs), each
 reverted after its run. Neither changes the delivery path; both only delay what
 the test does *after* it has already given up.
 

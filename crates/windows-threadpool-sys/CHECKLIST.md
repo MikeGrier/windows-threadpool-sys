@@ -5,7 +5,238 @@ Design decisions for this crate are in the workspace-root
 [windows-overlapped-io-sys](../windows-overlapped-io-sys/CHECKLIST.md). Completed milestones are archived in
 [COMPLETED-CHECKLIST.md](COMPLETED-CHECKLIST.md).
 
-No milestone is open. M-T6 -- cancellation self-heals -- completed on
-2026-10-01 and is archived in
-[COMPLETED-CHECKLIST.md](COMPLETED-CHECKLIST.md); the plan it belonged to is
-recorded in [COMPLETED-PLANS.md](COMPLETED-PLANS.md).
+M-T6 -- cancellation self-heals -- completed on 2026-10-01 and is archived in
+[COMPLETED-CHECKLIST.md](COMPLETED-CHECKLIST.md).
+
+## M-T7 -- The pool stall: why a worker factory loses its worker
+
+**Transferred from `windows-ioring-sys` on 2026-10-01, because the fault was never that crate's.**
+`M26.13.4` established it by measurement: during the stall the process thread pool dispatches **no
+callback of any kind** -- a wait, a timer and an I/O object each created and armed *during* the
+stall, with no connection to any ring, all sit undispatched until a work item is submitted. The ring
+is still needed to *reach* the state, which is why the reproducer stays in that crate, but nothing
+about the ring is what is stuck.
+
+What moved with it: [STALL-TIMELINE.md](STALL-TIMELINE.md), which walks one captured occurrence
+record by record, and the 33 measurement captures under [measurements/](measurements) taken during
+the investigation. What stayed: the reproducer itself, which is `windows-ioring-sys`' own test
+binary, and that crate's resolved-failure entry, because the tests that failed are its.
+
+**The remedy already shipped and is measured.** `M-T4` made teardown drain rather than cancel, which
+is what closes the failure; `M26.15` re-measured it against the current build at 0 in 12000 with a
+control reproducing at 12 in 4000. So everything below is **diagnostic, not remedial** -- it buys an
+explanation, not working software.
+
+**The hazard is still reachable, which is the argument for keeping any of it.** `try_cancel_pending`
+remains public: the drain changed the default, not the available operations. The self-heal is the
+mitigation for a caller who cancels, and it works by submitting a work item to a pool owing a
+repair -- which `M26.13.3` found is exactly what ends the stall. That makes the self-heal a rescue
+for this specific kernel behaviour, built out of this investigation, and never measured against it.
+
+**Item IDs keep their original `M26.*` numbers in parentheses**, because roughly thirty measurement
+READMEs cite them and renumbering would orphan every citation.
+
+- [ ] **M-T7.1** (was `M26.13`) -- **Find why the delivery stall's dispatch is delayed.**
+  Re-opened and substantially narrowed on 2026-09-26; the measurements are in
+  [UNRESOLVED-TEST-FAILURES.md](../windows-ioring-sys/RESOLVED-TEST-FAILURES.md) and are not repeated here, and one
+  captured occurrence is walked through record by record in
+  [STALL-TIMELINE.md](../windows-threadpool-sys/STALL-TIMELINE.md).
+
+  **What changed.** The stall was believed fixed by [D-68](../windows-ioring-sys/DESIGN-NOTES.md#d-68). It is not: it
+  still reproduces against the current build, with D-68's arm-before-signal ordering visible in the
+  trace of every capture. It is a **permanent hang** -- `M26.13.9` removed the post-mortem probe and
+  waited sixty seconds, and the delivery never arrived at all. An earlier revision of this item said
+  D-68 had converted the permanent loss into "a delayed dispatch that eventually delivers
+  everything"; that was an artifact of the probe, which releases the pool before the measurement is
+  taken.
+
+  **Re-planned 2026-09-26 after `M26.13.3`.** The question this item was written around --
+  what releases the stall -- is answered, and the answer moves the search. The stall ends when a
+  work item is **queued** to the pool and at no other time: it does not end on a timer, does not end
+  on its own through a two-second quiet period, and does not end when the work object is merely
+  created. Nine captures in three configurations, in
+  [measurements/2026-09-26-what-releases-the-stall/](../windows-threadpool-sys/measurements/2026-09-26-what-releases-the-stall/README.md).
+  So the remaining question is a **pool** question -- why a queued wait callback waits for an
+  unrelated `SubmitThreadpoolWork` -- where this item had been framed as a **ring** question.
+
+  **Re-planned again 2026-09-27 after `M26.13.4`, and the item stopped being about the ring at all --
+  which is what eventually moved it to this crate.**
+  During the stall the pool dispatches **no callback of any kind**: a wait, a timer, and an I/O
+  object each created and armed *during* the stall, with no connection to any ring, all sit
+  undispatched for two seconds and then run only once a work item is submitted. Fifteen captures in
+  [measurements/2026-09-27-which-poke-releases-the-stall/](../windows-threadpool-sys/measurements/2026-09-27-which-poke-releases-the-stall/README.md).
+  So the earlier framing -- "a queued *wait* callback waits for an unrelated `SubmitThreadpoolWork`"
+  -- was still too narrow. Nothing dispatches, and a work submit restarts everything.
+
+  **The four ring-ingredient experiments are withdrawn as the next step**, not because they are
+  answered but because they were aimed at the wrong half: they were designed to reproduce the
+  *entry* into the stall in isolation, and the isolation already fails to reproduce it across six
+  thousand trials. They stay available if the experiments below dead-end. For the record, they were:
+  an event the kernel also signals via `SetIoRingCompletionEvent`; a callback that re-arms itself
+  from the pool thread; a callback that drains under a mutex the test thread also takes; and
+  `CloseIoRing` releasing the kernel's reference to a still-armed event.
+
+  **Re-planned 2026-10-01: a remedy shipped, so this item is no longer the thing standing between
+  the suite and a clean run.** `M26.14.1` and `M26.14.2` found the entry -- the trigger's teardown,
+  closing a wait too soon after disarming it with a *cancel* -- and `M26.14.3`'s decision was taken:
+  `windows-threadpool-sys` now drains instead, which `M26.14.2` measured at 0 in 20000 against a
+  control's 10. So the experiments below are now **diagnostic rather than remedial**. They would say
+  *why* the kernel loses the worker; they are no longer the route to making the tests pass, and
+  `M26.15` is what establishes whether they still describe a live failure at all.
+
+  **Experiment 3 is withdrawn as a remedy.** "Adopt a private pool, or keep looking?" was explicitly
+  a workaround ahead of a diagnosis; the diagnosis arrived and produced a fix that costs no design
+  change, so the workaround's questions -- who owns the pool, one per delivery or shared, what it
+  means for a caller's own environment -- no longer need answering to get past this. It is kept
+  below only as the record of what was considered.
+
+  **DECISION TO RAISE, not to take: park experiments 0, 1 and 2, or keep them live?** They ask a
+  real question nobody has answered -- what leaves the worker factory with no worker -- and this
+  item has already established that ETW cannot separate the two candidate explanations, that the
+  `DISPATCHER` flag needs elevation, and that no public provider describes a completion packet
+  reaching a port. Against that: the fix has shipped, so the work buys understanding rather than
+  working software. Parking them in `M-inf` beside `M26.14.4` would be consistent with how that
+  item was treated; keeping them here says the diagnosis is still owed. Not taken here, because
+  "stop investigating a kernel behaviour we cannot explain" is the engineer's call, not this
+  item's.
+
+  **The remaining experiments**, in order:
+  0. **Arm a wait on an already-signalled event at process start, and see whether it is ever
+     delivered.** The question is unchanged -- separate `the pool would never have dispatched in
+     this process` from `it was put into this state during setup` -- but `M26.13.14` ruled out the
+     method this item previously proposed. A heartbeat timer cannot get below **15.625 ms**, the
+     default Windows tick, without `timeBeginPeriod` changing the machine's timer behaviour under
+     the measurement, and 15.7 ms is still after the deliveries are armed at about 2.5 ms. An
+     already-signalled wait is due **immediately**, needs no timer resolution at all, and is in the
+     kernel-delivered class that fails. Firing in the first fraction of a millisecond means the pool
+     dispatched before the trigger ran and the fault was induced afterwards; not firing means the
+     pool never dispatched in this process at all. Guard it with the healthy case: in a passing run
+     it must fire, or the probe proves nothing.
+  1. **Add `DISPATCHER` to the kernel trace and name who readies the worker.** `M26.13.19` ran the
+     `PROC_THREAD` half of this and it landed: across 900 traced runs exactly one process has a gap
+     over a second, the failing one, whose first pool worker arrives 5008.7 ms after the last test
+     thread against a healthy 0.232 to 17.928 ms. That confirms the missing worker from an
+     instrument the `ntdll` hooks do not touch, which was the point of running it.
+
+     What is left of this item is the second flag. `DISPATCHER` emits `ReadyThread`, naming which
+     thread readied which, so a healthy run would say what *causes* the worker to appear 0.376 ms
+     after the last test thread -- and a failing run would say whether anything in the process is
+     readied at all during the five seconds. Run it the same way, and pair every capture with a
+     healthy control from the same session.
+
+     **It needs elevation, and that is the only thing stopping it.** The NT Kernel Logger refuses a
+     non-elevated session (`xperf -on ...` answers `Access is denied. (0x5)`); `sudo` in Inline mode
+     works and was used for `M26.13.19`. `DISPATCHER` is far higher volume than `PROC_THREAD`, so
+     size the run deliberately: 900 runs took 190 s and produced a 31 MB trace with `PROC_THREAD`
+     alone, and one failure. Consider a ring buffer flushed on failure rather than a continuous
+     file.
+
+     **What no amount of ETW will answer**, checked rather than assumed on 2026-09-27: there is no
+     public event for a wait-completion packet reaching an I/O completion port, and none for
+     worker-factory activation. All 1198 registered providers carry no thread-pool provider by name;
+     `xperf -providers KF` has no thread-pool kernel flag; and a census of all 40
+     `Microsoft-Windows-Kernel-*` manifests (`wevtutil gp /ge /gm`) finds no event declaring a
+     worker factory or a completion packet -- the only `Worker` hits are the cache, power and
+     prefetch providers' own unrelated workers. `ntdll`'s `TppETW*` routines emit through
+     `NtTraceEvent` directly and carry the same facts the hooks already record. So "the factory was
+     given the packet and did not act" and "the packet never arrived" cannot be separated this way,
+     and this item must not be written up as though it settles them.
+  2. **What about the trigger leaves the pool with no worker?** `M26.9` narrowed entry to a
+     co-running test that creates an `EventDelivery` over a ring with nothing outstanding and drops
+     it promptly. Re-ask it as a thread-supply question rather than a ring question: does that
+     teardown retire the pool's last worker, and is the ring incidental to it?
+
+  3. **DECISION TO RAISE, not to take: adopt a private pool, or keep looking?** `M26.13.5` measured
+     a clean 12000 runs across three private-pool arms against 13 failures in 4000 on the default
+     pool. `EventDelivery::new` already takes an environment, so this is reachable today -- but it
+     is a **workaround ahead of a diagnosis**, and it carries design questions this item must not
+     answer alone: who owns the pool, whether there is one per delivery or one shared, what it means
+     for a caller who passes an environment of their own, and whether a crate should quietly move a
+     caller's callbacks off the pool they expected. Raise it before building it.
+
+     > **Handoff discharged 2026-10-01.** This callout, written from `windows-ioring-sys`, said a
+     > remedy would most likely land in this crate rather than in the ring. It did: `M-T4`'s
+     > draining teardown. The item itself has since followed it here.
+
+  **Ruled out, so they are not retried:** that the stall is a timer, that the test thread waking
+  ends it, that creating a work object rather than queuing one ends it, that any non-work poke ends
+  it, that it is specific to waits or to the ring's wait, that a thread minimum prevents it, that
+  this workspace's own callbacks occupy the pool's threads, and that announcing those callbacks as
+  long-running prevents it.
+
+  **Done, and archived rather than repeated here:**
+  - `M26.13.3` -- the stall ends on a work submit and at no other time.
+  - `M26.13.4` -- and nothing else dispatches either, so the fault is pool-wide.
+  - `M26.13.5` -- it has only ever been seen on the default pool, and the thread minimum is not why.
+  - `M26.13.6` -- the pool has no worker while stalled and makes two or three when work is
+    submitted; runs-long does not change that, and none of our callbacks is holding a thread.
+
+  **Do not treat the report's "it arrived, N past the bound" as delivery latency.** That interval is
+  measured from the start of the post-mortem, which is after the probe has run -- and the probe is
+  now known to be what ends the stall, so the figure describes the probe, not the delivery. Fixing
+  that wording is part of this item.
+
+- [x] **M26.13.1** -- Paired entry/exit records added to all five pool trampolines, the re-arm, and the test's post-mortem path; a sabotage sweep confirms each is load-bearing. -> [completed 2026-09-26](../windows-ioring-sys/COMPLETED-CHECKLIST.md#m26131)
+
+- [x] **M26.13.2** -- The buffer is per-process, so the population was never "the full suite"; the capturing binary emits 89 records, the threadpool crate's own 14061, and an overflow now announces itself. -> [completed 2026-09-26](../windows-ioring-sys/COMPLETED-CHECKLIST.md#m26132)
+
+- [x] **M26.13.3** -- The stall ends when a work item is queued to the pool, at no other time, and the five-second coincidence is the probe's timing rather than a timer. -> [completed 2026-09-26](../windows-ioring-sys/COMPLETED-CHECKLIST.md#m26133)
+
+- [x] **M26.13.4** -- Experiment 3: nothing else releases it, and nothing else dispatches either -- a wait, a timer and an I/O object armed during the stall all sit undispatched, so the fault is pool-wide and not this crate's. -> [completed 2026-09-27](../windows-ioring-sys/COMPLETED-CHECKLIST.md#m26134)
+
+- [x] **M26.13.5** -- Experiment 2: a private pool does not stall in 12000 runs, but the thread minimum is not why -- the no-minimum arm is already clean, so the supply reading it was written to test is unsupported. -> [completed 2026-09-27](../windows-ioring-sys/COMPLETED-CHECKLIST.md#m26135)
+
+- [x] **M26.13.6** -- The pool has 6 threads while stalled and 8 or 9 right after the work submit, so it has no worker and makes one; runs-long does not change that, and no callback of ours is holding a thread. -> [completed 2026-09-27](../windows-ioring-sys/COMPLETED-CHECKLIST.md#m26136)
+
+- [x] **M26.13.7** -- With call-boundary and exception tracing on, no Win32 call blocks during the stall: 707 bracketed calls across 24 captures all returned, slowest 220us. -> [completed 2026-09-27](../windows-ioring-sys/COMPLETED-CHECKLIST.md#m26137)
+
+- [x] **M26.13.8** -- The reproducer's own 5000ms submit timeout is not the five seconds: changed to 4000ms, dispatch still resumed at five in 14 of 14. -> [completed 2026-09-27](../windows-ioring-sys/COMPLETED-CHECKLIST.md#m26138)
+
+- [x] **M26.13.9** -- It never self-releases. With the probe removed the delivery never arrives in 65s, so this is a permanent hang and the `delayed dispatch` claim was an artifact of the instrument. -> [completed 2026-09-27](../windows-ioring-sys/COMPLETED-CHECKLIST.md#m26139)
+
+- [x] **M26.13.10** -- Not a missed wake: re-signalling the event the wait is armed on releases nothing in 5 of 5, with every SetEvent's success recorded. -> [completed 2026-09-27](../windows-ioring-sys/COMPLETED-CHECKLIST.md#m261310)
+
+- [x] **M26.13.11** -- A dump taken while stalled shows three pool workers parked idle in `ZwWaitForWorkViaWorkerFactory`, so the pool is not starved of threads and `M26.13.6`'s reading was wrong. -> [completed 2026-09-27](../windows-ioring-sys/COMPLETED-CHECKLIST.md#m261311)
+
+- [x] **M26.13.12** -- A self-rearming timer armed while the pool was healthy, due inside the stall window, fires only at the release in 10 of 10 -- so the fault is dispatch, not registration. -> [completed 2026-09-27](../windows-ioring-sys/COMPLETED-CHECKLIST.md#m261312)
+
+- [x] **M26.13.13** -- At a 100ms period the heartbeat becomes a clock: its first expiry is already missed and no pool callback of any kind is dispatched before the release, in 18 of 18. The pool never starts.  -> [completed 2026-09-27](../windows-ioring-sys/COMPLETED-CHECKLIST.md#m261313)
+
+- [x] **M26.13.14** -- At the 15.625ms system tick the heartbeat misses 320 consecutive expiries and the trace window is empty end to end, in 13 of 13; the onset is bracketed to the first 15.7ms, and the sub-millisecond period item 0 asked for is not reachable this way. -> [completed 2026-09-27](../windows-ioring-sys/COMPLETED-CHECKLIST.md#m261314)
+
+- [x] **M26.13.15** -- Delaying only the `SubmitThreadpoolWork` call by up to 2000ms moves the delivery with it in 99 of 99, the released worker serves the queued wait ahead of the work that woke it, and an `ntdll` census corrects "user-mode queue push" to "the only path that calls `NtReleaseWorkerFactoryWorker`". -> [completed 2026-09-27](../windows-ioring-sys/COMPLETED-CHECKLIST.md#m261315)
+
+- [x] **M26.13.16** -- No thread alive at the stall ever runs a callback, in 12 of 12, while a passing run serves the delivery on a pre-existing thread in 30 of 30: the parked workers are present and unused, so `M26.13.11`'s "not starved" survives but the inference drawn from it does not. -> [completed 2026-09-27](../windows-ioring-sys/COMPLETED-CHECKLIST.md#m261316)
+
+- [x] **M26.13.17** -- Inline ntdll hooks and a worker-factory scan: the process holds two factories, and the default pool reports zero workers while stalled against one while healthy, so `M26.13.11`'s three parked workers were the *other* factory's all along. -> [completed 2026-09-27](../windows-ioring-sys/COMPLETED-CHECKLIST.md#m261317)
+
+- [x] **M26.13.18** -- Hooks installed before `main` show the pool's first worker is never created: a healthy run makes one 0.24-0.31ms after the delivery is armed, a stalled run makes none before the release in 8 of 8, and the `AlreadySignaled` race is refuted. -> [completed 2026-09-27](../windows-ioring-sys/COMPLETED-CHECKLIST.md#m261318)
+
+- [x] **M26.13.19** -- An ETW kernel trace confirms the missing worker independently of the ntdll hooks: across 900 traced runs exactly one process has a gap over a second, the failing one, at 5008.7ms against a healthy 0.232-17.928ms. -> [completed 2026-09-27](../windows-ioring-sys/COMPLETED-CHECKLIST.md#m261319)
+
+- [x] **M26.13.20** -- Re-verified the reproducer's premises from a clean build: the 3-test reduction matches the full binary (16 vs 18 in 4000), the trigger is necessary (0 in 4000 without it), one victim suffices at about half the rate, and "fail together, never singly" was wrong. -> [completed 2026-09-28](../windows-ioring-sys/COMPLETED-CHECKLIST.md#m261320)
+
+- [x] **M26.14.1** -- The trigger's *teardown* is what poisons: built and never dropped it gives 0 in 4000 against a live control's 11, and a ring dropped without a delivery also gives 0. -> [completed 2026-09-28](../windows-ioring-sys/COMPLETED-CHECKLIST.md#m26141)
+
+- [x] **M26.14.2** -- Closing the wait too soon after disarming it is the poison: a 1ms gap between the disarm and the close, or a true drain in place of a cancel, each give 0 in 20000 against a control's 10. -> [completed 2026-09-28](../windows-ioring-sys/COMPLETED-CHECKLIST.md#m26142)
+
+- [x] **M26.14.3** -- Taken, and taken the way this item proposed: `windows-threadpool-sys` adopted
+  the draining teardown. -> [completed 2026-10-01](../windows-ioring-sys/COMPLETED-CHECKLIST.md#m26143)
+
+- [x] **M26.15** -- Re-measured: control 12 in 4000, current 0 in 12000, and the stall's entry moved
+  to [RESOLVED-TEST-FAILURES.md](../windows-ioring-sys/RESOLVED-TEST-FAILURES.md). The item's own premise was wrong and is
+  corrected in the archive. -> [completed 2026-10-01](../windows-ioring-sys/COMPLETED-CHECKLIST.md#m2615)
+
+## M-inf -- Diagnostic work with no gating deliverable
+
+- [ ] **M-T-inf.1** (was `M26.14.4`) -- **Find the threshold the close races.** `M26.14.2` used 1ms because it is
+  about 80x the natural 12us gap; nothing establishes what the minimum is. A sweep -- 0, 10us,
+  50us, 100us, 500us, 1ms, interleaved at 20000 each -- would say whether the window is
+  microseconds or milliseconds, which is itself evidence about what the close races.
+
+  **Moved here 2026-10-01, when its gate resolved the "never ships" way.** This item was gated on
+  `M26.14.3` and said so itself: if the draining teardown were adopted, the sleep never ships and
+  the sweep is only of diagnostic interest. It was adopted, so that is where this now sits -- not
+  cancelled, because the question it asks is about the *kernel* window the close races, which the
+  drain avoids rather than explains, and that remains the one thing about this stall nobody has
+  been able to see directly.

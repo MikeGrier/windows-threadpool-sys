@@ -362,7 +362,7 @@ identified the initialisation gap.
 
 **What it found**, for the investigation that asked: no exception is raised during the stall window,
 in 18 of 18 captures. Recorded in
-[windows-ioring-sys](../windows-ioring-sys/measurements/2026-09-27-exceptions-during-the-stall/README.md).
+[windows-ioring-sys](measurements/2026-09-27-exceptions-during-the-stall/README.md).
 
 ## Moved 2026-09-27 14:47:48 -04:00 -- M-T3, call-boundary tracing and a callback census
 
@@ -522,7 +522,7 @@ actionable in it, so they were renumbered to `M-T6.7` and `M-T6.8` and remain li
 
 Implements [Teardown drains rather than cancels](../../DESIGN-NOTES.md#teardown-drains), decided
 2026-09-28. Forced by a measurement in the ring crate:
-[closing-too-soon-after-the-disarm](../windows-ioring-sys/measurements/2026-09-28-closing-too-soon-after-the-disarm/README.md)
+[closing-too-soon-after-the-disarm](measurements/2026-09-28-closing-too-soon-after-the-disarm/README.md)
 shows the cancelling form leaves the default pool unable to make its first worker, 10 failures in
 20000 against 0 for the draining form.
 
@@ -567,7 +567,7 @@ shows the cancelling form leaves the default pool unable to make its first worke
   structure as a standalone wait: releasing with FALSE is safe, with TRUE is not. This crate's
   `Drop` already passes FALSE, so a consumer who only drops is safe -- not because the group
   protects them, but because the default was already the safe one. Artifact:
-  [which-teardowns-can-still-yank](../windows-ioring-sys/measurements/2026-09-30-which-teardowns-can-still-yank/README.md).
+  [which-teardowns-can-still-yank](measurements/2026-09-30-which-teardowns-can-still-yank/README.md).
 
   **The first answer was the opposite and was wrong**, which is recorded in the artifact because
   the failure mode generalises: a reachability walk over direct calls can prove reachability but
@@ -580,7 +580,7 @@ shows the cancelling form leaves the default pool unable to make its first worke
   measured against `EventDelivery` itself. Two builds differing only in `ThreadpoolWait`'s teardown,
   same reproducer, same session: the reverted (cancel) build reproduces, the committed (drain) build
   does not over seven times the runs. Counts and provenance in
-  [measurements/2026-09-29-the-fix-on-the-real-path/](../windows-ioring-sys/measurements/2026-09-29-the-fix-on-the-real-path/README.md).
+  [measurements/2026-09-29-the-fix-on-the-real-path/](measurements/2026-09-29-the-fix-on-the-real-path/README.md).
   Note what it does *not* establish: it excludes "the rate is unchanged", not "the rate is zero",
   and it is not a root cause. `M26.9` may be called closed on this; the open question is why the
   close-behind-disarm stalls the pool at all.
@@ -589,8 +589,8 @@ shows the cancelling form leaves the default pool unable to make its first worke
 Opened 2026-09-30. `M-T4` shipped a fix whose correctness is structural rather than statistical --
 the drain cannot reach the primitive that does the damage, so it holds however the timing falls --
 but the *cause* is still open. What is established is in
-[what-the-disassembly-says](../windows-ioring-sys/measurements/2026-09-30-what-the-disassembly-says/README.md)
-and [STALL-TIMELINE.md](../windows-ioring-sys/STALL-TIMELINE.md): all four teardown paths converge
+[what-the-disassembly-says](measurements/2026-09-30-what-the-disassembly-says/README.md)
+and [STALL-TIMELINE.md](STALL-TIMELINE.md): all four teardown paths converge
 on `NtCancelWaitCompletionPacket`, differing only in whether they ask it to remove an
 already-delivered packet, and the drain never calls it at all.
 
@@ -622,7 +622,7 @@ what is not.**
   the packet reaches the port, the factory was entitled to make a thread, and it did not. Also kills
   the benign reading of those counters, which had been consistent with a factory correctly seeing no
   work. Artifact:
-  [the-work-is-queued-and-the-pool-is-idle](../windows-ioring-sys/measurements/2026-09-30-the-work-is-queued-and-the-pool-is-idle/README.md).
+  [the-work-is-queued-and-the-pool-is-idle](measurements/2026-09-30-the-work-is-queued-and-the-pool-is-idle/README.md).
   The instrument (`trace::completion_port_depths`) has a sabotage-verified positive control, which
   mattered here because a silently broken probe reports "depth 0" -- the finding that would have
   sent the investigation the other way.
@@ -651,7 +651,7 @@ what is not.**
   factory with nothing to do is the two packets on its port. That is a simpler and stronger
   statement than the wedge it replaces: not a creation that got lost, but a prompt that never
   happened. Artifact:
-  [nothing-ever-asks-the-factory](../windows-ioring-sys/measurements/2026-09-30-nothing-ever-asks-the-factory/README.md).
+  [nothing-ever-asks-the-factory](measurements/2026-09-30-nothing-ever-asks-the-factory/README.md).
   Next measurement is `M-T5.6`.
 
   Our own measurements already bound the answer: a
@@ -769,7 +769,7 @@ what is not.**
   13. The same poke on a healthy factory in the same starting position takes it from 0 workers to 1
   and consumes the packet, so the stimulus is valid and the null result is a property of the
   stalled process. Artifact:
-  [arrivals-no-longer-reach-the-factory](../windows-ioring-sys/measurements/2026-09-30-arrivals-no-longer-reach-the-factory/README.md).
+  [arrivals-no-longer-reach-the-factory](measurements/2026-09-30-arrivals-no-longer-reach-the-factory/README.md).
 
   **This answers `M-T5.2` and dissolves the standing asymmetry.** Port healthy, factory healthy,
   and the notification between them persistently gone -- a packet posted by hand five seconds into
@@ -800,7 +800,7 @@ what is not.**
   > **CORRECTED 2026-09-30, same day it was written.** The first version of this item claimed
   > `cancel_pending` is uniquely dangerous and asked whether to remove it. That premise is **false**
   > and this workspace's own committed data said so before the item was written:
-  > [cancel-and-gap-are-both-required.csv](../windows-ioring-sys/measurements/2026-09-29-what-the-gap-is-made-of/cancel-and-gap-are-both-required.csv)
+  > [cancel-and-gap-are-both-required.csv](measurements/2026-09-29-what-the-gap-is-made-of/cancel-and-gap-are-both-required.csv)
   > records `hand-nocancel` -- an arm that **makes no cancel call at all** -- failing 22 times in
   > 20004, against `hand-control`'s 16 with the cancel. Dropping the cancel changes nothing
   > measurable, because `CloseThreadpoolWait` performs the same removal, through the same kernel
@@ -835,7 +835,7 @@ what is not.**
   `Drop` and `stop_and_drain` drain and the group releases with false -- but note *why*: not
   because those paths avoid the removal, but because they leave nothing for it to remove. The audit
   in
-  [which-teardowns-can-still-yank](../windows-ioring-sys/measurements/2026-09-30-which-teardowns-can-still-yank/README.md)
+  [which-teardowns-can-still-yank](measurements/2026-09-30-which-teardowns-can-still-yank/README.md)
   maps every remaining path that can remove a delivered packet, and its table stands.
 
 - [x] **M-T5.9** -- **Done 2026-09-30: severity characterised, and the "end of execution" reading is
@@ -844,7 +844,7 @@ what is not.**
   fresh timer and a completed overlapped read each leave the pool stalled for a full two-second
   window. Only a work submit recovers it, and recovery is complete -- a brand-new wait armed after
   it dispatches in microseconds, in 63 captures across six experiments. Artifact:
-  [what-a-process-does-after-the-stall](../windows-ioring-sys/measurements/2026-09-30-what-a-process-does-after-the-stall/README.md).
+  [what-a-process-does-after-the-stall](measurements/2026-09-30-what-a-process-does-after-the-stall/README.md).
 
   **The consequence worth carrying forward is that the fault is camouflaged, not benign.** A
   program that submits work items near its waits sees a latency spike bounded by the interval to
@@ -891,7 +891,7 @@ what is not.**
   that pays 400us without warming (more than warming's measured 223-304us) still fails at the cold
   rate, so it is the worker and not the elapsed time. Every warm run is individually confirmed, and
   the arm aborts rather than proceed if its warm-up fails. Artifact:
-  [a-warm-pool-does-not-stall](../windows-ioring-sys/measurements/2026-09-30-a-warm-pool-does-not-stall/README.md).
+  [a-warm-pool-does-not-stall](measurements/2026-09-30-a-warm-pool-does-not-stall/README.md).
 
   **Exposure is therefore bounded**: near process start, before the pool's first dispatch, and
   after each idle-timeout expiry when the last worker retires (67s for the default pool). A process

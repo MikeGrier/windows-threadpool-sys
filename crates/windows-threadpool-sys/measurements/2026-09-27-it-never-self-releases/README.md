@@ -57,8 +57,8 @@ further wait -- was right all along. What `D-68` changed, if anything, is not
 established.
 
 All four statements are corrected in the same change as this measurement:
-[UNRESOLVED-TEST-FAILURES.md](../../UNRESOLVED-TEST-FAILURES.md),
-[RESOLVED-TEST-FAILURES.md](../../RESOLVED-TEST-FAILURES.md),
+[UNRESOLVED-TEST-FAILURES.md](../../../windows-ioring-sys/UNRESOLVED-TEST-FAILURES.md),
+[RESOLVED-TEST-FAILURES.md](../../../windows-ioring-sys/RESOLVED-TEST-FAILURES.md),
 [CHECKLIST.md](../../CHECKLIST.md), and this directory's siblings by reference.
 
 ## What it does not change

@@ -31,7 +31,7 @@ safe.
 ## Arms
 
 The same reproducer as every earlier run: the three-test subset of
-[event_delivery.rs](../../tests/event_delivery.rs) -- two victims plus the
+[event_delivery.rs](../../../windows-ioring-sys/tests/event_delivery.rs) -- two victims plus the
 `dropping_with_nothing_outstanding_does_not_hang` trigger -- one fresh process
 per run, scored by exit code, serial, with `WINDOWS_THREADPOOL_TRACE='*'` so
 the rates compare with the earlier figures.

@@ -391,10 +391,10 @@ rather than cancels](../../DESIGN-NOTES.md#teardown-drains) and implemented as `
 below is the record as it stood while the failure was live, kept verbatim.
 
 **Measured twice, on two different builds.**
-[2026-09-29-the-fix-on-the-real-path](measurements/2026-09-29-the-fix-on-the-real-path/README.md)
+[2026-09-29-the-fix-on-the-real-path](../windows-threadpool-sys/measurements/2026-09-29-the-fix-on-the-real-path/README.md)
 took it on the real `EventDelivery` path against the `M-T4` build: 33 failures in 10000 reverted
 runs, 0 in 70000 drained.
-[2026-10-01-the-fix-still-holds-after-the-self-heal](measurements/2026-10-01-the-fix-still-holds-after-the-self-heal/README.md)
+[2026-10-01-the-fix-still-holds-after-the-self-heal](../windows-threadpool-sys/measurements/2026-10-01-the-fix-still-holds-after-the-self-heal/README.md)
 re-took it (`M26.15`) after `M-T6` added the default-on self-heal and `EventDelivery` gained its own
 draining `Drop`: control 12 in 4000, current 0 in 12000.
 
@@ -408,7 +408,7 @@ reproducer that had stopped reproducing.
 
 **Still not a root cause.** Why closing a wait handle behind its own disarm leaves the pool without
 a worker is unexplained, and no instrument tried has been able to see it -- see
-[STALL-TIMELINE.md](STALL-TIMELINE.md) and the parked `M26.14.4`. What changed is that this crate no
+[STALL-TIMELINE.md](../windows-threadpool-sys/STALL-TIMELINE.md) and the parked `M26.14.4`. What changed is that this crate no
 longer takes the path that reaches it.
 ## The M26.9 delivery stall still occurs; D-68 did not close it, and it is not this crate's fault
 
@@ -420,7 +420,7 @@ process thread pool dispatches **no callback of any kind**. A wait, a timer, and
 created and armed *during* the stall, with no connection to any ring, all sit undispatched for a
 full two seconds and then run only once a work item is submitted. Fifteen captures across five
 configurations, with a control proving the stall was still live throughout:
-[measurements/2026-09-27-which-poke-releases-the-stall/](measurements/2026-09-27-which-poke-releases-the-stall/README.md).
+[measurements/2026-09-27-which-poke-releases-the-stall/](../windows-threadpool-sys/measurements/2026-09-27-which-poke-releases-the-stall/README.md).
 The ring is still needed to reach the state -- six thousand ring-free trials never produced it --
 but nothing about the ring's own wait is what is stuck. The entry stays here because the failing
 tests are here.
@@ -430,16 +430,16 @@ the reproducer -- including the trigger's -- on one shared *private* pool: 0 fai
 against 13 in 4000 on the default pool in the same build. A thread minimum makes no difference; the
 arm with no minimum set was already clean, so the worker-supply reading the experiment was written
 to test is **not** supported. Figures and the positive control in
-[measurements/2026-09-27-private-pool-does-not-stall/](measurements/2026-09-27-private-pool-does-not-stall/README.md).
+[measurements/2026-09-27-private-pool-does-not-stall/](../windows-threadpool-sys/measurements/2026-09-27-private-pool-does-not-stall/README.md).
 
-**The pool has idle workers while stalled, and does not dispatch to them.** *Overturned 2026-09-27 by `M26.13.17`: the parked workers belong to a second worker factory, and the pool under test has none. The paragraph below is kept as the record of how the mistake was made -- a stack shows `TppWorkerThread`, which names the worker routine every pool shares, not the factory it serves.* Corrected 2026-09-27 by `M26.13.11`: a full dump taken while stalled shows **three** threads parked in `ntdll!ZwWaitForWorkViaWorkerFactory` under `ntdll!TppWorkerThread`. An earlier reading of this entry said the pool had *no* worker and created one on the work submit; the thread count was right and the inference was wrong. [measurements/2026-09-27-the-workers-are-there/](measurements/2026-09-27-the-workers-are-there/README.md). The count evidence below stands as counts. `M26.13.6` counted
+**The pool has idle workers while stalled, and does not dispatch to them.** *Overturned 2026-09-27 by `M26.13.17`: the parked workers belong to a second worker factory, and the pool under test has none. The paragraph below is kept as the record of how the mistake was made -- a stack shows `TppWorkerThread`, which names the worker routine every pool shares, not the factory it serves.* Corrected 2026-09-27 by `M26.13.11`: a full dump taken while stalled shows **three** threads parked in `ntdll!ZwWaitForWorkViaWorkerFactory` under `ntdll!TppWorkerThread`. An earlier reading of this entry said the pool had *no* worker and created one on the work submit; the thread count was right and the inference was wrong. [measurements/2026-09-27-the-workers-are-there/](../windows-threadpool-sys/measurements/2026-09-27-the-workers-are-there/README.md). The count evidence below stands as counts. `M26.13.6` counted
 the process's threads in the post-mortem: 6 while stalled, 8 or 9 immediately after the work submit,
 in every capture. Two readings it rules out rather than supports: this workspace's own callbacks are
 not occupying the threads -- across 27 captures, **zero** trampolines are entered during the stall,
 so none is inside a closure -- and marking the delivery callbacks with
 `SetThreadpoolCallbackRunsLong` does not prevent it (12 failures in 4000, against a control that has
 measured 13 and 21 in two separate 4000-run measurements, so no effect is claimed).
-[measurements/2026-09-27-the-pool-has-no-worker/](measurements/2026-09-27-the-pool-has-no-worker/README.md).
+[measurements/2026-09-27-the-pool-has-no-worker/](../windows-threadpool-sys/measurements/2026-09-27-the-pool-has-no-worker/README.md).
 
 **Tests:** `completions_are_delivered_on_pool_threads_without_the_submitting_thread_waiting` and
 `completions_queued_before_handover_are_still_delivered` in
@@ -449,7 +449,7 @@ only in parallel with a co-running test that creates an `EventDelivery` and drop
 **They usually both *report* failure, but not always, and the exception is instructive.** An earlier
 version of this line said "never singly", which is wrong: across the 80 captures committed under
 [measurements/](measurements/), 79 report both victims and
-[one reports a single victim](measurements/2026-09-27-the-pool-never-starts/stall-3888.txt) while
+[one reports a single victim](../windows-threadpool-sys/measurements/2026-09-27-the-pool-never-starts/stall-3888.txt) while
 the other test passes. That capture's own trace shows why, and it is not a second phenomenon. The
 pool was dead for the full five seconds there too -- the first callback of any kind is at
 5.003027s. What differs is only the race at the end: the two victims' deadlines are a fraction of a
@@ -459,7 +459,7 @@ deadline. So whether the second victim reports depends on whether its remaining 
 release latency, which is one more way the diagnostic probe repairs the fault it is measuring.
 
 **An annotated, record-by-record walk through one captured occurrence is in
-[STALL-TIMELINE.md](STALL-TIMELINE.md)**, including a reference table mapping every trace event to
+[STALL-TIMELINE.md](../windows-threadpool-sys/STALL-TIMELINE.md)**, including a reference table mapping every trace event to
 the Win32 call behind it. Read that first if you are coming to this cold.
 
 **Rate**, using that record's own reproducer against the current build: 2 failures in 600 runs and 2
@@ -478,7 +478,7 @@ post-mortem's pool-liveness probe submits work, that submit is what releases the
 rather than lost. With the probe removed and the post-mortem extended to sixty seconds, the
 delivery **never arrives**: `callbacks run: 0`, no trampoline is entered, and the trace holds
 nothing between 0.002s and 65.02s in 3 of 3 captures.
-[measurements/2026-09-27-it-never-self-releases/](measurements/2026-09-27-it-never-self-releases/README.md).
+[measurements/2026-09-27-it-never-self-releases/](../windows-threadpool-sys/measurements/2026-09-27-it-never-self-releases/README.md).
 
 So `M26.9`'s original signature -- a permanent lost wakeup -- was right, and D-68 did not convert it
 into anything milder. What D-68 changed, if anything, is not established here.
@@ -493,7 +493,7 @@ Across nine captures in three configurations the record immediately preceding th
 quiet period inserted before the probe contains no record of any kind; and creating the work object
 is not enough, since a one-second gap between `ThreadpoolWork::new` and `submit` passes in the same
 silence. Captures and figures:
-[measurements/2026-09-26-what-releases-the-stall/](measurements/2026-09-26-what-releases-the-stall/README.md).
+[measurements/2026-09-26-what-releases-the-stall/](../windows-threadpool-sys/measurements/2026-09-26-what-releases-the-stall/README.md).
 
 The probe's own `wait created` is stamped after the first `trampoline-entered` in all nine, which is
 what made the probe look like it could not be the cause. It is the **work** half of the probe that
@@ -515,39 +515,39 @@ dispatch across those runs was 18.6us. Whatever the mechanism is, it needs the r
 and measured 707 of them across 24 captured stalls: every one returned, and the slowest in the whole
 dataset is 220us. The arming pair that precedes the silence -- `CreateThreadpoolWait` then
 `SetThreadpoolWait` -- takes 2us and 1us respectively.
-[measurements/2026-09-27-no-win32-call-blocks/](measurements/2026-09-27-no-win32-call-blocks/README.md).
+[measurements/2026-09-27-no-win32-call-blocks/](../windows-threadpool-sys/measurements/2026-09-27-no-win32-call-blocks/README.md).
 
 **A timer armed while the pool was healthy also stops.** `M26.13.12` armed a self-rearming four-second timer at process start, due a full second before the test's deadline. In 10 of 10 captures it did not fire when due and fired only when the work submit released the pool, about a second late -- which is also its own positive control, since it does fire. It involves no event, no handle, no ring and no wait, and it was registered before anything went wrong, so the fault is in dispatch rather than in registration.
-[measurements/2026-09-27-a-timer-armed-while-healthy-also-stops/](measurements/2026-09-27-a-timer-armed-while-healthy-also-stops/README.md).
+[measurements/2026-09-27-a-timer-armed-while-healthy-also-stops/](../windows-threadpool-sys/measurements/2026-09-27-a-timer-armed-while-healthy-also-stops/README.md).
 
 **In a stalled run the pool dispatches nothing at all, from process start.** `M26.13.13` shortened the standing heartbeat to 100ms, making it a clock. Its first expiry at 0.1s is missed, about 50 consecutive expiries are missed, and across 18 captures **not one** pool callback of any kind -- wait, timer, work or I/O -- is dispatched before the release. So this is not a pool that runs and then wedges; the five seconds is a period during which it never starts.
-[measurements/2026-09-27-the-pool-never-starts/](measurements/2026-09-27-the-pool-never-starts/README.md).
+[measurements/2026-09-27-the-pool-never-starts/](../windows-threadpool-sys/measurements/2026-09-27-the-pool-never-starts/README.md).
 
 **Nothing whatsoever happens in the process during the window.** `M26.13.14` shortened the heartbeat again to 15.625ms -- the default Windows tick, the finest period reachable without `timeBeginPeriod` changing the machine's timer behaviour under the measurement. It misses 320 consecutive expiries, and in 13 of 13 captures the last setup record (`delivery setup-signalled`, about 2.5ms) and the first post-mortem record (about 5.01s) are **adjacent lines**. The trace brackets every Win32 call and carries a vectored exception handler, so the window contains no callback, no syscall and no exception. The heartbeat is also armed *before* the trigger's first record, which brackets the onset to the first 15.7ms.
-[measurements/2026-09-27-at-the-system-tick-it-still-never-starts/](measurements/2026-09-27-at-the-system-tick-it-still-never-starts/README.md).
+[measurements/2026-09-27-at-the-system-tick-it-still-never-starts/](../windows-threadpool-sys/measurements/2026-09-27-at-the-system-tick-it-still-never-starts/README.md).
 
 **The submit alone is what releases it, and the backlog was already queued.** `M26.13.15` moved only the `SubmitThreadpoolWork` call, by inserting a sleep between creating the work object and submitting it: 0, 250, 500, 1000 and 2000ms, 4000 runs each, 99 captures. Delivery-minus-submit stays at 0.25 to 0.54ms in every arm while delivery-minus-create tracks the delay across a 2000ms span. In 99 of 99 the first callback dispatched anywhere in the process is the stalled delivery's **wait**, served 29 to 67us *ahead of* the work item whose submit woke the worker -- so the wait callback was queued and unserved, not unnoticed.
-[measurements/2026-09-27-the-submit-is-what-releases-it/](measurements/2026-09-27-the-submit-is-what-releases-it/README.md).
+[measurements/2026-09-27-the-submit-is-what-releases-it/](../windows-threadpool-sys/measurements/2026-09-27-the-submit-is-what-releases-it/README.md).
 
 **Correction to the mechanism, and what the open question now is.** This record previously called `SubmitThreadpoolWork` "a user-mode queue push", contrasted against three kernel-delivered paths. That was an unverified label and is wrong in the half that matters. Disassembling all 189 `ntdll!Tp*`/`Tpp*` functions shows `TppWorkPost` pushes in user mode **and then calls `NtReleaseWorkerFactoryWorker`** -- one of only four functions in the whole thread pool that does, and none of the four is on the wait, timer or I/O path. Those three register for kernel delivery (`NtCreateWaitCompletionPacket`, `NtAssociateWaitCompletionPacket`, `NtSetTimer2`) and rely on the factory releasing a worker by itself when a packet arrives. So the open question is not "user mode versus kernel mode" but: **the worker factory holds parked workers and a queued packet and does not put them together until something explicitly asks it to.** Why is inside the factory, where this workspace's trace cannot reach.
 
 **The parked workers are never used, and a passing run uses them.** `M26.13.16` snapshotted the process's thread set at the stall and tested the serving thread for membership. In 12 of 12 captures **no thread that was alive at the stall ever runs a callback**: the backlog is served by one or two threads created after the fact. The same snapshot taken in a passing run, before any completion can arrive, finds the same six threads -- and the delivery is served by one that already existed, in 30 of 30. So `M26.13.11`'s literal claim survives (the threads are there, parked) but the inference drawn from it does not: a free worker sat available for the whole five seconds, in the same state as the one that serves the delivery in a passing run, and the pool dispatched only once a *new* thread existed. What this cannot separate is whether the new thread was created because the parked ones were unusable or merely as a side effect of the submit's `TppAdjustRunningThreadGoalWithLock`.
-[measurements/2026-09-27-the-parked-workers-are-never-used/](measurements/2026-09-27-the-parked-workers-are-never-used/README.md).
+[measurements/2026-09-27-the-parked-workers-are-never-used/](../windows-threadpool-sys/measurements/2026-09-27-the-parked-workers-are-never-used/README.md).
 
 **The default pool has no worker at all, and the parked three were never its own.** `M26.13.17` read `NtQueryInformationWorkerFactory` for **every** worker factory in the process, at the stalled moment and before the probe submits. There are two. The default pool (`ThreadMaximum` 768) reports `TotalWorkerCount` **0** while stalled in 12 of 12, against **1** while healthy in 20 of 20. The other (`ThreadMaximum` 3) holds exactly three workers, all waiting, and is identical in both arms. **This overturns `M26.13.11`:** `TppWorkerThread` is the worker routine for every pool in a process, so the dump's three parked stacks could never say which factory they served, and they answer to the second one. The pool under test has no worker -- which is what `M26.13.6` said from thread counts and the dump was taken to disprove. It also explains `M26.13.16` rather than leaving it strange: the parked threads were never candidates. While stalled the factory reports `Paused` false, `Shutdown` false, `MayCreate` **true**, `ThreadMinimum` 0 and `LastThreadCreationStatus` 0, so nothing has told it to stop and nothing has failed.
-[measurements/2026-09-27-the-default-pool-has-no-worker-at-all/](measurements/2026-09-27-the-default-pool-has-no-worker-at-all/README.md).
+[measurements/2026-09-27-the-default-pool-has-no-worker-at-all/](../windows-threadpool-sys/measurements/2026-09-27-the-default-pool-has-no-worker-at-all/README.md).
 
 **The pool's first worker is never created.** `M26.13.18` moved the hook install into a `.CRT$XCU` static initialiser, so it runs before `main` and before the harness has a thread -- which also makes it free, since there is nothing to suspend. With the hooks in place from process start: in a healthy run the kernel makes a worker **0.24 to 0.31ms** after the delivery is armed, which announces itself with `NtWorkerFactoryWorkerReady`, parks, and is handed the packet at once. In a stalled run there is **no `ready` and no `park` on that factory at all** before the release, in 8 of 8. So the stall is not a worker that fails to wake or a callback that runs and goes missing: the thread to run it is never made. The same run refutes the `AlreadySignaled` race that motivated hooking the wait registration -- `NtAssociateWaitCompletionPacket` reports the flag **false** for every association made before the first callback, in both arms.
-[measurements/2026-09-27-the-factory-never-makes-its-first-worker/](measurements/2026-09-27-the-factory-never-makes-its-first-worker/README.md).
+[measurements/2026-09-27-the-factory-never-makes-its-first-worker/](../windows-threadpool-sys/measurements/2026-09-27-the-factory-never-makes-its-first-worker/README.md).
 
 **The kernel's own record agrees, from an instrument the hooks do not touch.** `M26.13.19` ran an ETW kernel trace (`PROC_THREAD`) over 900 runs. Of the 900 processes, **exactly one** has a gap of more than a second anywhere in its thread activity, and it is the run that failed: its first pool worker is created **5008.736ms** after the last test thread, against a healthy range of **0.232 to 17.928ms** (mean 1.298) across the other 899. The failing process then makes three workers inside 373us, which is why it is one of only three in the trace to reach ten threads. This matters because every previous statement about the missing worker came from hooks this workspace planted in `ntdll` -- an instrument reporting on the mechanism it modifies. The kernel logged the same absence independently, in the same runs, while those hooks were installed in all 900.
-[measurements/2026-09-27-the-kernel-agrees-no-thread-is-made/](measurements/2026-09-27-the-kernel-agrees-no-thread-is-made/README.md).
+[measurements/2026-09-27-the-kernel-agrees-no-thread-is-made/](../windows-threadpool-sys/measurements/2026-09-27-the-kernel-agrees-no-thread-is-made/README.md).
 
 **The trigger's *teardown* is what poisons the process, not its setup.** `M26.14.1` made the trigger selectable and ran five arms of 4000. Built and deliberately **never dropped**, it produces **0** failures against a live control's 11 in the same session. A ring created and dropped with no `EventDelivery` over it also produces **0**. So it takes the delivery *and* taking it back down: a `TP_WAIT` armed on the ring's completion event and then disarmed, drained and closed 32us later -- before the pool has dispatched anything, and about 2.4ms before either victim arms. Four cycles instead of one give 26 rather than 11, so it is not a once-per-process event the first cycle exhausts; that arm also lengthens the trigger, so it is a direction rather than a dose-response.
-[measurements/2026-09-28-the-teardown-is-what-poisons/](measurements/2026-09-28-the-teardown-is-what-poisons/README.md).
+[measurements/2026-09-28-the-teardown-is-what-poisons/](../windows-threadpool-sys/measurements/2026-09-28-the-teardown-is-what-poisons/README.md).
 
 **Closing the wait too soon after disarming it is the poison, and two teardowns prevent it.** `M26.14.2` finished the decomposition with three arms interleaved at 20000 runs each, timing balanced to 1.3%. Against a control's **10** failures, a **1ms gap between the disarm and the close** gives **0**, and replacing the cancelling drain with a **true** drain (`WaitForThreadpoolWaitCallbacks` with `fCancelPendingCallbacks` FALSE rather than TRUE) also gives **0**; each zero has probability 4.5e-5 under the control's rate. The disarm alone is innocent (0 in 15000 cumulative). The control that makes the sleep meaningful is `hand-sleep-after`, which does the identical sleep *after* the teardown and still fails -- so the gap must sit between those two calls specifically, not merely delay the trigger. **This is a workaround with a mechanism-shaped hint, not a diagnosis**: a sleep that makes a race disappear is evidence of a race, not an explanation, and no threshold is established.
-[measurements/2026-09-28-closing-too-soon-after-the-disarm/](measurements/2026-09-28-closing-too-soon-after-the-disarm/README.md).
+[measurements/2026-09-28-closing-too-soon-after-the-disarm/](../windows-threadpool-sys/measurements/2026-09-28-closing-too-soon-after-the-disarm/README.md).
 
 **Not established:** why the pool will create a worker for a submitted work item but not for a wait,
 timer, or I/O callback that is already queued. That is the whole of what is left, and it is inside

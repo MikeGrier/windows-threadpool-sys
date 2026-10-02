@@ -13,7 +13,7 @@ the time of writing the signature it shows had appeared in 14 of 14 failures
 examined without capping.
 
 The trace facility, its targets and its filter are documented on
-[windows-threadpool-sys](../windows-threadpool-sys/src/trace.rs)'s `trace`
+[windows-threadpool-sys](src/trace.rs)'s `trace`
 module.
 
 ## How to read a row
@@ -114,9 +114,9 @@ t1253864 and t1253860 appear later. They are pool threads, and they do not exist
 `CreateThreadpoolWait`, `SetThreadpoolWait`, `SetEvent`, then the whole teardown
 sequence, inside 54 microseconds. Note that the handle the wait watches (240) is
 **not** the handle the setup signal is raised on (236): the ring keeps its own
-handle and hands out a duplicate, which is [D-20](DESIGN-NOTES.md#d-20), and the
+handle and hands out a duplicate, which is [D-20](../windows-ioring-sys/DESIGN-NOTES.md#d-20), and the
 signal must go to the ring's own or the kernel stops signalling it
-([D-77](DESIGN-NOTES.md#d-77)).
+([D-77](../windows-ioring-sys/DESIGN-NOTES.md#d-77)).
 
 Nothing here is wrong. This is the sequence `M26.9` identified as the trigger,
 and it is still only a correlation -- see `M26.13`'s remaining experiment 2.
@@ -136,7 +136,7 @@ and it is still only a correlation -- see `M26.13`'s remaining experiment 2.
       0.002355s t1253536 delivery               setup-signalled                 232      8
 ```
 
-Both follow the order [D-68](DESIGN-NOTES.md#d-68) requires: `wait armed`
+Both follow the order [D-68](../windows-ioring-sys/DESIGN-NOTES.md#d-68) requires: `wait armed`
 precedes `delivery setup-signalled`, by microseconds. The last one carries
 `8` in its second slot -- eight completions already queued in that ring,
 waiting for the callback that is about to not happen.
@@ -400,7 +400,7 @@ microseconds after it was queued, on a port whose factory has no threads yet.**
 
 Why that link breaks is inside the kernel's queue-to-factory notification, and no
 instrument available to this workspace reaches there. Queued as `M-T5` in
-[windows-threadpool-sys/CHECKLIST.md](../windows-threadpool-sys/CHECKLIST.md).
+[windows-threadpool-sys/CHECKLIST.md](CHECKLIST.md).
 
 **And one inference boundary, twice corrected.** That the process gains threads
 when dispatch resumes is measured. It was first read as "the six it holds while
@@ -509,4 +509,5 @@ $env:WINDOWS_THREADPOOL_TRACE = '*'
 
 The trace prints only on a failure, as part of the stall report. Rates, and the
 conditions the failure needs, are in
-[UNRESOLVED-TEST-FAILURES.md](UNRESOLVED-TEST-FAILURES.md).
+[RESOLVED-TEST-FAILURES.md](../windows-ioring-sys/RESOLVED-TEST-FAILURES.md),
+where the entry moved when M26.15 closed it.

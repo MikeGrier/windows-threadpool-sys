@@ -4417,7 +4417,7 @@ test that delays only what happens *after* the test has already given up:
   second in the same silence; dispatch follows the `submit`. So it is the queuing, not the creation.
 
 Captures, the generated figures, and the exact edits:
-[measurements/2026-09-26-what-releases-the-stall/](measurements/2026-09-26-what-releases-the-stall/README.md).
+[measurements/2026-09-26-what-releases-the-stall/](../windows-threadpool-sys/measurements/2026-09-26-what-releases-the-stall/README.md).
 The figures there are generated from the captures rather than transcribed -- five of nine were wrong
 when the table was first typed by hand, which is recorded in the README because it is the same
 transcription failure this repository's instructions already warn about.
@@ -4451,7 +4451,7 @@ dependency decision it flagged stays unraised.
 **The question asked** was whether any pool poke releases the stall or only a work submit. Five
 configurations, three captures each, with a work-submit control in every one so that a poke which
 did nothing could not be confused with a stall that had already ended:
-[measurements/2026-09-27-which-poke-releases-the-stall/](measurements/2026-09-27-which-poke-releases-the-stall/README.md).
+[measurements/2026-09-27-which-poke-releases-the-stall/](../windows-threadpool-sys/measurements/2026-09-27-which-poke-releases-the-stall/README.md).
 
 **The answer to the question as asked:** only a work submit. A fresh wait armed and signalled, a
 fresh timer due in a millisecond, and a real overlapped read that completed each leave the delivery
@@ -4515,7 +4515,7 @@ Split into four arms, it is a **null result on that hypothesis**:
 `private-min0` is the arm the original wording did not call for, and it is the one that carries the
 finding: a private pool with **no minimum at all** is already clean, so the minimum adds nothing and
 supply cannot be tested from this direction. Figures, method and the positive control in
-[measurements/2026-09-27-private-pool-does-not-stall/](measurements/2026-09-27-private-pool-does-not-stall/README.md).
+[measurements/2026-09-27-private-pool-does-not-stall/](../windows-threadpool-sys/measurements/2026-09-27-private-pool-does-not-stall/README.md).
 
 **What it does establish:** the stall has only ever been seen on the default process pool. All three
 `EventDelivery` objects shared one pool in every arm, including the trigger's, so the variable is
@@ -4604,7 +4604,7 @@ worker for a submitted work item but not for a wait, timer, or I/O callback that
 **No source changed.** The experiment was a temporary edit to
 [event_delivery.rs](tests/event_delivery.rs) plus one dev-dependency feature, both reverted after
 the runs and described in
-[measurements/2026-09-27-the-pool-has-no-worker/](measurements/2026-09-27-the-pool-has-no-worker/README.md).
+[measurements/2026-09-27-the-pool-has-no-worker/](../windows-threadpool-sys/measurements/2026-09-27-the-pool-has-no-worker/README.md).
 
 ## Moved 2026-09-27 15:07:48 -04:00 -- M26.13.7, a run with every instrument on
 
@@ -4627,7 +4627,7 @@ in all 24 captures, so it is nowhere near either figure.
 - **No exception was raised**, confirming M26.13.6's result on a second population.
 
 Figures and captures in
-[measurements/2026-09-27-no-win32-call-blocks/](measurements/2026-09-27-no-win32-call-blocks/README.md).
+[measurements/2026-09-27-no-win32-call-blocks/](../windows-threadpool-sys/measurements/2026-09-27-no-win32-call-blocks/README.md).
 
 **One observation, offered as one.** `SubmitThreadpoolWork` is the slowest call in the table by an
 order of magnitude -- median 85us against 1 to 3us for everything else -- and every one of those 48
@@ -4658,7 +4658,7 @@ delivery would arrive in time and the tests would simply stop failing.
 
 **Result:** 14 failures in 4000 runs, squarely in the range this configuration has produced all day,
 and dispatch resumed at about five seconds in **14 of 14**, never at four. Figures and captures in
-[measurements/2026-09-27-the-submit-timeout-is-not-it/](measurements/2026-09-27-the-submit-timeout-is-not-it/README.md).
+[measurements/2026-09-27-the-submit-timeout-is-not-it/](../windows-threadpool-sys/measurements/2026-09-27-the-submit-timeout-is-not-it/README.md).
 
 **Three existing observations already pointed this way**, but each was an inference where the
 experiment is direct: the call returns in about two milliseconds and never consumes its timeout; the
@@ -4687,7 +4687,7 @@ repair. That had never been separated.
 **Measured:** probe removed, post-mortem extended to sixty seconds. 3 failures in 1896 runs, and in
 all three the delivery **never arrives** -- `callbacks run: 0`, no trampoline entered, nothing in
 the trace between 2ms and 65.02s.
-[measurements/2026-09-27-it-never-self-releases/](measurements/2026-09-27-it-never-self-releases/README.md).
+[measurements/2026-09-27-it-never-self-releases/](../windows-threadpool-sys/measurements/2026-09-27-it-never-self-releases/README.md).
 
 **The correction.** This record said in four places that the failure was "not a lost wakeup" but "a
 delayed dispatch that eventually delivers everything", and that `D-68` had converted a permanent
@@ -4720,7 +4720,7 @@ manufactured the bug it was looking for, which is why
 
 **Result: 5 of 5 releases nothing.** Three seconds pass between the signal and the delivery, and the
 delivery lands at the control work submit, never at the signal.
-[measurements/2026-09-27-not-a-missed-wake/](measurements/2026-09-27-not-a-missed-wake/README.md).
+[measurements/2026-09-27-not-a-missed-wake/](../windows-threadpool-sys/measurements/2026-09-27-not-a-missed-wake/README.md).
 
 **The positive control is what makes that a refutation rather than a null.** A `SetEvent` that
 quietly failed would look identical to a signal that did nothing, so every call's return value is
@@ -4751,7 +4751,7 @@ work" wait. They are idle and available.
 and read it as "the pool has no worker and makes one". The counts were right; the inference was
 wrong, and it was the kind of inference a thread *count* can never support -- it cannot say what the
 threads are. Recorded in
-[measurements/2026-09-27-the-workers-are-there/](measurements/2026-09-27-the-workers-are-there/README.md).
+[measurements/2026-09-27-the-workers-are-there/](../windows-threadpool-sys/measurements/2026-09-27-the-workers-are-there/README.md).
 
 **So the question is now sharper and stranger.** The pool has idle workers. The wait is armed. Its
 event can be signalled successfully ([M26.13.10](COMPLETED-CHECKLIST.md#m261310)). No Win32 call
@@ -4793,7 +4793,7 @@ gets a chance to fire on a run that stalls -- a clean probe rather than added lo
 
 **Result: 10 of 10 fired about a second late, at the release, never when due.** Armed at 0.000s, due
 at 4.000s, fired between 5.004s and 5.019s -- the moment the work submit woke the pool.
-[measurements/2026-09-27-a-timer-armed-while-healthy-also-stops/](measurements/2026-09-27-a-timer-armed-while-healthy-also-stops/README.md).
+[measurements/2026-09-27-a-timer-armed-while-healthy-also-stops/](../windows-threadpool-sys/measurements/2026-09-27-a-timer-armed-while-healthy-also-stops/README.md).
 
 **It is its own positive control.** The timer does fire, so the machinery works and the arming took
 effect; it simply cannot fire while the pool is in this state. A bare "never fires" would have been
@@ -4829,7 +4829,7 @@ dispatched before the release. So this is not a pool that runs for a while and t
 that stalls, the pool dispatches nothing at all from process start until a work item is submitted.
 The five seconds is not a period during which it stopped working; it is a period during which it
 never started.
-[measurements/2026-09-27-the-pool-never-starts/](measurements/2026-09-27-the-pool-never-starts/README.md).
+[measurements/2026-09-27-the-pool-never-starts/](../windows-threadpool-sys/measurements/2026-09-27-the-pool-never-starts/README.md).
 
 **Still its own positive control:** the one firing at the release proves the arming took effect, so
 a wedged pool and a broken probe are not confusable.
@@ -4873,7 +4873,7 @@ and 15.7ms is still after the deliveries are armed at about 2.5ms, so no timer p
 without changing the machine's timer behaviour under the measurement. Item 0 is re-planned to arm a
 wait on an **already-signalled** event at process start instead: due immediately, no timer
 resolution needed, and in the kernel-delivered class that fails.
-[measurements/2026-09-27-at-the-system-tick-it-still-never-starts/](measurements/2026-09-27-at-the-system-tick-it-still-never-starts/README.md).
+[measurements/2026-09-27-at-the-system-tick-it-still-never-starts/](../windows-threadpool-sys/measurements/2026-09-27-at-the-system-tick-it-still-never-starts/README.md).
 ### <a id="m261315"></a>M26.13.15 -- Delaying only the `SubmitThreadpoolWork` call by up to 2000ms moves the delivery with it in 99 of 99, the released worker serves the queued wait ahead of the work that woke it, and an `ntdll` census corrects "user-mode queue push" to "the only path that calls `NtReleaseWorkerFactoryWorker`". *(completed 2026-09-27 19:43:47 -04:00)*
 
 **Three results, from one experiment and one census.**
@@ -4912,7 +4912,7 @@ that **the work path is the only one that explicitly asks the factory to release
 same call also explains the thread growth that had no explanation: the running-thread goal is raised
 on that path, so the 6-to-8 rise is a side effect of the submit rather than evidence about supply.
 This is static evidence about a code path, not a measurement of the fault.
-[measurements/2026-09-27-the-submit-is-what-releases-it/](measurements/2026-09-27-the-submit-is-what-releases-it/README.md).
+[measurements/2026-09-27-the-submit-is-what-releases-it/](../windows-threadpool-sys/measurements/2026-09-27-the-submit-is-what-releases-it/README.md).
 
 **Swept the corrected claim:** 2 sites carried the wrong wording ([M26.13.11](COMPLETED-CHECKLIST.md#m261311)'s
 archive entry and its measurement README); both now carry an additive correction rather than a
@@ -4969,7 +4969,7 @@ the **wait** callback -- no submit involved, queued for five seconds -- served b
 not exist at the stall in 12 of 12 while a passing run serves it on one that did in 30 of 30. It
 also does not identify the three parked threads as this pool's by direct evidence; the identical
 composition across both populations, one of which serves the delivery, is the argument.
-[measurements/2026-09-27-the-parked-workers-are-never-used/](measurements/2026-09-27-the-parked-workers-are-never-used/README.md).
+[measurements/2026-09-27-the-parked-workers-are-never-used/](../windows-threadpool-sys/measurements/2026-09-27-the-parked-workers-are-never-used/README.md).
 
 **Swept the qualified inference:** 8 pre-existing sites mention idle workers or starvation (one
 further hit, on an appender, is unrelated). Two assert the inference and carry a qualifier now -- the
@@ -5026,7 +5026,7 @@ completions, so "the factory holds the packet and will not act on it" and "the p
 are both still consistent with them. `M26.13.15`'s ordering evidence argues for the first and
 remains an argument. The second factory's identity is also unresolved -- a loose end rather than a
 gap, since it is identical in both arms.
-[measurements/2026-09-27-the-default-pool-has-no-worker-at-all/](measurements/2026-09-27-the-default-pool-has-no-worker-at-all/README.md).
+[measurements/2026-09-27-the-default-pool-has-no-worker-at-all/](../windows-threadpool-sys/measurements/2026-09-27-the-default-pool-has-no-worker-at-all/README.md).
 
 **Two defects in the instrument, both caught by building the guard rather than by the guard:** the
 self-test stub's first argument is an out-pointer and the first draft would have installed it as the
@@ -5037,14 +5037,14 @@ sabotages in the crate's new `sabotage.json` -- 9 sabotages, 8 caught and the co
 **Swept the overturned claim.** Named rather than counted, because a grep for "parked" or "starved"
 across this crate's documents matches mostly incidental prose and a tally of it would say nothing.
 The documents that *assert* the overturned reading are four, and each now carries a correction at
-the point of the assertion: [the-workers-are-there](measurements/2026-09-27-the-workers-are-there/README.md)
-and [the-parked-workers-are-never-used](measurements/2026-09-27-the-parked-workers-are-never-used/README.md)
+the point of the assertion: [the-workers-are-there](../windows-threadpool-sys/measurements/2026-09-27-the-workers-are-there/README.md)
+and [the-parked-workers-are-never-used](../windows-threadpool-sys/measurements/2026-09-27-the-parked-workers-are-never-used/README.md)
 open with an overturning note, [UNRESOLVED-TEST-FAILURES.md](UNRESOLVED-TEST-FAILURES.md)'s entry is
-marked at its heading, and [STALL-TIMELINE.md](STALL-TIMELINE.md)'s ruled-out row now reads "not
+marked at its heading, and [STALL-TIMELINE.md](../windows-threadpool-sys/STALL-TIMELINE.md)'s ruled-out row now reads "not
 ruled out after all". The dated archive entries above are left as written, with the correction
 carried here.
 
-**A standing lesson, recorded in [STALL-TIMELINE.md](STALL-TIMELINE.md):** count a pool's workers by
+**A standing lesson, recorded in [STALL-TIMELINE.md](../windows-threadpool-sys/STALL-TIMELINE.md):** count a pool's workers by
 asking each factory, never by reading stacks. A parked `TppWorkerThread` says *a* pool has a worker;
 in a process with more than one factory it does not say which, and here that distinction was the
 whole answer.
@@ -5086,7 +5086,7 @@ last of six installs 0.73s into the process. One snapshot for the batch puts all
 
 **Cost:** 8 failures in 4000 with four hooks installed, inside the range this configuration produces
 without them.
-[measurements/2026-09-27-the-factory-never-makes-its-first-worker/](measurements/2026-09-27-the-factory-never-makes-its-first-worker/README.md).
+[measurements/2026-09-27-the-factory-never-makes-its-first-worker/](../windows-threadpool-sys/measurements/2026-09-27-the-factory-never-makes-its-first-worker/README.md).
 
 **Still not established:** the packet's presence in the port. "The kernel queued the completion and
 the factory did not act on it" and "the kernel never queued it" produce identical records here,
@@ -5120,7 +5120,7 @@ ten threads.
 **So the hooks were not the cause.** The kernel logged the same absence, in the same runs, through a
 path the hooks do not touch -- and logged normal behaviour for 899 other processes that had those
 same hooks installed.
-[measurements/2026-09-27-the-kernel-agrees-no-thread-is-made/](measurements/2026-09-27-the-kernel-agrees-no-thread-is-made/README.md).
+[measurements/2026-09-27-the-kernel-agrees-no-thread-is-made/](../windows-threadpool-sys/measurements/2026-09-27-the-kernel-agrees-no-thread-is-made/README.md).
 
 **Method note worth keeping.** Thread ids are recycled aggressively across 900 short-lived
 processes, so matching the failing run to its process by any single id is wrong -- several processes
@@ -5184,7 +5184,7 @@ machine, since removed. Fifteen of this crate's test files share the pattern. Me
 a confound (13 in 4000 against a cleared directory, 16 against a full one) before being queued, and
 deliberately not fixed during M26.13 because adding teardown changes the reproducer while it is the
 instrument of an active investigation.
-[measurements/2026-09-28-re-verifying-the-premises/](measurements/2026-09-28-re-verifying-the-premises/README.md).
+[measurements/2026-09-28-re-verifying-the-premises/](../windows-threadpool-sys/measurements/2026-09-28-re-verifying-the-premises/README.md).
 
 **Extended on review, with the question stated plainly: several different test cases per process,
 never a repeat.** `libtest` runs each `#[test] fn` exactly once and this file has no
@@ -5237,7 +5237,7 @@ once.
 **Not established:** which part of the teardown does it -- disarm, drain and close are 12us apart
 and this cannot separate them. Nor why a ring is needed when the wait is on an ordinary event.
 Both are queued as M26.14.2.
-[measurements/2026-09-28-the-teardown-is-what-poisons/](measurements/2026-09-28-the-teardown-is-what-poisons/README.md).
+[measurements/2026-09-28-the-teardown-is-what-poisons/](../windows-threadpool-sys/measurements/2026-09-28-the-teardown-is-what-poisons/README.md).
 ### <a id="m26142"></a>M26.14.2 -- Closing the wait too soon after disarming it is the poison: a 1ms gap between the disarm and the close, or a true drain in place of a cancel, each give 0 in 20000 against a control's 10. *(completed 2026-09-28 20:39:34 -04:00)*
 
 **The decisive run**: three arms interleaved, 20000 each, pipes drained asynchronously, 60s bound
@@ -5283,7 +5283,7 @@ on counts of 5 to 16: a chi-square over six measurements of the unmodified teard
 and five of the six sit inside the 95% band around a pooled 2.6 per 1000. The practical lesson
 governed this run's design -- at 4000 runs a zero is strong but a rate comparison is not, which is
 why the decisive arms used 20000.
-[measurements/2026-09-28-closing-too-soon-after-the-disarm/](measurements/2026-09-28-closing-too-soon-after-the-disarm/README.md).
+[measurements/2026-09-28-closing-too-soon-after-the-disarm/](../windows-threadpool-sys/measurements/2026-09-28-closing-too-soon-after-the-disarm/README.md).
 
 **Raised, not taken:** M26.14.3 asks whether `windows-threadpool-sys` should adopt the draining
 teardown, which is a one-argument change with real semantic weight -- a drop that blocks until a
@@ -5635,7 +5635,7 @@ The item as it stood, including the premise that turned out to be false:
 **"Nothing has re-run this crate's stall against the shipped drain" was wrong when it was
 written**, on 2026-10-01, and nothing in the tree had changed to make it so -- the evidence was
 already committed and was not looked for.
-[2026-09-29-the-fix-on-the-real-path](measurements/2026-09-29-the-fix-on-the-real-path/README.md)
+[2026-09-29-the-fix-on-the-real-path](../windows-threadpool-sys/measurements/2026-09-29-the-fix-on-the-real-path/README.md)
 had measured exactly that: the committed drain, on the real `EventDelivery` path, at 33 failures
 in 10000 reverted runs against 0 in 70000 drained. The item was written from `M26.14.2`'s
 hand-rolled model and from the absence of a *later* measurement that in fact existed one directory
@@ -5655,7 +5655,7 @@ stall, so a mechanism that could mask the failure rather than leave it absent; `
 cancelling form; and `EventDelivery` gained its own draining `Drop` on 2026-10-01.
 
 Measured in
-[2026-10-01-the-fix-still-holds-after-the-self-heal](measurements/2026-10-01-the-fix-still-holds-after-the-self-heal/README.md):
+[2026-10-01-the-fix-still-holds-after-the-self-heal](../windows-threadpool-sys/measurements/2026-10-01-the-fix-still-holds-after-the-self-heal/README.md):
 the control reproduces at 12 in 4000, inside the range every earlier capture of that arm reported,
 and the current build reports 0 in 12000. Under an unchanged rate, 12000 runs would be expected to
 produce about 36 failures.
@@ -5684,7 +5684,7 @@ The item as it stood, including the premise that turned out to be wrong:
 >
 >   **Measured not to be a confound** before being queued -- the reproducer gives 13 failures in 4000
 >   against a cleared directory and 16 against a full one, both inside its usual range
->   ([measurements/2026-09-28-re-verifying-the-premises/](measurements/2026-09-28-re-verifying-the-premises/README.md)).
+>   ([measurements/2026-09-28-re-verifying-the-premises/](../windows-threadpool-sys/measurements/2026-09-28-re-verifying-the-premises/README.md)).
 >
 >   **Deliberately not fixed during M26.13**, and the reason is the blocker rather than a preference:
 >   adding teardown changes the reproducer's shape while it is the instrument of an active

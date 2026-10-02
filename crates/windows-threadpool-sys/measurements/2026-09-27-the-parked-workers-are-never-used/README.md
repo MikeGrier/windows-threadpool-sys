@@ -95,7 +95,7 @@ reading of the factory's own membership.
 
 `snapshot_threads()` (Toolhelp `TH32CS_SNAPTHREAD`, filtered to this process)
 was added temporarily to
-[tests/event_delivery.rs](../../tests/event_delivery.rs), called from the
+[tests/event_delivery.rs](../../../windows-ioring-sys/tests/event_delivery.rs), called from the
 post-mortem and -- under `IORING_HEALTHY_SNAPSHOT` -- from the healthy path,
 with the trace dumped at the end of a passing run. The stalled arm is 4000 runs
 producing 12 failures; the healthy arm is 30 runs of the same test.

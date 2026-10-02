@@ -35,7 +35,7 @@ waits, timers and I/O has no stimulus that will ever help it and hangs.
 
 The measurements behind every claim above are in
 [windows-ioring-sys/measurements](../windows-ioring-sys/measurements), indexed
-from [STALL-TIMELINE.md](../windows-ioring-sys/STALL-TIMELINE.md). They are
+from [STALL-TIMELINE.md](STALL-TIMELINE.md). They are
 linked rather than restated so that the figures have one home.
 
 ## What this crate's normal paths do about it

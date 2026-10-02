@@ -2,8 +2,8 @@
 
 Raised in review, and the best-supported hypothesis this failure has had: it
 smells like a lost wakeup, the same shape as the auto-reset-event and
-arming-order problems that [D-19](../../DESIGN-NOTES.md#d-19),
-[D-68](../../DESIGN-NOTES.md#d-68) and [D-77](../../DESIGN-NOTES.md#d-77) each
+arming-order problems that [D-19](../../../windows-ioring-sys/DESIGN-NOTES.md#d-19),
+[D-68](../../../windows-ioring-sys/DESIGN-NOTES.md#d-68) and [D-77](../../../windows-ioring-sys/DESIGN-NOTES.md#d-77) each
 addressed a version of.
 
 It is not. Re-signalling the very event the wait is armed on, during the stall,
@@ -12,9 +12,9 @@ changes nothing.
 ## Why the hypothesis was strong
 
 Everything about the signature fits a lost wakeup. `callbacks run: 0`. The
-completion event is auto-reset ([D-21](../../DESIGN-NOTES.md#d-21)), so a
+completion event is auto-reset ([D-21](../../../windows-ioring-sys/DESIGN-NOTES.md#d-21)), so a
 signal is consumed rather than left pending. It is edge-triggered on the
-completion queue going empty to non-empty ([D-19](../../DESIGN-NOTES.md#d-19)),
+completion queue going empty to non-empty ([D-19](../../../windows-ioring-sys/DESIGN-NOTES.md#d-19)),
 so a ring whose queue is already non-empty is signalled by nothing else. And
 the stall is now known to be **permanent**, which is exactly what a lost
 wakeup on such an event looks like. This crate has had that bug twice.

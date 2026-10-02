@@ -80,7 +80,7 @@ process at all. That is the re-planned next step.
 ## How it was run
 
 The three reproducer tests in
-[tests/event_delivery.rs](../../tests/event_delivery.rs) were temporarily given
+[tests/event_delivery.rs](../../../windows-ioring-sys/tests/event_delivery.rs) were temporarily given
 a `arm_heartbeat()` call creating one process-wide `ThreadpoolTimer` whose
 callback does nothing but `rearm_after(Duration::from_micros(15_625))`. The
 compiled binary was looped 4000 times with `WINDOWS_THREADPOOL_TRACE='*'` and
