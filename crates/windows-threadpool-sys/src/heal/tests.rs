@@ -594,4 +594,119 @@ mod on {
         drop(work);
         drop(pin);
     }
+
+    /// Force this pool's repair allocation to fail for as long as this lives.
+    ///
+    /// Keyed to one pool rather than switched on globally, so a test using it
+    /// cannot fail a registration belonging to a test running beside it.
+    struct ForcedRepairFailure;
+
+    impl ForcedRepairFailure {
+        fn for_pool(key: usize) -> Self {
+            crate::heal::FORCE_REPAIR_FAILURE_FOR.store(key, Ordering::SeqCst);
+            Self
+        }
+    }
+
+    impl Drop for ForcedRepairFailure {
+        fn drop(&mut self) {
+            crate::heal::FORCE_REPAIR_FAILURE_FOR.store(0, Ordering::SeqCst);
+        }
+    }
+
+    /// An object whose pool could not be registered still marks that pool when
+    /// the allocation succeeds at cancel time.
+    ///
+    /// This is the case that used to be lost outright: the registration cached
+    /// its miss and discarded the key, so the cancellation could neither find
+    /// an entry nor make one, on a pool that was perfectly repairable.
+    #[test]
+    fn a_cancellation_registers_a_pool_whose_first_registration_failed() {
+        let pool = ThreadpoolPool::new().expect("create pool");
+        let key = pool.as_raw() as usize;
+
+        // The registration an object got while the allocation was failing.
+        let registration = {
+            let _forced = ForcedRepairFailure::for_pool(key);
+            let registration = crate::heal::register(key);
+            assert!(
+                crate::heal::entries().iter().all(|e| e.key() != key),
+                "the forced failure must leave the pool unregistered, or this \
+                 test is not exercising the path it names"
+            );
+            registration
+        };
+
+        // Driven at this level rather than through `ThreadpoolWait::try_cancel_pending`
+        // on purpose. That method runs the untracked fail-fast, which panics
+        // under `fail-fast` -- and `--all-features` turns it on -- so a
+        // regression here would unwind through an armed wait's `Drop`, panic a
+        // second time, and abort. The harness scores an abort as a failure
+        // either way, which is precisely the weak kind of red this avoids:
+        // sabotaging the retry makes these two assertions fail by name.
+        let _gate = gate();
+        assert!(
+            registration.owe_repair(),
+            "the retry must register the pool it could not register before"
+        );
+        let entry = crate::heal::entries()
+            .into_iter()
+            .find(|e| e.key() == key)
+            .expect("the retry created the entry");
+        assert!(
+            entry.repair_owed_at().is_some(),
+            "the recovered entry must be marked, or the repair never runs"
+        );
+        entry.clear_repair();
+    }
+
+    /// With every allocation failing, the cancellation reports the pool
+    /// untracked rather than claiming a repair it did not arrange.
+    ///
+    /// The other direction of the same guard: the test above proves it does not
+    /// report untracked when it recovered, this one that it does when it could
+    /// not.
+    #[test]
+    fn a_cancellation_that_cannot_register_reports_the_pool_untracked() {
+        let pool = ThreadpoolPool::new().expect("create pool");
+        let key = pool.as_raw() as usize;
+        let mut env = CallbackEnviron::new();
+        env.set_pool(&pool);
+
+        let _forced = ForcedRepairFailure::for_pool(key);
+        // The registration an object would hold, taken directly: this is the
+        // unit the report comes from, and reaching it through a live wait would
+        // add a teardown that says nothing about the question.
+        let registration = crate::heal::register(key);
+        let tracked = registration.owe_repair();
+        assert!(
+            !tracked,
+            "every allocation failed, so the cancellation cannot claim the pool is tracked"
+        );
+        assert!(
+            crate::heal::entries().iter().all(|e| e.key() != key),
+            "nothing could be allocated, so no entry should exist"
+        );
+        drop(env);
+    }
+
+    /// The ordinary case reports tracked, so the assertion above is not simply
+    /// reading a value that is always `false`.
+    #[test]
+    fn a_cancellation_on_a_registered_pool_reports_the_pool_tracked() {
+        let pool = ThreadpoolPool::new().expect("create pool");
+        let key = pool.as_raw() as usize;
+        let _gate = gate();
+
+        let registration = crate::heal::register(key);
+        assert!(
+            registration.owe_repair(),
+            "the pool registered, so the cancellation tracks it"
+        );
+        let entry = crate::heal::entries()
+            .into_iter()
+            .find(|e| e.key() == key)
+            .expect("the registration created an entry");
+        entry.clear_repair();
+    }
 }

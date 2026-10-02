@@ -701,21 +701,34 @@ house rules require is what found the third.
 
   Both breaking; both recorded in [DESIGN-NOTES.md](../../DESIGN-NOTES.md).
 
-- [ ] **M-T10.18** -- **DECISION TO RAISE: what `try_cancel_pending` should do on a pool it cannot
-      repair.**
+- [x] **M-T10.18** -- **DECIDED 2026-10-02: a cancellation registers the pool itself, and reports
+      it when even that fails.** `heal::register` is best-effort, so a pool whose repair item could
+      not be created had nothing for a later `try_cancel_pending` to mark.
 
-  **Why this is open rather than fixed.** `heal::register` is best-effort: if the repair work item
-  cannot be created the pool goes unregistered, and a later `try_cancel_pending` performs the
-  removal with nothing to repair it. `M-T10.20` made that visible -- it records `cancel-untracked`
-  instead of returning in silence -- but what the API should *do* is a choice between options that
-  trade differently, and it is the engineer's: carry on as now; return whether the repair is
-  tracked so a caller can react; or refuse the cancellation, which is safest for the pool and
-  silently does not do what the caller asked.
+  **The decision.** The cancellation retries the registration at cancel time rather than giving up.
+  Allocating at the moment of need is what the pre-created repair object exists to avoid, but that
+  argument does not reach this path: the alternative is not "allocate earlier", it is "never repair
+  this pool at all". If the retry also fails, `cancel-untracked` is recorded **with the pool key**
+  and, under `fail-fast`, the call panics.
 
-  **It was queued nowhere until now.** `heal::register`'s comment deferred it to `M-T6.3`, which
-  closed on 2026-10-01 -- the cancellation rename and its unsafe sibling -- without deciding it.
-  This is the second dangling pointer of this shape found on this branch, after `sabotage.json`'s
-  reference to the same closed item.
+  **A prior defect surfaced while deciding it, fixed in the same change.** `Registration` held only
+  `Option<Arc<PoolEntry>>` and discarded the key, so an object whose registration failed could not
+  find an entry another object later created for the same pool -- the pool was repairable, a healthy
+  entry existed, and the cancellation still reported it untracked. The same omission made
+  `cancel-untracked` record `0` rather than naming the pool. `Registration` now keeps its key.
+
+  **Where the fail-fast fires is load-bearing.** `CleanupGroup`'s cancelling release marks members
+  between the native release and the loop that frees their contexts, so a panic raised there would
+  unwind past the frees and leak every context. The report is accumulated and acted on after the
+  frees, matching `fail_fast_if_owed`'s rule that the panic must report a violation and not cause
+  one.
+
+  **The error edge is now reachable from a test.** It runs only when `CreateThreadpoolWork` fails,
+  which no test can arrange, so a test-only `FORCE_REPAIR_FAILURE_FOR` forces it -- keyed to one
+  pool, because a global flag failed an unrelated test's registration on the first run. Both
+  directions are asserted, and sabotaging the retry fails the recovery test by name.
+
+  Recorded in [DESIGN-NOTES.md](../../DESIGN-NOTES.md#a-cancellation-allocates-its-own-repair-rather-than-giving-up).
 
 - [ ] **M-T10.7** -- **Decide whether CI should check intra-doc links in private items.**
 

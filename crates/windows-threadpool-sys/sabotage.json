@@ -201,10 +201,14 @@
       "expect": "caught",
       "why": "The first of the three claims the self-heal rests on. `try_cancel_pending` is a safe method only because the crate repairs the pool the cancel may have wedged, and the repair begins with the mark. A cancel that does not mark leaves the pool to be fixed by whatever the application happens to submit next, which for a program built on waits, timers and I/O is nothing.",
       "find": [
-        "                entry.owe_repair(now());"
+        "            };",
+        "            entry.owe_repair(now());",
+        "            // After the mark, never before: the healer's first tick must"
       ],
       "replace": [
-        "                let _ = entry;"
+        "            };",
+        "            let _ = entry;",
+        "            // After the mark, never before: the healer's first tick must"
       ]
     },
     {

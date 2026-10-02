@@ -884,11 +884,14 @@ impl ThreadpoolWait {
     /// *subsequent close* safe, not merely this call.
     /// This crate repairs the pool afterwards, which is what makes this safe to
     /// offer -- with one exception, stated because a guarantee with an unstated
-    /// hole is worse than one that names it: if this object's pool could not be
-    /// registered for repair when the object was created, which happens only
-    /// when creating the repair work item itself failed, there is nothing to
-    /// repair it and the cancellation proceeds anyway. That case records
-    /// `cancel-untracked` on the `heal` target. See
+    /// hole is worse than one that names it.
+    ///
+    /// If this object's pool could not be registered for repair when the object
+    /// was created, which happens only when creating the repair work item
+    /// failed, this call registers it **here** rather than giving up. Only when
+    /// that allocation fails too is the cancellation performed with nothing to
+    /// repair it, and that case records `cancel-untracked` on the `heal` target
+    /// -- naming the pool -- and panics under the `fail-fast` feature. See
     /// [README-FEATURE-self-heal.md](https://docs.rs/crate/windows-threadpool-sys/latest/source/README-FEATURE-self-heal.md).
     ///
     /// # Availability
@@ -906,7 +909,10 @@ impl ThreadpoolWait {
         unsafe { self.try_cancel_pending_no_heal_tracking() };
         // SAFETY: the context outlives every callback and is freed only by Drop,
         // which cannot run while this borrow of self is alive.
-        unsafe { &*self.context }.registration.owe_repair();
+        let tracked = unsafe { &*self.context }.registration.owe_repair();
+        // Last in the function, so the panic this may raise cannot skip the
+        // marking above -- the same placement rule the drop fail-fast follows.
+        crate::obligation::fail_fast_if_untracked(tracked, "ThreadpoolWait");
     }
 
     /// `try_cancel_pending` without the repair.
@@ -948,11 +954,16 @@ impl ThreadpoolWait {
     ///
     /// `context` must come from [`into_parts`](Self::into_parts) on this type
     /// and name a still-live object whose context the caller has not yet freed.
-    pub(crate) unsafe fn owe_repair(context: *mut core::ffi::c_void) {
+    ///
+    /// Reports whether the pool ended up tracked, which the group accumulates
+    /// and acts on after it has freed every context -- never here, where an
+    /// unwind would skip those frees.
+    #[must_use]
+    pub(crate) unsafe fn owe_repair(context: *mut core::ffi::c_void) -> bool {
         // SAFETY: forwarded; the context outlives the member until the group
         // frees it, and this only touches that object's registration.
         let ctx = unsafe { &*context.cast::<WaitContext>() };
-        ctx.registration.owe_repair();
+        ctx.registration.owe_repair()
     }
 
     /// Stop watching and block until the wait is idle, leaving it reusable.

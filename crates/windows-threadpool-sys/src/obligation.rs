@@ -143,6 +143,45 @@ pub(crate) fn fail_fast_if_owed(owed: bool, type_name: &str, close: &str) {
     }
 }
 
+/// Fail fast, if the `fail-fast` feature is on and a cancellation went
+/// untracked.
+///
+/// `tracked` is what [`crate::heal::Registration::owe_repair`] reported. A
+/// `false` means three allocations failed for one pool -- at the object's
+/// creation, at any later registration by something else on it, and at the
+/// retry the cancellation itself makes -- so the pool was cancelled with
+/// nothing that will ever repair it. That is the single case
+/// `try_cancel_pending`'s safety claim does not cover, and this is where a
+/// build that asked to be told about it finds out.
+///
+/// **Called at a point where unwinding skips nothing that must happen**, which
+/// is the same constraint [`fail_fast_if_owed`] carries and for the same
+/// reason. `CleanupGroup::close_members_cancelling` marks its members between
+/// the native release and the loop that frees their contexts; a panic raised
+/// inside that loop would unwind past the frees and leak every context. So
+/// callers collect the answer during the cancellation and call this afterwards,
+/// never in the middle of one.
+///
+/// One site for the message rather than one per caller, so the wording cannot
+/// drift between the per-object path and the group path.
+pub(crate) fn fail_fast_if_untracked(tracked: bool, type_name: &str) {
+    if tracked {
+        return;
+    }
+    crate::trace_record!("heal", "cancel-untracked-reported", 0);
+    #[cfg(feature = "fail-fast")]
+    panic!(
+        "windows-threadpool-sys: {type_name} cancelled pending callbacks on a pool this crate \
+         could not register for repair, so nothing will repair it. Every attempt to allocate the \
+         repair work item failed, including one made by this call. This panic is the `fail-fast` \
+         feature; with it off the cancellation records `cancel-untracked` and continues."
+    );
+    #[cfg(not(feature = "fail-fast"))]
+    {
+        let _ = type_name;
+    }
+}
+
 /// The event every type emits when it finds an obligation owed at `Drop`.
 ///
 /// One constant rather than the string at five call sites, so the tag a consumer

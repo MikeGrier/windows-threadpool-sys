@@ -51,7 +51,7 @@ pub(crate) use on::{PoolEntry, Registration, entries, now, register, retire_idle
 // to carry that condition too -- `#[cfg(test)]` alone resolves against a module
 // that is not there in a `--no-default-features` test build.
 #[cfg(all(test, feature = "self-heal"))]
-pub(crate) use on::{TICK_GATE, tick_inner};
+pub(crate) use on::{FORCE_REPAIR_FAILURE_FOR, TICK_GATE, tick_inner};
 
 #[cfg(not(feature = "self-heal"))]
 pub(crate) use off::{Registration, register};
@@ -80,7 +80,16 @@ mod off {
 
         /// Records nothing. Without the feature the repair obligation belongs to
         /// the caller of `try_cancel_pending_no_heal_tracking`, not to us.
-        pub(crate) const fn owe_repair(&self) {}
+        ///
+        /// Reports `true`: the question the value answers is "did this crate
+        /// leave a pool unrepaired behind a safety claim it made", and in this
+        /// build the crate makes no such claim, so there is nothing to report.
+        /// Answering `false` would fire the untracked fail-fast on every
+        /// cancellation in a configuration that never promised a repair.
+        #[must_use]
+        pub(crate) const fn owe_repair(&self) -> bool {
+            true
+        }
     }
 
     /// Records nothing, because without the feature there is no repair to owe.
@@ -282,7 +291,19 @@ mod on {
     }
 
     /// One object's claim on a pool's entry, released when the object goes.
-    pub(crate) struct Registration(Option<Arc<PoolEntry>>);
+    ///
+    /// **The key is kept even when the entry is absent.** An earlier version
+    /// held only the `Option`, so an object whose registration failed had no
+    /// way to name its own pool afterwards: it could not find an entry another
+    /// object created later, and the `cancel-untracked` record it emitted could
+    /// not say which pool it was about. Both followed from discarding the key
+    /// on the one path that most needed it.
+    pub(crate) struct Registration {
+        /// The pool this claim is against, known whether or not it registered.
+        key: PoolKey,
+        /// The entry, when one could be created or found.
+        entry: Option<Arc<PoolEntry>>,
+    }
 
     impl Registration {
         /// The entry, when the pool could be registered.
@@ -292,7 +313,7 @@ mod on {
         // available instead of being re-derived later.
         #[allow(dead_code)]
         pub(crate) fn entry(&self) -> Option<&Arc<PoolEntry>> {
-            self.0.as_ref()
+            self.entry.as_ref()
         }
 
         /// Note that this object's pool has just dispatched a callback.
@@ -300,7 +321,7 @@ mod on {
         /// Called from a trampoline, so it is on the path of every callback the
         /// crate delivers: one counter read and one relaxed store.
         pub(crate) fn stamp_dispatch(&self) {
-            if let Some(entry) = &self.0 {
+            if let Some(entry) = &self.entry {
                 entry.stamp_dispatch(now());
             }
         }
@@ -311,30 +332,60 @@ mod on {
         /// a repair asks is whether the pool has dispatched since the removal
         /// that may have severed its notification, and a dispatch that happened
         /// while the removal was in progress is no evidence about afterwards.
-        pub(crate) fn owe_repair(&self) {
-            let Some(entry) = &self.0 else {
-                // No entry, so no repair -- and this is the one path on which
-                // the cancellation's safety claim does not hold. It used to
-                // return in silence, which made a pool that may have been
-                // wedged indistinguishable from one that was repaired.
-                //
-                // Recorded rather than fixed here because what the *API*
-                // should do about it is a decision, and the comment on
-                // `register` deferred it to `M-T6.3` -- an item that has since
-                // closed without deciding it. It is now `M-T10.18`.
-                crate::trace_record!("heal", "cancel-untracked", 0);
-                return;
+        /// Reports whether the pool ended up tracked. `false` means the
+        /// cancellation has happened with nothing that will ever repair it,
+        /// which is the one case `try_cancel_pending`'s safety claim does not
+        /// cover; the caller decides what to do about it, at a point where a
+        /// panic cannot skip work the teardown still owes.
+        #[must_use]
+        pub(crate) fn owe_repair(&self) -> bool {
+            let Some(entry) = &self.entry else {
+                return self.owe_repair_untracked();
             };
-            {
-                entry.owe_repair(now());
-                // After the mark, never before: the healer's first tick must
-                // not be able to run before the entry it exists to repair says
-                // it is owed one.
-                //
-                // Called without the registry lock held -- creating the healer
-                // registers its own pool, which takes that lock.
-                ensure_running();
-            }
+            entry.owe_repair(now());
+            // After the mark, never before: the healer's first tick must
+            // not be able to run before the entry it exists to repair says
+            // it is owed one.
+            //
+            // Called without the registry lock held -- creating the healer
+            // registers its own pool, which takes that lock.
+            ensure_running();
+            true
+        }
+
+        /// The cancellation path for an object that never got an entry.
+        ///
+        /// Registration is attempted **again, here**, which is the one place in
+        /// this crate that allocates at the moment of need rather than ahead of
+        /// it. The usual argument against that is recorded on `tick`: the repair
+        /// work object is pre-created because the pool it is aimed at may
+        /// already be wedged. It does not apply to the decision this path faces,
+        /// because the alternative is not "allocate later", it is "never repair
+        /// this pool at all". Reaching here already means an allocation failed
+        /// when the object was created *and* that nothing else on the pool has
+        /// registered since, so the choice is between one more small allocation
+        /// and leaving a possibly-severed pool with nothing watching it.
+        ///
+        /// Creating a work object is not dispatching through the pool, so a
+        /// wedged pool is not itself a reason for this to fail.
+        ///
+        /// The temporary claim is dropped at the end: marking first is what
+        /// keeps the entry alive through it, because `release` retains an entry
+        /// whose repair is owed.
+        #[cold]
+        fn owe_repair_untracked(&self) -> bool {
+            let recovered = register(self.key);
+            let Some(entry) = &recovered.entry else {
+                // Three allocations have now failed for this pool: the one at
+                // the object's creation, any another object might have made
+                // since, and the one immediately above. Recorded with the key,
+                // so a capture names the pool rather than reporting `0`.
+                crate::trace_record!("heal", "cancel-untracked", self.key);
+                return false;
+            };
+            entry.owe_repair(now());
+            ensure_running();
+            true
         }
     }
 
@@ -368,7 +419,7 @@ mod on {
 
     impl Drop for Registration {
         fn drop(&mut self) {
-            if let Some(entry) = self.0.take() {
+            if let Some(entry) = self.entry.take() {
                 release(&entry);
             }
         }
@@ -397,13 +448,20 @@ mod on {
     /// succeeds, because failing it would turn an unrelated allocation failure
     /// into a failure of the caller's actual request.
     ///
-    /// A cancellation on such a pool is then performed with nothing to repair
-    /// it, which is the one case where `try_cancel_pending`'s safety claim does
-    /// not hold. `Registration::owe_repair` records `cancel-untracked` when it
-    /// happens, so it is visible rather than silent. What the *API* should do
-    /// about it is `M-T10.18`'s to decide -- this comment deferred it to
-    /// `M-T6.3`, which closed on 2026-10-01 without deciding it, so the
-    /// question was queued nowhere for as long as that pointer stood.
+    /// **An empty registration is not final.** It keeps its key, and
+    /// [`Registration::owe_repair`] calls this again when a cancellation
+    /// arrives, so a pool that could not be registered when one object was
+    /// created is registered then -- either finding an entry something else
+    /// made in the meantime, or making one. Only when that call fails too is a
+    /// cancellation performed with nothing to repair it, which is the one case
+    /// where `try_cancel_pending`'s safety claim does not hold; it records
+    /// `cancel-untracked` and, under `fail-fast`, panics. Decided in
+    /// `M-T10.18`.
+    ///
+    /// Note that this returns **without incrementing `objects`** when it fails,
+    /// so an object holding an empty registration is not counted by the
+    /// refcount and an entry can retire while it is still live. That is why the
+    /// retry re-registers rather than only looking the key up.
     pub(crate) fn register(key: PoolKey) -> Registration {
         let mut entries = locked();
         if let Some(entry) = entries.iter().find(|entry| entry.key == key) {
@@ -414,11 +472,14 @@ mod on {
                 key,
                 entry.objects.load(Ordering::Relaxed)
             );
-            return Registration(Some(Arc::clone(entry)));
+            return Registration {
+                key,
+                entry: Some(Arc::clone(entry)),
+            };
         }
         let Some(repair) = create_repair(key) else {
             crate::trace_record!("heal", "register-failed", key);
-            return Registration(None);
+            return Registration { key, entry: None };
         };
         let entry = Arc::new(PoolEntry {
             key,
@@ -429,7 +490,10 @@ mod on {
         });
         crate::trace_record!("heal", "entry-created", key, entry.repair.work);
         entries.push(Arc::clone(&entry));
-        Registration(Some(entry))
+        Registration {
+            key,
+            entry: Some(entry),
+        }
     }
 
     /// Give up one object's claim, retiring the entry when nothing needs it.
@@ -648,8 +712,29 @@ mod on {
         retire_idle();
     }
 
+    /// Force [`create_repair`] to fail for one pool, so the untracked path can
+    /// be tested.
+    ///
+    /// That path is reached only when `CreateThreadpoolWork` fails, which means
+    /// the process is out of memory -- not a condition a test can produce on
+    /// demand, and the error edge would otherwise be written but never
+    /// executed. This makes it reachable deterministically.
+    ///
+    /// **Keyed to a single pool, not a plain on/off flag.** The registry is
+    /// process-wide and these tests run as threads in one process, so a boolean
+    /// here fails registrations belonging to whichever unrelated test happens
+    /// to be creating an object at the time. Measured: it did exactly that on
+    /// the first run, failing `a_dispatch_after_the_cancellation_is_what_counts`
+    /// rather than anything it had to do with. Zero means no pool is forced.
+    #[cfg(test)]
+    pub(crate) static FORCE_REPAIR_FAILURE_FOR: AtomicUsize = AtomicUsize::new(0);
+
     /// Make the work object a repair for this pool will submit.
     fn create_repair(key: PoolKey) -> Option<RepairWork> {
+        #[cfg(test)]
+        if key != 0 && FORCE_REPAIR_FAILURE_FOR.load(Ordering::SeqCst) == key {
+            return None;
+        }
         // Allocated before the work object, so its address can be the context.
         let runs = Box::new(AtomicU64::new(0));
         let context: *mut core::ffi::c_void = std::ptr::from_ref(runs.as_ref())

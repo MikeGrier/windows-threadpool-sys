@@ -73,14 +73,19 @@ struct OwnedResource {
     /// a cancelling one. A no-op for every kind but a wait: the removal that
     /// can sever a pool's arrival notification operates on a wait completion
     /// packet, and only a wait owns one.
-    owe_repair: unsafe fn(*mut c_void),
+    owe_repair: unsafe fn(*mut c_void) -> bool,
     free: unsafe fn(*mut c_void),
 }
 
 /// A repair hook for a member whose release cannot wedge a pool.
 ///
 /// SAFETY: takes a pointer it never dereferences.
-unsafe fn no_repair_owed(_ptr: *mut c_void) {}
+unsafe fn no_repair_owed(_ptr: *mut c_void) -> bool {
+    // Nothing was cancelled on a pool this crate tracks, so there is nothing
+    // left untracked. Reporting `true` keeps the untracked fail-fast measuring
+    // only the members that can actually owe a repair.
+    true
+}
 
 // SAFETY: each pointer is a `Box` the group exclusively owns and frees exactly
 // once, after the pool has released every member that could reach it.
@@ -420,8 +425,9 @@ impl CleanupGroup {
     /// does, and owes its pool the same repair. This crate marks that repair
     /// here, which is what makes this safe to offer -- subject to the same
     /// stated hole as the per-object method: a member whose pool could not be
-    /// registered for repair records `cancel-untracked` and is cancelled
-    /// anyway.
+    /// registered for repair has that registration retried during this call,
+    /// and only if the retry also fails is it cancelled with nothing to repair
+    /// it, recording `cancel-untracked` and panicking under `fail-fast`.
     ///
     /// # Availability
     ///
@@ -543,6 +549,7 @@ impl CleanupGroup {
                 .lock()
                 .unwrap_or_else(|poison| poison.into_inner()),
         );
+        let mut tracked = true;
         if cancel_pending {
             for resource in resources.iter() {
                 // A cancelling release passes the cancel through to every
@@ -568,7 +575,11 @@ impl CleanupGroup {
                 // SAFETY: the contexts are still alive -- nothing is freed
                 // until the loop below -- and each hook matches the context
                 // kind this resource holds.
-                unsafe { (resource.owe_repair)(resource.ptr) };
+                //
+                // Accumulated rather than acted on here: the fail-fast this
+                // feeds panics, and a panic raised in this loop would unwind
+                // past the free loop below and leak every member's context.
+                tracked &= unsafe { (resource.owe_repair)(resource.ptr) };
             }
         }
         for resource in resources {
@@ -576,6 +587,9 @@ impl CleanupGroup {
             // reach this allocation; each is freed exactly once here.
             unsafe { (resource.free)(resource.ptr) };
         }
+        // After the frees, never before: this panics under `fail-fast`, and an
+        // unwind from inside either loop above would skip the frees.
+        crate::obligation::fail_fast_if_untracked(tracked, "CleanupGroup");
     }
 }
 
@@ -902,11 +916,16 @@ impl WaitMember<'_> {
 
     /// Prefer [`wait`](Self::wait).
     ///
-    /// This crate repairs the pool afterwards -- except on a pool whose repair
-    /// item could not be created, where the cancellation proceeds with nothing
-    /// to repair it and records `cancel-untracked`; see
-    /// [`crate::heal::register`] -- which is what makes this safe to
-    /// offer.
+    /// This crate repairs the pool afterwards -- and on a pool whose repair
+    /// item could not be created, this call tries to create it rather than
+    /// giving up. Only if that fails too does the cancellation proceed with
+    /// nothing to repair it, recording `cancel-untracked` and panicking under
+    /// `fail-fast`. That is what makes this safe to offer. See
+    /// [README-FEATURE-self-heal.md](https://docs.rs/crate/windows-threadpool-sys/latest/source/README-FEATURE-self-heal.md).
+    ///
+    /// The registry itself is private, so this names it rather than linking it:
+    /// a public page linking a private item renders a reference the reader
+    /// cannot follow, which rustdoc warns about.
     #[cfg(feature = "self-heal")]
     pub fn try_cancel_pending(&self) {
         // SAFETY: the obligation this transfers is discharged here, by marking
@@ -914,7 +933,12 @@ impl WaitMember<'_> {
         unsafe { self.try_cancel_pending_no_heal_tracking() };
         // SAFETY: the group owns this context and does not free it while this
         // member borrows the group.
-        unsafe { ThreadpoolWait::owe_repair(self.context) };
+        let tracked = unsafe { ThreadpoolWait::owe_repair(self.context) };
+        // Last in the function. Unlike the group-wide release this does not
+        // free anything, so there is nothing here for an unwind to skip -- but
+        // the placement matches the other two call sites rather than relying on
+        // that staying true.
+        crate::obligation::fail_fast_if_untracked(tracked, "WaitMember");
     }
 
     /// `try_cancel_pending` without the repair.

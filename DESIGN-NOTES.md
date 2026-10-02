@@ -1056,6 +1056,57 @@ itself, so nothing in that path issues a `CloseThreadpoolWait` behind a
 untested**, and worth knowing, but it is a question about the ring crate's
 reproducer rather than a change to this one.
 
+### A cancellation allocates its own repair rather than giving up
+
+`heal::register` is best-effort: when `CreateThreadpoolWork` fails there is no
+entry, and a later cancellation on that pool had nothing to mark. The question
+of what the API should do about it was `M-T10.18`.
+
+**Decided: the cancellation registers the pool itself, at cancel time.** If that
+also fails, it records `cancel-untracked` with the pool key, and under the
+`fail-fast` feature it panics.
+
+Allocating at the moment of need is exactly what [the repair work object is
+pre-created to avoid](#what-the-obligation-flag-records-and-why-a-dispatch-sometimes-discharges-it)
+-- the pool it is aimed at may already be wedged. That argument does not reach
+this path, because the alternative here is not "allocate earlier", it is "never
+repair this pool at all". Reaching it already means an allocation failed when
+the object was created *and* that nothing else on the pool has registered since.
+Creating a work object is not dispatching through the pool, so a wedged pool is
+not itself a reason for the retry to fail.
+
+**A prior defect was found while deciding this, and is fixed in the same
+change.** `Registration` held only `Option<Arc<PoolEntry>>` and discarded the
+key. Two consequences followed, neither of which the recorded hole described:
+
+- An object whose registration failed could not find an entry that *another*
+  object later created for the same pool. The pool was repairable, a healthy
+  entry existed, and the cancellation still reported it untracked.
+- `cancel-untracked` recorded `0` instead of the key, so a capture could not say
+  which pool went untracked.
+
+`Registration` now keeps the key whether or not it has an entry. Note that
+`register` returns early on failure *without* incrementing `objects`, so an
+object with a failed registration is not counted by the refcount and an entry
+can retire while it is still live -- which is why the fix re-registers rather
+than merely looking the key up.
+
+**Where the fail-fast fires is a constraint, not a detail.** `owe_repair` is
+reached from `CleanupGroup`'s cancelling release, in the window between the
+native release and the loop that frees member contexts. A panic raised there
+would unwind past the frees and leak every context. So the untracked report is
+accumulated during the release and acted on after the frees, which is the same
+rule [`fail_fast_if_owed`](#fail-fast-is-a-default-off-feature) already follows:
+the panic reports the violation, it must not cause one.
+
+**Reachability is a question this crate could not otherwise ask.** The path runs
+only when `CreateThreadpoolWork` fails, which means the process is out of
+memory, so the error edge would have been written and never executed. A
+test-only `FORCE_REPAIR_FAILURE_FOR` makes it reachable, **keyed to one pool
+rather than switched on globally** -- these tests run as threads in one process
+against a process-wide registry, and a boolean there failed an unrelated test's
+registration on the first run.
+
 ### The cancelling release is a separate method
 
 `close_members` took a `cancel_pending: bool`. It no longer does: draining is
