@@ -49,10 +49,5 @@ crate carries on behalf of a consumer nobody has written.
 - [x] **M27.2** -- Retired: a gap-closing item for gaps a non-existent consumer has not asked for.
   -> [retired 2026-10-01](COMPLETED-CHECKLIST.md#moved-2026-10-01-m27-retired)
 
-- [ ] **M27.3** -- Give a consumer the means to answer placement questions on their own hardware.
-  **Not gated on the planner** -- it is the client-side half of the thesis, and it is what lets a
-  developer disagree with any plan they are handed. `cache_domains.rs` now prints every cache level
-  beside the heuristic's pick; the equivalent for placement is a sample that reports what a chosen
-  arrangement costs and what the alternatives would have cost, on the machine in hand.
-  [ring_copy](examples/ring_copy) is the natural host, being already policy-selectable. **Do not ship
-  a verdict** -- report the observation and let the consumer conclude, per OPTION INTEGRITY.
+- [x] **M27.3** -- `ring_copy --compare` prices every policy on the machine in hand and reports
+  what each cost, with no verdict. -> [completed 2026-10-01](COMPLETED-CHECKLIST.md#m273)

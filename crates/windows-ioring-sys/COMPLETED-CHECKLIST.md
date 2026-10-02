@@ -6109,3 +6109,59 @@ capability -- nothing about this crate's API changed, and nothing stops a realiz
 >   Unchanged when it resumes: each gap is an input a caller supplies, never a choice this crate
 >   makes.
 >
+
+## <a id="moved-2026-10-01-m273"></a>Moved 2026-10-01 23:14 -04:00 -- M27.3, pricing the alternatives
+
+### <a id="m273"></a>M27.3 -- `ring_copy --compare` prices every policy on the machine in hand and reports what each cost, with no verdict. *(completed 2026-10-01 23:14 -04:00)*
+
+The item as it stood:
+> - [ ] **M27.3** -- Give a consumer the means to answer placement questions on their own hardware.
+>   **Not gated on the planner** -- it is the client-side half of the thesis, and it is what lets a
+>   developer disagree with any plan they are handed. `cache_domains.rs` now prints every cache level
+>   beside the heuristic's pick; the equivalent for placement is a sample that reports what a chosen
+>   arrangement costs and what the alternatives would have cost, on the machine in hand.
+>   [ring_copy](examples/ring_copy) is the natural host, being already policy-selectable. **Do not ship
+>   a verdict** -- report the observation and let the consumer conclude, per OPTION INTEGRITY.
+
+#### What was built
+
+`--compare` runs the copy under every policy and reports what each cost, with `--rounds` (default
+3) controlling repetitions. Three choices are worth recording, because each was the difference
+between a number and a defensible number:
+
+- **The arms share one code path.** `run_arrangement` was extracted from `main` so the alternatives
+  are priced through the identical path the chosen policy takes. A comparison whose arms do not
+  share a path measures the difference between the arms' *code* as much as between the
+  arrangements.
+- **The order rotates each round.** Back-to-back runs over the same file are not independent -- the
+  first pass warms the filesystem cache and every later one benefits. A fixed order would hand that
+  advantage to the same policy every time and bake it into the result. Rotating does not remove the
+  effect; it stops it being *attributed* to one arm.
+- **Wall time per arrangement, not the sum of its domains.** The domains run concurrently, so
+  summing them counts the same seconds once per domain and makes a wider arrangement look slower
+  the more parallelism it was given.
+
+#### No verdict, and the output says why
+
+Per OPTION INTEGRITY, no arm is marked best. The report states what the figures include (the
+filesystem cache, whatever else the machine was doing, this sample's own chunking), what they
+cannot separate (a genuinely better arrangement from one that ran while the machine was quieter),
+and that the choice belongs to the consumer and their workload.
+
+The fastest/slowest/median columns exist for that last point: **where one policy's spread overlaps
+another's, this run did not distinguish them**, and the reader can see that rather than being told
+a winner.
+
+A single-domain arrangement is reported as the machine saying it cannot express that arrangement --
+information about the host, not a finding against the policy.
+
+#### Observed on the development machine
+
+Run against a 16 MiB file, 3 rounds. Reported here as a demonstration that the sample produces
+intelligible output, not as a measurement of anything: one file, one machine, one moment.
+
+`ByCache` and `ByCore` both selected 8 domains; `ByNode`, `ByPackage` and `Single` each collapsed to
+one on this host. `ByCache`'s slowest round came in far below its median while `ByCore`'s rounds sat
+close together -- which is the cold first pass showing up exactly where the rotation is designed to
+expose it rather than hide it. A reader who took the medians alone would have missed it, which is
+why the spread is printed beside them.

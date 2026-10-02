@@ -39,6 +39,19 @@ pub enum Policy {
 }
 
 impl Policy {
+    /// Every policy, for `--compare` to price each in turn.
+    ///
+    /// Listed here rather than derived, because a sample that silently gained
+    /// an arm when a variant was added would change what a recorded comparison
+    /// means without anyone choosing that.
+    pub const ALL: [Policy; 5] = [
+        Policy::ByCache,
+        Policy::ByNode,
+        Policy::ByPackage,
+        Policy::ByCore,
+        Policy::Single,
+    ];
+
     /// Parse a policy name (case-insensitive), for the sample's `--policy` switch.
     ///
     /// `byl3` and `l3` are deliberately **not** accepted. They named a rule
