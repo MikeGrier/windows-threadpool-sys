@@ -5288,3 +5288,250 @@ why the decisive arms used 20000.
 **Raised, not taken:** M26.14.3 asks whether `windows-threadpool-sys` should adopt the draining
 teardown, which is a one-argument change with real semantic weight -- a drop that blocks until a
 pending callback runs can deadlock a caller. M26.14.4 asks for the threshold sweep if it does not.
+## <a id="moved-2026-10-01-m20-through-m24"></a>Moved 2026-10-01 21:19:21 -04:00 -- M20 through M24, and the M21+/M22+/M28+ buckets they filled
+
+Eight milestones, every item in them complete. Each item was archived individually as it
+finished, so the entries below are the stubs that pointed at those archive entries plus the
+milestone prose that framed them -- which is the part that lived only here.
+
+### M20 -- Repairs from the 2026-08-30 NUMA-sharding measurement
+
+Queued from
+[DESIGN-SESSION-2026-08-30-numa-sharded-io-execution-domains.md](../../design-sessions/DESIGN-SESSION-2026-08-30-numa-sharded-io-execution-domains.md),
+which measured a shipping ARM laptop and found the L3 heuristic's justification does not hold there. These
+were queued as documentation and policy repairs only, on the basis that **no defect was found in
+`ring_copy`** -- `Policy::select` already degrades to a whole-machine domain and reports it, which an
+initial reading of the session got wrong and the code corrected.
+
+**Corrected 2026-09-19: that basis no longer holds, and it changes the order.** `SH-4.12` in
+[CHECKLIST-ship-topology-and-queues.md](../../CHECKLIST-ship-topology-and-queues.md) later found two
+defects in that same function: it selects on `DomainKind::Cache { level: 3, .. }` rather than asking
+`outermost_partitioning_cache()` -- the one definition of which cache level partitions a machine, shipped
+in `windows-topology-sys` 0.2.0 -- so it can produce **overlapping** ring domains where two cache kinds
+report at level 3, and degrades silently on a host whose outermost partition sits at another level.
+`M20.1` and `M20.3` both land on that function and that rule, so both are **coupled to `SH-4.12`** and
+must follow it. `M20.2` and `M20.4` are done. `M20.6` is gated the other way, on `M22.1`. That leaves
+`SH-4.12` as the only thing standing between M20 and completion.
+
+The design questions the session opened are deliberately **not** queued here. It is still open, and its
+conclusions belong to it until it converges.
+
+- [x] **M20.1** -- Restate the cache heuristic as "the outermost cache level that actually partitions
+  the machine", sweep every restatement, and replace the consumer that bound to the level number.
+  Done together with `SH-4.12`, which is the code half of the same change.
+  -> [completed 2026-09-22](COMPLETED-CHECKLIST.md#m201)
+
+- [x] **M20.2** -- Record the 2026-08-30 ARM measurement as a decision, beside the zero-NUMA-node
+  observation it is the sibling of.
+  -> [completed 2026-09-19](COMPLETED-CHECKLIST.md#m202)
+
+- [x] **M20.3** -- Make `ring_copy`'s degraded-fallback path observable in a test, asserting both
+  that an absent relation degrades and that a present one does not. Done without waiting on
+  `SH-4.12`: the fallback tail is shared by every policy, so exercising it through `ByNode` and
+  `ByPackage` pins nothing that item rewrites.
+  -> [completed 2026-09-22](COMPLETED-CHECKLIST.md#m203)
+
+- [x] **M20.4** -- Correct "What is not reachable" in [DESIGN-NOTES.md](DESIGN-NOTES.md): the
+  file-handle-to-storage-node mapping is reachable on mechanism, and the conclusion it supported now rests
+  on volume granularity, absence, and spanned volumes instead.
+  -> [completed 2026-09-19](COMPLETED-CHECKLIST.md#m204)
+
+- [x] **M20.5** -- Dissolved by [D-47](DESIGN-NOTES.md#d-47-detail) rather than decided: the
+  `flush_barrier` assertion was measuring a claim the platform does not honour, so it was never a
+  flaky test. -> [completed 2026-09-07](COMPLETED-CHECKLIST.md#m205)
+
+- [x] **M20.6** -- Re-evaluate `CommitStrategy::AlternatingRings` and the benchmark's conclusion
+  against [D-47](DESIGN-NOTES.md#d-47-detail). **The harness cannot exhibit a blast-radius
+  difference, which is a fact about the harness and not a finding against the strategy** -- each
+  lane's own arena is the limiter there. The strategy stays, with the conditions under which it
+  would pay written down; `M25.5` re-runs the comparison where operations genuinely pend. The
+  sample's output and prose are corrected so they stop claiming to measure a commit.
+  -> [completed 2026-09-23](COMPLETED-CHECKLIST.md#m206)
+
+
+### M21 -- Epoch-log review: correctness repairs
+
+Queued from
+[DESIGN-SESSION-2026-09-19-epoch-log-review.md](design-sessions/DESIGN-SESSION-2026-09-19-epoch-log-review.md)
+(findings `C-1` through `C-5`). Independent of each other; listed in ascending cost. Nothing in this
+milestone was observed failing at the sample's current constants -- these are a withdrawn justification,
+two hang shapes, a mis-keyed trigger, and a specification gap. (`M21.3` predicted that its trigger was
+merely unreachable *today*; measuring it while implementing showed it is unreachable at any constants, so
+what it corrected was the coupling rather than a latent bug. The archived entry has the numbers.)
+
+- [x] **M21.1** -- Correct the last site that still asserts [D-24](DESIGN-NOTES.md#d-24)'s withdrawn
+  half: the epoch-order assertion in the epoch-log committer, whose justification cited the hold-back
+  claim [D-47](DESIGN-NOTES.md#d-47) removed.
+  -> [completed 2026-09-20](COMPLETED-CHECKLIST.md#m211)
+
+- [x] **M21.2** -- Publish a bounded pop and the wait it is generic over, then remove the two unbounded
+  spins. `IoRing::pop_within` / `pop_within_with`, over a `CompletionWait` the caller supplies, because
+  [D-21](DESIGN-NOTES.md#d-21) means the crate cannot choose the wait for them.
+  -> [completed 2026-09-21](COMPLETED-CHECKLIST.md#m212)
+
+- [x] **M21.3** -- Key the epoch commit off a completed append rather than off the counter, so the
+  trigger cannot fire on a pass that appended nothing. The predicted latent bug turned out to be
+  unreachable at any constants -- measured, not re-reasoned -- so this is a coupling change rather than
+  a fix.
+  -> [completed 2026-09-21](COMPLETED-CHECKLIST.md#m213)
+
+- [x] **M21.4** -- State what a *failed* commit does to `durable_through`, and bind it with tests in both
+  directions. Required making the sample a test target at all (`test = true`), and gating the
+  failure-path tests on `fault-injection`, since a healthy flush cannot be made to fail.
+  -> [completed 2026-09-21](COMPLETED-CHECKLIST.md#m214)
+
+- [x] **M21.5** -- Give the harness's wait loops a bound, and collapse the hand-written waits onto the
+  bounded pop. The item named two loops; a census found four, plus two flaky single-`try_pop` sites.
+  -> [completed 2026-09-21](COMPLETED-CHECKLIST.md#m215)
+
+- [x] **M21.6** -- Fix the four defects an independent review of the `M21.2` surface found: the timeout
+  mapping, its victim in `run_down`, the `INFINITE` collision, and the test hole that hid all of them.
+  -> [completed 2026-09-21](COMPLETED-CHECKLIST.md#m216)
+
+### M21+ -- Queued by the 2026-09-21 API review
+
+Queued from the review of the `M21.2` surface, recorded in
+[DESIGN-SESSION-2026-09-21-m21-remediation-findings.md](design-sessions/DESIGN-SESSION-2026-09-21-m21-remediation-findings.md).
+Its other four findings were fixed in `M21.6`.
+
+- [x] **M21+.1** -- Teach [check-borrow-surface.ps1](../../tools/check-borrow-surface.ps1) the two shapes
+  it was blind to: methods of a `pub trait`, and borrows in parameter position. Four entries appeared, one
+  of them predating the widening; the probes also found a latent bug in the checker itself.
+  -> [completed 2026-09-21](COMPLETED-CHECKLIST.md#m21plus1)
+
+### M22 -- Epoch-log review: submission and arena
+
+Queued from the same session (findings `E-1` through `E-3`). `M22.1` is sequenced first because `M20.6`
+re-reads numbers that its change moves.
+
+- [x] **M22.1** -- Batch an epoch's appends into one submission in both append paths, and measure
+  whether the per-record submission cost was flattening the strategy comparison. It was not:
+  throughput did not move out of the noise, though commit p50 did.
+  -> [completed 2026-09-22](COMPLETED-CHECKLIST.md#m221)
+
+- [x] **M22.2** -- Collapse the two free-slot implementations to one, derived from the arena's own
+  outstanding counts rather than tracked beside them. The item called both correct; one was not --
+  the tracked free list leaked a slot on every refused append.
+  -> [completed 2026-09-22](COMPLETED-CHECKLIST.md#m222)
+
+- [x] **M22.3** -- Give the registered arena a stated placement: the epoch-log arena is placed on the
+  NUMA node its own log file's volume reports, and the allocator moved into the library as
+  `NumaBuffer` rather than being copied a second time. The sample says plainly that the placement
+  cannot pay at this workload.
+  -> [completed 2026-09-22](COMPLETED-CHECKLIST.md#m223)
+
+
+### M22+ -- Queued by what the M21 work left behind
+
+- [x] **M22+.1** -- Make [bounded_pop.rs](tests/bounded_pop.rs) independent of how fast a device is, by
+  reading from an overlapped pipe nobody has written to. Filed and completed the same hour; the deferral
+  was a scheduling preference rather than a blocker.
+  -> [completed 2026-09-21](COMPLETED-CHECKLIST.md#m22plus1)
+
+
+
+### M24 -- Make the unit suite hermetic
+
+The defect and its classification are [D-49](DESIGN-NOTES.md#d-49); the remedies and their costs are
+[DESIGN-SESSION-2026-09-21-hermetic-unit-tests.md](design-sessions/DESIGN-SESSION-2026-09-21-hermetic-unit-tests.md).
+It began at **63 of 131 lib tests opening a real kernel ring**, so `cargo test --lib` did not mean
+what its name implies, and the repository's own Quality rule already classifies an operating-system
+API as an external boundary.
+
+**Where it ended: 41 of 151 open a ring, 110 do not.** The remainder is not movable without
+`M26.2`'s FFI seam, and [D-53](DESIGN-NOTES.md#d-53) records the rung that keeps it from climbing
+back -- an inventory of *which* tests open a ring, since a zero-check would fail on day one and
+could only be satisfied by deleting coverage.
+
+**Sequencing is the open question, not whether. Corrected 2026-09-22: the cost of waiting is close
+to zero, which is the opposite of what this paragraph first said.** It claimed that waiting
+compounds, "because every milestone that adds tests adds to the pile to be migrated, and `M22` is a
+testing-heavy milestone". The mechanism is real but the instance was not checked, and it is false:
+**all three `M22` items touch only `examples/epoch_log/`**, and none adds a lib test.
+
+**Unconditional as of 2026-09-22.** `M24.1` concluded and `M24.4` is withdrawn, so nothing in this
+milestone waits on an evaluation any more. The hermetic goal is reached by relocation and by the
+accounting extraction alone; the technique `M24.1` went looking for turned out to be a different
+and larger thing, and is `M26`.
+
+Checked across the whole queue rather than for `M22` alone, since the first claim was wrong for
+want of exactly that: **no pending item outside this milestone modifies `src/**/tests.rs`.** `M22`
+is example-only; `M23.1` is the *sample's* `contract.rs`, not the crate's; `M20.1` and `M20.6` are
+documentation and the `ring_copy` sample; `M23.2` is a decision that may imply API later. The 63
+therefore do not grow while this waits.
+
+So sequencing turns on other things, and they point the other way:
+
+- **`M24.2` is an internals refactor of a published crate**, and the branch carrying this work is
+  already 19 commits with one `feat` and three `fix` commits on it. Stacking a field-layout change
+  on top makes one review cover both a new public API and that refactor.
+- **`M24.1` is an evaluation whose answer could invalidate `M24.4`**, so beginning the build before
+  it concludes risks building something the evaluation rejects.
+- **`M22.1` unblocks `M20.6`**, an open question since 2026-09-07 about whether a strategy still
+  earns its place in a published sample -- which is a decision waiting on a measurement `M22.1`
+  produces.
+
+**`M24.1` concluded (2026-09-22) and nothing here waits on it.** `M24.4` is withdrawn; `M24.2`,
+`M24.3` and `M24.7` are the path to a hermetic suite and are independent of each other.
+
+- [x] **M24.1** -- Settle whether a co-tested fake escapes the mock objection. **Answered: the fake
+  was the wrong instrument.** A shared suite is strong over what we specify and blind to the
+  platform's incidental behaviour, and an assertion about the latter is a frozen observation rather
+  than a contract. Superseded by the resolver in `M26`.
+  -> [completed 2026-09-22](COMPLETED-CHECKLIST.md#m241)
+
+- [x] **M24.2** -- Extract the handle-free accounting into its own type, composed by `IoRing`. The
+  item's field split was verified exactly: five fields carry no kernel state, five do.
+  `Accounting` now owns them with 19 hermetic tests, and `IoRing` delegates nine methods.
+  -> [completed 2026-09-22](COMPLETED-CHECKLIST.md#m242)
+
+- [x] **M24.7** -- Convert the lib tests that construct a ring only to exercise bookkeeping.
+  **61 -> 52**, by narrowing `Token::new` to take the ring's ledger rather than the ring. The
+  remaining 52 are not convertible and the reason is structural, not effort -- see the archive.
+  -> [completed 2026-09-22](COMPLETED-CHECKLIST.md#m247)
+
+- [x] **M24.4** -- **Withdrawn by `M24.1` (2026-09-22).** A shared conformance suite over a
+  hand-written fake is superseded by the response-space resolver in `M26`, which serves the same
+  purpose without encoding a belief about the platform at all. Nothing is deferred by this: `M24`'s
+  goal is a hermetic lib suite, and `M24.2` plus `M24.3` achieve that without it.
+
+- [x] **M24.3** -- Relocate the lib tests that open a ring but use only public API into `tests/`.
+  **52 -> 41.** Eleven moved; the "25" the item predicted was never achievable, and the reason is
+  the same structural one `M24.7` found.
+  -> [completed 2026-09-22](COMPLETED-CHECKLIST.md#m243)
+
+- [x] **M24.5** -- Put the rule on a rung. An **inventory** of which lib tests open a ring
+  ([D-53](DESIGN-NOTES.md#d-53)), not the zero-check the item assumed -- that rule is false and
+  could only be satisfied by deleting coverage. The guard's own bidirectional check found a defect
+  in the guard.
+  -> [completed 2026-09-22](COMPLETED-CHECKLIST.md#m245)
+
+- [x] **M24.6** -- Sweep what this milestone makes false. Two of the three sites the item named
+  were false alarms; the third was false for a different and larger reason than the item gave, and
+  the sweep found two more it did not name.
+  -> [completed 2026-09-23](COMPLETED-CHECKLIST.md#m246)
+
+### M23 -- The ring as a durability domain, and storage affinity
+
+Queued from the 2026-09-19 epoch-log review (findings `S-1` and `S-3`). `S-2` is an addendum to `M20.6`
+rather than an item here. `M23.1` and `M23.2` are done; `M23.3` is the remaining question, and it is
+about this crate's own surface rather than about storage at all.
+
+- [x] **M23.1** -- State in the epoch-log contract that the barrier is ring-wide while the flush names a file, so one ring per log is a precondition of the cost model. -> [completed 2026-09-23](COMPLETED-CHECKLIST.md#m231)
+
+- [x] **M23.2** -- Decide how a caller arrives at a NUMA node: `win-numa-sys` offers declaring and discovering, and refuses the shortcut that does both at once. -> [completed 2026-09-23](COMPLETED-CHECKLIST.md#m232)
+
+- [x] **M23.3** -- Decide what this crate offers for holding a token between push and completion: the ring owns the inventory, `IoRing` becomes generic, and the break is accepted. -> [completed 2026-09-23](COMPLETED-CHECKLIST.md#m233)
+
+- [x] **M23.4** -- Drop guards that panicked during unwind aborted the process instead of reporting; they now stay silent while `std::thread::panicking()`. -> [completed 2026-09-23](COMPLETED-CHECKLIST.md#m234)
+
+- [x] **M23.5** -- Both asserts in `IoRing::drop` are now reached by tests; the raw-HRESULT seam the item priced turned out not to be needed, because the kernel refuses a null ring handle cleanly. -> [completed 2026-09-23](COMPLETED-CHECKLIST.md#m235)
+
+
+
+### M28+ -- Opened by the inventory
+
+- [x] **M28.7** -- Decided against: the ring can answer 1 of 4 violations, and an internal check would be wrong about 13 live `_raw` push sites. -> [completed 2026-09-26](COMPLETED-CHECKLIST.md#m287)
+
+- [x] **M28.8** -- `RingContract::in_flight` added; two hand-written copies deleted. The drain loops it named turned out not to depend on it -- `P-4` does. -> [completed 2026-09-26](COMPLETED-CHECKLIST.md#m288)
+
