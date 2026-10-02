@@ -90,6 +90,22 @@ whoever allocates it, and this crate accepts any `IoBuf`.
 expected one: `M27.1` was written expecting to find this crate short, and what it is short of is a
 thread-placement expression that belongs a layer down.
 
+## The "covered" verdicts are now demonstrated, not read
+
+Everything above was reached by reading signatures, which is weak evidence for a claim about this
+repository's own code. [realization_from_a_plan.rs](tests/realization_from_a_plan.rs) builds the
+arrangement a plan describes using only the public API, so each "covered" row is a thing that
+compiles and runs rather than a thing somebody read.
+
+The strongest of those is the buffer claim: `IoBufMut` is required of `NumaBuffer` at a function
+boundary in that test, so if the implementation disappeared the test would not **compile** -- which
+is a stronger rung than any assertion.
+
+What the test cannot do is notice the one gap *closing*. Absence of an API is not assertable, so
+the realizer reports processor pinning as unrealized from a statement in test code; somebody adding
+pool placement has to edit that file to stop it, which is the moment this census needs updating. It
+will not notice on its own.
+
 ## What this census deliberately does not do
 
 It does not propose API. It does not rank the gap against others, or claim the ring-memory limit

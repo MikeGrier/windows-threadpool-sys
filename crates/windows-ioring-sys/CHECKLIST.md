@@ -60,12 +60,24 @@ only build what this crate exposes, and nothing has ever checked that what it ex
   > -> `M-T8` -> `M-T8.1` (`Decide whether this crate expresses thread placement, and if so where`).
   > See [CHECKLIST.md](../windows-threadpool-sys/CHECKLIST.md).
 
-- [ ] **M27.2** -- **Gated on `M27.1` and on the planner's `EP-1+.6`.** Close the gaps the census
-  names, as ordinary capability on this crate with no policy attached. Each gap is an input a caller
-  supplies, never a choice this crate makes. Verify the way the thesis demands rather than the
-  convenient way: construct from a plan built against a *synthetic* machine, since the planner is
-  mockable by construction and this crate should be realizable without the hardware the plan
-  describes.
+- [ ] **M27.2** -- **Still gated on the planner's `EP-1+.6`; its verification half is done.**
+
+  **The verification half, done 2026-10-01.**
+  [realization_from_a_plan.rs](tests/realization_from_a_plan.rs) realizes a plan-shaped description
+  against a synthetic machine using only the public API, which is what `M27.1`'s "covered" verdicts
+  rested on -- they were reached by reading signatures, and now a test builds the arrangement
+  instead. The stand-in plan type is local to that file, so nothing public binds to a vocabulary
+  that is not settled. Sabotage-checked: swapping the two queue depths inside the realizer fails the
+  depth assertion by name.
+
+  **The gap-closing half has nothing to close, and that is why it stays open rather than closing.**
+  The census named one gap and it is `windows-threadpool-sys`' (`M-T8.1`); the ring-memory one is a
+  Win32 limit. But the census walked the four facts *as `M27.1` described them*, not a settled
+  vocabulary -- so whether `EP-1+.6` names a fact nobody has walked is exactly what this item is
+  waiting to find out. Closing it now would assert the vocabulary adds nothing.
+
+  Unchanged when it resumes: each gap is an input a caller supplies, never a choice this crate
+  makes.
 
 - [ ] **M27.3** -- Give a consumer the means to answer placement questions on their own hardware.
   **Not gated on the planner** -- it is the client-side half of the thesis, and it is what lets a
