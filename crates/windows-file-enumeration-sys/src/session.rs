@@ -113,6 +113,22 @@ struct SessionWork {
     suppressed: AtomicBool,
 }
 
+impl Drop for SessionWork {
+    fn drop(&mut self) {
+        // Both objects are submitted, so both owe a drain. Dropping them would
+        // make that drain anyway -- this is not new blocking -- but leaving it
+        // to `Drop` leaves the obligation undischarged, which is what
+        // `windows-threadpool-sys` reports and, under its `fail-fast` feature,
+        // panics on. Naming the point also says where this session blocks.
+        //
+        // The servicer goes first: the engine's callback can ring the
+        // servicer's doorbell, so draining the engine first could leave a
+        // freshly submitted servicer callback behind it.
+        self.servicer.stop_and_drain();
+        self.engine.stop_and_drain();
+    }
+}
+
 impl SessionWork {
     #[cfg(test)]
     fn is_suppressed(&self) -> bool {
