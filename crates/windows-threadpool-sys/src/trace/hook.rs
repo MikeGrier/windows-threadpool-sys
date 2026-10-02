@@ -293,6 +293,7 @@ pub(crate) unsafe fn is_syscall_stub(entry: *const u8) -> bool {
 /// with no thread able to release it. `patch` therefore returns its outcome
 /// and the caller records it afterwards.
 fn with_others_suspended<T>(patch: impl FnOnce() -> T) -> T {
+    use std::sync::Mutex;
     use windows_sys::Win32::Foundation::{CloseHandle, INVALID_HANDLE_VALUE};
     use windows_sys::Win32::System::Diagnostics::ToolHelp::{
         CreateToolhelp32Snapshot, TH32CS_SNAPTHREAD, THREADENTRY32, Thread32First, Thread32Next,
@@ -306,6 +307,34 @@ fn with_others_suspended<T>(patch: impl FnOnce() -> T) -> T {
     /// to this before anything is suspended, and growth past it is refused
     /// rather than allocated -- see below for why that matters.
     const ROOM: usize = 512;
+
+    /// Serializes every path into this function, against itself.
+    ///
+    /// Two threads here at once can each enumerate the other and then suspend
+    /// it. Neither is then running to resume the other, and the process stops
+    /// with no thread able to release it. The window is the interval in which
+    /// `SuspendThread` has returned on one thread but the target has not yet
+    /// stopped executing -- the API is documented as not guaranteeing the
+    /// suspension is complete when it returns.
+    ///
+    /// This lock is held by the suspending thread, which never suspends itself
+    /// (the enumeration filters out its own id), so the holder is always
+    /// running and a thread blocked here is simply waiting rather than
+    /// deadlocked.
+    ///
+    /// It is placed here rather than at the callers because that is what makes
+    /// the rule hold for all of them: `install_requested` had an `AtomicBool`
+    /// that stops it running *twice*, which is idempotence and not mutual
+    /// exclusion, and `install_by_label` had nothing. Serializing the thing
+    /// that suspends is one site; guarding each entry point is a rule to
+    /// remember every time one is added.
+    ///
+    /// Poison is recovered rather than propagated: a panic inside a previous
+    /// `patch` says nothing about whether it is safe to suspend threads now,
+    /// and refusing every later install because of it would disable the
+    /// facility for the rest of the process.
+    static PATCHING: Mutex<()> = Mutex::new(());
+    let _serialized = PATCHING.lock().unwrap_or_else(|poison| poison.into_inner());
 
     // SAFETY: neither has preconditions.
     let (me, self_thread) = unsafe { (GetCurrentProcessId(), GetCurrentThreadId()) };
@@ -482,6 +511,38 @@ pub(crate) fn factory_handle() -> usize {
 pub(crate) fn stub_entry(label: &str) -> Option<*const u8> {
     let (symbol, _, _) = HOOKS.iter().find(|(_, name, _)| *name == label)?;
     ntdll_proc(symbol).map(|found| found as *const u8)
+}
+
+/// An `ntdll` stub that this module can never patch, for the recogniser's
+/// live canary.
+///
+/// The canary asks whether the recognised shape still describes a real entry
+/// point on the running build. It has to read a stub whose bytes are the ones
+/// Windows shipped, and [`stub_entry`] cannot promise that: every name it can
+/// resolve is in [`HOOKS`], the patch is deliberately never removed, and a
+/// sibling test installs one. Reading a patched stub turns the canary into an
+/// assertion about the jump that was planted over it, which is both false and
+/// the opposite of what it is for.
+///
+/// Measured rather than reasoned: with the hooking test running first in the
+/// same process, the canary failed 25 of 25 runs. It passes in the full suite
+/// only because the default thread count happens to order the two the other
+/// way, which is luck that changes with the test count or the machine.
+///
+/// `NtQueryDefaultLocale` is the choice because it is absent from [`HOOKS`] --
+/// asserted below, so adding it there is a loud failure rather than a silently
+/// re-broken canary -- and because it is obscure enough that nothing else in
+/// the process is likely to have hooked it either.
+#[cfg(test)]
+pub(crate) fn unhookable_stub_entry() -> Option<*const u8> {
+    const SYMBOL: &str = "NtQueryDefaultLocale";
+    assert!(
+        !HOOKS.iter().any(|(symbol, _, _)| *symbol == SYMBOL),
+        "{SYMBOL} is now in HOOKS, so this module can patch it and it is no \
+         longer a canary for the shape Windows shipped -- pick another export \
+         that is not in the table"
+    );
+    ntdll_proc(SYMBOL).map(|found| found as *const u8)
 }
 
 /// Issue the self-test system call, returning its status and the three timer

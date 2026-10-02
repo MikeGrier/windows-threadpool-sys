@@ -392,21 +392,25 @@ house rules require is what found the third.
   configuration CI actually runs*. A guard that only fires under a locally-set environment
   variable has not been shown to guard anything.
 
-- [ ] **M-T10.3** -- **Serialize every entry point that suspends other threads.**
+- [x] **M-T10.3** -- **Serialize every entry point that suspends other threads.** Done by a
+      `Mutex` inside `with_others_suspended` itself rather than a guard at each caller, so the
+      rule holds for every path into it including ones not yet written. `install_requested`'s
+      `AtomicBool` stops it running twice, which is idempotence and not mutual exclusion;
+      `install_by_label` had nothing.
 
-  **The defect.** `trace/hook.rs`'s `with_others_suspended` is not serialized against itself, so
-  two installers on different threads can each suspend the other and neither resumes.
-  `install_requested` holds a guard that prevents this; `install_by_label` does not, and reaches
-  the same code.
+  **The reported hang did not reproduce, and the report should not be relied on.** The review
+  said two named tests hang at `--test-threads 2` and pass 20 of 20 at `--test-threads 1`. Neither
+  half holds here: 0 hangs in 40 runs of that pair at `--test-threads 2`, 0 hangs in 25 runs of
+  the whole `trace::` module at `--test-threads 2`, and the pair *fails* rather than passes at
+  `--test-threads 1` -- for the unrelated reason that became `M-T10.6`.
 
-  **Measured, not argued.** Two tests
-  (`a_hooked_stub_records_both_ends_and_still_performs_its_syscall` and
-  `hooking_the_wait_registration_observes_the_already_signalled_flag`) hang at `--test-threads 2`
-  and pass 20 of 20 at `--test-threads 1`.
-
-  **Target.** One lock covering every path into `with_others_suspended`, not a second guard beside
-  the existing one -- the finding is that the rule lived at one entry point and not the other, so
-  the fix is to give it a single site. Then confirm the two tests pass at `--test-threads 2`.
+  **The fix is justified analytically, not by that measurement.** Two threads inside
+  `with_others_suspended` can each enumerate the other and then suspend it, leaving neither
+  running to resume the other; `SuspendThread` is documented as not guaranteeing the suspension
+  is complete when it returns, which is the window. One `Mutex` removes the state entirely and
+  costs nothing on a facility that installs hooks once per process. An unreproduced hazard that a
+  cheap change makes unrepresentable is worth closing; what is not acceptable is recording it as
+  measured when it was not.
 
 - [ ] **M-T10.4** -- **DECISION TO RAISE: whether hot-patching a running process is a hazard this
       crate accepts.**
@@ -422,6 +426,27 @@ house rules require is what found the third.
   whether these hooks are diagnostic-only instruments that a developer installs deliberately, or
   a facility a consumer may install under load. The reviewer's confidence that the hazard exists
   is high; this item is about what to do with it, not whether it is there.
+
+- [x] **M-T10.6** -- **Stop the recogniser's live canary reading a stub a sibling test has
+      patched.** Found while trying to reproduce `M-T10.3`'s reported hang, which is the only
+      reason it was found at all.
+
+  **The defect.** `the_stub_recogniser_accepts_the_shape_and_rejects_everything_else` ended by
+  resolving the `selftest` hook target and asserting the bytes there are a syscall stub -- the
+  canary that says the recognised shape still describes this machine's Windows.
+  `a_hooked_stub_records_both_ends_and_still_performs_its_syscall` patches that same stub and, by
+  design, never removes it. Whichever ran first decided the answer, so the canary was asserting
+  the planted jump rather than the shape Windows shipped.
+
+  **Measured.** 25 of 25 runs of the `trace::` module failed at `--test-threads 2` before the
+  fix and 0 of 25 after. It is an order dependency and not a thread-count race: running just the
+  two tests single-threaded, with the hooking one first, failed too. The full suite passes only
+  because the default thread count happens to order them the other way -- luck that changes with
+  the test count, the machine, or a rename.
+
+  **Fixed** by giving the canary `unhookable_stub_entry()`, an `ntdll` export deliberately absent
+  from `HOOKS` and asserted to be absent, so this module cannot patch it however many hooks a run
+  installs.
 
 - [ ] **M-T10.5** -- **Make the hook tests' trace-record assertions reachable, so a sabotage can
       reach them.**

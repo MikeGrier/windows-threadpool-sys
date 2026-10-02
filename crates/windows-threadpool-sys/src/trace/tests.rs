@@ -517,7 +517,7 @@ fn exercise_a_periodic_timer() {
 #[cfg(feature = "trace")]
 #[test]
 fn the_stub_recogniser_accepts_the_shape_and_rejects_everything_else() {
-    use super::hook::{is_syscall_stub, stub_entry};
+    use super::hook::{is_syscall_stub, unhookable_stub_entry};
 
     // mov r10,rcx / mov eax,0x1E6 / test byte ptr [7FFE0308h],1
     let genuine: [u8; 16] = [
@@ -553,7 +553,12 @@ fn the_stub_recogniser_accepts_the_shape_and_rejects_everything_else() {
         );
     }
 
-    let live = stub_entry("selftest").expect("ntdll exports the self-test stub");
+    // Deliberately an export this module cannot patch, rather than one of its
+    // own hook targets. The hooking test in this file installs over a target
+    // and never removes it, so reading one here asserted the planted jump
+    // instead of the shape Windows shipped, and failed 25 of 25 runs whenever
+    // that test happened to run first. See `unhookable_stub_entry`.
+    let live = unhookable_stub_entry().expect("ntdll exports the canary stub");
     // SAFETY: an exported entry point has at least sixteen readable bytes.
     assert!(
         unsafe { is_syscall_stub(live) },
