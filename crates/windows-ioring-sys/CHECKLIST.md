@@ -95,8 +95,8 @@ every consumer names the type -- which means the migration order matters more th
 
 - [x] **M28.2** -- `RingContract` is bounded by operations in flight: terminal entries are retired, and a capped history keeps a duplicate distinguishable from an unrecognised completion. Recorded as [D-72](DESIGN-NOTES.md#d-72). -> [completed 2026-09-25](COMPLETED-CHECKLIST.md#m282)
 
-- [ ] **M28.3+M28.4** -- **Make `IoRing` generic, move the inventory inside, and migrate every
-  consumer, as one commit.** Gated on [D-71](DESIGN-NOTES.md#d-71), which settled what a caller
+- [x] **M28.3+M28.4** -- **Make `IoRing` generic, move the inventory inside, and migrate every
+  consumer, as one commit.** Complete 2026-10-01, when `M28.4.1d` closed. Gated on [D-71](DESIGN-NOTES.md#d-71), which settled what a caller
   receives.
 
   **Merged deliberately, and the coupling is acknowledged rather than disguised.** The milestone
@@ -169,24 +169,10 @@ every consumer names the type -- which means the migration order matters more th
         about itself. `RingContract` keeps the four claims that are about the kernel rather than
         about a caller's bookkeeping.
 
-  - [ ] **M28.4.1d** -- Migrate every consumer onto the inventory, then retire the token API.
-
-        **Measured before planning, and it is larger than "36 files" suggested**: 172 push call
-        sites and **116 `claim_if` sites** across 35 files. `claim_if` is not a substitution --
-        it is how each test *drives* its ring, so converting restructures control flow rather
-        than replacing a call.
-
-        **What a conversion actually does, which is why it is worth it.** The caller's
-        `HashMap<usize, (sidecar, Token<..>)>` *disappears* at each site: the push carries the
-        sidecar as `X`, and the pop returns `(payload, sidecar)` together. That is `D-55` paying
-        off rather than a cost being paid.
-
-        **Batched, and the reason that is legitimate.** Both APIs coexist today, so a
-        partly-converted tree still compiles and every batch is a green commit. `M28.4.2`'s
-        "convert all of them or none" governs the **shipped** state -- never two token models in
-        a release -- not the path to it. The final batch is what makes that true, and nothing is
-        released in between.
-
+  - [x] **M28.4.1d** -- Done by its sub-items; closing it was a documentation sweep, not a
+        migration. Four present-tense references to the retired token API survived `M28.6`,
+        including a rule the `RingContract` module still advertised that `D-74` had removed. ->
+        [completed 2026-10-01](COMPLETED-CHECKLIST.md#m2841d)
   - [x] **M28.4.1d.1** -- [bounded_pop.rs](tests/bounded_pop.rs) converted as the worked
         pattern. The `Token<Vec<u8>>` threaded through `push_pending_read`, `settle` and six call
         sites is gone; `PipeRing = IoRing<Vec<u8>>` holds the buffer instead. The conversion

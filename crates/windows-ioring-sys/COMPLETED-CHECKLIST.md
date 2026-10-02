@@ -5737,3 +5737,61 @@ changing the reproducer while it was an active instrument would invalidate every
 record. `M26.13` is still open, so this was the second case. The re-baselining cost is now small:
 `M26.15` re-established the rates earlier the same day, and the arm that still carries a rate is the
 *control*, which is a patched build anyone re-running it would rebuild regardless.
+
+## <a id="moved-2026-10-01-m2841d"></a>Moved 2026-10-01 22:25 -04:00 -- M28.4.1d, closing the inventory migration
+
+### <a id="m2841d"></a>M28.4.1d -- Done by its sub-items; closing it was a documentation sweep, not a migration. *(completed 2026-10-01 22:25 -04:00)*
+
+The item as it stood:
+>   - [ ] **M28.4.1d** -- Migrate every consumer onto the inventory, then retire the token API.
+>
+>         **Measured before planning, and it is larger than "36 files" suggested**: 172 push call
+>         sites and **116 `claim_if` sites** across 35 files. `claim_if` is not a substitution --
+>         it is how each test *drives* its ring, so converting restructures control flow rather
+>         than replacing a call.
+>
+>         **What a conversion actually does, which is why it is worth it.** The caller's
+>         `HashMap<usize, (sidecar, Token<..>)>` *disappears* at each site: the push carries the
+>         sidecar as `X`, and the pop returns `(payload, sidecar)` together. That is `D-55` paying
+>         off rather than a cost being paid.
+>
+>         **Batched, and the reason that is legitimate.** Both APIs coexist today, so a
+>         partly-converted tree still compiles and every batch is a green commit. `M28.4.2`'s
+>         "convert all of them or none" governs the **shipped** state -- never two token models in
+>         a release -- not the path to it. The final batch is what makes that true, and nothing is
+>         released in between.
+>
+
+#### What was actually left, which was not migration
+
+Every sub-item (`d.1`, `d.1b`, `d.2`, `d.2b`, `d.3`) was already complete, and the code bears that
+out: `src/token.rs` defines `OperationId` and nothing else, `try_pop_held` is gone, and the 47
+surviving `claim_if` sites are `PendingBufferRegistration` / `PendingFileRegistration` -- the
+registration mechanism, which `d.2` already recorded as a different thing from the push set.
+
+So the parent was an unchecked box over finished work. What closing it found instead was a sweep
+`M28.6` did not complete: **documentation that still describes the retired token API in the present
+tense**, which a reader would take as current.
+
+- **`contract.rs`'s "What it checks" table still advertised the leak rule `D-74` retired** --
+  "every token is claimed, or deliberately leaked", sourced to `D-13`. The `Violation` enum has
+  exactly the four kernel-level variants `M28.4.1c` said it would keep, so the table was promising a
+  fifth check the oracle does not make. The paragraph beneath it told a reader to report `_raw`
+  pushes "or the oracle will demand a claim that cannot be made", which it no longer can. That
+  paragraph also sat *between* two table rows, so the table did not render as a table at all.
+- **`ring.rs` carried a worked example of `token.claim_if(...)`** in an ```` ```ignore ```` block --
+  precisely the rot that `ignore` permits, since nothing compiles it. This repository's own rule
+  prefers `no_run` for that reason.
+- **`ring.rs` attributed a safety argument to `Token::claim_if`**, a type that no longer exists.
+- **`batch.rs` told callers four times to "claim its token"** to get a buffer back, which is now
+  done by popping the completion.
+- **`token.rs`'s own module doc still announced `Token<T>`** as what the file defines.
+
+**What was deliberately left alone.** Most `Token` mentions in this crate are *history* and read
+correctly as such -- "the identity that survived `Token`'s retirement", "it used to say", the `D-74`
+citations. Rewriting those would erase the record of a decision rather than correct a stale claim.
+The test is whether a reader would act on the sentence, not whether the word appears.
+
+**Verified by execution, not by reading**: full suite under `--all-features`, and `cargo doc` with
+`-D rustdoc::broken_intra_doc_links`, which also cleared a pre-existing private-link warning in the
+file being edited.

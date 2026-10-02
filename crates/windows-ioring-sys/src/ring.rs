@@ -420,8 +420,9 @@ impl Completion {
     ///     InjectedFailure::Win32(ERROR_ACCESS_DENIED),
     /// );
     /// assert!(completion.result().is_err());
-    /// // The token still claims it: the operation did complete.
-    /// let buffer = token.claim_if(&completion).expect("claims its own");
+    /// // The ring still returns the payload: the operation did complete, and
+    /// // a failed completion is still the proof that frees the buffer.
+    /// let (completion, payload) = ring.try_pop().expect("a completion");
     /// ```
     #[cfg(any(test, feature = "fault-injection"))]
     #[must_use]
@@ -489,9 +490,10 @@ impl Completion {
     /// exercise the pop without real I/O.
     ///
     /// Not available outside `#[cfg(test)]`: production code has no
-    /// legitimate reason to fabricate a completion, since `Token::claim_if`'s
-    /// whole safety argument depends on every `Completion` in existence
-    /// tracing back to a real `IORING_CQE` `IoRing::try_pop` observed.
+    /// legitimate reason to fabricate a completion, since the whole safety
+    /// argument for returning a payload depends on every `Completion` in
+    /// existence tracing back to a real `IORING_CQE` `IoRing::try_pop`
+    /// observed.
     #[cfg(test)]
     pub(crate) fn synthetic(
         user_data: usize,
@@ -1316,8 +1318,8 @@ impl<T, X> IoRing<T, X> {
 
     /// This ring's ledger, for the crate's own minting paths (M24.2).
     ///
-    /// Handed out rather than proxied so that a `Token` can be minted from
-    /// the bookkeeping alone -- which is what lets `token.rs`'s tests run
+    /// Handed out rather than proxied so that an [`OperationId`] can be minted
+    /// from the bookkeeping alone -- which is what lets `token.rs`'s tests run
     /// without a kernel ring, since minting is all they ever needed one for.
     pub(crate) fn accounting_mut(&mut self) -> &mut Accounting {
         &mut self.accounting

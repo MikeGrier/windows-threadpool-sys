@@ -36,14 +36,15 @@
 //! | Every queued SQE produces exactly one completion | [`DESIGN-NOTES.md`'s category-2 audit](../DESIGN-NOTES.md#one-sqe-one-completion) |
 //! | A push that failed synchronously produces none | the same section: it is un-counted, not merely uncompleted |
 //! | No completion arrives for an operation never pushed | corollary of the above |
-//! | Every token is claimed, or deliberately leaked | `Token`'s leak-on-drop contract ([D-13](../DESIGN-NOTES.md#d-13)) |
-//!
-//! Not every push carries a token: the `_raw` flush and cancel entry points
-//! return a bare `user_data`, because they own nothing a claim could hand
-//! back. Report those with
-//! [`RingContract::observe_push`](crate::contract::RingContract::observe_push),
-//! or the oracle will demand a claim that cannot be made.
 //! | Nothing is outstanding at quiescence | what `IoRing::run_down`'s termination depends on |
+//!
+//! Every rule here is about the **kernel**, not about a caller's bookkeeping.
+//! A fifth row used to sit above -- "every token is claimed, or deliberately
+//! leaked" -- and it retired with the token API: a push now hands back only an
+//! `OperationId`, which owns nothing, so there is nothing a caller could fail
+//! to claim. [D-74](../DESIGN-NOTES.md#d-74) records why that is a retirement
+//! rather than a narrowing, and the conservation it approximated is now
+//! `held() == outstanding()`, which the ring checks about itself.
 //!
 //! # What it deliberately does **not** check
 //!
@@ -206,7 +207,7 @@ const FINISHED_HISTORY: usize = 1024;
 ///
 /// Retiring an entry would lose the ability to call a later completion for it
 /// a *duplicate* rather than merely unrecognised, so the last
-/// [`FINISHED_HISTORY`] finished identities are remembered for that purpose
+/// `FINISHED_HISTORY` finished identities are remembered for that purpose
 /// alone. Beyond that window a duplicate is still reported, under the weaker
 /// name.
 ///

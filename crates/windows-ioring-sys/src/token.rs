@@ -1,5 +1,9 @@
 // Copyright (c) 2026 Mike Grier
-//! `Token<T>`: an owned value bound to one in-flight operation (M2.2, M2.3).
+//! [`OperationId`]: the name of one in-flight operation.
+//!
+//! The module is still called `token` because `Token<T>` lived here until
+//! `M28.4.1d` retired it; the file name is private (`mod token;`) and renaming
+//! it would churn history for no reader's benefit.
 
 use crate::ring::RingId;
 

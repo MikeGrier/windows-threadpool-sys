@@ -422,8 +422,8 @@ impl From<RegisteredFile> for FileRef {
 /// completes is a *reference*, not sole ownership. Every safe push method
 /// (e.g. [`Batch::read_owned`], as opposed to its `_raw` sibling) clones this
 /// `Arc` into the same inventory entry that already tracks the operation's own
-/// payload, so the underlying handle survives until that token is claimed
-/// or leaked (D-4 in `DESIGN-NOTES.md`), regardless of what the caller does
+/// payload, so the underlying handle survives until the ring returns that
+/// entry at its pop (D-4 in `DESIGN-NOTES.md`), regardless of what the caller does
 /// with its own clone.
 #[derive(Clone, Debug)]
 pub struct SharedFile(Arc<OwnedHandle>);
@@ -653,8 +653,8 @@ enum KernelAccess {
 /// is outstanding (M5.2, M5.3).
 ///
 /// Decrements [`RegisteredBuffers`]'s count **for the one buffer the
-/// operation addressed** only when actually claimed: dropping an unclaimed
-/// token forgets this like any other value a `Token` holds, which correctly
+/// operation addressed** only when the ring returns the entry: an entry the
+/// ring forgets rather than returns takes this with it, which correctly
 /// leaves the registration believing that use is still outstanding, since
 /// nothing proved otherwise.
 ///
@@ -846,8 +846,8 @@ impl<B: IoBufMut> RegisteredBuffers<B> {
     ///
     /// [`io::ErrorKind::InvalidInput`] if `i` is out of range for this
     /// registration, or [`io::ErrorKind::WouldBlock`] if a read is still
-    /// outstanding into that buffer -- pop its completion and claim its token
-    /// first.
+    /// outstanding into that buffer -- pop its completion first, which is what
+    /// returns the buffer.
     pub fn get(&mut self, i: u32) -> io::Result<&[u8]> {
         let index = usize::try_from(i).map_err(|_| {
             io::Error::new(
@@ -940,8 +940,8 @@ impl<B: IoBufMut> RegisteredBuffers<B> {
     ///
     /// [`io::ErrorKind::InvalidInput`] if `i` is out of range for this
     /// registration, or [`io::ErrorKind::WouldBlock`] if an operation is
-    /// still outstanding against that buffer -- pop its completion and claim
-    /// its token first.
+    /// still outstanding against that buffer -- pop its completion first,
+    /// which is what returns the buffer.
     pub fn get_mut(&mut self, i: u32) -> io::Result<&mut [u8]> {
         let index = usize::try_from(i).map_err(|_| {
             io::Error::new(
