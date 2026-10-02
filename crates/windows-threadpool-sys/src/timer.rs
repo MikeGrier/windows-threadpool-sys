@@ -346,12 +346,16 @@ impl TimerFiring<'_> {
             PendingRearm::After(delay) => relative_filetime(delay),
             PendingRearm::At(when) => absolute_filetime(when),
         };
-        // SAFETY: `timer` is this object's live PTP_TIMER, published before any
-        // callback could run.
-        unsafe { arm_raw(timer, due, 0, 0) };
-        // Set after the arming, under the same lock: a request the suppression
-        // rejected returns above and must not claim the timer is live.
-        self.ctx.obligation.record_live();
+        // Recorded before the arming is published, not after: by here the
+        // suppression check has already returned, so the arming is certain to
+        // happen, and the firing it produces can settle the obligation on
+        // another thread before this one gets any further. See
+        // `CloseObligation::record_live_before`.
+        self.ctx.obligation.record_live_before(|| {
+            // SAFETY: `timer` is this object's live PTP_TIMER, published before any
+            // callback could run.
+            unsafe { arm_raw(timer, due, 0, 0) };
+        });
         drop(suppressed);
         crate::trace_record!("timer", "rearm-left", timer);
         Some(true)
@@ -546,9 +550,10 @@ impl ThreadpoolTimer {
     /// The delay counts only time the system is awake. A zero delay makes the
     /// timer due immediately.
     pub fn set_after(&self, delay: Duration) {
-        self.record_live();
-        // SAFETY: timer is valid for the lifetime of self.
-        unsafe { arm_raw(self.timer, relative_filetime(delay), 0, 0) };
+        self.record_live_before(|| {
+            // SAFETY: timer is valid for the lifetime of self.
+            unsafe { arm_raw(self.timer, relative_filetime(delay), 0, 0) };
+        });
     }
 
     /// Fire once at the wall-clock instant `when`.
@@ -558,9 +563,10 @@ impl ThreadpoolTimer {
     /// fires promptly on resume. An instant already in the past fires
     /// immediately.
     pub fn set_at(&self, when: SystemTime) {
-        self.record_live();
-        // SAFETY: timer is valid for the lifetime of self.
-        unsafe { arm_raw(self.timer, absolute_filetime(when), 0, 0) };
+        self.record_live_before(|| {
+            // SAFETY: timer is valid for the lifetime of self.
+            unsafe { arm_raw(self.timer, absolute_filetime(when), 0, 0) };
+        });
     }
 
     /// Fire once after `delay`, allowing the system a coalescing `window`.
@@ -569,19 +575,22 @@ impl ThreadpoolTimer {
     /// group this timer with other expirations and wake the processor less
     /// often. A larger window trades timing precision for power.
     pub fn set_after_with_window(&self, delay: Duration, window: Duration) {
-        self.record_live();
-        // SAFETY: timer is valid for the lifetime of self.
-        unsafe { arm_raw(self.timer, relative_filetime(delay), 0, millis_u32(window)) };
+        self.record_live_before(|| {
+            // SAFETY: timer is valid for the lifetime of self.
+            unsafe { arm_raw(self.timer, relative_filetime(delay), 0, millis_u32(window)) };
+        });
     }
 
     /// Note that an arming has made this timer live, so `Drop` owes a drain.
     ///
     /// One site for the three `set_*` methods, which differ only in how they
     /// compute a due time.
-    fn record_live(&self) {
+    fn record_live_before(&self, publish: impl FnOnce()) {
         // SAFETY: the context outlives every callback and is freed only by Drop,
         // which cannot run while this borrow of self is alive.
-        unsafe { &*self.context }.obligation.record_live();
+        unsafe { &*self.context }
+            .obligation
+            .record_live_before(publish);
     }
 
     /// Stop the timer.

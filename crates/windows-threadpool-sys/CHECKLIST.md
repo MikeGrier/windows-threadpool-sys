@@ -358,6 +358,71 @@ second, and `M-T9.1` is the guard both of them want.
 Opened 2026-10-01 by a code review of this branch, which found a use-after-free in `RepairWork::drop`
 that the whole test suite and a full sabotage sweep had both missed.
 
+## M-T10 -- The second review round: ordering, serialization, and a test that never ran
+
+Opened 2026-10-02 by a review of everything on this branch. Four findings, all in
+`windows-threadpool-sys`. `M-T10.1` is fixed; the rest are open. The round's lesson is recorded
+with `M-T10.1`: the reviewer named two sites for a rule that lived at eight, and the sweep the
+house rules require is what found the third.
+
+- [x] **M-T10.1** -- **Record the drain obligation before the arming is published, at one site
+      rather than eight.** The re-arm paths in `wait` and `timer`, and `work`'s submit, set the
+      obligation flag *after* the native call that publishes the arming. A dispatch entering in
+      that window settles the obligation and is then overwritten, so a correctly-drained object
+      claims it owes a drain -- under `fail-fast` a panic, and an abort if `Drop` was already
+      unwinding. Fixed by moving the pair into `CloseObligation::record_live_before` and making
+      the bare store private, so the inverted order is a compile error. Recorded as
+      [The drain obligation is recorded before the arming is
+      published](../../DESIGN-NOTES.md#obligation-recorded-before-arming).
+
+- [ ] **M-T10.2** -- **Make `tests/obligation_report.rs` run in CI, then make it pass there.**
+
+  **The defect, and which half matters.** The test deliberately drops objects that owe a drain, so
+  under `--all-features` -- which arms `fail-fast` -- it exits 101. That is the reported symptom.
+  The *defect* is why nobody noticed: the test early-returns when no trace filter is set, so on
+  every CI run it does nothing and reports success. It is inert, and an inert test that reads as
+  green is worse than an absent one.
+
+  **Target.** Fix the inertness first and confirm the test then fails, which is what shows the
+  early return was hiding it. Then make it pass under `fail-fast` -- either by catching the
+  expected panic, or by gating the owing cases off the feature -- without reintroducing a path
+  where the whole body is skipped silently.
+
+  **Sabotage it**: break the behaviour the test asserts and confirm it goes red *in the
+  configuration CI actually runs*. A guard that only fires under a locally-set environment
+  variable has not been shown to guard anything.
+
+- [ ] **M-T10.3** -- **Serialize every entry point that suspends other threads.**
+
+  **The defect.** `trace/hook.rs`'s `with_others_suspended` is not serialized against itself, so
+  two installers on different threads can each suspend the other and neither resumes.
+  `install_requested` holds a guard that prevents this; `install_by_label` does not, and reaches
+  the same code.
+
+  **Measured, not argued.** Two tests
+  (`a_hooked_stub_records_both_ends_and_still_performs_its_syscall` and
+  `hooking_the_wait_registration_observes_the_already_signalled_flag`) hang at `--test-threads 2`
+  and pass 20 of 20 at `--test-threads 1`.
+
+  **Target.** One lock covering every path into `with_others_suspended`, not a second guard beside
+  the existing one -- the finding is that the rule lived at one entry point and not the other, so
+  the fix is to give it a single site. Then confirm the two tests pass at `--test-threads 2`.
+
+- [ ] **M-T10.4** -- **DECISION TO RAISE: whether hot-patching a running process is a hazard this
+      crate accepts.**
+
+  **The finding.** `trace/hook.rs` overwrites a 14-byte region of a running stub after suspending
+  the other threads. Suspension does not place a thread's instruction pointer *outside* that
+  region: a thread stopped at an instruction boundary inside the overwritten range resumes into
+  what is now jump-displacement data.
+
+  **Why this is a decision and not a bug to fix.** The cost of closing it (relocating trapped IPs
+  into a trampoline, or constraining installation to a point at which no other thread can be
+  inside a stub) is real, and whether it is worth paying depends on something the engineer owns:
+  whether these hooks are diagnostic-only instruments that a developer installs deliberately, or
+  a facility a consumer may install under load. The reviewer's confidence that the hazard exists
+  is high; this item is about what to do with it, not whether it is there.
+
 ## M-inf -- Diagnostic work with no gating deliverable
 
 - [ ] **M-T-inf.1** (was `M26.14.4`) -- **Find the threshold the close races.** `M26.14.2` used 1ms because it is

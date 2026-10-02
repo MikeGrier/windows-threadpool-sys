@@ -336,16 +336,17 @@ impl ThreadpoolPeriodicTimer {
     /// Subsequent ticks follow every [`ThreadpoolPeriodicTimer::period`]. A zero
     /// `first_delay` makes the first tick due immediately.
     pub fn start_after(&self, first_delay: Duration) {
-        self.record_live();
-        // SAFETY: timer is valid for the lifetime of self.
-        unsafe {
-            arm_raw(
-                self.timer,
-                relative_filetime(first_delay),
-                millis_u32(self.period),
-                0,
-            );
-        }
+        self.record_live_before(|| {
+            // SAFETY: timer is valid for the lifetime of self.
+            unsafe {
+                arm_raw(
+                    self.timer,
+                    relative_filetime(first_delay),
+                    millis_u32(self.period),
+                    0,
+                );
+            }
+        });
     }
 
     /// Start ticking, with the first tick at the wall-clock instant `when`.
@@ -353,16 +354,17 @@ impl ThreadpoolPeriodicTimer {
     /// Unlike a relative first delay, an absolute one passes through sleep and
     /// hibernation.
     pub fn start_at(&self, when: SystemTime) {
-        self.record_live();
-        // SAFETY: timer is valid for the lifetime of self.
-        unsafe {
-            arm_raw(
-                self.timer,
-                absolute_filetime(when),
-                millis_u32(self.period),
-                0,
-            );
-        }
+        self.record_live_before(|| {
+            // SAFETY: timer is valid for the lifetime of self.
+            unsafe {
+                arm_raw(
+                    self.timer,
+                    absolute_filetime(when),
+                    millis_u32(self.period),
+                    0,
+                );
+            }
+        });
     }
 
     /// Start ticking, allowing the system a coalescing `window` on each tick.
@@ -371,16 +373,17 @@ impl ThreadpoolPeriodicTimer {
     /// with other expirations and wake the processor less often, trading timing
     /// precision for power.
     pub fn start_with_window(&self, first_delay: Duration, window: Duration) {
-        self.record_live();
-        // SAFETY: timer is valid for the lifetime of self.
-        unsafe {
-            arm_raw(
-                self.timer,
-                relative_filetime(first_delay),
-                millis_u32(self.period),
-                millis_u32(window),
-            );
-        }
+        self.record_live_before(|| {
+            // SAFETY: timer is valid for the lifetime of self.
+            unsafe {
+                arm_raw(
+                    self.timer,
+                    relative_filetime(first_delay),
+                    millis_u32(self.period),
+                    millis_u32(window),
+                );
+            }
+        });
     }
 
     /// Stop the timer.
@@ -456,10 +459,12 @@ impl ThreadpoolPeriodicTimer {
     /// One site for the `start*` methods, which differ only in how they compute
     /// the first due time. `start` is not among them: it delegates to
     /// `start_after`.
-    fn record_live(&self) {
+    fn record_live_before(&self, publish: impl FnOnce()) {
         // SAFETY: the context outlives every tick and is freed only by Drop,
         // which cannot run while this borrow of self is alive.
-        unsafe { &*self.context }.obligation.record_live();
+        unsafe { &*self.context }
+            .obligation
+            .record_live_before(publish);
     }
 
     /// Give up ownership, returning the raw object, its callback context, and

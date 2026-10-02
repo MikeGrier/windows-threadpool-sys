@@ -34,11 +34,46 @@ impl CloseObligation {
         Self(AtomicBool::new(false))
     }
 
-    /// The object was made live: armed, started, or submitted.
+    /// Record the obligation, then publish the arming that creates it.
     ///
-    /// From here until something settles it, a `Drop` would be doing work the
+    /// The object is made live -- armed, started, or submitted -- by `publish`.
+    /// From there until something settles it, a `Drop` would be doing work the
     /// caller could have done at a moment of their choosing.
-    pub(crate) fn record_live(&self) {
+    ///
+    /// # The order is the whole point of this method
+    ///
+    /// `publish` makes the object reachable by the pool, so a dispatch can
+    /// enter its trampoline and call [`record_settled`](Self::record_settled)
+    /// at any instant after it returns -- on another thread, while this one is
+    /// still between instructions. Recording afterwards therefore overwrites a
+    /// settle that already happened, and leaves a completed object claiming it
+    /// owes a drain. Under the `fail-fast` feature that is a panic on a
+    /// correctly-drained object, and a panic during an unwinding `Drop` aborts.
+    ///
+    /// Recording first cannot fail the same way: the flag is set before
+    /// anything can settle it, so a dispatch that consumes the arming clears it
+    /// afterwards and the final value is the true one. The residual error is in
+    /// the harmless direction -- an arming that is published late can be
+    /// settled by an unrelated drain in between, which under-reports rather
+    /// than panicking on an object that owes nothing.
+    ///
+    /// This is a method taking a closure, rather than a `record_live` the
+    /// callers sequence themselves, because the sequencing was wrong at three
+    /// of the eight sites that perform it (`wait`'s re-arm, `timer`'s deferred
+    /// re-arm, and `work`'s submit) while being right at the other five. One
+    /// site cannot disagree with itself.
+    pub(crate) fn record_live_before(&self, publish: impl FnOnce()) {
+        self.record_live();
+        publish();
+    }
+
+    /// Set the flag.
+    ///
+    /// Deliberately private: [`record_live_before`](Self::record_live_before)
+    /// is the only way to reach it from outside this module, so no caller can
+    /// publish an arming and then record it. Reachable from the test module
+    /// below, which asserts the ordering this privacy enforces.
+    fn record_live(&self) {
         self.0.store(true, Ordering::Relaxed);
     }
 

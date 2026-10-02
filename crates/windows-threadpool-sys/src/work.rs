@@ -142,17 +142,18 @@ impl ThreadpoolWork {
     /// May be called repeatedly; each call queues an independent invocation.
     /// Multiple queued invocations may execute concurrently.
     pub fn submit(&self) {
-        crate::trace_call!("SubmitThreadpoolWork", self.handle, 0, {
-            // SAFETY: handle is valid for the lifetime of self.
-            unsafe { SubmitThreadpoolWork(self.handle) };
-        });
-        // The submit is the start of the interval a stalled dispatch is
-        // measured over; without it, a `trampoline-entered` has nothing to be
-        // late relative to.
-        crate::trace_record!("work", "submitted", self.handle);
         // SAFETY: the context outlives every callback and is freed only by Drop,
         // which cannot run while this borrow of self is alive.
-        unsafe { &*self.ctx }.obligation.record_live();
+        unsafe { &*self.ctx }.obligation.record_live_before(|| {
+            crate::trace_call!("SubmitThreadpoolWork", self.handle, 0, {
+                // SAFETY: handle is valid for the lifetime of self.
+                unsafe { SubmitThreadpoolWork(self.handle) };
+            });
+            // The submit is the start of the interval a stalled dispatch is
+            // measured over; without it, a `trampoline-entered` has nothing to be
+            // late relative to.
+            crate::trace_record!("work", "submitted", self.handle);
+        });
     }
 
     /// Blocks until all queued and in-progress invocations have completed.

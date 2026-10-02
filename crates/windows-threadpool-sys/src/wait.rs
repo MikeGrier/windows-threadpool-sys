@@ -516,14 +516,17 @@ impl WaitActivation<'_> {
             wait, 0,
             "the wait object must be published before callbacks"
         );
-        // SAFETY: `wait` is this object's live PTP_WAIT, published before any
-        // callback could run, and `handle` is owned by that object so it is
-        // still open. The timeout, if any, is a live stack value for the call.
-        unsafe { arm_raw(wait, self.ctx.handle, timeout) };
-        // Set after the arming, under the same lock: a re-arm that the
-        // suppression rejected returns above and must not claim the object is
-        // live, because it is not.
-        self.ctx.obligation.record_live();
+        // Recorded before the arming is published, not after: by here the
+        // suppression check has already returned, so the arming is certain to
+        // happen, and a dispatch it produces can settle the obligation on
+        // another thread before this one gets any further. See
+        // `CloseObligation::record_live_before`.
+        self.ctx.obligation.record_live_before(|| {
+            // SAFETY: `wait` is this object's live PTP_WAIT, published before any
+            // callback could run, and `handle` is owned by that object so it is
+            // still open. The timeout, if any, is a live stack value for the call.
+            unsafe { arm_raw(wait, self.ctx.handle, timeout) };
+        });
         drop(suppressed);
         crate::trace_record!("wait", "rearm-left", wait, self.ctx.handle as usize);
         true
@@ -798,10 +801,11 @@ impl ThreadpoolWait {
     pub fn arm(&self, timeout: Option<Duration>) {
         // SAFETY: the context outlives every callback and is freed only by Drop,
         // which cannot run while this borrow of self is alive.
-        unsafe { &*self.context }.obligation.record_live();
-        // SAFETY: `wait` is valid for the lifetime of self, and the handle is
-        // owned by self so it is still open.
-        unsafe { arm_raw(self.wait, self.target.raw(), timeout) };
+        unsafe { &*self.context }.obligation.record_live_before(|| {
+            // SAFETY: `wait` is valid for the lifetime of self, and the handle is
+            // owned by self so it is still open.
+            unsafe { arm_raw(self.wait, self.target.raw(), timeout) };
+        });
     }
 
     /// Stop watching.

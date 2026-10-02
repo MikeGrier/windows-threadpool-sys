@@ -66,6 +66,43 @@ fn repeated_arming_owes_once() {
 }
 
 #[test]
+fn the_obligation_is_recorded_before_the_arming_is_published() {
+    // The ordering every armed object depends on, asserted at the one site that
+    // now owns it. `publish` stands for the native call -- `SetThreadpoolWait`,
+    // `SetThreadpoolTimer`, `SubmitThreadpoolWork` -- after which a dispatch on
+    // a pool thread may settle the obligation at any instant. If the flag were
+    // not already set when `publish` runs, that settle would be overwritten by
+    // a later store and a drained object would claim it owes a drain.
+    let obligation = CloseObligation::new();
+    let mut owed_when_published = None;
+    obligation.record_live_before(|| owed_when_published = Some(obligation.is_owed()));
+    assert_eq!(
+        owed_when_published,
+        Some(true),
+        "the arming was published while the obligation still read as not owed"
+    );
+    assert!(obligation.is_owed());
+}
+
+#[test]
+fn a_settle_from_inside_the_publish_survives() {
+    // The race itself, made deterministic: `publish` here does what a dispatch
+    // racing the arming does -- it settles the obligation before the arming
+    // call returns. Nothing may re-assert the obligation afterwards, because
+    // the settle is the later event and is the true one.
+    //
+    // This is the assertion that fails if the store is ever moved back after
+    // `publish`, which is how `wait`'s re-arm, `timer`'s deferred re-arm and
+    // `work`'s submit were all written before this method existed.
+    let obligation = CloseObligation::new();
+    obligation.record_live_before(|| obligation.record_settled());
+    assert!(
+        !obligation.is_owed(),
+        "a settle that happened during the arming was overwritten by the record"
+    );
+}
+
+#[test]
 fn the_event_tag_is_stable() {
     // A consumer filters the trace on this string. Changing it is a change to
     // what a reader of a capture has to grep for, so it is pinned here rather

@@ -1342,6 +1342,68 @@ a job for precisely because no existing job selected it.
 That is the supported behaviour with the feature off, and it remains the default.
 What the sweep established is that *this* workspace no longer relies on it.
 
+## <a id="obligation-recorded-before-arming"></a>The drain obligation is recorded before the arming is published, and only one method can do it
+
+**Decided 2026-10-02**, from a review finding against the branch that introduced
+[the teardown fail-fast](#fail-fast-is-a-default-off-feature). The reviewer named
+two sites; a sweep found a third.
+
+### The rule
+
+A thread-pool object is made live by a native call -- `SetThreadpoolWait`,
+`SetThreadpoolTimer`, `SubmitThreadpoolWork` -- and that call is what *publishes*
+the arming to the pool. The obligation flag is set **before** the publishing
+call, never after. `CloseObligation::record_live_before` is the only way to do
+it: it takes the publishing call as a closure, and the underlying store is
+private to the `obligation` module.
+
+### Why the order is load-bearing rather than a style preference
+
+Once the arming is published, a dispatch can enter its trampoline on another
+thread at any instant, and the trampoline's first act is to settle the
+obligation. It does **not** take the re-arm suppression mutex to do so, so
+holding that mutex across the arming does not close the window.
+
+A record that happens after the publishing call therefore overwrites a settle
+that already happened, leaving an object that ran to completion claiming it owes
+a drain. With `fail-fast` armed that is a panic on a correctly-drained object --
+and a panic raised while `Drop` is already unwinding aborts the process. The
+failure is worse than the condition it was built to report.
+
+Recording first cannot fail that way: the flag is set before anything can settle
+it, so a dispatch that consumes the arming clears it afterwards and the last
+write is the true one. The residual error runs the other way -- an arming
+published late can be settled by an unrelated drain in the gap, which
+under-reports. Under-reporting costs a diagnostic; over-reporting costs an abort.
+
+### Why it is one method rather than a rule the call sites follow
+
+Eight sites perform this pair. Five had it right and three had it wrong --
+`wait`'s re-arm, `timer`'s deferred re-arm, and `work`'s submit -- which is the
+characteristic shape of a rule restated at many sites: it is not that anyone
+disagreed, it is that nothing made them agree. Two of the three carried comments
+arguing *for* the inverted order, on the grounds that a suppressed re-arm must
+not claim the object is live. That case returns earlier and never reaches the
+record, so the comments defended a hazard that was not there against one that
+was.
+
+Moving the pair into one method and making the bare store private pushes the
+rule down to the build: inverting it is now a compile error (`E0624`), not a
+review catch. See [Push every rule down the detection
+ladder](#detection-ladder).
+
+### What is checked, and how it was verified
+
+`obligation::tests` asserts both directions at the single site that now owns the
+ordering: that the flag already reads as owed while the publishing closure runs,
+and that a settle performed *from inside* that closure survives -- which is the
+race itself, made deterministic by substituting the closure for the dispatch.
+
+Both were verified by sabotage rather than by reading. Inverting the two
+statements inside `record_live_before` fails exactly those two tests and leaves
+the other eighteen passing; restoring the direct call at one of the former sites
+fails to compile with `E0624`.
+
 ## <a id="stop-and-drain-is-the-name"></a>`stop_and_drain` is the name of the synchronous close, and every type that drains has one
 
 **Decided 2026-10-01** by the engineer, implementing `M-T6.7`. The inventory that
