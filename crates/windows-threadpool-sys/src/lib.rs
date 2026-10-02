@@ -107,6 +107,76 @@
 //!   -- what is given up is the process, not the diagnostic. A callback that can
 //!   fail must handle its own errors rather than panicking.
 //!
+//! # Teardown drains, and why that is not a style preference
+//!
+//! Every teardown in this crate **drains**: it lets a callback that is already
+//! queued run, rather than asking the kernel to discard it. `Drop` blocks until
+//! that is finished, and [`wait::ThreadpoolWait::stop_and_drain`] is the same
+//! work at a point the caller chooses.
+//!
+//! That is partly a correctness argument -- a queued callback is work the caller
+//! asked for, and discarding it is not "finalised". It is also the only
+//! available defence against a measured fault in the Windows thread pool, which
+//! is worth stating plainly because the fault is silent, process-wide, and easy
+//! to attribute to anything else.
+//!
+//! ## The fault
+//!
+//! Tearing down a wait asks the kernel to cancel its completion packet
+//! (`IopCancelWaitCompletionPacket`). When the packet has **already been
+//! delivered** to the pool's completion port, that cancel removes it. If the
+//! removal lands a few microseconds after the packet was queued, on a pool that
+//! has **no threads yet**, the port's notification to its worker factory can be
+//! lost.
+//!
+//! Afterwards that pool dispatches **nothing**: not the waits already armed, not
+//! a freshly armed wait, not a timer, not a completed overlapped read. The
+//! factory meanwhile reads as perfectly healthy -- not paused, not shut down,
+//! permitted to create a worker, no failed creation, zero workers. Work queues
+//! up on the port and is never looked at.
+//!
+//! ## What it costs, and what recovers it
+//!
+//! The blast radius is one pool, and all of it. A second pool in the same
+//! process is unaffected. But the pool normally affected is the **default** one,
+//! so in practice that is every component in the process that did not create its
+//! own -- including code with no connection to whoever tore the wait down.
+//!
+//! Submitting a work item recovers it immediately and completely, because that
+//! reaches the factory by a route the lost notification is not on. Nothing else
+//! observed does. So a program that submits work items near its waits sees a
+//! **latency spike** easy to mistake for scheduler jitter; a program using only
+//! waits, timers and I/O has no stimulus that will ever help it and **hangs**.
+//!
+//! ## Why draining is the fix rather than a delay
+//!
+//! A gap between the disarm and the close also prevents it, and is **not** what
+//! this crate does. A gap makes the race improbable; draining makes it
+//! impossible, because `WaitForThreadpoolWaitCallbacks` with
+//! `fCancelPendingCallbacks` false cannot reach the removal primitive on any
+//! path. The queued callback runs, dispatch clears the association, and the
+//! close that follows finds nothing to take.
+//!
+//! Note the shape of that: **the close performs the same removal**, so no choice
+//! of entry point avoids the dangerous call. Draining does not dodge it -- it
+//! empties it. Avoiding
+//! [`wait::ThreadpoolWait::try_cancel_pending_no_heal_tracking`] buys nothing on
+//! its own, which is why the default paths drain rather than the hazardous call
+//! being hidden.
+//!
+//! ## If you are worried about code you do not control
+//!
+//! The fault needs a pool with no threads, which bounds the exposure to process
+//! start and to the moments after a pool's last worker retires.
+//! [`pool::prewarm_default_pool`] removes that precondition for as long as the
+//! pool stays warm, and [`trace::worker_factory_snapshot`] reports the counters
+//! the whole diagnosis turns on. Neither is a fix, and this crate's own
+//! teardowns need neither.
+//!
+//! Holding the pool warm permanently is not available: `SetThreadpoolThreadMinimum`
+//! does not accept the default pool, and calling it that way terminates the
+//! process rather than failing.
+//!
 //! # Relationship to `windows-overlapped-io-sys`
 //!
 //! Thread-pool I/O is one of three completion backends for the overlapped model
@@ -138,9 +208,15 @@ pub mod callback_env;
 #[cfg(windows)]
 pub mod cleanup_group;
 #[cfg(windows)]
+pub(crate) mod heal;
+#[cfg(windows)]
 pub mod io;
 #[cfg(windows)]
+pub(crate) mod obligation;
+#[cfg(windows)]
 pub mod pool;
+#[cfg(windows)]
+pub(crate) mod rearm;
 #[cfg(windows)]
 pub mod timer;
 

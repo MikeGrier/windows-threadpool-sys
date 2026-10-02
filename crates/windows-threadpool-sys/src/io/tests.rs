@@ -123,6 +123,19 @@ fn immediate_failure_returns_the_operation_and_balances_the_start() {
     // The start was balanced by CancelThreadpoolIo, so nothing is outstanding.
     assert_eq!(tp.outstanding(), 0);
 
+    // `start-cancelled` is asserted here rather than in the pending-read test
+    // because this is the path that produces it: a start balanced without a
+    // callback. Without the record, this operation's `started` would read as a
+    // dispatch that never arrived -- which is exactly the shape of the defect
+    // the trace is being used to chase.
+    if crate::trace::wants("io") {
+        assert!(
+            crate::trace::counted("io", "start-cancelled") > 0,
+            "`io` recorded no `start-cancelled`; the trace is narrowed to it and a start has \
+             just been balanced with no callback, so the call site is missing"
+        );
+    }
+
     drop(tp);
     let _ = std::fs::remove_file(&path);
 }
@@ -227,6 +240,127 @@ fn pending_read_completes_through_the_callback() {
     assert_eq!(io_result, 0, "expected a successful read");
     assert_eq!(transferred, content.len());
     assert_eq!(&buffer[..content.len()], content);
+
+    drop(tp);
+
+    // The `io` object's whole life, asserted here because this test already
+    // owns the only real overlapped exercise in the crate -- and after the drop
+    // above, so the teardown stages are in the trace by the time it reads. It
+    // checks only when the process environment has narrowed the trace to `io`;
+    // the filter is read once per process, so a test cannot set it without
+    // racing every other test in the binary. See
+    // `crate::trace::tests::every_pool_object_records_its_creation_establishment_callbacks_and_teardown`,
+    // which carries the same reasoning for the other four objects.
+    if crate::trace::wants("io") {
+        for event in [
+            "created",
+            "started",
+            "trampoline-entered",
+            "trampoline-left",
+            "rundown-begin",
+            "rundown-ended",
+            "drop-begin",
+            "drop-drained",
+            "drop-closed",
+        ] {
+            assert!(
+                crate::trace::counted("io", event) > 0,
+                "`io` recorded no `{event}`; the trace is narrowed to it and an object has just \
+                 been created, started, dispatched, run down and dropped, so the call site is \
+                 missing"
+            );
+        }
+    }
+
+    let _ = std::fs::remove_file(&path);
+}
+
+/// An I/O completion stamps its pool, like every other dispatch kind.
+///
+/// On a **private** pool, deliberately. The obvious place for this assertion is
+/// `pending_read_completes_through_the_callback`, which runs on the default
+/// pool -- and the default pool's entry is stamped by every other test in this
+/// binary, so the assertion would pass there with the I/O trampoline's stamp
+/// deleted. A pool nothing else touches is what makes it mean something.
+///
+/// Measured: with the stamp removed from `io_trampoline` and this test absent,
+/// the entire suite stayed green.
+#[cfg(feature = "self-heal")]
+#[test]
+fn an_io_completion_stamps_its_pool() {
+    use crate::callback_env::CallbackEnviron;
+    use crate::pool::ThreadpoolPool;
+
+    let content = b"io dispatch stamps its pool";
+    let path = temp_file_with(content, "io-stamp");
+
+    let pool = ThreadpoolPool::new().expect("create pool");
+    let mut env = CallbackEnviron::new();
+    env.set_pool(&pool);
+
+    let tp = ThreadpoolIo::new(
+        read_endpoint(&path),
+        move |completion: &IoCompletion| {
+            // SAFETY: this object only ever carries `Operation<()>`, submitted
+            // below, and each completion is claimed exactly once.
+            let _ = unsafe { completion.claim::<()>() };
+        },
+        Some(&mut env),
+    )
+    .expect("create TP_IO");
+
+    let entry = crate::heal::entries()
+        .into_iter()
+        .find(|e| e.key() == pool.as_raw() as usize)
+        .expect("creating the object registered its pool");
+    assert_eq!(
+        entry.last_dispatch(),
+        0,
+        "nothing has dispatched on this pool yet"
+    );
+    let before = crate::heal::now();
+
+    let mut buffer = [0_u8; 64];
+    let buf_ptr = buffer.as_mut_ptr();
+    let buf_len = buffer.len() as u32;
+    let mut bytes: u32 = 0;
+    let bytes_ptr: *mut u32 = &mut bytes;
+
+    let mut operation = Operation::new(());
+    operation.set_offset(0);
+
+    // SAFETY: issues exactly one overlapped ReadFile into `buffer`, which stays
+    // alive until this test blocks in `run_down()` below.
+    let submitted = unsafe {
+        tp.submit(operation, |handle, overlapped| {
+            let ok = ReadFile(
+                handle.as_raw_handle(),
+                buf_ptr,
+                buf_len,
+                bytes_ptr,
+                overlapped,
+            );
+            if ok != 0 {
+                return Ok(Issued::Pending);
+            }
+            let error = io::Error::last_os_error();
+            if error.raw_os_error() == Some(ERROR_IO_PENDING as i32) {
+                return Ok(Issued::Pending);
+            }
+            Err(error)
+        })
+    };
+    assert!(
+        matches!(submitted, Submitted::Pending(_)),
+        "expected a pending submission, got {submitted:?}"
+    );
+
+    tp.run_down();
+    assert!(
+        entry.last_dispatch() >= before,
+        "the completion callback ran, so the I/O trampoline must have stamped \
+         this pool"
+    );
 
     drop(tp);
     let _ = std::fs::remove_file(&path);

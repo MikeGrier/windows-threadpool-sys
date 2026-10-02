@@ -1039,6 +1039,11 @@ fn cancel_all_with_nothing_outstanding_is_benign() {
 /// the resulting callbacks, and terminate -- never free storage the kernel still
 /// owns, and never block forever.
 #[test]
+// Dropping an endpoint with operations outstanding is this test's subject, so
+// it must keep doing exactly that. Under `fail-fast` that drop is *required* to
+// panic, so the armed behaviour is guarded by tests/fail_fast_teardown.rs
+// instead.
+#[cfg(not(feature = "fail-fast"))]
 fn drop_with_operations_outstanding_cancels_drains_and_terminates() {
     const OPERATIONS: usize = 16;
 

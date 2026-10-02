@@ -69,8 +69,18 @@ struct OwnedResource {
     /// `CloseThreadpoolCleanupGroupMembers` runs. A no-op for kinds with no
     /// callback-driven re-arm (work, periodic timers, watched handles).
     prepare_shutdown: unsafe fn(*mut c_void),
+    /// Mark the member's pool as owing a self-heal repair, when the release is
+    /// a cancelling one. A no-op for every kind but a wait: the removal that
+    /// can sever a pool's arrival notification operates on a wait completion
+    /// packet, and only a wait owns one.
+    owe_repair: unsafe fn(*mut c_void),
     free: unsafe fn(*mut c_void),
 }
+
+/// A repair hook for a member whose release cannot wedge a pool.
+///
+/// SAFETY: takes a pointer it never dereferences.
+unsafe fn no_repair_owed(_ptr: *mut c_void) {}
 
 // SAFETY: each pointer is a `Box` the group exclusively owns and frees exactly
 // once, after the pool has released every member that could reach it.
@@ -163,7 +173,10 @@ impl CleanupGroup {
     /// Returns the error from `CreateThreadpoolCleanupGroup`.
     pub fn new() -> io::Result<Self> {
         // SAFETY: the call takes no inputs.
-        let group = unsafe { CreateThreadpoolCleanupGroup() };
+        let group = crate::trace_call!("CreateThreadpoolCleanupGroup", 0, 0, {
+            // SAFETY: the call takes no inputs.
+            unsafe { CreateThreadpoolCleanupGroup() }
+        });
         if group == 0 {
             return Err(io::Error::last_os_error());
         }
@@ -220,6 +233,7 @@ impl CleanupGroup {
         self.adopt(OwnedResource {
             ptr: context,
             prepare_shutdown: prepare_shutdown_noop,
+            owe_repair: no_repair_owed,
             free: ThreadpoolWork::drop_context,
         });
         Ok(WorkMember {
@@ -249,10 +263,12 @@ impl CleanupGroup {
         self.adopt(OwnedResource {
             ptr: context,
             prepare_shutdown: ThreadpoolTimer::prepare_shutdown,
+            owe_repair: no_repair_owed,
             free: ThreadpoolTimer::drop_context,
         });
         Ok(TimerMember {
             handle,
+            context,
             _group: PhantomData,
         })
     }
@@ -283,6 +299,7 @@ impl CleanupGroup {
         self.adopt(OwnedResource {
             ptr: context,
             prepare_shutdown: prepare_shutdown_noop,
+            owe_repair: no_repair_owed,
             free: ThreadpoolPeriodicTimer::drop_context,
         });
         Ok(PeriodicTimerMember {
@@ -319,6 +336,7 @@ impl CleanupGroup {
         self.adopt(OwnedResource {
             ptr: context,
             prepare_shutdown: ThreadpoolWait::prepare_shutdown,
+            owe_repair: ThreadpoolWait::owe_repair,
             free: ThreadpoolWait::drop_context,
         });
         // The target outlives the member for the same reason the context does.
@@ -329,11 +347,13 @@ impl CleanupGroup {
         self.adopt(OwnedResource {
             ptr: target.cast(),
             prepare_shutdown: prepare_shutdown_noop,
+            owe_repair: no_repair_owed,
             free: free_boxed::<WaitTarget>,
         });
         Ok(WaitMember {
             handle: raw,
             watched: target,
+            context,
             _group: PhantomData,
         })
     }
@@ -392,18 +412,37 @@ impl CleanupGroup {
                 // matches the context kind this resource holds and only
                 // suppresses/disarms that one object.
                 unsafe { (resource.prepare_shutdown)(resource.ptr) };
+                if cancel_pending {
+                    // A cancelling release passes the cancel through to every
+                    // member, so each wait among them reaches the same removal
+                    // `ThreadpoolWait::try_cancel_pending` does and owes its
+                    // pool the same repair. Marked before the release rather
+                    // than after because the members' contexts are freed by it.
+                    // SAFETY: as above; the hook matches this resource's kind.
+                    unsafe { (resource.owe_repair)(resource.ptr) };
+                }
             }
         }
 
-        // SAFETY: the group is live. This waits for executing callbacks and
-        // releases every member, so afterwards nothing can reach the contexts.
-        unsafe {
-            CloseThreadpoolCleanupGroupMembers(
-                self.group,
-                if cancel_pending { TRUE } else { FALSE },
-                ptr::null_mut(),
-            );
-        }
+        // The longest-blocking call in this crate: it waits for every member's
+        // executing callback. Bracketed so a release that parks is visible as
+        // an interval rather than inferred from the gap after it.
+        crate::trace_call!(
+            "CloseThreadpoolCleanupGroupMembers",
+            self.group,
+            u32::from(cancel_pending),
+            {
+                // SAFETY: the group is live. This waits for executing callbacks and
+                // releases every member, so afterwards nothing can reach the contexts.
+                unsafe {
+                    CloseThreadpoolCleanupGroupMembers(
+                        self.group,
+                        if cancel_pending { TRUE } else { FALSE },
+                        ptr::null_mut(),
+                    );
+                }
+            }
+        );
 
         let resources = std::mem::take(
             &mut *self
@@ -424,7 +463,10 @@ impl Drop for CleanupGroup {
         // Let queued callbacks run, matching the default of `close_members`.
         self.release_members(false);
         // SAFETY: the members are released, so the group can be closed.
-        unsafe { CloseThreadpoolCleanupGroup(self.group) };
+        crate::trace_call!("CloseThreadpoolCleanupGroup", self.group, 0, {
+            // SAFETY: the group is live and closed exactly once, here.
+            unsafe { CloseThreadpoolCleanupGroup(self.group) };
+        });
     }
 }
 
@@ -451,19 +493,38 @@ impl WorkMember<'_> {
     pub fn submit(&self) {
         // SAFETY: the handle is live until the group releases its members,
         // which the borrow on `_group` prevents from happening first.
-        unsafe { SubmitThreadpoolWork(self.handle) };
+        crate::trace_call!("SubmitThreadpoolWork", self.handle, 0, {
+            // SAFETY: the handle is live until the group releases it.
+            unsafe { SubmitThreadpoolWork(self.handle) };
+        });
     }
 
     /// Block until all queued and in-progress invocations have completed.
     pub fn wait(&self) {
         // SAFETY: as above.
-        unsafe { WaitForThreadpoolWorkCallbacks(self.handle, FALSE) };
+        crate::trace_call!("WaitForThreadpoolWorkCallbacks", self.handle, 0, {
+            // SAFETY: the handle is live until the group releases it.
+            unsafe { WaitForThreadpoolWorkCallbacks(self.handle, FALSE) };
+        });
+    }
+
+    /// Stop accepting work and block until none is queued or executing.
+    ///
+    /// As on [`ThreadpoolWork`], there is nothing to *stop* -- a submission
+    /// cannot be withdrawn, only waited for -- so this is exactly
+    /// [`wait`](Self::wait). The name exists so a caller tearing down a mixed
+    /// set of objects can reach for one method.
+    pub fn stop_and_drain(&self) {
+        self.wait();
     }
 
     /// Cancel invocations that have not started, then wait for those that have.
     pub fn cancel_pending(&self) {
         // SAFETY: as above.
-        unsafe { WaitForThreadpoolWorkCallbacks(self.handle, TRUE) };
+        crate::trace_call!("WaitForThreadpoolWorkCallbacks(cancel)", self.handle, 1, {
+            // SAFETY: the handle is live until the group releases it.
+            unsafe { WaitForThreadpoolWorkCallbacks(self.handle, TRUE) };
+        });
     }
 }
 
@@ -474,6 +535,12 @@ impl WorkMember<'_> {
 #[derive(Debug)]
 pub struct TimerMember<'group> {
     handle: PTP_TIMER,
+    /// The callback context the group owns for this member.
+    ///
+    /// Held so the member can run the same `stop_and_drain` its standalone twin
+    /// does, suppression and all. The group owns and frees it; this is a borrow
+    /// for the member's lifetime.
+    context: *mut c_void,
     _group: PhantomData<&'group CleanupGroup>,
 }
 
@@ -503,19 +570,48 @@ impl TimerMember<'_> {
     #[must_use]
     pub fn is_set(&self) -> bool {
         // SAFETY: as above.
-        unsafe { IsThreadpoolTimerSet(self.handle) != 0 }
+        crate::trace_call!("IsThreadpoolTimerSet", self.handle, 0, {
+            // SAFETY: the handle is live until the group releases it.
+            unsafe { IsThreadpoolTimerSet(self.handle) != 0 }
+        })
     }
 
     /// Block until all queued and executing callbacks have completed.
     pub fn wait(&self) {
         // SAFETY: as above.
-        unsafe { WaitForThreadpoolTimerCallbacks(self.handle, FALSE) };
+        crate::trace_call!("WaitForThreadpoolTimerCallbacks", self.handle, 0, {
+            // SAFETY: the handle is live until the group releases it.
+            unsafe { WaitForThreadpoolTimerCallbacks(self.handle, FALSE) };
+        });
+    }
+
+    /// Stop the timer and block until no firing is queued or executing.
+    ///
+    /// The same drain [`ThreadpoolTimer::stop_and_drain`] performs, including
+    /// suppressing a re-arm a running callback asks for: without that the drain
+    /// could return with a due time installed, which is the whole reason the
+    /// standalone type has this method rather than only `disarm` and `wait`.
+    ///
+    /// Added because a member that lacked it was not the equivalent of its
+    /// standalone twin that [`CleanupGroup::create_timer`] says it is.
+    pub fn stop_and_drain(&self) {
+        // SAFETY: the group owns this context and does not free it while this
+        // member borrows the group, and `handle` is the object it belongs to.
+        unsafe { ThreadpoolTimer::stop_and_drain_parts(self.context, self.handle) };
     }
 
     /// Cancel callbacks that have not started, then wait for those that have.
+    ///
+    /// Unlike the wait member's method of the same name, this carries no
+    /// process-wide hazard. The primitive that can sever a pool's
+    /// arrival-to-factory notification operates on a *wait completion packet*,
+    /// which only a wait owns; a timer has none.
     pub fn cancel_pending(&self) {
         // SAFETY: as above.
-        unsafe { WaitForThreadpoolTimerCallbacks(self.handle, TRUE) };
+        crate::trace_call!("WaitForThreadpoolTimerCallbacks(cancel)", self.handle, 1, {
+            // SAFETY: the handle is live until the group releases it.
+            unsafe { WaitForThreadpoolTimerCallbacks(self.handle, TRUE) };
+        });
     }
 }
 
@@ -566,13 +662,19 @@ impl PeriodicTimerMember<'_> {
     #[must_use]
     pub fn is_running(&self) -> bool {
         // SAFETY: as above.
-        unsafe { IsThreadpoolTimerSet(self.handle) != 0 }
+        crate::trace_call!("IsThreadpoolTimerSet", self.handle, 0, {
+            // SAFETY: the handle is live until the group releases it.
+            unsafe { IsThreadpoolTimerSet(self.handle) != 0 }
+        })
     }
 
     /// Block until all queued and executing ticks have completed.
     pub fn wait(&self) {
         // SAFETY: as above.
-        unsafe { WaitForThreadpoolTimerCallbacks(self.handle, FALSE) };
+        crate::trace_call!("WaitForThreadpoolTimerCallbacks", self.handle, 0, {
+            // SAFETY: the handle is live until the group releases it.
+            unsafe { WaitForThreadpoolTimerCallbacks(self.handle, FALSE) };
+        });
     }
 
     /// Stop the timer and wait until no tick is queued or executing.
@@ -584,7 +686,10 @@ impl PeriodicTimerMember<'_> {
     pub fn stop_and_drain(&self) {
         self.stop();
         // SAFETY: as above.
-        unsafe { WaitForThreadpoolTimerCallbacks(self.handle, TRUE) };
+        crate::trace_call!("WaitForThreadpoolTimerCallbacks(cancel)", self.handle, 1, {
+            // SAFETY: the handle is live until the group releases it.
+            unsafe { WaitForThreadpoolTimerCallbacks(self.handle, TRUE) };
+        });
     }
 }
 
@@ -596,6 +701,11 @@ impl PeriodicTimerMember<'_> {
 pub struct WaitMember<'group> {
     handle: PTP_WAIT,
     watched: *mut WaitTarget,
+    /// The callback context the group owns for this member.
+    ///
+    /// Held so the member can mark its own pool as owing a repair. The group
+    /// owns and frees it; this is a borrow for the member's lifetime.
+    context: *mut c_void,
     _group: PhantomData<&'group CleanupGroup>,
 }
 
@@ -628,13 +738,76 @@ impl WaitMember<'_> {
     /// Block until all queued and executing callbacks have completed.
     pub fn wait(&self) {
         // SAFETY: as above.
-        unsafe { WaitForThreadpoolWaitCallbacks(self.handle, FALSE) };
+        crate::trace_call!("WaitForThreadpoolWaitCallbacks", self.handle, 0, {
+            // SAFETY: the handle is live until the group releases it.
+            unsafe { WaitForThreadpoolWaitCallbacks(self.handle, FALSE) };
+        });
     }
 
     /// Cancel callbacks that have not started, then wait for those that have.
-    pub fn cancel_pending(&self) {
+    ///
+    /// # This brings a process-wide hazard forward; it does not create it
+    ///
+    /// Same as
+    /// [`ThreadpoolWait::try_cancel_pending_no_heal_tracking`](crate::wait::ThreadpoolWait::try_cancel_pending_no_heal_tracking)
+    /// -- see there for the full account. In short: removing an already-delivered
+    /// completion packet can permanently sever a pool's arrival-to-factory
+    /// notification, but the member's eventual release performs the same removal
+    /// anyway, so avoiding this call does not avoid the hazard. Draining does,
+    /// because it leaves nothing to remove.
+    ///
+    /// Owning the wait through a cleanup group does **not** change this. The
+    /// group's own `Drop` is safe because it releases with cancel-pending false,
+    /// not because the group protects its members; `close_members(true)` passes
+    /// the cancel through to each member.
+    ///
+    /// Stop watching and block until no callback is queued or executing.
+    ///
+    /// The same drain [`ThreadpoolWait::stop_and_drain`] performs, including
+    /// suppressing a re-arm a running callback asks for: without that the drain
+    /// could return with the object armed again, which is the whole reason the
+    /// standalone type has this method rather than only `disarm` and `wait`.
+    ///
+    /// Added because a member that lacked it was not the equivalent of its
+    /// standalone twin that [`CleanupGroup::create_wait`] says it is.
+    pub fn stop_and_drain(&self) {
+        // SAFETY: the group owns this context and does not free it while this
+        // member borrows the group, and `handle` is the object it belongs to.
+        unsafe { ThreadpoolWait::stop_and_drain_parts(self.context, self.handle) };
+    }
+
+    /// Prefer [`wait`](Self::wait).
+    ///
+    /// This crate repairs the pool afterwards, which is what makes this safe to
+    /// offer.
+    #[cfg(feature = "self-heal")]
+    pub fn try_cancel_pending(&self) {
+        // SAFETY: the obligation this transfers is discharged here, by marking
+        // the pool so the self-heal repairs it.
+        unsafe { self.try_cancel_pending_no_heal_tracking() };
+        // SAFETY: the group owns this context and does not free it while this
+        // member borrows the group.
+        unsafe { ThreadpoolWait::owe_repair(self.context) };
+    }
+
+    /// `try_cancel_pending` without the repair.
+    ///
+    /// Not a link, deliberately: the method it would name does not exist in a
+    /// build with `self-heal` off, and this one does, so the link would dangle
+    /// in exactly the configuration this method exists for.
+    ///
+    /// # Safety
+    ///
+    /// The caller must ensure the pool is repaired, by submitting any work item
+    /// to it or by knowing something else keeps it live. See
+    /// [`ThreadpoolWait::try_cancel_pending_no_heal_tracking`], whose obligation
+    /// this is.
+    pub unsafe fn try_cancel_pending_no_heal_tracking(&self) {
         // SAFETY: as above.
-        unsafe { WaitForThreadpoolWaitCallbacks(self.handle, TRUE) };
+        crate::trace_call!("WaitForThreadpoolWaitCallbacks(cancel)", self.handle, 1, {
+            // SAFETY: the handle is live until the group releases it.
+            unsafe { WaitForThreadpoolWaitCallbacks(self.handle, TRUE) };
+        });
     }
 }
 

@@ -20,9 +20,10 @@
 use std::io;
 use std::os::windows::io::{AsHandle, AsRawHandle, BorrowedHandle, FromRawHandle, OwnedHandle};
 use std::ptr;
-use std::sync::Mutex;
 use std::sync::atomic::{AtomicIsize, Ordering};
 use std::time::Duration;
+
+use crate::rearm::RearmSuppression;
 
 use windows_sys::Win32::Foundation::{FALSE, FILETIME, HANDLE, TRUE, WAIT_TIMEOUT};
 use windows_sys::Win32::System::Threading::{
@@ -78,11 +79,18 @@ pub(crate) struct CustomClose {
 
 impl Drop for CustomClose {
     fn drop(&mut self) {
-        // SAFETY: the handle was vouched for by `assume_waitable_with` and is
-        // still open -- every owner drains the wait before dropping this, so the
-        // pool is no longer watching it. This runs exactly once, because `Drop`
-        // does.
-        unsafe { (self.close)(self.raw) };
+        // Bracketed like a Win32 call because that is what it usually is: the
+        // routine is caller-supplied and the case this exists for,
+        // `FindCloseChangeNotification`, is a kernel close. It runs while the
+        // owning wait is being torn down, so a slow one shows up as a stalled
+        // teardown with no other explanation.
+        crate::trace_call!("WaitCloseFn", self.raw as usize, self.close as usize, {
+            // SAFETY: the handle was vouched for by `assume_waitable_with` and is
+            // still open -- every owner drains the wait before dropping this, so the
+            // pool is no longer watching it. This runs exactly once, because `Drop`
+            // does.
+            unsafe { (self.close)(self.raw) };
+        });
     }
 }
 
@@ -307,33 +315,36 @@ impl WaitResult {
 struct WaitContext {
     wait: AtomicIsize,
     handle: HANDLE,
-    /// How many callers are currently suppressing re-arming: zero means allowed.
+    /// Stops a callback re-arming this wait once a teardown has begun.
     ///
-    /// Arming takes this lock and does nothing while the count is non-zero, so a
-    /// callback that re-arms cannot start watching again after a disarm from
-    /// outside: without it, a drain could complete with the object armed again,
-    /// and for `Drop` that meant closing the object and freeing its context with
-    /// a fresh callback queued against them.
+    /// Arming takes this lock and does nothing while the count is non-zero, so
+    /// a callback that re-arms cannot start watching again after a disarm from
+    /// outside. Its two users here are [`ThreadpoolWait::stop_and_drain`],
+    /// which raises and lowers it, and `Drop`, which raises it permanently --
+    /// the asymmetry [`RearmSuppression`] is a count for. The lock is only ever
+    /// held across the native `SetThreadpoolWait` call.
+    rearm: RearmSuppression,
+    /// Whether the object is armed with nothing having drained it.
     ///
-    /// A count rather than a flag because suppression has two users with
-    /// different lifetimes: [`ThreadpoolWait::stop_and_drain`] raises it and
-    /// lowers it again, while `Drop` raises it permanently. With a flag, a
-    /// `stop_and_drain` finishing would clear a suppression that another
-    /// concurrent one still needed.
+    /// A dispatch settles it because `SetThreadpoolWait` arms for exactly one
+    /// activation: once the callback has entered, the object is no longer
+    /// watching, so there is nothing for `Drop` to wait on and nothing to
+    /// report. A callback that re-arms sets it again, which is why this is
+    /// cleared at trampoline entry rather than on the way out.
+    obligation: crate::obligation::CloseObligation,
+    /// This object's claim on its pool's self-heal entry.
     ///
-    /// The lock is only ever held across the native `SetThreadpoolWait` call,
-    /// never across a callback drain, which would deadlock a callback that
-    /// happened to be blocked on it.
-    suppress_rearm: Mutex<u32>,
+    /// On the context rather than on `ThreadpoolWait` so the trampoline can
+    /// reach it to stamp a dispatch (`M-T6.2`), and so it survives `into_parts`
+    /// into a cleanup-group member.
+    registration: crate::heal::Registration,
     callback: Box<dyn Fn(&WaitActivation<'_>) + Send + Sync + 'static>,
 }
 
 impl WaitContext {
     /// Lock the suppression count, recovering from a panicking holder.
     fn suppression(&self) -> std::sync::MutexGuard<'_, u32> {
-        self.suppress_rearm
-            .lock()
-            .unwrap_or_else(|poison| poison.into_inner())
+        self.rearm.lock()
     }
 
     /// Start suppressing re-arming, and disarm under the same acquisition.
@@ -342,21 +353,21 @@ impl WaitContext {
     /// callback: a re-arm either lands entirely before this, or is suppressed by
     /// it. The lock is released before any drain.
     fn suppress_and_disarm(&self) {
-        let mut suppressed = self.suppression();
-        *suppressed = suppressed.saturating_add(1);
-        let wait = self.wait.load(Ordering::Acquire);
-        crate::trace_record!("wait", "suppress-and-disarm", wait, *suppressed);
-        if wait != 0 {
+        self.rearm.suppress_and(|suppressed| {
+            let wait = self.wait.load(Ordering::Acquire);
+            crate::trace_record!("wait", "suppress-and-disarm", wait, suppressed);
+            if wait == 0 {
+                return;
+            }
             // SAFETY: `wait` is this object's live PTP_WAIT, published before any
             // callback could run and valid until Drop closes it.
             unsafe { disarm_raw(wait) };
-        }
+        });
     }
 
     /// Stop suppressing re-arming.
     fn release_suppression(&self) {
-        let mut suppressed = self.suppression();
-        *suppressed = suppressed.saturating_sub(1);
+        self.rearm.release();
     }
 }
 
@@ -487,14 +498,20 @@ impl WaitActivation<'_> {
     /// use it to observe the suppression directly, which is otherwise only
     /// visible as the absence of undefined behaviour.
     pub(crate) fn rearm_reporting(&self, timeout: Option<Duration>) -> bool {
+        // Recorded *before* the lock, not after: the acquisition can block on a
+        // concurrent `suppress_and_disarm`, and a re-arm parked on that mutex is
+        // one of the things a silent interval in the trace could be. Entry and
+        // exit straddling the lock is what tells the two apart.
+        let wait = self.ctx.wait.load(Ordering::Acquire);
+        crate::trace_record!("wait", "rearm-entered", wait);
         // Taken before arming and held across it, so this either happens before
         // a suppressing caller raises the count or is suppressed by it -- never
         // in between.
         let suppressed = self.ctx.suppression();
         if *suppressed > 0 {
+            crate::trace_record!("wait", "rearm-suppressed", wait, *suppressed);
             return false;
         }
-        let wait = self.ctx.wait.load(Ordering::Acquire);
         debug_assert_ne!(
             wait, 0,
             "the wait object must be published before callbacks"
@@ -503,7 +520,12 @@ impl WaitActivation<'_> {
         // callback could run, and `handle` is owned by that object so it is
         // still open. The timeout, if any, is a live stack value for the call.
         unsafe { arm_raw(wait, self.ctx.handle, timeout) };
+        // Set after the arming, under the same lock: a re-arm that the
+        // suppression rejected returns above and must not claim the object is
+        // live, because it is not.
+        self.ctx.obligation.record_live();
         drop(suppressed);
+        crate::trace_record!("wait", "rearm-left", wait, self.ctx.handle as usize);
         true
     }
 }
@@ -512,8 +534,11 @@ impl WaitActivation<'_> {
 ///
 /// SAFETY: `wait` must be a live `PTP_WAIT`.
 pub(crate) unsafe fn disarm_raw(wait: PTP_WAIT) {
-    // SAFETY: forwarded; a null handle is the documented way to cancel a wait.
-    unsafe { SetThreadpoolWait(wait, ptr::null_mut(), ptr::null()) };
+    crate::trace_call!("SetThreadpoolWait(disarm)", wait, 0, {
+        // SAFETY: forwarded; a null handle is the documented way to cancel a wait.
+        unsafe { SetThreadpoolWait(wait, ptr::null_mut(), ptr::null()) };
+    });
+    crate::trace_record!("wait", "disarmed", wait);
 }
 
 /// Arm a raw wait object against a borrowed target.
@@ -530,16 +555,18 @@ pub(crate) unsafe fn arm_member(wait: PTP_WAIT, target: &WaitTarget, timeout: Op
 /// SAFETY: `wait` must be a live `PTP_WAIT` and `handle` a live waitable handle
 /// (or null to disarm).
 unsafe fn arm_raw(wait: PTP_WAIT, handle: HANDLE, timeout: Option<Duration>) {
-    match timeout {
-        Some(timeout) => {
-            let filetime = relative_filetime(timeout);
-            // SAFETY: forwarded from this function's contract; `filetime` is
-            // read only for the duration of the call.
-            unsafe { SetThreadpoolWait(wait, handle, &filetime) };
+    crate::trace_call!("SetThreadpoolWait", wait, handle as usize, {
+        match timeout {
+            Some(timeout) => {
+                let filetime = relative_filetime(timeout);
+                // SAFETY: forwarded from this function's contract; `filetime` is
+                // read only for the duration of the call.
+                unsafe { SetThreadpoolWait(wait, handle, &filetime) };
+            }
+            // SAFETY: forwarded; a null timeout means "wait indefinitely".
+            None => unsafe { SetThreadpoolWait(wait, handle, ptr::null()) },
         }
-        // SAFETY: forwarded; a null timeout means "wait indefinitely".
-        None => unsafe { SetThreadpoolWait(wait, handle, ptr::null()) },
-    }
+    });
     crate::trace_record!("wait", "armed", wait, handle as usize);
 }
 
@@ -557,12 +584,23 @@ unsafe extern "system" fn wait_trampoline(
     crate::trace_record!("wait", "trampoline-entered", _wait, wait_result);
     // SAFETY: context is a valid *mut WaitContext for the full callback duration.
     let ctx = unsafe { &*(context as *const WaitContext) };
+    // This activation consumed the arming: the pool is no longer watching, so
+    // nothing is owed unless the callback below arms it again.
+    ctx.obligation.record_settled();
+    // Stamped before the callback, not after: a dispatch that is still running
+    // is evidence the pool is live, and a long callback must not look like
+    // silence to the self-heal.
+    ctx.registration.stamp_dispatch();
     let activation = WaitActivation {
         result: WaitResult::from_raw(wait_result),
         ctx,
     };
     // Not contained: see the callback contract in the crate docs.
     (ctx.callback)(&activation);
+    // Paired with the record above. The pair is what makes a silent interval
+    // readable: an entry with no exit says a callback is still inside the
+    // closure, which is a different finding from no entry at all.
+    crate::trace_record!("wait", "trampoline-left", _wait, wait_result);
 }
 
 /// An owned thread-pool wait object bound to one waitable handle.
@@ -633,8 +671,9 @@ unsafe extern "system" fn wait_trampoline(
 ///     std::thread::sleep(std::time::Duration::from_millis(5));
 /// }
 ///
-/// wait.disarm();
-/// wait.wait();
+/// // Disarms and drains in one step, discharging the drain this wait owes
+/// // rather than leaving the blocking teardown to `Drop`.
+/// wait.stop_and_drain();
 /// assert!(seen.load(Ordering::SeqCst) >= 1);
 /// # Ok::<(), std::io::Error>(())
 /// ```
@@ -681,19 +720,29 @@ impl ThreadpoolWait {
         F: Fn(&WaitActivation<'_>) + Send + Sync + 'static,
     {
         let target = handle.into_target();
+        // Read before `env` is consumed below, and registered before the object
+        // exists: the entry must be able to repair this pool from the moment
+        // anything of ours can dispatch on it.
+        let registration = crate::heal::register(crate::heal::key_of(env.as_deref()));
         let context = Box::into_raw(Box::new(WaitContext {
             wait: AtomicIsize::new(0),
             handle: target.raw(),
-            suppress_rearm: Mutex::new(0),
+            rearm: RearmSuppression::new(),
+            obligation: crate::obligation::CloseObligation::new(),
+            registration,
             callback: Box::new(callback),
         }));
         let env_ptr = env.map_or(ptr::null_mut(), |e| e.as_mut_ptr());
 
         // SAFETY: context is a valid heap pointer that outlives every callback,
         // and env_ptr is valid (or null) for the duration of this call.
-        let wait = unsafe {
-            CreateThreadpoolWait(Some(wait_trampoline), context.cast(), env_ptr.cast_const())
-        };
+        let wait = crate::trace_call!("CreateThreadpoolWait", 0, 0, {
+            // SAFETY: context is a valid heap pointer that outlives every callback,
+            // and env_ptr is valid (or null) for the duration of this call.
+            unsafe {
+                CreateThreadpoolWait(Some(wait_trampoline), context.cast(), env_ptr.cast_const())
+            }
+        });
 
         if wait == 0 {
             let error = io::Error::last_os_error();
@@ -747,6 +796,9 @@ impl ThreadpoolWait {
     /// should watch a manual-reset event kept in agreement with the state it
     /// reports, which is level-triggered and so has no signal to lose.
     pub fn arm(&self, timeout: Option<Duration>) {
+        // SAFETY: the context outlives every callback and is freed only by Drop,
+        // which cannot run while this borrow of self is alive.
+        unsafe { &*self.context }.obligation.record_live();
         // SAFETY: `wait` is valid for the lifetime of self, and the handle is
         // owned by self so it is still open.
         unsafe { arm_raw(self.wait, self.target.raw(), timeout) };
@@ -755,11 +807,16 @@ impl ThreadpoolWait {
     /// Stop watching.
     ///
     /// New activations stop being queued, but a callback already queued still
-    /// runs; use [`ThreadpoolWait::cancel_pending`] to drop those as well.
+    /// runs; use `try_cancel_pending`, or
+    /// [`try_cancel_pending_no_heal_tracking`](Self::try_cancel_pending_no_heal_tracking)
+    /// in a build without the `self-heal` feature, to drop those as well.
     pub fn disarm(&self) {
-        // SAFETY: `wait` is valid for the lifetime of self; a null handle is the
-        // documented way to cancel a pending wait.
-        unsafe { SetThreadpoolWait(self.wait, ptr::null_mut(), ptr::null()) };
+        crate::trace_call!("SetThreadpoolWait(disarm)", self.wait, 0, {
+            // SAFETY: `wait` is valid for the lifetime of self; a null handle is the
+            // documented way to cancel a pending wait.
+            unsafe { SetThreadpoolWait(self.wait, ptr::null_mut(), ptr::null()) };
+        });
+        crate::trace_record!("wait", "disarmed", self.wait);
     }
 
     /// Let every queued callback run, and block until none is executing.
@@ -769,8 +826,10 @@ impl ThreadpoolWait {
     /// so the object is watching again when this returns. Use
     /// [`stop_and_drain`](Self::stop_and_drain) to reach quiescence.
     pub fn wait(&self) {
-        // SAFETY: `wait` is valid for the lifetime of self.
-        unsafe { WaitForThreadpoolWaitCallbacks(self.wait, FALSE) };
+        crate::trace_call!("WaitForThreadpoolWaitCallbacks", self.wait, 0, {
+            // SAFETY: `wait` is valid for the lifetime of self.
+            unsafe { WaitForThreadpoolWaitCallbacks(self.wait, FALSE) };
+        });
     }
 
     /// Drop callbacks that have not started, then wait for any executing one.
@@ -779,16 +838,118 @@ impl ThreadpoolWait {
     /// wait idle: it does not suppress the re-arm of a callback that is already
     /// running. Use [`stop_and_drain`](Self::stop_and_drain) when the wait must
     /// actually be quiescent afterwards.
-    pub fn cancel_pending(&self) {
-        // SAFETY: `wait` is valid for the lifetime of self. A cancelled wait
-        // callback owns no storage, so dropping queued callbacks orphans nothing.
-        unsafe { WaitForThreadpoolWaitCallbacks(self.wait, TRUE) };
+    ///
+    /// # This brings a process-wide hazard forward; it does not create it
+    ///
+    /// Cancelling asks the kernel to remove a completion packet that may already
+    /// have been delivered to the pool's completion port
+    /// (`IopCancelWaitCompletionPacket` with `RemoveSignaledPacket` set).
+    /// Measured on this workspace's reproducer, a removal that lands a few
+    /// microseconds after the packet was queued, on a port whose factory has no
+    /// threads yet, can **sever the notification from that port to the worker
+    /// factory**.
+    ///
+    /// The scope of that is one pool -- but it is the whole of that pool, not
+    /// this wait and not waits as a kind. Measured during such a stall: already
+    /// armed waits, a freshly armed and signalled wait, a fresh timer, and a
+    /// completed overlapped read all fail to dispatch. A second pool in the same
+    /// process is unaffected. Since the pool normally affected is the **default**
+    /// one, the practical reach is every component in the process that did not
+    /// explicitly create its own -- including code that has nothing to do with
+    /// the caller.
+    ///
+    /// Submitting a work item recovers it, because that reaches the factory by a
+    /// route the broken notification is not on. Nothing else observed does.
+    ///
+    /// **But this method is not the only way to reach that, and on the measured
+    /// evidence it is not even the usual one.** `CloseThreadpoolWait` performs
+    /// the same removal, through the same kernel routine with the same flag,
+    /// whenever it finds a packet still outstanding -- so a teardown that never
+    /// calls this method reaches the hazard anyway. In the reproducer, dropping
+    /// the cancel entirely changed nothing measurable: 22 failures in 20004
+    /// without it against 16 with it.
+    ///
+    /// What this method does is perform the removal *earlier*, which removes any
+    /// chance for the callback to run first.
+    ///
+    /// The fix is therefore not to avoid this method but to leave nothing to
+    /// remove: [`wait`](Self::wait) and [`stop_and_drain`](Self::stop_and_drain)
+    /// let the queued callback run, which clears the association, after which the
+    /// close has nothing to take. Draining cannot reach the removal primitive on
+    /// any path. Prefer them -- but note that doing so is what makes the
+    /// *subsequent close* safe, not merely this call.
+    /// This crate repairs the pool afterwards, which is what makes this safe to
+    /// offer. See
+    /// [README-FEATURE-self-heal.md](https://docs.rs/crate/windows-threadpool-sys/latest/source/README-FEATURE-self-heal.md).
+    ///
+    /// # Availability
+    ///
+    /// Requires the `self-heal` feature, which is on by default. Without it this
+    /// method does not exist and a call to it fails to compile, naming
+    /// [`try_cancel_pending_no_heal_tracking`](Self::try_cancel_pending_no_heal_tracking)
+    /// as what to reach for instead. That is the designed behaviour, not an
+    /// oversight: a guarantee you were relying on has been removed, and a
+    /// compile error is the only way you find that out.
+    #[cfg(feature = "self-heal")]
+    pub fn try_cancel_pending(&self) {
+        // SAFETY: the obligation this transfers is discharged here, by marking
+        // the pool so the self-heal repairs it.
+        unsafe { self.try_cancel_pending_no_heal_tracking() };
+        // SAFETY: the context outlives every callback and is freed only by Drop,
+        // which cannot run while this borrow of self is alive.
+        unsafe { &*self.context }.registration.owe_repair();
+    }
+
+    /// `try_cancel_pending` without the repair.
+    ///
+    /// Not a link, deliberately: the method it would name does not exist in a
+    /// build with `self-heal` off, and this one does, so the link would dangle
+    /// in exactly the configuration this method exists for.
+    ///
+    /// Always present, including in builds with `self-heal` off, which is the
+    /// point: it is the method that still exists when the gated one does not,
+    /// and its signature says what the caller takes on.
+    ///
+    /// # Safety
+    ///
+    /// The caller must ensure the pool is repaired. Submitting any work item to
+    /// it does so; so does knowing the pool is kept live by something else.
+    /// Leaving it unrepaired can stop the pool dispatching -- which, for the
+    /// process-default pool, reaches every component in the process, including
+    /// code with no connection to this call.
+    ///
+    /// This is not a memory-safety obligation, and the keyword is not claiming
+    /// one. It is here because the obligation is statable and dischargeable by
+    /// the caller, which is what `unsafe` marks; see
+    /// [the self-heal decision](https://docs.rs/crate/windows-threadpool-sys/latest/source/DESIGN-NOTES.md).
+    pub unsafe fn try_cancel_pending_no_heal_tracking(&self) {
+        crate::trace_call!("WaitForThreadpoolWaitCallbacks(cancel)", self.wait, 1, {
+            // SAFETY: `wait` is valid for the lifetime of self. A cancelled wait
+            // callback owns no storage, so dropping queued callbacks orphans nothing.
+            unsafe { WaitForThreadpoolWaitCallbacks(self.wait, TRUE) };
+        });
+    }
+
+    /// Mark the pool behind a detached wait context as owing a repair.
+    ///
+    /// For [`crate::cleanup_group::CleanupGroup`], whose members hold their
+    /// context through the group rather than through a [`ThreadpoolWait`].
+    ///
+    /// # Safety
+    ///
+    /// `context` must come from [`into_parts`](Self::into_parts) on this type
+    /// and name a still-live object whose context the caller has not yet freed.
+    pub(crate) unsafe fn owe_repair(context: *mut core::ffi::c_void) {
+        // SAFETY: forwarded; the context outlives the member until the group
+        // frees it, and this only touches that object's registration.
+        let ctx = unsafe { &*context.cast::<WaitContext>() };
+        ctx.registration.owe_repair();
     }
 
     /// Stop watching and block until the wait is idle, leaving it reusable.
     ///
     /// This exists because neither [`disarm`](Self::disarm) nor
-    /// [`cancel_pending`](Self::cancel_pending) can stop a self-re-arming wait on
+    /// `try_cancel_pending` can stop a self-re-arming wait on
     /// its own: a callback already running can call [`WaitActivation::rearm`]
     /// after a disarm from outside has taken effect. This suppresses re-arming
     /// for the duration of the call, using the same mechanism `Drop` uses, and
@@ -801,6 +962,12 @@ impl ThreadpoolWait {
     /// - no callback is queued or executing, and
     /// - the object is not watching -- a re-arm requested by a callback that ran
     ///   during the call is discarded rather than deferred.
+    ///
+    /// **A queued callback runs; it is not discarded.** That is the difference
+    /// between this and `try_cancel_pending`, and it is why
+    /// this can block for as long as the callback takes. See
+    /// [the teardown-drains decision](../../../DESIGN-NOTES.md#teardown-drains)
+    /// for why finishing the work is preferred to abandoning it.
     ///
     /// # What it does not
     ///
@@ -816,11 +983,37 @@ impl ThreadpoolWait {
     pub fn stop_and_drain(&self) {
         // SAFETY: the context outlives every callback and is freed only by Drop,
         // which cannot run while this borrow of self is alive.
-        let ctx = unsafe { &*self.context };
+        unsafe { Self::stop_and_drain_parts(self.context.cast(), self.wait) };
+    }
+
+    /// [`stop_and_drain`](Self::stop_and_drain) against a detached context.
+    ///
+    /// One body rather than two, so this type and the cleanup-group member that
+    /// wraps the same object cannot drift apart: the suppression discipline here
+    /// is what makes the drain mean anything, and a second copy of it is a
+    /// second place for a later change to reach one and miss the other.
+    ///
+    /// # Safety
+    ///
+    /// `context` must come from [`into_parts`](Self::into_parts) on this type
+    /// and name a still-live object whose context the caller has not yet freed,
+    /// and `wait` must be that object.
+    pub(crate) unsafe fn stop_and_drain_parts(context: *mut core::ffi::c_void, wait: PTP_WAIT) {
+        // SAFETY: forwarded from this function's own contract.
+        let ctx = unsafe { &*context.cast::<WaitContext>() };
         ctx.suppress_and_disarm();
         // Drained with the lock released: a callback blocked on it would
         // otherwise never finish, and this would never return.
-        self.cancel_pending();
+        crate::trace_call!("WaitForThreadpoolWaitCallbacks", wait, 0, {
+            // SAFETY: `wait` is live, and waiting without cancelling cannot
+            // orphan any storage.
+            unsafe { WaitForThreadpoolWaitCallbacks(wait, FALSE) };
+        });
+        // Settled after the drain, not before: a callback running during it may
+        // have asked to re-arm, and the suppression discards that request, so
+        // the object really is idle here. Releasing the suppression below lets a
+        // later `arm` make it live again, which sets this afresh.
+        ctx.obligation.record_settled();
         ctx.release_suppression();
     }
 
@@ -848,6 +1041,17 @@ impl ThreadpoolWait {
     pub(crate) unsafe fn drop_context(context: *mut core::ffi::c_void) {
         // SAFETY: forwarded from this function's own contract.
         drop(unsafe { Box::from_raw(context.cast::<WaitContext>()) });
+    }
+
+    /// Whether `Drop` would report an undischarged drain obligation right now.
+    ///
+    /// Exists so the obligation's wiring can be asserted without depending on
+    /// the trace, whose filter is fixed before `main` and so cannot be narrowed
+    /// from inside a test.
+    #[cfg(test)]
+    pub(crate) fn obligation_owed(&self) -> bool {
+        // SAFETY: the context outlives every callback and is freed only by Drop.
+        unsafe { &*self.context }.obligation.is_owed()
     }
 
     /// Suppress this member's re-arm and disarm it, before a
@@ -885,11 +1089,23 @@ impl Drop for ThreadpoolWait {
         let ctx = unsafe { &*self.context };
         // Raised and never released: unlike `stop_and_drain`, there is no
         // afterwards for this object.
-        crate::trace_record!("wait", "drop-begin", self.wait);
+        crate::trace_record!("wait", "drop-begin", self.wait, self.target.raw() as usize);
+        // Read before the disarm and drain, and emitted before them: the record
+        // marks the start of the blocking interval it reports, so a reader sees
+        // what the following gap is for rather than learning it afterwards.
+        // Captured, not re-read later: a callback dispatched during the drain
+        // below settles the obligation, so asking afterwards would find nothing
+        // owed on exactly the objects that owed something. The context is also
+        // freed before the fail-fast, so this must be a value rather than a
+        // borrow.
+        let owed = ctx.obligation.is_owed();
+        if owed {
+            crate::trace_record!("wait", crate::obligation::DROP_OBLIGATION_OWED, self.wait);
+        }
         ctx.suppress_and_disarm();
         // The lock is released before draining: a callback blocked on it would
         // otherwise never finish, and this wait would never return.
-        self.cancel_pending();
+        self.wait();
         crate::trace_record!("wait", "drop-drained", self.wait);
 
         // SAFETY: no callback can be queued or executing, so the object can be
@@ -897,11 +1113,25 @@ impl Drop for ThreadpoolWait {
         // this, when its field is dropped, so the handle outlives the wait
         // object and its close routine -- `CloseHandle` or a custom one -- runs
         // only once the pool has stopped watching it.
+        crate::trace_call!("CloseThreadpoolWait", self.wait, 0, {
+            unsafe { CloseThreadpoolWait(self.wait) };
+        });
+        // SAFETY: as above; the pool can no longer reach the context.
         unsafe {
-            CloseThreadpoolWait(self.wait);
             drop(Box::from_raw(self.context));
         }
-        crate::trace_record!("wait", "drop-closed", self.wait);
+        // The last record this object emits, and it carries the target handle
+        // because nothing after it can: the close of that handle is the field
+        // drop that runs the instant this body returns, with no code of ours in
+        // between. So the interval from `drop-drained` to the handle's close
+        // holds exactly `CloseThreadpoolWait`, the context free, and that field
+        // drop -- a reader who sees a gap there is looking at one of those three
+        // and not at something unrecorded.
+        crate::trace_record!("wait", "drop-closed", self.wait, self.target.raw() as usize);
+        // Last, after the drain, the close and the context free. A panic
+        // unwinds, so anything after it would be skipped; the target handle
+        // still closes, because field drops run even when `Drop::drop` unwinds.
+        crate::obligation::fail_fast_if_owed(owed, "ThreadpoolWait", "stop_and_drain");
     }
 }
 

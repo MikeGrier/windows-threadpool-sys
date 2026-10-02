@@ -1,6 +1,9 @@
 // Copyright (c) 2026 Mike Grier
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+// The only user is gated off under `fail-fast` (dropping a submitted work item
+// is required to panic there), so the import is unused in that build alone.
+#[cfg_attr(feature = "fail-fast", allow(unused_imports))]
 use std::time::Duration;
 
 use crate::callback_env::CallbackEnviron;
@@ -96,6 +99,10 @@ fn submit_ten_times_counter_is_ten() {
 // --- callback ownership model ---
 
 /// Drop must wait for in-flight callbacks before freeing the captured context.
+// Dropping a submitted work item is this test's subject, so it must keep doing
+// exactly that. Under `fail-fast` that drop is *required* to panic, so the
+// armed behaviour is guarded by the child-process test instead.
+#[cfg(not(feature = "fail-fast"))]
 #[test]
 fn drop_waits_for_in_flight_callback() {
     let done = Arc::new(AtomicBool::new(false));
@@ -180,6 +187,9 @@ fn cancel_pending_does_not_panic() {
     work.cancel_pending();
     // Count is in [0, 10] — we don't assert a specific value since cancellation is racy.
     assert!(count.load(Ordering::SeqCst) <= 10);
+    // A dispatch never settles a work item's obligation -- it can be submitted
+    // again -- so the drain is owed however many callbacks have run.
+    work.stop_and_drain();
 }
 
 /// After cancel_pending, resubmit and wait — must run exactly once.

@@ -46,6 +46,11 @@ use crate::callback_env::CallbackEnviron;
 /// operation and waited for every executing callback.
 struct IoContext {
     live: Arc<OperationRegistry>,
+    /// This object's claim on its pool's self-heal entry.
+    ///
+    /// On the context rather than on `ThreadpoolIo` so the trampoline can reach
+    /// it to stamp a dispatch (`M-T6.2`).
+    registration: crate::heal::Registration,
     callback: Box<dyn Fn(&IoCompletion) + Send + Sync + 'static>,
 }
 
@@ -65,6 +70,11 @@ unsafe extern "system" fn io_trampoline(
 ) {
     // SAFETY: context is a valid *mut IoContext for the full callback duration (see Drop).
     let ctx = unsafe { &*(context as *const IoContext) };
+    crate::trace_record!("io", "trampoline-entered", overlapped as usize, io_result);
+    // Stamped before the callback, not after: a dispatch that is still running
+    // is evidence the pool is live, and a long callback must not look like
+    // silence to the self-heal.
+    ctx.registration.stamp_dispatch();
 
     let overlapped = overlapped.cast::<OVERLAPPED>();
 
@@ -90,6 +100,7 @@ unsafe extern "system" fn io_trampoline(
         claimed: Cell::new(false),
     };
     (ctx.callback)(&completion);
+    crate::trace_record!("io", "trampoline-left", overlapped as usize, io_result);
 }
 
 /// An owned thread-pool I/O object bound to one overlapped endpoint.
@@ -220,24 +231,31 @@ impl ThreadpoolIo {
     {
         let handle = endpoint.into_handle();
         let live = Arc::new(OperationRegistry::new());
+        // Read before `env` is consumed below, and registered before the object
+        // exists: the entry must be able to repair this pool from the moment
+        // anything of ours can dispatch on it.
+        let registration = crate::heal::register(crate::heal::key_of(env.as_deref()));
         let context = Box::into_raw(Box::new(IoContext {
             live: Arc::clone(&live),
+            registration,
             callback: Box::new(callback),
         }));
 
         let env_ptr = env.map_or(ptr::null_mut(), |e| e.as_mut_ptr());
 
-        // SAFETY: the handle is a live overlapped endpoint that no other backend
-        // has associated, context is a valid heap pointer that outlives every
-        // callback, and env_ptr is valid (or null) for the duration of this call.
-        let tp_io = unsafe {
-            CreateThreadpoolIo(
-                handle.as_raw_handle(),
-                Some(io_trampoline),
-                context.cast(),
-                env_ptr.cast_const(),
-            )
-        };
+        let tp_io = crate::trace_call!("CreateThreadpoolIo", handle.as_raw_handle() as usize, 0, {
+            // SAFETY: the handle is a live overlapped endpoint that no other backend
+            // has associated, context is a valid heap pointer that outlives every
+            // callback, and env_ptr is valid (or null) for the duration of this call.
+            unsafe {
+                CreateThreadpoolIo(
+                    handle.as_raw_handle(),
+                    Some(io_trampoline),
+                    context.cast(),
+                    env_ptr.cast_const(),
+                )
+            }
+        });
 
         if tp_io == 0 {
             let error = io::Error::last_os_error();
@@ -246,6 +264,7 @@ impl ThreadpoolIo {
             return Err(error);
         }
 
+        crate::trace_record!("io", "created", tp_io, handle.as_raw_handle() as usize);
         Ok(Self {
             tp_io,
             handle,
@@ -342,14 +361,27 @@ impl ThreadpoolIo {
         self.live.insert(id);
         // SAFETY: tp_io is valid for the lifetime of self. This start is balanced
         // exactly once on every path below.
-        unsafe { StartThreadpoolIo(self.tp_io) };
+        crate::trace_call!("StartThreadpoolIo", self.tp_io, overlapped as usize, {
+            // SAFETY: tp_io is valid for the lifetime of self. This start is balanced
+            // exactly once on every path below.
+            unsafe { StartThreadpoolIo(self.tp_io) };
+        });
+        crate::trace_record!("io", "started", self.tp_io, overlapped as usize);
 
         match issue(self.handle(), overlapped) {
             Ok(Issued::Pending) => Submitted::Pending(id),
             Ok(Issued::Completed { bytes_transferred }) => {
                 // SAFETY: no callback will arrive, so the start must be balanced
                 // here or the pool would wait for a completion that never comes.
-                unsafe { CancelThreadpoolIo(self.tp_io) };
+                crate::trace_call!("CancelThreadpoolIo", self.tp_io, overlapped as usize, {
+                    // SAFETY: no callback will arrive, so the start must be balanced
+                    // here or the pool would wait for a completion that never comes.
+                    unsafe { CancelThreadpoolIo(self.tp_io) };
+                });
+                // Paired with `started`: this operation will never reach the
+                // trampoline, so without this record its `started` would look
+                // like a dispatch that never happened.
+                crate::trace_record!("io", "start-cancelled", self.tp_io, overlapped as usize);
                 self.live.remove(overlapped);
                 // SAFETY: the operation completed synchronously and no callback
                 // will arrive, so the kernel is done with the storage; reclaim
@@ -364,7 +396,12 @@ impl ThreadpoolIo {
             Err(error) => {
                 // SAFETY: the submission failed and no callback will arrive, so
                 // the start must be balanced here.
-                unsafe { CancelThreadpoolIo(self.tp_io) };
+                crate::trace_call!("CancelThreadpoolIo", self.tp_io, overlapped as usize, {
+                    // SAFETY: the submission failed and no callback will arrive, so
+                    // the start must be balanced here.
+                    unsafe { CancelThreadpoolIo(self.tp_io) };
+                });
+                crate::trace_record!("io", "start-cancelled", self.tp_io, overlapped as usize);
                 self.live.remove(overlapped);
                 // SAFETY: no callback will arrive, so reclaim the operation we
                 // just leaked, exactly once.
@@ -399,7 +436,15 @@ impl ThreadpoolIo {
             // SAFETY: cancelling by a valid handle and an OVERLAPPED identity
             // the registry has confirmed still names a live operation, and which
             // cannot be reclaimed and reissued while the guard is held.
-            let ok = unsafe { CancelIoEx(self.raw_handle(), id.as_ptr()) };
+            let ok = crate::trace_call!(
+                "CancelIoEx",
+                self.raw_handle() as usize,
+                id.as_ptr() as usize,
+                {
+                    // SAFETY: the handle is owned by self and the OVERLAPPED is live.
+                    unsafe { CancelIoEx(self.raw_handle(), id.as_ptr()) }
+                }
+            );
             if ok == 0 {
                 return Err(io::Error::last_os_error());
             }
@@ -415,7 +460,10 @@ impl ThreadpoolIo {
     /// nothing was outstanding.
     pub fn cancel_all(&self) -> io::Result<()> {
         // SAFETY: a null OVERLAPPED cancels all operations on the handle.
-        let ok = unsafe { CancelIoEx(self.raw_handle(), ptr::null()) };
+        let ok = crate::trace_call!("CancelIoEx(all)", self.raw_handle() as usize, 0, {
+            // SAFETY: the handle is owned by self; a null OVERLAPPED cancels all.
+            unsafe { CancelIoEx(self.raw_handle(), ptr::null()) }
+        });
         if ok == 0 {
             return Err(io::Error::last_os_error());
         }
@@ -438,10 +486,12 @@ impl ThreadpoolIo {
     /// Must not be called from inside this object's own callback, which would
     /// wait on the callback's own completion.
     pub fn run_down(&self) {
+        crate::trace_record!("io", "rundown-begin", self.tp_io, self.outstanding());
         self.live.wait_until_empty();
         // Deregistration happens at callback entry, so an empty registry does
         // not by itself mean the callbacks have finished.
         self.wait();
+        crate::trace_record!("io", "rundown-ended", self.tp_io);
     }
 
     /// Block until no I/O callback for this object is executing.
@@ -455,7 +505,11 @@ impl ThreadpoolIo {
     pub fn wait(&self) {
         // SAFETY: tp_io is valid for the lifetime of self; FALSE never cancels
         // pending callbacks, so no operation's storage is orphaned.
-        unsafe { WaitForThreadpoolIoCallbacks(self.tp_io, FALSE) };
+        crate::trace_call!("WaitForThreadpoolIoCallbacks", self.tp_io, 0, {
+            // SAFETY: tp_io is valid for the lifetime of self; FALSE never cancels
+            // pending callbacks, so no operation storage is orphaned.
+            unsafe { WaitForThreadpoolIoCallbacks(self.tp_io, FALSE) };
+        });
     }
 
     fn raw_handle(&self) -> HANDLE {
@@ -474,15 +528,26 @@ impl fmt::Debug for ThreadpoolIo {
 impl Drop for ThreadpoolIo {
     fn drop(&mut self) {
         let count = self.outstanding();
+        crate::trace_record!("io", "drop-begin", self.tp_io, count);
         if count > 0 {
             // A blocking Drop signals that rundown was skipped. Report it from
             // this single site, then make the block terminate: because this
             // object owns the handle, cancelling guarantees every outstanding
             // operation delivers its callback.
-            eprintln!(
-                "windows-threadpool-sys: ThreadpoolIo dropped with {count} operation(s) still \
-                 outstanding; call cancel_all() and run_down() before dropping to control when \
-                 this blocks."
+            //
+            // The report is a trace event rather than the `eprintln!` this
+            // shipped with, per [A developer-facing report is a trace
+            // event](../../../DESIGN-NOTES.md#reports-are-trace-events). The
+            // outstanding count rides in the second numeric slot, so the only
+            // thing the conversion cost is the English. This type needs no
+            // `CloseObligation`: `outstanding()` answers the same question from
+            // live state, which is why the other four types carry a flag and
+            // this one does not.
+            crate::trace_record!(
+                "io",
+                crate::obligation::DROP_OBLIGATION_OWED,
+                self.tp_io,
+                count
             );
             let _ = self.cancel_all();
             self.live.wait_until_empty();
@@ -496,15 +561,33 @@ impl Drop for ThreadpoolIo {
         // SAFETY: tp_io is valid and no operation is outstanding, so waiting
         // without cancelling cannot orphan any storage, and closing the object
         // is legal once its callbacks have finished.
-        unsafe {
-            WaitForThreadpoolIoCallbacks(self.tp_io, FALSE);
-            CloseThreadpoolIo(self.tp_io);
-        }
+        crate::trace_call!("WaitForThreadpoolIoCallbacks", self.tp_io, 0, {
+            // SAFETY: tp_io is valid and nothing is outstanding, so waiting without
+            // cancelling cannot orphan any storage.
+            unsafe { WaitForThreadpoolIoCallbacks(self.tp_io, FALSE) };
+        });
+        crate::trace_call!("CloseThreadpoolIo", self.tp_io, 0, {
+            // SAFETY: closing the object is legal once its callbacks have finished.
+            unsafe { CloseThreadpoolIo(self.tp_io) };
+        });
+        crate::trace_record!("io", "drop-drained", self.tp_io);
 
         // SAFETY: the TP_IO object is closed and every callback has finished, so
         // nothing can reach the context again; free it exactly once. `handle`
         // closes after this, when its field is dropped.
         unsafe { drop(Box::from_raw(self.context)) };
+        // The last record this object emits, and it carries the handle because
+        // nothing after it can: the handle's close is the field drop that runs
+        // the instant this body returns, with no code of ours in between.
+        crate::trace_record!("io", "drop-closed", self.tp_io, self.raw_handle() as usize);
+        // Last, after the rundown, the close and the context free: a panic
+        // unwinds, so anything after it would be skipped; the endpoint handle
+        // still closes, because field drops run even when `Drop::drop` unwinds.
+        //
+        // `count` was read at the top, before the cancel and the wait emptied
+        // the registry -- reading it here would find zero on exactly the objects
+        // that owed a rundown.
+        crate::obligation::fail_fast_if_owed(count > 0, "ThreadpoolIo", "run_down");
     }
 }
 

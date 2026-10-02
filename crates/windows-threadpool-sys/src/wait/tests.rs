@@ -242,6 +242,10 @@ fn a_rearming_callback_activates_repeatedly() {
         results.iter().all(|r| *r == WaitResult::Signalled),
         "every activation should be a signal, got {results:?}"
     );
+    // `disarm` is not a drain -- it stops the next activation without settling
+    // the obligation -- so the close is still owed, and under `fail-fast` the
+    // crate is held to the protocol it publishes.
+    wait.stop_and_drain();
 }
 
 /// A callback that does not rearm stops watching after one activation.
@@ -310,6 +314,7 @@ fn disarming_prevents_activation() {
     signal(wait.handle());
     std::thread::sleep(Duration::from_millis(60));
     assert_eq!(seen.count(), 0, "a disarmed wait must not activate");
+    wait.stop_and_drain();
 }
 
 #[test]
@@ -595,6 +600,10 @@ fn drop_waits_for_an_executing_callback() {
 }
 
 /// Dropping a wait whose callback rearms must terminate: Drop disarms first.
+// Dropping an armed wait is this test's subject, so it must keep doing exactly
+// that. Under `fail-fast` that drop is *required* to panic, so the armed
+// behaviour is guarded by the child-process test instead.
+#[cfg(not(feature = "fail-fast"))]
 #[test]
 fn drop_of_a_rearming_wait_terminates() {
     let started = std::time::Instant::now();
@@ -664,6 +673,63 @@ fn rearming_outside_teardown_is_honoured() {
     assert_eq!(*outcomes.lock().unwrap(), vec![true]);
 }
 
+/// `stop_and_drain` lifts its own suppression before returning, so a callback
+/// that re-arms afterwards is honoured again.
+///
+/// This is the only test that covers the lifting. The obvious candidate,
+/// [`a_wait_is_reusable_after_stop_and_drain`], re-arms through
+/// [`ThreadpoolWait::arm`] -- which deliberately does *not* consult the
+/// suppression -- so it passes whether or not the count was ever lowered. And
+/// [`rearming_outside_teardown_is_honoured`] never drains first, so its count is
+/// zero throughout. Only a callback-side re-arm after a completed drain can tell
+/// the difference, which is what this does.
+#[test]
+fn a_callback_can_rearm_again_after_stop_and_drain() {
+    let outcomes = Arc::new(Mutex::new(Vec::new()));
+    let recorder = Arc::clone(&outcomes);
+    let started = Activations::new();
+    let entered = Arc::clone(&started);
+    // Selects the activation *after* the drain, atomically for the reason given
+    // on `rearming_outside_teardown_is_honoured`.
+    let selector = Arc::new(AtomicUsize::new(0));
+    let pick = Arc::clone(&selector);
+
+    let wait = ThreadpoolWait::new(
+        event(true),
+        move |activation| {
+            if pick.fetch_add(1, Ordering::SeqCst) == 1 {
+                recorder
+                    .lock()
+                    .unwrap()
+                    .push(activation.rearm_reporting(None));
+            }
+            entered.record(activation.result());
+        },
+        None,
+    )
+    .expect("create wait");
+
+    // First activation: does not re-arm, so the wait is idle when this returns.
+    wait.arm(None);
+    signal(wait.handle());
+    started.wait_for(1);
+    wait.stop_and_drain();
+
+    // Second activation, after the drain. Its re-arm is discarded if the
+    // suppression `stop_and_drain` raised was never lowered.
+    wait.arm(None);
+    signal(wait.handle());
+    started.wait_for(2);
+    wait.stop_and_drain();
+
+    assert_eq!(
+        *outcomes.lock().unwrap(),
+        vec![true],
+        "stop_and_drain must lift its own suppression, or every later \
+         callback-side re-arm is silently discarded"
+    );
+}
+
 /// A callback that re-arms while `Drop` is tearing down must not leave the
 /// object armed behind it: the drain would then return with an activation still
 /// possible, and the close and context free would race a fresh callback.
@@ -712,6 +778,8 @@ fn rearming_during_teardown_is_suppressed() {
     );
 }
 
+// Dropping an armed wait is this test's subject -- see the note above.
+#[cfg(not(feature = "fail-fast"))]
 #[test]
 fn drop_while_armed_but_not_signalled_is_clean() {
     let (wait, seen) = recording_wait(true);
@@ -962,6 +1030,9 @@ fn the_default_path_still_closes_with_close_handle() {
     wait.arm(None);
     signal(wait.handle());
     wait.wait();
+    // `wait` blocks for the callback but does not settle the obligation; the
+    // drop under test here is the handle close, which still happens below.
+    wait.stop_and_drain();
     drop(wait);
 }
 
@@ -1003,4 +1074,228 @@ fn into_handle_declines_a_custom_close_target() {
         1,
         "the returned wrapper still owns the handle and closes it once"
     );
+}
+
+/// Teardown **runs** a queued callback rather than discarding it.
+///
+/// This is the guard for
+/// [the teardown-drains decision](../../../../DESIGN-NOTES.md#teardown-drains),
+/// and it exists because the tests that were already here could not tell the
+/// two teardowns apart. Cancelling and draining both leave the object
+/// quiescent, so every assertion about quiescence passes either way -- which is
+/// exactly why the wrong one survived as long as it did. The only assertion
+/// that separates them is whether the callback *ran*.
+///
+/// **Getting a callback provably queued-but-not-started is the whole
+/// difficulty**, and a private pool capped at one thread is what makes it
+/// deterministic rather than a race. The single thread is occupied by a work
+/// item that will not return until this test lets it, so when the event is
+/// signalled the wait's callback has nowhere to run: the pool must queue it.
+/// Only then is the distinction between "discard what is queued" and "run what
+/// is queued" observable at all.
+#[test]
+fn stop_and_drain_runs_a_queued_callback_rather_than_discarding_it() {
+    let pool = ThreadpoolPool::new().expect("create the private pool");
+    pool.set_min_threads(1).expect("one thread minimum");
+    pool.set_max_threads(1).expect("one thread maximum");
+    let mut env = CallbackEnviron::new();
+    env.set_pool(&pool);
+
+    // Occupy the pool's only thread until this test releases it.
+    let gate = Arc::new((Mutex::new(false), Condvar::new()));
+    let gate_for_work = Arc::clone(&gate);
+    // Set on entry, so the test can wait for the occupier to be *running*
+    // rather than merely submitted. See the spin below for why that matters.
+    let entered = Arc::new(AtomicUsize::new(0));
+    let entered_for_work = Arc::clone(&entered);
+    let occupier = crate::work::ThreadpoolWork::new(
+        move || {
+            entered_for_work.fetch_add(1, Ordering::SeqCst);
+            let (lock, cvar) = &*gate_for_work;
+            let mut open = lock.lock().unwrap_or_else(|p| p.into_inner());
+            while !*open {
+                open = cvar.wait(open).unwrap_or_else(|p| p.into_inner());
+            }
+        },
+        Some(&mut env),
+    )
+    .expect("create the occupying work item");
+    occupier.submit();
+
+    // Block until the occupier actually holds the pool's only thread.
+    //
+    // `submit` queues; it does not dispatch. Without this the occupier and the
+    // wait's callback are two queued items on a one-thread pool and the pool
+    // may run either first -- so "the callback is queued and cannot have
+    // started" was an assumption rather than a fact, and the assertion meant to
+    // check it passes whenever *nothing* has run yet, which is also true when
+    // the occupier has not started.
+    //
+    // Measured 2026-10-01, which is how this was found: with the cancelling
+    // sabotage applied, one run reported the occupier entered and the callback
+    // already run before `drop`, and another reported the occupier never
+    // entered at all. Both let the callback run, so both made a cancelling
+    // teardown look identical to a draining one and the guard reported
+    // `survived`. See `M-T6.10`.
+    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    while entered.load(Ordering::SeqCst) == 0 {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the occupying work item never started, so the pool's only thread is \
+             not held and this test cannot measure a queued callback"
+        );
+        std::thread::yield_now();
+    }
+
+    let ran = Arc::new(AtomicUsize::new(0));
+    let ran_for_callback = Arc::clone(&ran);
+    let event = WaitableHandle::event(true, false).expect("create the event");
+    let raw = event.handle().as_raw_handle();
+    let wait = ThreadpoolWait::new(
+        event,
+        move |_| {
+            ran_for_callback.fetch_add(1, Ordering::SeqCst);
+        },
+        Some(&mut env),
+    )
+    .expect("create the wait");
+    wait.arm(None);
+
+    // Signal it while the only thread is busy: the callback is now queued and
+    // cannot have started.
+    // SAFETY: a live event handle this test owns.
+    unsafe { SetEvent(raw) };
+    assert_eq!(
+        ran.load(Ordering::SeqCst),
+        0,
+        "the pool's only thread is occupied, so the callback cannot have run yet -- if it did, \
+         this test is no longer measuring a queued callback and proves nothing"
+    );
+
+    // Release the occupier on another thread, so the drain below is what waits
+    // for the queued callback rather than this thread having already let it run.
+    let gate_for_release = Arc::clone(&gate);
+    let releaser = std::thread::spawn(move || {
+        std::thread::sleep(Duration::from_millis(50));
+        let (lock, cvar) = &*gate_for_release;
+        *lock.lock().unwrap_or_else(|p| p.into_inner()) = true;
+        cvar.notify_all();
+    });
+
+    wait.stop_and_drain();
+
+    assert_eq!(
+        ran.load(Ordering::SeqCst),
+        1,
+        "teardown must run the queued callback, not discard it: a cancelling teardown leaves this \
+         at zero and the object just as quiescent, which is why quiescence is not the property to \
+         assert here"
+    );
+    releaser.join().expect("the releasing thread finished");
+    // A dispatch never settles a work item's obligation -- it can be submitted
+    // again -- so the occupier owes a drain even though its callback returned.
+    occupier.stop_and_drain();
+}
+
+/// `Drop` runs a queued callback too, not only `stop_and_drain`.
+///
+/// Separate from the test above because they are separate call sites: `Drop`
+/// raises the suppression permanently and never releases it, so a change that
+/// fixed one and not the other would leave the teardown that actually matters
+/// -- the one a caller reaches by doing nothing -- still discarding work.
+// Dropping an armed wait is this test's subject -- see the note above.
+#[cfg(not(feature = "fail-fast"))]
+#[test]
+fn drop_runs_a_queued_callback_rather_than_discarding_it() {
+    let pool = ThreadpoolPool::new().expect("create the private pool");
+    pool.set_min_threads(1).expect("one thread minimum");
+    pool.set_max_threads(1).expect("one thread maximum");
+    let mut env = CallbackEnviron::new();
+    env.set_pool(&pool);
+
+    let gate = Arc::new((Mutex::new(false), Condvar::new()));
+    let gate_for_work = Arc::clone(&gate);
+    // Set on entry, so the test can wait for the occupier to be *running*
+    // rather than merely submitted. See the spin below for why that matters.
+    let entered = Arc::new(AtomicUsize::new(0));
+    let entered_for_work = Arc::clone(&entered);
+    let occupier = crate::work::ThreadpoolWork::new(
+        move || {
+            entered_for_work.fetch_add(1, Ordering::SeqCst);
+            let (lock, cvar) = &*gate_for_work;
+            let mut open = lock.lock().unwrap_or_else(|p| p.into_inner());
+            while !*open {
+                open = cvar.wait(open).unwrap_or_else(|p| p.into_inner());
+            }
+        },
+        Some(&mut env),
+    )
+    .expect("create the occupying work item");
+    occupier.submit();
+
+    // Block until the occupier actually holds the pool's only thread.
+    //
+    // `submit` queues; it does not dispatch. Without this the occupier and the
+    // wait's callback are two queued items on a one-thread pool and the pool
+    // may run either first -- so "the callback is queued and cannot have
+    // started" was an assumption rather than a fact, and the assertion meant to
+    // check it passes whenever *nothing* has run yet, which is also true when
+    // the occupier has not started.
+    //
+    // Measured 2026-10-01, which is how this was found: with the cancelling
+    // sabotage applied, one run reported the occupier entered and the callback
+    // already run before `drop`, and another reported the occupier never
+    // entered at all. Both let the callback run, so both made a cancelling
+    // teardown look identical to a draining one and the guard reported
+    // `survived`. See `M-T6.10`.
+    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    while entered.load(Ordering::SeqCst) == 0 {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the occupying work item never started, so the pool's only thread is \
+             not held and this test cannot measure a queued callback"
+        );
+        std::thread::yield_now();
+    }
+
+    let ran = Arc::new(AtomicUsize::new(0));
+    let ran_for_callback = Arc::clone(&ran);
+    let event = WaitableHandle::event(true, false).expect("create the event");
+    let raw = event.handle().as_raw_handle();
+    let wait = ThreadpoolWait::new(
+        event,
+        move |_| {
+            ran_for_callback.fetch_add(1, Ordering::SeqCst);
+        },
+        Some(&mut env),
+    )
+    .expect("create the wait");
+    wait.arm(None);
+    // SAFETY: a live event handle this test owns.
+    unsafe { SetEvent(raw) };
+    assert_eq!(
+        ran.load(Ordering::SeqCst),
+        0,
+        "the callback must still be queued when the drop below starts, or this proves nothing"
+    );
+
+    let gate_for_release = Arc::clone(&gate);
+    let releaser = std::thread::spawn(move || {
+        std::thread::sleep(Duration::from_millis(50));
+        let (lock, cvar) = &*gate_for_release;
+        *lock.lock().unwrap_or_else(|p| p.into_inner()) = true;
+        cvar.notify_all();
+    });
+
+    drop(wait);
+
+    assert_eq!(
+        ran.load(Ordering::SeqCst),
+        1,
+        "Drop must run the queued callback, not discard it"
+    );
+    releaser.join().expect("the releasing thread finished");
+    // A dispatch never settles a work item's obligation -- it can be submitted
+    // again -- so the occupier owes a drain even though its callback returned.
+    occupier.stop_and_drain();
 }
