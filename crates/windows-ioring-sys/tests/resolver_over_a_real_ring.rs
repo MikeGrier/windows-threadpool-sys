@@ -44,7 +44,7 @@ type ResolverRing = IoRing;
 /// crate's own `Build*` path is exercised exactly as it would be otherwise.
 mod common;
 
-fn scratch(tag: &str) -> (SharedFile, common::TempPath) {
+fn scratch(tag: &str) -> (common::TempPath, SharedFile) {
     let path = common::TempPath::new("m26-3", tag);
     let file = std::fs::OpenOptions::new()
         .create(true)
@@ -53,7 +53,7 @@ fn scratch(tag: &str) -> (SharedFile, common::TempPath) {
         .open(&path)
         .expect("a scratch file");
     assert!(!file.as_raw_handle().is_null());
-    (SharedFile::new(file.into()), path)
+    (path, SharedFile::new(file.into()))
 }
 
 #[test]
@@ -70,7 +70,7 @@ fn an_installed_resolver_answers_a_real_rings_operations() {
         // resolver that owns its operations. Outside it, rundown would ask a
         // real ring to wait for completions the kernel has no record of.
         let mut ring = ResolverRing::with_inventory(64, 128).expect("a ring");
-        let (file, path) = scratch("reachable");
+        let (path, file) = scratch("reachable");
 
         {
             let mut batch = Batch::new(&mut ring);
@@ -159,7 +159,7 @@ fn a_ring_runs_down_under_the_widest_resolution() {
         let replay = resolver.replay_hint();
         let path = resolver.scoped(|watch| {
             let mut ring = ResolverRing::with_inventory(64, 128).expect("a ring");
-            let (file, path) = scratch("rundown");
+            let (path, file) = scratch("rundown");
 
             let mut batch = Batch::new(&mut ring);
             for _ in 0..6 {
@@ -212,7 +212,7 @@ fn a_declined_submit_leaves_the_ring_resumable_and_the_policy_to_the_caller() {
     let replay = resolver.replay_hint();
     let (path, refusals, finished) = resolver.scoped(|_| {
         let mut ring = ResolverRing::with_inventory(64, 128).expect("a ring");
-        let (file, path) = scratch("declined");
+        let (path, file) = scratch("declined");
 
         let mut batch = Batch::new(&mut ring);
         for _ in 0..6 {
@@ -281,7 +281,7 @@ fn an_expired_wait_is_a_successful_submit() {
         let replay = resolver.replay_hint();
         let path = resolver.scoped(|watch| {
             let mut ring = ResolverRing::with_inventory(64, 128).expect("a ring");
-            let (file, path) = scratch("expired-submit");
+            let (path, file) = scratch("expired-submit");
 
             let outcome = {
                 let mut batch = Batch::new(&mut ring);
@@ -336,7 +336,7 @@ fn run_down_within_honours_its_bound_and_reports_rather_than_deciding() {
     let replay = resolver.replay_hint();
     let path = resolver.scoped(|_| {
         let mut ring = ResolverRing::with_inventory(64, 128).expect("a ring");
-        let (file, path) = scratch("bounded-rundown");
+        let (path, file) = scratch("bounded-rundown");
         {
             let mut batch = Batch::new(&mut ring);
             for _ in 0..4 {
@@ -410,7 +410,7 @@ fn a_pending_completion_defeats_try_pop_and_not_pop_within() {
 
     let path = resolver.scoped(|_| {
         let mut ring = ResolverRing::with_inventory(64, 128).expect("a ring");
-        let (file, path) = scratch("pending");
+        let (path, file) = scratch("pending");
 
         {
             let mut batch = Batch::new(&mut ring);
@@ -459,7 +459,7 @@ fn a_thread_with_nothing_installed_still_talks_to_the_kernel() {
     // that leaked past its guard would divert every ring in the process, and
     // the failure would look like a flaky kernel rather than like a harness
     // defect.
-    let (file, path) = scratch("uninstalled");
+    let (path, file) = scratch("uninstalled");
     let mut ring = ResolverRing::with_inventory(64, 128).expect("a ring");
 
     {

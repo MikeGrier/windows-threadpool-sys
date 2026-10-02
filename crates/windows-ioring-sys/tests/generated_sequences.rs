@@ -336,7 +336,7 @@ fn temp_file(tag: &str) -> common::TempPath {
     common::TempPath::new("generated", tag)
 }
 
-fn fixture(tag: &str) -> (File, common::TempPath) {
+fn fixture(tag: &str) -> (common::TempPath, File) {
     let path = temp_file(tag);
     let mut content = vec![0_u8; FILE_LEN];
     for (index, chunk) in content.chunks_mut(BUF_LEN).enumerate() {
@@ -348,7 +348,7 @@ fn fixture(tag: &str) -> (File, common::TempPath) {
         .write(true)
         .open(&path)
         .expect("open fixture read/write");
-    (file, path)
+    (path, file)
 }
 
 fn duplicate_handle(file: &File) -> OwnedHandle {
@@ -793,7 +793,7 @@ fn generated_sequences_satisfy_the_ring_contract() {
          uninstrumented and only prove that nothing crashed"
     );
 
-    let (file, path) = fixture("sweep");
+    let (path, file) = fixture("sweep");
     let shared = SharedFile::new(duplicate_handle(&file));
     let mut rng = Rng(seed);
     let mut coverage = Coverage::default();
@@ -937,7 +937,7 @@ fn issue_47_backlog_at_handover() -> Regression {
 }
 
 fn replay(tag: &str, regression: &Regression) {
-    let (file, path) = fixture(tag);
+    let (path, file) = fixture(tag);
     let shared = SharedFile::new(duplicate_handle(&file));
     let mut coverage = Coverage::default();
     let plan = Plan {
@@ -987,7 +987,7 @@ fn the_lost_wakeup_detector_fires_when_no_wakeup_is_owed() {
     /// would add five seconds to every run to learn the same thing.
     const EXPECT_TIMEOUT_MS: u32 = 250;
 
-    let (file, path) = fixture("detector");
+    let (path, file) = fixture("detector");
     let handle = file.as_raw_handle();
     let mut ring = SequenceRing::with_inventory(64, 64).expect("create ring");
     let mut run = Run {

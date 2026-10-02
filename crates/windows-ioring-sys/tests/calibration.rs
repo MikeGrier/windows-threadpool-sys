@@ -68,7 +68,7 @@ const BUDGET: usize = 512;
 
 mod common;
 
-fn scratch(tag: &str) -> (SharedFile, common::TempPath) {
+fn scratch(tag: &str) -> (common::TempPath, SharedFile) {
     let path = common::TempPath::new("m26-5", tag);
     let file = std::fs::OpenOptions::new()
         .create(true)
@@ -76,7 +76,7 @@ fn scratch(tag: &str) -> (SharedFile, common::TempPath) {
         .write(true)
         .open(&path)
         .expect("a scratch file");
-    (SharedFile::new(file.into()), path)
+    (path, SharedFile::new(file.into()))
 }
 
 /// The ring these calibrations drive.
@@ -160,7 +160,7 @@ fn the_resolver_breaks_a_consumer_that_believes_the_drain_flag_holds_back() {
     // resolver can *see* this class of error -- so the assertion is that some
     // seed breaks the believer, and a run where none did would mean the
     // instrument had gone narrow.
-    let (file, path) = scratch("holdback");
+    let (path, file) = scratch("holdback");
     let mut broken = 0_usize;
     let mut drain_half_failures = Vec::new();
 
@@ -287,7 +287,7 @@ fn an_expired_wait_reaches_pop_within() {
     // Asserted through the resolver's own counter rather than inferred from a
     // timing, because "the call took a while" is not evidence that a wait
     // expired.
-    let (file, path) = scratch("expired");
+    let (path, file) = scratch("expired");
     let mut seeds_with_an_expired_wait = 0_usize;
 
     for seed in SEEDS {
@@ -344,7 +344,7 @@ fn an_expired_wait_is_not_reported_as_a_failure() {
     // This is the assertion the sabotage turns red, so the two are a pair: the
     // sabotage shows the assertion is load-bearing, and the assertion is what
     // gives the sabotage something to break.
-    let (file, path) = scratch("notafailure");
+    let (path, file) = scratch("notafailure");
     for seed in SEEDS {
         let resolver = Resolver::with_config(
             seed,
