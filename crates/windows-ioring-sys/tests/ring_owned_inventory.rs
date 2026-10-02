@@ -14,11 +14,10 @@ use windows_ioring_sys::{Batch, FlushCoverage, FlushMode, IoRing, PushOptions};
 
 const LEN: usize = 4096;
 
-fn fixture(tag: &str) -> (std::path::PathBuf, std::fs::File) {
-    let path = std::env::temp_dir().join(format!(
-        "windows-ioring-sys-inventory-{}-{tag}.tmp",
-        std::process::id()
-    ));
+mod common;
+
+fn fixture(tag: &str) -> (common::TempPath, std::fs::File) {
+    let path = common::TempPath::new("inventory", tag);
     let mut file = std::fs::File::create(&path).expect("create fixture");
     file.write_all(&vec![0xC3_u8; LEN]).expect("fill fixture");
     file.sync_all().expect("flush fixture");

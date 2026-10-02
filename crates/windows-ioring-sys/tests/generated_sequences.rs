@@ -72,7 +72,6 @@
 use std::collections::HashMap;
 use std::fs::File;
 use std::os::windows::io::{AsRawHandle, OwnedHandle};
-use std::path::PathBuf;
 
 use windows_ioring_sys::contract::RingContract;
 use windows_ioring_sys::{
@@ -330,14 +329,14 @@ struct Run {
 /// Tagged per test, not just per process: libtest runs the tests in this file
 /// concurrently as threads, so one shared path would have them writing and
 /// opening the same file at the same time.
-fn temp_file(tag: &str) -> PathBuf {
-    std::env::temp_dir().join(format!(
-        "windows-ioring-sys-generated-{tag}-{}.tmp",
-        std::process::id()
-    ))
+mod common;
+
+/// A temp path that removes itself when dropped; see [`common::TempPath`].
+fn temp_file(tag: &str) -> common::TempPath {
+    common::TempPath::new("generated", tag)
 }
 
-fn fixture(tag: &str) -> (File, PathBuf) {
+fn fixture(tag: &str) -> (File, common::TempPath) {
     let path = temp_file(tag);
     let mut content = vec![0_u8; FILE_LEN];
     for (index, chunk) in content.chunks_mut(BUF_LEN).enumerate() {

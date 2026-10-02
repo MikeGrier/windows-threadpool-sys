@@ -70,6 +70,8 @@
 
 use std::time::{Duration, Instant};
 
+mod common;
+
 use windows_ioring_sys::contract::RingContract;
 use windows_ioring_sys::sys::{Resolver, ResolverWatch, Responses};
 use windows_ioring_sys::{
@@ -539,10 +541,7 @@ fn the_properties_hold_under_every_resolution() {
          prove that nothing crashed"
     );
 
-    let path = std::env::temp_dir().join(format!(
-        "windows-ioring-sys-m26-4-{}.tmp",
-        std::process::id()
-    ));
+    let path = common::TempPath::new("m26-4", "resolution");
     let mut plan_rng = Rng(plan_seed);
     let mut resolver_rng = Rng(resolver_seed);
     let mut coverage = Coverage::default();
@@ -699,10 +698,7 @@ fn pop_within_honours_its_bound_when_nothing_completes() {
     // and the deadline is the only thing that can end the call.
     let guard = windows_ioring_sys::sys::install(Box::new(Stalled));
     let mut ring = PropertyRing::with_inventory(64, 128).expect("a ring");
-    let path = std::env::temp_dir().join(format!(
-        "windows-ioring-sys-m26-4-stalled-{}.tmp",
-        std::process::id()
-    ));
+    let path = common::TempPath::new("m26-4", "stalled");
     let file = SharedFile::new(
         std::fs::OpenOptions::new()
             .create(true)

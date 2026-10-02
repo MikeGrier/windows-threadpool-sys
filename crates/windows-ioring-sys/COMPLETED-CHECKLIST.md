@@ -5669,3 +5669,71 @@ adopted after a silent `.Replace()` voided a 60000-run measurement.
 self-heal did not mask anything" rests on the mechanism -- a repair is only owed after a
 cancellation, and the drain records none -- rather than on a measurement. A `--no-default-features`
 arm would settle it, and is not queued, because nothing currently depends on the answer.
+
+## <a id="moved-2026-10-01-m2614"></a>Moved 2026-10-01 22:03:17 -04:00 -- M26.14, the leaking temp files
+
+### <a id="m2614"></a>M26.14 -- A self-removing `TempPath` guard, shared by 14 test files: an all-passing suite run went from 25 leaked files to 0, and a test panicking with its handle open now leaves none. *(completed 2026-10-01 22:03:17 -04:00)*
+
+The item as it stood, including the premise that turned out to be wrong:
+> - [ ] **M26.14** -- **The ioring tests leak their temp files, and nothing cleans up.** `temp_file` in
+>   [tests/event_delivery.rs](tests/event_delivery.rs) builds a path under the system temp directory
+>   and no test removes it; each run of the M26.13 reproducer leaves two behind, and roughly thirty
+>   thousand runs during that investigation accumulated **307,383 files, 1.2 GB** on the development
+>   machine before they were deleted by hand. It is not confined to that file: **15** of this crate's
+>   test files build paths under the temp directory and none clean up.
+>
+>   **Measured not to be a confound** before being queued -- the reproducer gives 13 failures in 4000
+>   against a cleared directory and 16 against a full one, both inside its usual range
+>   ([measurements/2026-09-28-re-verifying-the-premises/](measurements/2026-09-28-re-verifying-the-premises/README.md)).
+>
+>   **Deliberately not fixed during M26.13**, and the reason is the blocker rather than a preference:
+>   adding teardown changes the reproducer's shape while it is the instrument of an active
+>   investigation, and every failure rate on record would have to be re-established against the new
+>   one. Take it once M26.13 closes, or take it sooner as an explicit decision to re-baseline. The
+>   fix itself is small -- an RAII guard returned by `temp_file` that removes the path on drop, so
+>   that a panicking test still cleans up.
+
+#### Correction: "none clean up" was wrong, and the correction sharpened the fix
+
+**Twelve of the fifteen files already removed their temp files**, across 45 call sites, and
+`flush_barrier_stress.rs` already carried a correct RAII guard with the hazard documented. Only
+three -- `completion_event.rs`, `event_delivery.rs` and `submission_lifecycle.rs` -- had no removal
+on any path.
+
+The real defect is narrower and explains the leak better than the item's version did: **a trailing
+`remove_file` does not run when the test panics**, and `M26.13` was thirty thousand runs of a
+reproducer whose failing arm panics. Had the item's framing been taken at face value, the fix would
+have been fifteen new cleanup calls on the path that already worked, and the panicking path -- the
+one that produced the 307,383 files -- would have been left exactly as it was.
+
+#### What was built and what it was measured against
+
+A `TempPath` guard in `tests/common/mod.rs`, one definition, included by the 14 converted files.
+Measured in
+[2026-10-01-the-tests-stop-leaking-temp-files](measurements/2026-10-01-the-tests-stop-leaking-temp-files/README.md):
+an all-passing suite run leaked **25** files before and **0** after.
+
+**The panicking path was verified rather than assumed**, because a zero on a passing run does not
+establish the property the guard exists for. A deliberate `panic!` was placed in a test *after its
+file handle is open* -- the state in which a removal can fail outright -- and the run panicked
+there, exited 101, and left no file. That site had no removal at all beforehand, so the same panic
+leaked before the change.
+
+#### Two things deliberately left alone, each for a reason
+
+**The 45 existing `remove_file` calls stay.** They look redundant and are not: each runs at a point
+the test controls, after the test has closed its own handle, which is strictly more reliable than a
+drop order that depends on declaration order. The guard is the net underneath them, and a removal
+that finds nothing is not an error, so the two compose.
+
+**`flush_barrier_stress.rs` keeps its own `Fixture` guard**, which closes the handle before
+deleting. Converting it for uniformity would have risked the precise defect it was written to fix --
+every trial silently leaking a 32 MiB extent because the handle was held in the same struct.
+
+#### The gate this item carried
+
+It said to take this once `M26.13` closes, or sooner as an explicit decision to re-baseline, because
+changing the reproducer while it was an active instrument would invalidate every failure rate on
+record. `M26.13` is still open, so this was the second case. The re-baselining cost is now small:
+`M26.15` re-established the rates earlier the same day, and the arm that still carries a rate is the
+*control*, which is a patched build anyone re-running it would rebuild regardless.

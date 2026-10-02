@@ -4,7 +4,6 @@
 #![cfg(windows)]
 
 use std::os::windows::io::AsRawHandle;
-use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -51,11 +50,11 @@ fn the_guard_allocator_is_installed_for_this_test_binary() {
     );
 }
 
-fn temp_file(tag: &str) -> PathBuf {
-    std::env::temp_dir().join(format!(
-        "windows-ioring-sys-registration-{tag}-{}.tmp",
-        std::process::id()
-    ))
+mod common;
+
+/// A temp path that removes itself when dropped; see [`common::TempPath`].
+fn temp_file(tag: &str) -> common::TempPath {
+    common::TempPath::new("registration", tag)
 }
 
 #[test]

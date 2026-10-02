@@ -28,7 +28,6 @@
 #![cfg(all(windows, feature = "fault-injection"))]
 
 use std::os::windows::io::AsRawHandle;
-use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
@@ -38,11 +37,11 @@ use windows_ioring_sys::{
     IoRingErrorExt, PushOptions, RingCondition, SharedFile, WriteCaching,
 };
 
-fn temp_file(tag: &str) -> PathBuf {
-    std::env::temp_dir().join(format!(
-        "windows-ioring-sys-failure-paths-{tag}-{}.tmp",
-        std::process::id()
-    ))
+mod common;
+
+/// A temp path that removes itself when dropped; see [`common::TempPath`].
+fn temp_file(tag: &str) -> common::TempPath {
+    common::TempPath::new("failure-paths", tag)
 }
 
 /// Wait for one completion, bounded.

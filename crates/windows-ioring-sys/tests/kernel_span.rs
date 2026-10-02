@@ -35,7 +35,6 @@
 #![cfg(windows)]
 
 use std::os::windows::io::OwnedHandle;
-use std::path::PathBuf;
 
 use windows_guard_alloc::poison;
 use windows_guard_alloc::witness::Witness;
@@ -66,11 +65,11 @@ const SLOT_LEN: usize = 8192;
 /// How long to wait for a completion before declaring the ring stuck.
 const WAIT_MS: u32 = 30_000;
 
-fn temp_file(tag: &str) -> PathBuf {
-    std::env::temp_dir().join(format!(
-        "windows-ioring-sys-kernel-span-{tag}-{}.tmp",
-        std::process::id()
-    ))
+mod common;
+
+/// A temp path that removes itself when dropped; see [`common::TempPath`].
+fn temp_file(tag: &str) -> common::TempPath {
+    common::TempPath::new("kernel-span", tag)
 }
 
 /// The poison ordinal used for slot `i`.

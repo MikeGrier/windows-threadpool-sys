@@ -16,17 +16,16 @@
 #![cfg(all(windows, feature = "fault-injection"))]
 
 use std::os::windows::io::AsRawHandle;
-use std::path::PathBuf;
 
 use windows_ioring_sys::{
     Batch, Completion, InjectedFailure, IoRing, IoRingErrorExt, PushOptions, RingCondition,
 };
 
-fn temp_file(tag: &str) -> PathBuf {
-    std::env::temp_dir().join(format!(
-        "windows-ioring-sys-fault-injection-{tag}-{}.tmp",
-        std::process::id()
-    ))
+mod common;
+
+/// A temp path that removes itself when dropped; see [`common::TempPath`].
+fn temp_file(tag: &str) -> common::TempPath {
+    common::TempPath::new("fault-injection", tag)
 }
 
 /// The ring these tests drive.

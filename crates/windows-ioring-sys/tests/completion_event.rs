@@ -24,7 +24,6 @@
 
 use std::fs::File;
 use std::os::windows::io::{AsRawHandle, FromRawHandle, OwnedHandle};
-use std::path::PathBuf;
 
 use windows_ioring_sys::{Batch, IoRing, PushOptions, capabilities};
 use windows_sys::Win32::Foundation::{HANDLE, WAIT_OBJECT_0, WAIT_TIMEOUT};
@@ -71,11 +70,11 @@ const MAX_DRAIN_ATTEMPTS: usize = 512;
 /// answers it from the ring rather than from a copy the test maintained.
 type EventRing = IoRing<Vec<u8>>;
 
-fn temp_file(tag: &str) -> PathBuf {
-    std::env::temp_dir().join(format!(
-        "windows-ioring-sys-completion-event-{tag}-{}.tmp",
-        std::process::id()
-    ))
+mod common;
+
+/// A temp path that removes itself when dropped; see [`common::TempPath`].
+fn temp_file(tag: &str) -> common::TempPath {
+    common::TempPath::new("completion-event", tag)
 }
 
 /// A file with `CHUNKS * CHUNK_LEN` bytes of readable content, open for read.

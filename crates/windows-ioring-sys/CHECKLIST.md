@@ -213,23 +213,10 @@ nobody updates.
   to [RESOLVED-TEST-FAILURES.md](RESOLVED-TEST-FAILURES.md). The item's own premise was wrong and is
   corrected in the archive. -> [completed 2026-10-01](COMPLETED-CHECKLIST.md#m2615)
 
-- [ ] **M26.14** -- **The ioring tests leak their temp files, and nothing cleans up.** `temp_file` in
-  [tests/event_delivery.rs](tests/event_delivery.rs) builds a path under the system temp directory
-  and no test removes it; each run of the M26.13 reproducer leaves two behind, and roughly thirty
-  thousand runs during that investigation accumulated **307,383 files, 1.2 GB** on the development
-  machine before they were deleted by hand. It is not confined to that file: **15** of this crate's
-  test files build paths under the temp directory and none clean up.
-
-  **Measured not to be a confound** before being queued -- the reproducer gives 13 failures in 4000
-  against a cleared directory and 16 against a full one, both inside its usual range
-  ([measurements/2026-09-28-re-verifying-the-premises/](measurements/2026-09-28-re-verifying-the-premises/README.md)).
-
-  **Deliberately not fixed during M26.13**, and the reason is the blocker rather than a preference:
-  adding teardown changes the reproducer's shape while it is the instrument of an active
-  investigation, and every failure rate on record would have to be re-established against the new
-  one. Take it once M26.13 closes, or take it sooner as an explicit decision to re-baseline. The
-  fix itself is small -- an RAII guard returned by `temp_file` that removes the path on drop, so
-  that a panicking test still cleans up.
+- [x] **M26.14** -- A self-removing `TempPath` guard, shared by 14 test files: an all-passing suite
+  run went from 25 leaked files to 0, and a test panicking with its handle open now leaves none.
+  The item's "none clean up" was wrong; 12 of 15 did, just not on the panicking path. ->
+  [completed 2026-10-01](COMPLETED-CHECKLIST.md#m2614)
 
 ## M27 -- What this crate owes the topology planner
 

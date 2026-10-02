@@ -42,11 +42,10 @@ type ResolverRing = IoRing;
 /// A file to aim flushes at. Its contents never matter: under a resolver the
 /// operation never reaches the kernel, and the point of the handle is that the
 /// crate's own `Build*` path is exercised exactly as it would be otherwise.
-fn scratch(tag: &str) -> (SharedFile, std::path::PathBuf) {
-    let path = std::env::temp_dir().join(format!(
-        "windows-ioring-sys-m26-3-{}-{tag}.tmp",
-        std::process::id()
-    ));
+mod common;
+
+fn scratch(tag: &str) -> (SharedFile, common::TempPath) {
+    let path = common::TempPath::new("m26-3", tag);
     let file = std::fs::OpenOptions::new()
         .create(true)
         .truncate(true)

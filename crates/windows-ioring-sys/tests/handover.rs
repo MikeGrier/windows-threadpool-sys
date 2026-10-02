@@ -37,7 +37,7 @@ use std::ffi::c_void;
 use std::fs::File;
 use std::os::windows::ffi::OsStrExt;
 use std::os::windows::io::{AsRawHandle, FromRawHandle, OwnedHandle};
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use windows_ioring_sys::contract::RingContract;
 use windows_ioring_sys::{Batch, IoBuf, IoBufMut, IoRing, PushOptions};
@@ -216,11 +216,11 @@ fn open_unbuffered(path: &Path) -> OwnedHandle {
     unsafe { OwnedHandle::from_raw_handle(raw.cast::<c_void>()) }
 }
 
-fn temp_file(tag: &str) -> PathBuf {
-    std::env::temp_dir().join(format!(
-        "windows-ioring-sys-handover-{tag}-{}.tmp",
-        std::process::id()
-    ))
+mod common;
+
+/// A temp path that removes itself when dropped; see [`common::TempPath`].
+fn temp_file(tag: &str) -> common::TempPath {
+    common::TempPath::new("handover", tag)
 }
 
 /// A file with `WAVES * CHUNKS * CHUNK_LEN` bytes of readable content, open

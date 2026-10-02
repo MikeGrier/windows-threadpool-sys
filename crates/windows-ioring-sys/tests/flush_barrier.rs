@@ -55,7 +55,7 @@
 use std::ffi::c_void;
 use std::os::windows::ffi::OsStrExt;
 use std::os::windows::io::{AsRawHandle, FromRawHandle, OwnedHandle, RawHandle};
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use windows_ioring_sys::{
     Batch, FlushCoverage, FlushMode, IoBuf, IoRing, PushOptions, WriteCaching,
@@ -127,11 +127,11 @@ unsafe impl IoBuf for Aligned {
     }
 }
 
-fn temp_file(tag: &str) -> PathBuf {
-    std::env::temp_dir().join(format!(
-        "windows-ioring-sys-flush-barrier-{tag}-{}.tmp",
-        std::process::id()
-    ))
+mod common;
+
+/// A temp path that removes itself when dropped; see [`common::TempPath`].
+fn temp_file(tag: &str) -> common::TempPath {
+    common::TempPath::new("flush-barrier", tag)
 }
 
 /// Open `path` for unbuffered, overlapped access.

@@ -66,11 +66,10 @@ const BUF_LEN: usize = 256;
 /// How many consultations one sweep may take to drain.
 const BUDGET: usize = 512;
 
-fn scratch(tag: &str) -> (SharedFile, std::path::PathBuf) {
-    let path = std::env::temp_dir().join(format!(
-        "windows-ioring-sys-m26-5-{}-{tag}.tmp",
-        std::process::id()
-    ));
+mod common;
+
+fn scratch(tag: &str) -> (SharedFile, common::TempPath) {
+    let path = common::TempPath::new("m26-5", tag);
     let file = std::fs::OpenOptions::new()
         .create(true)
         .truncate(true)

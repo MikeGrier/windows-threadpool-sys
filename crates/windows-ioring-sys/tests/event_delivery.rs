@@ -7,7 +7,6 @@
 #![cfg(all(windows, feature = "threadpool"))]
 
 use std::os::windows::io::AsRawHandle;
-use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::mpsc;
@@ -20,11 +19,11 @@ use windows_sys::Win32::System::Threading::WaitForSingleObject;
 const CHUNKS: usize = 8;
 const CHUNK_LEN: usize = 512;
 
-fn temp_file(tag: &str) -> PathBuf {
-    std::env::temp_dir().join(format!(
-        "windows-ioring-sys-event-delivery-{tag}-{}.tmp",
-        std::process::id()
-    ))
+mod common;
+
+/// A temp path that removes itself when dropped; see [`common::TempPath`].
+fn temp_file(tag: &str) -> common::TempPath {
+    common::TempPath::new("event-delivery", tag)
 }
 
 fn filled_content() -> Vec<u8> {

@@ -5,7 +5,6 @@
 
 use std::io;
 use std::os::windows::io::{AsRawHandle, OwnedHandle};
-use std::path::PathBuf;
 
 use windows_ioring_sys::contract::RingContract;
 use windows_ioring_sys::{
@@ -39,11 +38,11 @@ const POP_BOUND: std::time::Duration = std::time::Duration::from_secs(10);
 const CHUNKS: usize = 8;
 const CHUNK_LEN: usize = 512;
 
-fn temp_file(tag: &str) -> PathBuf {
-    std::env::temp_dir().join(format!(
-        "windows-ioring-sys-submission-{tag}-{}.tmp",
-        std::process::id()
-    ))
+mod common;
+
+/// A temp path that removes itself when dropped; see [`common::TempPath`].
+fn temp_file(tag: &str) -> common::TempPath {
+    common::TempPath::new("submission", tag)
 }
 
 fn filled_content() -> Vec<u8> {
