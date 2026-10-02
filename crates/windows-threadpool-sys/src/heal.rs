@@ -86,6 +86,13 @@ mod off {
         /// build the crate makes no such claim, so there is nothing to report.
         /// Answering `false` would fire the untracked fail-fast on every
         /// cancellation in a configuration that never promised a repair.
+        /// Claims nothing: without the feature there is no registry to claim
+        /// in, and no repair whose object could keep a pool alive.
+        #[must_use]
+        pub(crate) const fn reclaim(&self) -> Registration {
+            Registration
+        }
+
         #[must_use]
         pub(crate) const fn owe_repair(&self) -> bool {
             true
@@ -368,6 +375,19 @@ mod on {
         /// which is the one case `try_cancel_pending`'s safety claim does not
         /// cover; the caller decides what to do about it, at a point where a
         /// panic cannot skip work the teardown still owes.
+        /// Take a second, independent claim on this object's pool.
+        ///
+        /// Registers the pool when this registration is empty, so the claim
+        /// owns a repair work object either way -- and that object is bound to
+        /// the pool, which is what makes holding the claim keep the pool alive.
+        ///
+        /// `CleanupGroup` uses this to close a window its own release opens:
+        /// see `ThreadpoolWait::recover_repair`.
+        #[must_use]
+        pub(crate) fn reclaim(&self) -> Registration {
+            register(self.key)
+        }
+
         #[must_use]
         pub(crate) fn owe_repair(&self) -> bool {
             let Some(entry) = &self.entry else {
@@ -533,12 +553,28 @@ mod on {
     /// rule covers the default pool and a private one alike -- see the decision
     /// recorded with `M-T6.1`. Retiring an entry that still owes a repair would
     /// drop the repair at exactly the moment it is needed.
+    /// Whether an entry can be dropped from the registry.
+    ///
+    /// **One definition, because there are two retirement sites.** `release`
+    /// retires when an object goes and `retire_idle` retires when a repair is
+    /// discharged, and for a while they disagreed: the outstanding-repair
+    /// condition was added to the second and not the first, so the hazard it
+    /// was added for -- `RepairWork::drop` draining a repair the pool has not
+    /// dispatched, on the healer's only thread -- was still reachable through
+    /// the other. Two copies of a rule that must agree is the shape this
+    /// repository treats as a defect; this is the shape that cannot have it.
+    fn is_retirable(entry: &PoolEntry) -> bool {
+        entry.objects.load(Ordering::Relaxed) == 0
+            && entry.repair_owed_at().is_none()
+            && entry.repair_settled()
+    }
+
     fn release(entry: &Arc<PoolEntry>) {
         // Moved out rather than dropped in place; see `retire_idle`.
         let retired: Vec<Arc<PoolEntry>> = {
             let mut entries = locked();
             let remaining = entry.objects.fetch_sub(1, Ordering::Relaxed) - 1;
-            if remaining > 0 || entry.repair_owed_at().is_some() {
+            if !is_retirable(entry) {
                 crate::trace_record!("heal", "released", entry.key, remaining);
                 return;
             }
@@ -586,9 +622,7 @@ mod on {
         let retired: Vec<Arc<PoolEntry>> = {
             let mut entries = locked();
             let (out, keep) = entries.iter().cloned().partition(|entry| {
-                let idle = entry.objects.load(Ordering::Relaxed) == 0
-                    && entry.repair_owed_at().is_none()
-                    && entry.repair_settled();
+                let idle = is_retirable(entry);
                 if idle {
                     crate::trace_record!("heal", "entry-retired", entry.key, 0);
                 }

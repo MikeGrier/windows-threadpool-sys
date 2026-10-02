@@ -164,9 +164,18 @@ static ARM_BEFORE_MAIN: extern "C" fn() = {
         let _ = imp::enabled();
         // Hook installation is deliberately NOT part of that path. It answers
         // to its own environment variable, so it must happen whether or not
-        // the trace is armed -- and it must happen here, where this process
-        // still has exactly one thread. This call is also what closes the
-        // window, so there is no later path that can patch a live process.
+        // the trace is armed -- and it happens here, as early as this process
+        // runs any of its own code. This call is also what closes the window,
+        // so there is no later path that can patch a live process.
+        //
+        // Running here is not what makes the patch safe, and this comment used
+        // to say it was ("where this process still has exactly one thread").
+        // It is not something placement can establish: an initialiser ordered
+        // before this one may have started threads, and in a DLL this runs at
+        // attach, inside a process that is already running. The installer
+        // checks the condition itself -- see the patch-window section in
+        // `hook` -- and refuses when it does not hold. Being early simply means
+        // the check usually has nothing to object to.
         imp::install_hooks_before_main();
     }
     arm

@@ -643,9 +643,16 @@ fn the_stub_recogniser_accepts_the_shape_and_rejects_everything_else() {
 #[cfg(feature = "trace")]
 #[test]
 fn a_hooked_stub_records_both_ends_and_still_performs_its_syscall() {
-    use super::hook::{call_selftest, factory_handle, fired, install_by_label};
+    use super::hook::{call_selftest, factory_handle, fired, install_by_label, installed_by_label};
 
-    install_by_label("selftest").expect("the self-test stub is hookable");
+    // Installed only when this process has not installed it already. The
+    // `.CRT$XCU` initialiser installs whatever `WINDOWS_THREADPOOL_TRACE_HOOKS`
+    // names, so with that variable set this test used to meet its own
+    // installation and fail on the recogniser's correct `NotAStub` refusal --
+    // failing precisely when the instrument it tests was switched on.
+    if !installed_by_label("selftest") {
+        install_by_label("selftest").expect("the self-test stub is hookable");
+    }
 
     // Counted rather than read out of the trace, so this runs on every machine
     // rather than only where `WINDOWS_THREADPOOL_TRACE` happens to be set. The
@@ -655,6 +662,12 @@ fn a_hooked_stub_records_both_ends_and_still_performs_its_syscall() {
     let before_fired = fired("selftest");
     let before_enter = counted("wfactory", "selftest-enter");
     let before_leave = counted("wfactory", "selftest-leave");
+    // Captured rather than assumed zero. `FACTORY` is process-wide and the
+    // worker-factory hooks legitimately write it, so with
+    // `WINDOWS_THREADPOOL_TRACE_HOOKS=*` a real handle is already learned by
+    // the time this runs. The claim here was never "no handle exists"; it is
+    // that *this* call does not contribute one.
+    let before_handle = factory_handle();
 
     // The call whose result proves the trampoline: a working system call fills
     // all three values and reports success, so a trampoline that jumped
@@ -680,7 +693,7 @@ fn a_hooked_stub_records_both_ends_and_still_performs_its_syscall() {
 
     assert_eq!(
         factory_handle(),
-        0,
+        before_handle,
         "the self-test stub's first argument is an out-pointer, not a worker factory handle, \
          so it must not be mistaken for one -- a hook that learned a handle from the wrong \
          call would leave the factory counters describing whatever that pointer happened to be"
@@ -914,10 +927,13 @@ fn the_hook_installation_window_is_shut_before_any_test_runs() {
 #[cfg(feature = "trace")]
 #[test]
 fn hooking_the_wait_registration_observes_the_already_signalled_flag() {
-    use super::hook::{fired, install_by_label};
+    use super::hook::{fired, install_by_label, installed_by_label};
     use crate::wait::{ThreadpoolWait, WaitableHandle};
 
-    install_by_label("associate").expect("the wait-registration stub is hookable");
+    // As the self-test above: skipped when the initialiser already installed it.
+    if !installed_by_label("associate") {
+        install_by_label("associate").expect("the wait-registration stub is hookable");
+    }
     let before = fired("associate");
 
     // Signalled at creation, so the association races an object that is

@@ -958,6 +958,28 @@ impl ThreadpoolWait {
     /// Reports whether the pool ended up tracked, which the group accumulates
     /// and acts on after it has freed every context -- never here, where an
     /// unwind would skip those frees.
+    /// Take a repair claim on this wait's pool while the object is still live.
+    ///
+    /// For [`crate::cleanup_group::CleanupGroup`], which must do this *before*
+    /// its native release: a member whose pool was never registered holds
+    /// nothing that keeps that pool alive, and the release frees the last bound
+    /// object. The claim this returns owns a repair work object bound to the
+    /// pool, so holding it across the release keeps the pool alive for the
+    /// marking pass that follows.
+    ///
+    /// # Safety
+    ///
+    /// `context` must come from [`into_parts`](Self::into_parts) on this type
+    /// and name a still-live object whose context the caller has not yet freed.
+    pub(crate) unsafe fn recover_repair(
+        context: *mut core::ffi::c_void,
+    ) -> Option<crate::heal::Registration> {
+        // SAFETY: forwarded; the context outlives the member until the group
+        // frees it, and this only touches that object's registration.
+        let ctx = unsafe { &*context.cast::<WaitContext>() };
+        Some(ctx.registration.reclaim())
+    }
+
     #[must_use]
     pub(crate) unsafe fn owe_repair(context: *mut core::ffi::c_void) -> bool {
         // SAFETY: forwarded; the context outlives the member until the group

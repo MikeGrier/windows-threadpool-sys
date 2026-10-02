@@ -813,6 +813,59 @@ house rules require is what found the third.
   `trace` was redundant against the unconditional dependency feature and justified by a comment
   calling it test-only, which `poke_completion_ports` being public contradicts.
 
+- [x] **M-T10.31** -- **Claim a member's repair before the release that can free its pool.** The
+      ninth review round, and a use-after-free introduced by `M-T10.18`'s cancel-time retry. A wait
+      whose pool could not be registered holds nothing that keeps that pool alive -- the repair work
+      object, which would be a bound object deferring `CloseThreadpool`, was never created. A
+      cancelling group release frees the last bound object and *then* marks, so the retry inside
+      `owe_repair` could call `CreateThreadpoolWork` against freed memory, reachable through the
+      safe API. `release_members` now takes each member's claim **before** the native release and
+      holds it across, which both creates that object and keeps the pool alive. The per-object path
+      was never exposed: `self` is a live bound object for the whole call.
+
+- [x] **M-T10.32** -- **Give retirement one predicate instead of two.** `M-T10.28` added the
+      outstanding-repair condition to `retire_idle` and not to `release`, so the hazard it was added
+      for -- `RepairWork::drop` draining an undispatched repair on the healer's only thread -- was
+      still reachable through the other site. Both now call `is_retirable`. This is the fourth
+      partial fix of this shape on this branch; the answer is one definition, not a third careful
+      reading.
+
+- [x] **M-T10.33** -- **Make `close_members_cancelling_no_heal_tracking` actually not track.** It
+      called `release_members(true)`, whose repair pass was unconditional, so the method named for
+      *not* tracking marked pools, allocated repair objects, started the process-lifetime healer,
+      and could panic under `fail-fast` -- a contract its own documentation denies, and the opposite
+      of what a caller diagnosing a stall asks for. Tracking is now a parameter the safe form passes
+      and this one does not, which also stops the fail-fast firing for a caller who took the
+      obligation deliberately.
+
+- [x] **M-T10.34** -- **Check the patch-window precondition rather than asserting it from
+      placement.** The module documented the hazard exactly -- a suspended thread's instruction
+      pointer can be inside the bytes being replaced -- and then claimed the supported path avoids
+      it "because it patches when the process has no other threads", justified by running from a
+      `.CRT$XCU` initialiser. Placement does not establish that: an initialiser ordered earlier may
+      have started threads, and in a DLL the same initialiser runs at attach inside a running
+      process. No instruction pointer was ever read.
+
+  Each suspended thread's `Rip` is now compared against the ranges about to be written, and the
+  install refuses when one is inside. Verified by sabotage: forcing the comparison to match refuses
+  with `NotQuiesced`. The `CONTEXT` buffer is wrapped in a 16-byte-aligned type because
+  `GetThreadContext` documents that alignment on this architecture while `align_of::<CONTEXT>()`
+  from `windows-sys` measures 8 -- it worked without the wrapper, which is incidental behaviour
+  rather than a contract.
+
+- [x] **M-T10.35** -- **Stop the hook tests failing whenever hooks are enabled.** The initialiser
+      installs whatever `WINDOWS_THREADPOOL_TRACE_HOOKS` names before any test runs; the two
+      installation tests then installed again, met their own patch, and failed on the recogniser's
+      correct `NotAStub` refusal. The suite was green only because nothing ever set the variable.
+      Reproduced at `exit 101` before the fix. They now install only when `installed_by_label`
+      reports the stub is not already patched, which does not weaken rejection of a foreign patch.
+
+  One assertion was wrong in the same configuration for a different reason: it required
+  `factory_handle()` to be zero, but `FACTORY` is process-wide and the worker-factory hooks
+  legitimately write it, so with every hook installed a real handle is already learned. The claim is
+  that *this* call contributes none, so it now compares against the value captured before the call.
+  Measured after: 299 pass with hooks unset, `*`, `selftest`, and `associate`.
+
 - [ ] **M-T10.7** -- **Decide whether CI should check intra-doc links in private items.**
 
   **The gap.** The `docs` job runs `cargo doc --no-deps --all-features` without

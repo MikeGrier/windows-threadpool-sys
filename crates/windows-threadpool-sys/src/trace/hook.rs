@@ -100,24 +100,34 @@
 //! *inside* the range about to be overwritten, and it resumes into what is now
 //! jump-displacement data.
 //!
-//! The supported path does not reach that, because it patches when the process
-//! has no other threads. Installation happens from the `.CRT$XCU` initialiser
-//! in [`super`], which runs during CRT startup -- before `main`, and so before
-//! the test harness or the pool has created a thread.
+//! **That precondition is checked, on every path.** After the suspension, each
+//! stopped thread's instruction pointer is read and compared against the byte
+//! ranges about to be written; a thread parked inside one makes the install
+//! refuse. So the hazard above is answered by an observation about this process
+//! at this instant, which is the only thing that can answer it.
 //!
-//! That is **enforced** rather than merely arranged, which it was not until a
-//! review found otherwise: installation used to sit at the end of
-//! `observe_exceptions`, a public function that `enabled` calls only when the
-//! trace is armed, so a process that asked for hooks without asking for the
-//! trace could reach the installer later with its threads already running. The
-//! initialiser now installs directly and unconditionally and then seals the
-//! window; [`install_requested`] refuses afterwards, and a test asserts the
-//! seal.
+//! It is written that way because the previous answer was prose. The supported
+//! path was said not to reach the hazard "because it patches when the process
+//! has no other threads", justified by installation happening from the
+//! `.CRT$XCU` initialiser in [`super`] -- before `main`, and so before the test
+//! harness or the pool has created a thread. Placement does not establish that
+//! claim: an initialiser that runs earlier may have started threads, and in a
+//! DLL the same initialiser runs at attach, inside a process that is already
+//! running and may have many. The timing is still worth having, because a
+//! process with one thread passes the check trivially; it is no longer what the
+//! argument rests on.
 //!
-//! What remains is `install_by_label`, which is `#[cfg(test)]` and does patch
-//! a live process. The suspension it performs is a mitigation and not a proof:
-//! it closes the window in which a thread is *running* through the range, not
-//! the one in which a thread is already stopped inside it.
+//! Installation is additionally confined to that initialiser rather than merely
+//! arranged there, which it was not until a review found otherwise: it used to
+//! sit at the end of `observe_exceptions`, a public function that `enabled`
+//! calls only when the trace is armed, so a process that asked for hooks
+//! without asking for the trace could reach the installer later. The initialiser
+//! now installs directly and unconditionally and then seals the window;
+//! [`install_requested`] refuses afterwards, and a test asserts the seal.
+//!
+//! `install_by_label` is `#[cfg(test)]` and does patch a live process. It takes
+//! the same check, so what used to be a mitigation there is now the same proof
+//! the supported path gets.
 
 use std::sync::atomic::{AtomicU32, AtomicUsize, Ordering};
 
@@ -506,18 +516,26 @@ pub(super) const SETTLE: std::time::Duration = std::time::Duration::from_millis(
 /// snapshot -- where one attempt holds them for microseconds. The caller opens
 /// and restores per attempt so the writable window stays the size it was before
 /// the retry existed.
-fn quiesce_once<T>(patch: impl FnOnce() -> T) -> Option<T> {
+fn quiesce_once<T>(ranges: &[(usize, usize)], patch: impl FnOnce() -> T) -> Option<T> {
     use std::sync::Mutex;
     use windows_sys::Win32::Foundation::{
         CloseHandle, ERROR_INVALID_PARAMETER, GetLastError, INVALID_HANDLE_VALUE,
     };
+    use windows_sys::Win32::System::Diagnostics::Debug::{CONTEXT, GetThreadContext};
     use windows_sys::Win32::System::Diagnostics::ToolHelp::{
         CreateToolhelp32Snapshot, TH32CS_SNAPTHREAD, THREADENTRY32, Thread32First, Thread32Next,
     };
     use windows_sys::Win32::System::Threading::{
         GetCurrentProcessId, GetCurrentThreadId, OpenThread, ResumeThread, SuspendThread,
-        THREAD_SUSPEND_RESUME,
+        THREAD_GET_CONTEXT, THREAD_SUSPEND_RESUME,
     };
+
+    /// `CONTEXT_CONTROL` for x86-64: the group holding `Rip`.
+    ///
+    /// Spelled out because `windows-sys` exposes the architecture's control
+    /// flag under a name that varies by target, and only the instruction
+    /// pointer is wanted here.
+    const CONTEXT_CONTROL_AMD64: u32 = 0x0010_0001;
 
     /// Threads handled without a second allocation. Both vectors are reserved
     /// to this before anything is suspended, and a process with more threads
@@ -640,7 +658,7 @@ fn quiesce_once<T>(patch: impl FnOnce() -> T) -> Option<T> {
     // nothing, in the window this function exists to keep empty.
     for &id in if enumerated { &ids[..] } else { &[][..] } {
         // SAFETY: no preconditions; a null return is handled.
-        let thread = unsafe { OpenThread(THREAD_SUSPEND_RESUME, 0, id) };
+        let thread = unsafe { OpenThread(THREAD_SUSPEND_RESUME | THREAD_GET_CONTEXT, 0, id) };
         if thread.is_null() {
             // SAFETY: no preconditions; reports the call immediately above.
             if unsafe { GetLastError() } == ERROR_INVALID_PARAMETER {
@@ -657,6 +675,50 @@ fn quiesce_once<T>(patch: impl FnOnce() -> T) -> Option<T> {
             break;
         }
         held.push(thread);
+    }
+
+    // Every other thread is stopped. That is still not enough to write over
+    // live code: a thread can be suspended with its instruction pointer
+    // *inside* the bytes about to be replaced, and it would resume into what is
+    // by then jump-displacement data.
+    //
+    // This used to be answered by asserting that the supported path installs
+    // from a `.CRT$XCU` initialiser, "where this process still has exactly one
+    // thread". Placement does not establish that: an earlier initialiser may
+    // have started threads, and in a DLL the same initialiser runs at attach,
+    // inside a process that is already running. The claim was prose, and prose
+    // is not a rung -- so the precondition is checked here instead, and the
+    // install refuses when it does not hold.
+    if quiesced && !ranges.is_empty() {
+        for &thread in &held {
+            // Aligned here rather than trusted to the binding. `GetThreadContext`
+            // documents a 16-byte alignment requirement for this structure on
+            // this architecture, and `align_of::<CONTEXT>()` from `windows-sys`
+            // measures **8**. Passing the under-aligned buffer happened to work
+            // when this was written, which is the kind of incidental behaviour
+            // that is not a contract; the wrapper asks for what the API asks
+            // for.
+            #[repr(C, align(16))]
+            struct Aligned(CONTEXT);
+
+            // Zeroed is a valid starting state once `ContextFlags` says which
+            // groups to fill.
+            let mut context = Aligned(unsafe { std::mem::zeroed() });
+            context.0.ContextFlags = CONTEXT_CONTROL_AMD64;
+            // SAFETY: the thread is suspended and was opened for this access;
+            // `context` is a live, correctly aligned buffer.
+            if unsafe { GetThreadContext(thread, &mut context.0) } == 0 {
+                // A thread whose instruction pointer cannot be read is a thread
+                // this cannot clear, and an unreadable answer is not a safe one.
+                quiesced = false;
+                break;
+            }
+            let rip = context.0.Rip as usize;
+            if ranges.iter().any(|&(start, end)| rip >= start && rip < end) {
+                quiesced = false;
+                break;
+            }
+        }
     }
 
     let outcome = if quiesced { Some(patch()) } else { None };
@@ -1005,8 +1067,16 @@ fn install_batch(chosen: &[usize]) -> Vec<(usize, Result<(), Refusal>)> {
             break;
         };
 
+        // The byte ranges the stores will land on, so the suspension can refuse
+        // a thread parked inside one.
+        let ranges: Vec<(usize, usize)> = prepared
+            .iter()
+            .filter_map(|(_, outcome)| outcome.as_ref().ok())
+            .map(|ready| (ready.entry as usize, ready.entry as usize + PATCH_LEN))
+            .collect();
+
         // Phase two, with every other thread stopped: stores only.
-        let committed = quiesce_once(|| {
+        let committed = quiesce_once(&ranges, || {
             for (_, outcome) in &prepared {
                 if let Ok(ready) = outcome {
                     // SAFETY: prepared by `prepare`, on a page `open_pages`
@@ -1146,6 +1216,26 @@ pub(crate) fn call_selftest() -> (i32, u32, u32, u32) {
 ///
 /// The name-to-index step [`install_requested`] and the tests share, so a test
 /// exercises the same lookup a run does rather than a parallel one.
+/// Whether this module has already patched the stub behind a label.
+///
+/// A non-zero trampoline slot is the record of a successful install, and only
+/// a successful install writes one.
+///
+/// Tests need this because the `.CRT$XCU` initialiser installs whatever
+/// `WINDOWS_THREADPOOL_TRACE_HOOKS` asked for before any test runs. A test that
+/// then installed unconditionally met its own installation: the recogniser sees
+/// the patched entry, correctly refuses it as `NotAStub`, and the suite failed
+/// in exactly the configuration that exercises the thing under test. Asking
+/// first is what lets the assertions run against an installation this process
+/// already has, without weakening the recogniser's rejection of a foreign one.
+#[cfg(test)]
+pub(crate) fn installed_by_label(label: &str) -> bool {
+    HOOKS
+        .iter()
+        .position(|(_, name, _)| *name == label)
+        .is_some_and(|index| TRAMPOLINES[index].load(Ordering::Acquire) != 0)
+}
+
 #[cfg(test)]
 pub(crate) fn install_by_label(label: &str) -> Result<(), Refusal> {
     let Some(index) = HOOKS.iter().position(|(_, name, _)| *name == label) else {
