@@ -1,7 +1,7 @@
 {
   "package": "windows-threadpool-sys",
   "description": "Sabotages for the ntdll inline-hook facility in src/trace/hook.rs -- the stub recogniser that makes patching safe, the trampoline that rebuilds the displaced system call, and the table column that decides which calls carry a worker factory handle. Run with tools/run-sabotage.ps1; see tools/README-sabotage.md for the format and for why the results are read the way they are.",
-  "notCoveredHere": "The trace RECORDS a hook emits are deliberately absent from this manifest. They are asserted by the same test, but only when WINDOWS_THREADPOOL_TRACE is set in the environment, and neither this harness nor CI sets it -- so a sabotage that removed the `record` calls would be reported SURVIVED for a guard that does in fact exist. That is the feature-gate trap this repository already documents, arriving through an environment variable rather than a cargo feature. The guard those assertions back is the `fired` counter, which is unconditional and IS swept below. Making the record assertions reachable needs the traced tests to run somewhere, which is queued as M-T4.1 in CHECKLIST.md.",
+  "notCoveredHere": "The trace RECORDS a hook emits are deliberately absent from this manifest. They are asserted by the same test, but only when WINDOWS_THREADPOOL_TRACE is set in the environment, and neither this harness nor CI sets it -- so a sabotage that removed the `record` calls would be reported SURVIVED for a guard that does in fact exist. That is the feature-gate trap this repository already documents, arriving through an environment variable rather than a cargo feature. The guard those assertions back is the `fired` counter, which is unconditional and IS swept below. Making the record assertions reachable needs the traced tests to run somewhere, which is queued as M-T10.5 in CHECKLIST.md. That is now a smaller job than it was when this note was written: tests/obligation_report.rs faced the same problem and solved it by re-executing its own binary as a child with WINDOWS_THREADPOOL_TRACE set, so the technique is in the tree and the hook tests need only adopt it. An earlier version of this note cited M-T4.1, which is a completed decision about the name of the synchronous close and has nothing to do with this.",
   "testArgs": [
     "--all-features"
   ],
@@ -277,6 +277,32 @@
       ],
       "replace": [
         "    if true || owed {"
+      ]
+    },
+    {
+      "name": "the obligation is recorded after the arming instead of before",
+      "file": "src/obligation.rs",
+      "expect": "caught",
+      "why": "The ordering every armed object depends on, and the one this crate got wrong at three of eight sites before the pair was moved into a single method. Publishing the arming first opens a window in which a dispatch settles the obligation on a pool thread and is then overwritten, so an object that ran to completion claims it owes a drain -- under fail-fast a panic on a correctly-drained object, and an abort if Drop was already unwinding. The guard is in obligation::tests rather than in a pool test, because the ordering now lives at one site and that is where it can be made deterministic.",
+      "find": [
+        "        self.record_live();",
+        "        publish();"
+      ],
+      "replace": [
+        "        publish();",
+        "        self.record_live();"
+      ]
+    },
+    {
+      "name": "Drop does not report the obligation it was left",
+      "file": "src/wait.rs",
+      "expect": "caught",
+      "why": "The report itself, as opposed to the fail-fast built on top of it. Removing the record leaves a Drop that still performs the blocking drain but tells nobody it had to, which is the condition the whole obligation mechanism exists to surface and is invisible to every test that only checks the program does not hang. This entry is also the control on tests/obligation_report.rs: that test spent its life early-returning when the trace filter was unset, so it passed while measuring nothing, and this sabotage is what demonstrates it now measures something.",
+      "find": [
+        "            crate::trace_record!(\"wait\", crate::obligation::DROP_OBLIGATION_OWED, self.wait);"
+      ],
+      "replace": [
+        "            let _ = crate::obligation::DROP_OBLIGATION_OWED;"
       ]
     }
   ]

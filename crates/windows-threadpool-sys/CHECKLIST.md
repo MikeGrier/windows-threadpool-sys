@@ -375,7 +375,7 @@ house rules require is what found the third.
       [The drain obligation is recorded before the arming is
       published](../../DESIGN-NOTES.md#obligation-recorded-before-arming).
 
-- [ ] **M-T10.2** -- **Make `tests/obligation_report.rs` run in CI, then make it pass there.**
+- [x] **M-T10.2** -- **Make `tests/obligation_report.rs` run in CI, then make it pass there.**
 
   **The defect, and which half matters.** The test deliberately drops objects that owe a drain, so
   under `--all-features` -- which arms `fail-fast` -- it exits 101. That is the reported symptom.
@@ -422,6 +422,21 @@ house rules require is what found the third.
   whether these hooks are diagnostic-only instruments that a developer installs deliberately, or
   a facility a consumer may install under load. The reviewer's confidence that the hazard exists
   is high; this item is about what to do with it, not whether it is there.
+
+- [ ] **M-T10.5** -- **Make the hook tests' trace-record assertions reachable, so a sabotage can
+      reach them.**
+
+  **The gap.** `sabotage.json`'s `notCoveredHere` records that the trace records a hook emits are
+  deliberately absent from the sweep: they are asserted only when `WINDOWS_THREADPOOL_TRACE` is
+  set, which neither the harness nor CI does, so a sabotage removing those `record` calls would
+  be reported SURVIVED for a guard that exists. The manifest's note cited `M-T4.1` for this, which
+  is a completed decision about the name of the synchronous close and never covered it -- so the
+  work was, in practice, queued nowhere.
+
+  **Target.** Adopt the technique `M-T10.2` put in the tree: `tests/obligation_report.rs`
+  re-executes its own binary as a child with the filter set, which makes a traced assertion run
+  under a plain `cargo test`. Apply it to the hook tests, then add the record sabotages to
+  `sabotage.json` and confirm each is caught rather than survived.
 
 ## M-inf -- Diagnostic work with no gating deliverable
 
