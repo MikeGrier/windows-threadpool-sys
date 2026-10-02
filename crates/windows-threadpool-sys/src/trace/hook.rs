@@ -5,7 +5,7 @@
 //! This exists for one investigation: a default-pool stall in which the pool
 //! holds parked workers and a queued completion packet and does not put the
 //! two together (see
-//! [the ioring crate's STALL-TIMELINE.md](../../../windows-ioring-sys/STALL-TIMELINE.md)).
+//! [STALL-TIMELINE.md](../../STALL-TIMELINE.md)).
 //! Everything above the factory has been measured from outside and is
 //! consistent; what is left is what the factory itself was told and what it
 //! believes. Both are reachable only by watching the syscalls that carry them.
@@ -470,50 +470,43 @@ pub(crate) unsafe fn is_syscall_stub(entry: *const u8) -> bool {
 ///
 /// Returns `None` without running `patch` when any thread could not be stopped.
 /// Every thread this call did suspend is resumed either way.
-fn with_others_suspended<T>(patch: impl FnOnce() -> T) -> Option<T> {
-    /// Attempts made before the install is refused.
-    ///
-    /// One attempt refuses whenever any thread cannot be stopped, and a thread
-    /// that is *terminating* cannot be: `SuspendThread` answers
-    /// `ERROR_ACCESS_DENIED` for one, on a handle that `OpenThread` had just
-    /// returned for the same id. That is not the `OpenThread` case handled in
-    /// the suspend loop below and must not be folded into it -- an id that
-    /// names nothing is gone, whereas a terminating thread may still be
-    /// executing its exit path, which is the property the refusal is about.
-    ///
-    /// So the refusal stands and the attempt is repeated instead. Each one
-    /// resumes everything it stopped before returning, so a retry begins with
-    /// nothing suspended and takes the lock again, and the thread that could
-    /// not be stopped is given a moment to finish leaving.
-    ///
-    /// Measured: running this crate's own lib tests at 32 test threads, 13 of
-    /// 30 runs refused the self-test install, every one of them reporting
-    /// `SuspendThread` / `ERROR_ACCESS_DENIED` with the enumeration intact.
-    const ATTEMPTS: usize = 16;
-
-    /// Time given to a terminating thread between attempts.
-    const SETTLE: std::time::Duration = std::time::Duration::from_millis(1);
-
-    let mut patch = Some(patch);
-    for attempt in 0..ATTEMPTS {
-        if let Some(out) = quiesce_once(&mut patch) {
-            return Some(out);
-        }
-        if attempt + 1 < ATTEMPTS {
-            std::thread::sleep(SETTLE);
-        }
-    }
-    None
-}
-
-/// One attempt at [`with_others_suspended`]: stop every other thread, run
-/// `patch` if and only if every one of them stopped, resume them all.
+/// Attempts [`install_batch`] makes before it refuses.
 ///
-/// Takes the closure by `&mut Option` rather than by value because the caller
-/// may call this more than once while the closure may run at most once. The
-/// `take` happens only on the path that patches, so an attempt that refuses
-/// leaves it for the next one.
-fn quiesce_once<T, F: FnOnce() -> T>(patch: &mut Option<F>) -> Option<T> {
+/// One attempt refuses whenever any thread cannot be stopped, and a thread that
+/// is *terminating* cannot be: `SuspendThread` answers `ERROR_ACCESS_DENIED`
+/// for one, on a handle that `OpenThread` had just returned for the same id.
+/// That is not the `OpenThread` case handled in the suspend loop below and must
+/// not be folded into it -- an id that names nothing is gone, whereas a
+/// terminating thread may still be executing its exit path, which is the
+/// property the refusal is about.
+///
+/// So the refusal stands and the attempt is repeated instead. Each one resumes
+/// everything it stopped before returning, so a retry begins with nothing
+/// suspended and takes the lock again, and the thread that could not be stopped
+/// is given a moment to finish leaving.
+///
+/// Measured: running this crate's own lib tests at 32 test threads, 13 of 30
+/// runs refused the self-test install, every one of them reporting
+/// `SuspendThread` / `ERROR_ACCESS_DENIED` with the enumeration intact.
+pub(super) const ATTEMPTS: usize = 16;
+
+/// Time given to a terminating thread between attempts.
+pub(super) const SETTLE: std::time::Duration = std::time::Duration::from_millis(1);
+
+/// One attempt: stop every other thread, run `patch` if and only if every one
+/// of them stopped, resume them all.
+///
+/// **The retry around this lives in [`install_batch`], not here**, and that is
+/// the point rather than an accident of layout. The target pages must be made
+/// writable before the suspension and restored after it, because
+/// `VirtualProtect` cannot be called inside the window. A retry wrapped around
+/// this function alone would therefore hold `ntdll`'s code pages
+/// `PAGE_EXECUTE_READWRITE` across every attempt -- on the order of a second
+/// with every other thread running, since each attempt takes a fresh thread
+/// snapshot -- where one attempt holds them for microseconds. The caller opens
+/// and restores per attempt so the writable window stays the size it was before
+/// the retry existed.
+fn quiesce_once<T>(patch: impl FnOnce() -> T) -> Option<T> {
     use std::sync::Mutex;
     use windows_sys::Win32::Foundation::{
         CloseHandle, ERROR_INVALID_PARAMETER, GetLastError, INVALID_HANDLE_VALUE,
@@ -666,13 +659,7 @@ fn quiesce_once<T, F: FnOnce() -> T>(patch: &mut Option<F>) -> Option<T> {
         held.push(thread);
     }
 
-    let outcome = if quiesced {
-        // Only this path consumes the closure, so a refused attempt leaves it
-        // intact for the next one. Unreachable twice within one attempt.
-        Some((patch.take().expect("an attempt patches at most once"))())
-    } else {
-        None
-    };
+    let outcome = if quiesced { Some(patch()) } else { None };
 
     for &thread in &held {
         // SAFETY: suspended by this function, opened for this access.
@@ -930,10 +917,14 @@ pub(super) fn restore_pages(opened: &[OpenedPage]) {
 /// nothing that can block. That is the point of splitting the install in three
 /// -- see [`install_batch`].
 ///
-/// SAFETY: `prepared` must come from [`prepare`], whose page is still open for
-/// writing and whose entry is a recognised stub.
+/// SAFETY: `prepared` must come from [`prepare`] and its entry must sit on a
+/// page [`open_pages`] has made writable and not yet restored. `prepare`
+/// deliberately does not open the page -- protection is per-page and two stubs
+/// can share one -- so naming it as the opener, which this comment used to do,
+/// stated a precondition no function establishes.
 unsafe fn commit(prepared: &Prepared) {
-    // SAFETY: the page was made writable by `prepare` for exactly this length.
+    // SAFETY: `open_pages` made this page writable and `restore_pages` has not
+    // run yet, for exactly this length.
     unsafe {
         std::ptr::copy_nonoverlapping(prepared.patch.as_ptr(), prepared.entry, PATCH_LEN);
     }
@@ -983,7 +974,7 @@ unsafe fn finish(prepared: &Prepared) {
 fn install_batch(chosen: &[usize]) -> Vec<(usize, Result<(), Refusal>)> {
     // Phase one, with everything still running: resolve, recognise, allocate
     // the trampolines.
-    let mut prepared: Vec<(usize, Result<Prepared, Refusal>)> = chosen
+    let prepared: Vec<(usize, Result<Prepared, Refusal>)> = chosen
         .iter()
         .map(|&index| (index, prepare(index)))
         .collect();
@@ -994,77 +985,84 @@ fn install_batch(chosen: &[usize]) -> Vec<(usize, Result<(), Refusal>)> {
         .iter()
         .filter_map(|(_, outcome)| outcome.as_ref().ok().map(|ready| ready.entry))
         .collect();
-    let opened = if targets.is_empty() {
-        Some(Vec::new())
-    } else {
-        open_pages(&targets)
-    };
-    let Some(opened) = opened else {
-        // Nothing has been written and `open_pages` has already restored
-        // whatever it managed to open. The trampolines are the rest of the
-        // cleanup: `prepare` allocated and published one per entry that got
-        // this far, and no stub was patched to use any of them.
-        for (_, outcome) in &mut prepared {
-            if let Ok(ready) = outcome {
-                discard_prepared(ready);
-                *outcome = Err(Refusal::NotWritable);
-            }
-        }
-        return prepared
-            .into_iter()
-            .map(|(index, outcome)| (index, outcome.map(|_| ())))
-            .collect();
-    };
+    // Phases one-and-a-half through three, retried as a unit: open the pages,
+    // patch with everything stopped, restore the pages. The open and the
+    // restore are inside the attempt deliberately -- see `quiesce_once` -- so a
+    // retry never leaves `ntdll` writable-and-executable across the wait.
+    let mut refusal = Refusal::NotQuiesced;
+    for attempt in 0..ATTEMPTS {
+        let opened = if targets.is_empty() {
+            Some(Vec::new())
+        } else {
+            open_pages(&targets)
+        };
+        let Some(opened) = opened else {
+            // `open_pages` has already restored whatever it managed to open,
+            // and nothing has been written. Not retried: a page this process
+            // cannot make writable will not become writable a millisecond
+            // later, which is unlike the terminating thread the retry is for.
+            refusal = Refusal::NotWritable;
+            break;
+        };
 
-    // Phase two, with every other thread stopped: stores only.
-    let committed = with_others_suspended(|| {
-        for (_, outcome) in &prepared {
-            if let Ok(ready) = outcome {
-                // SAFETY: prepared by `prepare`, on a page `open_pages` made
-                // writable and has not yet restored.
-                unsafe { commit(ready) };
+        // Phase two, with every other thread stopped: stores only.
+        let committed = quiesce_once(|| {
+            for (_, outcome) in &prepared {
+                if let Ok(ready) = outcome {
+                    // SAFETY: prepared by `prepare`, on a page `open_pages`
+                    // made writable and has not yet restored.
+                    unsafe { commit(ready) };
+                }
             }
+        })
+        .is_some();
+
+        if !committed {
+            // Nothing was written. Put the protection back before waiting, so
+            // the pages are writable only for the attempt itself.
+            restore_pages(&opened);
+            if attempt + 1 < ATTEMPTS {
+                std::thread::sleep(SETTLE);
+            }
+            continue;
         }
-    })
-    .is_some();
-    if !committed {
-        // Not quiesced, so nothing was written. Restore the pages, release the
-        // trampolines nothing will now jump through, and refuse every entry
-        // rather than reporting an install that did not happen.
-        restore_pages(&opened);
-        return prepared
+
+        // Phase three, running again: flush each patched stub, then put every
+        // page's protection back exactly once.
+        let outcomes: Vec<(usize, Result<(), Refusal>)> = prepared
             .into_iter()
             .map(|(index, outcome)| {
-                let outcome = match outcome {
+                let result = match outcome {
                     Ok(ready) => {
-                        discard_prepared(&ready);
-                        Err(Refusal::NotQuiesced)
+                        // SAFETY: prepared above and just committed.
+                        unsafe { finish(&ready) };
+                        Ok(())
                     }
                     Err(why) => Err(why),
                 };
-                (index, outcome)
+                (index, result)
             })
             .collect();
+        restore_pages(&opened);
+        return outcomes;
     }
 
-    // Phase three, running again: flush each patched stub, then put every
-    // page's protection back exactly once.
-    let outcomes: Vec<(usize, Result<(), Refusal>)> = prepared
+    // Every attempt refused, so nothing was written and no page is still open.
+    // Release the trampolines nothing will now jump through and refuse every
+    // entry rather than reporting an install that did not happen.
+    prepared
         .into_iter()
         .map(|(index, outcome)| {
-            let result = match outcome {
+            let outcome = match outcome {
                 Ok(ready) => {
-                    // SAFETY: prepared above and just committed.
-                    unsafe { finish(&ready) };
-                    Ok(())
+                    discard_prepared(&ready);
+                    Err(refusal)
                 }
                 Err(why) => Err(why),
             };
-            (index, result)
+            (index, outcome)
         })
-        .collect();
-    restore_pages(&opened);
-    outcomes
+        .collect()
 }
 
 /// The worker factory handle learned so far, or zero.
@@ -1564,9 +1562,24 @@ pub(crate) fn probe_ports() -> Vec<(u32, usize)> {
     seen
 }
 
-/// Record one factory's counters. Every record carries the handle in its
-/// second slot, so a capture from a process holding more than one factory can
-/// be read apart rather than averaged into nonsense.
+/// Record one factory's counters.
+///
+/// A record carries the handle in its second slot wherever that slot is free,
+/// so a capture from a process holding more than one factory can be read apart
+/// rather than averaged into nonsense. `counts()` reads *every* factory in the
+/// process rather than guessing which is the default pool's, so without this a
+/// reader could only attribute a row by its position in the capture.
+///
+/// The exceptions are the records that pair two counters the layout only makes
+/// sense of together -- `counts-min-max`, `counts-creating`,
+/// `counts-idle-timeout-ms`, `counts-start-routine`, `counts-stack`, and the
+/// two status records -- which spend the second slot on the partner value.
+/// Those are attributable by the `counts-total` that precedes them for the same
+/// factory.
+///
+/// `counts-waiting` and `counts-pending` used to pass a literal zero here, and
+/// they are the two this facility exists to read: a factory holding the packet,
+/// with parked workers it does not consider available. They carry the handle.
 fn read_one(query: Query, handle: usize) -> bool {
     let mut info = Basic::default();
     let mut returned = 0_u32;
@@ -1600,13 +1613,13 @@ fn read_one(query: Query, handle: usize) -> bool {
         TARGET,
         "counts-waiting",
         info.waiting_worker_count as u64,
-        0,
+        handle as u64,
     );
     record(
         TARGET,
         "counts-pending",
         info.pending_worker_count as u64,
-        0,
+        handle as u64,
     );
     record(
         TARGET,

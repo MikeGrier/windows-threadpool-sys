@@ -177,6 +177,23 @@
 //! does not accept the default pool, and calling it that way terminates the
 //! process rather than failing.
 //!
+//! ## Being told when a teardown had to drain: the `fail-fast` feature
+//!
+//! By default a teardown that finds a drain still owed records it and carries
+//! on. The `fail-fast` feature, off by default, turns that into a panic, so a
+//! caller who left the blocking drain to `Drop` finds out at the point it
+//! happened rather than from a trace afterwards.
+//!
+//! **Cargo unifies features across a build, so any crate that enables this
+//! turns it on for every crate in that build.** A library cannot decline
+//! another dependency's choice, and `default-features = false` does not help:
+//! the feature is off by default, so declining the defaults declines nothing.
+//! What changes is teardown behaviour process-wide, which is a reasonable thing
+//! for an application to ask about its own code and an unreasonable one to
+//! impose on an unrelated component sharing the build. Enable it from a binary,
+//! a test, or a development profile rather than from a published library's
+//! default feature set.
+//!
 //! # Relationship to `windows-overlapped-io-sys`
 //!
 //! Thread-pool I/O is one of three completion backends for the overlapped model

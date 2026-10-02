@@ -186,35 +186,53 @@ fn the_filter_narrows_to_the_targets_named() {
 /// keeps the guarantee that matters (the handler is installed and records)
 /// without pretending a designed-in loss does not happen.
 ///
-/// Env-gated like the other guards here, and for the same reason: the filter
-/// is read once per process, so a test cannot set it without racing every
-/// other test in the binary. Feature-gated too, because without `trace` there
-/// is no handler to exercise and the binding it probes with is not compiled.
+/// Runs in a trace-armed child, because the filter is fixed before `main` and a
+/// test cannot arm it without racing every other test in the binary. Feature-
+/// gated too, because without `trace` there is no handler to exercise and the
+/// binding it probes with is not compiled.
+///
+/// It previously opened with `if !wants("exception") { return; }`, which made it
+/// a test that could not fail: the filter is unset in every ordinary run and in
+/// CI, so it returned having raised nothing and asserted nothing. The child is
+/// what this branch added to stop precisely that, and three sibling assertions
+/// already used it.
 #[cfg(feature = "trace")]
 #[test]
 fn the_exception_observer_notes_a_first_chance_exception() {
-    if !wants("exception") {
-        return;
-    }
-    /// Enough that losing every one to lock contention is not a thing that
-    /// happens, few enough to stay instant.
-    const RAISES: usize = 64;
+    crate::trace::in_a_trace_armed_child(
+        "trace::tests::the_exception_observer_notes_a_first_chance_exception",
+        "exception",
+        || {
+            assert!(
+                wants("exception"),
+                "the child was launched with the trace armed for `exception` but `wants` \
+                 disagrees, so nothing below would be observed"
+            );
 
-    let before = counted("exception", "raised");
-    let text = c"windows-threadpool-sys exception observer probe";
-    for _ in 0..RAISES {
-        // SAFETY: a valid NUL-terminated string, live for the duration of the call.
-        unsafe {
-            windows_sys::Win32::System::Diagnostics::Debug::OutputDebugStringA(text.as_ptr().cast())
-        };
-        if counted("exception", "raised") > before {
-            return;
-        }
-    }
-    panic!(
-        "the trace is narrowed to `exception` and {RAISES} first-chance exceptions have just been \
-         raised with none recorded, so either the handler is not installed or it is losing every \
-         record"
+            /// Enough that losing every one to lock contention is not a thing
+            /// that happens, few enough to stay instant.
+            const RAISES: usize = 64;
+
+            let before = counted("exception", "raised");
+            let text = c"windows-threadpool-sys exception observer probe";
+            for _ in 0..RAISES {
+                // SAFETY: a valid NUL-terminated string, live for the duration
+                // of the call.
+                unsafe {
+                    windows_sys::Win32::System::Diagnostics::Debug::OutputDebugStringA(
+                        text.as_ptr().cast(),
+                    )
+                };
+                if counted("exception", "raised") > before {
+                    return;
+                }
+            }
+            panic!(
+                "the trace is narrowed to `exception` and {RAISES} first-chance exceptions have \
+                 just been raised with none recorded, so either the handler is not installed or \
+                 it is losing every record"
+            );
+        },
     );
 }
 

@@ -125,6 +125,23 @@ the caller to remember:
 |---|---|---|
 | `self-heal` | **on** | Repairs a thread pool that an explicitly-requested cancellation may have wedged, and provides the safe `try_cancel_pending`. See [README-FEATURE-self-heal.md](README-FEATURE-self-heal.md) before turning it off -- the hazard it covers is silent, intermittent, and lands on components that never called the API. |
 | `trace` | off | In-process tracing of pool operations, plus worker-factory and completion-port introspection. Diagnostic; reads layouts Microsoft does not publish. Tracing alone observes and modifies nothing; the inline hooks below need a second opt-in. |
+| `fail-fast` | off | Turns a teardown that found a drain still owed into a panic rather than a report. Arms the check directly -- see the warning below before enabling it anywhere but a leaf binary. |
+
+### `fail-fast` cannot be declined by the crates it affects
+
+Cargo unifies features across a build, so **any** crate enabling `fail-fast`
+turns it on for every crate in that build. A library that depends on this one
+cannot opt out of another dependency's choice, and `default-features = false`
+does not help: the feature is off by default, so declining the defaults declines
+nothing here.
+
+What changes is teardown behaviour process-wide -- a `Drop` that previously
+reported an outstanding drain now panics. That is a reasonable thing for an
+application to ask for about its own code, and an unreasonable thing to impose
+on an unrelated component that happens to share the build.
+
+So enable it from a binary, a test, or a development profile, and not from a
+published library's default feature set.
 
 ### The inline hooks are a second opt-in, and they are exclusive
 

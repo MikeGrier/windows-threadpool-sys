@@ -756,6 +756,63 @@ house rules require is what found the third.
   now cleared on exactly one path, and the comment states why that cannot race a call already inside
   the hook body.
 
+- [x] **M-T10.27** -- **Run the exception-observer assertion in a trace-armed child.** The eighth
+      review round's headline finding, and this branch's own signature defect recurring:
+      `the_exception_observer_notes_a_first_chance_exception` opened with
+      `if !wants("exception") { return; }`, so in every ordinary run and in CI it returned having
+      raised nothing and asserted nothing. `M-T10.12` and `M-T10.16` exist to remove exactly this,
+      and the remedy they introduced -- `in_a_trace_armed_child` -- was already applied at three
+      other sites. Measured before the fix: the test passed in 0.00s with the filter unset, and
+      since its only other exit is a `panic!`, passing was itself the proof it returned early.
+      Measured after: 0.06s, and sabotaging the recorder fails it by name.
+
+- [x] **M-T10.28** -- **Stop the healer parking on the one pool it is trying to repair.** `tick`
+      submits a repair, clears the mark, then calls `retire_idle` in the same pass. An entry whose
+      objects are gone is then idle, so the last `Arc` drops, `RepairWork::drop` drains the work
+      object -- and that drain cannot return until the pool dispatches. The pool is by construction
+      the one suspected of not dispatching, and the healer is built with `set_max_threads(1)`, so
+      one wedged pool parked the only thread the facility has and no pool in the process would ever
+      be repaired again.
+
+  `retire_idle` already moved the drop out of the registry lock for this exact reason, and its
+  comment says so; that protected every *other* pool's registration from the wait but not the
+  healer's own thread. Retirement now also requires `repair_settled()` -- a submission counter
+  paired against the existing `runs` -- so an entry is retired only once the pool has given every
+  repair back. An entry kept alive for a pool that never dispatches is the cheaper failure by a
+  wide margin. The counter is incremented *before* the submit, because a repair can be dispatched
+  the instant it is handed over and a count taken afterwards could be overtaken by the run it is
+  meant to be paired against.
+
+- [x] **M-T10.29** -- **Bound the writable window to one attempt, not sixteen.** A defect introduced
+      by `M-T10.24`'s retry. `install_batch` opened the `ntdll` pages, called the retrying
+      `with_others_suspended`, and restored them only afterwards -- so a contended install held live
+      code pages `PAGE_EXECUTE_READWRITE`, with every other thread running, across all sixteen
+      attempts and their snapshots, where one attempt holds them for microseconds. The retry now
+      lives in `install_batch` and opens and restores per attempt; `quiesce_once` is a single
+      attempt again and its doc records why the retry cannot wrap it. `NotWritable` is not retried,
+      because a page this process cannot make writable will not become writable a millisecond
+      later. Re-verified that the flake `M-T10.24` fixed stays fixed: 0 failures in 30 runs at 32
+      test threads.
+
+- [x] **M-T10.30** -- **Carry the factory handle on the two records the investigation turns on, and
+      five smaller corrections.** `counts-waiting` and `counts-pending` passed a literal `0` while
+      `read_one`'s doc promised every record carries the handle -- and those two are precisely what
+      the facility exists to read. `counts()` reads every factory in the process rather than
+      guessing which is the default pool's, so without the handle a two-factory capture could only
+      be attributed by row adjacency. Both now carry it, and the doc names the records that
+      genuinely spend the slot on a partner value.
+
+  Also: the module doc linked `../../../windows-ioring-sys/STALL-TIMELINE.md`, a path `b4a0a886`
+  emptied when it re-homed that file here; `commit`'s safety contract credited `prepare` with
+  opening the page, which `prepare` explicitly does not do (`open_pages` does, per `M-T10.13`);
+  `fail-fast` appeared in neither the README nor the crate docs, leaving its build-unification
+  hazard stated only in a `Cargo.toml` comment; the `compile_fail` guarding the feature-off API
+  shape called a made-up method and so asserted only that `rustc` rejects unknown names -- it now
+  names the real method under `cfg_attr(not(feature = "self-heal"))`, verified bidirectionally by
+  forcing the block on with the feature enabled and watching it fail; and `Win32_System_IO` under
+  `trace` was redundant against the unconditional dependency feature and justified by a comment
+  calling it test-only, which `poke_completion_ports` being public contradicts.
+
 - [ ] **M-T10.7** -- **Decide whether CI should check intra-doc links in private items.**
 
   **The gap.** The `docs` job runs `cargo doc --no-deps --all-features` without

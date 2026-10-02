@@ -155,6 +155,31 @@ mod on {
             self.repair.runs.load(Ordering::SeqCst)
         }
 
+        /// Note that a repair has been handed to the pool.
+        ///
+        /// Counted so [`repair_settled`](Self::repair_settled) can tell a
+        /// dispatched repair from one the pool still holds.
+        fn repair_submitted(&self) {
+            self.repair.submitted.fetch_add(1, Ordering::SeqCst);
+        }
+
+        /// Whether every repair submitted on this entry has been dispatched.
+        ///
+        /// False while the pool still holds one, which is the state in which
+        /// `WaitForThreadpoolWorkCallbacks` -- the drain in `RepairWork::drop`
+        /// -- would block until the pool dispatches it. On a pool that never
+        /// does, that wait never returns.
+        ///
+        /// The counters are only ever compared, never used to pair a particular
+        /// submission with a particular run, so the submit-then-dispatch race
+        /// can at worst report `false` for an entry that has just settled. That
+        /// costs one more pass before the entry retires and cannot report
+        /// `true` while a submission is outstanding, which is the direction that
+        /// matters.
+        pub(crate) fn repair_settled(&self) -> bool {
+            self.repair.runs.load(Ordering::SeqCst) >= self.repair.submitted.load(Ordering::SeqCst)
+        }
+
         /// Note that the pool dispatched a callback.
         pub(crate) fn stamp_dispatch(&self, at: u64) {
             self.last_dispatch.store(at, Ordering::Relaxed);
@@ -206,6 +231,12 @@ mod on {
     /// would create an entry.
     struct RepairWork {
         work: PTP_WORK,
+        /// How many times this object has been handed to the pool.
+        ///
+        /// Paired with `runs` so an entry is retired only once the pool has
+        /// given every submission back. See
+        /// [`PoolEntry::repair_settled`](PoolEntry::repair_settled).
+        submitted: AtomicU64,
         /// How many times *this* object has been dispatched.
         ///
         /// Boxed so its address is stable, and handed to the work object as its
@@ -522,10 +553,26 @@ mod on {
         drop(retired);
     }
 
-    /// Retire every entry that has no objects and owes no repair.
+    /// Retire every entry that has no objects, owes no repair, and has no
+    /// repair still sitting in its pool.
     ///
     /// For the self-heal timer (`M-T6.4`), which is what discharges a repair and
     /// so is what makes a retained entry retirable again.
+    ///
+    /// **An entry with a submission still outstanding is kept**, however idle it
+    /// otherwise looks. Retiring it drops the last `Arc`, which runs
+    /// `RepairWork::drop`, which drains the work object -- and that drain cannot
+    /// return until the pool dispatches the repair. The pool in question is by
+    /// construction the one suspected of not dispatching, and `tick` runs on a
+    /// healer built with `set_max_threads(1)`, so a drain that blocks there
+    /// parks the only thread the facility has and no pool in the process is
+    /// ever repaired again. Keeping one entry alive for a pool that never
+    /// dispatches is the cheaper failure by a wide margin.
+    ///
+    /// Moving the drop out of the registry lock, below, is a separate and
+    /// still-necessary precaution: it stops such a wait blocking every other
+    /// pool's registration and release. It does not help the healer's own
+    /// thread, which is what this condition is for.
     pub(crate) fn retire_idle() {
         // The retired entries are moved out under the lock and dropped after it
         // is released.
@@ -539,8 +586,9 @@ mod on {
         let retired: Vec<Arc<PoolEntry>> = {
             let mut entries = locked();
             let (out, keep) = entries.iter().cloned().partition(|entry| {
-                let idle =
-                    entry.objects.load(Ordering::Relaxed) == 0 && entry.repair_owed_at().is_none();
+                let idle = entry.objects.load(Ordering::Relaxed) == 0
+                    && entry.repair_owed_at().is_none()
+                    && entry.repair_settled();
                 if idle {
                     crate::trace_record!("heal", "entry-retired", entry.key, 0);
                 }
@@ -702,6 +750,13 @@ mod on {
             // nothing and makes one call -- which matters because the pool it is
             // aimed at may already be wedged.
             crate::trace_record!("heal", "repair-submitted", entry.key(), entry.repair_work());
+            // Counted *before* the submit, never after: the repair can be
+            // dispatched on a pool thread the instant it is handed over, so a
+            // count taken afterwards can be overtaken by the run it is meant to
+            // be paired against, and `repair_settled` would then read `true`
+            // with a submission outstanding -- which is the one answer it must
+            // never give.
+            entry.repair_submitted();
             // SAFETY: the work object was created by `create_repair` for this
             // entry and is alive while the entry is, which this `Arc` ensures.
             unsafe { SubmitThreadpoolWork(entry.repair_work()) };
@@ -756,7 +811,11 @@ mod on {
         if work == 0 {
             None
         } else {
-            Some(RepairWork { work, runs })
+            Some(RepairWork {
+                work,
+                runs,
+                submitted: AtomicU64::new(0),
+            })
         }
     }
 }
@@ -783,22 +842,30 @@ mod on {
 /// ```
 ///
 /// With `self-heal` **off**, it does not, and calling it is a compile error --
-/// which is the designed behaviour rather than an oversight. This is written as
-/// a `compile_fail` test of a *made-up* method name so that it fails for the
-/// same reason in both configurations; a `compile_fail` naming the real method
-/// would start passing for the wrong reason the moment the feature was on.
+/// which is the designed behaviour rather than an oversight. The block below
+/// names the **real** method and is emitted **only in the build where the claim
+/// applies**, so it fails to compile for the stated reason rather than for any
+/// reason at all.
 ///
-/// ```compile_fail
-/// use windows_threadpool_sys::wait::{ThreadpoolWait, WaitableHandle};
-/// let wait = ThreadpoolWait::new(
-///     WaitableHandle::event(true, false).unwrap(),
-///     |_| {},
-///     None,
-/// )
-/// .unwrap();
-/// wait.no_such_cancellation_method();
-/// ```
-///
+/// An earlier version was a `compile_fail` on a made-up method name, emitted in
+/// both configurations. That could not fail for the right reason in either: it
+/// asserted only that `rustc` rejects an unknown method, which it would do with
+/// the feature on, off, or the crate absent. The `cfg_attr` is what lets the
+/// real name be used, because the block then does not exist in the build where
+/// the method does.
+#[cfg_attr(
+    not(feature = "self-heal"),
+    doc = "```compile_fail",
+    doc = "use windows_threadpool_sys::wait::{ThreadpoolWait, WaitableHandle};",
+    doc = "let wait = ThreadpoolWait::new(",
+    doc = "    WaitableHandle::event(true, false).unwrap(),",
+    doc = "    |_| {},",
+    doc = "    None,",
+    doc = ")",
+    doc = ".unwrap();",
+    doc = "wait.try_cancel_pending();",
+    doc = "```"
+)]
 /// The `unsafe` sibling is present either way, which is what makes it the one a
 /// consumer can always reach for:
 ///
