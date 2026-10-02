@@ -891,7 +891,13 @@ fn poke_the_stalled_port() {
     windows_threadpool_sys::trace_record!("postmortem", "poke-begin");
     // Depth 1: only the port holding the stuck work, which is the stalled
     // pool's. The healthy control uses 0, because the port it pokes is idle.
-    let poked = windows_threadpool_sys::trace::poke_completion_ports(1);
+    // SAFETY: the obligation is that the process has already failed and is
+    // being diagnosed rather than relied upon, and that nothing in it still
+    // needs a completion port to deliver only packets its owner posted. Both
+    // hold here: this runs only under `IORING_POKE_PORT`, on the stalled arm of
+    // a postmortem whose pool has already stopped dispatching, in a test
+    // process that is torn down immediately afterwards.
+    let poked = unsafe { windows_threadpool_sys::trace::poke_completion_ports(1) };
     windows_threadpool_sys::trace_record!("postmortem", "poke-posted", poked as u64);
     std::thread::sleep(Duration::from_millis(250));
     // The same counters again, so the pair brackets the post. A capture that
@@ -933,7 +939,12 @@ fn capture_healthy_factory_state() {
     // nothing at all.
     if std::env::var_os("IORING_POKE_PORT").is_some() {
         windows_threadpool_sys::trace_record!("postmortem", "poke-begin");
-        let poked = windows_threadpool_sys::trace::poke_completion_ports(0);
+        // SAFETY: as the stalled arm above -- opt-in under `IORING_POKE_PORT`,
+        // in a dedicated test process that exits straight afterwards. This is
+        // the healthy control, so the pool here has not failed; what makes it
+        // sound is the second half of the obligation, that nothing in this
+        // process depends on its ports carrying only its own packets.
+        let poked = unsafe { windows_threadpool_sys::trace::poke_completion_ports(0) };
         windows_threadpool_sys::trace_record!("postmortem", "poke-posted", poked as u64);
         std::thread::sleep(Duration::from_millis(250));
         windows_threadpool_sys::trace_record!("postmortem", "poke-after");
