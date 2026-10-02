@@ -55,6 +55,26 @@ use std::time::{Duration, Instant, SystemTime};
 use windows_threadpool_sys::cleanup_group::CleanupGroup;
 use windows_threadpool_sys::timer::{ThreadpoolPeriodicTimer, ThreadpoolTimer};
 
+/// Release a group's members, cancelling queued callbacks, in either feature
+/// configuration.
+///
+/// The safe form of this is gated on `self-heal`, because it is the repair that
+/// makes cancelling a wait member safe to offer. Tests must still exercise the
+/// cancelling release without the feature, so this picks the safe method where
+/// it exists and takes the obligation explicitly where it does not. One site
+/// per test target rather than a `cfg` at each call.
+fn close_cancelling(group: &mut CleanupGroup) {
+    #[cfg(feature = "self-heal")]
+    group.close_members_cancelling();
+    #[cfg(not(feature = "self-heal"))]
+    // SAFETY: the obligation is to repair each member's pool. These tests use
+    // private pools that are torn down immediately afterwards, so no later work
+    // depends on one dispatching again; nothing outside the test can reach them.
+    unsafe {
+        group.close_members_cancelling_no_heal_tracking()
+    };
+}
+
 // --- gating ---
 
 /// Set this to `1` to run the suite. Absent, every scenario returns immediately.
@@ -1235,7 +1255,11 @@ stress! {
             }
 
             // Alternate cancelling pending callbacks and letting them run.
-            group.close_members(round % 2 == 0);
+            if round % 2 == 0 {
+            close_cancelling(&mut group);
+        } else {
+            group.close_members();
+        }
             assert_eq!(
                 group.owned_resources(),
                 0,
@@ -1302,7 +1326,11 @@ stress! {
                                 std::thread::sleep(Duration::from_millis(20));
                             }
                         }
-                        group.close_members((t + i) % 2 == 0);
+                        if (t + i) % 2 == 0 {
+                close_cancelling(&mut group);
+            } else {
+                group.close_members();
+            }
                         assert_eq!(
                             group.owned_resources(),
                             0,
@@ -1457,7 +1485,7 @@ stress! {
                                 member.set_after(Duration::ZERO);
                                 std::thread::sleep(Duration::from_millis(20));
                             }
-                            group.close_members(false);
+                            group.close_members();
                         }
                         cycles += 1;
                     }

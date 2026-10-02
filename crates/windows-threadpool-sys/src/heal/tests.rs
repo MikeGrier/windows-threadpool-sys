@@ -40,6 +40,31 @@ mod on {
     use crate::heal::PoolEntry;
     use std::sync::Arc;
 
+    /// Hold off every tick for the duration of a test's critical section.
+    ///
+    /// Making a private pool does **not** isolate these tests. `tick` walks the
+    /// whole registry, so another test's tick -- or the background healer's,
+    /// which starts at the first cancellation anywhere in the process and runs
+    /// until it exits -- can clear this test's mark between the cancellation
+    /// that set it and the assertion about it. Measured rather than supposed, though
+    /// not by the loop that first found it: a review saw
+    /// `a_cancelling_group_release_marks_a_wait_members_pool` fail on run 19 of
+    /// this module at 32 test threads, and 60 further runs here -- with this
+    /// gate disconnected, and again with a thread calling `tick` in a loop --
+    /// did not reproduce it. The window is a few microseconds wide, so failing
+    /// to land in it settles nothing either way. Placing a tick in the window
+    /// by hand does settle it: inserting `tick_inner()` between that test's
+    /// `close_members(true)` and its assertion fails it every time, on the
+    /// assertion the review named.
+    ///
+    /// A test that wants to tick calls `crate::heal::tick_inner` while holding
+    /// this; `crate::heal::tick` would deadlock on the gate it already has.
+    fn gate() -> std::sync::MutexGuard<'static, ()> {
+        crate::heal::TICK_GATE
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner())
+    }
+
     /// The entry for a freshly created private pool, with one object on it.
     fn entry_for(pool: &ThreadpoolPool) -> (ThreadpoolWork, Arc<PoolEntry>) {
         let mut env = CallbackEnviron::new();
@@ -318,6 +343,7 @@ mod on {
 
     #[test]
     fn try_cancel_pending_marks_its_pool() {
+        let _gate = gate();
         let pool = ThreadpoolPool::new().expect("create pool");
         let mut env = CallbackEnviron::new();
         env.set_pool(&pool);
@@ -370,6 +396,7 @@ mod on {
 
     #[test]
     fn a_cancelling_group_release_marks_a_wait_members_pool() {
+        let _gate = gate();
         use crate::cleanup_group::CleanupGroup;
 
         let pool = ThreadpoolPool::new().expect("create pool");
@@ -390,7 +417,7 @@ mod on {
             .expect("the member registered its pool");
         assert_eq!(entry.repair_owed_at(), None);
 
-        group.close_members(true);
+        group.close_members_cancelling();
         assert!(
             entry.repair_owed_at().is_some(),
             "a cancelling release passes the cancel to each member, so a wait \
@@ -420,7 +447,7 @@ mod on {
             .find(|e| e.key() == pool.as_raw() as usize)
             .expect("the member registered its pool");
 
-        group.close_members(false);
+        group.close_members();
         assert_eq!(
             entry.repair_owed_at(),
             None,
@@ -446,13 +473,20 @@ mod on {
             .find(|e| e.key() == pool.as_raw() as usize)
             .expect("the wait registered its pool");
 
-        assert_eq!(entry.repairs_run(), 0, "nothing repaired on this pool yet");
-        wait.arm(None);
-        wait.try_cancel_pending();
-        assert!(
-            entry.repair_owed_at().is_some(),
-            "the cancel marks the pool"
-        );
+        // Gated only across the mark and the assertion about it, then released
+        // so the healer can actually tick. Holding it through the wait below
+        // would block the very timer this test is waiting for, which is how the
+        // first version of this gate turned a passing test into a hang.
+        {
+            let _gate = gate();
+            assert_eq!(entry.repairs_run(), 0, "nothing repaired on this pool yet");
+            wait.arm(None);
+            wait.try_cancel_pending();
+            assert!(
+                entry.repair_owed_at().is_some(),
+                "the cancel marks the pool"
+            );
+        }
 
         // Waiting on *this entry's own* repair object having been dispatched,
         // which pins two things weaker assertions cannot.
@@ -479,6 +513,7 @@ mod on {
 
     #[test]
     fn a_tick_skips_a_pool_that_has_dispatched_since_the_cancellation() {
+        let _gate = gate();
         // The coalescing rule, driven directly rather than through the timer:
         // a dispatch after the cancellation is evidence the pool is live, so no
         // repair is submitted. Asserted through the mark being cleared without
@@ -499,7 +534,7 @@ mod on {
             entry.dispatched_since(10),
             "a dispatch after the cancellation is what the skip rests on"
         );
-        crate::heal::tick();
+        crate::heal::tick_inner();
         assert_eq!(
             entry.repairs_run(),
             0,
@@ -518,6 +553,7 @@ mod on {
 
     #[test]
     fn a_tick_leaves_a_pool_alone_when_nothing_is_owed() {
+        let _gate = gate();
         let pool = ThreadpoolPool::new().expect("create pool");
         let mut env = CallbackEnviron::new();
         env.set_pool(&pool);
@@ -526,7 +562,7 @@ mod on {
             .into_iter()
             .find(|e| e.key() == pool.as_raw() as usize)
             .expect("the work registered its pool");
-        crate::heal::tick();
+        crate::heal::tick_inner();
         assert_eq!(entry.repair_owed_at(), None);
         drop(work);
     }

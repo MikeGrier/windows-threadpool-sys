@@ -1039,14 +1039,15 @@ through `release_members`, and `Drop` calls it with `cancel_pending` **false**:
 ```rust
 impl Drop for CleanupGroup {
     fn drop(&mut self) {
-        // Let queued callbacks run, matching the default of `close_members`.
+        // Let queued callbacks run, matching `close_members`.
         self.release_members(false);
 ```
 
-So it already drains. `close_members(cancel_pending: bool)` is also already the
-method requirement 3 asks for: an explicit, synchronous release at a point the
-caller picks, with the choice in the caller's hands and the draining form as
-what `Drop` does when they do not.
+So it already drains. `close_members()` is also already the method requirement 3
+asks for: an explicit, synchronous release at a point the caller picks, with the
+choice in the caller's hands and the draining form as what `Drop` does when they
+do not. The choice is made by picking a method rather than by passing a flag --
+see [The cancelling release is a separate method](#the-cancelling-release-is-a-separate-method).
 
 A member is also structurally unlike the standalone case: it never closes
 itself, so nothing in that path issues a `CloseThreadpoolWait` behind a
@@ -1054,6 +1055,67 @@ itself, so nothing in that path issues a `CloseThreadpoolWait` behind a
 **Whether that makes a cleanup-group consumer immune to the measured stall is
 untested**, and worth knowing, but it is a question about the ring crate's
 reproducer rather than a change to this one.
+
+### The cancelling release is a separate method
+
+`close_members` took a `cancel_pending: bool`. It no longer does: draining is
+`close_members()`, cancelling is `close_members_cancelling()` behind
+`self-heal`, and `close_members_cancelling_no_heal_tracking()` is the ungated
+`unsafe` form.
+
+The flag made one call site mean two different things, and only one of them
+carried an obligation. Passing `true` reached the same removal primitive
+`ThreadpoolWait::try_cancel_pending` reaches, so it owed the same repair -- yet
+the per-object method had been gated on `self-heal` and marked `unsafe` without
+it, while the group method stayed safe and ungated in every configuration. With
+the feature off, `close_members(true)` performed the hazardous cancellation on
+every wait member and landed on `off::Registration::owe_repair`, which does
+nothing.
+
+Three properties follow from splitting it, none of which a flag can have:
+
+- The dangerous form is **named**, so it is visible at the call site and
+  greppable.
+- Its availability is **decided by the build**, not by a runtime value: with
+  `self-heal` off, the safe cancelling method does not exist, and a caller
+  relying on the repair gets a compile error naming the `unsafe` alternative.
+  A `bool` cannot be gated -- `cfg` applies to items, not to argument values.
+- A caller who genuinely wants the cancel without the feature must write
+  `unsafe` and discharge the obligation, which is what the per-object API
+  already required.
+
+This mirrors `ThreadpoolWait::try_cancel_pending` /
+`try_cancel_pending_no_heal_tracking` exactly, and the mirroring is the point:
+one rule about cancelling a wait, stated the same way wherever a caller can
+reach it. The previous arrangement stated it at the per-object site only, which
+is the half-converted shape this file records elsewhere.
+
+**Cost, stated rather than minimised:** this is a breaking change to a public
+method, and a call with a *dynamic* flag no longer compiles -- it becomes an
+`if`/`else` over two methods. Three such call sites existed in this crate's own
+tests. That cost is the mechanism, not a side effect: a caller choosing at
+runtime between a safe and an obligation-carrying teardown is exactly the thing
+that could not be checked before.
+
+### Posting fabricated packets is an `unsafe` operation
+
+`trace::poke_completion_ports` is `unsafe fn`. It posts a packet with a zero
+completion key and a null `OVERLAPPED` to every completion port in the process
+above a depth threshold, including ports this crate neither created nor owns. A
+worker that picks one up may dispatch it as garbage, and code that trusts its
+own completion key or dereferences the `OVERLAPPED` reaches a null pointer by a
+path its author cannot see from the call.
+
+The hazard was already documented -- "**Destructive** ... Only for a process
+that has already failed" -- in prose, on a safe function. That is a rule
+enforced by whoever reads the doc comment, which over a long change is nobody.
+The keyword moves it to the build.
+
+As with `try_cancel_pending_no_heal_tracking`, this is not a memory-safety
+obligation of the function's own body; it is an obligation that is statable and
+dischargeable only by the caller, which is what `unsafe` is being used to mark
+here. The `#[cfg(not(feature = "trace"))]` stub keeps the keyword although it
+posts nothing, so the signature does not change between configurations.
 
 ### What the obligation flag records, and why a dispatch sometimes discharges it
 
@@ -1518,7 +1580,7 @@ prompted it was taken after `M-T6.3` settled the cancel surface.
 Every type whose teardown drains offers `stop_and_drain`. `ThreadpoolWork`,
 `WorkMember`, `TimerMember` and `WaitMember` gained one; nothing was renamed.
 
-`ThreadpoolIo::run_down` and `CleanupGroup::close_members(bool)` keep their own
+`ThreadpoolIo::run_down` and `CleanupGroup::close_members` keep their own
 names and were deliberately not aliased. Both do something a per-object drain
 does not -- one waits on an operation registry, the other releases a whole group
 -- so a shared name would claim an equivalence that is not there.

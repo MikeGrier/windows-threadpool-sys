@@ -11,6 +11,9 @@
 //! filling the real buffer would evict every record the rest of the suite had
 //! just taken.
 
+// Only the trace-gated probes below hand a callback's arrival back to the test
+// thread, so without `trace` nothing here uses a channel.
+#[cfg(feature = "trace")]
 use std::sync::mpsc;
 use std::time::Duration;
 
@@ -220,6 +223,7 @@ fn the_exception_observer_notes_a_first_chance_exception() {
 /// Generous, because these run alongside the rest of the suite on a machine
 /// that may be loaded: the question is whether the record exists at all, not
 /// how promptly it arrived.
+#[cfg(feature = "trace")]
 const PROBE_BOUND: Duration = Duration::from_secs(5);
 
 /// Every pool object in this crate records its whole life: its creation, every
@@ -419,6 +423,7 @@ fn every_pool_object_records_its_creation_establishment_callbacks_and_teardown()
 }
 
 /// One wait activation, which also drives one re-arm from the pool thread.
+#[cfg(feature = "trace")]
 fn exercise_a_wait() {
     use crate::wait::{ThreadpoolWait, WaitableHandle};
 
@@ -452,6 +457,7 @@ fn exercise_a_wait() {
 }
 
 /// One work-item invocation.
+#[cfg(feature = "trace")]
 fn exercise_a_work_item() {
     use crate::work::ThreadpoolWork;
 
@@ -472,6 +478,7 @@ fn exercise_a_work_item() {
 }
 
 /// One one-shot timer firing, which also drives one deferred re-arm.
+#[cfg(feature = "trace")]
 fn exercise_a_timer() {
     use crate::timer::ThreadpoolTimer;
 
@@ -516,6 +523,7 @@ fn exercise_a_timer() {
 }
 
 /// One periodic-timer tick.
+#[cfg(feature = "trace")]
 fn exercise_a_periodic_timer() {
     use crate::timer::ThreadpoolPeriodicTimer;
 

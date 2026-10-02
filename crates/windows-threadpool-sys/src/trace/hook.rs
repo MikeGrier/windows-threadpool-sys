@@ -468,6 +468,49 @@ pub(crate) unsafe fn is_syscall_stub(entry: *const u8) -> bool {
 /// Returns `None` without running `patch` when any thread could not be stopped.
 /// Every thread this call did suspend is resumed either way.
 fn with_others_suspended<T>(patch: impl FnOnce() -> T) -> Option<T> {
+    /// Attempts made before the install is refused.
+    ///
+    /// One attempt refuses whenever any thread cannot be stopped, and a thread
+    /// that is *terminating* cannot be: `SuspendThread` answers
+    /// `ERROR_ACCESS_DENIED` for one, on a handle that `OpenThread` had just
+    /// returned for the same id. That is not the `OpenThread` case handled in
+    /// the suspend loop below and must not be folded into it -- an id that
+    /// names nothing is gone, whereas a terminating thread may still be
+    /// executing its exit path, which is the property the refusal is about.
+    ///
+    /// So the refusal stands and the attempt is repeated instead. Each one
+    /// resumes everything it stopped before returning, so a retry begins with
+    /// nothing suspended and takes the lock again, and the thread that could
+    /// not be stopped is given a moment to finish leaving.
+    ///
+    /// Measured: running this crate's own lib tests at 32 test threads, 13 of
+    /// 30 runs refused the self-test install, every one of them reporting
+    /// `SuspendThread` / `ERROR_ACCESS_DENIED` with the enumeration intact.
+    const ATTEMPTS: usize = 16;
+
+    /// Time given to a terminating thread between attempts.
+    const SETTLE: std::time::Duration = std::time::Duration::from_millis(1);
+
+    let mut patch = Some(patch);
+    for attempt in 0..ATTEMPTS {
+        if let Some(out) = quiesce_once(&mut patch) {
+            return Some(out);
+        }
+        if attempt + 1 < ATTEMPTS {
+            std::thread::sleep(SETTLE);
+        }
+    }
+    None
+}
+
+/// One attempt at [`with_others_suspended`]: stop every other thread, run
+/// `patch` if and only if every one of them stopped, resume them all.
+///
+/// Takes the closure by `&mut Option` rather than by value because the caller
+/// may call this more than once while the closure may run at most once. The
+/// `take` happens only on the path that patches, so an attempt that refuses
+/// leaves it for the next one.
+fn quiesce_once<T, F: FnOnce() -> T>(patch: &mut Option<F>) -> Option<T> {
     use std::sync::Mutex;
     use windows_sys::Win32::Foundation::{
         CloseHandle, ERROR_INVALID_PARAMETER, GetLastError, INVALID_HANDLE_VALUE,
@@ -481,8 +524,10 @@ fn with_others_suspended<T>(patch: impl FnOnce() -> T) -> Option<T> {
     };
 
     /// Threads handled without a second allocation. Both vectors are reserved
-    /// to this before anything is suspended, and growth past it is refused
-    /// rather than allocated -- see below for why that matters.
+    /// to this before anything is suspended, and a process with more threads
+    /// than this makes the whole install refuse rather than either allocating
+    /// in the suspended window or quietly suspending a prefix -- see below for
+    /// why both of those matter.
     const ROOM: usize = 512;
 
     /// Serializes every path into this function, against itself.
@@ -518,7 +563,18 @@ fn with_others_suspended<T>(patch: impl FnOnce() -> T) -> Option<T> {
 
     // Phase one: enumerate. This allocates, and does so while every thread is
     // still running.
+    //
+    // **The enumeration fails closed**, and did not until a review pointed at
+    // it. An earlier revision refused when a thread could not be opened or
+    // suspended, and left every way of failing to *find* the threads reporting
+    // success: a snapshot that could not be taken, an enumeration that could
+    // not be started, and a thread count past `ROOM` all left `ids` empty or
+    // short, which then read as "every thread is suspended" and patched
+    // fourteen bytes of live code with nothing stopped at all. That is a
+    // strictly worse version of the case that had been fixed, one block above
+    // it.
     let mut ids: Vec<u32> = Vec::with_capacity(ROOM);
+    let mut enumerated = false;
     // SAFETY: no preconditions; an invalid handle is handled.
     let snap = unsafe { CreateToolhelp32Snapshot(TH32CS_SNAPTHREAD, 0) };
     if snap != INVALID_HANDLE_VALUE {
@@ -529,8 +585,19 @@ fn with_others_suspended<T>(patch: impl FnOnce() -> T) -> Option<T> {
         };
         // SAFETY: `snap` is live and `entry.dwSize` is set.
         let mut ok = unsafe { Thread32First(snap, &mut entry) } != 0;
-        while ok && ids.len() < ROOM {
+        // A process always has at least this thread, so a first call that
+        // reports nothing is a failed enumeration rather than an empty one.
+        let started = ok;
+        let mut overflowed = false;
+        while ok {
             if entry.th32OwnerProcessID == me && entry.th32ThreadID != self_thread {
+                if ids.len() == ROOM {
+                    // Refuse rather than truncate. Growing the vector here
+                    // would allocate, and a short list is the dangerous answer
+                    // dressed as a complete one.
+                    overflowed = true;
+                    break;
+                }
                 ids.push(entry.th32ThreadID);
             }
             // SAFETY: as above; `entry` is still initialised.
@@ -538,6 +605,7 @@ fn with_others_suspended<T>(patch: impl FnOnce() -> T) -> Option<T> {
         }
         // SAFETY: the snapshot is not used again.
         unsafe { CloseHandle(snap) };
+        enumerated = started && !overflowed;
     }
     let mut held: Vec<*mut core::ffi::c_void> = Vec::with_capacity(ids.len());
 
@@ -570,8 +638,11 @@ fn with_others_suspended<T>(patch: impl FnOnce() -> T) -> Option<T> {
     //
     // Measured: refusing both made `install_by_label` fail in an ordinary test
     // process, which is what sent this back for the distinction.
-    let mut quiesced = true;
-    for &id in &ids {
+    let mut quiesced = enumerated;
+    // Nothing is suspended at all when the enumeration failed: stopping every
+    // thread and then declining to patch would be a perturbation bought for
+    // nothing, in the window this function exists to keep empty.
+    for &id in if enumerated { &ids[..] } else { &[][..] } {
         // SAFETY: no preconditions; a null return is handled.
         let thread = unsafe { OpenThread(THREAD_SUSPEND_RESUME, 0, id) };
         if thread.is_null() {
@@ -592,7 +663,13 @@ fn with_others_suspended<T>(patch: impl FnOnce() -> T) -> Option<T> {
         held.push(thread);
     }
 
-    let outcome = if quiesced { Some(patch()) } else { None };
+    let outcome = if quiesced {
+        // Only this path consumes the closure, so a refused attempt leaves it
+        // intact for the next one. Unreachable twice within one attempt.
+        Some((patch.take().expect("an attempt patches at most once"))())
+    } else {
+        None
+    };
 
     for &thread in &held {
         // SAFETY: suspended by this function, opened for this access.

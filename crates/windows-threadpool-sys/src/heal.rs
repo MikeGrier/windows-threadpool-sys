@@ -47,6 +47,11 @@ pub(crate) fn key_of(env: Option<&CallbackEnviron<'_>>) -> PoolKey {
 #[cfg(feature = "self-heal")]
 #[allow(unused_imports)]
 pub(crate) use on::{PoolEntry, Registration, entries, now, register, retire_idle, tick};
+// The module these name exists only with the feature on, so the re-export has
+// to carry that condition too -- `#[cfg(test)]` alone resolves against a module
+// that is not there in a `--no-default-features` test build.
+#[cfg(all(test, feature = "self-heal"))]
+pub(crate) use on::{TICK_GATE, tick_inner};
 
 #[cfg(not(feature = "self-heal"))]
 pub(crate) use off::{Registration, register};
@@ -532,37 +537,91 @@ mod on {
     /// could stop the timer *after* a concurrent cancellation had marked its
     /// pool and asked for the healer, leaving a repair owed with nothing to
     /// deliver it. A coalesced tick is the cheaper of the two mistakes.
+    /// **Only success is remembered.** This used to be an
+    /// `OnceLock<Option<Healer>>` filled by `get_or_init`, which cached the
+    /// *failure* too: one transient `ThreadpoolPool::new` under memory
+    /// pressure, at the first cancellation in the process, and the healer was
+    /// never attempted again. Every later cancellation would still mark its
+    /// pool, nothing would ever tick, and no failure was reported -- the whole
+    /// feature off for the life of the process on the strength of one bad
+    /// moment. A failed attempt now records and leaves the slot empty, so the
+    /// next cancellation tries again.
     fn ensure_running() {
-        static HEALER: OnceLock<Option<Healer>> = OnceLock::new();
-        HEALER.get_or_init(|| {
-            let pool = crate::pool::ThreadpoolPool::new().ok()?;
-            // One thread is enough: a tick submits and returns.
-            pool.set_max_threads(1).ok()?;
-            // Scoped so the environment's borrow of `pool` ends before `pool`
-            // is moved into the value the static keeps. The borrow is real --
-            // `set_pool` ties the environment to the pool it names -- and only
-            // the construction needs it.
-            let timer = {
-                let mut env = crate::callback_env::CallbackEnviron::new();
-                env.set_pool(&pool);
-                crate::timer::ThreadpoolPeriodicTimer::new(
-                    HEAL_PERIOD,
-                    |_tick| tick(),
-                    Some(&mut env),
-                )
-                .ok()?
-            };
-            timer.start_with_window(HEAL_PERIOD, HEAL_WINDOW);
-            crate::trace_record!("heal", "healer-started", pool.as_raw());
-            Some(Healer {
-                _pool: pool,
-                _timer: timer,
-            })
-        });
+        /// Fast path, so the common already-running case pays a load rather
+        /// than a lock on the cancellation path.
+        static RUNNING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+        static HEALER: Mutex<Option<Healer>> = Mutex::new(None);
+
+        if RUNNING.load(Ordering::Acquire) {
+            return;
+        }
+        // Held across construction, which registers the healer's own pool and
+        // so takes the registry lock. That order -- this lock, then the
+        // registry -- is the only one taken anywhere: `tick` and `register`
+        // take the registry lock and never this one, and `owe_repair` calls
+        // here without holding it.
+        let mut slot = HEALER.lock().unwrap_or_else(|poison| poison.into_inner());
+        if slot.is_some() {
+            return;
+        }
+        let Some(healer) = build() else {
+            crate::trace_record!("heal", "healer-start-failed", 0);
+            return;
+        };
+        crate::trace_record!("heal", "healer-started", 0);
+        *slot = Some(healer);
+        RUNNING.store(true, Ordering::Release);
     }
+
+    /// Create the healer's pool and periodic timer, or report that it could not.
+    fn build() -> Option<Healer> {
+        let pool = crate::pool::ThreadpoolPool::new().ok()?;
+        // One thread is enough: a tick submits and returns.
+        pool.set_max_threads(1).ok()?;
+        // Scoped so the environment's borrow of `pool` ends before `pool`
+        // is moved into the value the static keeps. The borrow is real --
+        // `set_pool` ties the environment to the pool it names -- and only
+        // the construction needs it.
+        let timer = {
+            let mut env = crate::callback_env::CallbackEnviron::new();
+            env.set_pool(&pool);
+            crate::timer::ThreadpoolPeriodicTimer::new(HEAL_PERIOD, |_tick| tick(), Some(&mut env))
+                .ok()?
+        };
+        timer.start_with_window(HEAL_PERIOD, HEAL_WINDOW);
+        Some(Healer {
+            _pool: pool,
+            _timer: timer,
+        })
+    }
+
+    /// Serializes a tick against a test's mark-then-assert.
+    ///
+    /// `tick` processes **every** registered pool, so it is not isolated by a
+    /// test making its own: one test's tick -- or the background healer's,
+    /// which starts at the first cancellation anywhere in the process -- can
+    /// clear another test's mark between the cancellation and the assertion
+    /// about it. `cargo test` runs these as threads of one process, which is
+    /// deliberate here, so that is a live hazard rather than a theoretical one:
+    /// a review reproduced it on run 19 of a loop at 32 test threads.
+    ///
+    /// A test holds this across the whole of its critical section and calls
+    /// [`tick_inner`] rather than [`tick`], which would deadlock on the gate it
+    /// is already holding.
+    #[cfg(test)]
+    pub(crate) static TICK_GATE: Mutex<()> = Mutex::new(());
 
     /// One pass over the registry: repair what is owed, skip what is alive.
     pub(crate) fn tick() {
+        #[cfg(test)]
+        let _gate = TICK_GATE
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner());
+        tick_inner();
+    }
+
+    /// [`tick`] without taking the test gate.
+    pub(crate) fn tick_inner() {
         for entry in entries() {
             let Some(owed_at) = entry.repair_owed_at() else {
                 continue;

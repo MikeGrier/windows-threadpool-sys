@@ -644,6 +644,63 @@ house rules require is what found the third.
   `owe_repair` returned in silence. It now records `cancel-untracked`, and both statements of the
   claim name the exception.
 
+- [x] **M-T10.21** -- **Make the thread enumeration fail closed before anything is patched.** The
+      sixth review round. `with_others_suspended` refused when a thread could not be opened or
+      suspended, but every way of failing to *find* the threads reported success: a snapshot that
+      could not be taken, an enumeration that could not be started, and a thread count past `ROOM`
+      each left `ids` empty or short, which read as "everything is suspended" and patched fourteen
+      bytes of live code with nothing stopped. Strictly worse than the per-thread case fixed one
+      block above it in `M-T10.19`. An `enumerated` flag now gates `quiesced`, and the suspend loop
+      is skipped entirely when it is false, so a refused install perturbs nothing.
+
+- [x] **M-T10.22** -- **Stop a transient healer-start failure disabling self-heal for the process.**
+      `ensure_running` cached its result in a `OnceLock<Option<Healer>>` built with `.ok()?`, so one
+      failed `ThreadpoolPool::new()` -- a transient condition -- latched `None` permanently and
+      silently, and no later cancellation anywhere in the process was ever repaired. Now an
+      `AtomicBool` fast path over a `Mutex<Option<Healer>>`: a failure records `healer-start-failed`
+      and leaves the slot empty, so the next cancellation retries.
+
+- [x] **M-T10.23** -- **Isolate the heal tests from every other tick in the process.** `tick` walks
+      the whole registry, so a private pool does not isolate a test: another test's tick, or the
+      background healer's, can clear a mark between the cancellation that sets it and the assertion
+      about it. A `TICK_GATE` now brackets each critical section.
+
+  **Reproduction, stated honestly.** The review saw this fail on run 19 at 32 test threads. 60 runs
+  here with the gate disconnected, and 60 more with a thread calling `tick` in a loop, did not
+  reproduce it -- the window is microseconds wide, so missing it settles nothing. What settles it is
+  placing a tick in the window by hand: inserting `tick_inner()` between
+  `a_cancelling_group_release_marks_a_wait_members_pool`'s `close_members_cancelling()` and its
+  assertion fails that test every time, on the assertion the review named.
+
+- [x] **M-T10.24** -- **Retry a refused quiesce instead of weakening the refusal.** Found while
+      verifying `M-T10.23`, not by the review: the full lib suite at 32 test threads failed 13 of 30
+      runs in `trace::tests::a_hooked_stub_records_both_ends_and_still_performs_its_syscall` with
+      `NotQuiesced`. Instrumenting rather than guessing named the cause -- `SuspendThread` returning
+      `ERROR_ACCESS_DENIED`, enumeration intact -- which is a thread that is *terminating*.
+
+  This was `M-T10.19` half-converted: the benign/dangerous distinction was given to `OpenThread` and
+  not to `SuspendThread` one line below. The carve-out was **not** extended, because the two cases
+  differ -- an id that names nothing is gone, whereas a terminating thread may still be running its
+  exit path, which is the property the refusal establishes. The refusal stands and the whole attempt
+  is retried outside the suspended window. Measured 13/30 before, 0/30 after.
+
+- [x] **M-T10.25** -- **Split the cancelling group release out of `close_members(bool)`, and make
+      posting fabricated packets `unsafe`.** Two findings of the same shape: a hazard gated by the
+      build for one entry point and by prose for another.
+
+  **`close_members(cancel_pending: bool)`** was safe and ungated in every configuration, while the
+  per-object `try_cancel_pending` it reaches is `self-heal`-gated and `unsafe` without the feature.
+  With the feature off, `close_members(true)` cancelled every wait member and landed on a no-op
+  `owe_repair`. Now `close_members()`, `close_members_cancelling()` (gated), and
+  `close_members_cancelling_no_heal_tracking()` (ungated, `unsafe`) -- a `bool` cannot be `cfg`-gated,
+  an item can.
+
+  **`poke_completion_ports`** is now `unsafe fn`. It posts a zero key and a null `OVERLAPPED` to
+  every completion port in the process above a depth, including ports this crate does not own; the
+  "**Destructive** ... only for a process that has already failed" rule was enforced by prose alone.
+
+  Both breaking; both recorded in [DESIGN-NOTES.md](../../DESIGN-NOTES.md).
+
 - [ ] **M-T10.18** -- **DECISION TO RAISE: what `try_cancel_pending` should do on a pool it cannot
       repair.**
 

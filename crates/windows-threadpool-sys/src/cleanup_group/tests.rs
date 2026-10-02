@@ -13,6 +13,26 @@ use std::time::{Duration, Instant};
 
 use windows_sys::Win32::System::Threading::SetEvent;
 
+/// Release a group's members, cancelling queued callbacks, in either feature
+/// configuration.
+///
+/// The safe form of this is gated on `self-heal`, because it is the repair that
+/// makes cancelling a wait member safe to offer. Tests must still exercise the
+/// cancelling release without the feature, so this picks the safe method where
+/// it exists and takes the obligation explicitly where it does not. One site
+/// per test target rather than a `cfg` at each call.
+fn close_cancelling(group: &mut CleanupGroup) {
+    #[cfg(feature = "self-heal")]
+    group.close_members_cancelling();
+    #[cfg(not(feature = "self-heal"))]
+    // SAFETY: the obligation is to repair each member's pool. These tests use
+    // private pools that are torn down immediately afterwards, so no later work
+    // depends on one dispatching again; nothing outside the test can reach them.
+    unsafe {
+        group.close_members_cancelling_no_heal_tracking()
+    };
+}
+
 use crate::callback_env::CallbackEnviron;
 use crate::cleanup_group::CleanupGroup;
 use crate::pool::ThreadpoolPool;
@@ -147,7 +167,7 @@ fn a_cancelling_release_marks_its_pool_after_the_cancellation() {
         ticked.store(true, Ordering::SeqCst);
     });
 
-    group.close_members(true);
+    close_cancelling(&mut group);
 
     assert!(
         cleared.load(Ordering::SeqCst),
@@ -182,7 +202,7 @@ fn a_work_member_runs() {
         work.submit();
         work.wait();
     }
-    group.close_members(false);
+    group.close_members();
     assert_eq!(ran.count(), 1);
 }
 
@@ -200,7 +220,7 @@ fn a_timer_member_fires() {
         timer.wait();
         assert!(timer.is_set(), "expiry does not clear the due time");
     }
-    group.close_members(false);
+    group.close_members();
     assert_eq!(ran.count(), 1);
 }
 
@@ -227,7 +247,7 @@ fn a_timer_member_can_rearm_itself() {
         timer.disarm();
         timer.wait();
     }
-    group.close_members(false);
+    group.close_members();
     assert_eq!(ran.count(), 3);
 }
 
@@ -250,7 +270,7 @@ fn a_periodic_timer_member_ticks() {
         assert!(timer.is_running());
         timer.stop_and_drain();
     }
-    group.close_members(false);
+    group.close_members();
     assert!(ran.count() >= 3);
 }
 
@@ -286,7 +306,7 @@ fn a_wait_member_activates() {
         ran.wait_for(1);
         wait.wait();
     }
-    group.close_members(false);
+    group.close_members();
     assert_eq!(ran.count(), 1);
 }
 
@@ -331,7 +351,7 @@ fn close_members_releases_every_kind_at_once() {
         ran.wait_for(4);
     }
 
-    group.close_members(true);
+    close_cancelling(&mut group);
     assert_eq!(
         group.owned_resources(),
         0,
@@ -347,10 +367,10 @@ fn close_members_is_idempotent() {
         work.submit();
         work.wait();
     }
-    group.close_members(false);
+    group.close_members();
     assert_eq!(group.owned_resources(), 0);
-    group.close_members(false);
-    group.close_members(true);
+    group.close_members();
+    close_cancelling(&mut group);
     assert_eq!(group.owned_resources(), 0);
 }
 
@@ -366,7 +386,7 @@ fn members_created_after_a_release_are_still_released() {
         work.submit();
         work.wait();
     }
-    group.close_members(false);
+    group.close_members();
     assert_eq!(
         group.owned_resources(),
         0,
@@ -384,7 +404,7 @@ fn members_created_after_a_release_are_still_released() {
         "the group is not tracking the second batch"
     );
 
-    group.close_members(false);
+    group.close_members();
     assert_eq!(
         group.owned_resources(),
         0,
@@ -405,7 +425,7 @@ fn a_reused_group_releases_its_second_batch_on_drop() {
             work.submit();
             work.wait();
         }
-        group.close_members(true);
+        close_cancelling(&mut group);
 
         {
             let counter = Arc::clone(&ran);
@@ -457,7 +477,7 @@ fn close_members_waits_for_an_executing_callback() {
         started.wait_for(1);
     }
 
-    group.close_members(true);
+    close_cancelling(&mut group);
     assert_eq!(
         done.load(Ordering::SeqCst),
         1,
@@ -481,7 +501,11 @@ fn close_members_can_run_or_cancel_queued_callbacks() {
                 work.submit();
             }
         }
-        group.close_members(cancel);
+        if cancel {
+            close_cancelling(&mut group);
+        } else {
+            group.close_members();
+        }
         // Whichever mode, the count settles and nothing runs afterwards.
         let settled = ran.count();
         std::thread::sleep(Duration::from_millis(40));
@@ -574,7 +598,7 @@ fn a_member_uses_the_callers_pool_without_mutating_the_environment() {
         work.submit();
         work.wait();
     }
-    group.close_members(false);
+    group.close_members();
 
     assert_eq!(ran.count(), 1);
     assert_eq!(
@@ -612,8 +636,8 @@ fn one_environment_serves_several_groups() {
         a.wait();
         b.wait();
     }
-    first.close_members(false);
-    second.close_members(false);
+    first.close_members();
+    second.close_members();
     assert_eq!(ran.count(), 2);
     assert_eq!(env.as_inner().CleanupGroup, 0);
 }
@@ -667,7 +691,7 @@ fn many_members_are_all_released() {
             work.wait();
         }
     }
-    group.close_members(false);
+    group.close_members();
     assert_eq!(group.owned_resources(), 0);
     assert_eq!(ran.count(), MEMBERS);
 }
@@ -764,7 +788,7 @@ fn releasing_a_group_while_a_timer_callback_rearms_leaves_it_quiescent() {
         })
     };
 
-    group.close_members(false);
+    group.close_members();
     releaser.join().expect("releaser");
 
     // The suppressed re-arm must not have re-armed a torn-down object.
@@ -818,7 +842,7 @@ fn releasing_a_group_while_a_wait_callback_rearms_leaves_it_quiescent() {
         })
     };
 
-    group.close_members(false);
+    group.close_members();
     releaser.join().expect("releaser");
 
     let after_release = count.load(Ordering::SeqCst);
@@ -883,7 +907,7 @@ fn group_release_runs_a_custom_closer_exactly_once() {
         "not closed while a member"
     );
 
-    group.close_members(false);
+    group.close_members();
     assert_eq!(
         CLOSES.load(Ordering::SeqCst),
         1,
@@ -970,7 +994,7 @@ fn group_release_runs_a_custom_closer_only_after_draining() {
     started.wait_for(1);
 
     let entered_release = Instant::now();
-    group.close_members(false);
+    group.close_members();
     let blocked_for = entered_release.elapsed();
 
     // Without this the test could pass vacuously: if the callback had already
@@ -1017,7 +1041,7 @@ fn cancelling_pending_still_runs_a_custom_closer_exactly_once() {
     let ok = unsafe { SetEvent(member.handle().as_raw_handle()) };
     assert_ne!(ok, 0, "SetEvent failed");
 
-    group.close_members(true);
+    close_cancelling(&mut group);
     assert_eq!(
         CLOSES.load(Ordering::SeqCst),
         1,
@@ -1059,7 +1083,7 @@ fn a_group_releases_default_and_custom_close_members_together() {
     assert_ne!(ok, 0, "SetEvent failed");
     ran.wait_for(1);
 
-    group.close_members(false);
+    group.close_members();
 
     assert_eq!(
         CLOSES.load(Ordering::SeqCst),

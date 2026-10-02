@@ -22,6 +22,26 @@ use windows_sys::Win32::System::Threading::{CreateEventW, SetEvent};
 use windows_threadpool_sys::cleanup_group::CleanupGroup;
 use windows_threadpool_sys::wait::{ThreadpoolWait, WaitCloseFn, WaitableHandle};
 
+/// Release a group's members, cancelling queued callbacks, in either feature
+/// configuration.
+///
+/// The safe form of this is gated on `self-heal`, because it is the repair that
+/// makes cancelling a wait member safe to offer. Tests must still exercise the
+/// cancelling release without the feature, so this picks the safe method where
+/// it exists and takes the obligation explicitly where it does not. One site
+/// per test target rather than a `cfg` at each call.
+fn close_cancelling(group: &mut CleanupGroup) {
+    #[cfg(feature = "self-heal")]
+    group.close_members_cancelling();
+    #[cfg(not(feature = "self-heal"))]
+    // SAFETY: the obligation is to repair each member's pool. These tests use
+    // private pools that are torn down immediately afterwards, so no later work
+    // depends on one dispatching again; nothing outside the test can reach them.
+    unsafe {
+        group.close_members_cancelling_no_heal_tracking()
+    };
+}
+
 /// How many waits each scenario builds.
 ///
 /// Large enough that teardown genuinely overlaps executing callbacks and that a
@@ -255,7 +275,7 @@ fn releasing_a_group_closes_every_custom_target_exactly_once() {
     );
     let entered_teardown = std::time::Instant::now();
 
-    group.close_members(false);
+    group.close_members();
     let blocked_for = entered_teardown.elapsed();
 
     assert!(
@@ -266,7 +286,7 @@ fn releasing_a_group_closes_every_custom_target_exactly_once() {
     assert_eq!(group.owned_resources(), 0, "the group holds nothing after");
 
     // A second release, and the group's own drop, must not close anything again.
-    group.close_members(false);
+    group.close_members();
     drop(group);
     probe.assert_closed_each_exactly_once(WAITS, "group release, repeated");
 }
@@ -302,7 +322,7 @@ fn releasing_a_group_with_cancel_pending_closes_every_custom_target_exactly_once
         "nothing may be closed while the members are live"
     );
 
-    group.close_members(true);
+    close_cancelling(&mut group);
 
     // Whether a callback ran, was cancelled, or was mid-flight, the handle is
     // still the group's to close, exactly once, with the caller's routine.
@@ -343,7 +363,7 @@ fn a_group_releases_custom_and_default_targets_together() {
         }
     }
 
-    group.close_members(false);
+    group.close_members();
 
     probe.assert_closed_each_exactly_once(WAITS / 2, "mixed group release");
     assert_eq!(group.owned_resources(), 0, "the group holds nothing after");

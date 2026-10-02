@@ -21,7 +21,7 @@
 //! # use windows_threadpool_sys::cleanup_group::CleanupGroup;
 //! let mut group = CleanupGroup::new().expect("create group");
 //! let work = group.create_work(|| {}, None).expect("create work");
-//! group.close_members(false);
+//! group.close_members();
 //! work.submit(); // error: `group` is mutably borrowed above
 //! ```
 //!
@@ -144,7 +144,7 @@ fn prepare_shutdown_noop(_ptr: *mut c_void) {}
 /// }
 ///
 /// // One call tears down every member of the group.
-/// group.close_members(false);
+/// group.close_members();
 /// assert_eq!(count.load(Ordering::SeqCst), 2);
 /// # Ok::<(), std::io::Error>(())
 /// ```
@@ -203,7 +203,12 @@ impl CleanupGroup {
     /// See the field's documentation for why observing that instant is the
     /// only way to pin the order in which a cancelling release marks its
     /// pools.
-    #[cfg(test)]
+    ///
+    /// Carries the feature condition of its only caller, which is the test for
+    /// that marking order: without `self-heal` there is no mark to observe, so
+    /// an ungated hook here is dead code in a `--no-default-features` build --
+    /// which CI compiles with `-D warnings`.
+    #[cfg(all(test, feature = "self-heal"))]
     pub(crate) fn on_before_release(&self, hook: impl Fn() + Send + Sync + 'static) {
         *self
             .before_release
@@ -383,11 +388,10 @@ impl CleanupGroup {
         })
     }
 
-    /// Release every member of this group.
+    /// Release every member of this group, letting queued callbacks run.
     ///
-    /// Waits for executing callbacks to finish. When `cancel_pending` is true,
-    /// callbacks that have not started are dropped instead of run; when false,
-    /// they run first.
+    /// Waits for executing callbacks to finish; callbacks that have not started
+    /// run before the release completes.
     ///
     /// Taking `&mut self` is what makes members unusable afterwards: they borrow
     /// the group, so the compiler rejects any later use of one. Calling this
@@ -396,8 +400,70 @@ impl CleanupGroup {
     /// The group remains usable afterwards. New members may be created on it,
     /// and they are released by the next call or by `Drop`, exactly as the first
     /// batch was.
-    pub fn close_members(&mut self, cancel_pending: bool) {
-        self.release_members(cancel_pending);
+    ///
+    /// To drop queued callbacks instead of running them, see
+    /// `close_members_cancelling` -- named without a link because it does not
+    /// exist in a build with `self-heal` off, while this method does, so a link
+    /// would dangle in that configuration.
+    pub fn close_members(&mut self) {
+        self.release_members(false);
+    }
+
+    /// Release every member of this group, dropping queued callbacks.
+    ///
+    /// As [`close_members`](Self::close_members), except that callbacks which
+    /// have not started are dropped rather than run.
+    ///
+    /// A cancelling release passes the cancel through to every member, so a wait
+    /// among them reaches the same removal primitive
+    /// [`ThreadpoolWait::try_cancel_pending`](crate::wait::ThreadpoolWait::try_cancel_pending)
+    /// does, and owes its pool the same repair. This crate marks that repair
+    /// here, which is what makes this safe to offer -- subject to the same
+    /// stated hole as the per-object method: a member whose pool could not be
+    /// registered for repair records `cancel-untracked` and is cancelled
+    /// anyway.
+    ///
+    /// # Availability
+    ///
+    /// Requires the `self-heal` feature, which is on by default. Without it this
+    /// method does not exist and a call to it fails to compile, naming
+    /// [`close_members_cancelling_no_heal_tracking`](Self::close_members_cancelling_no_heal_tracking)
+    /// as what to reach for instead. That is the designed behaviour, not an
+    /// oversight: the repair this method performs is what the feature provides,
+    /// and a compile error is the only way a caller relying on it finds out it
+    /// is gone.
+    #[cfg(feature = "self-heal")]
+    pub fn close_members_cancelling(&mut self) {
+        // SAFETY: the obligation this transfers is discharged by
+        // `release_members`, which marks every member's pool for repair after
+        // the native release and before the contexts are freed.
+        unsafe { self.close_members_cancelling_no_heal_tracking() };
+    }
+
+    /// `close_members_cancelling` without the repair.
+    ///
+    /// Not a link, deliberately: the method it would name does not exist in a
+    /// build with `self-heal` off, and this one does, so the link would dangle
+    /// in exactly the configuration this method exists for.
+    ///
+    /// Always present, including in builds with `self-heal` off, which is the
+    /// point: it is the method that still exists when the gated one does not,
+    /// and its signature says what the caller takes on.
+    ///
+    /// # Safety
+    ///
+    /// The caller must ensure every member's pool is repaired. Submitting any
+    /// work item to a pool does so; so does knowing it is kept live by
+    /// something else. Leaving one unrepaired can stop that pool dispatching --
+    /// which, for the process-default pool, reaches every component in the
+    /// process, including code with no connection to this call.
+    ///
+    /// This is not a memory-safety obligation, and the keyword is not claiming
+    /// one. It is here because the obligation is statable and dischargeable by
+    /// the caller, which is what `unsafe` marks; see
+    /// [the self-heal decision](https://docs.rs/crate/windows-threadpool-sys/latest/source/DESIGN-NOTES.md).
+    pub unsafe fn close_members_cancelling_no_heal_tracking(&mut self) {
+        self.release_members(true);
     }
 
     /// The number of contexts and handles the group is holding for its members.
@@ -515,7 +581,7 @@ impl CleanupGroup {
 
 impl Drop for CleanupGroup {
     fn drop(&mut self) {
-        // Let queued callbacks run, matching the default of `close_members`.
+        // Let queued callbacks run, matching `close_members`.
         self.release_members(false);
         // SAFETY: the members are released, so the group can be closed.
         crate::trace_call!("CloseThreadpoolCleanupGroup", self.group, 0, {
@@ -813,8 +879,11 @@ impl WaitMember<'_> {
     ///
     /// Owning the wait through a cleanup group does **not** change this. The
     /// group's own `Drop` is safe because it releases with cancel-pending false,
-    /// not because the group protects its members; `close_members(true)` passes
-    /// the cancel through to each member.
+    /// not because the group protects its members; a cancelling release passes
+    /// the cancel through to each member. Named without a link, for the reason
+    /// `try_cancel_pending_no_heal_tracking` gives: `close_members_cancelling`
+    /// does not exist in a build with `self-heal` off, while this method does,
+    /// so a link would dangle in that configuration.
     ///
     /// Stop watching and block until no callback is queued or executing.
     ///

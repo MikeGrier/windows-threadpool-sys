@@ -648,10 +648,29 @@ mod imp {
     ///
     /// Asks whether an ordinary arrival wakes a stalled pool, which is the one
     /// route to a factory's create decision that has never been seen to recover
-    /// this stall. **Destructive**: a posted packet is not a real work item, so
-    /// a worker that appears may dispatch it as garbage. Only for a process that
-    /// has already failed, and never on a path that runs by default.
-    pub fn poke_completion_ports(min_depth: u32) -> u32 {
+    /// this stall.
+    ///
+    /// # Safety
+    ///
+    /// **Destructive.** This posts a fabricated packet -- a zero completion key
+    /// and a null `OVERLAPPED` -- to every completion port in the process whose
+    /// depth is at least `min_depth`, including ports this crate did not create
+    /// and does not own. A worker that picks one up may dispatch it as garbage:
+    /// code that trusts its own completion key, or dereferences the
+    /// `OVERLAPPED`, reaches a null pointer by a path its author cannot see
+    /// from the call.
+    ///
+    /// The caller must ensure the process has already failed and is being
+    /// diagnosed rather than relied upon, and that nothing in it still depends
+    /// on a completion port delivering only packets its owner posted. Nothing
+    /// here can check either condition.
+    ///
+    /// This is not a memory-safety obligation of this function's own, and the
+    /// keyword is not claiming one. It is here for the reason
+    /// `try_cancel_pending_no_heal_tracking` carries it: the obligation is
+    /// statable and dischargeable by the caller and by nobody else, and a rule
+    /// that lives only in prose is enforced by whoever remembers it.
+    pub unsafe fn poke_completion_ports(min_depth: u32) -> u32 {
         super::hook::poke_ports_with_work(min_depth)
     }
 }
@@ -697,7 +716,15 @@ mod imp {
         Vec::new()
     }
     /// Does nothing in this build: there is no scan to find ports with.
-    pub fn poke_completion_ports(_min_depth: u32) -> u32 {
+    ///
+    /// # Safety
+    ///
+    /// Nothing is posted here, so this build imposes no obligation of its own.
+    /// It keeps the keyword so the two configurations present one signature:
+    /// dropping it would let a caller compile without `trace` and then fail to
+    /// compile with it, which is the configuration-dependent surface the
+    /// crate's shape assertion exists to prevent.
+    pub unsafe fn poke_completion_ports(_min_depth: u32) -> u32 {
         0
     }
 }
@@ -713,7 +740,10 @@ pub use imp::{
 /// reader of a capture sees: a call site that records under a target other
 /// than the one it means to would be invisible to a check that went behind the
 /// formatting, and is the kind of mistake this is used to catch.
-#[cfg(test)]
+// Carries the feature condition of its callers: every one of them is a
+// trace-gated test, so without 	race this is dead code in a build CI
+// compiles with `-D warnings`.
+#[cfg(all(test, feature = "trace"))]
 pub(crate) fn counted(target: &str, event: &str) -> usize {
     dump()
         .lines()
