@@ -1839,29 +1839,39 @@ instead.
   favour of the two-method shape, which achieves the same explicitness without a
   protocol.
 
-### Which clock the two stamps are on, and which way its error falls
+### Which clock the stamps are on, and which way its error falls
 
-Decided 2026-10-01 implementing `M-T6.2`. Both stamps -- the last dispatch and
-the cancellation that owes a repair -- are `QueryInterruptTime`, the interrupt-time
-counter.
+**The "last dispatch" stamp this section described was removed by
+[Health is derived from stamps, not stored in a flag](#health-is-derived-from-stamps-not-stored-in-a-flag)
+(`M-T9.2`); the choice of clock below is still current.**
+
+Decided 2026-10-01 implementing `M-T6.2`, and narrowed by `M-T9.2`. Every stamp
+is `QueryInterruptTime`, the interrupt-time counter.
+
+**No stamp is taken on the callback path any more.** When this was written there
+was a "last dispatch" stamp read in every callback the crate delivered, and the
+argument for a cheap user-mode counter rested partly on that. `M-T9.2` replaced
+it: health now comes only from this crate's own repair dispatching, so the
+stamps are taken on a cancellation and on the repair lifecycle, and ordinary
+traffic touches none of them. The clock argument survives the change, because
+the question asked of the values did not change.
 
 The only question ever asked of these values is which of two came first, so a
-counter whose value the kernel publishes to user mode is enough, and this runs on
-the path of every callback the crate delivers. Reading `KUSER_SHARED_DATA`
-directly is the same read and is how this is often written; it binds to a layout
-nothing promises, where the documented call is the specified primitive for the
-same value.
+counter whose value the kernel publishes to user mode is enough. Reading
+`KUSER_SHARED_DATA` directly is the same read and is how this is often written;
+it binds to a layout nothing promises, where the documented call is the
+specified primitive for the same value.
 
 **The counter advances on the system clock tick**, tens of milliseconds by
-default, so a dispatch and a cancellation within one tick carry equal stamps. The
-comparison is `>`, so equal stamps read as "no dispatch since" and the repair is
-submitted.
+default, so two events within one tick carry equal stamps. `unhealed` compares
+`last_cancelled >= last_started`, so equal stamps read as "no repair has started
+since" and the repair is submitted.
 
 That is the direction the error has to fall. A redundant repair costs one work
 submission to a pool that did not need it; a suppressed repair leaves a pool
 stalled until the application happens to submit something. And the opposite
 mistake cannot occur at any resolution: the counter never goes backwards, so a
-dispatch stamp can never exceed a cancellation that followed it.
+stamp can never exceed one taken after it.
 
 ### How long an entry lives, and why the default pool needs no rule of its own
 

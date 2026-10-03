@@ -1,8 +1,9 @@
 # The `self-heal` feature
 
-**Default: on.** It costs a timestamp store on each callback and, only once a
-cancellation has actually happened, one lazily-created private thread pool with a
-periodic timer.
+**Default: on.** Callbacks this crate dispatches do not touch its state at all;
+the cost begins at a `try_cancel_pending`, and the lazily-created private thread
+pool and periodic timer appear only once a cancellation has actually happened.
+The table under [What it costs](#what-it-costs) is the full account.
 
 This document is for deciding whether to turn it off. The short answer is that
 you should not unless you have a specific reason, and that if you do, the crate

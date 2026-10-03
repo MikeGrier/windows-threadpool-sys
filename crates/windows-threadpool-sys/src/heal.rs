@@ -684,12 +684,16 @@ mod on {
         true
     }
 
-    /// The interrupt-time counter, as both stamps are measured on.
+    /// The interrupt-time counter, which every stamp here is measured on.
     ///
     /// `QueryInterruptTime` rather than `QueryPerformanceCounter` because the
-    /// only question asked of these values is which of two came first, and this
-    /// runs for every callback -- the counter is read from memory the kernel
-    /// publishes to user mode, where `QueryPerformanceCounter` may do more.
+    /// only question asked of these values is which of two came first: the
+    /// counter is read from memory the kernel publishes to user mode, where
+    /// `QueryPerformanceCounter` may do more. This used to run on the path of
+    /// every callback the crate delivered, which was most of the argument for
+    /// the cheaper read; `M-T9.2` removed that stamp, so it now runs only on a
+    /// cancellation and on the repair lifecycle. The choice stands because the
+    /// question did not change.
     /// Reading `KUSER_SHARED_DATA` directly would be the same read and is how
     /// this is often done, but it binds to a layout nothing promises; the
     /// documented call is the specified primitive for the same value.
@@ -697,9 +701,9 @@ mod on {
     /// # Resolution, and which way its error falls
     ///
     /// The counter advances on the system clock tick -- tens of milliseconds by
-    /// default -- so a dispatch and a cancellation within one tick carry equal
-    /// stamps. [`PoolEntry::unhealed`] treats that as unhealed, so a repair is
-    /// submitted rather than skipped. That is the
+    /// default -- so a cancellation and a repair's start within one tick carry
+    /// equal stamps. [`PoolEntry::unhealed`] treats that as unhealed, so a
+    /// repair is submitted rather than skipped. That is the
     /// direction the error has to fall: a redundant repair costs one work
     /// submission, where a suppressed one leaves a pool stalled.
     ///
