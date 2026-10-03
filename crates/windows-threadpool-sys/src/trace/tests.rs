@@ -36,8 +36,12 @@ fn record(a: u64) -> Record {
 }
 
 /// The `a` slots still held, oldest first.
+///
+/// Goes through `iter` rather than the vector, which after the first wrap is
+/// not in logical order -- reading the vector directly would make every
+/// assertion below agree with the storage instead of with the contract.
 fn held(buffer: &Buffer) -> Vec<u64> {
-    buffer.records.iter().map(|record| record.a).collect()
+    buffer.iter().map(|record| record.a).collect()
 }
 
 #[test]
@@ -70,6 +74,46 @@ fn a_full_buffer_evicts_the_oldest_and_keeps_the_newest() {
          report the same length and lose the end of the run instead of the start"
     );
     assert_eq!(buffer.dropped, 3, "one drop per push past the capacity");
+}
+
+/// The window stays in order across many wraps, and the storage never grows.
+///
+/// `M-T12.3`. Eviction overwrites in place rather than shifting, so the vector
+/// is a ring and the oldest record moves around it. The test above wraps once,
+/// which a ring can survive while still being wrong further round: an off-by-one
+/// in the head, or an iterator that splits the wrong way, produces a *rotation*
+/// of the right records -- the same values, the same length, in an order no
+/// reader would question.
+///
+/// So this wraps the buffer several times over and pins the exact sequence each
+/// time, including the two boundaries a rotation bug is most likely to survive:
+/// the push that lands head back at zero, and the one immediately after it.
+#[test]
+fn the_window_stays_in_order_across_repeated_wraps() {
+    let mut buffer = Buffer::with_capacity(4);
+    for a in 0..4 {
+        buffer.push(record(a), 4);
+    }
+    assert_eq!(held(&buffer), vec![0, 1, 2, 3], "filled, not yet wrapped");
+
+    // Each push past the capacity slides the window by exactly one.
+    for a in 4..20 {
+        buffer.push(record(a), 4);
+        let oldest = a - 3;
+        assert_eq!(
+            held(&buffer),
+            (oldest..=a).collect::<Vec<_>>(),
+            "after pushing {a} the window must be {oldest}..={a}; the same records in a \
+             different order would read as a valid capture of a sequence that never happened"
+        );
+        assert_eq!(
+            buffer.records.len(),
+            4,
+            "the ring overwrites, so the storage cannot grow past the capacity it was given"
+        );
+    }
+
+    assert_eq!(buffer.dropped, 16, "one drop per push past the capacity");
 }
 
 #[test]

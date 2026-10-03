@@ -1118,8 +1118,30 @@ the one acted on so far.
   and the recogniser's 16-byte validation. The third, the trace buffer's `Vec::remove(0)` eviction,
   is in the record layer and survives; see `M-T12.3`.
 
-- [ ] **M-T12.3** -- **Make the trace buffer evict in constant time.** Found by the eleventh review
-      round; the one finding of that round that the hook removal does not dissolve.
+- [x] **M-T12.3** -- **Make the trace buffer evict in constant time.** Found by the eleventh review
+      round; the one finding of that round that the hook removal does not dissolve. Done
+      2026-10-03.
+
+  **What landed.** `Buffer` keeps a `head` and overwrites in place, so eviction is one indexed
+  write and a modulus. The vector is no longer in logical order after the first wrap, so every
+  reader goes through `iter`, which yields `records[head..]` then `records[..head]`; before the
+  first wrap `head` is zero and that is simply the vector. `dump` and the tests' `held` helper
+  both moved onto it.
+
+  **The modulus is of the vector's own length, not of `capacity`.** The two can differ: a buffer
+  that reached a larger capacity keeps that length if a later push passes a smaller one, exactly
+  as the remove-and-push it replaces did. Taking `capacity` would index outside the vector.
+
+  **The risk this fix introduces is a rotation, not a loss**, which is why the guard is shaped the
+  way it is. An off-by-one head, or an iterator that splits the wrong way, returns the right
+  records in the right number and the wrong order -- a capture of a sequence that never happened,
+  and nothing about it looks wrong. `the_window_stays_in_order_across_repeated_wraps` pins the
+  exact window after every push through several full turns; both failure shapes were verified to
+  fail it by name, and the reversed split is in `sabotage.json`.
+
+  **What is deliberately not swept:** restoring `Vec::remove(0)`. It would survive, and correctly
+  -- it is slower, not wrong, and no test can assert the absence of a memmove without timing. The
+  case against it is analytic and is recorded above rather than measured.
 
   **The defect.** `Buffer::push` calls `self.records.remove(0)` once the buffer is full, which
   shifts every remaining record. `Record` is about 72 bytes and `CAPACITY` is 262,144, so each

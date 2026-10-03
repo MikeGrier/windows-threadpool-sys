@@ -279,6 +279,19 @@
       "replace": [
         "        entry.objects.load(Ordering::SeqCst) == 0 && !entry.unhealed() && !entry.repair_in_flight()"
       ]
+    },
+    {
+      "name": "the trace buffer reports its records rotated",
+      "file": "src/trace.rs",
+      "expect": "caught",
+      "why": "Eviction overwrites in place rather than shifting, so the vector is a ring and the oldest record moves around it. A reader that splits it the wrong way returns the right records, the right count, and an order no reader would question -- a capture of a sequence that never happened, which is worse than no capture because nothing about it looks wrong. This patch is that split, reversed.",
+      "whyNotTheShiftItself": "Restoring Vec::remove(0) would not be caught, and correctly so: it is slower, not wrong, and no test can assert the absence of a memmove without timing. The defect that version carried was a performance one in an instrument meant to observe timing-sensitive behaviour, which is argued from the code in M-T12.3 rather than measured. What is swept here is the correctness risk the fix introduced.",
+      "find": [
+        "        oldest_first.iter().chain(wrapped.iter())"
+      ],
+      "replace": [
+        "        wrapped.iter().chain(oldest_first.iter())"
+      ]
     }
   ]
 }

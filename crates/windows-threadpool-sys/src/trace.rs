@@ -71,7 +71,17 @@ struct Record {
 /// the one thing a shared trace cannot tolerate.
 #[cfg(any(feature = "trace", test))]
 struct Buffer {
+    /// The records, as a ring once the buffer is full.
+    ///
+    /// Not in logical order after the first wrap -- read it through
+    /// [`iter`](Self::iter), which is the only thing that knows where the
+    /// oldest one is.
     records: Vec<Record>,
+    /// Where the oldest record sits, and so where the next one overwrites.
+    ///
+    /// Zero until the buffer first fills, which is why a buffer that never
+    /// overflows needs nothing to know about the ring.
+    head: usize,
     /// How many records were evicted to make room for later ones.
     dropped: usize,
     /// Whether the first eviction has already been reported.
@@ -83,6 +93,7 @@ impl Buffer {
     fn with_capacity(capacity: usize) -> Self {
         Self {
             records: Vec::with_capacity(capacity),
+            head: 0,
             dropped: 0,
             announced: false,
         }
@@ -99,28 +110,59 @@ impl Buffer {
     /// later wondered why the trace began in the middle.
     ///
     /// A `capacity` of zero stores nothing and counts every record as dropped.
-    /// Degenerate, and defined rather than left to `remove(0)` on an empty
-    /// vector, which panics.
+    /// Degenerate, and defined rather than left to fall out of the arithmetic.
+    ///
+    /// **Eviction overwrites in place; it does not shift.** This used to be
+    /// `Vec::remove(0)`, which moves every remaining record down one. At the
+    /// real capacity that is about 18 MB memmoved per record, under the trace
+    /// mutex, for every record after the buffer fills -- in an instrument whose
+    /// whole purpose is observing behaviour sensitive to timing. A buffer that
+    /// filled mid-capture would start perturbing, and plausibly manufacturing,
+    /// the stall it was being used to study. The buffer is sized not to fill in
+    /// an ordinary capture, which is what kept this invisible.
     fn push(&mut self, record: Record, capacity: usize) -> bool {
-        if self.records.len() >= capacity {
-            if capacity > 0 {
-                self.records.remove(0);
-            }
+        if capacity == 0 {
             self.dropped += 1;
             let first = !self.announced;
             self.announced = true;
-            if capacity == 0 {
-                return first;
-            }
-            self.records.push(record);
             return first;
         }
-        self.records.push(record);
-        false
+        if self.records.len() < capacity {
+            // Still filling. `with_capacity` reserved the room, so this does
+            // not reallocate and the ring has not started turning yet.
+            self.records.push(record);
+            return false;
+        }
+        // Full: the oldest record is at `head`, and is what this replaces.
+        //
+        // Indexed modulo the vector's own length rather than `capacity`,
+        // because the two can differ -- a buffer that reached a larger capacity
+        // keeps that length if a later push passes a smaller one, exactly as
+        // the remove-and-push it replaces did. Taking the modulus of
+        // `capacity` would index outside the vector.
+        let size = self.records.len();
+        self.records[self.head] = record;
+        self.head = (self.head + 1) % size;
+        self.dropped += 1;
+        let first = !self.announced;
+        self.announced = true;
+        first
+    }
+
+    /// The records in the order they were recorded, oldest first.
+    ///
+    /// The ring's logical order, which is the only order any reader wants: a
+    /// capture that reported its own records out of sequence would be worse
+    /// than one that reported nothing, because nothing about it looks wrong.
+    /// Before the first wrap `head` is zero and this is simply the vector.
+    fn iter(&self) -> impl Iterator<Item = &Record> {
+        let (wrapped, oldest_first) = self.records.split_at(self.head);
+        oldest_first.iter().chain(wrapped.iter())
     }
 
     fn clear(&mut self) {
         self.records.clear();
+        self.head = 0;
         self.dropped = 0;
         self.announced = false;
     }
@@ -377,7 +419,7 @@ mod imp {
                 state.dropped
             ));
         }
-        for record in &state.records {
+        for record in state.iter() {
             out.push_str(&format!(
                 "  {:>12.6}s t{:<6} {:<22} {:<36} {:>6} {:>6}\n",
                 record.at.as_secs_f64(),
