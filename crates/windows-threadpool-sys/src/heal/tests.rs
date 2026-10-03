@@ -526,6 +526,314 @@ mod on {
         drop(work);
     }
 
+    /// Where a stalled pool's blocking callback reports from, and waits.
+    #[derive(Default)]
+    struct OccupancyState {
+        /// Set once the pool's only thread is inside the blocking callback.
+        inside: bool,
+        /// Set to let that callback return, so the work object can be drained.
+        released: bool,
+    }
+
+    /// The handshake between a stalled pool's callback and the test driving it.
+    #[derive(Default)]
+    struct Occupancy {
+        state: std::sync::Mutex<OccupancyState>,
+        changed: std::sync::Condvar,
+    }
+
+    impl Occupancy {
+        fn lock(&self) -> std::sync::MutexGuard<'_, OccupancyState> {
+            self.state
+                .lock()
+                .unwrap_or_else(|poison| poison.into_inner())
+        }
+
+        /// Wait for `done`, or give up after `limit`. False means it timed out.
+        fn wait_for(&self, limit: Duration, done: impl Fn(&OccupancyState) -> bool) -> bool {
+            let mut state = self.lock();
+            while !done(&state) {
+                let (next, timeout) = self
+                    .changed
+                    .wait_timeout(state, limit)
+                    .unwrap_or_else(|poison| poison.into_inner());
+                if timeout.timed_out() {
+                    return done(&next);
+                }
+                state = next;
+            }
+            true
+        }
+    }
+
+    /// A pool that cannot dispatch anything, because its one thread is busy.
+    ///
+    /// **The difference between this and holding the repair callback is the
+    /// reason it exists.** `repair_trampoline` stamps `last_started` as its
+    /// very first act, *before* the test hold -- deliberately, so an entry can
+    /// be retired while its callback is still running. A held callback has
+    /// therefore already made `repair_in_flight` false, and an entry whose
+    /// repair has run can never be made overdue again without waiting out the
+    /// real threshold: to be in flight `last_submitted` must exceed
+    /// `last_started`, and to be overdue it must lag the clock by five seconds,
+    /// which cannot both hold once `last_started` is a recent stamp.
+    ///
+    /// Occupying the pool's only thread keeps the repair from ever starting, so
+    /// `last_started` stays at zero and the state stays reachable. It is also
+    /// the state the feature is about rather than a simulation of it: a pool
+    /// that is not dispatching.
+    struct StalledPool {
+        /// `Option` so [`Drop`] can release the callback and drain the work
+        /// *before* the pool it runs on is closed. Field order alone would drop
+        /// it first but would not let the callback return, so the drain would
+        /// block for the callback's full timeout.
+        blocker: Option<ThreadpoolWork>,
+        pool: ThreadpoolPool,
+        occupancy: Arc<Occupancy>,
+    }
+
+    impl StalledPool {
+        /// `None` if the pool could not be built or its thread not occupied.
+        fn new() -> Option<Self> {
+            let pool = ThreadpoolPool::new().ok()?;
+            // One thread, so one blocking callback is the whole pool.
+            pool.set_max_threads(1).ok()?;
+
+            let occupancy = Arc::new(Occupancy::default());
+            let in_callback = Arc::clone(&occupancy);
+            let mut env = CallbackEnviron::new();
+            env.set_pool(&pool);
+            let blocker = ThreadpoolWork::new(
+                move || {
+                    in_callback.lock().inside = true;
+                    in_callback.changed.notify_all();
+                    // Bounded, so a leaked instance cannot park a pool thread
+                    // for the rest of the test binary's life.
+                    in_callback.wait_for(Duration::from_secs(120), |s| s.released);
+                },
+                Some(&mut env),
+            )
+            .ok()?;
+            // The environment borrows the pool, and `CreateThreadpoolWork` has
+            // already copied it, so release the borrow before the pool moves
+            // into the returned value.
+            drop(env);
+            blocker.submit();
+
+            // Submitting a repair before the thread is occupied would let it
+            // run, which is precisely what this type exists to prevent.
+            occupancy
+                .wait_for(Duration::from_secs(30), |s| s.inside)
+                .then_some(())?;
+
+            Some(Self {
+                blocker: Some(blocker),
+                pool,
+                occupancy,
+            })
+        }
+
+        fn key(&self) -> usize {
+            self.pool.as_raw() as usize
+        }
+
+        /// This pool's registry entry, which the blocking work item created.
+        fn entry(&self) -> Arc<PoolEntry> {
+            let key = self.key();
+            crate::heal::entries()
+                .into_iter()
+                .find(|e| e.key() == key)
+                .expect("the blocking work registered its pool")
+        }
+    }
+
+    impl Drop for StalledPool {
+        fn drop(&mut self) {
+            self.occupancy.lock().released = true;
+            self.occupancy.changed.notify_all();
+            if let Some(blocker) = self.blocker.take() {
+                // The drain this type owes for having submitted. Released
+                // first, or it would block until the callback's own timeout.
+                blocker.stop_and_drain();
+            }
+        }
+    }
+
+    /// A repair the pool has not taken is re-submitted once, and reported.
+    ///
+    /// The `M-T9.2` deferral, decided 2026-10-02. A repair sitting with a pool
+    /// unstarted is almost always "queued behind other work", which is why
+    /// `repair_in_flight` suppresses a second submission at all -- but past a
+    /// generous threshold that reading stops being the likely one, and the
+    /// previous behaviour was to stay silent about it forever.
+    ///
+    /// Driven by backdating the submission rather than by waiting out the real
+    /// five-second threshold, so the test is instant and exact.
+    #[test]
+    fn a_repair_the_pool_has_not_taken_is_resubmitted_and_reported() {
+        let _gate = gate();
+        let stalled = StalledPool::new().expect("occupy a pool's only thread");
+        let entry = stalled.entry();
+
+        backdate_an_overdue_repair(&entry);
+
+        crate::heal::tick_inner();
+        assert_eq!(
+            entry.repair_overdue_count(),
+            1,
+            "the tick must notice a repair the pool has not taken"
+        );
+        let resubmitted = entry.last_submitted();
+        assert!(
+            resubmitted > 1,
+            "and must re-submit it rather than only reporting -- the stamp moves to now"
+        );
+
+        // A second tick immediately after must do nothing: the re-submission is
+        // fresh, so it is in flight but not overdue. Without that distinction
+        // this would queue one repair per tick forever. The pool cannot have
+        // started it, so this is that branch and not an entry that looks healed.
+        assert!(entry.repair_in_flight());
+        crate::heal::tick_inner();
+        assert_eq!(
+            entry.repair_overdue_count(),
+            1,
+            "a repair submitted moments ago is the ordinary case, not an overdue one"
+        );
+        assert_eq!(
+            entry.last_submitted(),
+            resubmitted,
+            "and must not be submitted again, or every tick would queue one more"
+        );
+    }
+
+    /// Set an entry up as unhealed with a repair handed over and long overdue.
+    ///
+    /// The two stamps the overdue path reads, at the dawn of the counter, so
+    /// the threshold is already passed without waiting out the real five
+    /// seconds. One helper rather than the same pair of stamps written at each
+    /// site, because the two must agree for the entry to be in flight at all.
+    fn backdate_an_overdue_repair(entry: &Arc<PoolEntry>) {
+        entry.stamp_cancelled(1);
+        entry.stamp_submitted(1);
+        assert!(
+            entry.repair_in_flight(),
+            "the backdated stamps must leave a repair in flight, or the tick \
+             under test takes the submit path instead of the overdue one"
+        );
+    }
+
+    /// Without `fail-fast`, a pool that stays stuck is re-submitted to forever.
+    ///
+    /// The other half of the decision the test above covers: past the
+    /// reattempt allowance this crate has nothing left to try, and the choice
+    /// recorded for the feature-off build is to keep reporting and keep
+    /// re-submitting rather than to give up and go quiet. A second episode is
+    /// enough to show the loop does not stop, because nothing in the path
+    /// counts episodes except the counter asserted here.
+    ///
+    /// Feature-gated because this is exactly the state the `fail-fast` build
+    /// ends the process on -- see
+    /// `the_fail_fast_build_ends_the_process_on_a_pool_that_will_not_be_repaired`.
+    #[cfg(not(feature = "fail-fast"))]
+    #[test]
+    fn without_fail_fast_a_pool_that_will_not_be_repaired_is_retried_indefinitely() {
+        let _gate = gate();
+        let stalled = StalledPool::new().expect("occupy a pool's only thread");
+        let entry = stalled.entry();
+
+        for episode in 1..=3 {
+            backdate_an_overdue_repair(&entry);
+            crate::heal::tick_inner();
+            assert_eq!(
+                entry.repair_overdue_count(),
+                episode,
+                "episode {episode} must be counted: the retry is indefinite, so no \
+                 episode is the last one"
+            );
+            assert!(
+                entry.last_submitted() > 1,
+                "and must re-submit on episode {episode} rather than only counting it"
+            );
+        }
+    }
+
+    /// With `fail-fast`, the same state ends the process.
+    ///
+    /// **This aborts rather than unwinds**, so it cannot be observed with
+    /// `catch_unwind` the way the teardown fail-fasts are: the panic escapes
+    /// the healer's `extern "system"` timer trampoline, which Rust turns into
+    /// an abort. The body therefore runs in a child, and the parent asserts on
+    /// how the child died -- the same shape `tests/callback_panic_aborts.rs`
+    /// uses, kept here rather than there because the state has to be reached
+    /// through `pub(crate)` stamps an integration test cannot see.
+    ///
+    /// Asserts the stderr message too, not only the exit status. A child that
+    /// died silently would satisfy an exit-code-only assertion while telling an
+    /// operator nothing, and the claim that the message survives an abort is
+    /// one this crate makes in `fail_fast_if_unrepairable`'s own documentation.
+    #[cfg(feature = "fail-fast")]
+    #[test]
+    fn the_fail_fast_build_ends_the_process_on_a_pool_that_will_not_be_repaired() {
+        /// Names the child; absent in the parent.
+        const CHILD_VAR: &str = "WTPS_UNREPAIRABLE_CHILD";
+        /// The child's exit code if it survives the state that must end it.
+        const SURVIVED: i32 = 9;
+        /// The child's exit code when it fails before reaching that state. Any
+        /// other nonzero code reads as the abort, so a setup failure has to be
+        /// distinguishable from the thing under test.
+        const SETUP_FAILED: i32 = 111;
+        const NAME: &str = "heal::tests::on::\
+                            the_fail_fast_build_ends_the_process_on_a_pool_that_will_not_be_repaired";
+
+        if std::env::var(CHILD_VAR).is_ok() {
+            let _gate = gate();
+            let Some(stalled) = StalledPool::new() else {
+                std::process::exit(SETUP_FAILED);
+            };
+            let entry = stalled.entry();
+
+            // Two episodes: the allowance is one reattempt, so the first
+            // re-submits and the second is the one with nothing left to try.
+            for _ in 0..2 {
+                backdate_an_overdue_repair(&entry);
+                crate::heal::tick_inner();
+            }
+
+            std::process::exit(SURVIVED);
+        }
+
+        let exe = std::env::current_exe().expect("locate the test binary");
+        let out = std::process::Command::new(exe)
+            .env(CHILD_VAR, "1")
+            .args(["--exact", NAME, "--test-threads", "1", "--nocapture"])
+            .output()
+            .expect("run the child");
+
+        assert_ne!(
+            out.status.code(),
+            Some(SURVIVED),
+            "the child reached the end of a state `fail-fast` is supposed to stop on"
+        );
+        assert_ne!(
+            out.status.code(),
+            Some(SETUP_FAILED),
+            "the child failed during setup, so it never reached the state under test"
+        );
+        assert_ne!(
+            out.status.code(),
+            Some(0),
+            "the child exited cleanly -- exit 0 also means `--exact {NAME}` matched \
+             nothing, so check the test has not been renamed without updating `NAME`"
+        );
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        assert!(
+            stderr.contains("has not dispatched a repair"),
+            "the child died without saying why; an abort that reports nothing leaves \
+             an operator with an exit code and no cause. stderr was:\n{stderr}"
+        );
+    }
+
     /// Hold every repair callback inside its dispatch for as long as this lives.
     ///
     /// Process-wide, so it takes the tick gate: another test's repair running

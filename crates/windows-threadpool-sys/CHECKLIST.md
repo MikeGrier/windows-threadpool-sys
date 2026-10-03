@@ -308,11 +308,36 @@ second, and `M-T9.1` is the guard both of them want.
   takes one atomic store off every callback the crate delivers. `Registration` is still held by the
   work, timer, periodic-timer and I/O contexts, now purely for its `Drop`, and each field says so.
 
-  > **DECISION TO RAISE (the item's second deferred detail): a wedged pool still never retries.**
-  > One repair is submitted per cancellation; if the pool never dispatches it, `repair_in_flight`
-  > stays true and nothing tries again. That is unchanged from the previous scheme, so it is not a
-  > regression -- but whether a repair unstarted after N ticks should be re-submitted is open, and
-  > the stamps now make it cheap to answer. Not decided here.
+  **The item's second deferred detail -- a wedged pool never retrying -- was decided 2026-10-02
+  and is implemented.** A repair still in flight past `OVERDUE_AFTER` (five seconds, twenty healer
+  periods) is reported as `repair-overdue` and re-submitted. The allowance is one reattempt,
+  counted per episode and reset whenever a repair actually runs; past it, `fail-fast` ends the
+  process and a build without that feature goes on reporting and re-submitting indefinitely. The
+  threshold is generous on purpose: "wedged" and "merely busy under load" look identical from the
+  healer, the second is enormously more likely, and the cost of being hasty is crying wolf about a
+  healthy pool -- or, under `fail-fast`, ending the process over one.
+
+  **The `fail-fast` here aborts; the teardown ones unwind.** It fires on the healer's timer
+  trampoline, and Rust turns a panic escaping an `extern "system"` boundary into an abort. That is
+  stated at `fail_fast_if_unrepairable` rather than left to be discovered, and it is defensible on
+  its own terms: the condition being reported is that a pool in this process has stopped
+  dispatching, so there is no thread known to still work to unwind to. The message still reaches
+  stderr, because the panic hook runs first -- asserted, not assumed.
+
+  **What a second submit is worth is not established, and the code says so.** The recovery this
+  feature rests on is measured for *a* submit; whether a factory re-evaluates its create decision
+  on a later arrival is the question `poke_completion_ports` exists to ask, and the answer recorded
+  there is that an ordinary arrival has never been seen to recover this stall. The reattempt is a
+  cheap thing tried in a state that should not arise, not a mechanism with evidence behind it.
+
+  **Three tests, and the state is real rather than simulated.** `StalledPool` occupies a
+  single-thread pool's only thread, so a submitted repair genuinely never dispatches. That is not
+  decoration: `repair_trampoline` stamps `last_started` as its first act, so merely *holding* the
+  callback has already made `repair_in_flight` false, and an entry whose repair has started can
+  never be made overdue again without waiting out the real threshold. The fail-fast case runs in a
+  child process and asserts on how it died, because an in-process abort would take the runner with
+  it. Both branches are in `sabotage.json`: deleting the overdue test, or the reattempt
+  comparison, is caught.
 
 - [x] **M-T9.1** -- **Write the test that would have caught the repair-object use-after-free.**
       Done 2026-10-02 as `retiring_an_entry_waits_for_a_repair_callback_already_running`.

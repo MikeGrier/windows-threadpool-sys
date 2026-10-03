@@ -182,6 +182,48 @@ pub(crate) fn fail_fast_if_untracked(tracked: bool, type_name: &str) {
     }
 }
 
+/// Fail fast, if the `fail-fast` feature is on, when a pool will not take a
+/// repair.
+///
+/// Reached only from the self-heal timer, and only when a repair has sat with a
+/// pool unstarted past the overdue threshold more than once with a reattempt in
+/// between. At that point the crate has submitted the one action measured to
+/// recover the stall, twice, and the pool has dispatched neither -- so it has no
+/// remaining idea whether that pool can be recovered, which is the condition
+/// this feature exists to stop on rather than continue past.
+///
+/// **This aborts rather than unwinds, which the other two fail-fast sites do
+/// not.** It runs on the healer's timer callback, and a panic escaping an
+/// `extern "system"` trampoline is turned into an abort by Rust -- see
+/// `tests/callback_panic_aborts.rs`. The message still reaches stderr, because
+/// the panic hook runs before unwinding begins. That is the honest outcome
+/// here: the condition being reported is that a thread pool in this process has
+/// stopped dispatching and would not take the repair, so there is no thread to
+/// unwind to that is known to still work.
+///
+/// With the feature off the caller records the episode and re-submits, which it
+/// will go on doing for as long as the pool stays stuck.
+///
+/// # Availability
+///
+/// Gated on `self-heal`, because the self-heal timer is its only caller: with
+/// that feature off there is no repair to go unstarted and nothing to report.
+#[cfg(feature = "self-heal")]
+pub(crate) fn fail_fast_if_unrepairable(key: usize, overdue: u32) {
+    #[cfg(feature = "fail-fast")]
+    panic!(
+        "windows-threadpool-sys: pool {key:#x} has not dispatched a repair after {overdue} \
+         overdue attempts, so this crate cannot establish that it is still delivering callbacks. \
+         A cancellation may have left it wedged and the repair this crate submits has not been \
+         taken. This panic is the `fail-fast` feature; with it off the self-heal records \
+         `repair-overdue` and keeps re-submitting."
+    );
+    #[cfg(not(feature = "fail-fast"))]
+    {
+        let _ = (key, overdue);
+    }
+}
+
 /// The event every type emits when it finds an obligation owed at `Drop`.
 ///
 /// One constant rather than the string at five call sites, so the tag a consumer

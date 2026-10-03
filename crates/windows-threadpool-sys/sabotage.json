@@ -255,6 +255,31 @@
       ]
     },
     {
+      "name": "a repair the pool never takes is waited on forever",
+      "file": "src/heal.rs",
+      "expect": "caught",
+      "why": "The suppression that stops a repair being queued on every tick is also what could hide a pool that is never going to run one. Removing the overdue test restores the behaviour M-T9.2 decided against: an in-flight repair is skipped no matter how long it has sat there, so a wedged pool is retried no further and reported never. The patch keeps the skip and deletes only the threshold, which is the shape the defect would really take -- the guard has to notice the elapsed time, not merely that a repair exists.",
+      "find": [
+        "                if !entry.repair_overdue(now(), OVERDUE_AFTER) {"
+      ],
+      "replace": [
+        "                if true {"
+      ]
+    },
+    {
+      "name": "the heal never gives up on a pool that will not be repaired",
+      "file": "src/heal.rs",
+      "expect": "caught",
+      "why": "The second half of the same decision: after one reattempt the crate has submitted the only action measured to release the stall, twice, and has nothing further to try. Under `fail-fast` that is a stop condition. Removing the comparison leaves a build that re-submits forever in a configuration whose entire purpose is to end the process rather than continue past a state it cannot establish is recoverable -- and it fails silently, because the retry loop looks exactly the same from outside.",
+      "whyTheChildTest": "Caught by a test that drives the state in a CHILD process and asserts on how it died, because the panic escapes the healer's `extern \"system\"` trampoline and aborts rather than unwinding. An in-process assertion would take the test runner with it.",
+      "find": [
+        "                if overdue > REATTEMPTS_BEFORE_FAIL_FAST {"
+      ],
+      "replace": [
+        "                if false {"
+      ]
+    },
+    {
       "name": "the teardown fail-fast panics before the drain instead of after it",
       "file": "src/wait.rs",
       "expect": "caught",

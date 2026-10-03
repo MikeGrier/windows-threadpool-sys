@@ -108,7 +108,7 @@ mod off {
 #[cfg(feature = "self-heal")]
 mod on {
     use super::PoolKey;
-    use std::sync::atomic::{AtomicIsize, AtomicU64, AtomicUsize, Ordering};
+    use std::sync::atomic::{AtomicIsize, AtomicU32, AtomicU64, AtomicUsize, Ordering};
     use std::sync::{Arc, Mutex, OnceLock};
     use std::time::Duration;
     use windows_sys::Win32::Foundation::FALSE;
@@ -163,6 +163,12 @@ mod on {
         /// Compared against `last_started` to tell a repair the pool still
         /// holds from one it has given back.
         last_submitted: AtomicU64,
+        /// Re-submissions made because a repair sat with the pool unstarted.
+        ///
+        /// Reset the moment a repair callback runs, because that is the
+        /// evidence the pool is dispatching again. See
+        /// [`note_repair_overdue`](Self::note_repair_overdue).
+        stuck_reattempts: AtomicU32,
         /// How many times this entry's own repair item has been dispatched.
         ///
         /// A count rather than a stamp because the stamps answer "in which
@@ -226,6 +232,9 @@ mod on {
         /// drain exists to cover.
         fn count_repair_run(&self) {
             self.runs.fetch_add(1, Ordering::SeqCst);
+            // The pool dispatched, which is the only direct evidence it is not
+            // wedged, so whatever overdue episodes preceded this are spent.
+            self.stuck_reattempts.store(0, Ordering::SeqCst);
         }
 
         /// Note that a repair has been handed to the pool.
@@ -250,6 +259,24 @@ mod on {
             cancelled != 0 && cancelled >= self.last_started.load(Ordering::SeqCst)
         }
 
+        /// Whether a submitted repair has been with the pool longer than
+        /// `after`, in the units [`now`] counts.
+        ///
+        /// Distinct from [`repair_in_flight`](Self::repair_in_flight), which is
+        /// true the instant a repair is handed over. A repair that is merely
+        /// queued behind other work is the ordinary case and says nothing; one
+        /// that is still unstarted much later is the case worth reporting.
+        pub(crate) fn repair_overdue(&self, now: u64, after: u64) -> bool {
+            self.repair_in_flight()
+                && now.saturating_sub(self.last_submitted.load(Ordering::SeqCst)) >= after
+        }
+
+        /// Count one overdue episode, reporting how many have now been seen
+        /// since the last repair actually ran.
+        pub(crate) fn note_repair_overdue(&self) -> u32 {
+            self.stuck_reattempts.fetch_add(1, Ordering::SeqCst) + 1
+        }
+
         /// Whether a submitted repair has not yet been given back.
         ///
         /// This is also the retirement guard: dropping the last `Arc` runs
@@ -264,6 +291,20 @@ mod on {
         #[cfg(test)]
         pub(crate) fn last_cancelled(&self) -> u64 {
             self.last_cancelled.load(Ordering::SeqCst)
+        }
+
+        /// When a repair was last handed to the pool; zero if never.
+        // Read only by tests -- see the note on `repairs_run`.
+        #[cfg(test)]
+        pub(crate) fn last_submitted(&self) -> u64 {
+            self.last_submitted.load(Ordering::SeqCst)
+        }
+
+        /// Overdue episodes counted since the last repair actually ran.
+        // Read only by tests -- see the note on `repairs_run`.
+        #[cfg(test)]
+        pub(crate) fn repair_overdue_count(&self) -> u32 {
+            self.stuck_reattempts.load(Ordering::SeqCst)
         }
 
         /// When this entry's repair callback last ran; zero if never.
@@ -593,6 +634,7 @@ mod on {
             last_cancelled: AtomicU64::new(0),
             last_started: AtomicU64::new(0),
             last_submitted: AtomicU64::new(0),
+            stuck_reattempts: AtomicU32::new(0),
             runs: AtomicU64::new(0),
         });
         if !arm_repair(&entry) {
@@ -824,6 +866,28 @@ mod on {
         tick_inner();
     }
 
+    /// How long a submitted repair may go unstarted before it is reported.
+    ///
+    /// In the 100-nanosecond units [`now`] counts, so this is five seconds --
+    /// twenty healer periods.
+    ///
+    /// **Generous on purpose.** Two states look identical from here: a pool
+    /// that is wedged, and a pool that is merely busy. The second is enormously
+    /// more likely, and the cost of waiting longer is only a later report,
+    /// where the cost of being hasty is crying wolf about a healthy pool under
+    /// load -- and, under `fail-fast`, ending the process over it.
+    const OVERDUE_AFTER: u64 = 5 * 10_000_000;
+
+    /// Overdue episodes tolerated before `fail-fast` gives up.
+    ///
+    /// One, so there is a single reattempt. The first overdue report re-submits
+    /// and says so; a second means the reattempt did not help either, and at
+    /// that point this crate has no further idea whether the pool can be
+    /// recovered -- which is the condition `fail-fast` exists to stop on.
+    /// Reset by a repair actually running, so this counts one *episode* rather
+    /// than one process lifetime.
+    const REATTEMPTS_BEFORE_FAIL_FAST: u32 = 1;
+
     /// [`tick`] without taking the test gate.
     ///
     /// **Reads state, and writes only its own stamp.** There is no clear here,
@@ -847,11 +911,30 @@ mod on {
                 continue;
             }
             if entry.repair_in_flight() {
-                // One is already with the pool. Submitting another cannot tell
-                // us anything the first will not, and on a pool that never
-                // dispatches it would queue one per tick forever.
-                crate::trace_record!("heal", "repair-in-flight", entry.key());
-                continue;
+                if !entry.repair_overdue(now(), OVERDUE_AFTER) {
+                    // Ordinary: a repair handed over moments ago has not run
+                    // yet. Submitting another cannot tell us anything the first
+                    // will not.
+                    crate::trace_record!("heal", "repair-in-flight", entry.key());
+                    continue;
+                }
+                // The repair has been with the pool long enough that "merely
+                // queued" has stopped being the likely reading. Report it, and
+                // fall through to submit another.
+                //
+                // **What a second submit is worth is not established.** The
+                // recovery this feature rests on is measured for *a* submit;
+                // whether a factory re-evaluates its create decision on a later
+                // arrival is exactly the question `poke_completion_ports`
+                // exists to ask, and the answer recorded there is that an
+                // ordinary arrival has never been seen to recover this stall.
+                // So the reattempt is a cheap thing tried in a state that
+                // should not arise, not a mechanism with evidence behind it.
+                let overdue = entry.note_repair_overdue();
+                crate::trace_record!("heal", "repair-overdue", entry.key(), u64::from(overdue));
+                if overdue > REATTEMPTS_BEFORE_FAIL_FAST {
+                    crate::obligation::fail_fast_if_unrepairable(entry.key(), overdue);
+                }
             }
             // The one action measured to release the stall every time. The work
             // object was made when the pool was registered, so this allocates

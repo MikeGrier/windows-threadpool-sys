@@ -1867,10 +1867,64 @@ That the order no longer matters was checked the same way: with `repair` moved
 to the last field the guard still passes, where the arrangement it replaced
 would have had exactly the hazard its comment warned about.
 
-**Still open:** a pool that never dispatches is submitted one repair and never
-retried, because `repair_in_flight` stays true. That is unchanged from the
-previous scheme rather than a regression, and whether to re-submit after N ticks
-is recorded as a decision to raise on `M-T9.2`.
+### A repair the pool never takes is retried once, then reported
+
+Decided 2026-10-02, discharging the detail `M-T9.2` deferred. `repair_in_flight`
+suppressing a second submission is what stops a repair being queued on every
+tick, and it was also what could hide a pool that was never going to run one.
+The stamps make the elapsed time available, so the suppression is now bounded:
+
+```text
+in flight and not overdue  ->  skip, as before
+in flight and overdue      ->  report `repair-overdue`, count the episode, submit again
+episodes past the allowance ->  `fail-fast` stops the process; without it, keep going
+```
+
+**The threshold is five seconds -- twenty healer periods -- and is generous on
+purpose.** Two states look identical from the healer: a pool that is wedged, and
+a pool that is merely busy. The second is enormously more likely. The cost of
+waiting longer is a later report; the cost of being hasty is crying wolf about a
+healthy pool under load, and under `fail-fast` ending the process over it.
+
+**One reattempt, counted per episode rather than per process.** A repair actually
+running resets the count, so a pool that gets stuck, recovers, and gets stuck
+again is treated as two episodes and not as a process that has used up its
+allowance. Past the allowance the crate has submitted the one action measured to
+release the stall, twice, and has no remaining idea whether that pool can be
+recovered -- which is the condition `fail-fast` exists to stop on rather than
+continue past. With the feature off there is nothing better to do than keep
+reporting and keep trying, so it does, indefinitely.
+
+**What a second submit is worth is not established.** The recovery this feature
+rests on is measured for *a* submit. Whether a factory re-evaluates its create
+decision on a later arrival is exactly the question `poke_completion_ports`
+exists to ask, and the answer recorded there is that an ordinary arrival has
+never been seen to recover this stall. So the reattempt is a cheap thing tried
+in a state that should not arise, not a mechanism with evidence behind it, and
+the code says so at the branch rather than leaving the next reader to infer a
+confidence that was never there.
+
+**This `fail-fast` aborts, where the teardown ones unwind.** It fires on the
+healer's timer trampoline, and Rust turns a panic escaping an `extern "system"`
+boundary into an abort -- the contract `tests/callback_panic_aborts.rs` pins.
+That is the honest outcome rather than a limitation worked around: what is being
+reported is that a thread pool in this process has stopped dispatching and would
+not take the repair, so there is no thread known to still work to unwind to. The
+message still reaches stderr, because the panic hook runs before unwinding would
+have begun, and that is asserted rather than assumed.
+
+**The tests reach the state rather than simulating it.** A `StalledPool`
+occupies a one-thread pool's only thread, so a submitted repair genuinely never
+dispatches. The alternative -- holding the repair callback, which this module
+already has a hook for -- does not work here, and the reason is worth recording
+because it is not obvious: `repair_trampoline` stamps `last_started` as its very
+first act, deliberately, so that an entry can be retired while its callback is
+still running. A held callback has therefore *already* made `repair_in_flight`
+false. Once `last_started` is a recent stamp the state is unreachable at all: to
+be in flight `last_submitted` must exceed it, and to be overdue it must lag the
+clock by the threshold, and both cannot hold. The `fail-fast` case runs in a
+child process and asserts on how it died, since an in-process abort would take
+the test runner with it.
 
 ### The healer's cadence, and why it never stops once started
 
