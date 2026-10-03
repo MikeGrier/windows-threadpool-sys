@@ -207,7 +207,7 @@ mod on {
         /// Note when a repair dispatch was observed.
         ///
         /// Only the stamp. Counting lives in
-        /// [`record_repair_run`](Self::record_repair_run), because the two
+        /// [`count_repair_run`](Self::count_repair_run), because the two
         /// answer different questions: this one orders a dispatch against a
         /// cancellation, and the count says whether this entry's own
         /// pre-created object was the thing submitted. A test that drives the
@@ -292,7 +292,7 @@ mod on {
     /// which would recurse: creating an entry would create an object, which
     /// would create an entry.
     struct RepairWork {
-        /// The handle, or zero before [`arm`](PoolEntry::arm) has set it.
+        /// The handle, or zero before [`arm_repair`] has set it.
         ///
         /// Settable after construction because the work object's callback
         /// context is the *entry's* address, so the entry has to exist before
@@ -505,8 +505,8 @@ mod on {
     ///
     /// The counter advances on the system clock tick -- tens of milliseconds by
     /// default -- so a dispatch and a cancellation within one tick carry equal
-    /// stamps. [`PoolEntry::dispatched_since`] compares with `>`, so equal
-    /// stamps mean "no dispatch since", and the repair is submitted. That is the
+    /// stamps. [`PoolEntry::unhealed`] treats that as unhealed, so a repair is
+    /// submitted rather than skipped. That is the
     /// direction the error has to fall: a redundant repair costs one work
     /// submission, where a suppressed one leaves a pool stalled. The opposite
     /// mistake cannot happen at any resolution, because the counter never goes

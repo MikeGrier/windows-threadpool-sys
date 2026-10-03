@@ -1027,7 +1027,7 @@ unsafe impl<T: Send, L: ClaimLayout> Send for Shared<T, L> {}
 impl<T, L: ClaimLayout> Shared<T, L> {
     /// The capacity as the width the positions are counted in.
     ///
-    /// Lossless by construction: [`BOUNDS`] caps the capacity at 2^31.
+    /// Lossless by construction: [`BOUNDS_MAX`] caps the capacity at 2^31.
     fn capacity_u64(&self) -> u64 {
         debug_assert!(self.capacity <= BOUNDS_MAX);
         self.capacity as u64

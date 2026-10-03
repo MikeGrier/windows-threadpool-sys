@@ -853,20 +853,36 @@ house rules require is what found the third.
   that *this* call contributes none, so it now compares against the value captured before the call.
   Measured after: 299 pass with hooks unset, `*`, `selftest`, and `associate`.
 
-- [ ] **M-T10.7** -- **Decide whether CI should check intra-doc links in private items.**
+- [x] **M-T10.7** -- **DECIDED 2026-10-02: yes. CI documents private items.**
+      `--document-private-items` added to all five `cargo doc` steps, which already denied the link
+      lints but only ever resolved the public surface.
 
-  **The gap.** The `docs` job runs `cargo doc --no-deps --all-features` without
-  `--document-private-items`, so rustdoc never resolves links written in the docs of private
-  modules and functions. Two broken ones had accumulated unnoticed and were found only because
-  `M-T10.4` ran the stricter form by hand: `callback_env.rs` linked a bare `set_pool` where the
-  associated-item path was needed, and `hook.rs` linked a `#[cfg(test)]` function that does not
-  exist in a documentation build. Both are fixed; nothing stops the next two.
+  **The cost it was weighed against did not materialise.** The open question was whether the flag
+  would surface links that are useful to a maintainer but meaningless in published docs, forcing a
+  choice between noise and rewriting prose to satisfy a build nobody reads. It surfaced **nine dead
+  links across four crates**, and every one was simply wrong -- naming an item that had been
+  renamed, removed, or gated out of the configuration being documented. None was a judgement call:
 
-  **Why it is a decision rather than an obvious yes.** `--document-private-items` also surfaces
-  links that are correct for a maintainer reading the source but meaningless in published docs,
-  and this crate's private modules carry a lot of prose. Turning it on in CI may mean either
-  accepting that noise or rewriting those links to a form that satisfies a build nobody reads.
-  Worth weighing against simply running it by hand when a private module's docs are edited.
+  - `heal.rs` x3 -- `record_repair_run` (renamed by `M-T9.1`), `PoolEntry::arm` (never existed;
+    `arm_repair` is a free function), `PoolEntry::dispatched_since` (removed by `M-T9.2`). All
+    three were written during this branch's last two commits.
+  - `trace/hook.rs` x3 -- `install`, which has been `install_batch` throughout.
+  - `windows-waitable-queues` x3 -- `reserving_mpsc::ClaimLayout` from two sibling modules needing
+    a `crate::` path, and `BOUNDS` where the item is `BOUNDS_MAX`.
+  - Found afterwards, because cargo stops at the first failing crate: `windows-file-watcher` x3
+    (`WatcherInner::reopen`, renamed to `install`) and a `windows-platform-probes` link ambiguous
+    between a function and a macro.
+
+  **Verified the flag is what catches them**, rather than assuming: a dead link planted in a
+  private item passes `cargo doc -p windows-threadpool-sys --no-deps --all-features` and fails the
+  same command with `--document-private-items`. The planted link was first placed in a
+  `self-heal`-gated module and checked under `--no-default-features`, where both forms passed --
+  the module is not compiled there, so the first attempt proved nothing.
+
+  **One link was deliberately left unlinked.** `pending.rs` referenced
+  `Completion::with_injected_failure`, which is gated on `fault-injection`; a link dangles in the
+  `--no-default-features` build CI also documents. Named in backticks with the reason, matching the
+  precedent set for `close_members_cancelling`.
 
 - [ ] **M-T10.5** -- **Make the hook tests' trace-record assertions reachable, so a sabotage can
       reach them.**

@@ -222,7 +222,7 @@ struct WatcherInner {
     /// cancelling and resubmitting on the same handle, because the latter was
     /// measured to leave the filesystem's recursive attachment unchanged --
     /// direct children kept being reported, nested ones never were. See
-    /// [`WatcherInner::reopen`]. Re-establishment (M5.1) reuses the same
+    /// [`WatcherInner::install`]. Re-establishment (M5.1) reuses the same
     /// mechanism after a fresh open, and so does a tier downgrade (M6.3): both
     /// are "tear down whatever is here, install something new".
     endpoint: Mutex<Option<Endpoint>>,
@@ -342,7 +342,7 @@ impl WatcherInner {
         self.arm_locked(&mut gate)
     }
 
-    /// Arm the freshly (re-)established endpoint from inside [`install`],
+    /// Arm the freshly (re-)established endpoint from inside [`install`](Self::install),
     /// transitioning the gate out of [`ArmGate::Reopening`] itself rather
     /// than going through the callback-facing [`arm`](Self::arm) above, which
     /// deliberately no-ops while `Reopening` is set. Otherwise `install`'s own
@@ -1220,7 +1220,7 @@ impl DirectoryWatcher {
 
     /// Shared constructor body: build the resident state and its callback
     /// machinery, then establish the first read or wait through
-    /// [`WatcherInner::reopen`] -- the same tier-choosing path used for every
+    /// [`WatcherInner::install`] -- the same tier-choosing path used for every
     /// later widen, re-establish, or downgrade.
     ///
     /// On any failure, `route` is reclaimed from `inner.routes` (it is still

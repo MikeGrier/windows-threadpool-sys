@@ -85,7 +85,7 @@ use core::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 ///
 /// With `usize` it can. On a 32-bit target the counter laps after 2^32 claims,
 /// which is about thirty-seven seconds at the reference rate
-/// [`reserving_mpsc::ClaimLayout`] documents. **That rate is `reserving_mpsc`'s,
+/// [`ClaimLayout`](crate::reserving_mpsc::ClaimLayout) documents. **That rate is `reserving_mpsc`'s,
 /// and is used here only as an arithmetic input rather than as a bound on this
 /// shape**: this shape's own measured throughput differs, and at low producer
 /// counts exceeds it, so the interval is neither a floor nor a forecast for it.

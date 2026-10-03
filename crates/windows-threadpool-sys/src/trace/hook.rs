@@ -45,7 +45,7 @@
 //! the process takes into the kernel.
 //!
 //! **The recognition is the safety property, and it is enforced.**
-//! [`install`] refuses any target whose first sixteen bytes are not that
+//! [`install_batch`] refuses any target whose first sixteen bytes are not that
 //! prefix, with the four system-call-number bytes wildcarded. A future Windows
 //! that changes the stub shape gets a refusal and a recorded reason, not a
 //! corrupted `ntdll`.
@@ -83,7 +83,7 @@
 //! and whichever patched second decides what the program does.
 //!
 //! The recogniser makes this module a well-behaved *second* patcher and does
-//! nothing for the first case. [`install`] refuses a target that is not an
+//! nothing for the first case. [`install_batch`] refuses a target that is not an
 //! unmodified stub, so arriving after somebody else yields a recorded refusal
 //! rather than a corrupted chain. Arriving *before* them is the direction with
 //! no defence, and it is the direction a pre-`main` installer always takes.
@@ -451,7 +451,7 @@ fn ntdll_proc(name: &str) -> Option<usize> {
 ///
 /// The whole safety argument for this module is that it only ever patches
 /// something it has recognised, so this is the load-bearing check rather than
-/// a convenience. It is separate from [`install`] so a test can assert both of
+/// a convenience. It is separate from [`install_batch`] so a test can assert both of
 /// its directions: that it accepts a real stub, and that it rejects something
 /// that is not one. A guard tested in only one direction is the recurring
 /// defect this repository's instructions name.

@@ -83,7 +83,7 @@ macro_rules! blocking_states {
         /// **A type rather than a `&'static str`, so completeness is
         /// checkable.** These were strings, and the test that claimed to check
         /// every state had a perturbation derived BOTH of its sets from the
-        /// perturbation table -- so a new branch in [`blocking_states`] that no
+        /// perturbation table -- so a new branch in [`blocking_states`](fn@blocking_states) that no
         /// mutation reached appeared in neither set and both loops stayed green.
         /// The guard could only confirm that existing labels described existing
         /// mutations.

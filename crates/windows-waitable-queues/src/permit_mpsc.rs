@@ -79,7 +79,7 @@ use crate::metrics::Metrics;
 /// **64 bits on every target, deliberately, rather than `usize`**, for the same
 /// reason [`slotwise_mpsc`](crate::slotwise_mpsc) made the same choice: a
 /// 32-bit counter laps in about thirty-seven seconds at the reference rate
-/// [`reserving_mpsc::ClaimLayout`] documents -- an arithmetic input taken from
+/// [`ClaimLayout`](crate::reserving_mpsc::ClaimLayout) documents -- an arithmetic input taken from
 /// another shape rather than a bound on this one -- and a shape
 /// whose soundness depends on the target's pointer width is not one this crate
 /// ships twice over.
