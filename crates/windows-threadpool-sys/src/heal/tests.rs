@@ -656,14 +656,40 @@ mod on {
         wait.stop_and_drain();
     }
 
+    /// Assert that a tick handed this entry no repair.
+    ///
+    /// **Asserted on the submission, never on the repair having run.**
+    /// `repairs_run` counts repairs that have *dispatched*, which is
+    /// asynchronous: on a fresh private pool with no thread started yet, a
+    /// repair submitted by the tick is still 0 on the next line, so a test
+    /// written against it passes whether or not the submission happened. Both
+    /// callers below were written that way, and deleting the skip they exist to
+    /// cover left the whole lib suite green.
+    ///
+    /// `stamp_submitted` raises `outstanding` and stores `last_submitted`
+    /// immediately before `SubmitThreadpoolWork`, so both are already written
+    /// by the time `tick_inner` returns. They are the synchronous evidence.
+    fn assert_no_repair_was_handed_over(entry: &crate::heal::PoolEntry, because: &str) {
+        assert_eq!(
+            entry.last_submitted(),
+            0,
+            "{because}, so the tick must not submit a repair -- `last_submitted` \
+             is stamped before the submit it accompanies, so a non-zero value \
+             here is a submission that happened"
+        );
+        assert!(
+            !entry.repair_in_flight(),
+            "{because}, so nothing must be outstanding on this entry"
+        );
+    }
+
     #[test]
     fn a_tick_leaves_a_pool_its_own_repair_has_answered() {
         let _gate = gate();
         // The coalescing rule, driven directly rather than through the timer:
         // a dispatch after the cancellation is evidence the pool is live, so no
-        // repair is submitted. Asserted through the mark being cleared without
-        // the work object having been submitted -- the pool is this test's and
-        // nothing else can touch it.
+        // repair is submitted. The pool is this test's and nothing else can
+        // touch it, so the entry's counters are this tick's doing alone.
         let pool = ThreadpoolPool::new().expect("create pool");
         let mut env = CallbackEnviron::new();
         env.set_pool(&pool);
@@ -680,13 +706,7 @@ mod on {
             "a dispatch after the cancellation is what the skip rests on"
         );
         crate::heal::tick_inner();
-        assert_eq!(
-            entry.repairs_run(),
-            0,
-            "the pool dispatched after the cancellation, so no repair is owed \
-             to it and none must be submitted -- asserted on the repair having \
-             run rather than on the mark, which the tick clears either way"
-        );
+        assert_no_repair_was_handed_over(&entry, "the pool dispatched after the cancellation");
         assert!(
             !entry.unhealed(),
             "the tick leaves a healed pool healed: there is no mark to clear, so \
@@ -698,6 +718,11 @@ mod on {
     #[test]
     fn a_tick_leaves_a_pool_alone_when_nothing_is_owed() {
         let _gate = gate();
+        // Nothing has ever cancelled on this pool, so `unhealed` is false for a
+        // reason the tick cannot change -- which is why this asserts on the
+        // submission instead. `last_cancelled` is 0, so `!unhealed()` holds
+        // whatever the tick does, and a version of this test that checked only
+        // that could not fail.
         let pool = ThreadpoolPool::new().expect("create pool");
         let mut env = CallbackEnviron::new();
         env.set_pool(&pool);
@@ -707,7 +732,11 @@ mod on {
             .find(|e| e.key() == pool.as_raw() as usize)
             .expect("the work registered its pool");
         crate::heal::tick_inner();
-        assert!(!entry.unhealed());
+        assert_no_repair_was_handed_over(&entry, "nothing has cancelled on this pool");
+        assert!(
+            !entry.unhealed(),
+            "and an entry that was never marked stays unmarked"
+        );
         drop(work);
     }
 

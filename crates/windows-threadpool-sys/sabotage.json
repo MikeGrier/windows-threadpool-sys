@@ -101,17 +101,29 @@
       ]
     },
     {
+      "name": "the tick stops coalescing and repairs a pool that already answered",
+      "file": "src/heal.rs",
+      "expect": "caught",
+      "why": "The coalescing rule: a pool that dispatched *after* its cancellation is live, so it is owed nothing and a tick must hand it no repair. Deleting the skip is the whole-hog version of getting that wrong -- every entry is repaired on every tick, including healthy ones. This entry exists because the rule was previously untested: both tests named below asserted on `repairs_run`, which counts repairs that have *dispatched*, and on a fresh private pool with no thread started the count is still 0 on the next line whether or not a submission happened. Deleting the skip left all 286 lib tests passing. They now assert on `last_submitted` and `repair_in_flight`, which `stamp_submitted` writes synchronously before `SubmitThreadpoolWork`.",
+      "find": [
+        "            if !entry.unhealed() {"
+      ],
+      "replace": [
+        "            if false {"
+      ]
+    },
+    {
       "name": "the heal creates a work object instead of submitting the pre-created one",
       "file": "src/heal.rs",
       "expect": "caught",
       "why": "The third claim, and the one that is easiest to break while looking correct. Creating a work object was measured NOT to release a stalled pool; only submitting one is. So the repair object is made when the pool is registered, and the healing path must do nothing but submit it. The patch below still submits something, and on a real pool would still release the stall -- which is why the guard is tied to the entry's OWN repair object through its callback context, not to a count of repairs in general.",
-      "whyNotNullContext": "The fresh object is given its own valid counter rather than a null context. With null the trampoline dereferences it and the process aborts, which the harness scores as caught -- but by a crash, not by a test noticing, and this repository treats a crash-caught mutant as an uncovered one.",
+      "whyNotNullContext": "The fresh object is given the *entry's own address* as its context, not a null and not a fresh allocation. `repair_trampoline` casts its context to `&PoolEntry` and writes stamps and counters through it, so both alternatives are undefined behaviour: null faults, and a `Box<AtomicU64>` -- which this entry used until M-T13.3 -- is eight bytes being written as a much larger struct, corrupting the heap for every other test in the process. Either way the harness would score it caught by a crash rather than by a test noticing, and this repository treats a crash-caught mutant as an uncovered one. Passing the real entry keeps the patched build well-defined, so the guard that catches it is a test observing the wrong work object, which is the claim being made.",
       "find": [
         "        unsafe { SubmitThreadpoolWork(entry.repair_work()) };"
       ],
       "replace": [
         "        unsafe {",
-        "            let ctx: *mut core::ffi::c_void = Box::into_raw(Box::new(AtomicU64::new(0))).cast();",
+        "            let ctx: *mut core::ffi::c_void = std::ptr::from_ref(entry) as *mut _;",
         "            let fresh = CreateThreadpoolWork(Some(repair_trampoline), ctx, std::ptr::null());",
         "            if fresh != 0 { SubmitThreadpoolWork(fresh); }",
         "        }"

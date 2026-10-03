@@ -1207,7 +1207,7 @@ leftovers from two of this branch's own larger edits -- the hook deletion in `1e
 heal rework in `M-T9.2` -- that removed a thing without removing what pointed at it. The first
 finding is of a different and worse kind: a rule nothing tests.
 
-- [ ] **M-T13.1** -- **Make the tick's coalescing skip actually tested.** `tick_inner`'s
+- [x] **M-T13.1** -- **Make the tick's coalescing skip actually tested.** `tick_inner`'s
   `if !entry.unhealed() { continue; }` is the coalescing rule: a pool that dispatched after its
   cancellation is live and is owed no repair. **Deleting the skip outright leaves all 286 lib
   tests passing** -- measured, not argued. Both tests that exist to cover it are inert:
@@ -1238,7 +1238,7 @@ finding is of a different and worse kind: a rule nothing tests.
   other. **Target:** extract `stop_and_drain_parts` for the periodic timer and have both call it,
   so the next conversion cannot reach one site only.
 
-- [ ] **M-T13.3** -- **Repair the sabotage entry that now invokes undefined behaviour.** The entry
+- [x] **M-T13.3** -- **Repair the sabotage entry that now invokes undefined behaviour.** The entry
   "the heal creates a work object instead of submitting the pre-created one" passes
   `Box::new(AtomicU64::new(0))` as the fresh work object's context. `repair_trampoline` casts its
   context to `&PoolEntry` and writes stamps and counters through it, so the patched build writes
