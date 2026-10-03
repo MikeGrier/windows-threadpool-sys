@@ -131,9 +131,18 @@ impl ThreadpoolWork {
         });
 
         if handle == 0 {
+            // Read before the free, as the other three constructors do. `ctx`
+            // owns a `Registration`, whose drop can reach `PoolEntry::drop` and
+            // from there `WaitForThreadpoolWorkCallbacks` and
+            // `CloseThreadpoolWork`. Whether either of those disturbs the
+            // thread's last error on success is not documented, so this is not
+            // a demonstrated clobber -- but the ordering that cannot be wrong
+            // costs a line, and this was the only one of the four doing it the
+            // other way round.
+            let error = io::Error::last_os_error();
             // SAFETY: the pool never saw ctx; reclaim it immediately.
             unsafe { drop(Box::from_raw(ctx)) };
-            return Err(io::Error::last_os_error());
+            return Err(error);
         }
 
         crate::trace_record!("work", "created", handle);

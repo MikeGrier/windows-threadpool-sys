@@ -292,7 +292,7 @@ mod on {
         /// *between* them: those two are what make `repair_in_flight` false, so
         /// the instant after them is the instant the entry becomes retirable
         /// while its callback is still running. That is the window
-        /// `RepairWork::drop`'s drain exists to cover.
+        /// `PoolEntry::drop`'s drain exists to cover.
         fn count_repair_run(&self) {
             self.runs.fetch_add(1, Ordering::SeqCst);
             // The pool dispatched, which is the only direct evidence it is not
@@ -350,7 +350,7 @@ mod on {
         ///
         /// This is also the retirement guard, and that is why it counts rather
         /// than comparing stamps: dropping the last `Arc` runs
-        /// `RepairWork::drop`, whose drain cannot return until the pool
+        /// `PoolEntry::drop`, whose drain cannot return until the pool
         /// dispatches, and `tick` runs on a healer with one thread. A predicate
         /// that reads false with a repair still queued therefore parks
         /// self-heal for the whole process -- see the `outstanding` field.
@@ -484,9 +484,12 @@ mod on {
         // nothing, which is the trap this crate's sabotage manifest documents.
         //
         // SAFETY: the context is the address of the `PoolEntry` that owns this
-        // work object, which outlives every dispatch of it: the entry's first
-        // field drains this object in its `Drop`, before any of the entry is
-        // freed.
+        // work object, which outlives every dispatch of it: `PoolEntry::drop`
+        // drains this object before any field of the entry is dropped, and
+        // long before the `Arc` releases the allocation. The argument is the
+        // language's ordering of `Drop::drop` against field drops, not a
+        // declaration order -- which is what it used to rest on, and what
+        // `M-T13.7` corrected here after the drain moved off `RepairWork`.
         let entry = unsafe { &*context.cast::<PoolEntry>() };
         // The stamp and the count first: together they are what make
         // `repair_in_flight` false, so from here the entry can be retired while
@@ -771,7 +774,7 @@ mod on {
         // Built before the work object, because the work object's callback
         // context is this entry's own address. The entry is not published until
         // arming succeeds, so a failed arming leaves nothing behind: the local
-        // `Arc` is dropped here, and `RepairWork::drop` sees a zero handle and
+        // `Arc` is dropped here, and `PoolEntry::drop` sees a zero handle and
         // does nothing.
         let entry = Arc::new(PoolEntry {
             repair: RepairWork {
@@ -804,7 +807,7 @@ mod on {
     /// retires when an object goes and `retire_idle` retires when a repair is
     /// discharged, and for a while they disagreed: the outstanding-repair
     /// condition was added to the second and not the first, so the hazard it
-    /// was added for -- `RepairWork::drop` draining a repair the pool has not
+    /// was added for -- `PoolEntry::drop` draining a repair the pool has not
     /// dispatched, on the healer's only thread -- was still reachable through
     /// the other. Two copies of a rule that must agree is the shape this
     /// repository treats as a defect; this is the shape that cannot have it.
@@ -846,7 +849,7 @@ mod on {
     ///
     /// **An entry with a submission still outstanding is kept**, however idle it
     /// otherwise looks. Retiring it drops the last `Arc`, which runs
-    /// `RepairWork::drop`, which drains the work object -- and that drain cannot
+    /// `PoolEntry::drop`, which drains the work object -- and that drain cannot
     /// return until the pool dispatches the repair. The pool in question is by
     /// construction the one suspected of not dispatching, and `tick` runs on a
     /// healer built with `set_max_threads(1)`, so a drain that blocks there
@@ -862,7 +865,7 @@ mod on {
         // The retired entries are moved out under the lock and dropped after it
         // is released.
         //
-        // Dropping the last `Arc` in place would run `RepairWork::drop`, which
+        // Dropping the last `Arc` in place would run `PoolEntry::drop`, which
         // now drains the work object before closing it -- and that drain waits
         // on a pool this feature only touches because it is suspected of not
         // dispatching. Holding the process-wide registry lock across such a
@@ -1167,7 +1170,7 @@ mod on {
     /// The pool whose repair callback is held inside its dispatch, and for how
     /// long.
     ///
-    /// The drain in `RepairWork::drop` covers a window a few instructions wide:
+    /// The drain in `PoolEntry::drop` covers a window a few instructions wide:
     /// between the callback stamping `last_started` -- which is what makes the
     /// entry retirable -- and the callback returning. Nothing can land a
     /// retirement in that window by timing, so a test widens it.

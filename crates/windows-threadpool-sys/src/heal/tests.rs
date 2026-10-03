@@ -974,13 +974,20 @@ mod on {
 
     /// With `fail-fast`, the same state ends the process.
     ///
-    /// **This aborts rather than unwinds**, so it cannot be observed with
-    /// `catch_unwind` the way the teardown fail-fasts are: the panic escapes
-    /// the healer's `extern "system"` timer trampoline, which Rust turns into
-    /// an abort. The body therefore runs in a child, and the parent asserts on
-    /// how the child died -- the same shape `tests/callback_panic_aborts.rs`
-    /// uses, kept here rather than there because the state has to be reached
-    /// through `pub(crate)` stamps an integration test cannot see.
+    /// **What this establishes is the panic and its message, not the abort.**
+    /// In the shipped path the panic escapes the healer's `extern "system"`
+    /// timer trampoline, which Rust turns into an abort; this test does not
+    /// traverse that path. The child calls `tick_inner` directly on a libtest
+    /// thread, so the panic unwinds, libtest catches it, and the child exits
+    /// 101. Every assertion below -- not `SURVIVED`, not `SETUP_FAILED`,
+    /// non-zero, the message on stderr -- holds under that unwind, so none of
+    /// them would tell an abort from a caught panic.
+    ///
+    /// It runs in a child anyway, because a panic on the test's own thread
+    /// would fail the test rather than demonstrate anything, and the state has
+    /// to be reached through `pub(crate)` stamps an integration test cannot
+    /// see. `tests/callback_panic_aborts.rs` is where the abort itself is
+    /// covered, by going through a real trampoline.
     ///
     /// Asserts the stderr message too, not only the exit status. A child that
     /// died silently would satisfy an exit-code-only assertion while telling an
@@ -1084,7 +1091,7 @@ mod on {
 
     /// Retiring an entry whose repair callback is still running waits for it.
     ///
-    /// `M-T9.1`. `RepairWork::drop` drains the work object before closing it,
+    /// `M-T9.1`. `PoolEntry::drop` drains the work object before closing it,
     /// and this is the window that makes the drain necessary: the callback
     /// stamps `last_started` on entry, which is exactly what makes the entry
     /// retirable, and it then goes on to write to the entry again. A retirement

@@ -5,13 +5,13 @@
   "testArgs": [
     "--all-features"
   ],
-  "whyTestArgs": "--all-features, because the whole hook module is behind the `trace` feature. Without it the module is not compiled, every sabotage lands in code that does not exist, and the sweep reports SURVIVED for guards that are present and working.",
+  "whyTestArgs": "--all-features, because this crate's two optional features each gate code these sabotages patch and tests that catch them: `self-heal` gates the whole repair registry, and `trace` gates the record buffer and every test that reads it -- including the one that catches the periodic member draining rather than cancelling, which is observable only in the trace. Without the features the patched code is not compiled, the sabotage lands in code that does not exist, and the sweep reports SURVIVED for guards that are present and working. (It formerly said this was about the hook module; that module was removed, and the reason the flag is still required is a different one.)",
   "sabotages": [
     {
       "name": "the pre-main initialiser is dropped by the linker",
       "file": "src/trace.rs",
       "expect": "caught",
-      "why": "`#[used]` is what stops the linker discarding a static nothing references, and `.CRT$XCU` is what makes the CRT call it before main. Getting either wrong still builds: the instrument silently reverts to installing hooks lazily, which in the investigation this was built for lands 0.12s into the process, long after the fault is established. Renaming the section reproduces exactly that -- a working build whose initialiser never runs.",
+      "why": "`#[used]` is what stops the linker discarding a static nothing references, and `.CRT$XCU` is what makes the CRT call it before main. Getting either wrong still builds: the instrument silently reverts to arming lazily, on the first traced call, which in the investigation this was built for lands 0.12s into the process, long after the fault is established. Renaming the section reproduces exactly that -- a working build whose initialiser never runs.",
       "find": [
         "#[unsafe(link_section = \".CRT$XCU\")]"
       ],

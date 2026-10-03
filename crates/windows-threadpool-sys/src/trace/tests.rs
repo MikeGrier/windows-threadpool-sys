@@ -611,11 +611,12 @@ fn exercise_a_periodic_timer() {
 
 /// The trace's static initialiser really runs before `main`.
 ///
-/// The whole point of `.CRT$XCU` here is timing: hooks installed on the first
-/// traced call land inside the first test, which in the investigation this was
-/// built for is already too late to see the thing being investigated. So the
-/// property worth guarding is not "the hooks work" -- that has its own test --
-/// but "the arrangement to run them early was not silently discarded".
+/// The whole point of `.CRT$XCU` here is timing: a trace armed lazily, on the
+/// first traced call, starts recording inside the first test -- which in the
+/// investigation this was built for is already too late to see the thing being
+/// investigated. So the property worth guarding is not "recording works" --
+/// every other trace test covers that -- but "the arrangement to arm it early
+/// was not silently discarded".
 ///
 /// It is a live risk rather than a theoretical one. A static that nothing
 /// references is exactly what a linker may drop; `#[used]` is what asks it not
@@ -627,8 +628,8 @@ fn exercise_a_periodic_timer() {
 fn the_trace_arms_itself_before_main() {
     assert!(
         super::armed_before_main(),
-        "the .CRT$XCU initialiser did not run, so the trace armed lazily instead -- hooks will \
-         install inside the first test rather than before any thread exists, which is the \
+        "the .CRT$XCU initialiser did not run, so the trace armed lazily instead -- recording \
+         would begin inside the first test rather than before any thread exists, which is the \
          failure this arrangement exists to prevent"
     );
 }

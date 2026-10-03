@@ -1260,7 +1260,7 @@ finding is of a different and worse kind: a rule nothing tests.
   extrapolates from it ("the way a one-shot timer's disarm does"), and this item must either
   measure the periodic type or state plainly that the behaviour is pinned only for the one-shot.
 
-- [ ] **M-T13.5** -- **Drop the four `windows-sys` features the deleted hook facility needed.** The
+- [x] **M-T13.5** -- **Drop the four `windows-sys` features the deleted hook facility needed.** The
   `trace` feature still pulls `Win32_System_Diagnostics_ToolHelp`, `Win32_System_LibraryLoader`,
   `Win32_System_Memory` and `Win32_System_SystemInformation`, with a five-line comment explaining
   the page-size arithmetic "the hook installer needs" and how `VirtualProtect` reports a whole
@@ -1268,7 +1268,7 @@ finding is of a different and worse kind: a rule nothing tests.
   left in the crate. A consumer who turns tracing on compiles four modules for nothing, and the
   comment describes machinery that is not there.
 
-- [ ] **M-T13.6** -- **Read the error before freeing the context in `ThreadpoolWork::new`.** The
+- [x] **M-T13.6** -- **Read the error before freeing the context in `ThreadpoolWork::new`.** The
   failure path runs `drop(Box::from_raw(ctx))` and *then* `io::Error::last_os_error()`. Since this
   branch, `ctx` holds a `Registration`, whose drop can reach `PoolEntry::drop` and from there
   `WaitForThreadpoolWorkCallbacks` and `CloseThreadpoolWork`. `timer.rs` and `timer/periodic.rs`
@@ -1280,7 +1280,7 @@ finding is of a different and worse kind: a rule nothing tests.
   among four sites that should agree rather than a demonstrated bug. It is worth fixing because it
   costs one line and because the ordering that is obviously safe should not be the minority.
 
-- [ ] **M-T13.7** -- **Stop crediting a `Drop` impl that does not exist.** Eight comments across
+- [x] **M-T13.7** -- **Stop crediting a `Drop` impl that does not exist.** Eight comments across
   `heal.rs` (lines 295, 353, 774, 807, 849, 865, 1170) and `heal/tests.rs` (1058) attribute the
   repair object's drain to `RepairWork::drop`. There is no `impl Drop for RepairWork`; the drain
   moved into `PoolEntry::drop` when the teardown-order invariant was made unrepresentable. The
@@ -1288,7 +1288,7 @@ finding is of a different and worse kind: a rule nothing tests.
   with "the entry's first field drains this object in its `Drop`" -- an argument about field order
   that the `PoolEntry::drop` impl deliberately replaced.
 
-- [ ] **M-T13.8** -- **Say what the fail-fast child test establishes, which is not the abort.** Its
+- [x] **M-T13.8** -- **Say what the fail-fast child test establishes, which is not the abort.** Its
   doc opens "**This aborts rather than unwinds**, so it cannot be observed with `catch_unwind`",
   and attributes that to the panic escaping the healer's `extern "system"` trampoline. The child
   calls `crate::heal::tick_inner()` directly on the libtest thread, so the panic unwinds normally
@@ -1297,7 +1297,7 @@ finding is of a different and worse kind: a rule nothing tests.
   caught panic. The test is worth keeping: it proves the panic fires and that the message reaches
   stderr, which is the claim `fail_fast_if_unrepairable` makes. Only the doc overstates it.
 
-- [ ] **M-T13.9** -- **Sweep the hook facility's remaining name.** `trace.rs`'s module doc tells a
+- [x] **M-T13.9** -- **Sweep the hook facility's remaining name.** `trace.rs`'s module doc tells a
   reader the crate records under `wait`, `work`, `io`, `timer` and `timer-periodic`; it also
   records under `heal`, `syscall-enter` and `syscall-leave`, so a reader building a filter from
   that list silently loses the self-heal subsystem. `sabotage.json`'s `whyTestArgs` justifies

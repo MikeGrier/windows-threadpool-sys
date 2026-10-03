@@ -34,11 +34,13 @@
 //! $env:WINDOWS_THREADPOOL_TRACE = '*'               # everything
 //! ```
 //!
-//! The targets this crate records under are `wait`, `work`, `io`, `timer`, and
-//! `timer-periodic` -- one per pool object, and matched by substring, so
-//! `timer` selects the periodic timer as well. Dependent crates add their own;
-//! `windows-ioring-sys` records under `delivery` and, from its own tests,
-//! `postmortem`.
+//! The targets this crate records under are `wait`, `work`, `io`, `timer` and
+//! `timer-periodic` -- one per pool object -- plus `heal` for the self-heal
+//! registry, `syscall-enter` and `syscall-leave` for the bracketed Win32 calls
+//! themselves, and `exception` when exception observation is switched on.
+//! Targets are matched by substring, so `timer` selects the periodic timer as
+//! well. Dependent crates add their own; `windows-ioring-sys` records under
+//! `delivery` and, from its own tests, `postmortem`.
 //!
 //! Unset, empty, or matching nothing means no record is kept and the cost is
 //! one relaxed atomic load per call site.

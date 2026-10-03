@@ -78,16 +78,6 @@ self-heal = ["windows-sys/Win32_System_WindowsProgramming"]
 trace = [
 	"windows-sys/Win32_System_Diagnostics_Debug",
 	"windows-sys/Win32_System_Kernel",
-	"windows-sys/Win32_System_Diagnostics_ToolHelp",
-	"windows-sys/Win32_System_LibraryLoader",
-	"windows-sys/Win32_System_Memory",
-	# `Win32_System_SystemInformation` is for `GetSystemInfo`, which supplies
-	# the page size the hook installer needs. It changes protection once per
-	# page rather than once per stub -- `VirtualProtect` reports the previous
-	# protection of the whole page, so two stubs sharing one would otherwise
-	# save and restore each other's temporary state -- and grouping stubs by
-	# page requires knowing how big one is rather than assuming.
-	"windows-sys/Win32_System_SystemInformation",
 ]
 [dependencies.windows-sys]
 version = "0.61.2"
