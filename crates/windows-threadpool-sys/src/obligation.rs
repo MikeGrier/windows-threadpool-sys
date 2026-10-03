@@ -146,7 +146,11 @@ pub(crate) fn fail_fast_if_owed(owed: bool, type_name: &str, close: &str) {
 /// Fail fast, if the `fail-fast` feature is on and a cancellation went
 /// untracked.
 ///
-/// `tracked` is what [`crate::heal::Registration::owe_repair`] reported. A
+/// `tracked` is what the registration reported -- `owe_repair` with `self-heal`
+/// on, `owe_repair_claimed` with it off, which is why this names them rather
+/// than linking: the feature-off `Registration` deliberately has no
+/// `owe_repair`, so a link to one would be unresolvable in exactly the
+/// configuration the `no self-heal` CI job documents. A
 /// `false` means three allocations failed for one pool -- at the object's
 /// creation, at any later registration by something else on it, and at the
 /// retry the cancellation itself makes -- so the pool was cancelled with

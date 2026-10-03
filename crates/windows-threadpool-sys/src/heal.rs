@@ -81,11 +81,6 @@ mod off {
         /// Records nothing. Without the feature the repair obligation belongs to
         /// the caller of `try_cancel_pending_no_heal_tracking`, not to us.
         ///
-        /// Reports `true`: the question the value answers is "did this crate
-        /// leave a pool unrepaired behind a safety claim it made", and in this
-        /// build the crate makes no such claim, so there is nothing to report.
-        /// Answering `false` would fire the untracked fail-fast on every
-        /// cancellation in a configuration that never promised a repair.
         /// Claims nothing: without the feature there is no registry to claim
         /// in, and no repair whose object could keep a pool alive.
         #[must_use]
@@ -95,6 +90,12 @@ mod off {
 
         /// Nothing is tracked, so nothing can be untracked, and the caller's
         /// fail-fast has nothing to report.
+        ///
+        /// Reports `true`: the question the value answers is "did this crate
+        /// leave a pool unrepaired behind a safety claim it made", and in this
+        /// build the crate makes no such claim, so there is nothing to report.
+        /// Answering `false` would fire the untracked fail-fast on every
+        /// cancellation in a configuration that never promised a repair.
         ///
         /// The feature-on twin has a second form, `owe_repair`, for the path
         /// that may retry its registration. There is deliberately no mirror of
@@ -279,6 +280,13 @@ mod on {
         /// in the registry forever, which is a worse failure than the
         /// double-decrement it would be covering for.
         pub(crate) fn note_repair_started(&self) {
+            // `fetch_update` is deprecated on current stable, renamed to
+            // `try_update`. The new name postdates this workspace's MSRV
+            // (1.98), so using it would trade a lint for a build failure on the
+            // toolchain the MSRV job pins; the old name compiles on both. See
+            // the identical note in `windows-overlapped-io-sys`' `identity.rs`
+            // -- both revert when the MSRV moves past the rename.
+            #[allow(deprecated)]
             let _ = self
                 .outstanding
                 .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |n| {
