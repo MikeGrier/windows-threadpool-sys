@@ -274,8 +274,14 @@ second, and `M-T9.1` is the guard both of them want.
   unconditional store. `unhealed()` is `last_cancelled != 0 && last_cancelled >= last_started`;
   `repair_in_flight()` is `last_submitted > last_started`; `tick` submits when unhealed and nothing
   is in flight, and **clears nothing**. The trampoline takes a `*const PoolEntry`, so all four
-  values live on the entry, and `repair` is the entry's first field so its drain runs before
-  anything it writes to is freed.
+  values live on the entry, and `repair` is the entry's first field.
+
+  **Correction, made while implementing `M-T9.1`:** this entry first said that placement made the
+  drain run "before anything it writes to is freed", and that is false. Every other field owns no
+  heap, so dropping one frees nothing; the single allocation belongs to the `Arc` and is released
+  only after all drop glue. The ordering was load-bearing for the `Box<AtomicU64>` design it
+  replaced and is merely defensive now. What protects the callback is the drain, which `M-T9.1`
+  measures.
 
   **Verified by sabotage, not by reading.** Restoring the keep-earliest `compare_exchange` fails
   `a_cancellation_during_a_tick_is_not_lost` on the assertion that a later cancellation moves the
@@ -307,42 +313,32 @@ second, and `M-T9.1` is the guard both of them want.
   > regression -- but whether a repair unstarted after N ticks should be re-submitted is open, and
   > the stamps now make it cheap to answer. Not decided here.
 
-- [ ] **M-T9.1** -- **Write the test that would have caught the repair-object use-after-free.**
+- [x] **M-T9.1** -- **Write the test that would have caught the repair-object use-after-free.**
+      Done 2026-10-02 as `retiring_an_entry_waits_for_a_repair_callback_already_running`.
 
-  **What the defect was.** `RepairWork::drop` called `CloseThreadpoolWork` without draining first,
-  then freed the `Box<AtomicU64>` whose *address* is that work object's callback context.
-  `CloseThreadpoolWork` does not wait -- it frees the work object asynchronously once outstanding
-  callbacks finish -- so a repair submitted and not yet dispatched would `fetch_add` through freed
-  heap. Fixed by draining before the close, mirroring `ThreadpoolWork::drop`, which had always done
-  it correctly.
+  **The window, now that `M-T9.2` has landed.** `repair_in_flight` keeps an entry alive while a
+  repair is queued, so the original shape -- submitted, not yet dispatched, entry freed -- is no
+  longer reachable. What remains is narrower, and is what the drain actually covers: the callback
+  stamps `last_started` on entry, which is precisely what makes the entry retirable, and then writes
+  to the entry again. A retirement landing between those two writes drops the last `Arc`, and
+  `CloseThreadpoolWork` does not wait.
 
-  **The target has moved since this was written, and moved toward this guard.** `M-T9.2` removed
-  the box: the callback context is now the `PoolEntry` itself, and what a missing drain would
-  corrupt is the entry's own stamps. The drain still happens in the same place, and the invariant
-  that keeps it sound is now the field order -- `repair` is declared first so its `Drop` runs before
-  the stamps it protects. That makes this guard strictly more valuable than when it was queued,
-  because the invariant it would protect is a declaration order that any later edit can silently
-  undo.
+  **Asserted on the drop blocking, not on a fault** -- a deliberate departure from this item's
+  suggestion of `windows-guard-alloc`, for the reason the item itself gives. A crash-caught result
+  is treated as uncovered here, and a guard page reports a use-after-free by crashing. Measuring
+  that the retirement waited states the property directly, needs neither a second process nor a
+  global allocator, and fails by name. Under sabotage: **3.7 us against a 400 ms hold**, scored by
+  the harness as `exit 101` -- an ordinary test failure rather than a crash code.
 
-  **Why nothing caught it, which is the part worth fixing.** Every test in `heal/tests.rs` holds its
-  own `Arc<PoolEntry>` clone, and usually a live object too, so the entry is never retired while a
-  repair is in flight -- the precise condition the defect needs. The sabotage manifest inherited the
-  same blind spot. A guard has to drop the last `Arc` between the submit and the dispatch.
+  **The window is reached by holding the callback inside it**, under a `#[cfg(test)]` hook, because
+  it is a few instructions wide and nothing lands there by timing. Added to `sabotage.json`, so the
+  guard is re-checked rather than verified once and discarded.
 
-  **`windows-guard-alloc` is the instrument**, and is already a workspace member: a guarded
-  allocation for the entry would fault on the write rather than silently corrupting whatever took
-  the freed block. Reaching the window reliably may need the repair trampoline to be delayed under
-  a test-only hook, since the race is microseconds wide.
-
-  **Sabotage it**: with the drain removed the guard must fail, and the failure must be the write
-  through freed memory rather than a timeout -- a crash-caught mutant is treated as uncovered here.
-
-  **This guard covers `M-T9.2` as well**, and is the reason the two belong together: pointing the
-  trampoline at the `PoolEntry` makes the field-order invariant above load-bearing, and this
-  repository has been bitten by a field-order assumption twice in one evening already
-  (`flush_barrier_stress`'s `Fixture`, and the `TempPath` ordering corrected in
-  `test(ioring): order the temp-file guard before the handle it protects`). A comment is not a rung;
-  this test is.
+  > **DECISION TO RAISE: this invariant could be made unrepresentable rather than guarded.** Giving
+  > `PoolEntry` its own `Drop` that drains before any field is dropped would take the teardown order
+  > off declaration order entirely -- the build rung rather than the unit-test rung. Not done here
+  > because `M-T9.2` deliberately chose field order and no `Drop` impl, so changing it is a design
+  > decision rather than a test. Cheap if wanted.
 
 Opened 2026-10-01 by a code review of this branch, which found a use-after-free in `RepairWork::drop`
 that the whole test suite and a full sabotage sweep had both missed.

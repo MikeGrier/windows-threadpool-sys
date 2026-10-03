@@ -1845,9 +1845,21 @@ count before, justified by its lifetime being easier to guarantee than the
 entry's. That was never true: the box was freed by the same drop as everything
 else, so while `Drop` did not drain, the box dangled too -- the indirection made
 the use-after-free smaller rather than absent, and small is what kept it hidden.
-`repair` is now the entry's **first field**, so its drain runs before any stamp
-it protects is dropped. That ordering is load-bearing and unenforced by the
-compiler; `M-T9.1` is the guard for it.
+`repair` is the entry's first field, so its drain runs before the rest of the
+entry is dropped.
+
+**That ordering is defensive rather than load-bearing, and this note first
+claimed otherwise.** Every other field owns no heap -- dropping an atomic is a
+no-op, and the one allocation holding them all belongs to the `Arc`, which frees
+it only after every field has been dropped. The drain therefore runs while the
+stamps are mapped whatever the declaration order. The claim was true of the
+`Box<AtomicU64>` design, where dropping that field freed heap; the box went and
+the reasoning did not follow it.
+
+What makes the callback safe is the drain. `M-T9.1` guards it by measuring that
+retiring an entry whose callback is still running **blocks** -- asserted on the
+wait rather than on a fault, because a use-after-free detected by a crash is a
+crash-caught result, which this repository treats as uncovered.
 
 **Still open:** a pool that never dispatches is submitted one repair and never
 retried, because `repair_in_flight` stays true. That is unchanged from the

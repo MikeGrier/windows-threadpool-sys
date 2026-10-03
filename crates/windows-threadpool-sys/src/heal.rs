@@ -51,7 +51,10 @@ pub(crate) use on::{PoolEntry, Registration, entries, now, register, retire_idle
 // to carry that condition too -- `#[cfg(test)]` alone resolves against a module
 // that is not there in a `--no-default-features` test build.
 #[cfg(all(test, feature = "self-heal"))]
-pub(crate) use on::{FORCE_REPAIR_FAILURE_FOR, TICK_GATE, tick_inner};
+pub(crate) use on::{
+    FORCE_REPAIR_FAILURE_FOR, HOLD_REPAIR_CALLBACK_FOR, HOLD_REPAIR_CALLBACK_MS,
+    REPAIR_CALLBACK_INSIDE, TICK_GATE, tick_inner,
+};
 
 #[cfg(not(feature = "self-heal"))]
 pub(crate) use off::{Registration, register};
@@ -123,15 +126,25 @@ mod on {
     pub(crate) struct PoolEntry {
         /// The work item a repair submits.
         ///
-        /// **Declared first, and that is load-bearing.** This struct has no
-        /// `Drop` of its own, so its fields drop in declaration order, and this
-        /// field's `Drop` drains the work object. Every other field below is
-        /// written by that object's callback through a pointer to this entry,
-        /// so draining has to happen before any of them is dropped. Declared
-        /// last -- as it was -- the drain would run after the stamps it exists
-        /// to protect had already gone. Ordered the way
-        /// [`EventDelivery`](../../windows-ioring-sys/src/event_delivery.rs)
-        /// orders its `wait` before its `ring`, for the same reason.
+        /// Declared first so the drain in its `Drop` runs before the rest of
+        /// the entry is dropped. **That ordering is defensive, not
+        /// load-bearing, and an earlier version of this comment claimed
+        /// otherwise.** Every field below owns no heap: dropping an atomic is a
+        /// no-op, and the single allocation holding all of them belongs to the
+        /// `Arc`, which frees it only after every field has been dropped. So
+        /// the drain runs while the stamps are still mapped whatever order the
+        /// fields are declared in.
+        ///
+        /// The claim was true of the design this replaced, where the callback's
+        /// context was a `Box<AtomicU64>` -- dropping *that* field freed heap,
+        /// so a drain after it would have been draining into a freed block.
+        /// The box is gone and the reasoning did not follow it.
+        ///
+        /// What makes the callback safe is the drain itself, which
+        /// `retiring_an_entry_waits_for_a_repair_callback_already_running`
+        /// measures and `sabotage.json` re-checks. The order is kept because it
+        /// costs nothing and keeps the teardown reading in the order it
+        /// happens.
         repair: RepairWork,
         key: PoolKey,
         /// How many live objects this crate has on the pool.
@@ -217,9 +230,14 @@ mod on {
             self.last_started.store(at, Ordering::SeqCst);
         }
 
-        /// Note that this entry's repair callback has run: stamp and count.
-        fn record_repair_run(&self, at: u64) {
-            self.stamp_started(at);
+        /// Count a dispatch of this entry's own repair item.
+        ///
+        /// Separate from the stamp because a test needs to stop *between* them:
+        /// the stamp is what makes `repair_in_flight` false, so the instant
+        /// after it is the instant the entry becomes retirable while its
+        /// callback is still running. That is the window `RepairWork::drop`'s
+        /// drain exists to cover.
+        fn count_repair_run(&self) {
             self.runs.fetch_add(1, Ordering::SeqCst);
         }
 
@@ -363,7 +381,17 @@ mod on {
         // field drains this object in its `Drop`, before any of the entry is
         // freed.
         let entry = unsafe { &*context.cast::<PoolEntry>() };
-        entry.record_repair_run(now());
+        // The stamp first: it is what makes `repair_in_flight` false, so from
+        // here the entry can be retired while this callback is still running.
+        entry.stamp_started(now());
+        #[cfg(test)]
+        if entry.key != 0 && HOLD_REPAIR_CALLBACK_FOR.load(Ordering::SeqCst) == entry.key {
+            REPAIR_CALLBACK_INSIDE.store(entry.key, Ordering::SeqCst);
+            let hold = HOLD_REPAIR_CALLBACK_MS.load(Ordering::SeqCst);
+            std::thread::sleep(Duration::from_millis(hold));
+        }
+        // The write that a missing drain would make through a freed entry.
+        entry.count_repair_run();
         crate::trace_record!("heal", "repair-ran", _work);
     }
 
@@ -868,6 +896,36 @@ mod on {
     /// rather than anything it had to do with. Zero means no pool is forced.
     #[cfg(test)]
     pub(crate) static FORCE_REPAIR_FAILURE_FOR: AtomicUsize = AtomicUsize::new(0);
+
+    /// The pool whose repair callback is held inside its dispatch, and for how
+    /// long.
+    ///
+    /// The drain in `RepairWork::drop` covers a window a few instructions wide:
+    /// between the callback stamping `last_started` -- which is what makes the
+    /// entry retirable -- and the callback returning. Nothing can land a
+    /// retirement in that window by timing, so a test widens it.
+    ///
+    /// **Keyed to one pool, like `FORCE_REPAIR_FAILURE_FOR` and for the same
+    /// reason.** The registry is process-wide and these tests are threads in
+    /// one process, so an unkeyed hold catches whichever repair happens to
+    /// dispatch -- including one submitted by another test before this one
+    /// took the tick gate. Measured: the first version of this used a bare
+    /// flag, passed alone, and failed in the full suite because another test's
+    /// callback raised it while this test's own repair had not dispatched yet.
+    #[cfg(test)]
+    pub(crate) static HOLD_REPAIR_CALLBACK_FOR: AtomicUsize = AtomicUsize::new(0);
+
+    /// How long a held callback stays inside the window, in milliseconds.
+    #[cfg(test)]
+    pub(crate) static HOLD_REPAIR_CALLBACK_MS: AtomicU64 = AtomicU64::new(0);
+
+    /// The pool whose repair callback has reached the window; zero if none.
+    ///
+    /// A test waits for *its own* key here rather than sleeping, so it drops
+    /// the last `Arc` while that callback is demonstrably still running rather
+    /// than hoping it is.
+    #[cfg(test)]
+    pub(crate) static REPAIR_CALLBACK_INSIDE: AtomicUsize = AtomicUsize::new(0);
 
     /// Make the work object a repair for this pool will submit.
     /// Give an entry its work object, with the entry itself as the context.

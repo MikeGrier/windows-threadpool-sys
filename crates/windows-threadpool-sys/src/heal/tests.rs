@@ -526,6 +526,124 @@ mod on {
         drop(work);
     }
 
+    /// Hold every repair callback inside its dispatch for as long as this lives.
+    ///
+    /// Process-wide, so it takes the tick gate: another test's repair running
+    /// concurrently would also be held, and the entered flag is shared.
+    struct HeldRepairCallback {
+        key: usize,
+        #[allow(dead_code)]
+        gate: std::sync::MutexGuard<'static, ()>,
+    }
+
+    impl HeldRepairCallback {
+        fn for_pool(key: usize, ms: u64) -> Self {
+            let gate = gate();
+            crate::heal::REPAIR_CALLBACK_INSIDE.store(0, Ordering::SeqCst);
+            crate::heal::HOLD_REPAIR_CALLBACK_MS.store(ms, Ordering::SeqCst);
+            crate::heal::HOLD_REPAIR_CALLBACK_FOR.store(key, Ordering::SeqCst);
+            Self { key, gate }
+        }
+
+        fn wait_until_inside(&self) {
+            spin_until("this pool's repair callback to enter its dispatch", || {
+                crate::heal::REPAIR_CALLBACK_INSIDE.load(Ordering::SeqCst) == self.key
+            });
+        }
+    }
+
+    impl Drop for HeldRepairCallback {
+        fn drop(&mut self) {
+            crate::heal::HOLD_REPAIR_CALLBACK_FOR.store(0, Ordering::SeqCst);
+            crate::heal::HOLD_REPAIR_CALLBACK_MS.store(0, Ordering::SeqCst);
+            crate::heal::REPAIR_CALLBACK_INSIDE.store(0, Ordering::SeqCst);
+        }
+    }
+
+    /// Retiring an entry whose repair callback is still running waits for it.
+    ///
+    /// `M-T9.1`. `RepairWork::drop` drains the work object before closing it,
+    /// and this is the window that makes the drain necessary: the callback
+    /// stamps `last_started` on entry, which is exactly what makes the entry
+    /// retirable, and it then goes on to write to the entry again. A retirement
+    /// landing between those two writes drops the last `Arc`, and without the
+    /// drain `CloseThreadpoolWork` would return immediately -- it frees the
+    /// work object asynchronously rather than waiting -- leaving the callback
+    /// writing into an allocation the `Arc` has released.
+    ///
+    /// **Asserted on the drop blocking, not on a fault.** A use-after-free
+    /// detected by a crash is a crash-caught result, which this repository
+    /// treats as uncovered: it depends on allocator behaviour and reports the
+    /// same way whether or not anything noticed. Measuring that the retirement
+    /// waited for the callback states the property directly and fails cleanly,
+    /// by name, when the drain is removed.
+    ///
+    /// Nothing here can land in the window by timing -- it is a few
+    /// instructions wide -- so the callback is held inside it.
+    #[test]
+    fn retiring_an_entry_waits_for_a_repair_callback_already_running() {
+        /// Long enough that the measurement cannot be mistaken for scheduler
+        /// noise, short enough to stay instant.
+        const HOLD: Duration = Duration::from_millis(400);
+        /// What the drop must exceed to count as having waited. Below the hold
+        /// so a slow start to the callback cannot fail an honest run.
+        const WAITED: Duration = Duration::from_millis(200);
+
+        let pool = ThreadpoolPool::new().expect("create pool");
+        let key = pool.as_raw() as usize;
+        let held = HeldRepairCallback::for_pool(key, HOLD.as_millis() as u64);
+        let mut env = CallbackEnviron::new();
+        env.set_pool(&pool);
+        let work = ThreadpoolWork::new(|| {}, Some(&mut env)).expect("create work");
+        let entry = crate::heal::entries()
+            .into_iter()
+            .find(|e| e.key() == key)
+            .expect("the work registered its pool");
+
+        // Unhealed, so the tick below submits a repair.
+        //
+        // Stamped `1` rather than `now()`, and that is not cosmetic.
+        // `QueryInterruptTime` has about 15.6 ms resolution, and `unhealed`
+        // counts equal stamps as unhealed on purpose -- so a cancellation and
+        // the dispatch that answers it landing in one tick leaves the entry
+        // unhealed, hence not retirable, and `retire_idle` below would do
+        // nothing at all. Measured: with `now()` here this failed 3 runs in 20
+        // at 32 test threads, reporting a 4 us retirement because there was
+        // nothing to retire. Any real interrupt time is far above 1, so the
+        // callback's stamp is unambiguously later.
+        entry.stamp_cancelled(1);
+        // Nothing of the caller's is left on the pool, so the entry is held
+        // only by the registry and by this test.
+        drop(work);
+
+        crate::heal::tick_inner();
+        assert!(
+            entry.repairs_run() == 0,
+            "the callback must still be inside its dispatch, not finished"
+        );
+
+        // Dropped before the retirement, so the registry's is the last claim
+        // and `retire_idle` below performs the final drop.
+        drop(entry);
+        held.wait_until_inside();
+
+        let started = Instant::now();
+        crate::heal::retire_idle();
+        let blocked_for = started.elapsed();
+
+        assert!(
+            blocked_for >= WAITED,
+            "retiring the entry returned in {blocked_for:?} while its repair callback was still \
+             running, so the close did not drain and the callback's remaining write lands in an \
+             allocation the last `Arc` has released"
+        );
+        assert!(
+            !crate::heal::entries().iter().any(|e| e.key() == key),
+            "the entry was retirable, so it must be gone -- otherwise this measured some other \
+             entry's drain"
+        );
+    }
+
     /// Force this pool's repair allocation to fail for as long as this lives.
     ///
     /// Keyed to one pool rather than switched on globally, so a test using it

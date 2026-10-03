@@ -196,6 +196,20 @@
       ]
     },
     {
+      "name": "the repair object is closed without draining it",
+      "file": "src/heal.rs",
+      "expect": "caught",
+      "why": "CloseThreadpoolWork does not wait -- it frees the work object asynchronously once outstanding callbacks finish. A repair callback stamps last_started on entry, which is exactly what makes its entry retirable, and then writes to the entry again. Without the drain, a retirement landing between those two writes drops the last Arc and the callback finishes into a released allocation. The guard asserts the retirement blocked rather than waiting for a fault, because a crash-caught result is treated as uncovered here.",
+      "find": [
+        "            crate::trace_call!(\"WaitForThreadpoolWorkCallbacks\", work, 0, {",
+        "                unsafe { WaitForThreadpoolWorkCallbacks(work, FALSE) };",
+        "            });"
+      ],
+      "replace": [
+        "            let _ = work;"
+      ]
+    },
+    {
       "name": "a cancellation does not arm a repair",
       "file": "src/heal.rs",
       "expect": "caught",
@@ -217,10 +231,10 @@
       "expect": "caught",
       "why": "The second claim. Health is derived, not stored: a pool is unhealed while its last cancellation is at or after the last time its own repair callback ran. This stamp is the only thing that ever heals an entry, so a trampoline that does not write it leaves every cancelled pool unhealed forever -- the entry is never retired, and every tick that finds no repair in flight submits another.",
       "find": [
-        "        entry.record_repair_run(now());"
+        "        entry.stamp_started(now());"
       ],
       "replace": [
-        "        let _ = entry;"
+        "        entry.stamp_started(0);"
       ]
     },
     {
