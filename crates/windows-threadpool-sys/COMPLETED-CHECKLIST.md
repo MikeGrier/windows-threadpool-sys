@@ -1268,3 +1268,115 @@ fail-fast that never fires, and one that fires when nothing is owed.
 **No separate CI job was added**, deliberately: the existing `--all-features` jobs arm the
 feature by construction, unlike the feature-*off* configuration that `M-T6.6` had to add a job
 for.
+
+## Moved 2026-10-02 22:50:33 -04:00 -- M-T9, make the repair mark lossless, and guard the teardown that frees it
+
+Opened 2026-10-01 by a code review of this branch, which found two defects in `heal.rs` that the
+whole test suite and a full sabotage sweep had both missed. The first is fixed; `M-T9.2` is the
+second, and `M-T9.1` is the guard both of them want.
+
+### <a id="m-t92"></a>M-T9.2 -- Replace the repair mark with three derived timestamps, and point the trampoline at the entry. *(completed 2026-10-02 22:50:33 -04:00)*
+
+Implemented 2026-10-02 to the shape recorded below.
+
+**What landed.** `last_cancelled`, `last_started` and `last_submitted`, each written by an
+unconditional store. `unhealed()` is `last_cancelled != 0 && last_cancelled >= last_started`;
+`repair_in_flight()` is `last_submitted > last_started`; `tick` submits when unhealed and nothing
+is in flight, and **clears nothing**. The trampoline takes a `*const PoolEntry`, so all four
+values live on the entry, and `repair` is the entry's first field.
+
+**Correction, and then a fix, both from `M-T9.1`:** this entry first said that placement made the
+drain run "before anything it writes to is freed", and that is false. Every other field owns no
+heap, so dropping one frees nothing; the single allocation belongs to the `Arc` and is released
+only after all drop glue. The ordering was load-bearing for the `Box<AtomicU64>` design it
+replaced, and the justification was restated for a design where it no longer applied. The drain
+has since moved onto `PoolEntry::drop`, so declaration order carries nothing and the question
+cannot be got wrong a third time.
+
+**Verified by sabotage, not by reading.** Restoring the keep-earliest `compare_exchange` fails
+`a_cancellation_during_a_tick_is_not_lost` on the assertion that a later cancellation moves the
+stamp forward. Both `heal.rs` entries in `sabotage.json` were re-anchored and re-run through the
+harness; both are caught.
+
+**Equality reads as unhealed**, per the first detail the item asked to decide deliberately. A
+cancellation and a dispatch inside one `QueryInterruptTime` tick are indistinguishable, so this
+errs toward a redundant repair; `a_dispatch_in_the_same_tick_as_the_cancellation_does_not_heal_it`
+pins it.
+
+**The submit guard is `!repair_in_flight()`, not `last_cancelled > last_submitted`.** The item
+proposed the latter. The former is the same rule stated against the pair that already answers
+"has the pool given it back", so there is one comparison rather than two that must agree -- and it
+behaves better in the case the item did not reach: a cancellation arriving while a repair is in
+flight is answered by that repair if it dispatches afterwards, and by the next tick if it does
+not.
+
+**The user-dispatch signal is gone, with the tests that proved its wiring.** `stamp_dispatch`,
+`last_dispatch` and `dispatched_since` are removed, and with them the five per-kind tests that
+asserted each trampoline stamped its entry. They tested a mechanism this item replaces: health is
+now evidenced by *our own* repair dispatching, which a quiet pool cannot fake. Removing it also
+takes one atomic store off every callback the crate delivers. `Registration` is still held by the
+work, timer, periodic-timer and I/O contexts, now purely for its `Drop`, and each field says so.
+
+**The item's second deferred detail -- a wedged pool never retrying -- was decided 2026-10-02
+and is implemented.** A repair still in flight past `OVERDUE_AFTER` (five seconds, twenty healer
+periods) is reported as `repair-overdue` and re-submitted. The allowance is one reattempt,
+counted per episode and reset whenever a repair actually runs; past it, `fail-fast` ends the
+process and a build without that feature goes on reporting and re-submitting indefinitely. The
+threshold is generous on purpose: "wedged" and "merely busy under load" look identical from the
+healer, the second is enormously more likely, and the cost of being hasty is crying wolf about a
+healthy pool -- or, under `fail-fast`, ending the process over one.
+
+**The `fail-fast` here aborts; the teardown ones unwind.** It fires on the healer's timer
+trampoline, and Rust turns a panic escaping an `extern "system"` boundary into an abort. That is
+stated at `fail_fast_if_unrepairable` rather than left to be discovered, and it is defensible on
+its own terms: the condition being reported is that a pool in this process has stopped
+dispatching, so there is no thread known to still work to unwind to. The message still reaches
+stderr, because the panic hook runs first -- asserted, not assumed.
+
+**What a second submit is worth is not established, and the code says so.** The recovery this
+feature rests on is measured for *a* submit; whether a factory re-evaluates its create decision
+on a later arrival is the question `poke_completion_ports` exists to ask, and the answer recorded
+there is that an ordinary arrival has never been seen to recover this stall. The reattempt is a
+cheap thing tried in a state that should not arise, not a mechanism with evidence behind it.
+
+**Three tests, and the state is real rather than simulated.** `StalledPool` occupies a
+single-thread pool's only thread, so a submitted repair genuinely never dispatches. That is not
+decoration: `repair_trampoline` stamps `last_started` as its first act, so merely *holding* the
+callback has already made `repair_in_flight` false, and an entry whose repair has started can
+never be made overdue again without waiting out the real threshold. The fail-fast case runs in a
+child process and asserts on how it died, because an in-process abort would take the runner with
+it. Both branches are in `sabotage.json`: deleting the overdue test, or the reattempt
+comparison, is caught.
+
+### <a id="m-t91"></a>M-T9.1 -- Write the test that would have caught the repair-object use-after-free. *(completed 2026-10-02 22:50:33 -04:00)*
+
+Opened 2026-10-01 by a code review of this branch, which found a use-after-free in `RepairWork::drop`
+that the whole test suite and a full sabotage sweep had both missed.
+
+Done 2026-10-02 as `retiring_an_entry_waits_for_a_repair_callback_already_running`.
+
+**The window, now that `M-T9.2` has landed.** `repair_in_flight` keeps an entry alive while a
+repair is queued, so the original shape -- submitted, not yet dispatched, entry freed -- is no
+longer reachable. What remains is narrower, and is what the drain actually covers: the callback
+stamps `last_started` on entry, which is precisely what makes the entry retirable, and then writes
+to the entry again. A retirement landing between those two writes drops the last `Arc`, and
+`CloseThreadpoolWork` does not wait.
+
+**Asserted on the drop blocking, not on a fault** -- a deliberate departure from this item's
+suggestion of `windows-guard-alloc`, for the reason the item itself gives. A crash-caught result
+is treated as uncovered here, and a guard page reports a use-after-free by crashing. Measuring
+that the retirement waited states the property directly, needs neither a second process nor a
+global allocator, and fails by name. Under sabotage: **3.7 us against a 400 ms hold**, scored by
+the harness as `exit 101` -- an ordinary test failure rather than a crash code.
+
+**The window is reached by holding the callback inside it**, under a `#[cfg(test)]` hook, because
+it is a few instructions wide and nothing lands there by timing. Added to `sabotage.json`, so the
+guard is re-checked rather than verified once and discarded.
+
+**DECIDED 2026-10-02 and done: the invariant is unrepresentable rather than guarded.** `PoolEntry`
+now drains in its own `Drop`, which runs to completion before any field is dropped, so the
+teardown no longer depends on declaration order at all. Checked by moving `repair` to the **last**
+field and re-running the guard: it still passes, where the arrangement it replaced would have had
+exactly the hazard its own comment warned about. The drain stays guarded by the test above, which
+still fails under sabotage at `exit 101`.
+
