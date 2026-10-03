@@ -1224,7 +1224,7 @@ finding is of a different and worse kind: a rule nothing tests.
   none covers it, and verify the rejecting direction by deleting the skip and watching the test go
   red.
 
-- [ ] **M-T13.2** -- **Give the periodic timer one drain body instead of two.**
+- [x] **M-T13.2** -- **Give the periodic timer one drain body instead of two.**
   `PeriodicTimerMember::stop_and_drain` passes `TRUE` to `WaitForThreadpoolTimerCallbacks` --
   cancel -- while `ThreadpoolPeriodicTimer::stop_and_drain` passes `FALSE` and documents at length
   that "the drain no longer cancels". The member's own doc says "As with

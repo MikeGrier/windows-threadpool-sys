@@ -1310,3 +1310,51 @@ fn a_work_members_stop_and_drain_runs_what_was_submitted() {
         "the drain must run the submitted callback, not return before it"
     );
 }
+
+/// The member's teardown makes the same Win32 call its standalone twin makes.
+///
+/// **Asserted on the call, because the behaviour is not observable.** A
+/// periodic `stop` already discards a queued tick, so passing `TRUE` rather
+/// than `FALSE` to `WaitForThreadpoolTimerCallbacks` changes nothing a test
+/// can see through the callback -- which is exactly why the two copies were
+/// able to drift for as long as they did. The trace records the call itself,
+/// so that is where the divergence was visible, and this looks there.
+///
+/// Both directions, in one test: the drain form must be present and the cancel
+/// form must be absent. Asserting only the first would pass if the member made
+/// both calls, and asserting only the second would pass if it made neither.
+///
+/// The padding in `dump`'s format is what makes these two substrings
+/// distinguishable: the drain's name is 31 characters and is padded into a
+/// 36-wide column, so it is always followed by a space, while the cancel form
+/// is 39 characters and carries its `(cancel)` suffix inline.
+#[cfg(feature = "trace")]
+#[test]
+fn a_periodic_members_teardown_drains_rather_than_cancelling() {
+    crate::trace::in_a_trace_armed_child(
+        "cleanup_group::tests::a_periodic_members_teardown_drains_rather_than_cancelling",
+        "syscall-enter",
+        || {
+            let group = CleanupGroup::new().expect("create the group");
+            let timer = group
+                .create_periodic_timer(Duration::from_millis(50), |_| {}, None)
+                .expect("create the periodic member");
+            timer.start();
+            timer.stop_and_drain();
+
+            let dump = crate::trace::dump();
+            assert!(
+                dump.contains("WaitForThreadpoolTimerCallbacks "),
+                "the member must drain -- no `WaitForThreadpoolTimerCallbacks` \
+                 with the cancel flag clear was recorded at all, so this test \
+                 observed nothing:\n{dump}"
+            );
+            assert!(
+                !dump.contains("WaitForThreadpoolTimerCallbacks(cancel)"),
+                "the member must drain rather than cancel, as \
+                 `ThreadpoolPeriodicTimer::stop_and_drain` does and as this \
+                 member's own documentation claims it does:\n{dump}"
+            );
+        },
+    );
+}

@@ -101,6 +101,21 @@
       ]
     },
     {
+      "name": "the periodic member cancels its teardown instead of draining it",
+      "file": "src/cleanup_group.rs",
+      "expect": "caught",
+      "why": "The shape this crate's teardown rules keep drifting into: one rule, two sites, converted at one. `ThreadpoolPeriodicTimer::stop_and_drain` was changed from cancelling to draining and documented at length; the cleanup-group member went on passing TRUE, kept its `(cancel)` trace label, never settled the obligation, and all the while its own doc said it did 'as with `ThreadpoolPeriodicTimer::stop_and_drain`'. The one-shot timer and the wait did not drift, because both members delegate to a shared `*_parts` body -- the periodic timer had none, which is what made one-sided conversion possible. It has one now, and this patch is the drift being re-introduced by hand. Caught by a trace assertion rather than by behaviour, because the behaviour is genuinely unobservable: a periodic `stop` already discards a queued tick, so TRUE and FALSE produce the same callback outcome. The Win32 call differs, and that is what the guard reads.",
+      "find": [
+        "        unsafe { ThreadpoolPeriodicTimer::stop_and_drain_parts(self.context, self.handle) };"
+      ],
+      "replace": [
+        "        self.stop();",
+        "        crate::trace_call!(\"WaitForThreadpoolTimerCallbacks(cancel)\", self.handle, 1, {",
+        "            unsafe { WaitForThreadpoolTimerCallbacks(self.handle, TRUE) };",
+        "        });"
+      ]
+    },
+    {
       "name": "the tick stops coalescing and repairs a pool that already answered",
       "file": "src/heal.rs",
       "expect": "caught",

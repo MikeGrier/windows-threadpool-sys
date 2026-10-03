@@ -445,16 +445,42 @@ impl ThreadpoolPeriodicTimer {
     /// exclusively or serialize access to it. Unlike the one-shot timer there is
     /// no re-arm to suppress: [`PeriodicTick::stop`] only ever stops.
     pub fn stop_and_drain(&self) {
-        self.stop();
-        // The stop above is what makes this terminate: with no period left to
+        // SAFETY: the context outlives every tick and is freed only by Drop,
+        // which cannot run while this borrow of self is alive.
+        unsafe { Self::stop_and_drain_parts(self.context.cast(), self.timer) };
+    }
+
+    /// [`stop_and_drain`](Self::stop_and_drain) against a detached context.
+    ///
+    /// One body rather than two, for the reason the one-shot timer's twin of
+    /// this function gives -- and this type is the evidence that the reason is
+    /// real rather than tidiness. It had no shared body, and the two copies
+    /// drifted: the drain here was converted from cancelling to waiting while
+    /// the cleanup-group member went on passing `TRUE`, kept its `(cancel)`
+    /// trace label, and never settled the obligation at all, all while its own
+    /// documentation said it did "as with `ThreadpoolPeriodicTimer`".
+    ///
+    /// # Safety
+    ///
+    /// `context` must come from [`into_parts`](Self::into_parts) on this type
+    /// and name a still-live object whose context the caller has not yet freed,
+    /// and `timer` must be that object.
+    pub(crate) unsafe fn stop_and_drain_parts(context: *mut core::ffi::c_void, timer: PTP_TIMER) {
+        // SAFETY: forwarded from this function's own contract.
+        let ctx = unsafe { &*context.cast::<PeriodicContext>() };
+        // SAFETY: `timer` is live for this call by the same contract.
+        unsafe { disarm_raw(timer) };
+        // The disarm above is what makes this terminate: with no period left to
         // re-queue from, the drain has a finite backlog to run out.
-        self.wait();
+        crate::trace_call!("WaitForThreadpoolTimerCallbacks", timer, 0, {
+            // SAFETY: `timer` is live, and waiting without cancelling cannot
+            // orphan any storage.
+            unsafe { WaitForThreadpoolTimerCallbacks(timer, FALSE) };
+        });
         // Settled after the drain. `PeriodicTick::stop` only ever stops, so
         // unlike the one-shot timer there is no re-arm that could have landed
         // during the drain and nothing to suppress.
-        // SAFETY: the context outlives every tick and is freed only by Drop,
-        // which cannot run while this borrow of self is alive.
-        unsafe { &*self.context }.obligation.record_settled();
+        ctx.obligation.record_settled();
     }
 
     /// Note that a start has made this timer live, so `Drop` owes a drain.

@@ -346,6 +346,7 @@ impl CleanupGroup {
         Ok(PeriodicTimerMember {
             handle,
             period,
+            context,
             _group: PhantomData,
         })
     }
@@ -825,8 +826,21 @@ impl TimerMember<'_> {
 pub struct PeriodicTimerMember<'group> {
     handle: PTP_TIMER,
     period: Duration,
+    /// The callback context the group owns for this member.
+    ///
+    /// Held so the member can run the same `stop_and_drain` its standalone twin
+    /// does, obligation settlement and all. The group owns and frees it; this
+    /// is a borrow for the member's lifetime.
+    context: *mut c_void,
     _group: PhantomData<&'group CleanupGroup>,
 }
+
+// SAFETY: the context refers to state the group owns and outlives this member;
+// the member only reads it and passes it to thread-safe pool APIs. The same
+// argument as for `TimerMember`, which holds the same kind of borrow.
+unsafe impl Send for PeriodicTimerMember<'_> {}
+// SAFETY: as above.
+unsafe impl Sync for PeriodicTimerMember<'_> {}
 
 impl PeriodicTimerMember<'_> {
     /// The period this timer ticks on.
@@ -880,17 +894,15 @@ impl PeriodicTimerMember<'_> {
 
     /// Stop the timer and wait until no tick is queued or executing.
     ///
-    /// As with [`ThreadpoolPeriodicTimer::stop_and_drain`], this holds provided
-    /// no other thread starts the member during the call: the `start*` methods
-    /// take `&self`, so a start landing between the stop and the drain would
-    /// leave a schedule installed on return.
+    /// The same drain [`ThreadpoolPeriodicTimer::stop_and_drain`] performs,
+    /// including that it holds only provided no other thread starts the member
+    /// during the call: the `start*` methods take `&self`, so a start landing
+    /// between the stop and the drain would leave a schedule installed on
+    /// return.
     pub fn stop_and_drain(&self) {
-        self.stop();
-        // SAFETY: as above.
-        crate::trace_call!("WaitForThreadpoolTimerCallbacks(cancel)", self.handle, 1, {
-            // SAFETY: the handle is live until the group releases it.
-            unsafe { WaitForThreadpoolTimerCallbacks(self.handle, TRUE) };
-        });
+        // SAFETY: the group owns the context and the object and releases both
+        // only when it is dropped, which cannot happen while this borrow lives.
+        unsafe { ThreadpoolPeriodicTimer::stop_and_drain_parts(self.context, self.handle) };
     }
 }
 
