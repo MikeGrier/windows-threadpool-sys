@@ -61,6 +61,15 @@ fn heading(content: &str) -> Option<&str> {
     }
 }
 
+// encoding-check: allow-glued-doc-comment
+//
+// This file parses doc comments, so it necessarily contains a quote welded to a
+// doc marker -- in `strip_prefix` below, and in every test case that feeds this
+// function a sample line. That is the exact sequence `tools/check-encoding.ps1`
+// flags as a mis-joined edit, and nothing textual separates the two cases. The
+// marker turns off that one rule for this file; encoding, control characters
+// and mojibake are still checked here.
+
 /// The text after a doc marker, or `None` if the line is not a doc comment.
 fn doc_content(line: &str) -> Option<&str> {
     let trimmed = line.trim_start();

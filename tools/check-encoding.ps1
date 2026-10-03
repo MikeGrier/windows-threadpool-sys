@@ -105,6 +105,11 @@ $strictUtf8 = [System.Text.UTF8Encoding]::new($false, $true)
 # They are still validated as UTF-8.
 $AllowMojibakeMarker = 'encoding-check: allow-mojibake'
 
+# Files whose SUBJECT is doc-comment syntax opt out of the glued-doc-comment
+# check (rule 3 below) by including this marker. It disables that rule only --
+# control characters, encoding and mojibake are still checked on such a file.
+$AllowGluedDocMarker = 'encoding-check: allow-glued-doc-comment'
+
 foreach ($file in $files) {
     if (-not (Test-Path -LiteralPath $file)) { continue }
     $bytes = [System.IO.File]::ReadAllBytes($file)
@@ -167,7 +172,14 @@ foreach ($file in $files) {
     #    A preceding slash is excluded -- `[^\s/]` rather than `\S` -- so a
     #    `////` banner comment is not flagged. `\S///` matched every one of them,
     #    because the third slash of the banner is itself a non-space character.
-    if ([System.IO.Path]::GetExtension($file) -eq '.rs') {
+    #    A file that PARSES doc comments must contain the sequence this rule
+    #    looks for -- `strip_prefix("///")` puts a quote directly against the
+    #    marker, and so does every test case feeding it a sample line. There is
+    #    no textual way to tell those from the welded edit above, so such a file
+    #    opts out by marker rather than by obfuscating its own literals with
+    #    escapes. The opt-out is narrow: it skips this rule and nothing else.
+    if ([System.IO.Path]::GetExtension($file) -eq '.rs' -and
+        -not $text.Contains($AllowGluedDocMarker)) {
         $glued = [regex]::Match($text, '[^\s/]///')
         if ($glued.Success) {
             $prefix = $text.Substring(0, $glued.Index)
