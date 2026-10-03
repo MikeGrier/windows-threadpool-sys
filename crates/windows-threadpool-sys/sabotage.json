@@ -54,14 +54,14 @@
       "expect": "caught",
       "why": "A typo in WINDOWS_THREADPOOL_TRACE_HOOKS must refuse, not silently patch whichever stub happens to be first in the table. The first entry is the worker park, the hottest path in the pool, so this mistake would be both invisible and maximally perturbing.",
       "find": [
-        "    let Some(index) = HOOKS.iter().position(|(_, name, _)| *name == label) else {",
+        "    let Some(index) = HOOKS.iter().position(|(_, name)| *name == label) else {",
         "        return Err(Refusal::NotFound);",
         "    };"
       ],
       "replace": [
         "    let index = HOOKS",
         "        .iter()",
-        "        .position(|(_, name, _)| *name == label)",
+        "        .position(|(_, name)| *name == label)",
         "        .unwrap_or(0);"
       ]
     },
@@ -281,15 +281,32 @@
       ]
     },
     {
+      "name": "the quiesce stops believing a thread it never suspended is a stranger",
+      "file": "src/trace/hook.rs",
+      "expect": "caught",
+      "why": "The snapshot is taken while the process runs and the suspend loop runs with its targets still running, so a listed thread can create another before it is itself suspended. That newcomer is in neither the snapshot nor the held set, so it is running while fourteen bytes of live code are written, and the instruction-pointer check never sees it because that walks only suspended threads. The sweep refuses on any thread it did not suspend. This patch makes every thread look known, which is the sweep present but blind -- the shape the defect would really take, since deleting the block outright is the easier thing to notice in review.",
+      "find": [
+        "                    let known = id == self_thread || ids.contains(&id);"
+      ],
+      "replace": [
+        "                    let known = true;"
+      ]
+    },
+    {
       "name": "a claim that pinned nothing registers the pool again after the release",
       "file": "src/heal.rs",
       "expect": "caught",
       "why": "The pre-release claim exists so the pool survives the release: a claim holding an entry holds that entry's repair work object, which is a bound object, and CloseThreadpool defers the free until every bound object is gone. A claim holding none pins nothing, so by the time the marking pass runs the pool may be freed -- and this patch is the retry that would then call CreateThreadpoolWork with an environment naming it. The guard drives the difference rather than the symptom: it lifts the forced allocation failure in the before-release hook, so the removed retry would succeed and the release would report tracked, where the correct behaviour reports untracked and fail-fast says so.",
       "find": [
+        "        pub(crate) fn owe_repair_claimed(&self) -> bool {",
+        "            let Some(entry) = &self.entry else {",
         "                crate::trace_record!(\"heal\", \"cancel-untracked\", self.key);",
         "                return false;"
       ],
+      "whyThisAnchor": "Anchored on the function signature as well as the body, because `owe_repair_untracked` emits the same record and returns the same value two screens away -- the shorter pattern matched twice and the harness refused it. A sabotage that patches the wrong one of two near-identical sites inverts its own conclusion.",
       "replace": [
+        "        pub(crate) fn owe_repair_claimed(&self) -> bool {",
+        "            let Some(entry) = &self.entry else {",
         "                return self.owe_repair_untracked();"
       ]
     },

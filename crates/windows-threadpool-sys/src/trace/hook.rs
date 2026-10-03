@@ -253,14 +253,86 @@ pub(crate) enum Refusal {
     NotQuiesced = 6,
 }
 
+/// Drop **this** thread from the enumeration, to stand in for one created after
+/// it. Zero omits nothing.
+///
+/// The sweep in [`quiesce_once`] refuses when it meets a thread the snapshot did
+/// not list. The real way to produce one is to have a listed thread spawn
+/// another before it is itself suspended, which is a race no test can land on
+/// demand -- so the *effect* is produced instead, by removing an id the snapshot
+/// did list. From the sweep's side the two are identical: a live thread it did
+/// not suspend.
+///
+/// **Keyed to one id rather than "drop the last one", and both halves of that
+/// matter.** An unkeyed flag perturbs whichever install happens to be running,
+/// and the registry of test threads is process-wide. Worse, it is not even
+/// faithful: an arbitrary dropped id may belong to a thread that has since
+/// exited, and `install_batch` retries sixteen times -- so the stranger stops
+/// existing and the install succeeds. Measured at 32 test threads: 4 failures in
+/// 20 runs, every one of them `Ok(())` where a refusal was required. The caller
+/// names a thread it is itself keeping alive, so the stranger is there for every
+/// attempt.
+///
+/// Without this the guard has no test at all. Measured, before it existed:
+/// making the sweep blind (`known = true`) left all 292 lib tests passing, so a
+/// sabotage of it would have been scored SURVIVED and the manifest entry
+/// claiming otherwise would have been a false claim.
+#[cfg(test)]
+pub(super) static OMIT_THREAD_FROM_SNAPSHOT: std::sync::atomic::AtomicU32 =
+    std::sync::atomic::AtomicU32::new(0);
+
+/// `ntdll!NtGetNextThread`, the allocation-free way to walk this process's
+/// threads.
+///
+/// `(ProcessHandle, ThreadHandle, DesiredAccess, HandleAttributes, Flags,
+/// NewThreadHandle)`. Used only by [`quiesce_once`], which needs an enumeration
+/// it can run with other threads suspended -- see the sweep there for why a
+/// second toolhelp snapshot would not do.
+type NtGetNextThread = unsafe extern "system" fn(
+    *mut core::ffi::c_void,
+    *mut core::ffi::c_void,
+    u32,
+    u32,
+    u32,
+    *mut *mut core::ffi::c_void,
+) -> i32;
+
+/// Compare two labels in a `const`, which `==` on `&str` cannot do here.
+///
+/// Exists only for the arity assertions generated beside the hook table.
+const fn label_eq(a: &str, b: &str) -> bool {
+    let (a, b) = (a.as_bytes(), b.as_bytes());
+    if a.len() != b.len() {
+        return false;
+    }
+    let mut i = 0;
+    while i < a.len() {
+        if a[i] != b[i] {
+            return false;
+        }
+        i += 1;
+    }
+    true
+}
+
+/// How many arguments the forwarding shape carries.
+///
+/// Twelve, which is more than any function hooked here takes
+/// (`NtCreateWorkerFactory`, the widest, takes ten).
+const FORWARD_ARITY: usize = 12;
+
 /// Forwarding shape for every hooked stub.
 ///
-/// Twelve `usize` arguments, which is more than any function hooked here
-/// takes (`NtCreateWorkerFactory`, the widest, takes ten). Passing more
-/// arguments than the callee reads is harmless -- the extra stack slots are
-/// written by this module's own frame and never read by anyone -- and it
-/// removes the need for a per-function signature, which is the part of a hook
-/// that is easy to get subtly wrong.
+/// Passing more arguments than the callee reads is harmless -- the extra stack
+/// slots are written by this module's own frame and never read by anyone -- so
+/// one shape serves every trampoline.
+///
+/// **This reasoning is about the outgoing call only, and an earlier revision of
+/// this comment used it to justify the incoming side too.** It does not carry:
+/// a hook *declared* with twelve arguments and planted over a three-argument
+/// stub reads incoming stack slots the caller never had to supply. Each hook is
+/// now declared with its own stub's arity where this crate can establish it;
+/// see the note under the table.
 ///
 /// The arguments are forwarded, never interpreted, with the single exception
 /// of the first: for every function here that is the worker factory handle.
@@ -306,27 +378,49 @@ static FIRED: [AtomicU32; HOOKS.len()] = [const { AtomicU32::new(0) }; HOOKS.len
 pub(crate) fn fired(label: &str) -> u32 {
     HOOKS
         .iter()
-        .position(|(_, name, _)| *name == label)
+        .position(|(_, name)| *name == label)
         .map_or(0, |index| FIRED[index].load(Ordering::Relaxed))
+}
+
+/// Maps one argument name to its type, so a parameter *list* can become a type
+/// list inside the `hooks!` table below. Every hooked argument is a `usize`.
+macro_rules! arg_ty {
+    ($ignored:ident) => {
+        usize
+    };
 }
 
 /// Generates one hook function per stub, each recording an enter/leave pair
 /// around a forward to its own trampoline.
 macro_rules! hooks {
-    ($($index:expr => $symbol:literal, $label:literal, $carries_handle:literal, $name:ident;)*) => {
+    ($($index:expr => $symbol:literal, $label:literal, $carries_handle:literal, $name:ident,
+       ($($arg:ident),*);)*) => {
         $(
             /// Records the call, forwards it unchanged, records the status.
+            ///
+            /// **Declared with the arity of the stub it is planted over**, which
+            /// the table supplies. Forwarding more arguments than a callee reads
+            /// is harmless and this module relies on it; *receiving* more than
+            /// the caller passed is a different thing and is not harmless. A
+            /// twelve-argument hook planted over a three-argument stub reads
+            /// incoming stack slots the caller never had to supply: on x64 those
+            /// land inside the caller's own frame, so it reads stale bytes
+            /// rather than faulting, which is why it was never seen to
+            /// misbehave and why it was still wrong.
             ///
             /// SAFETY: this is reached only by a jump planted over an `ntdll`
             /// syscall stub, so the caller's expectations are that stub's.
             /// Every argument is forwarded untouched to a trampoline that
             /// issues the same system call.
             #[allow(clippy::too_many_arguments)]
-            unsafe extern "system" fn $name(
-                a1: usize, a2: usize, a3: usize, a4: usize, a5: usize, a6: usize,
-                a7: usize, a8: usize, a9: usize, a10: usize, a11: usize, a12: usize,
-            ) -> i32 {
+            unsafe extern "system" fn $name($($arg: usize),*) -> i32 {
                 FIRED[$index].fetch_add(1, Ordering::Relaxed);
+                // Collected so the body below can be written once for every
+                // arity. Indexing past the end is impossible: the reads are
+                // `get`, and the pad is what the fixed-width forward needs.
+                let args = [$($arg),*];
+                let a1 = args[0];
+                let a2 = args.get(1).copied().unwrap_or(0);
                 // Only the worker-factory calls carry a factory handle in
                 // their first argument. Storing one from a stub that does not
                 // -- the self-test entry takes an out-pointer there -- would
@@ -345,8 +439,19 @@ macro_rules! hooks {
                 let status = if raw == 0 {
                     0
                 } else {
+                    // Padded out to the fixed forwarding width. This is the
+                    // direction that *is* harmless: the trampoline reads only
+                    // what its system call takes, and the slots beyond that are
+                    // written by this frame and read by nobody.
+                    let mut full = [0usize; FORWARD_ARITY];
+                    full[..args.len()].copy_from_slice(&args);
                     let call: Forward = unsafe { std::mem::transmute::<usize, Forward>(raw) };
-                    unsafe { call(a1, a2, a3, a4, a5, a6, a7, a8, a9, a10, a11, a12) }
+                    unsafe {
+                        call(
+                            full[0], full[1], full[2], full[3], full[4], full[5], full[6],
+                            full[7], full[8], full[9], full[10], full[11],
+                        )
+                    }
                 };
                 record(TARGET, concat!($label, "-leave"), a1 as u64, status as u32 as u64);
                 if $label == "associate" && status >= 0 {
@@ -366,27 +471,95 @@ macro_rules! hooks {
                     //
                     // SAFETY: the call returned success, so the kernel wrote
                     // through the out-parameter and has finished with it.
-                    let flag = unsafe { already_signalled(a8) };
-                    record(TARGET, "associate-already-signalled", flag, a3 as u64);
+                    // `get` rather than indexing, because this body is compiled
+                    // for every arity in the table and a three-argument hook has
+                    // no eighth slot. That it is never `None` for the hook that
+                    // actually takes this branch is asserted below, at compile
+                    // time, so the fallback cannot quietly swallow a mistake.
+                    if let (Some(&signalled), Some(&packet)) = (args.get(7), args.get(2)) {
+                        let flag = unsafe { already_signalled(signalled) };
+                        record(TARGET, "associate-already-signalled", flag, packet as u64);
+                    }
                 }
                 status
             }
         )*
 
-        /// Every stub this module knows how to hook: index, exported name, the
-        /// label its records carry, and the function planted over it.
-        const HOOKS: &[(&str, &str, Forward)] = &[
-            $(($symbol, $label, $name),)*
+        /// No stub may declare more arguments than the forward can carry.
+        ///
+        /// The pad above would panic at the `copy_from_slice` otherwise, inside
+        /// a hook planted over a live system call -- which is the worst place in
+        /// this crate for a runtime failure. A table entry that outgrows the
+        /// forwarding width fails the build instead.
+        $(
+            const _: () = assert!(
+                [$(stringify!($arg)),*].len() <= FORWARD_ARITY,
+                "a hook declares more arguments than the forwarding shape carries"
+            );
+        )*
+
+        /// The `associate` hook reads its eighth argument, so it must have one.
+        ///
+        /// Without this, narrowing that entry's arity below eight would compile:
+        /// the read is a `get` whose `None` arm does nothing, so the record
+        /// would simply stop being emitted and every test of it would still
+        /// pass. The check belongs at the arity, which is the thing that would
+        /// change.
+        $(
+            const _: () = assert!(
+                !label_eq($label, "associate") || [$(stringify!($arg)),*].len() >= 8,
+                "the associate hook reads AlreadySignaled, its eighth argument"
+            );
+        )*
+
+        /// Every stub this module knows how to hook: exported name and the
+        /// label its records carry, in index order.
+        ///
+        /// The replacement function is **not** stored here. Each one now has its
+        /// own stub's signature, so there is no single function type the column
+        /// could have; its address is reached through [`hook_address`] instead.
+        const HOOKS: &[(&str, &str)] = &[
+            $(($symbol, $label),)*
         ];
+
+        /// The address of the function planted over the stub at `index`.
+        ///
+        /// A function rather than a table column because casting a function to
+        /// an integer is not something a `const` can do; at run time it is
+        /// ordinary. Returns zero for an index outside the table, which cannot
+        /// happen -- every caller derives its index from `HOOKS` -- and is a
+        /// refusal rather than a panic if it ever did, because this runs beside
+        /// code that patches live system calls.
+        fn hook_address(index: usize) -> usize {
+            match index {
+                $($index => {
+                    // Bound to the hook's own pointer type before the integer
+                    // cast: a function *item* cannot be cast to an integer
+                    // directly, and there is no longer one shared signature to
+                    // route it through.
+                    let planted: unsafe extern "system" fn($(arg_ty!($arg)),*) -> i32 = $name;
+                    planted as usize
+                })*
+                _ => 0,
+            }
+        }
     };
 }
 
+// The final column is the stub's argument list, which becomes the hook's own
+// signature. Where a stub's arity is not something this crate can establish, it
+// is left at the full forwarding width -- see the note below the table.
 hooks! {
-    0 => "NtWaitForWorkViaWorkerFactory", "park", true, hook_park;
-    1 => "NtReleaseWorkerFactoryWorker", "release", true, hook_release;
-    2 => "NtWorkerFactoryWorkerReady", "ready", true, hook_ready;
-    3 => "NtSetInformationWorkerFactory", "set-info", true, hook_set_info;
-    4 => "NtShutdownWorkerFactory", "shutdown", true, hook_shutdown;
+    0 => "NtWaitForWorkViaWorkerFactory", "park", true, hook_park,
+        (a1, a2, a3, a4, a5, a6, a7, a8, a9, a10, a11, a12);
+    1 => "NtReleaseWorkerFactoryWorker", "release", true, hook_release,
+        (a1, a2, a3, a4, a5, a6, a7, a8, a9, a10, a11, a12);
+    2 => "NtWorkerFactoryWorkerReady", "ready", true, hook_ready,
+        (a1, a2, a3, a4, a5, a6, a7, a8, a9, a10, a11, a12);
+    3 => "NtSetInformationWorkerFactory", "set-info", true, hook_set_info,
+        (a1, a2, a3, a4, a5, a6, a7, a8, a9, a10, a11, a12);
+    4 => "NtShutdownWorkerFactory", "shutdown", true, hook_shutdown,
+        (a1, a2, a3, a4, a5, a6, a7, a8, a9, a10, a11, a12);
     // The facility's own positive control, and not a worker-factory call at
     // all. `NtQueryTimerResolution` was chosen because nothing else in a Rust
     // process calls it: a self-test that hooked a busy stub would flood the
@@ -394,13 +567,45 @@ hooks! {
     // removed. It is in the table rather than beside the test so that a run on
     // an unfamiliar Windows build can verify the mechanism end to end before
     // trusting what the other five report.
-    5 => "NtQueryTimerResolution", "selftest", false, hook_selftest;
+    //
+    // Three arguments, and this crate can say so from its own code rather than
+    // from a header it does not own: `call_selftest` invokes the stub through a
+    // three-argument pointer and asserts the kernel wrote all three
+    // out-parameters.
+    5 => "NtQueryTimerResolution", "selftest", false, hook_selftest, (a1, a2, a3);
     // The wait registration itself, and the one entry here whose *return
     // value* is the interesting part rather than its arguments. Its first
     // argument is a wait-completion packet, not a factory, so it must not
     // teach `counts` a handle.
-    6 => "NtAssociateWaitCompletionPacket", "associate", false, hook_associate;
+    //
+    // Eight arguments, which this module already depends on: `AlreadySignaled`
+    // is the eighth, and `already_signalled` dereferences it. A hook declaring
+    // fewer could not read it at all.
+    6 => "NtAssociateWaitCompletionPacket", "associate", false, hook_associate,
+        (a1, a2, a3, a4, a5, a6, a7, a8);
 }
+
+/// Why five of the seven stubs above still take the full forwarding width.
+///
+/// Not an oversight, and not the same judgement as the two that do not. The
+/// five worker-factory calls are undocumented, and at least one of them --
+/// `NtWaitForWorkViaWorkerFactory` -- has been described with different
+/// argument counts on different Windows versions. Declaring too *many*
+/// arguments reads stale bytes from the caller's frame and forwards values the
+/// kernel ignores. Declaring too *few* silently drops a real argument, and on
+/// that particular stub the result would be every pool worker parking with a
+/// zeroed parameter: a far worse failure, in the exact code path this facility
+/// exists to observe.
+///
+/// So the rule is: narrow a hook to a stub's real arity only where this crate
+/// can establish that arity from something it owns. `selftest` qualifies
+/// because `call_selftest` calls it directly; `associate` qualifies because
+/// `already_signalled` reads its eighth argument. Nothing here establishes the
+/// other five, so they keep the conservative upper bound.
+///
+/// Narrowing them needs a source for the arity that is good on every supported
+/// Windows version, which is a different kind of work from this change.
+const _ARITY_RATIONALE: () = ();
 
 /// `NtAssociateWaitCompletionPacket`'s eighth argument is a `PBOOLEAN`
 /// out-parameter, `AlreadySignaled`.
@@ -621,6 +826,30 @@ fn quiesce_once<T>(ranges: &[(usize, usize)], patch: impl FnOnce() -> T) -> Opti
         unsafe { CloseHandle(snap) };
         enumerated = started && !overflowed;
     }
+    // Stands in for a thread created between the snapshot and the suspension.
+    // Applied after `enumerated` is decided, so this weakens what gets suspended
+    // without pretending the enumeration itself failed. `retain` reorders
+    // nothing and allocates nothing.
+    #[cfg(test)]
+    {
+        let omitted = OMIT_THREAD_FROM_SNAPSHOT.load(Ordering::SeqCst);
+        if omitted != 0 {
+            ids.retain(|&id| id != omitted);
+        }
+    }
+
+    // Resolved **now**, while allocation is still safe, because the sweep that
+    // uses it runs with threads stopped. `ntdll_proc` allocates a NUL-terminated
+    // copy of the name and calls `GetProcAddress`, which takes the loader lock;
+    // either one taken inside the suspended window can deadlock against a thread
+    // suspended while holding it, which is the hazard this whole phase is
+    // arranged around.
+    let next_thread: Option<NtGetNextThread> = ntdll_proc("NtGetNextThread").map(|address| {
+        // SAFETY: the export exists in every supported `ntdll` and its
+        // signature is the one declared on the type alias.
+        unsafe { std::mem::transmute::<usize, NtGetNextThread>(address) }
+    });
+
     let mut held: Vec<*mut core::ffi::c_void> = Vec::with_capacity(ids.len());
 
     // Phase two: suspend, patch, resume. **Nothing in here may allocate.**
@@ -675,6 +904,77 @@ fn quiesce_once<T>(ranges: &[(usize, usize)], patch: impl FnOnce() -> T) -> Opti
             break;
         }
         held.push(thread);
+    }
+
+    // Every thread the snapshot listed is stopped. **That is not the same as
+    // every thread being stopped**, and the difference is the one this block
+    // closes. The snapshot is taken while the process runs, and the suspend loop
+    // above runs with its targets still running, so a thread listed there can
+    // create another before it is itself suspended. The newcomer is in neither
+    // the snapshot nor `held`: it is running, and the instruction-pointer check
+    // below never sees it, because that walks only threads that were suspended.
+    //
+    // So the thread set is swept again here, now that nothing we know of is
+    // running, and any stranger refuses the attempt. `install_batch` retries, by
+    // which time the newcomer is in the fresh snapshot and gets suspended like
+    // any other.
+    //
+    // **`NtGetNextThread` rather than a second toolhelp snapshot**, and that is
+    // forced rather than chosen. Re-enumerating with
+    // `CreateToolhelp32Snapshot` allocates, and an allocation here deadlocks the
+    // process against a thread suspended while holding the allocator lock --
+    // the hazard this phase is built to avoid, which an earlier version of this
+    // function already hit once. The `Nt` walk takes a handle and a thread id
+    // and touches no user-mode heap or lock.
+    //
+    // Fails closed when the export cannot be resolved, matching the rest of this
+    // module: an unverifiable precondition is not a satisfied one.
+    if quiesced {
+        use windows_sys::Win32::System::Threading::{GetCurrentProcess, GetThreadId};
+        /// `THREAD_QUERY_LIMITED_INFORMATION`, all `GetThreadId` needs.
+        const QUERY_LIMITED: u32 = 0x0800;
+
+        match next_thread {
+            None => quiesced = false,
+            Some(next) => {
+                // SAFETY: a pseudo-handle with no lifetime and no preconditions.
+                let process = unsafe { GetCurrentProcess() };
+                let mut cursor: *mut core::ffi::c_void = std::ptr::null_mut();
+                loop {
+                    let mut found: *mut core::ffi::c_void = std::ptr::null_mut();
+                    // SAFETY: `process` is this process, `cursor` is null on the
+                    // first call and a handle this loop owns afterwards, and
+                    // `found` is a live local the call writes through.
+                    let status = unsafe { next(process, cursor, QUERY_LIMITED, 0, 0, &mut found) };
+                    if !cursor.is_null() {
+                        // SAFETY: owned by this loop and not used again; the
+                        // walk took its own reference for the next step.
+                        unsafe { CloseHandle(cursor) };
+                    }
+                    if status < 0 || found.is_null() {
+                        // A non-success status ends the walk. Only
+                        // STATUS_NO_MORE_ENTRIES is expected, and distinguishing
+                        // it would not change what happens: the sweep has seen
+                        // every thread it is going to see.
+                        break;
+                    }
+                    // SAFETY: `found` is a live thread handle opened for query.
+                    let id = unsafe { GetThreadId(found) };
+                    let known = id == self_thread || ids.contains(&id);
+                    if !known {
+                        quiesced = false;
+                        // SAFETY: owned here and not used again.
+                        unsafe { CloseHandle(found) };
+                        break;
+                    }
+                    cursor = found;
+                }
+                if !cursor.is_null() {
+                    // SAFETY: the last handle the walk produced, owned here.
+                    unsafe { CloseHandle(cursor) };
+                }
+            }
+        }
     }
 
     // Every other thread is stopped. That is still not enough to write over
@@ -767,7 +1067,8 @@ fn prepare(index: usize) -> Result<Prepared, Refusal> {
         VirtualFree, VirtualProtect,
     };
 
-    let (symbol, _, hook) = HOOKS[index];
+    let (symbol, _) = HOOKS[index];
+    let hook = hook_address(index);
     let Some(entry) = ntdll_proc(symbol) else {
         return Err(Refusal::NotFound);
     };
@@ -838,7 +1139,7 @@ fn prepare(index: usize) -> Result<Prepared, Refusal> {
     let mut patch = [0_u8; PATCH_LEN];
     patch[0] = 0xFF;
     patch[1] = 0x25;
-    patch[6..].copy_from_slice(&(hook as usize).to_le_bytes());
+    patch[6..].copy_from_slice(&hook.to_le_bytes());
 
     // Note what is deliberately NOT done here: opening the target page for
     // writing. `VirtualProtect` acts on whole pages, so two stubs that share
@@ -1153,7 +1454,7 @@ pub(crate) fn factory_handle() -> usize {
 /// byte array the test wrote itself.
 #[cfg(test)]
 pub(crate) fn stub_entry(label: &str) -> Option<*const u8> {
-    let (symbol, _, _) = HOOKS.iter().find(|(_, name, _)| *name == label)?;
+    let (symbol, _) = HOOKS.iter().find(|(_, name)| *name == label)?;
     ntdll_proc(symbol).map(|found| found as *const u8)
 }
 
@@ -1181,7 +1482,7 @@ pub(crate) fn stub_entry(label: &str) -> Option<*const u8> {
 pub(crate) fn unhookable_stub_entry() -> Option<*const u8> {
     const SYMBOL: &str = "NtQueryDefaultLocale";
     assert!(
-        !HOOKS.iter().any(|(symbol, _, _)| *symbol == SYMBOL),
+        !HOOKS.iter().any(|(symbol, _)| *symbol == SYMBOL),
         "{SYMBOL} is now in HOOKS, so this module can patch it and it is no \
          longer a canary for the shape Windows shipped -- pick another export \
          that is not in the table"
@@ -1232,13 +1533,13 @@ pub(crate) fn call_selftest() -> (i32, u32, u32, u32) {
 pub(crate) fn installed_by_label(label: &str) -> bool {
     HOOKS
         .iter()
-        .position(|(_, name, _)| *name == label)
+        .position(|(_, name)| *name == label)
         .is_some_and(|index| TRAMPOLINES[index].load(Ordering::Acquire) != 0)
 }
 
 #[cfg(test)]
 pub(crate) fn install_by_label(label: &str) -> Result<(), Refusal> {
-    let Some(index) = HOOKS.iter().position(|(_, name, _)| *name == label) else {
+    let Some(index) = HOOKS.iter().position(|(_, name)| *name == label) else {
         return Err(Refusal::NotFound);
     };
     install_batch(&[index])
@@ -1294,7 +1595,7 @@ pub(crate) fn install_requested() {
         return;
     }
     let mut chosen: Vec<usize> = Vec::new();
-    for (index, (_, label, _)) in HOOKS.iter().enumerate() {
+    for (index, (_, label)) in HOOKS.iter().enumerate() {
         if !wanted.iter().any(|want| *want == "*" || want == label) {
             continue;
         }
@@ -1537,7 +1838,7 @@ pub(crate) fn counts() -> bool {
     // SAFETY: the name resolved in `ntdll` and this is its documented shape.
     let query: Query = unsafe { std::mem::transmute::<usize, Query>(raw) };
     let handle = FACTORY.load(Ordering::Relaxed);
-    for (index, (_, label, _)) in HOOKS.iter().enumerate() {
+    for (index, (_, label)) in HOOKS.iter().enumerate() {
         let count = fired(label);
         if count != 0 {
             // Deliberately a count and not just the records: the buffer evicts,

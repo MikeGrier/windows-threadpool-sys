@@ -734,6 +734,80 @@ fn a_hooked_stub_records_both_ends_and_still_performs_its_syscall_body() {
     );
 }
 
+/// A thread the snapshot did not list refuses the install.
+///
+/// `M-T11.6`. The enumeration runs while the process runs, and the suspend loop
+/// runs with its targets still running, so a listed thread can create another
+/// before it is itself suspended. That newcomer is in neither the snapshot nor
+/// the suspended set: it is executing while fourteen bytes of live code are
+/// written, and the instruction-pointer check cannot see it, because that walks
+/// only threads that were suspended.
+///
+/// **The race cannot be landed on demand, so the effect is produced instead.**
+/// `OMIT_ONE_FROM_SNAPSHOT` drops one id the snapshot did list, which from the
+/// sweep's side is indistinguishable from a thread created after it: a live
+/// thread the quiesce did not suspend.
+///
+/// **Both directions, in one test**, because each is useless alone. A guard that
+/// refuses everything would satisfy the first assertion and make the facility
+/// unusable; one that refuses nothing is the defect itself, and that is not
+/// hypothetical -- making the sweep blind left the whole lib suite passing,
+/// which is why this test exists rather than a `sabotage.json` entry alone.
+///
+/// The stranger is a thread this test owns and keeps parked for the duration,
+/// because `install_batch` retries sixteen times: an omitted id belonging to a
+/// thread that happens to exit stops being a stranger partway through, and the
+/// install then succeeds. That is not a hypothetical -- it is what the first
+/// version of this test did, and it failed 4 runs in 20 at 32 test threads.
+///
+/// Uses `shutdown`, a label no other test installs, so the refusal leaves the
+/// process exactly as it found it.
+#[cfg(feature = "trace")]
+#[test]
+fn a_thread_the_snapshot_missed_refuses_the_install() {
+    use super::hook::{OMIT_THREAD_FROM_SNAPSHOT, Refusal, install_by_label, installed_by_label};
+    use windows_sys::Win32::System::Threading::GetCurrentThreadId;
+
+    assert!(
+        !installed_by_label("shutdown"),
+        "this test needs a label nothing has installed, or it meets a refusal from the \
+         recogniser instead of the one under test"
+    );
+
+    // A thread of this test's own, parked until it is told to leave, so the
+    // omitted id names something that is still there on every attempt.
+    let (id_tx, id_rx) = mpsc::channel();
+    let (go_tx, go_rx) = mpsc::channel::<()>();
+    let parked = std::thread::spawn(move || {
+        // SAFETY: no preconditions.
+        id_tx.send(unsafe { GetCurrentThreadId() }).ok();
+        // Returns on either a send or a hang-up, so this cannot outlive the test.
+        go_rx.recv().ok();
+    });
+    let stranger = id_rx
+        .recv_timeout(PROBE_BOUND)
+        .expect("the parked thread reported its id");
+
+    OMIT_THREAD_FROM_SNAPSHOT.store(stranger, std::sync::atomic::Ordering::SeqCst);
+    let refused = install_by_label("shutdown");
+    OMIT_THREAD_FROM_SNAPSHOT.store(0, std::sync::atomic::Ordering::SeqCst);
+
+    drop(go_tx);
+    parked.join().expect("the parked thread exited");
+
+    assert_eq!(
+        refused,
+        Err(Refusal::NotQuiesced),
+        "a live thread the quiesce did not suspend must refuse the patch; any other answer \
+         means the sweep did not notice it, and the fourteen bytes would have been written \
+         with that thread running"
+    );
+    assert!(
+        !installed_by_label("shutdown"),
+        "a refused install must leave the stub alone"
+    );
+}
+
 /// An install refuses, and leaves `ntdll` alone, when the name is not there.
 #[cfg(feature = "trace")]
 #[test]

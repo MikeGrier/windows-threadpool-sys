@@ -971,7 +971,33 @@ comment that the code next to it does not keep.
   pool pointer whose last member has just been released. Reachable only under allocation failure,
   which is why it is stated rather than assumed.
 
-- [ ] **M-T11.5** -- **Give each hook the arity of the stub it is planted over.** Every replacement
+- [x] **M-T11.5** -- **Give each hook the arity of the stub it is planted over.** Done 2026-10-03,
+      and **deliberately only where the arity is establishable** -- read the next paragraph before
+      treating the remaining five as an oversight.
+
+  **What landed.** The `hooks!` table gained an argument-list column that becomes each hook's own
+  signature. `selftest` declares three and `associate` eight. Two `const` assertions sit beside the
+  table: no entry may exceed the forwarding width, and the `associate` entry may not drop below
+  eight, since it reads `AlreadySignaled` through a `get` whose `None` arm would otherwise make the
+  record quietly stop being emitted with every test still passing. Both verified by sabotage: each
+  fails the build with its own message.
+
+  **The other five keep the full width, and that is a decision rather than a gap.** Their stubs are
+  undocumented and at least `NtWaitForWorkViaWorkerFactory` has been described with different
+  argument counts on different Windows versions. Declaring too many reads stale bytes from the
+  caller's frame and forwards values the kernel ignores; declaring too few silently drops a real
+  argument, and on that stub the result is every pool worker parking with a zeroed parameter -- in
+  the exact path this facility exists to observe. So the rule is to narrow only where this crate
+  establishes the arity from something it owns: `call_selftest` calls its stub directly, and
+  `already_signalled` reads the eighth argument of the other.
+
+  **`HOOKS` no longer stores the replacement function.** With per-stub signatures there is no single
+  function type for that column, so the address is reached through a generated `hook_address`; a
+  `const` cannot cast a function to an integer, which is why it is a function.
+
+  > **DECISION TO RAISE: narrowing the remaining five needs an arity source good on every supported
+  > Windows version.** That is a different kind of work from this item -- acquiring and validating
+  > an external contract, not editing a table -- and is not queued. Say if it is wanted. Every replacement
       is a twelve-argument `extern "system"` fn, but the stubs take fewer. Forwarding twelve
   arguments *to* a smaller callee is fine; *receiving* twelve from a caller that passed three is
   not -- the hook reads incoming stack slots the caller never had to supply. On x64 those slots
@@ -979,7 +1005,25 @@ comment that the code next to it does not keep.
   this has never been seen to misbehave and why it is still wrong. The macro already varies
   per-hook data; arity is one more column.
 
-- [ ] **M-T11.6** -- **Make the quiesce account for threads created while it is enumerating.** The
+- [x] **M-T11.6** -- **Make the quiesce account for threads created while it is enumerating.**
+      Done 2026-10-03. After the suspend loop, the thread set is swept again and any thread the
+      quiesce did not suspend refuses the attempt; `install_batch`'s retry then picks it up in a
+      fresh snapshot.
+
+  **`NtGetNextThread`, not a second toolhelp snapshot, and that is forced rather than chosen.**
+  Re-enumerating with `CreateToolhelp32Snapshot` allocates, and an allocation with threads
+  suspended deadlocks against one suspended while holding the allocator lock -- the hazard this
+  phase is built around, which an earlier version of this function hit for real. The export is
+  resolved *before* anything is suspended, because `ntdll_proc` allocates and `GetProcAddress`
+  takes the loader lock. Unresolvable means refuse, matching the module's posture.
+
+  **The guard needed a test, and finding that out is the point.** Making the sweep blind
+  (`known = true`) left all 292 lib tests passing, so the `sabotage.json` entry would have claimed
+  `caught` falsely -- caught only by running it rather than assuming. The race cannot be landed on
+  demand, so `OMIT_ONE_FROM_SNAPSHOT` produces its *effect*: it drops one id the snapshot did list,
+  which from the sweep's side is indistinguishable from a thread created after it.
+  `a_thread_the_snapshot_missed_refuses_the_install` asserts both directions, and the blind sweep
+  now fails it by name. The
       installer snapshots thread IDs, then suspends that snapshot. A listed thread can create
   another before it is suspended, and the new thread is neither in the snapshot nor suspended, so
   it can execute a stub while its fourteen bytes are being written. The instruction-pointer check
