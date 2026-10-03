@@ -302,21 +302,16 @@ fn recv_one(
             windows_threadpool_sys::trace_record!("postmortem", "outstanding-begin");
             let at_failure = outstanding();
             windows_threadpool_sys::trace_record!("postmortem", "outstanding-read", at_failure);
-            // M-T5.1. Read the factory's own counters and, with them, how much
-            // undelivered work is sitting on each completion port -- the
-            // quantity the factory's create test actually consults.
+            // **The worker-factory counters and the completion-port depths used
+            // to be read here, and are gone.** They were the quantity the
+            // factory's create test actually consults, and reading them needed
+            // an undocumented entry point and an unpublished structure layout,
+            // which `windows-threadpool-sys` no longer ships -- see
+            // [This crate ships no undocumented APIs](../../../DESIGN-NOTES.md#no-undocumented-apis).
             //
-            // **Both must happen before `pool_liveness`**, and the ordering is
-            // the whole measurement rather than a tidiness preference: the
-            // liveness probe submits a work item, and submitting work is the
-            // one action measured to release this stall every time. Asking
-            // afterwards would describe a pool that had already been repaired
-            // by the question.
+            // What that costs this post-mortem is recorded with the removal, not
+            // left to be inferred from an absence: see `M-R1.1` in CHECKLIST.md.
             //
-            // Neither call dequeues anything, so reading is not consuming.
-            windows_threadpool_sys::trace::worker_factory_counts();
-            windows_threadpool_sys::trace::completion_port_depths();
-            poke_the_stalled_port();
             // The pool-liveness probe runs first, while the process is still
             // in the failed state -- asking afterwards would describe a
             // different moment.
@@ -865,103 +860,11 @@ fn hand_rolled_trigger(variant: &str) {
     drop(ring);
 }
 
-/// EXPERIMENT (M-T5.6): does an ordinary arrival wake the stalled pool?
-///
-/// `M-T5.1` and `M-T5.2` between them leave one question: the work is on the
-/// port, the factory would approve a create if asked, and nothing is scheduled
-/// to ask it. So is the route from "work arrived" to "make a worker" broken, or
-/// did it simply never fire for these particular packets?
-///
-/// Posting a packet exercises that route on demand. The measurement is the
-/// factory's **worker count**, read before and after -- not whether anything
-/// sensible runs, because a raw packet is not a real work item.
-///
-/// Enabled by `IORING_POKE_PORT`, and deliberately not on by default: the post
-/// is destructive, and a worker that does appear may dispatch garbage. That is
-/// tolerable here only because this runs inside a process that has already
-/// failed and is about to panic.
-///
-/// The wait is generous relative to what a healthy run needs -- a worker
-/// announces itself within a third of a millisecond there -- so a zero afterwards
-/// means the prompt did not work, not that the answer was missed.
-fn poke_the_stalled_port() {
-    if std::env::var_os("IORING_POKE_PORT").is_none() {
-        return;
-    }
-    windows_threadpool_sys::trace_record!("postmortem", "poke-begin");
-    // Depth 1: only the port holding the stuck work, which is the stalled
-    // pool's. The healthy control uses 0, because the port it pokes is idle.
-    // SAFETY: the obligation is that the process has already failed and is
-    // being diagnosed rather than relied upon, and that nothing in it still
-    // needs a completion port to deliver only packets its owner posted. Both
-    // hold here: this runs only under `IORING_POKE_PORT`, on the stalled arm of
-    // a postmortem whose pool has already stopped dispatching, in a test
-    // process that is torn down immediately afterwards.
-    let poked = unsafe { windows_threadpool_sys::trace::poke_completion_ports(1) };
-    windows_threadpool_sys::trace_record!("postmortem", "poke-posted", poked as u64);
-    std::thread::sleep(Duration::from_millis(250));
-    // The same counters again, so the pair brackets the post. A capture that
-    // shows identical values either side is the negative answer, and has to be
-    // distinguishable from one where the read never happened.
-    windows_threadpool_sys::trace_record!("postmortem", "poke-after");
-    windows_threadpool_sys::trace::worker_factory_counts();
-    windows_threadpool_sys::trace::completion_port_depths();
-    windows_threadpool_sys::trace_record!("postmortem", "poke-end");
-}
-
-/// EXPERIMENT (M-T5.2): the healthy control for the factory-state capture.
-///
-/// The post-mortem only fires on a stall, so every factory reading so far comes
-/// from a broken pool and there is nothing to compare it against. This records
-/// the same counters from a pool that has just worked, giving the resting value
-/// of each flag.
-///
-/// Enabled by `IORING_CAPTURE_HEALTHY` so an ordinary run is untouched. It is a
-/// *contrast*, not a matched control: this pool has already dispatched and so
-/// has a worker, where the stalled one never made its first. That difference is
-/// the point -- what is wanted is the value of these flags on a factory that is
-/// working, not a reconstruction of the stalled moment.
-fn capture_healthy_factory_state() {
-    if std::env::var_os("IORING_CAPTURE_HEALTHY").is_none() {
-        return;
-    }
-    windows_threadpool_sys::trace_record!("postmortem", "healthy-capture");
-    windows_threadpool_sys::trace::worker_factory_counts();
-    windows_threadpool_sys::trace::completion_port_depths();
-
-    // **The positive control for `M-T5.6`**, and the reason this function is
-    // worth more than a resting-state reading. At this point the default pool
-    // exists, has no workers, is permitted to create one, and its port is empty
-    // -- the same starting position as the stalled factory, minus the fault. If
-    // a posted packet makes a worker appear here and not there, the difference
-    // is the finding. If it makes no worker appear here either, then posting is
-    // simply not a stimulus that creates workers and the stalled arm proves
-    // nothing at all.
-    if std::env::var_os("IORING_POKE_PORT").is_some() {
-        windows_threadpool_sys::trace_record!("postmortem", "poke-begin");
-        // SAFETY: as the stalled arm above -- opt-in under `IORING_POKE_PORT`,
-        // in a dedicated test process that exits straight afterwards. This is
-        // the healthy control, so the pool here has not failed; what makes it
-        // sound is the second half of the obligation, that nothing in this
-        // process depends on its ports carrying only its own packets.
-        let poked = unsafe { windows_threadpool_sys::trace::poke_completion_ports(0) };
-        windows_threadpool_sys::trace_record!("postmortem", "poke-posted", poked as u64);
-        std::thread::sleep(Duration::from_millis(250));
-        windows_threadpool_sys::trace_record!("postmortem", "poke-after");
-        windows_threadpool_sys::trace::worker_factory_counts();
-        windows_threadpool_sys::trace::completion_port_depths();
-        windows_threadpool_sys::trace_record!("postmortem", "poke-end");
-    }
-
-    eprintln!("{}", windows_threadpool_sys::trace::dump());
-}
-
 #[test]
 fn dropping_with_nothing_outstanding_does_not_hang() {
     let variant = std::env::var("IORING_TRIGGER").unwrap_or_default();
     if variant.starts_with("hand-") {
         hand_rolled_trigger(&variant);
-        capture_healthy_factory_state();
         return;
     }
     let ring = IoRing::new(8, 8).expect("create ring");

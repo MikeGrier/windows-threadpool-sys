@@ -29,3 +29,45 @@ here, because the ring is what reaches the state.
 archived groups use it: such a heading is gated work with no current obligation, not an unfinished
 milestone. When this file carries milestones again, which of them are open is what the headings
 say; this preamble deliberately does not restate it, because a second copy is one nobody updates.
+
+## M-R1 -- The stall post-mortem after the hooking facility was removed
+
+Opened 2026-10-03. `windows-threadpool-sys` deleted its inline hooking facility, because this
+workspace ships no undocumented APIs and no assumptions about undocumented behaviour -- see
+[DESIGN-NOTES.md](../../DESIGN-NOTES.md#no-undocumented-apis). The reproducer in this crate was its
+real consumer, so what that costs the post-mortem is recorded here rather than left to be inferred
+from an absence.
+
+- [x] **M-R1.1** -- **Strip the post-mortem probes that depended on the hooking facility.** Done
+      2026-10-03.
+
+  **What was removed from `tests/event_delivery.rs`:**
+
+  - the worker-factory counter and completion-port depth reads taken at the moment of failure, in
+    `hand_rolled_trigger`, deliberately ordered *before* the liveness probe because submitting
+    work is the one action measured to release this stall and asking afterwards would describe a
+    pool the question had already repaired;
+  - `poke_the_stalled_port`, gated on `IORING_POKE_PORT`, which posted a packet to a stalled port
+    and read the factory's worker count either side. This is the experiment behind the recorded
+    answer that **an ordinary completion-port arrival has never been seen to recover this stall**;
+  - `capture_healthy_factory_state`, gated on `IORING_CAPTURE_HEALTHY`, the healthy-arm contrast
+    for the same reading.
+
+  **What the apparatus can no longer answer.** Whether a stalled factory has zero workers while
+  holding queued work -- the signature the investigation turned on -- and whether poking the port
+  changes that. The reproducer still detects the stall and still reports outstanding counts, ring
+  state and pool liveness; what it has lost is the ability to say *why* the pool did not dispatch.
+
+  **What survives, and where.** The captures taken with the facility are committed under
+  `windows-threadpool-sys/measurements/`, and the central finding -- the pool's first worker is
+  never created -- was reproduced independently of the hooks by an ETW kernel trace across 900
+  runs (`M26.13.19`). ETW is the documented route and is where any rebuild should start.
+
+- [ ] **M-R1.2** -- **Decide whether to rebuild the two experiments on ETW.** Not started, and
+      deliberately not scoped yet.
+
+  The two questions `M-R1.1` retired are worth answering and are not answerable in-process on
+  documented ground. An ETW kernel trace reaches both: thread-create events say whether the
+  stalled factory ever made a worker, and the same session spans the poke, so the before/after
+  contrast survives the move. Whether it is worth building depends on whether `M-T7.1` is resumed,
+  which is a decision for the engineer rather than something this item should assume.
