@@ -156,13 +156,13 @@ fn a_cancelling_release_marks_its_pool_after_the_cancellation() {
         .into_iter()
         .find(|e| e.key() == key)
         .expect("the wait member registered its pool");
-    entry.clear_repair();
+    entry.force_healed();
 
     let cleared = Arc::new(AtomicBool::new(false));
     let ticked = Arc::clone(&cleared);
     group.on_before_release(move || {
         if let Some(entry) = crate::heal::entries().into_iter().find(|e| e.key() == key) {
-            entry.clear_repair();
+            entry.force_healed();
         }
         ticked.store(true, Ordering::SeqCst);
     });
@@ -178,12 +178,12 @@ fn a_cancelling_release_marks_its_pool_after_the_cancellation() {
     // marking too early loses the pool from the registry entirely rather than
     // leaving it there with nothing owed.
     let entry = crate::heal::entries().into_iter().find(|e| e.key() == key);
-    let owed = entry.as_ref().and_then(|found| found.repair_owed_at());
+    let owed = entry.as_ref().is_some_and(|found| found.unhealed());
     if let Some(found) = entry.as_ref() {
-        found.clear_repair();
+        found.force_healed();
     }
     assert!(
-        owed.is_some(),
+        owed,
         "a repair cleared during the release left the cancellation unmarked, so the pool it may \
          have wedged owes nothing and the self-heal will never visit it (entry present: {})",
         entry.is_some()

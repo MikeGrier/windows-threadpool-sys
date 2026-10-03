@@ -1796,6 +1796,64 @@ alive long enough to *receive* that repair. Retiring it would close the repair
 object, let the pool go, and discard an owed repair at the one moment it
 matters. The retention is bounded by a single self-heal period.
 
+### Health is derived from three stamps, not stored in a flag
+
+Decided 2026-10-02 implementing `M-T9.2`. An entry carries `last_cancelled`,
+`last_started` and `last_submitted`, each written by an unconditional store, and
+nothing records "a repair is owed":
+
+```text
+unhealed()         <=>  last_cancelled != 0 && last_cancelled >= last_started
+repair_in_flight() <=>  last_submitted  >  last_started
+tick:                   if unhealed() && !repair_in_flight() { submit; stamp last_submitted }
+trampoline:             stamp last_started
+```
+
+**The flag this replaces could lose a cancellation outright.** It was set with
+`compare_exchange(0, at)` -- deliberately keeping the earliest unrepaired
+cancellation -- and cleared with an unconditional `store(0)`. The two do not
+pair. A cancellation arriving between a tick's read of the flag and its clear
+hit a slot that still held the first stamp, so the exchange did nothing, and the
+clear then erased both. The repair that tick had submitted was handed over
+*before* that second cancellation and so could not answer it, leaving a pool
+possibly severed with nothing scheduled. A store cannot fail that way, and there
+is no clear to race.
+
+**Equality reads as unhealed.** `QueryInterruptTime` has system-tick resolution,
+so a cancellation and a dispatch within one tick carry the same value and
+nothing can order them. Treating that as healthy would risk crediting a
+cancellation with a dispatch that preceded it; treating it as unhealed costs a
+redundant repair, which this crate already takes as the safe direction.
+
+**The submit guard asks whether a repair is outstanding, not whether the
+cancellation is newer than the last submission.** Both rules prevent a submit
+storm, but the first is stated against the same pair that answers "has the pool
+given it back", so there is one comparison rather than two that must agree. It
+also answers a case the other does not: a cancellation arriving while a repair
+is in flight is answered by that repair if it dispatches afterwards, and by the
+next tick if it does not.
+
+**The evidence of health is now our own work item dispatching.** The previous
+scheme watched a stamp written by *user* objects' trampolines, so a pool with no
+other traffic was indistinguishable from a wedged one. That stamp, its
+`dispatched_since` reader, and the per-callback store that maintained it are
+gone -- which also removes one atomic store from every callback this crate
+delivers.
+
+**The trampoline's context is the `PoolEntry`.** A `Box<AtomicU64>` held the
+count before, justified by its lifetime being easier to guarantee than the
+entry's. That was never true: the box was freed by the same drop as everything
+else, so while `Drop` did not drain, the box dangled too -- the indirection made
+the use-after-free smaller rather than absent, and small is what kept it hidden.
+`repair` is now the entry's **first field**, so its drain runs before any stamp
+it protects is dropped. That ordering is load-bearing and unenforced by the
+compiler; `M-T9.1` is the guard for it.
+
+**Still open:** a pool that never dispatches is submitted one repair and never
+retried, because `repair_in_flight` stays true. That is unchanged from the
+previous scheme rather than a regression, and whether to re-submit after N ticks
+is recorded as a decision to raise on `M-T9.2`.
+
 ### The healer's cadence, and why it never stops once started
 
 Decided 2026-10-01 implementing `M-T6.4`. A 250 ms period with a 250 ms

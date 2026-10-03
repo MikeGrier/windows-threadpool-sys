@@ -104,7 +104,7 @@ mod on {
     fn a_fresh_entry_owes_no_repair() {
         let pool = ThreadpoolPool::new().expect("create pool");
         let (_work, entry) = entry_for(&pool);
-        assert_eq!(entry.repair_owed_at(), None);
+        assert!(!entry.unhealed(), "nothing has cancelled on this pool");
     }
 
     #[test]
@@ -142,30 +142,72 @@ mod on {
         let pool = ThreadpoolPool::new().expect("create pool");
         let key = pool.as_raw() as usize;
         let (work, entry) = entry_for(&pool);
-        entry.owe_repair(1);
+        entry.stamp_cancelled(1);
         drop(work);
         assert!(
             crate::heal::entries().iter().any(|e| e.key() == key),
             "a repair is owed, so the entry is retained past its last object"
         );
-        // Discharging it makes the entry retirable, which is what the self-heal
-        // timer relies on.
-        entry.clear_repair();
+        // A repair dispatching after the cancellation is what discharges it --
+        // there is no clear to call. That is what makes the entry retirable,
+        // which is what the self-heal timer relies on.
+        entry.stamp_started(2);
         crate::heal::retire_idle();
         assert!(!crate::heal::entries().iter().any(|e| e.key() == key));
     }
 
+    /// The defect `M-T9.2` exists for, stated as a sequence.
+    ///
+    /// The flag this replaces was set by `compare_exchange(0, at)` -- a no-op
+    /// while a mark stood -- and cleared by an unconditional store. A
+    /// cancellation arriving between a tick's read and its clear therefore
+    /// landed nowhere: the exchange failed against the first stamp, and the
+    /// clear then erased both. The repair that tick submitted happened strictly
+    /// before that second cancellation, so it could not answer it, and the pool
+    /// was left wedged with nothing scheduled.
     #[test]
-    fn the_first_cancellation_is_the_one_remembered() {
-        // Overwriting with a later stamp could make a dispatch that genuinely
-        // followed the first cancellation look as though it preceded the second,
-        // which would suppress a repair that is still owed.
+    fn a_cancellation_during_a_tick_is_not_lost() {
         let pool = ThreadpoolPool::new().expect("create pool");
         let (work, entry) = entry_for(&pool);
-        entry.owe_repair(10);
-        entry.owe_repair(20);
-        assert_eq!(entry.repair_owed_at(), Some(10));
-        entry.clear_repair();
+
+        entry.stamp_cancelled(10);
+        assert!(entry.unhealed(), "the first cancellation stands");
+
+        // What a tick does: hands a repair to the pool. No clear.
+        entry.stamp_submitted(11);
+
+        // The cancellation the old scheme dropped on the floor, arriving while
+        // that repair is still with the pool.
+        entry.stamp_cancelled(20);
+        assert_eq!(
+            entry.last_cancelled(),
+            20,
+            "the later cancellation must move the stamp forward; the \
+             compare-exchange this replaces would have left 10 here and the \
+             tick's clear would then have erased even that"
+        );
+
+        // The repair submitted at 11 now runs. It answers the cancellation at
+        // 10 and cannot answer the one at 20, because it was handed over first.
+        entry.stamp_started(12);
+        assert_eq!(entry.last_started(), 12);
+        assert!(
+            entry.unhealed(),
+            "a repair dispatched at 12 cannot answer a cancellation at 20, so the pool is still \
+             unhealed and the next tick must submit again"
+        );
+        assert!(
+            !entry.repair_in_flight(),
+            "the submitted repair has been given back, so a fresh one may be sent"
+        );
+
+        // And a repair that does follow it settles the matter.
+        entry.stamp_submitted(21);
+        entry.stamp_started(22);
+        assert!(
+            !entry.unhealed(),
+            "a dispatch after the last cancellation heals it"
+        );
         drop(work);
     }
 
@@ -173,15 +215,49 @@ mod on {
     fn a_dispatch_after_the_cancellation_is_what_counts() {
         let pool = ThreadpoolPool::new().expect("create pool");
         let (work, entry) = entry_for(&pool);
-        entry.stamp_dispatch(5);
-        entry.owe_repair(10);
+        entry.stamp_started(5);
+        entry.stamp_cancelled(10);
         assert!(
-            !entry.dispatched_since(10),
+            entry.unhealed(),
             "a dispatch before the cancellation is no evidence the pool is live"
         );
-        entry.stamp_dispatch(11);
-        assert!(entry.dispatched_since(10));
-        entry.clear_repair();
+        entry.stamp_started(11);
+        assert!(!entry.unhealed());
+        drop(work);
+    }
+
+    /// Equal stamps read as unhealed, which costs a redundant repair rather
+    /// than risking a missed one.
+    ///
+    /// `QueryInterruptTime` has system-tick resolution -- about 15.6 ms -- so a
+    /// cancellation and a dispatch inside one tick are indistinguishable by
+    /// these values. Nothing here can say which came first.
+    #[test]
+    fn a_dispatch_in_the_same_tick_as_the_cancellation_does_not_heal_it() {
+        let pool = ThreadpoolPool::new().expect("create pool");
+        let (work, entry) = entry_for(&pool);
+        entry.stamp_started(10);
+        entry.stamp_cancelled(10);
+        assert!(
+            entry.unhealed(),
+            "same-tick stamps cannot be ordered, so this must err toward repairing"
+        );
+        drop(work);
+    }
+
+    /// A repair the pool still holds is not a reason to send another.
+    #[test]
+    fn a_repair_in_flight_blocks_a_second_submission() {
+        let pool = ThreadpoolPool::new().expect("create pool");
+        let (work, entry) = entry_for(&pool);
+        entry.stamp_cancelled(10);
+        entry.stamp_submitted(11);
+        assert!(entry.repair_in_flight());
+        entry.stamp_started(12);
+        assert!(
+            !entry.repair_in_flight(),
+            "the pool gave the repair back, so nothing is outstanding"
+        );
         drop(work);
     }
 
@@ -214,22 +290,9 @@ mod on {
 
     // --- M-T6.2: every trampoline stamps its pool before calling the closure.
 
-    use crate::timer::{ThreadpoolPeriodicTimer, ThreadpoolTimer};
     use crate::wait::{ThreadpoolWait, WaitableHandle};
-    use std::os::windows::io::AsRawHandle;
-    use std::sync::atomic::{AtomicU64, Ordering};
+    use std::sync::atomic::Ordering;
     use std::time::{Duration, Instant};
-    use windows_sys::Win32::System::Threading::SetEvent;
-
-    /// The entry for a fresh private pool, with one object held open on it.
-    ///
-    /// Returned so a second object can be created against the same pool and its
-    /// callback can read the entry the first one registered -- the entry does
-    /// not exist until some object creates it, so a callback cannot look up its
-    /// own.
-    fn pinned_entry(pool: &ThreadpoolPool) -> (ThreadpoolWork, Arc<PoolEntry>) {
-        entry_for(pool)
-    }
 
     fn spin_until(label: &str, mut done: impl FnMut() -> bool) {
         let deadline = Instant::now() + Duration::from_secs(5);
@@ -237,102 +300,6 @@ mod on {
             assert!(Instant::now() < deadline, "timed out waiting for {label}");
             std::thread::sleep(Duration::from_millis(1));
         }
-    }
-
-    #[test]
-    fn a_work_dispatch_stamps_its_pool() {
-        let pool = ThreadpoolPool::new().expect("create pool");
-        let (pin, entry) = pinned_entry(&pool);
-        let before = crate::heal::now();
-        let mut env = CallbackEnviron::new();
-        env.set_pool(&pool);
-        let work = ThreadpoolWork::new(|| {}, Some(&mut env)).expect("create work");
-        work.submit();
-        work.wait();
-        assert!(
-            entry.last_dispatch() >= before,
-            "a work callback ran, so its pool's slot must carry a stamp from it"
-        );
-        drop(work);
-        drop(pin);
-    }
-
-    #[test]
-    fn a_wait_dispatch_stamps_its_pool() {
-        let pool = ThreadpoolPool::new().expect("create pool");
-        let (pin, entry) = pinned_entry(&pool);
-        let before = crate::heal::now();
-        let mut env = CallbackEnviron::new();
-        env.set_pool(&pool);
-        let fired = Arc::new(AtomicU64::new(0));
-        let seen = Arc::clone(&fired);
-        let event = WaitableHandle::event(true, false).expect("create event");
-        let wait = ThreadpoolWait::new(
-            event,
-            move |_| {
-                seen.fetch_add(1, Ordering::SeqCst);
-            },
-            Some(&mut env),
-        )
-        .expect("create wait");
-        wait.arm(None);
-        // SAFETY: a live event owned by the wait, kept alive by this borrow.
-        let ok = unsafe { SetEvent(wait.handle().as_raw_handle()) };
-        assert_ne!(ok, 0, "SetEvent failed");
-        spin_until("the wait to fire", || fired.load(Ordering::SeqCst) == 1);
-        assert!(entry.last_dispatch() >= before);
-        wait.stop_and_drain();
-        drop(wait);
-        drop(pin);
-    }
-
-    #[test]
-    fn a_timer_dispatch_stamps_its_pool() {
-        let pool = ThreadpoolPool::new().expect("create pool");
-        let (pin, entry) = pinned_entry(&pool);
-        let before = crate::heal::now();
-        let mut env = CallbackEnviron::new();
-        env.set_pool(&pool);
-        let fired = Arc::new(AtomicU64::new(0));
-        let seen = Arc::clone(&fired);
-        let timer = ThreadpoolTimer::new(
-            move |_| {
-                seen.fetch_add(1, Ordering::SeqCst);
-            },
-            Some(&mut env),
-        )
-        .expect("create timer");
-        timer.set_after(Duration::from_millis(1));
-        spin_until("the timer to fire", || fired.load(Ordering::SeqCst) == 1);
-        assert!(entry.last_dispatch() >= before);
-        timer.stop_and_drain();
-        drop(timer);
-        drop(pin);
-    }
-
-    #[test]
-    fn a_periodic_tick_stamps_its_pool() {
-        let pool = ThreadpoolPool::new().expect("create pool");
-        let (pin, entry) = pinned_entry(&pool);
-        let before = crate::heal::now();
-        let mut env = CallbackEnviron::new();
-        env.set_pool(&pool);
-        let ticks = Arc::new(AtomicU64::new(0));
-        let seen = Arc::clone(&ticks);
-        let timer = ThreadpoolPeriodicTimer::new(
-            Duration::from_millis(1),
-            move |_| {
-                seen.fetch_add(1, Ordering::SeqCst);
-            },
-            Some(&mut env),
-        )
-        .expect("create timer");
-        timer.start();
-        spin_until("a tick", || ticks.load(Ordering::SeqCst) >= 1);
-        assert!(entry.last_dispatch() >= before);
-        timer.stop_and_drain();
-        drop(timer);
-        drop(pin);
     }
 
     // --- M-T6.3: a cancellation marks its pool as owing a repair.
@@ -353,15 +320,15 @@ mod on {
             .into_iter()
             .find(|e| e.key() == pool.as_raw() as usize)
             .expect("the wait registered its pool");
-        assert_eq!(entry.repair_owed_at(), None, "nothing owed before the call");
+        assert!(!entry.unhealed(), "nothing owed before the call");
 
         wait.arm(None);
         wait.try_cancel_pending();
         assert!(
-            entry.repair_owed_at().is_some(),
+            entry.unhealed(),
             "a cancellation may have severed this pool, so it owes a repair"
         );
-        entry.clear_repair();
+        entry.force_healed();
         // The cancel does not discharge the obligation -- it severs the pool's
         // watch without draining this object -- so the drain is still the
         // caller's to make, and under `fail-fast` the crate makes it.
@@ -386,9 +353,8 @@ mod on {
         // SAFETY: this test discharges the obligation by not depending on the
         // pool afterwards; the object is dropped immediately below.
         unsafe { wait.try_cancel_pending_no_heal_tracking() };
-        assert_eq!(
-            entry.repair_owed_at(),
-            None,
+        assert!(
+            !entry.unhealed(),
             "the untracked form must record nothing, or the `unsafe` is a lie"
         );
         wait.stop_and_drain();
@@ -415,15 +381,15 @@ mod on {
             .into_iter()
             .find(|e| e.key() == pool.as_raw() as usize)
             .expect("the member registered its pool");
-        assert_eq!(entry.repair_owed_at(), None);
+        assert!(!entry.unhealed());
 
         group.close_members_cancelling();
         assert!(
-            entry.repair_owed_at().is_some(),
+            entry.unhealed(),
             "a cancelling release passes the cancel to each member, so a wait \
              among them owes its pool a repair"
         );
-        entry.clear_repair();
+        entry.force_healed();
     }
 
     #[test]
@@ -448,9 +414,8 @@ mod on {
             .expect("the member registered its pool");
 
         group.close_members();
-        assert_eq!(
-            entry.repair_owed_at(),
-            None,
+        assert!(
+            !entry.unhealed(),
             "a draining release leaves nothing to remove, so nothing is owed"
         );
     }
@@ -482,10 +447,7 @@ mod on {
             assert_eq!(entry.repairs_run(), 0, "nothing repaired on this pool yet");
             wait.arm(None);
             wait.try_cancel_pending();
-            assert!(
-                entry.repair_owed_at().is_some(),
-                "the cancel marks the pool"
-            );
+            assert!(entry.unhealed(), "the cancel marks the pool");
         }
 
         // Waiting on *this entry's own* repair object having been dispatched,
@@ -505,14 +467,12 @@ mod on {
             "this pool's pre-created repair item to be dispatched",
             || entry.repairs_run() > 0,
         );
-        spin_until("the healer to discharge the mark", || {
-            entry.repair_owed_at().is_none()
-        });
+        spin_until("the healer to discharge the mark", || !entry.unhealed());
         wait.stop_and_drain();
     }
 
     #[test]
-    fn a_tick_skips_a_pool_that_has_dispatched_since_the_cancellation() {
+    fn a_tick_leaves_a_pool_its_own_repair_has_answered() {
         let _gate = gate();
         // The coalescing rule, driven directly rather than through the timer:
         // a dispatch after the cancellation is evidence the pool is live, so no
@@ -528,10 +488,10 @@ mod on {
             .find(|e| e.key() == pool.as_raw() as usize)
             .expect("the work registered its pool");
 
-        entry.owe_repair(10);
-        entry.stamp_dispatch(11);
+        entry.stamp_cancelled(10);
+        entry.stamp_started(11);
         assert!(
-            entry.dispatched_since(10),
+            !entry.unhealed(),
             "a dispatch after the cancellation is what the skip rests on"
         );
         crate::heal::tick_inner();
@@ -542,11 +502,10 @@ mod on {
              to it and none must be submitted -- asserted on the repair having \
              run rather than on the mark, which the tick clears either way"
         );
-        assert_eq!(
-            entry.repair_owed_at(),
-            None,
-            "the tick must discharge the mark it decided not to act on, or it \
-             would reconsider the same pool forever"
+        assert!(
+            !entry.unhealed(),
+            "the tick leaves a healed pool healed: there is no mark to clear, so \
+             it simply has nothing to do on this entry"
         );
         drop(work);
     }
@@ -563,36 +522,8 @@ mod on {
             .find(|e| e.key() == pool.as_raw() as usize)
             .expect("the work registered its pool");
         crate::heal::tick_inner();
-        assert_eq!(entry.repair_owed_at(), None);
+        assert!(!entry.unhealed());
         drop(work);
-    }
-
-    #[test]
-    fn the_stamp_lands_before_the_callback_body_runs() {
-        // The ordering the item asks for, asserted from inside the callback:
-        // a dispatch that is still running is evidence the pool is live, so a
-        // long callback must not look like silence until it returns.
-        let pool = ThreadpoolPool::new().expect("create pool");
-        let (pin, entry) = pinned_entry(&pool);
-        let observed = Arc::new(AtomicU64::new(0));
-        let recorder = Arc::clone(&observed);
-        let watched = Arc::clone(&entry);
-        let before = crate::heal::now();
-        let mut env = CallbackEnviron::new();
-        env.set_pool(&pool);
-        let work = ThreadpoolWork::new(
-            move || recorder.store(watched.last_dispatch(), Ordering::SeqCst),
-            Some(&mut env),
-        )
-        .expect("create work");
-        work.submit();
-        work.wait();
-        assert!(
-            observed.load(Ordering::SeqCst) >= before,
-            "the callback body saw no stamp, so the trampoline stamped after it"
-        );
-        drop(work);
-        drop(pin);
     }
 
     /// Force this pool's repair allocation to fail for as long as this lives.
@@ -654,10 +585,10 @@ mod on {
             .find(|e| e.key() == key)
             .expect("the retry created the entry");
         assert!(
-            entry.repair_owed_at().is_some(),
+            entry.unhealed(),
             "the recovered entry must be marked, or the repair never runs"
         );
-        entry.clear_repair();
+        entry.force_healed();
     }
 
     /// With every allocation failing, the cancellation reports the pool
@@ -707,6 +638,6 @@ mod on {
             .into_iter()
             .find(|e| e.key() == key)
             .expect("the registration created an entry");
-        entry.clear_repair();
+        entry.force_healed();
     }
 }

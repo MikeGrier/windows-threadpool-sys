@@ -267,64 +267,45 @@ Opened 2026-10-01 by a code review of this branch, which found two defects in `h
 whole test suite and a full sabotage sweep had both missed. The first is fixed; `M-T9.2` is the
 second, and `M-T9.1` is the guard both of them want.
 
-- [ ] **M-T9.2** -- **Replace the repair mark with three derived timestamps, and point the
-      trampoline at the entry.**
+- [x] **M-T9.2** -- **Replace the repair mark with three derived timestamps, and point the
+      trampoline at the entry.** Implemented 2026-10-02 to the shape recorded below.
 
-  **The defect.** `owe_repair` records a cancellation with `compare_exchange(0, at)` -- a no-op
-  while a mark is already outstanding, which is the deliberate "keep the earliest cancellation"
-  policy. But `clear_repair` is an unconditional `store(0)`. The two do not pair, so a
-  `try_cancel_pending` landing between `tick`'s read of the mark and its clear is recorded
-  **nowhere**: the CAS fails because the slot still holds the first stamp, and the clear then erases
-  both. The repair `tick` submitted happened strictly *before* that second cancellation, so it
-  cannot repair whatever it severed. A pool is left wedged with nothing scheduled, silently -- the
-  exact failure this feature exists to prevent. Both `tick` branches are affected; the
-  `dispatched_since` skip is arguably worse, because there nothing was submitted at all.
+  **What landed.** `last_cancelled`, `last_started` and `last_submitted`, each written by an
+  unconditional store. `unhealed()` is `last_cancelled != 0 && last_cancelled >= last_started`;
+  `repair_in_flight()` is `last_submitted > last_started`; `tick` submits when unhealed and nothing
+  is in flight, and **clears nothing**. The trampoline takes a `*const PoolEntry`, so all four
+  values live on the entry, and `repair` is the entry's first field so its drain runs before
+  anything it writes to is freed.
 
-  **The shape, decided 2026-10-02 (the engineer's design).** Stop storing health and derive it from
-  three monotonic stamps, each written by an **unconditional** store that cannot fail the way a CAS
-  can:
+  **Verified by sabotage, not by reading.** Restoring the keep-earliest `compare_exchange` fails
+  `a_cancellation_during_a_tick_is_not_lost` on the assertion that a later cancellation moves the
+  stamp forward. Both `heal.rs` entries in `sabotage.json` were re-anchored and re-run through the
+  harness; both are caught.
 
-  ```text
-  cancel:      last_cancelled.store(now)
-  tick:        if last_cancelled > last_started      // nothing has run since
-                  && last_cancelled > last_submitted // and one is not already in flight
-               { submit; last_submitted.store(now) }
-  trampoline:  last_started.store(now)
+  **Equality reads as unhealed**, per the first detail the item asked to decide deliberately. A
+  cancellation and a dispatch inside one `QueryInterruptTime` tick are indistinguishable, so this
+  errs toward a redundant repair; `a_dispatch_in_the_same_tick_as_the_cancellation_does_not_heal_it`
+  pins it.
 
-  healthy  <=>  last_started > last_cancelled
-  ```
+  **The submit guard is `!repair_in_flight()`, not `last_cancelled > last_submitted`.** The item
+  proposed the latter. The former is the same rule stated against the pair that already answers
+  "has the pool given it back", so there is one comparison rather than two that must agree -- and it
+  behaves better in the case the item did not reach: a cancellation arriving while a repair is in
+  flight is answered by that repair if it dispatches afterwards, and by the next tick if it does
+  not.
 
-  No clear, no CAS, no lost update. `unhealed` is the *name* of that comparison rather than a field,
-  which is [prefer a derived fact to a restated
-  one](../../.github/copilot-instructions.md) applied to state instead of prose. It also replaces a
-  weaker signal: `dispatched_since` depends on *user* objects' trampolines stamping the entry, so a
-  pool with no other activity is indistinguishable from a wedged one, whereas our own repair
-  dispatching is direct evidence.
+  **The user-dispatch signal is gone, with the tests that proved its wiring.** `stamp_dispatch`,
+  `last_dispatch` and `dispatched_since` are removed, and with them the five per-kind tests that
+  asserted each trampoline stamped its entry. They tested a mechanism this item replaces: health is
+  now evidenced by *our own* repair dispatching, which a quiet pool cannot fake. Removing it also
+  takes one atomic store off every callback the crate delivers. `Registration` is still held by the
+  work, timer, periodic-timer and I/O contexts, now purely for its `Drop`, and each field says so.
 
-  **The trampoline takes a pointer to the `PoolEntry`**, not to a side allocation. All four values
-  then live on the entry the callback is about. The current `Box<AtomicU64>` never bought any
-  safety -- its premise was that the box's lifetime was easier to guarantee than the entry's, and
-  since `Drop` did not drain, the box was dangling too. It made the use-after-free *smaller*, not
-  absent, and it is what disguised it.
-
-  > **This requires moving `repair` to the FIRST field of `PoolEntry`.** The struct has no `Drop`
-  > impl, so its fields drop in declaration order, and `repair` is currently declared **last** --
-  > meaning the timestamps would be freed before `RepairWork::drop` drains the work object that
-  > writes to them. First-field placement makes the drain run before anything it protects is freed.
-  > Order the fields the way [`EventDelivery`](../windows-ioring-sys/src/event_delivery.rs) orders
-  > `wait` before `ring`, and say why at the field.
-
-  **Two details to decide deliberately rather than discover:**
-
-  - **Equal stamps are common, not rare.** `QueryInterruptTime` has system-tick resolution
-    (about 15.6 ms), so `last_cancelled == last_started` will happen often. Treating equality as
-    healthy risks declaring health when the cancellation actually followed the dispatch inside one
-    tick. Require strictly `>`, erring toward a redundant repair -- which this crate already
-    establishes is the safe direction.
-  - **A wedged pool never retries.** With `last_cancelled > last_submitted` as the guard, one
-    repair is submitted per cancellation; if the pool is genuinely wedged that submit never
-    dispatches and nothing tries again. The current code has the same property, so this is not a
-    regression -- but decide whether a repair unstarted after N ticks should be re-submitted.
+  > **DECISION TO RAISE (the item's second deferred detail): a wedged pool still never retries.**
+  > One repair is submitted per cancellation; if the pool never dispatches it, `repair_in_flight`
+  > stays true and nothing tries again. That is unchanged from the previous scheme, so it is not a
+  > regression -- but whether a repair unstarted after N ticks should be re-submitted is open, and
+  > the stamps now make it cheap to answer. Not decided here.
 
 - [ ] **M-T9.1** -- **Write the test that would have caught the repair-object use-after-free.**
 
@@ -334,6 +315,14 @@ second, and `M-T9.1` is the guard both of them want.
   callbacks finish -- so a repair submitted and not yet dispatched would `fetch_add` through freed
   heap. Fixed by draining before the close, mirroring `ThreadpoolWork::drop`, which had always done
   it correctly.
+
+  **The target has moved since this was written, and moved toward this guard.** `M-T9.2` removed
+  the box: the callback context is now the `PoolEntry` itself, and what a missing drain would
+  corrupt is the entry's own stamps. The drain still happens in the same place, and the invariant
+  that keeps it sound is now the field order -- `repair` is declared first so its `Drop` runs before
+  the stamps it protects. That makes this guard strictly more valuable than when it was queued,
+  because the invariant it would protect is a declaration order that any later edit can silently
+  undo.
 
   **Why nothing caught it, which is the part worth fixing.** Every test in `heal/tests.rs` holds its
   own `Arc<PoolEntry>` clone, and usually a live object too, so the entry is never retired while a

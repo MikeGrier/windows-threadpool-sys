@@ -75,9 +75,6 @@ mod off {
     );
 
     impl Registration {
-        /// Records nothing: with no entry there is no slot to stamp.
-        pub(crate) const fn stamp_dispatch(&self) {}
-
         /// Records nothing. Without the feature the repair obligation belongs to
         /// the caller of `try_cancel_pending_no_heal_tracking`, not to us.
         ///
@@ -108,7 +105,7 @@ mod off {
 #[cfg(feature = "self-heal")]
 mod on {
     use super::PoolKey;
-    use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
+    use std::sync::atomic::{AtomicIsize, AtomicU64, AtomicUsize, Ordering};
     use std::sync::{Arc, Mutex, OnceLock};
     use std::time::Duration;
     use windows_sys::Win32::Foundation::FALSE;
@@ -124,19 +121,54 @@ mod on {
     /// wall-clock, so the only requirement on their source is that it be
     /// monotonic and shared -- see `M-T6.2`, which picks it.
     pub(crate) struct PoolEntry {
-        key: PoolKey,
-        /// When a dispatch was last observed on this pool. Written by `M-T6.2`.
+        /// The work item a repair submits.
         ///
-        /// A value *after* `repair_owed_at` is direct evidence the pool is still
-        /// delivering callbacks, which is what lets the self-heal skip it.
-        last_dispatch: AtomicU64,
-        /// When a cancellation left a repair owing; zero means none is owed.
-        /// Written by `M-T6.3`.
-        repair_owed_at: AtomicU64,
+        /// **Declared first, and that is load-bearing.** This struct has no
+        /// `Drop` of its own, so its fields drop in declaration order, and this
+        /// field's `Drop` drains the work object. Every other field below is
+        /// written by that object's callback through a pointer to this entry,
+        /// so draining has to happen before any of them is dropped. Declared
+        /// last -- as it was -- the drain would run after the stamps it exists
+        /// to protect had already gone. Ordered the way
+        /// [`EventDelivery`](../../windows-ioring-sys/src/event_delivery.rs)
+        /// orders its `wait` before its `ring`, for the same reason.
+        repair: RepairWork,
+        key: PoolKey,
         /// How many live objects this crate has on the pool.
         objects: AtomicUsize,
-        /// The work item a repair submits. Created with the entry, never later.
-        repair: RepairWork,
+        /// When a cancellation last left this pool possibly severed.
+        ///
+        /// One of three monotonic stamps that between them replace a stored
+        /// "repair owed" flag. Each is written by an **unconditional** store,
+        /// which is the whole point: the flag was set with a compare-exchange
+        /// that deliberately kept the earliest cancellation, and cleared with
+        /// an unconditional store. The two did not pair, so a cancellation
+        /// landing between `tick`'s read and its clear was recorded nowhere --
+        /// the CAS failed against the old stamp and the clear then erased both.
+        /// A store cannot fail that way.
+        ///
+        /// Health is derived rather than stored: see
+        /// [`unhealed`](Self::unhealed).
+        last_cancelled: AtomicU64,
+        /// When this entry's own repair callback last ran.
+        ///
+        /// Written by the repair trampoline, so it is direct evidence that the
+        /// pool dispatched *our* work item. That is strictly better evidence
+        /// than the dispatch stamp it replaces, which depended on a user
+        /// object's trampoline firing: a pool with no other activity was
+        /// indistinguishable from a wedged one.
+        last_started: AtomicU64,
+        /// When a repair was last handed to the pool.
+        ///
+        /// Compared against `last_started` to tell a repair the pool still
+        /// holds from one it has given back.
+        last_submitted: AtomicU64,
+        /// How many times this entry's own repair item has been dispatched.
+        ///
+        /// A count rather than a stamp because the stamps answer "in which
+        /// order" and this answers "at all", which is what a test asserting the
+        /// pre-created object was used needs.
+        runs: AtomicU64,
     }
 
     impl PoolEntry {
@@ -147,7 +179,7 @@ mod on {
 
         /// The work object a repair submits.
         pub(crate) fn repair_work(&self) -> PTP_WORK {
-            self.repair.work
+            self.repair.work.load(Ordering::SeqCst)
         }
 
         /// How many times this pool's own repair item has been dispatched.
@@ -159,75 +191,93 @@ mod on {
         // the dead-code warning fires in the configuration CI builds.
         #[cfg(test)]
         pub(crate) fn repairs_run(&self) -> u64 {
-            self.repair.runs.load(Ordering::SeqCst)
+            self.runs.load(Ordering::SeqCst)
+        }
+
+        /// Note that a cancellation may have severed this pool.
+        ///
+        /// An unconditional store, where the flag this replaces used a
+        /// compare-exchange that silently did nothing while an earlier mark
+        /// stood. A later cancellation can only move the stamp forward, and
+        /// forward is the direction that keeps it unrepaired.
+        pub(crate) fn stamp_cancelled(&self, at: u64) {
+            self.last_cancelled.store(at, Ordering::SeqCst);
+        }
+
+        /// Note when a repair dispatch was observed.
+        ///
+        /// Only the stamp. Counting lives in
+        /// [`record_repair_run`](Self::record_repair_run), because the two
+        /// answer different questions: this one orders a dispatch against a
+        /// cancellation, and the count says whether this entry's own
+        /// pre-created object was the thing submitted. A test that drives the
+        /// ordering directly must be able to do so without claiming a repair
+        /// ran.
+        pub(crate) fn stamp_started(&self, at: u64) {
+            self.last_started.store(at, Ordering::SeqCst);
+        }
+
+        /// Note that this entry's repair callback has run: stamp and count.
+        fn record_repair_run(&self, at: u64) {
+            self.stamp_started(at);
+            self.runs.fetch_add(1, Ordering::SeqCst);
         }
 
         /// Note that a repair has been handed to the pool.
+        pub(crate) fn stamp_submitted(&self, at: u64) {
+            self.last_submitted.store(at, Ordering::SeqCst);
+        }
+
+        /// Whether a cancellation stands unanswered by a repair dispatch.
         ///
-        /// Counted so [`repair_settled`](Self::repair_settled) can tell a
-        /// dispatched repair from one the pool still holds.
-        fn repair_submitted(&self) {
-            self.repair.submitted.fetch_add(1, Ordering::SeqCst);
-        }
-
-        /// Whether every repair submitted on this entry has been dispatched.
+        /// **Equality counts as unhealed, deliberately.** `QueryInterruptTime`
+        /// has system-tick resolution -- about 15.6 ms -- so a cancellation and
+        /// a dispatch inside the same tick carry the same stamp, and nothing
+        /// here can say which came first. Reading that as healthy would risk
+        /// declaring a pool repaired by a dispatch that actually preceded the
+        /// cancellation. Reading it as unhealed costs one redundant repair,
+        /// which this crate has already established is the safe direction.
         ///
-        /// False while the pool still holds one, which is the state in which
-        /// `WaitForThreadpoolWorkCallbacks` -- the drain in `RepairWork::drop`
-        /// -- would block until the pool dispatches it. On a pool that never
-        /// does, that wait never returns.
+        /// A pool that was never cancelled has a zero stamp and is healthy,
+        /// which is why the zero is tested rather than left to the comparison.
+        pub(crate) fn unhealed(&self) -> bool {
+            let cancelled = self.last_cancelled.load(Ordering::SeqCst);
+            cancelled != 0 && cancelled >= self.last_started.load(Ordering::SeqCst)
+        }
+
+        /// Whether a submitted repair has not yet been given back.
         ///
-        /// The counters are only ever compared, never used to pair a particular
-        /// submission with a particular run, so the submit-then-dispatch race
-        /// can at worst report `false` for an entry that has just settled. That
-        /// costs one more pass before the entry retires and cannot report
-        /// `true` while a submission is outstanding, which is the direction that
-        /// matters.
-        pub(crate) fn repair_settled(&self) -> bool {
-            self.repair.runs.load(Ordering::SeqCst) >= self.repair.submitted.load(Ordering::SeqCst)
+        /// This is also the retirement guard: dropping the last `Arc` runs
+        /// `RepairWork::drop`, whose drain cannot return until the pool
+        /// dispatches, and `tick` runs on a healer with one thread.
+        pub(crate) fn repair_in_flight(&self) -> bool {
+            self.last_submitted.load(Ordering::SeqCst) > self.last_started.load(Ordering::SeqCst)
         }
 
-        /// Note that the pool dispatched a callback.
-        pub(crate) fn stamp_dispatch(&self, at: u64) {
-            self.last_dispatch.store(at, Ordering::Relaxed);
-        }
-
-        /// Note that a cancellation left this pool owing a repair.
-        ///
-        /// Keeps the earliest unrepaired cancellation rather than the latest: the
-        /// question a repair asks is whether a dispatch has been seen since the
-        /// cancellation, and overwriting with a later stamp could make a dispatch
-        /// that genuinely followed the first cancellation look as though it
-        /// preceded the second.
-        pub(crate) fn owe_repair(&self, at: u64) {
-            let _ =
-                self.repair_owed_at
-                    .compare_exchange(0, at, Ordering::Relaxed, Ordering::Relaxed);
-        }
-
-        /// When the oldest unrepaired cancellation happened, or `None`.
-        pub(crate) fn repair_owed_at(&self) -> Option<u64> {
-            match self.repair_owed_at.load(Ordering::Relaxed) {
-                0 => None,
-                at => Some(at),
-            }
-        }
-
-        /// Whether a dispatch has been observed since `at`.
-        pub(crate) fn dispatched_since(&self, at: u64) -> bool {
-            self.last_dispatch.load(Ordering::Relaxed) > at
-        }
-
-        /// When a dispatch was last observed; zero if none has been.
+        /// When a cancellation last left this pool unrepaired; zero if never.
         // Read only by tests -- see the note on `repairs_run`.
         #[cfg(test)]
-        pub(crate) fn last_dispatch(&self) -> u64 {
-            self.last_dispatch.load(Ordering::Relaxed)
+        pub(crate) fn last_cancelled(&self) -> u64 {
+            self.last_cancelled.load(Ordering::SeqCst)
         }
 
-        /// Mark the owed repair discharged.
-        pub(crate) fn clear_repair(&self) {
-            self.repair_owed_at.store(0, Ordering::Relaxed);
+        /// When this entry's repair callback last ran; zero if never.
+        // Read only by tests -- see the note on `repairs_run`.
+        #[cfg(test)]
+        pub(crate) fn last_started(&self) -> u64 {
+            self.last_started.load(Ordering::SeqCst)
+        }
+
+        /// Record a dispatch strictly after the last cancellation.
+        ///
+        /// The discharge operation tests need now that there is no clear. It
+        /// takes the cancellation stamp and steps past it rather than reading
+        /// the clock, so it heals the entry whatever the tick resolution does
+        /// -- which `stamp_started(now())` would not, since a cancellation in
+        /// the same tick compares equal and equality reads as unhealed.
+        #[cfg(test)]
+        pub(crate) fn force_healed(&self) {
+            self.stamp_started(self.last_cancelled.load(Ordering::SeqCst) + 1);
         }
     }
 
@@ -237,34 +287,13 @@ mod on {
     /// which would recurse: creating an entry would create an object, which
     /// would create an entry.
     struct RepairWork {
-        work: PTP_WORK,
-        /// How many times this object has been handed to the pool.
+        /// The handle, or zero before [`arm`](PoolEntry::arm) has set it.
         ///
-        /// Paired with `runs` so an entry is retired only once the pool has
-        /// given every submission back. See
-        /// [`PoolEntry::repair_settled`](PoolEntry::repair_settled).
-        submitted: AtomicU64,
-        /// How many times *this* object has been dispatched.
-        ///
-        /// Boxed so its address is stable, and handed to the work object as its
-        /// callback context, so only this entry's repair item can increment it.
-        /// That is what lets a test tell the pre-created object being submitted
-        /// from a fresh one made on the healing path: a work object created
-        /// anywhere else carries a different context and cannot touch this
-        /// counter. Per entry rather than process-wide because the registry is
-        /// shared and `cargo test` runs these as threads in one process, so a
-        /// global count could be satisfied by another test's repair and would
-        /// prove nothing about this one.
-        // Never read through this field: it is held for its *address*, which is
-        // the work object's callback context, and for the lifetime that keeps
-        // that address valid. The counter is read through the context instead.
-        //
-        // That lifetime is only long enough because `Drop` drains the work
-        // object before closing it. An earlier revision of this comment claimed
-        // the close itself waited for a running callback; `CloseThreadpoolWork`
-        // does no such thing, and the drain is what makes the claim true.
-        #[allow(dead_code)]
-        runs: Box<AtomicU64>,
+        /// Settable after construction because the work object's callback
+        /// context is the *entry's* address, so the entry has to exist before
+        /// the object can be created. An entry whose arming failed keeps a zero
+        /// here and is never published.
+        work: AtomicIsize,
     }
 
     // SAFETY: a PTP_WORK is a pool object the thread pool itself uses across
@@ -277,12 +306,14 @@ mod on {
             // Drained before the close, and the order is the whole of this
             // impl's correctness.
             //
-            // `runs` is a `Box` whose *address* is this work object's callback
-            // context, and the field drop below frees it the instant this body
-            // returns. `CloseThreadpoolWork` does not wait: it frees the work
-            // object asynchronously once outstanding callbacks finish, so a
-            // repair that has been submitted and not yet dispatched would run
-            // afterwards and `fetch_add` through freed heap.
+            // The callback's context is the address of the `PoolEntry` that
+            // owns this field, and that entry's remaining fields are dropped --
+            // and its allocation freed -- the moment this returns.
+            // `CloseThreadpoolWork` does not wait: it frees the work object
+            // asynchronously once outstanding callbacks finish, so a repair
+            // that has been submitted and not yet dispatched would run
+            // afterwards and stamp through freed memory. This field is declared
+            // first on the entry so this body runs before any of it goes.
             //
             // The window is not theoretical. `tick` submits, clears the mark,
             // and then calls `retire_idle`, which can drop the last `Arc` to
@@ -297,13 +328,19 @@ mod on {
             // SAFETY: `work` was created by `CreateThreadpoolWork` here and is
             // closed exactly once. Waiting without cancelling cannot orphan
             // anything: the callback owns no storage.
-            crate::trace_call!("WaitForThreadpoolWorkCallbacks", self.work, 0, {
-                unsafe { WaitForThreadpoolWorkCallbacks(self.work, FALSE) };
+            let work = self.work.load(Ordering::SeqCst);
+            if work == 0 {
+                // Never armed: creating the work object failed, so there is
+                // nothing to drain and nothing to close.
+                return;
+            }
+            crate::trace_call!("WaitForThreadpoolWorkCallbacks", work, 0, {
+                unsafe { WaitForThreadpoolWorkCallbacks(work, FALSE) };
             });
-            crate::trace_record!("heal", "repair-closed", self.work);
+            crate::trace_record!("heal", "repair-closed", work);
             // SAFETY: as above, and no callback can still be running after the
-            // drain, so the context the field drop frees is unreachable.
-            unsafe { CloseThreadpoolWork(self.work) };
+            // drain, so the entry the context names is unreachable from one.
+            unsafe { CloseThreadpoolWork(work) };
         }
     }
 
@@ -321,10 +358,12 @@ mod on {
         // nor CI sets -- a check written against it would pass while observing
         // nothing, which is the trap this crate's sabotage manifest documents.
         //
-        // SAFETY: the context is the `runs` box of the `RepairWork` owning this
-        // object, which outlives every dispatch of it -- the close in `Drop`
-        // waits for a running callback before the box is freed.
-        unsafe { &*context.cast::<AtomicU64>() }.fetch_add(1, Ordering::SeqCst);
+        // SAFETY: the context is the address of the `PoolEntry` that owns this
+        // work object, which outlives every dispatch of it: the entry's first
+        // field drains this object in its `Drop`, before any of the entry is
+        // freed.
+        let entry = unsafe { &*context.cast::<PoolEntry>() };
+        entry.record_repair_run(now());
         crate::trace_record!("heal", "repair-ran", _work);
     }
 
@@ -352,16 +391,6 @@ mod on {
         #[allow(dead_code)]
         pub(crate) fn entry(&self) -> Option<&Arc<PoolEntry>> {
             self.entry.as_ref()
-        }
-
-        /// Note that this object's pool has just dispatched a callback.
-        ///
-        /// Called from a trampoline, so it is on the path of every callback the
-        /// crate delivers: one counter read and one relaxed store.
-        pub(crate) fn stamp_dispatch(&self) {
-            if let Some(entry) = &self.entry {
-                entry.stamp_dispatch(now());
-            }
         }
 
         /// Note that a cancellation on this object's pool owes it a repair.
@@ -393,10 +422,10 @@ mod on {
             let Some(entry) = &self.entry else {
                 return self.owe_repair_untracked();
             };
-            entry.owe_repair(now());
-            // After the mark, never before: the healer's first tick must
+            entry.stamp_cancelled(now());
+            // After the stamp, never before: the healer's first tick must
             // not be able to run before the entry it exists to repair says
-            // it is owed one.
+            // it is unhealed.
             //
             // Called without the registry lock held -- creating the healer
             // registers its own pool, which takes that lock.
@@ -434,7 +463,7 @@ mod on {
                 crate::trace_record!("heal", "cancel-untracked", self.key);
                 return false;
             };
-            entry.owe_repair(now());
+            entry.stamp_cancelled(now());
             ensure_running();
             true
         }
@@ -528,18 +557,27 @@ mod on {
                 entry: Some(Arc::clone(entry)),
             };
         }
-        let Some(repair) = create_repair(key) else {
+        // Built before the work object, because the work object's callback
+        // context is this entry's own address. The entry is not published until
+        // arming succeeds, so a failed arming leaves nothing behind: the local
+        // `Arc` is dropped here, and `RepairWork::drop` sees a zero handle and
+        // does nothing.
+        let entry = Arc::new(PoolEntry {
+            repair: RepairWork {
+                work: AtomicIsize::new(0),
+            },
+            key,
+            objects: AtomicUsize::new(1),
+            last_cancelled: AtomicU64::new(0),
+            last_started: AtomicU64::new(0),
+            last_submitted: AtomicU64::new(0),
+            runs: AtomicU64::new(0),
+        });
+        if !arm_repair(&entry) {
             crate::trace_record!("heal", "register-failed", key);
             return Registration { key, entry: None };
-        };
-        let entry = Arc::new(PoolEntry {
-            key,
-            last_dispatch: AtomicU64::new(0),
-            repair_owed_at: AtomicU64::new(0),
-            objects: AtomicUsize::new(1),
-            repair,
-        });
-        crate::trace_record!("heal", "entry-created", key, entry.repair.work);
+        }
+        crate::trace_record!("heal", "entry-created", key, entry.repair_work());
         entries.push(Arc::clone(&entry));
         Registration {
             key,
@@ -564,9 +602,7 @@ mod on {
     /// the other. Two copies of a rule that must agree is the shape this
     /// repository treats as a defect; this is the shape that cannot have it.
     fn is_retirable(entry: &PoolEntry) -> bool {
-        entry.objects.load(Ordering::Relaxed) == 0
-            && entry.repair_owed_at().is_none()
-            && entry.repair_settled()
+        entry.objects.load(Ordering::Relaxed) == 0 && !entry.unhealed() && !entry.repair_in_flight()
     }
 
     fn release(entry: &Arc<PoolEntry>) {
@@ -767,16 +803,32 @@ mod on {
     }
 
     /// [`tick`] without taking the test gate.
+    ///
+    /// **Reads state, and writes only its own stamp.** There is no clear here,
+    /// and that absence is the point of `M-T9.2`: the flag this replaces was
+    /// set by a compare-exchange that kept the earliest cancellation and
+    /// cleared by an unconditional store, so a cancellation arriving between
+    /// this function's read and its clear was recorded nowhere. The repair
+    /// submitted below happened strictly *before* such a cancellation and
+    /// therefore could not answer it, and the pool was left wedged with nothing
+    /// scheduled. Both branches had it; the skip was worse, because there
+    /// nothing was submitted at all.
     pub(crate) fn tick_inner() {
         for entry in entries() {
-            let Some(owed_at) = entry.repair_owed_at() else {
+            if !entry.unhealed() {
+                // Either nothing has cancelled on this pool, or a repair has
+                // dispatched since the last one that did. The second case is
+                // direct evidence from *our own* work item, which the dispatch
+                // stamp it replaces could not give: that depended on a user
+                // object's trampoline firing, so a quiet pool looked exactly
+                // like a wedged one.
                 continue;
-            };
-            if entry.dispatched_since(owed_at) {
-                // Direct evidence the pool is still delivering callbacks, so
-                // whatever the cancellation may have done, it did not stop it.
-                crate::trace_record!("heal", "repair-unnecessary", entry.key());
-                entry.clear_repair();
+            }
+            if entry.repair_in_flight() {
+                // One is already with the pool. Submitting another cannot tell
+                // us anything the first will not, and on a pool that never
+                // dispatches it would queue one per tick forever.
+                crate::trace_record!("heal", "repair-in-flight", entry.key());
                 continue;
             }
             // The one action measured to release the stall every time. The work
@@ -784,17 +836,16 @@ mod on {
             // nothing and makes one call -- which matters because the pool it is
             // aimed at may already be wedged.
             crate::trace_record!("heal", "repair-submitted", entry.key(), entry.repair_work());
-            // Counted *before* the submit, never after: the repair can be
+            // Stamped *before* the submit, never after: the repair can be
             // dispatched on a pool thread the instant it is handed over, so a
-            // count taken afterwards can be overtaken by the run it is meant to
-            // be paired against, and `repair_settled` would then read `true`
-            // with a submission outstanding -- which is the one answer it must
-            // never give.
-            entry.repair_submitted();
-            // SAFETY: the work object was created by `create_repair` for this
+            // stamp taken afterwards can be overtaken by the run it is meant to
+            // precede -- leaving `last_submitted` behind `last_started` and
+            // `repair_in_flight` reading false with one outstanding, which is
+            // the one answer it must never give.
+            entry.stamp_submitted(now());
+            // SAFETY: the work object was created by `arm_repair` for this
             // entry and is alive while the entry is, which this `Arc` ensures.
             unsafe { SubmitThreadpoolWork(entry.repair_work()) };
-            entry.clear_repair();
         }
         // Entries kept alive only by an owed repair become retirable once it is
         // discharged, and this is the only place that can notice.
@@ -819,16 +870,27 @@ mod on {
     pub(crate) static FORCE_REPAIR_FAILURE_FOR: AtomicUsize = AtomicUsize::new(0);
 
     /// Make the work object a repair for this pool will submit.
-    fn create_repair(key: PoolKey) -> Option<RepairWork> {
+    /// Give an entry its work object, with the entry itself as the context.
+    ///
+    /// Reports whether it now has one. The entry must not be published to the
+    /// registry until this says `true`.
+    ///
+    /// The context is the entry's address rather than a side allocation. The
+    /// `Box<AtomicU64>` this replaces was justified by its lifetime being
+    /// easier to guarantee than the entry's, which was never true: the box was
+    /// freed by the same drop that freed everything else, so when `Drop` did
+    /// not drain, the box dangled too. It made the use-after-free smaller
+    /// rather than absent, and smaller is what kept it hidden.
+    fn arm_repair(entry: &Arc<PoolEntry>) -> bool {
+        let key = entry.key;
         #[cfg(test)]
         if key != 0 && FORCE_REPAIR_FAILURE_FOR.load(Ordering::SeqCst) == key {
-            return None;
+            return false;
         }
-        // Allocated before the work object, so its address can be the context.
-        let runs = Box::new(AtomicU64::new(0));
-        let context: *mut core::ffi::c_void = std::ptr::from_ref(runs.as_ref())
-            .cast::<core::ffi::c_void>()
-            .cast_mut();
+        // The address of the entry's allocation, which is stable for as long as
+        // any `Arc` to it lives and is what the trampoline casts back.
+        let context: *mut core::ffi::c_void =
+            Arc::as_ptr(entry).cast::<core::ffi::c_void>().cast_mut();
         let mut env = crate::callback_env::CallbackEnviron::new();
         // SAFETY: a non-zero key names a live pool -- the caller is creating an
         // object against it in this call -- and the environment is used only for
@@ -836,21 +898,17 @@ mod on {
         unsafe { env.set_pool_raw(key as isize) };
         let work = crate::trace_call!("CreateThreadpoolWork", key, 0, {
             // SAFETY: the trampoline matches the required ABI, the context is
-            // the `runs` box moved into the returned value below, and the
-            // environment is live for this call.
+            // the entry that owns this work object and outlives every dispatch
+            // of it, and the environment is live for this call.
             unsafe { CreateThreadpoolWork(Some(repair_trampoline), context, env.as_mut_ptr()) }
         });
         // `PTP_WORK` is an opaque handle rather than a pointer, so failure is a
         // zero value, not a null one.
         if work == 0 {
-            None
-        } else {
-            Some(RepairWork {
-                work,
-                runs,
-                submitted: AtomicU64::new(0),
-            })
+            return false;
         }
+        entry.repair.work.store(work, Ordering::SeqCst);
+        true
     }
 }
 

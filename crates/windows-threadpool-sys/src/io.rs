@@ -50,6 +50,15 @@ struct IoContext {
     ///
     /// On the context rather than on `ThreadpoolIo` so the trampoline can reach
     /// it to stamp a dispatch (`M-T6.2`).
+    /// This pool's entry in the self-heal registry.
+    ///
+    /// Held for its `Drop`, not read. The claim keeps the entry alive while
+    /// this object exists, which is what makes the entry's pre-created repair
+    /// work object available -- and bound to the pool, deferring its free --
+    /// if a wait on the same pool is later cancelled. Only a wait reads a
+    /// registration, because only a wait reaches the removal primitive that
+    /// owes a repair.
+    #[allow(dead_code)]
     registration: crate::heal::Registration,
     callback: Box<dyn Fn(&IoCompletion) + Send + Sync + 'static>,
 }
@@ -74,7 +83,6 @@ unsafe extern "system" fn io_trampoline(
     // Stamped before the callback, not after: a dispatch that is still running
     // is evidence the pool is live, and a long callback must not look like
     // silence to the self-heal.
-    ctx.registration.stamp_dispatch();
 
     let overlapped = overlapped.cast::<OVERLAPPED>();
 

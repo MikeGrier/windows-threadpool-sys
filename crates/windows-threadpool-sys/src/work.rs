@@ -32,6 +32,15 @@ struct WorkContext {
     /// Lives on the context rather than on `ThreadpoolWork` so the trampoline
     /// can reach it to stamp a dispatch (`M-T6.2`), and so it survives
     /// `into_parts` into a cleanup-group member.
+    /// This pool's entry in the self-heal registry.
+    ///
+    /// Held for its `Drop`, not read. The claim keeps the entry alive while
+    /// this object exists, which is what makes the entry's pre-created repair
+    /// work object available -- and bound to the pool, deferring its free --
+    /// if a wait on the same pool is later cancelled. Only a wait reads a
+    /// registration, because only a wait reaches the removal primitive that
+    /// owes a repair.
+    #[allow(dead_code)]
     registration: crate::heal::Registration,
 }
 
@@ -50,7 +59,6 @@ unsafe extern "system" fn work_trampoline(
     // Stamped before the callback, not after: a dispatch that is still running
     // is evidence the pool is live, and a long callback must not look like
     // silence to the self-heal.
-    ctx.registration.stamp_dispatch();
     // Not contained: the callback contract requires that it not unwind, and a
     // callback that breaks it aborts here rather than being silently forgiven.
     (ctx.f)();
