@@ -886,6 +886,88 @@ rules require is what found the third.
   run hit. 30 runs at 32 threads are clean afterwards. The mechanism is recorded on `gate()`, beside
   the first reason it exists.
 
+## M-T11 -- The tenth review round: a lost trait, two stamp defects, and the hook's ABI
+
+Opened 2026-10-03 by a review of everything on this branch. Seven findings. Four are this branch's
+own regressions and two of those are `M-T9.2`'s, landed the same day; two are long-standing in the
+`trace`-gated hook facility. The round's lesson is that **the gate cannot see any of them**: every
+one passed `cargo clippy -D warnings` on four configurations, the full test suite on five, 30
+stress runs at 32 threads, and a 27/27 sabotage sweep. Four of the seven are a claim in a doc
+comment that the code next to it does not keep.
+
+- [ ] **M-T11.1** -- **Restore `TimerMember`'s `Send` and `Sync`, and put the rule on the build.**
+
+  **The regression.** At the merge base `TimerMember` held only a `PTP_TIMER` and a `PhantomData`,
+  so it was auto-`Send + Sync`. This branch added `context: *mut c_void` and did not add the
+  `unsafe impl`s, so a public type stopped being movable or shareable between threads. Verified by
+  compiling an assertion: `TimerMember` fails both bounds with `E0277` while `WorkMember`,
+  `PeriodicTimerMember` and `WaitMember` pass.
+
+  **`WaitMember` is the precedent and the tell.** It carries two pointers and has both impls with a
+  SAFETY note. The same reasoning applies verbatim to the timer's context, so this is one rule
+  applied at one of two sites -- the sixth time that shape has appeared on this branch.
+
+  **Fix at the build rung, not by adding two lines.** A `const _: () = ...` assertion over all four
+  member types makes the next pointer-shaped field a compile error rather than a silent API break.
+  Assert the accepting direction too, so a bound that is accidentally removed from every type is
+  not reported as success.
+
+- [ ] **M-T11.2** -- **Make the repair predicates say what their doc comments claim.** Two defects
+      in `M-T9.2`, found together because they are the same block of accessors.
+
+  **A plain store cannot publish a monotonic clock.** `stamp_cancelled` is an unconditional store
+  whose doc says "a later cancellation can only move the stamp forward", and `now`'s doc goes
+  further: "the opposite mistake cannot happen at any resolution, because the counter never goes
+  backwards." The counter does not, but the *store* can land out of order: a thread that reads 10
+  and is preempted past a dispatch at 20 and a second cancellation at 30 will write 10 last, and
+  `unhealed` then reads healthy with a cancellation unanswered. That is exactly the lost
+  cancellation `M-T9.2` was written to eliminate, re-entering through the publication rather than
+  through the compare-exchange. `fetch_max` makes the stated property true.
+
+  **The retry broke the outstanding-repair predicate.** `repair_in_flight` is
+  `last_submitted > last_started`, which was sound only while at most one repair could be
+  outstanding. `M-T9.2`'s overdue path submits a second before the first has started, so the first
+  starting makes the predicate false while the second is still queued. `is_retirable` then permits
+  retirement, and `PoolEntry::drop` drains -- waiting for a callback on a pool that is by
+  construction suspected of not dispatching, on the healer's only thread. Self-heal stops
+  process-wide.
+
+  **Count outstanding submissions rather than comparing timestamps**, so the predicate answers the
+  question it is named for. Timestamps then serve only health (`unhealed`) and retry timing
+  (`repair_overdue`), which is what they can actually support.
+
+- [ ] **M-T11.3** -- **Update the self-heal feature guide, which documents the design `M-T9.2`
+      deleted.** The guide still tells a consumer that every callback this crate dispatches stamps
+  a per-pool marker, that a busy pool therefore suppresses repair submissions, and that the per
+  callback cost is an interrupt-time read and a relaxed store. None of that is true: health is now
+  evidenced only by the crate's own repair dispatching, and that store was removed from every
+  callback. This is the public-facing document and nothing swept it.
+
+- [ ] **M-T11.4** -- **Stop a failed pre-release recovery claiming to pin a pool it does not.**
+      `recover_repair` returns `Some(reclaim())` unconditionally, and `reclaim` re-attempts
+  registration. When that attempt fails the `Registration` holds no entry and therefore no `Arc`,
+  so it keeps nothing alive -- yet the field's doc says the caller "holds [it] across the native
+  release so the pool cannot be freed under the marking pass that follows". On that path the
+  marking pass can reach `owe_repair_untracked`, which registers and arms a work object against a
+  pool pointer whose last member has just been released. Reachable only under allocation failure,
+  which is why it is stated rather than assumed.
+
+- [ ] **M-T11.5** -- **Give each hook the arity of the stub it is planted over.** Every replacement
+      is a twelve-argument `extern "system"` fn, but the stubs take fewer. Forwarding twelve
+  arguments *to* a smaller callee is fine; *receiving* twelve from a caller that passed three is
+  not -- the hook reads incoming stack slots the caller never had to supply. On x64 those slots
+  land inside the caller's own frame, so it reads stale data rather than faulting, which is why
+  this has never been seen to misbehave and why it is still wrong. The macro already varies
+  per-hook data; arity is one more column.
+
+- [ ] **M-T11.6** -- **Make the quiesce account for threads created while it is enumerating.** The
+      installer snapshots thread IDs, then suspends that snapshot. A listed thread can create
+  another before it is suspended, and the new thread is neither in the snapshot nor suspended, so
+  it can execute a stub while its fourteen bytes are being written. The instruction-pointer check
+  covers only threads that were successfully suspended. Reach a fixed point -- re-enumerate after
+  suspending and repeat until a pass adds nothing -- or refuse, which is the established posture
+  for this module when it cannot establish its precondition.
+
 ## M-inf -- Diagnostic work with no gating deliverable
 
 - [ ] **M-T-inf.1** (was `M26.14.4`) -- **Find the threshold the close races.** `M26.14.2` used 1ms because it is
