@@ -498,7 +498,11 @@ rules require is what found the third.
 
   **The real population**, found by grepping for `wants(` rather than for `return`: four sites.
   Two were these; one is `the_filter_narrows_to_the_targets_named`, where the gating *is* the
-  subject; one is the hook records already queued as `M-T10.5`.
+  subject; the fourth was the hook records, converted by `M-T10.5`. Re-run after that conversion,
+  the grep leaves no assertion *silently* skipped on an unset filter: what remains is this crate's
+  `wants` definition and macros, four sites that **assert** `wants` is true inside an armed child,
+  the one test whose subject is the gating, and `tests/obligation_report.rs`, which gates but then
+  exits with a distinct code its parent checks rather than passing quietly.
 
 - [x] **M-T10.17** -- **Bound the warm-up's teardown on the path where its callback never
       arrived.** `prewarm_default_pool` timed out after two seconds and then called
@@ -805,20 +809,82 @@ rules require is what found the third.
   `--no-default-features` build CI also documents. Named in backticks with the reason, matching the
   precedent set for `close_members_cancelling`.
 
-- [ ] **M-T10.5** -- **Make the hook tests' trace-record assertions reachable, so a sabotage can
-      reach them.**
+- [x] **M-T10.5** -- **Make the hook tests' trace-record assertions reachable, so a sabotage can
+      reach them.** Done 2026-10-02.
 
-  **The gap.** `sabotage.json`'s `notCoveredHere` records that the trace records a hook emits are
-  deliberately absent from the sweep: they are asserted only when `WINDOWS_THREADPOOL_TRACE` is
-  set, which neither the harness nor CI does, so a sabotage removing those `record` calls would
-  be reported SURVIVED for a guard that exists. The manifest's note cited `M-T4.1` for this, which
-  is a completed decision about the name of the synchronous close and never covered it -- so the
-  work was, in practice, queued nowhere.
+  **What landed.** `a_hooked_stub_records_both_ends_and_still_performs_its_syscall` now runs its
+  body in a trace-armed child through `trace::in_a_trace_armed_child`, the one site `M-T10.16`
+  built for exactly this, and its two record assertions lost the `if wants("wfactory")` guard that
+  made them inert on every ordinary run and in CI. The child opens by asserting `wants("wfactory")`
+  is true, so a filter that failed to reach it fails loudly rather than passing vacuously -- the
+  trap being closed here, arriving one level up.
 
-  **Target.** Adopt the technique `M-T10.2` put in the tree: `tests/obligation_report.rs`
-  re-executes its own binary as a child with the filter set, which makes a traced assertion run
-  under a plain `cargo test`. Apply it to the hook tests, then add the record sabotages to
-  `sabotage.json` and confirm each is caught rather than survived.
+  **`fired` stays counted rather than traced**, deliberately. It is the half of that test which
+  needs no armed trace, and keeping it independent of the filter means the two halves cannot fail
+  for the same reason.
+
+  **Both record sabotages are in `sabotage.json` and are caught by name**, not by a crash:
+  deleting the `-enter` record fails on "the hook must record entering the call", and deleting
+  `-leave` on its own message, each surfacing through the parent's exit-code check. Verified
+  individually before being written down, and the manifest's `notCoveredHere` note -- which had
+  cited a completed, unrelated decision for this work -- was rewritten to say what is now swept.
+
+  **The note did not simply go away, because the gap it describes did not.** What `M-T10.5` could
+  fix was assertions that existed and could not run. The hook module's other records have no
+  assertions at all, which is a different defect; it is now stated precisely in the manifest and
+  queued as `M-T10.36` rather than left implied by a note that would read as though everything
+  were covered.
+
+- [ ] **M-T10.36** -- **Assert the hook module's remaining records, which no test checks at all.**
+      Found by `M-T10.5`, which could only fix assertions that existed.
+
+  **The gap, and why it is not the one `M-T10.5` closed.** `M-T10.5` made two *existing* record
+  assertions reachable. These have none: `installed` / `refused` / `refused-after-seal` from the
+  install path, `factory-found` / `factories-seen` and the `counts-*` family from the
+  worker-factory probe, `port-depth` / `ports-seen` / `port-unavailable` / `port-poking` /
+  `port-poked` from the completion-port scan, and `associate-already-signalled` from the
+  wait-registration hook. Each has a test that runs the code emitting it, and every one of those
+  tests asserts the **value the function returns** rather than the record it writes. So a sabotage
+  deleting any of these would be scored SURVIVED, and correctly -- the guard is genuinely absent.
+  `sabotage.json`'s `notCoveredHere` states this precisely; that note is the inventory.
+
+  **Why it is worth doing rather than accepting.** This crate's own argument for the hooks is that
+  a silent instrument is worse than none: an investigation reading an empty capture concludes the
+  call never happened. `counts-*` and `port-depth` are the two the stall work actually turned on,
+  so they are the place to start if this is scoped down.
+
+  **Shape.** The three tests already build the state; what they lack is a trace-armed child and a
+  `counted(..) > before` pair, which is the same conversion `M-T10.5` performed once. Then one
+  `sabotage.json` entry per record, each verified to be caught by name before it is written down.
+  Watch for the vacuous direction: `associate-already-signalled` is emitted only on a *successful*
+  association, so a test asserting it must establish that the call succeeded, or it pins nothing.
+
+- [x] **M-T10.37** -- **Gate the five heal tests that drive an entry with synthetic stamps.**
+      Found 2026-10-02 by `M-T10.5`'s stress run, and a defect in `M-T9.2`'s own tests.
+
+  **The failure.** `an_entry_owing_a_repair_outlives_its_last_object` failed on run 18 of 25 at
+  `--test-threads 32`, on its final assertion -- the entry it had just healed was still in the
+  registry. It took no tick gate.
+
+  **The mechanism, and why `M-T9.2` created it.** These tests stamp an entry by hand with small
+  values (`1`, `2`, `10`, `12`). A concurrent tick -- the background healer's, or another test's --
+  writes `last_submitted` with `now()`, and the repair it submits writes `last_started` the same
+  way. Both are astronomically larger than the synthetic values, so a single interleaved tick
+  inverts `repair_in_flight`, `unhealed`, or retirability, whichever the test went on to assert.
+  The flag this design replaced could not do it: holding no clock value, a tick could only set or
+  clear it, so these tests were safe when they were written and stopped being safe when the stamps
+  landed.
+
+  **Fixed at all five sites, not at the one that failed.** Grepping for tests that stamp without
+  taking the gate found five; fixing only the observed one would have left the identical defect at
+  four. This is the half-converted-rule shape the house rules name, and it is the fifth time it has
+  appeared on this branch.
+
+  **Confirmed by placing the interleaving rather than by waiting for it**, since a window this
+  narrow proves nothing by failing to recur: inserting one `tick_inner()` between the test's
+  `stamp_cancelled(1)` and `stamp_started(2)` fails it every time, on the same assertion the stress
+  run hit. 30 runs at 32 threads are clean afterwards. The mechanism is recorded on `gate()`, beside
+  the first reason it exists.
 
 ## M-inf -- Diagnostic work with no gating deliverable
 

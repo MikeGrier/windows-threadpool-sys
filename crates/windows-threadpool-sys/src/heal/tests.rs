@@ -57,6 +57,24 @@ mod on {
     /// `close_members(true)` and its assertion fails it every time, on the
     /// assertion the review named.
     ///
+    /// **The second reason, which `M-T9.2` created and which is sharper than the
+    /// first: a test driving an entry with small synthetic stamps is reading
+    /// fields a concurrent tick writes with the real clock.** A tick stamps
+    /// `last_submitted` with `now()`, and the repair it submits stamps
+    /// `last_started` the same way -- both astronomically larger than the `1`,
+    /// `10`, `12` these tests use -- so one interleaved tick inverts
+    /// `repair_in_flight`, `unhealed`, or whether an entry is retirable,
+    /// whichever the test went on to assert. The old flag could not do this: it
+    /// held no clock value, so a tick could only set or clear it.
+    ///
+    /// Measured, not supposed: `an_entry_owing_a_repair_outlives_its_last_object`
+    /// failed on run 18 of 25 at 32 test threads, on its final assertion, with a
+    /// repair submitted between its `stamp_cancelled(1)` and `stamp_started(2)`
+    /// leaving `last_submitted` at a real timestamp and the entry therefore
+    /// unretirable. Five tests in this module take synthetic stamps and all five
+    /// now hold this gate; fixing only the one that happened to fail would have
+    /// left the same defect at four sites.
+    ///
     /// A test that wants to tick calls `crate::heal::tick_inner` while holding
     /// this; `crate::heal::tick` would deadlock on the gate it already has.
     fn gate() -> std::sync::MutexGuard<'static, ()> {
@@ -139,6 +157,7 @@ mod on {
         // The retention rule, and the reason it is uniform across pool kinds:
         // retiring an entry that still owes a repair would drop the repair at
         // exactly the moment it is needed.
+        let _gate = gate();
         let pool = ThreadpoolPool::new().expect("create pool");
         let key = pool.as_raw() as usize;
         let (work, entry) = entry_for(&pool);
@@ -167,6 +186,7 @@ mod on {
     /// was left wedged with nothing scheduled.
     #[test]
     fn a_cancellation_during_a_tick_is_not_lost() {
+        let _gate = gate();
         let pool = ThreadpoolPool::new().expect("create pool");
         let (work, entry) = entry_for(&pool);
 
@@ -213,6 +233,7 @@ mod on {
 
     #[test]
     fn a_dispatch_after_the_cancellation_is_what_counts() {
+        let _gate = gate();
         let pool = ThreadpoolPool::new().expect("create pool");
         let (work, entry) = entry_for(&pool);
         entry.stamp_started(5);
@@ -234,6 +255,7 @@ mod on {
     /// these values. Nothing here can say which came first.
     #[test]
     fn a_dispatch_in_the_same_tick_as_the_cancellation_does_not_heal_it() {
+        let _gate = gate();
         let pool = ThreadpoolPool::new().expect("create pool");
         let (work, entry) = entry_for(&pool);
         entry.stamp_started(10);
@@ -248,6 +270,7 @@ mod on {
     /// A repair the pool still holds is not a reason to send another.
     #[test]
     fn a_repair_in_flight_blocks_a_second_submission() {
+        let _gate = gate();
         let pool = ThreadpoolPool::new().expect("create pool");
         let (work, entry) = entry_for(&pool);
         entry.stamp_cancelled(10);

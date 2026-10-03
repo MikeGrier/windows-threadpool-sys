@@ -1,7 +1,9 @@
 {
   "package": "windows-threadpool-sys",
   "description": "Sabotages for the ntdll inline-hook facility in src/trace/hook.rs -- the stub recogniser that makes patching safe, the trampoline that rebuilds the displaced system call, and the table column that decides which calls carry a worker factory handle. Run with tools/run-sabotage.ps1; see tools/README-sabotage.md for the format and for why the results are read the way they are.",
-  "notCoveredHere": "The trace RECORDS a hook emits are deliberately absent from this manifest. They are asserted by the same test, but only when WINDOWS_THREADPOOL_TRACE is set in the environment, and neither this harness nor CI sets it -- so a sabotage that removed the `record` calls would be reported SURVIVED for a guard that does in fact exist. That is the feature-gate trap this repository already documents, arriving through an environment variable rather than a cargo feature. The guard those assertions back is the `fired` counter, which is unconditional and IS swept below. Making the record assertions reachable needs the traced tests to run somewhere, which is queued as M-T10.5 in CHECKLIST.md. That is now a smaller job than it was when this note was written: tests/obligation_report.rs faced the same problem and solved it by re-executing its own binary as a child with WINDOWS_THREADPOOL_TRACE set, so the technique is in the tree and the hook tests need only adopt it. An earlier version of this note cited M-T4.1, which is a completed decision about the name of the synchronous close and has nothing to do with this.",
+  "coveredSinceM-T10.5": "The hook trampoline's own `-enter` and `-leave` records ARE swept, by the two entries below. They were not, and could not be, until M-T10.5: the assertions existed but sat behind `if wants(\"wfactory\")`, and neither this harness nor CI sets WINDOWS_THREADPOOL_TRACE, so a sabotage deleting those `record` calls was scored SURVIVED against a guard that did exist. The fix was to run the test body in a trace-armed child via trace::in_a_trace_armed_child, which fixes the filter before `main` the only way a test can. Both sabotages are caught by name rather than by a crash. An earlier version of this note cited M-T4.1 for the outstanding work, which is a completed decision about the name of the synchronous close and never covered it -- so the job was, in practice, queued nowhere.",
+
+  "notCoveredHere": "The hook module's OTHER records are still absent, and for a different reason than the two above: no test asserts them at all, so there is nothing here to make reachable. They are `installed` / `refused` / `refused-after-seal` from the install path, `factory-found` / `factories-seen` / the `counts-*` family from the worker-factory probe, `port-depth` / `ports-seen` / `port-unavailable` / `port-poking` / `port-poked` from the completion-port scan, and `associate-already-signalled` from the wait-registration hook. Each has a test that exercises the code emitting it, but every one of those tests asserts the VALUE the function returns rather than the record it writes -- `the_factory_scan_finds_the_pool_and_reads_plausible_counts` checks the counts, `the_port_scan_finds_a_completion_port_and_reads_its_depth` checks the depth, and `hooking_the_wait_registration_observes_the_already_signalled_flag` deliberately asserts only that the hook fired, because which flag value comes back is a fact about the kernel on the day. So deleting any of those `record` calls would be reported SURVIVED, correctly: the guard really is missing. Queued as M-T10.36 in CHECKLIST.md.",
   "testArgs": [
     "--all-features"
   ],
@@ -252,6 +254,30 @@
         "                let fresh = CreateThreadpoolWork(Some(repair_trampoline), ctx, std::ptr::null());",
         "                if fresh != 0 { SubmitThreadpoolWork(fresh); }",
         "            }"
+      ]
+    },
+    {
+      "name": "the hook records entering the call but the record is dropped",
+      "file": "src/trace/hook.rs",
+      "expect": "caught",
+      "why": "Half of what a hook is for. A trampoline that performs the displaced system call correctly but records nothing leaves an investigation reading an empty capture and concluding the call never happened -- which is the exact inference this facility exists to support, so a silent hook is worse than no hook. The patch keeps the arguments live, so this is the record going missing rather than the call changing shape.",
+      "find": [
+        "                record(TARGET, concat!($label, \"-enter\"), a1 as u64, a2 as u64);"
+      ],
+      "replace": [
+        "                let _ = (a1, a2);"
+      ]
+    },
+    {
+      "name": "the hook records leaving the call but the record is dropped",
+      "file": "src/trace/hook.rs",
+      "expect": "caught",
+      "why": "The other end, and the one whose absence is hardest to read: with no `-leave` record a call that never returned is indistinguishable from one that did, so a hang and a success look alike in the capture. That is precisely the distinction the stall investigation turned on.",
+      "find": [
+        "                record(TARGET, concat!($label, \"-leave\"), a1 as u64, status as u32 as u64);"
+      ],
+      "replace": [
+        "                let _ = status;"
       ]
     },
     {

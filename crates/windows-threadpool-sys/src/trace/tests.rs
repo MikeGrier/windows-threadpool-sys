@@ -640,10 +640,35 @@ fn the_stub_recogniser_accepts_the_shape_and_rejects_everything_else() {
 /// Uses the table's self-test entry rather than a worker-factory stub: the
 /// patch is never removed, so hooking a busy stub here would follow every
 /// later test in the process.
+///
+/// **Runs in a trace-armed child**, which is what makes the record half of the
+/// claim assertable at all. The filter is fixed before `main`, so a test cannot
+/// narrow it for itself; this body previously guarded its two record assertions
+/// with `if wants("wfactory")` and they were therefore inert on every ordinary
+/// run and in CI. `sabotage.json` recorded the consequence honestly -- that a
+/// sabotage deleting the hook's `record` calls would be scored SURVIVED against
+/// a guard that does exist -- and `M-T10.5` is the item that closed it. See
+/// [`in_a_trace_armed_child`](crate::trace::in_a_trace_armed_child) for why
+/// this shape rather than the two that look cheaper.
 #[cfg(feature = "trace")]
 #[test]
 fn a_hooked_stub_records_both_ends_and_still_performs_its_syscall() {
+    crate::trace::in_a_trace_armed_child(
+        "trace::tests::a_hooked_stub_records_both_ends_and_still_performs_its_syscall",
+        "wfactory",
+        a_hooked_stub_records_both_ends_and_still_performs_its_syscall_body,
+    );
+}
+
+#[cfg(feature = "trace")]
+fn a_hooked_stub_records_both_ends_and_still_performs_its_syscall_body() {
     use super::hook::{call_selftest, factory_handle, fired, install_by_label, installed_by_label};
+
+    assert!(
+        wants("wfactory"),
+        "the child must be running with the trace armed for `wfactory`, or the record \
+         assertions below observe nothing while still passing"
+    );
 
     // Installed only when this process has not installed it already. The
     // `.CRT$XCU` initialiser installs whatever `WINDOWS_THREADPOOL_TRACE_HOOKS`
@@ -654,11 +679,10 @@ fn a_hooked_stub_records_both_ends_and_still_performs_its_syscall() {
         install_by_label("selftest").expect("the self-test stub is hookable");
     }
 
-    // Counted rather than read out of the trace, so this runs on every machine
-    // rather than only where `WINDOWS_THREADPOOL_TRACE` happens to be set. The
-    // record assertions below are additional, and are skipped when the trace is
-    // not armed -- but the fired count is not, because a guard that is silently
-    // inert wherever the environment is unset is not a guard.
+    // `fired` is counted rather than read out of the trace, and deliberately
+    // stays that way: it is the half of this test that needs no armed trace, so
+    // keeping it independent of the filter means the two halves cannot fail for
+    // the same reason.
     let before_fired = fired("selftest");
     let before_enter = counted("wfactory", "selftest-enter");
     let before_leave = counted("wfactory", "selftest-leave");
@@ -699,17 +723,15 @@ fn a_hooked_stub_records_both_ends_and_still_performs_its_syscall() {
          call would leave the factory counters describing whatever that pointer happened to be"
     );
 
-    if wants("wfactory") {
-        assert!(
-            counted("wfactory", "selftest-enter") > before_enter,
-            "the hook must record entering the call"
-        );
-        assert!(
-            counted("wfactory", "selftest-leave") > before_leave,
-            "the hook must record leaving it, or a call that never returned would be \
-             indistinguishable from one that did"
-        );
-    }
+    assert!(
+        counted("wfactory", "selftest-enter") > before_enter,
+        "the hook must record entering the call"
+    );
+    assert!(
+        counted("wfactory", "selftest-leave") > before_leave,
+        "the hook must record leaving it, or a call that never returned would be \
+         indistinguishable from one that did"
+    );
 }
 
 /// An install refuses, and leaves `ntdll` alone, when the name is not there.
