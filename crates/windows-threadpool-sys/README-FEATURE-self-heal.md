@@ -51,28 +51,42 @@ explicitly asks to cancel.
 
 ## What the feature actually does
 
-1. Each callback this crate dispatches stamps a per-pool "last dispatch" marker
-   before calling your closure. The source is the interrupt-time counter, a
-   memory read rather than a syscall.
-2. `try_cancel_pending` marks its pool as owing a repair, and stamps when.
-3. A self-heal timer, running on a private pool this crate creates **lazily on
-   the first cancellation**, periodically checks the marked pools. For each one
-   it submits a pre-created work item -- unless a dispatch has been observed
-   *since* the cancellation, which is direct evidence the pool is alive and makes
-   the repair unnecessary.
+1. `try_cancel_pending` stamps its pool with when the cancellation happened. The
+   source is the interrupt-time counter, a memory read rather than a syscall.
+2. A self-heal timer, running on a private pool this crate creates **lazily on
+   the first cancellation**, periodically checks the stamped pools. For each one
+   whose cancellation has not yet been answered, it submits a pre-created work
+   item to that pool.
+3. That repair running is what marks the pool answered -- the submission is the
+   remedy, and the callback running is the evidence it arrived.
 
 The repair work item is created once, when the pool is registered, so the healing
-path performs no allocation and makes one call.
+path performs no allocation and makes one call. That matters because the pool it
+is aimed at may already be wedged.
+
+**A repair the pool does not take is retried once, then reported.** If a repair
+is still queued five seconds later, the timer records `repair-overdue` and
+submits again. Past one such reattempt the `fail-fast` feature, if enabled, ends
+the process; without it the timer goes on reporting and re-submitting. The
+allowance is restored whenever a repair actually runs.
 
 ## What it costs
 
 | | cost |
 |---|---|
-| per callback dispatched | one interrupt-time read and one relaxed store |
-| per `try_cancel_pending` | two stores |
+| per callback dispatched | nothing: callbacks this crate dispatches do not touch the self-heal state |
+| per `try_cancel_pending` | one clock read and one atomic max |
 | if you never cancel | the private pool is never created; no timer, no thread |
 | after a cancellation | one private pool, one periodic timer, one work object per watched pool |
-| a busy process | usually no repair submitted at all, because dispatches are observed after the cancel |
+| a pool that was cancelled | one work submission per healer period until a repair dispatches |
+
+**Evidence of health comes only from this crate's own repair dispatching.** An
+earlier design stamped a marker in every callback this crate dispatched, so
+ordinary traffic on a pool would suppress the repair and a busy process usually
+submitted none. That was removed: a pool with no other traffic was
+indistinguishable from a wedged one, which is precisely the case the feature
+exists for. The cost moved with it -- the per-callback store is gone, and a
+cancelled pool now gets a repair submitted whether or not it is otherwise busy.
 
 The coalescing matters because cancellation tends to appear in `Drop` paths as a
 matter of course. Repairing on every call would charge a teardown-sized cost to a

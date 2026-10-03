@@ -941,8 +941,8 @@ comment that the code next to it does not keep.
   question it is named for. Timestamps then serve only health (`unhealed`) and retry timing
   (`repair_overdue`), which is what they can actually support.
 
-- [ ] **M-T11.3** -- **Update the self-heal feature guide, which documents the design `M-T9.2`
-      deleted.** The guide still tells a consumer that every callback this crate dispatches stamps
+- [x] **M-T11.3** -- **Update the self-heal feature guide, which documents the design `M-T9.2`
+      deleted.** Done 2026-10-03. The guide still tells a consumer that every callback this crate dispatches stamps
   a per-pool marker, that a busy pool therefore suppresses repair submissions, and that the per
   callback cost is an interrupt-time read and a relaxed store. None of that is true: health is now
   evidenced only by the crate's own repair dispatching, and that store was removed from every
