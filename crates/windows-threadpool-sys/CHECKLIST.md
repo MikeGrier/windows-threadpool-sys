@@ -1200,6 +1200,111 @@ the one acted on so far.
   one-off grep, recorded here, and the sweep it drove found exactly the reviewer's eight and no
   more.
 
+## M-T13 -- The twelfth review round: an uncovered rule, a half-converted twin, and the hook's residue
+
+Nine findings, all confirmed. The round is characterised by *residue*: four of the nine are
+leftovers from two of this branch's own larger edits -- the hook deletion in `1eca1e16` and the
+heal rework in `M-T9.2` -- that removed a thing without removing what pointed at it. The first
+finding is of a different and worse kind: a rule nothing tests.
+
+- [ ] **M-T13.1** -- **Make the tick's coalescing skip actually tested.** `tick_inner`'s
+  `if !entry.unhealed() { continue; }` is the coalescing rule: a pool that dispatched after its
+  cancellation is live and is owed no repair. **Deleting the skip outright leaves all 286 lib
+  tests passing** -- measured, not argued. Both tests that exist to cover it are inert:
+  `a_tick_leaves_a_pool_its_own_repair_has_answered` asserts `repairs_run() == 0` on the line
+  after `tick_inner()`, and `repairs_run` counts repairs that have *run*, which on a fresh private
+  pool with no thread yet is asynchronous and still 0 whether or not one was submitted. Its own
+  assertion message names the choice -- "on the repair having run rather than on the mark" -- so
+  the reasoning is recorded and wrong. `a_tick_leaves_a_pool_alone_when_nothing_is_owed` asserts
+  only `!unhealed()`, which is false-by-construction when nothing ever stamped a cancellation, so
+  no behaviour of the tick can make it fail.
+
+  **Target:** assert on the synchronous evidence -- `last_submitted()` and `repair_in_flight()` --
+  which are written by `submit_repair` before it returns. Add a sabotage entry for the skip, since
+  none covers it, and verify the rejecting direction by deleting the skip and watching the test go
+  red.
+
+- [ ] **M-T13.2** -- **Give the periodic timer one drain body instead of two.**
+  `PeriodicTimerMember::stop_and_drain` passes `TRUE` to `WaitForThreadpoolTimerCallbacks` --
+  cancel -- while `ThreadpoolPeriodicTimer::stop_and_drain` passes `FALSE` and documents at length
+  that "the drain no longer cancels". The member's own doc says "As with
+  `ThreadpoolPeriodicTimer::stop_and_drain`", so it cross-references the twin it disagrees with,
+  and its trace label still reads `(cancel)`.
+
+  **This is a two-site rule half-converted, and the structural cause is visible in the siblings
+  that did not drift:** `TimerMember` and `WaitMember` both delegate to a shared
+  `ThreadpoolTimer::stop_and_drain_parts` / `ThreadpoolWait::stop_and_drain_parts`. The periodic
+  timer has no such shared body, which is why it was possible to convert one copy and not the
+  other. **Target:** extract `stop_and_drain_parts` for the periodic timer and have both call it,
+  so the next conversion cannot reach one site only.
+
+- [ ] **M-T13.3** -- **Repair the sabotage entry that now invokes undefined behaviour.** The entry
+  "the heal creates a work object instead of submitting the pre-created one" passes
+  `Box::new(AtomicU64::new(0))` as the fresh work object's context. `repair_trampoline` casts its
+  context to `&PoolEntry` and writes stamps and counters through it, so the patched build writes
+  past the end of an 8-byte allocation. The entry's `whyNotNullContext` explains that a null
+  context was avoided precisely so the result would not be a crash-caught one -- and the context
+  type changed underneath that reasoning, so it now risks exactly the outcome it was written to
+  avoid, plus heap damage that other tests in the same process would see.
+
+- [ ] **M-T13.4** -- **Correct the disarm documentation, which says the opposite of what the crate
+  measures.** `ThreadpoolTimer::disarm` says "a callback already queued still runs; use
+  `cancel_pending` to drop those as well", and `ThreadpoolPeriodicTimer::stop` says "a tick already
+  queued still runs". `disarming_cancels_a_queued_tick_which_a_waits_disarm_does_not` pins the
+  opposite for the one-shot timer: with a disarm the queued tick is discarded, asserted as
+  `outcomes[1] == 0` against `outcomes[0] == 1` without one. The doc therefore sends a caller to
+  `cancel_pending` for something that has already happened.
+
+  **The periodic half needs its own measurement rather than a copied claim.** The pinning test
+  drives a one-shot `ThreadpoolTimer`; `ThreadpoolPeriodicTimer::stop_and_drain`'s doc already
+  extrapolates from it ("the way a one-shot timer's disarm does"), and this item must either
+  measure the periodic type or state plainly that the behaviour is pinned only for the one-shot.
+
+- [ ] **M-T13.5** -- **Drop the four `windows-sys` features the deleted hook facility needed.** The
+  `trace` feature still pulls `Win32_System_Diagnostics_ToolHelp`, `Win32_System_LibraryLoader`,
+  `Win32_System_Memory` and `Win32_System_SystemInformation`, with a five-line comment explaining
+  the page-size arithmetic "the hook installer needs" and how `VirtualProtect` reports a whole
+  page's previous protection. `1eca1e16` deleted that facility; none of the four has a single use
+  left in the crate. A consumer who turns tracing on compiles four modules for nothing, and the
+  comment describes machinery that is not there.
+
+- [ ] **M-T13.6** -- **Read the error before freeing the context in `ThreadpoolWork::new`.** The
+  failure path runs `drop(Box::from_raw(ctx))` and *then* `io::Error::last_os_error()`. Since this
+  branch, `ctx` holds a `Registration`, whose drop can reach `PoolEntry::drop` and from there
+  `WaitForThreadpoolWorkCallbacks` and `CloseThreadpoolWork`. `timer.rs` and `timer/periodic.rs`
+  both capture the error first and free second; `work.rs` is the only one of the four that does
+  not.
+
+  **State the finding honestly: the clobber is not established.** Nothing in the Win32
+  documentation says those two calls set the last error on success, so this is an inconsistency
+  among four sites that should agree rather than a demonstrated bug. It is worth fixing because it
+  costs one line and because the ordering that is obviously safe should not be the minority.
+
+- [ ] **M-T13.7** -- **Stop crediting a `Drop` impl that does not exist.** Eight comments across
+  `heal.rs` (lines 295, 353, 774, 807, 849, 865, 1170) and `heal/tests.rs` (1058) attribute the
+  repair object's drain to `RepairWork::drop`. There is no `impl Drop for RepairWork`; the drain
+  moved into `PoolEntry::drop` when the teardown-order invariant was made unrepresentable. The
+  trampoline's `SAFETY` comment is the one that matters, because it justifies a raw dereference
+  with "the entry's first field drains this object in its `Drop`" -- an argument about field order
+  that the `PoolEntry::drop` impl deliberately replaced.
+
+- [ ] **M-T13.8** -- **Say what the fail-fast child test establishes, which is not the abort.** Its
+  doc opens "**This aborts rather than unwinds**, so it cannot be observed with `catch_unwind`",
+  and attributes that to the panic escaping the healer's `extern "system"` trampoline. The child
+  calls `crate::heal::tick_inner()` directly on the libtest thread, so the panic unwinds normally
+  and the child exits 101. Every parent assertion -- not `SURVIVED`, not `SETUP_FAILED`, non-zero,
+  stderr text present -- holds under that unwind, so none of them distinguishes an abort from a
+  caught panic. The test is worth keeping: it proves the panic fires and that the message reaches
+  stderr, which is the claim `fail_fast_if_unrepairable` makes. Only the doc overstates it.
+
+- [ ] **M-T13.9** -- **Sweep the hook facility's remaining name.** `trace.rs`'s module doc tells a
+  reader the crate records under `wait`, `work`, `io`, `timer` and `timer-periodic`; it also
+  records under `heal`, `syscall-enter` and `syscall-leave`, so a reader building a filter from
+  that list silently loses the self-heal subsystem. `sabotage.json`'s `whyTestArgs` justifies
+  `--all-features` with "the whole hook module is behind the `trace` feature", and three messages
+  in `trace/tests.rs` (614, 617, 630) still speak of hooks installing. The `--all-features`
+  justification needs replacing with the real reason rather than deleting, since the flag is still
+  required.
 ## M-inf -- Diagnostic work with no gating deliverable
 
 - [ ] **M-T-inf.1** (was `M26.14.4`) -- **Find the threshold the close races.** `M26.14.2` used 1ms because it is
