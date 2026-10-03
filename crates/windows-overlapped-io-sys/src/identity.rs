@@ -48,13 +48,19 @@ fn try_next_generation(sequence: &AtomicU64) -> Option<u64> {
     // then 1, 2, ... and mint successfully, which is exactly the recycled
     // generation this refuses to produce. Saturating inside the update means the
     // counter never transiently holds a wrapped value, so there is no window.
-    sequence
-        .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |current| {
-            // `then`, not `then_some`: the latter is eager, so `current + 1`
-            // would overflow at the boundary before the guard could apply.
-            (current != u64::MAX).then(|| current + 1)
-        })
-        .ok()
+    // `fetch_update` is deprecated on current stable, renamed to `try_update`.
+    // The new name does not exist on this workspace's MSRV (1.98), so calling it
+    // would trade a lint for a build failure on the toolchain the MSRV job
+    // pins. The old name still compiles on both, so it stays until the MSRV
+    // moves past the rename. Scoped to this expression rather than the item, so
+    // a future deprecation elsewhere in the function is not silenced with it.
+    #[allow(deprecated)]
+    let next = sequence.fetch_update(Ordering::Relaxed, Ordering::Relaxed, |current| {
+        // `then`, not `then_some`: the latter is eager, so `current + 1`
+        // would overflow at the boundary before the guard could apply.
+        (current != u64::MAX).then(|| current + 1)
+    });
+    next.ok()
 }
 
 /// Take the next generation from `sequence`, refusing to wrap.
