@@ -895,7 +895,12 @@ one passed `cargo clippy -D warnings` on four configurations, the full test suit
 stress runs at 32 threads, and a 27/27 sabotage sweep. Four of the seven are a claim in a doc
 comment that the code next to it does not keep.
 
-- [ ] **M-T11.1** -- **Restore `TimerMember`'s `Send` and `Sync`, and put the rule on the build.**
+- [x] **M-T11.1** -- **Restore `TimerMember`'s `Send` and `Sync`, and put the rule on the build.**
+      Done 2026-10-03. The two `unsafe impl`s, with `WaitMember`'s SAFETY reasoning, plus a
+      `const _` block instantiating `needs_send` / `needs_sync` over all four member types.
+      Verified by sabotage in the direction that matters: with the impls removed the build fails
+      `E0277` **at lines 942-943 of the assertion itself**, not at some incidental use, so the
+      guard is what catches it rather than a bystander.
 
   **The regression.** At the merge base `TimerMember` held only a `PTP_TIMER` and a `PhantomData`,
   so it was auto-`Send + Sync`. This branch added `context: *mut c_void` and did not add the

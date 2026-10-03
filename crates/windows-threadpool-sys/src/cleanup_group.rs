@@ -736,6 +736,13 @@ pub struct TimerMember<'group> {
     _group: PhantomData<&'group CleanupGroup>,
 }
 
+// SAFETY: the context refers to state the group owns and outlives this member;
+// the member only reads it and passes it to thread-safe pool APIs. The same
+// reasoning as `WaitMember`'s, which is the point -- this type was left without
+// these impls when it gained the pointer, and silently stopped being `Send`.
+unsafe impl Send for TimerMember<'_> {}
+unsafe impl Sync for TimerMember<'_> {}
+
 impl TimerMember<'_> {
     /// Fire once, `delay` from now.
     pub fn set_after(&self, delay: Duration) {
@@ -905,6 +912,43 @@ pub struct WaitMember<'group> {
 // the member only reads them and passes them to thread-safe pool APIs.
 unsafe impl Send for WaitMember<'_> {}
 unsafe impl Sync for WaitMember<'_> {}
+
+/// Every member type is `Send` and `Sync`, and the build is what says so.
+///
+/// A member is a borrow of state the group owns, so these bounds are a property
+/// of the group's ownership rather than of any one member's fields -- which is
+/// exactly why a field can take them away without anything noticing. It
+/// happened: `TimerMember` held only a handle and a `PhantomData` and was
+/// auto-`Send + Sync`; gaining a `*mut c_void` context made it neither, the
+/// `unsafe impl`s that `WaitMember` already carried for the identical reason
+/// were not added beside it, and a public type silently stopped being movable
+/// between threads. No lint, test or sabotage saw it.
+///
+/// So the rule lives here rather than in a test. These functions are never
+/// called; instantiating them is what type-checks the bounds, and a member that
+/// loses one fails the build at the definition rather than in a consumer's
+/// crate. Adding a type to this list is the cost of adding a member kind, and
+/// that is the point.
+///
+/// **Both directions.** A reader may wonder what stops this being vacuous: if
+/// the bounds were dropped from every type at once, would this still pass? No --
+/// `needs_send` and `needs_sync` name the bounds explicitly, so each call is a
+/// real obligation. The accepting direction is checked by the fact that this
+/// compiles at all, and the rejecting direction was checked by measurement: with
+/// `TimerMember`'s impls absent, the first two lines below are the `E0277` that
+/// found this.
+const _: () = {
+    const fn needs_send<T: Send>() {}
+    const fn needs_sync<T: Sync>() {}
+    needs_send::<TimerMember<'_>>();
+    needs_sync::<TimerMember<'_>>();
+    needs_send::<WorkMember<'_>>();
+    needs_sync::<WorkMember<'_>>();
+    needs_send::<PeriodicTimerMember<'_>>();
+    needs_sync::<PeriodicTimerMember<'_>>();
+    needs_send::<WaitMember<'_>>();
+    needs_sync::<WaitMember<'_>>();
+};
 
 impl WaitMember<'_> {
     /// Borrow the watched handle, for signalling or inspecting it.
