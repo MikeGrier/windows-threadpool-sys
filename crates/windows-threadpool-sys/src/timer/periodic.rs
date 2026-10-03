@@ -29,11 +29,6 @@ struct PeriodicContext {
     /// from the period, so the timer is just as live after a tick as before it.
     /// Only stopping it settles this.
     obligation: crate::obligation::CloseObligation,
-    /// This object's claim on its pool's self-heal entry.
-    ///
-    /// On the context rather than on `ThreadpoolPeriodicTimer` so the trampoline
-    /// can reach it to stamp a dispatch (`M-T6.2`), and so it survives
-    /// `into_parts` into a cleanup-group member.
     /// This pool's entry in the self-heal registry.
     ///
     /// Held for its `Drop`, not read. The claim keeps the entry alive while

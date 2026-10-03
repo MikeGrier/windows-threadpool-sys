@@ -46,10 +46,6 @@ use crate::callback_env::CallbackEnviron;
 /// operation and waited for every executing callback.
 struct IoContext {
     live: Arc<OperationRegistry>,
-    /// This object's claim on its pool's self-heal entry.
-    ///
-    /// On the context rather than on `ThreadpoolIo` so the trampoline can reach
-    /// it to stamp a dispatch (`M-T6.2`).
     /// This pool's entry in the self-heal registry.
     ///
     /// Held for its `Drop`, not read. The claim keeps the entry alive while

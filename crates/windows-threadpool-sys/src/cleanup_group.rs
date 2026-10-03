@@ -69,11 +69,11 @@ struct OwnedResource {
     /// `CloseThreadpoolCleanupGroupMembers` runs. A no-op for kinds with no
     /// callback-driven re-arm (work, periodic timers, watched handles).
     prepare_shutdown: unsafe fn(*mut c_void),
-    /// Mark the member's pool as owing a self-heal repair, when the release is
-    /// a cancelling one. A no-op for every kind but a wait: the removal that
-    /// can sever a pool's arrival notification operates on a wait completion
-    /// packet, and only a wait owns one.
     /// Take a repair claim on this member's pool while it is still live.
+    ///
+    /// Yields nothing for every kind but a wait: the removal that can sever a
+    /// pool's arrival notification operates on a wait completion packet, and
+    /// only a wait owns one.
     ///
     /// Returns the claim, which the caller holds across the native release so
     /// the pool cannot be freed under the marking pass that follows.
@@ -982,26 +982,6 @@ impl WaitMember<'_> {
         });
     }
 
-    /// Cancel callbacks that have not started, then wait for those that have.
-    ///
-    /// # This brings a process-wide hazard forward; it does not create it
-    ///
-    /// Same as
-    /// [`ThreadpoolWait::try_cancel_pending_no_heal_tracking`](crate::wait::ThreadpoolWait::try_cancel_pending_no_heal_tracking)
-    /// -- see there for the full account. In short: removing an already-delivered
-    /// completion packet can permanently sever a pool's arrival-to-factory
-    /// notification, but the member's eventual release performs the same removal
-    /// anyway, so avoiding this call does not avoid the hazard. Draining does,
-    /// because it leaves nothing to remove.
-    ///
-    /// Owning the wait through a cleanup group does **not** change this. The
-    /// group's own `Drop` is safe because it releases with cancel-pending false,
-    /// not because the group protects its members; a cancelling release passes
-    /// the cancel through to each member. Named without a link, for the reason
-    /// `try_cancel_pending_no_heal_tracking` gives: `close_members_cancelling`
-    /// does not exist in a build with `self-heal` off, while this method does,
-    /// so a link would dangle in that configuration.
-    ///
     /// Stop watching and block until no callback is queued or executing.
     ///
     /// The same drain [`ThreadpoolWait::stop_and_drain`] performs, including
@@ -1049,6 +1029,13 @@ impl WaitMember<'_> {
     /// Not a link, deliberately: the method it would name does not exist in a
     /// build with `self-heal` off, and this one does, so the link would dangle
     /// in exactly the configuration this method exists for.
+    ///
+    /// **Owning the wait through a cleanup group does not change the hazard.**
+    /// The group's own `Drop` is safe because it releases with cancel-pending
+    /// false, not because the group protects its members; a cancelling release
+    /// passes the cancel through to each one. Named without a link for the
+    /// reason given above: `close_members_cancelling` does not exist in a build
+    /// with `self-heal` off, while this method does.
     ///
     /// # Safety
     ///

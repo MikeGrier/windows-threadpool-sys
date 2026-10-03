@@ -1157,6 +1157,49 @@ the one acted on so far.
   overflow announcement are unaffected. Watch that the existing buffer tests pin *order* as well
   as contents, since a ring is where that can silently invert.
 
+- [x] **M-T12.4** -- **Unfuse eight doc blocks, and check the half that is checkable.** Found by
+      the twelfth review round, which found them by reading; done 2026-10-03.
+
+  **The defect, and why ten rounds missed it.** An edit that replaces an item's documentation by
+  anchoring on its signature and prepending new prose leaves the previous block above the new one.
+  The result compiles, renders, and passes every gate: rustdoc validates link *syntax* rather than
+  prose, clippy does not read doc semantics, and `missing_docs` is satisfied by the presence of *a*
+  comment rather than by its being the right one. All eight are mine, all from this branch.
+
+  **Five were a false claim repeated.** The `registration` field on every context type said it sat
+  there "so the trampoline can reach it to stamp a dispatch (`M-T6.2`)" -- a mechanism `M-T9.2`
+  deleted. In four of them the true text sat directly underneath, so each field stated two
+  contradictory things; `wait.rs` had only the false one. `M-T9.2`'s own entry claims "each field
+  says so", which was half-true, and the true half is what let the sweep look done.
+
+  **Three left an item with no documentation of its own**: `Registration::owe_repair` and
+  `release` had their docs stolen by the item above them, and `ThreadpoolWait::recover_repair`
+  carried two `# Safety` sections. `missing_docs` cannot see any of these -- two are `pub(crate)`,
+  and the third has a comment, just not its own.
+
+  **One was actively misleading.** `WaitMember::stop_and_drain` carried a section headed "This
+  brings a process-wide hazard forward; it does not create it", which is the opposite of what
+  draining does. The reviewer read that text as belonging to no existing method and suggested
+  deleting it; that was wrong -- `WaitMember` has two cancelling methods, and the paragraph makes
+  a group-specific point neither of them stated. It was **relocated** to
+  `try_cancel_pending_no_heal_tracking`, whose obligation it describes.
+
+  **The check, and what it deliberately does not cover.** `tests/doc_blocks.rs` errors on a doc
+  block carrying the same heading twice: there is no legitimate item with two `# Safety` sections,
+  so that signal is sound. It skips fenced regions, because a doctest hides a line with `# ` and
+  would otherwise be indistinguishable from a heading. It walks `src` recursively -- a shallow
+  walk would skip `heal/`, `timer/` and `trace/` and report success over a fraction of the tree --
+  and asserts both a floor on files visited and a floor on headings recognised, so a broken walk
+  or a blind parser fails loudly instead of passing vacuously. Its rejecting direction is verified
+  by sabotage: re-fusing the block the reviewer found fails it by file and line.
+
+  **The general case is not automated, and that is the decision rather than an omission.** Two
+  fused *summary sentences* carry no sound signal. The best heuristic -- a one-sentence paragraph
+  with no blank line before it and one after -- flags about twenty-five sites in this crate, of
+  which four are real; shipping it would be shipping an alarm nobody can act on. It is a useful
+  one-off grep, recorded here, and the sweep it drove found exactly the reviewer's eight and no
+  more.
+
 ## M-inf -- Diagnostic work with no gating deliverable
 
 - [ ] **M-T-inf.1** (was `M26.14.4`) -- **Find the threshold the close races.** `M26.14.2` used 1ms because it is

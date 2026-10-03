@@ -332,11 +332,17 @@ struct WaitContext {
     /// report. A callback that re-arms sets it again, which is why this is
     /// cleared at trampoline entry rather than on the way out.
     obligation: crate::obligation::CloseObligation,
-    /// This object's claim on its pool's self-heal entry.
+    /// This pool's entry in the self-heal registry.
     ///
-    /// On the context rather than on `ThreadpoolWait` so the trampoline can
-    /// reach it to stamp a dispatch (`M-T6.2`), and so it survives `into_parts`
-    /// into a cleanup-group member.
+    /// **The one registration that is read rather than only held.** A wait is
+    /// the only object that reaches the removal primitive a cancellation owes a
+    /// repair for, so `try_cancel_pending`, `recover_repair` and `owe_repair`
+    /// all go through this field; the other four context types hold theirs
+    /// purely for its `Drop`.
+    ///
+    /// On the context rather than on [`ThreadpoolWait`] so it survives
+    /// [`into_parts`](ThreadpoolWait::into_parts) into a cleanup-group member,
+    /// which is how the group reaches it after the object itself is gone.
     registration: crate::heal::Registration,
     callback: Box<dyn Fn(&WaitActivation<'_>) + Send + Sync + 'static>,
 }
@@ -944,19 +950,6 @@ impl ThreadpoolWait {
         });
     }
 
-    /// Mark the pool behind a detached wait context as owing a repair.
-    ///
-    /// For [`crate::cleanup_group::CleanupGroup`], whose members hold their
-    /// context through the group rather than through a [`ThreadpoolWait`].
-    ///
-    /// # Safety
-    ///
-    /// `context` must come from [`into_parts`](Self::into_parts) on this type
-    /// and name a still-live object whose context the caller has not yet freed.
-    ///
-    /// Reports whether the pool ended up tracked, which the group accumulates
-    /// and acts on after it has freed every context -- never here, where an
-    /// unwind would skip those frees.
     /// Take a repair claim on this wait's pool while the object is still live.
     ///
     /// For [`crate::cleanup_group::CleanupGroup`], which must do this *before*
@@ -986,6 +979,15 @@ impl ThreadpoolWait {
     /// `M-T11.4` removed the `OwnedResource` hook that named it: the group's
     /// marking pass now goes through the claims, which is what the retry here
     /// must not be reached from.
+    ///
+    /// Reports whether the pool ended up tracked. A caller that accumulates
+    /// this across several members must act on it only after every context is
+    /// freed -- never mid-loop, where an unwind would skip those frees.
+    ///
+    /// # Safety
+    ///
+    /// `context` must come from [`into_parts`](Self::into_parts) on this type
+    /// and name a still-live object whose context the caller has not yet freed.
     #[cfg(feature = "self-heal")]
     #[must_use]
     pub(crate) unsafe fn owe_repair(context: *mut core::ffi::c_void) -> bool {

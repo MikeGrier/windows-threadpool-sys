@@ -535,17 +535,6 @@ mod on {
             self.entry.as_ref()
         }
 
-        /// Note that a cancellation on this object's pool owes it a repair.
-        ///
-        /// Stamped *after* the cancelling call returns, not before. The question
-        /// a repair asks is whether the pool has dispatched since the removal
-        /// that may have severed its notification, and a dispatch that happened
-        /// while the removal was in progress is no evidence about afterwards.
-        /// Reports whether the pool ended up tracked. `false` means the
-        /// cancellation has happened with nothing that will ever repair it,
-        /// which is the one case `try_cancel_pending`'s safety claim does not
-        /// cover; the caller decides what to do about it, at a point where a
-        /// panic cannot skip work the teardown still owes.
         /// Take a second, independent claim on this object's pool.
         ///
         /// Registers the pool when this registration is empty, so the claim
@@ -559,6 +548,18 @@ mod on {
             register(self.key)
         }
 
+        /// Note that a cancellation on this object's pool owes it a repair.
+        ///
+        /// Called *after* the cancelling call returns, not before. The question
+        /// a repair asks is whether the pool has dispatched since the removal
+        /// that may have severed its notification, and a dispatch that happened
+        /// while the removal was in progress is no evidence about afterwards.
+        ///
+        /// Reports whether the pool ended up tracked. `false` means the
+        /// cancellation has happened with nothing that will ever repair it,
+        /// which is the one case `try_cancel_pending`'s safety claim does not
+        /// cover; the caller decides what to do about it, at a point where a
+        /// panic cannot skip work the teardown still owes.
         #[must_use]
         pub(crate) fn owe_repair(&self) -> bool {
             let Some(entry) = &self.entry else {
@@ -797,12 +798,6 @@ mod on {
         }
     }
 
-    /// Give up one object's claim, retiring the entry when nothing needs it.
-    ///
-    /// **An entry outlives its objects while a repair is owed**, and that single
-    /// rule covers the default pool and a private one alike -- see the decision
-    /// recorded with `M-T6.1`. Retiring an entry that still owes a repair would
-    /// drop the repair at exactly the moment it is needed.
     /// Whether an entry can be dropped from the registry.
     ///
     /// **One definition, because there are two retirement sites.** `release`
@@ -817,6 +812,12 @@ mod on {
         entry.objects.load(Ordering::Relaxed) == 0 && !entry.unhealed() && !entry.repair_in_flight()
     }
 
+    /// Give up one object's claim, retiring the entry when nothing needs it.
+    ///
+    /// **An entry outlives its objects while a repair is owed**, and that single
+    /// rule covers the default pool and a private one alike -- see the decision
+    /// recorded with `M-T6.1`. Retiring an entry that still owes a repair would
+    /// drop the repair at exactly the moment it is needed.
     fn release(entry: &Arc<PoolEntry>) {
         // Moved out rather than dropped in place; see `retire_idle`.
         let retired: Vec<Arc<PoolEntry>> = {
@@ -1193,7 +1194,6 @@ mod on {
     #[cfg(test)]
     pub(crate) static REPAIR_CALLBACK_INSIDE: AtomicUsize = AtomicUsize::new(0);
 
-    /// Make the work object a repair for this pool will submit.
     /// Give an entry its work object, with the entry itself as the context.
     ///
     /// Reports whether it now has one. The entry must not be published to the
