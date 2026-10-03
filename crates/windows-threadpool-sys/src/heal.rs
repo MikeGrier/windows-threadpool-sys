@@ -52,8 +52,8 @@ pub(crate) use on::{PoolEntry, Registration, entries, now, register, retire_idle
 // that is not there in a `--no-default-features` test build.
 #[cfg(all(test, feature = "self-heal"))]
 pub(crate) use on::{
-    FORCE_REPAIR_FAILURE_FOR, HOLD_REPAIR_CALLBACK_FOR, HOLD_REPAIR_CALLBACK_MS,
-    REPAIR_CALLBACK_INSIDE, TICK_GATE, is_retirable, tick_inner,
+    FORCE_HEALER_START_FAILURE, FORCE_REPAIR_FAILURE_FOR, HOLD_REPAIR_CALLBACK_FOR,
+    HOLD_REPAIR_CALLBACK_MS, REPAIR_CALLBACK_INSIDE, TICK_GATE, is_retirable, tick_inner,
 };
 
 #[cfg(not(feature = "self-heal"))]
@@ -564,15 +564,7 @@ mod on {
             let Some(entry) = &self.entry else {
                 return self.owe_repair_untracked();
             };
-            entry.stamp_cancelled(now());
-            // After the stamp, never before: the healer's first tick must
-            // not be able to run before the entry it exists to repair says
-            // it is unhealed.
-            //
-            // Called without the registry lock held -- creating the healer
-            // registers its own pool, which takes that lock.
-            ensure_running();
-            true
+            mark_and_arrange_repair(entry)
         }
 
         /// Mark a cancellation on a claim taken *before* a release, where
@@ -605,9 +597,7 @@ mod on {
                 crate::trace_record!("heal", "cancel-untracked", self.key);
                 return false;
             };
-            entry.stamp_cancelled(now());
-            ensure_running();
-            true
+            mark_and_arrange_repair(entry)
         }
 
         /// The cancellation path for an object that never got an entry.
@@ -640,10 +630,46 @@ mod on {
                 crate::trace_record!("heal", "cancel-untracked", self.key);
                 return false;
             };
-            entry.stamp_cancelled(now());
-            ensure_running();
-            true
+            mark_and_arrange_repair(entry)
         }
+    }
+
+    /// Mark a cancellation and make sure something will actually repair it.
+    ///
+    /// **The common tail of all three cancellation paths**, and one site rather
+    /// than three because the interesting half is a fallback that is easy to
+    /// add to one of them and forget in the others -- which is how this was
+    /// first written, and what a review caught.
+    ///
+    /// The stamp comes first, never after the start: the healer's first tick
+    /// must not be able to run before the entry it exists to repair says it is
+    /// unhealed. `ensure_running` is called without the registry lock held,
+    /// because creating the healer registers its own pool and so takes it.
+    ///
+    /// **When the healer cannot be started, the repair is submitted here
+    /// instead.** Leaving it would mark a pool unhealed and schedule nothing
+    /// while still reporting the cancellation as tracked, so
+    /// `try_cancel_pending`'s claim that this crate repairs the pool afterwards
+    /// would silently not hold and the untracked fail-fast would not fire
+    /// either. A later cancellation anywhere in the process retries the start,
+    /// which is `M-T10.22`; what that does not cover is a process where no
+    /// later cancellation arrives.
+    ///
+    /// Submitting now is what a tick would have done, it is the action measured
+    /// to release the stall, and the work object already exists -- so the only
+    /// thing given up is the coalescing the timer provides, which this path
+    /// pays for once rather than being a correctness question.
+    ///
+    /// Always reports the cancellation as tracked: either a healer will visit
+    /// this entry or its repair has already been handed over.
+    fn mark_and_arrange_repair(entry: &PoolEntry) -> bool {
+        entry.stamp_cancelled(now());
+        if ensure_running() {
+            return true;
+        }
+        crate::trace_record!("heal", "repair-submitted-inline", entry.key());
+        submit_repair(entry);
+        true
     }
 
     /// The interrupt-time counter, as both stamps are measured on.
@@ -914,14 +940,24 @@ mod on {
     /// feature off for the life of the process on the strength of one bad
     /// moment. A failed attempt now records and leaves the slot empty, so the
     /// next cancellation tries again.
-    fn ensure_running() {
+    #[must_use]
+    fn ensure_running() -> bool {
         /// Fast path, so the common already-running case pays a load rather
         /// than a lock on the cancellation path.
         static RUNNING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
         static HEALER: Mutex<Option<Healer>> = Mutex::new(None);
 
+        // Lets a test reach the no-healer path without having to make pool or
+        // timer creation fail for real. Read before the fast path, because by
+        // the time a test runs some earlier test has almost certainly started
+        // the healer for the process.
+        #[cfg(test)]
+        if FORCE_HEALER_START_FAILURE.load(Ordering::SeqCst) {
+            return false;
+        }
+
         if RUNNING.load(Ordering::Acquire) {
-            return;
+            return true;
         }
         // Held across construction, which registers the healer's own pool and
         // so takes the registry lock. That order -- this lock, then the
@@ -930,15 +966,16 @@ mod on {
         // here without holding it.
         let mut slot = HEALER.lock().unwrap_or_else(|poison| poison.into_inner());
         if slot.is_some() {
-            return;
+            return true;
         }
         let Some(healer) = build() else {
             crate::trace_record!("heal", "healer-start-failed", 0);
-            return;
+            return false;
         };
         crate::trace_record!("heal", "healer-started", 0);
         *slot = Some(healer);
         RUNNING.store(true, Ordering::Release);
+        true
     }
 
     /// Create the healer's pool and periodic timer, or report that it could not.
@@ -1010,6 +1047,34 @@ mod on {
     /// than one process lifetime.
     const REATTEMPTS_BEFORE_FAIL_FAST: u32 = 1;
 
+    /// Hand this entry's pre-created repair to its pool.
+    ///
+    /// **One definition, because there are two places a repair is submitted.**
+    /// The healer's tick is the ordinary one; `Registration::owe_repair` is the
+    /// other, on the path where the healer could not be started and a tick will
+    /// therefore never arrive. The two must agree about the order of the stamp,
+    /// the count and the call, and the order is the subtle part -- so they ask
+    /// the same function rather than restating it.
+    ///
+    /// The work object was made when the pool was registered, so this allocates
+    /// nothing and makes one call, which matters because the pool it is aimed
+    /// at may already be wedged. It is never null: `register` returns an empty
+    /// registration and keeps the entry out of the registry when `arm_repair`
+    /// fails, so an entry that can be reached from either caller has one.
+    fn submit_repair(entry: &PoolEntry) {
+        crate::trace_record!("heal", "repair-submitted", entry.key(), entry.repair_work());
+        // Counted and stamped *before* the submit, never after: the repair can
+        // be dispatched on a pool thread the instant it is handed over, so a
+        // trampoline that lowered the count before this raised it would leave
+        // `repair_in_flight` reading false with one outstanding, which is the
+        // one answer it must never give. The saturating decrement means such an
+        // inversion could not even be recovered by the arithmetic.
+        entry.stamp_submitted(now());
+        // SAFETY: the work object was created by `arm_repair` for this entry
+        // and is alive while the entry is, which the caller's reference keeps.
+        unsafe { SubmitThreadpoolWork(entry.repair_work()) };
+    }
+
     /// [`tick`] without taking the test gate.
     ///
     /// **Reads state, and writes only its own stamp.** There is no clear here,
@@ -1058,22 +1123,7 @@ mod on {
                     crate::obligation::fail_fast_if_unrepairable(entry.key(), overdue);
                 }
             }
-            // The one action measured to release the stall every time. The work
-            // object was made when the pool was registered, so this allocates
-            // nothing and makes one call -- which matters because the pool it is
-            // aimed at may already be wedged.
-            crate::trace_record!("heal", "repair-submitted", entry.key(), entry.repair_work());
-            // Counted and stamped *before* the submit, never after: the repair
-            // can be dispatched on a pool thread the instant it is handed over,
-            // so a trampoline that lowered the count before this raised it
-            // would leave `repair_in_flight` reading false with one
-            // outstanding, which is the one answer it must never give. The
-            // saturating decrement means such an inversion could not even be
-            // recovered by the arithmetic.
-            entry.stamp_submitted(now());
-            // SAFETY: the work object was created by `arm_repair` for this
-            // entry and is alive while the entry is, which this `Arc` ensures.
-            unsafe { SubmitThreadpoolWork(entry.repair_work()) };
+            submit_repair(&entry);
         }
         // Entries kept alive only by an owed repair become retirable once it is
         // discharged, and this is the only place that can notice.
@@ -1096,6 +1146,22 @@ mod on {
     /// rather than anything it had to do with. Zero means no pool is forced.
     #[cfg(test)]
     pub(crate) static FORCE_REPAIR_FAILURE_FOR: AtomicUsize = AtomicUsize::new(0);
+
+    /// Make [`ensure_running`] report that no healer is available.
+    ///
+    /// The fallback it gates only runs when the healer cannot be started, and
+    /// making pool or timer creation fail for real is not something a test can
+    /// ask for. Read before the fast path rather than inside `build`, because
+    /// by the time any test runs some earlier one has almost certainly started
+    /// the healer for the whole process -- a flag that only reached `build`
+    /// would be inert.
+    ///
+    /// Unkeyed, unlike the two below, and the tick gate is what makes that
+    /// safe: a test setting this holds the gate, so no other test's
+    /// cancellation is in flight to be perturbed by it.
+    #[cfg(test)]
+    pub(crate) static FORCE_HEALER_START_FAILURE: std::sync::atomic::AtomicBool =
+        std::sync::atomic::AtomicBool::new(false);
 
     /// The pool whose repair callback is held inside its dispatch, and for how
     /// long.

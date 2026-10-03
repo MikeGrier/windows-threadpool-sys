@@ -1066,6 +1066,43 @@ comment that the code next to it does not keep.
   suspending and repeat until a pass adds nothing -- or refuse, which is the established posture
   for this module when it cannot establish its precondition.
 
+## M-T12 -- The eleventh review round
+
+Opened 2026-10-03 by a review of everything on this branch. Four findings; this milestone holds
+the one acted on so far.
+
+- [x] **M-T12.1** -- **Submit the repair inline when the healer cannot be started.** Done
+      2026-10-03.
+
+  **The gap.** `owe_repair` stamped the entry, called `ensure_running`, and reported the
+  cancellation as tracked **whatever that returned**. When the healer could not be started there
+  was then a pool marked unhealed with nothing scheduled to visit it, while `try_cancel_pending`'s
+  claim that this crate repairs the pool afterwards silently did not hold -- and the untracked
+  fail-fast did not fire either, because by its own account nothing had gone wrong. `M-T10.22`
+  makes a *later* cancellation retry the start; what it does not cover is a process where no later
+  cancellation arrives.
+
+  **The fix is to do what the tick would have done.** `ensure_running` now reports whether a healer
+  exists, and when it does not the entry's own pre-created repair is submitted on the spot. That is
+  the action measured to release the stall, the work object already exists so it allocates nothing,
+  and the only thing given up is the coalescing the timer provides -- a cost this path pays once
+  rather than a correctness question. The cancellation is still reported as tracked, which is
+  honest: its repair has been handed over rather than scheduled, which is the stronger answer.
+
+  **One site, not one of three.** The first attempt fixed `owe_repair` alone and left
+  `owe_repair_claimed` and `owe_repair_untracked` with the old unconditional `true` -- the
+  half-converted shape this branch keeps producing. The common tail is now
+  `mark_and_arrange_repair`, which all three call, and the submit itself is `submit_repair`, shared
+  with `tick_inner` so the order of stamp, count and call cannot drift between them.
+
+  **Guarded in both directions** by `a_cancellation_submits_its_repair_when_the_healer_will_not_start`,
+  which holds the tick gate so a submission it observes can only be the inline one: with a healer
+  available nothing is handed over, and without one the repair is submitted and counted
+  outstanding. In `sabotage.json`, and caught by name when the fallback is reverted.
+
+  **Extracting `submit_repair` broke two existing sabotage anchors**, which the pre-sweep check
+  caught before a run was wasted on them. That check is now the habit this branch was missing.
+
 ## M-inf -- Diagnostic work with no gating deliverable
 
 - [ ] **M-T-inf.1** (was `M26.14.4`) -- **Find the threshold the close races.** `M26.14.2` used 1ms because it is

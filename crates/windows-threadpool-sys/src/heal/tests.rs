@@ -380,6 +380,72 @@ mod on {
         drop(work);
     }
 
+    /// A cancellation whose healer will not start submits its repair inline.
+    ///
+    /// The gap a review found: `owe_repair` stamped the entry, called
+    /// `ensure_running`, and reported the cancellation as tracked **whatever
+    /// that returned**. When the healer could not be started there was then a
+    /// pool marked unhealed with nothing scheduled to visit it, while
+    /// `try_cancel_pending`'s claim that this crate repairs the pool afterwards
+    /// silently did not hold and the untracked fail-fast did not fire either.
+    ///
+    /// A later cancellation anywhere in the process retries the start, which is
+    /// `M-T10.22`. What that does not cover is a process where no later
+    /// cancellation arrives -- so the repair is now submitted on the spot.
+    ///
+    /// **The gate is what makes the observation unambiguous.** It stops the
+    /// healer's own tick, so a submission seen here can only be the inline one;
+    /// without it, a real tick could supply the same evidence and the test
+    /// would pass whether or not the fallback existed.
+    #[test]
+    fn a_cancellation_submits_its_repair_when_the_healer_will_not_start() {
+        let _gate = gate();
+        let pool = ThreadpoolPool::new().expect("create pool");
+        let (work, entry) = entry_for(&pool);
+        let key = entry.key();
+
+        // The accepting direction first: with a healer available, the
+        // cancellation path schedules rather than submits, so nothing is handed
+        // over while the gate holds every tick off.
+        let registration = crate::heal::register(key);
+        assert!(
+            registration.owe_repair(),
+            "a registered pool's cancellation is tracked"
+        );
+        assert_eq!(
+            entry.last_submitted(),
+            0,
+            "with a healer running the repair is left to a tick, and the gate is holding \
+             every tick off -- a submission here would mean the fallback fires when it \
+             should not, which would cost the coalescing the timer exists to provide"
+        );
+
+        // And the direction the fallback is for.
+        crate::heal::FORCE_HEALER_START_FAILURE.store(true, Ordering::SeqCst);
+        let registration = crate::heal::register(key);
+        let tracked = registration.owe_repair();
+        crate::heal::FORCE_HEALER_START_FAILURE.store(false, Ordering::SeqCst);
+
+        assert!(
+            tracked,
+            "the cancellation is still tracked: its repair has been handed over rather than \
+             scheduled, which is a stronger answer than scheduling, not a weaker one"
+        );
+        assert!(
+            entry.last_submitted() > 0,
+            "no healer will ever tick this entry, so the repair must have been submitted here. \
+             Reporting tracked without submitting leaves a pool marked unhealed with nothing \
+             arranged to repair it"
+        );
+        assert!(
+            entry.repair_in_flight(),
+            "and it must be counted as outstanding, or retirement could drop the entry while \
+             that repair is still queued"
+        );
+
+        drop(work);
+    }
+
     #[test]
     fn two_pools_get_two_entries() {
         let first = ThreadpoolPool::new().expect("create pool");

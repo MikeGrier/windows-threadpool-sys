@@ -217,14 +217,11 @@
       "expect": "caught",
       "why": "The first of the three claims the self-heal rests on. `try_cancel_pending` is a safe method only because the crate repairs the pool the cancel may have wedged, and the repair begins with the mark. A cancel that does not mark leaves the pool to be fixed by whatever the application happens to submit next, which for a program built on waits, timers and I/O is nothing.",
       "find": [
-        "            };",
-        "            entry.stamp_cancelled(now());",
-        "            // After the stamp, never before: the healer's first tick must"
+        "    fn mark_and_arrange_repair(entry: &PoolEntry) -> bool {",
+        "        entry.stamp_cancelled(now());"
       ],
       "replace": [
-        "            };",
-        "            let _ = entry;",
-        "            // After the stamp, never before: the healer's first tick must"
+        "    fn mark_and_arrange_repair(entry: &PoolEntry) -> bool {"
       ]
     },
     {
@@ -246,14 +243,14 @@
       "why": "The third claim, and the one that is easiest to break while looking correct. Creating a work object was measured NOT to release a stalled pool; only submitting one is. So the repair object is made when the pool is registered, and the healing path must do nothing but submit it. The patch below still submits something, and on a real pool would still release the stall -- which is why the guard is tied to the entry's OWN repair object through its callback context, not to a count of repairs in general.",
       "whyNotNullContext": "The fresh object is given its own valid counter rather than a null context. With null the trampoline dereferences it and the process aborts, which the harness scores as caught -- but by a crash, not by a test noticing, and this repository treats a crash-caught mutant as an uncovered one.",
       "find": [
-        "            unsafe { SubmitThreadpoolWork(entry.repair_work()) };"
+        "        unsafe { SubmitThreadpoolWork(entry.repair_work()) };"
       ],
       "replace": [
-        "            unsafe {",
-        "                let ctx: *mut core::ffi::c_void = Box::into_raw(Box::new(AtomicU64::new(0))).cast();",
-        "                let fresh = CreateThreadpoolWork(Some(repair_trampoline), ctx, std::ptr::null());",
-        "                if fresh != 0 { SubmitThreadpoolWork(fresh); }",
-        "            }"
+        "        unsafe {",
+        "            let ctx: *mut core::ffi::c_void = Box::into_raw(Box::new(AtomicU64::new(0))).cast();",
+        "            let fresh = CreateThreadpoolWork(Some(repair_trampoline), ctx, std::ptr::null());",
+        "            if fresh != 0 { SubmitThreadpoolWork(fresh); }",
+        "        }"
       ]
     },
     {
@@ -306,6 +303,25 @@
       ],
       "replace": [
         "                    let known = true;"
+      ]
+    },
+    {
+      "name": "a cancellation reports tracked without arranging any repair",
+      "file": "src/heal.rs",
+      "expect": "caught",
+      "why": "`try_cancel_pending` is safe to offer because this crate repairs the pool afterwards. When the healer cannot be started there is no tick to do that, so the repair is submitted on the spot instead -- the pre-created work object makes it one call. This patch restores the shape a review found: stamp the entry, ignore whether a healer exists, and report the cancellation as tracked regardless. The pool is then marked unhealed with nothing scheduled to visit it, and the untracked fail-fast does not fire either, because by its own account nothing went wrong.",
+      "whyNotTheStartItself": "Making `build` fail would be the other way in, but every test shares one process and some earlier test has almost certainly started the healer already -- a sabotage there would be inert. The patch is at the decision that consumes the answer, which is where the defect was.",
+      "find": [
+        "        if ensure_running() {",
+        "            return true;",
+        "        }",
+        "        crate::trace_record!(\"heal\", \"repair-submitted-inline\", entry.key());",
+        "        submit_repair(entry);",
+        "        true"
+      ],
+      "replace": [
+        "        let _ = ensure_running();",
+        "        true"
       ]
     },
     {
