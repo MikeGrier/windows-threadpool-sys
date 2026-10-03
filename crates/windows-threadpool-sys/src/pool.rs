@@ -325,15 +325,17 @@ impl Drop for ThreadpoolPool {
 /// does the default pool have" without scanning the handle space. The skip would
 /// cost roughly seven times what it saves.
 ///
-/// The second reason outlasts the first. That query reads a layout Microsoft
-/// does not publish, and this crate confines such reads to the `trace` feature.
-/// A misread returning a plausible non-zero would make this function skip the
-/// warm-up and report success, leaving the caller believing they are protected
-/// when they are not -- the exact failure this exists to prevent. An
+/// The second reason outlasts the first, and has since become the whole of it.
+/// That query reads a layout Microsoft does not publish, through an undocumented
+/// entry point. A misread returning a plausible non-zero would make this function
+/// skip the warm-up and report success, leaving the caller believing they are
+/// protected when they are not -- the exact failure this exists to prevent. An
 /// unconditional submit cannot be wrong that way.
 ///
-/// [`crate::trace::worker_factory_snapshot`] exposes the counts for a caller who
-/// wants them for their own reasons.
+/// **This crate no longer contains any way to make that query.** The facility
+/// that did was removed rather than kept behind a feature; see the decision in
+/// the workspace `DESIGN-NOTES.md`. A caller who wants worker counts needs a
+/// mechanism built on documented ground, such as an ETW kernel trace.
 ///
 /// # Returns
 ///

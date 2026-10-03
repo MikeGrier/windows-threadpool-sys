@@ -133,10 +133,12 @@ What it will **not** look like: a crash, a leak, an error return, or anything
 attributable to the call that caused it. The counters a diagnostic would normally
 check all read healthy.
 
-If you need to check, [`trace::worker_factory_snapshot`] reports every worker
-factory's counts. A pool with queued work, zero workers, and permission to create
-one is the signature. It is behind the `trace` feature and reads a layout
-Microsoft does not publish.
+The signature, if you have a way to observe it, is a pool with queued work, zero
+workers, and permission to create one. **This crate gives you no way to observe
+it.** Reading those counters needs an undocumented entry point and an unpublished
+structure layout, which this crate does not ship; an ETW kernel trace reaches the
+same conclusion on documented ground, and is what the captures under
+`measurements/` used to confirm it independently.
 
 ## Why the ungated method is `unsafe` when hanging is not undefined behaviour
 

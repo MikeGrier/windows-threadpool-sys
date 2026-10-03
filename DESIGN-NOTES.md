@@ -1517,7 +1517,94 @@ statements inside `record_live_before` fails exactly those two tests and leaves
 the other eighteen passing; restoring the direct call at one of the former sites
 fails to compile with `E0624`.
 
-## <a id="hot-patching-is-exclusive"></a>Hot-patching is exclusive, and the inline hooks spend that exclusivity knowingly
+## <a id="no-undocumented-apis"></a>This crate ships no undocumented APIs, and no assumptions about undocumented behaviour
+
+**Decided 2026-10-03** by the engineer. A standing constraint on what may ship,
+and the reason `trace/hook.rs` was deleted rather than fixed or relocated.
+
+### The rule
+
+No shipped code calls an undocumented entry point, and none depends on
+behaviour Microsoft does not publish. That covers names (`Nt*` exports outside
+the documented set) and, equally, *shape*: instruction encodings, structure
+layouts, fixed addresses, and argument counts.
+
+The second half is the part that is easy to lose. An undocumented name is
+visible at the call site; an assumption about a structure's size, or about what
+a stub's bytes mean, reads like ordinary code.
+
+### What went, and what it cost
+
+The inline hooking facility: it resolved undocumented worker-factory syscalls
+from `ntdll` and overwrote the first fourteen bytes of each with a jump,
+rebuilding the displaced instructions into a trampoline. Removing it took with
+it twelve undocumented entry points, the syscall-stub byte pattern, the syscall
+numbers, `WORKER_FACTORY_BASIC_INFORMATION`'s layout, a fixed `KUSER_SHARED_DATA`
+address and the meaning of one bit in it, and the argument counts of six
+undocumented calls -- which `M-T11.5` had already recorded as *unestablishable*
+from anything this crate owns.
+
+Four public functions went with it: `worker_factory_counts`,
+`completion_port_depths`, `worker_factory_snapshot`, `poke_completion_ports`.
+The trace **record** layer -- `record`, `dump`, `wants`, `enabled`, `clear`,
+`observe_exceptions` -- is untouched and reaches no further than this crate's
+own operations.
+
+Two integration tests went: `prewarming_makes_the_default_pool_create_a_worker`
+and `querying_the_worker_count_costs_more_than_the_submit_it_would_skip`. The
+first was the only direct evidence that `prewarm_default_pool` causes a worker
+to be created. **That claim is now carried only by the function's own documented
+contract** -- a callback having run is the proof, because it ran on a worker --
+which is self-evidencing rather than externally corroborated. Said plainly
+because it is a real reduction in what is checked, not a tidy-up.
+
+### Why deletion rather than a feature gate or a separate crate
+
+A feature gate was the arrangement that already existed, and it is what let the
+facility accumulate: `prewarm_default_pool`'s own documentation said this crate
+"confines such reads to the `trace` feature", which was true and was not enough.
+Confinement bounds who is exposed; it does not bound what is assumed. The
+constraint is about what ships, and a cargo feature ships.
+
+A separate unpublished crate would have satisfied the letter. It was declined
+because the facility's correctness criterion is the problem, not its location:
+every review round found another precondition that had been assumed rather than
+established, and the set of such preconditions is not enumerable in advance.
+Nineteen of twenty-six review items on the branch were in that one file, and
+four of its fixes introduced the next defect in it.
+
+### What rebuilding it on documented ground would take
+
+Recorded because the observations were worth having, and someone may want them
+again.
+
+- **Worker creation and thread lifetime** -- the finding the investigation
+  turned on. An **ETW kernel trace** already produced it independently of the
+  hooks: across 900 traced runs exactly one process showed a gap over a second,
+  the failing one, at 5008.7 ms against a healthy 0.232-17.928 ms (`M26.13.19`).
+  This is the documented route, it needs no in-process code, and it is what any
+  rebuild should start from.
+- **Worker-factory counters** -- no documented API exposes them. There is no
+  known documented substitute; ETW thread events answer the question the
+  counters were used for, by a different means.
+- **Completion-port depth** -- likewise undocumented. What it was used for was
+  deciding whether a stalled factory was *entitled* to a worker; ETW plus the
+  application's own accounting of outstanding operations reaches the same
+  question.
+- **`AlreadySignaled` on wait registration** -- this one has a documented
+  shape available: a caller who needs to know whether an object was already
+  signalled when a wait was armed can test the object directly before arming,
+  which is a race-free question only the caller can ask at the right moment.
+
+The captures taken with the facility remain under `measurements/`, and git
+retains the code.
+
+## <a id="hot-patching-is-exclusive"></a>Hot-patching is exclusive, and the inline hooks spent that exclusivity knowingly
+
+**Superseded by [This crate ships no undocumented APIs](#no-undocumented-apis).**
+The facility this decision governs was removed on 2026-10-03; the decision is
+kept because it records why the exclusivity mattered, which any rebuild would
+face again.
 
 **Decided 2026-10-02** by the engineer, from a review finding against
 `trace/hook.rs`. The finding was about a patch window; the decision is about

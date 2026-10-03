@@ -169,9 +169,13 @@
 //! The fault needs a pool with no threads, which bounds the exposure to process
 //! start and to the moments after a pool's last worker retires.
 //! [`pool::prewarm_default_pool`] removes that precondition for as long as the
-//! pool stays warm, and [`trace::worker_factory_snapshot`] reports the counters
-//! the whole diagnosis turns on. Neither is a fix, and this crate's own
-//! teardowns need neither.
+//! pool stays warm. It is not a fix, and this crate's own teardowns do not need
+//! it.
+//!
+//! The worker-factory counters the diagnosis turned on are **not** readable from
+//! this crate: reading them needs an undocumented entry point and an unpublished
+//! structure layout, which this crate does not ship. The captures that were taken
+//! with them are under `measurements/`.
 //!
 //! Holding the pool warm permanently is not available: `SetThreadpoolThreadMinimum`
 //! does not accept the default pool, and calling it that way terminates the

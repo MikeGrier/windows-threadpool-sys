@@ -1,124 +1,12 @@
 {
   "package": "windows-threadpool-sys",
-  "description": "Sabotages for the ntdll inline-hook facility in src/trace/hook.rs -- the stub recogniser that makes patching safe, the trampoline that rebuilds the displaced system call, and the table column that decides which calls carry a worker factory handle. Run with tools/run-sabotage.ps1; see tools/README-sabotage.md for the format and for why the results are read the way they are.",
-  "coveredSinceM-T10.5": "The hook trampoline's own `-enter` and `-leave` records ARE swept, by the two entries below. They were not, and could not be, until M-T10.5: the assertions existed but sat behind `if wants(\"wfactory\")`, and neither this harness nor CI sets WINDOWS_THREADPOOL_TRACE, so a sabotage deleting those `record` calls was scored SURVIVED against a guard that did exist. The fix was to run the test body in a trace-armed child via trace::in_a_trace_armed_child, which fixes the filter before `main` the only way a test can. Both sabotages are caught by name rather than by a crash. An earlier version of this note cited M-T4.1 for the outstanding work, which is a completed decision about the name of the synchronous close and never covered it -- so the job was, in practice, queued nowhere.",
-
-  "notCoveredHere": "The hook module's OTHER records are still absent, and for a different reason than the two above: no test asserts them at all, so there is nothing here to make reachable. They are `installed` / `refused` / `refused-after-seal` from the install path, `factory-found` / `factories-seen` / the `counts-*` family from the worker-factory probe, `port-depth` / `ports-seen` / `port-unavailable` / `port-poking` / `port-poked` from the completion-port scan, and `associate-already-signalled` from the wait-registration hook. Each has a test that exercises the code emitting it, but every one of those tests asserts the VALUE the function returns rather than the record it writes -- `the_factory_scan_finds_the_pool_and_reads_plausible_counts` checks the counts, `the_port_scan_finds_a_completion_port_and_reads_its_depth` checks the depth, and `hooking_the_wait_registration_observes_the_already_signalled_flag` deliberately asserts only that the hook fired, because which flag value comes back is a fact about the kernel on the day. So deleting any of those `record` calls would be reported SURVIVED, correctly: the guard really is missing. Queued as M-T10.36 in CHECKLIST.md.",
+  "description": "Sabotages for windows-threadpool-sys: the draining teardown and its per-object obligation, the self-heal registry and repair submission, and the trace record buffer. Run with tools/run-sabotage.ps1; see tools/README-sabotage.md for the format and for why the results are read the way they are.",
+  "notCoveredHere": "The hook facility this manifest was originally written for has been removed: it patched undocumented \ntdll syscall stubs, and this crate ships no undocumented entry points or assumptions about unpublished layouts. Fourteen entries went with it. What remains sweeps the teardown model, the drain obligations, and the self-heal -- all of which rest on documented Win32. The one trace entry below covers the record buffer's eviction, which is this crate's own data structure.",
   "testArgs": [
     "--all-features"
   ],
   "whyTestArgs": "--all-features, because the whole hook module is behind the `trace` feature. Without it the module is not compiled, every sabotage lands in code that does not exist, and the sweep reports SURVIVED for guards that are present and working.",
   "sabotages": [
-    {
-      "name": "the trampoline omits the system call",
-      "file": "src/trace/hook.rs",
-      "expect": "caught",
-      "why": "The trampoline rebuilds the displaced stub from the system call number. Replacing the two-byte `syscall` with NOPs leaves a trampoline that returns whatever was in eax without entering the kernel, so the hooked call silently stops doing anything. This is the failure that would make every hooked measurement a fiction while the process kept running, so the guard has to notice it by the call's own results rather than by a crash.",
-      "find": [
-        "    stub[8] = 0x0F;",
-        "    stub[9] = 0x05;"
-      ],
-      "replace": [
-        "    stub[8] = 0x90;",
-        "    stub[9] = 0x90;"
-      ]
-    },
-    {
-      "name": "the recogniser accepts anything",
-      "file": "src/trace/hook.rs",
-      "expect": "caught",
-      "why": "The recogniser is the entire safety argument for patching another module's code: it is what stops a jump being planted over instructions nobody decoded. A version that returns true unconditionally would happily corrupt any export whose name resolved.",
-      "find": [
-        "    head[..4] == PREFIX_HEAD && head[8..16] == PREFIX_TAIL"
-      ],
-      "replace": [
-        "    let _ = (head, PREFIX_HEAD, PREFIX_TAIL);",
-        "    true"
-      ]
-    },
-    {
-      "name": "the recogniser pins the system call number",
-      "file": "src/trace/hook.rs",
-      "expect": "caught",
-      "why": "The four system-call-number bytes are the one part of the stub that legitimately varies, between functions and between Windows builds. A recogniser that matched them too would refuse every stub but the one it was written against -- a failure that looks like safety and is in fact a facility that never works. This is the opposite direction from the sabotage above, and a guard that only tested one of them would pass either way.",
-      "find": [
-        "    head[..4] == PREFIX_HEAD && head[8..16] == PREFIX_TAIL"
-      ],
-      "replace": [
-        "    head[..8] == [0x4C, 0x8B, 0xD1, 0xB8, 0xE6, 0x01, 0x00, 0x00] && head[8..16] == PREFIX_TAIL"
-      ]
-    },
-    {
-      "name": "an unknown hook label falls back to the first entry",
-      "file": "src/trace/hook.rs",
-      "expect": "caught",
-      "why": "A typo in WINDOWS_THREADPOOL_TRACE_HOOKS must refuse, not silently patch whichever stub happens to be first in the table. The first entry is the worker park, the hottest path in the pool, so this mistake would be both invisible and maximally perturbing.",
-      "find": [
-        "    let Some(index) = HOOKS.iter().position(|(_, name)| *name == label) else {",
-        "        return Err(Refusal::NotFound);",
-        "    };"
-      ],
-      "replace": [
-        "    let index = HOOKS",
-        "        .iter()",
-        "        .position(|(_, name)| *name == label)",
-        "        .unwrap_or(0);"
-      ]
-    },
-    {
-      "name": "the fired counter never increments",
-      "file": "src/trace/hook.rs",
-      "expect": "caught",
-      "why": "The counter is what makes the facility's guard run on a machine with no trace environment set. Removing the increment is indistinguishable, to every unconditional assertion, from a jump that was never planted -- which is exactly the state the guard exists to rule out.",
-      "find": [
-        "                FIRED[$index].fetch_add(1, Ordering::Relaxed);"
-      ],
-      "replace": [
-        "                let _ = &FIRED[$index];"
-      ]
-    },
-    {
-      "name": "every hooked call is taken to carry a factory handle",
-      "file": "src/trace/hook.rs",
-      "expect": "caught",
-      "why": "Only the worker-factory calls have a factory handle in their first argument. Ignoring the table column that says so lets a stub with an out-pointer there install itself as the handle, after which the factory counters describe whatever that pointer was -- an error that reports itself as a plain query failure and would be read as the factory's own answer. This sabotage is here because the defect was real: it was in the first draft of the module and was caught while writing the table, not by a test.",
-      "find": [
-        "                if $carries_handle && a1 != 0 {"
-      ],
-      "replace": [
-        "                if a1 != 0 {"
-      ]
-    },
-    {
-      "name": "the factory layout is the wrong size",
-      "file": "src/trace/hook.rs",
-      "expect": "caught",
-      "why": "The query rejects a buffer whose length does not match the information class, so a struct that is the wrong SIZE fails every call while looking exactly like a process that has no worker factory. This defect was real -- it was the first draft, and it made the scan report nothing on a machine where the scan works. Padding the struct reproduces it: `_tail` has no readers, so the size changes and nothing else does.",
-      "whyNotTruncation": "This case used to DELETE the five fields from `start_routine` to `stack_commit`, which was the original defect's own shape. That stopped working on 2026-10-01: those fields acquired readers when the factory snapshot began emitting them, so the patch became a compile error (E0609, five times) instead of the runtime failure it is meant to produce, and the harness reported MANIFEST DOES NOT COMPILE. Checked before repairing, per M-T6.9: the patch was not being caught by a const assertion, which would have meant re-declaring the case rather than repairing it. Growing the struct through a field nothing reads produces the same wrong size with no such coupling.",
-      "find": [
-        "    _tail: u32,",
-        "}"
-      ],
-      "replace": [
-        "    _tail: u32,",
-        "    _sabotage_padding: [u64; 4],",
-        "}"
-      ]
-    },
-    {
-      "name": "the handle scan gives up immediately",
-      "file": "src/trace/hook.rs",
-      "expect": "caught",
-      "why": "The scan is what makes the factory readable in a stalled process, where no hooked call has fired and so no handle has been learned. A ceiling that stops before any real handle leaves it finding nothing, which is indistinguishable from a process with no pool -- and would have been read as exactly that.",
-      "find": [
-        "    /// this is generous for a test process rather than a tuned figure.",
-        "    const CEILING: usize = 4096;"
-      ],
-      "replace": [
-        "    /// this is generous for a test process rather than a tuned figure.",
-        "    const CEILING: usize = 4;"
-      ]
-    },
     {
       "name": "the pre-main initialiser is dropped by the linker",
       "file": "src/trace.rs",
@@ -129,18 +17,6 @@
       ],
       "replace": [
         "#[unsafe(link_section = \".CRT$XCZ_not_an_initialiser\")]"
-      ]
-    },
-    {
-      "name": "the suspended window allocates",
-      "file": "src/trace/hook.rs",
-      "expect": "survives",
-      "why": "A DELIBERATE control, and the one entry here that documents a hazard the tests cannot see. Dropping the reservation on `held` makes the push allocate while other threads are suspended, and a thread suspended holding the allocator lock can never give it back -- a deadlock. It survives because the tests install hooks from a process whose other threads are not holding that lock at that instant, so the defect is real and the suite is blind to it. It is recorded here so the reservation is not removed as redundant by a future reader; the argument for it is in the comment at the call site, not in a test. NOTE: this reservation was for a long time the ONLY thing guarding that window, while the install it wrapped was separately taking the allocator lock through ntdll_proc's owned name, the LOADER lock through GetModuleHandleA and GetProcAddress, and the memory manager through VirtualAlloc and VirtualProtect. A review found those; the install is now split into prepare/commit/finish and the window holds a single fourteen-byte store. The reservation still matters and this control still survives, but it is no longer the whole of the protection and must not be read as though it were.",
-      "find": [
-        "    let mut held: Vec<*mut core::ffi::c_void> = Vec::with_capacity(ids.len());"
-      ],
-      "replace": [
-        "    let mut held: Vec<*mut core::ffi::c_void> = Vec::new();"
       ]
     },
     {
@@ -183,18 +59,6 @@
       ],
       "replace": [
         "        outcomes[1], 1,"
-      ]
-    },
-    {
-      "name": "CONTROL: a refusal reason is renumbered",
-      "file": "src/trace/hook.rs",
-      "expect": "survives",
-      "why": "The control this manifest needs. The numeric value of a refusal reason is carried into a trace record and never compared against anything, so changing it cannot break a test. A sweep in which this were CAUGHT would mean the suite is sensitive to something other than behaviour, and the CAUGHT results above would be worth no more than this one.",
-      "find": [
-        "    NoTrampoline = 3,"
-      ],
-      "replace": [
-        "    NoTrampoline = 30,"
       ]
     },
     {
@@ -251,58 +115,6 @@
         "            let fresh = CreateThreadpoolWork(Some(repair_trampoline), ctx, std::ptr::null());",
         "            if fresh != 0 { SubmitThreadpoolWork(fresh); }",
         "        }"
-      ]
-    },
-    {
-      "name": "the hook records entering the call but the record is dropped",
-      "file": "src/trace/hook.rs",
-      "expect": "caught",
-      "why": "Half of what a hook is for. A trampoline that performs the displaced system call correctly but records nothing leaves an investigation reading an empty capture and concluding the call never happened -- which is the exact inference this facility exists to support, so a silent hook is worse than no hook. The patch keeps the arguments live, so this is the record going missing rather than the call changing shape.",
-      "find": [
-        "                record(TARGET, concat!($label, \"-enter\"), a1 as u64, a2 as u64);"
-      ],
-      "replace": [
-        "                let _ = (a1, a2);"
-      ]
-    },
-    {
-      "name": "the hook records leaving the call but the record is dropped",
-      "file": "src/trace/hook.rs",
-      "expect": "caught",
-      "why": "The other end, and the one whose absence is hardest to read: with no `-leave` record a call that never returned is indistinguishable from one that did, so a hang and a success look alike in the capture. That is precisely the distinction the stall investigation turned on.",
-      "find": [
-        "                record(TARGET, concat!($label, \"-leave\"), a1 as u64, status as u32 as u64);"
-      ],
-      "replace": [
-        "                let _ = status;"
-      ]
-    },
-    {
-      "name": "the AlreadySignaled reader believes any byte is a flag",
-      "file": "src/trace/hook.rs",
-      "expect": "caught",
-      "why": "`associate` is the only hook that interprets a high-numbered argument instead of forwarding it, so it is the only one whose correctness depends on the stub's arity being what the table says. The kernel writes 0 or 1 through that pointer; anything else means the eighth slot is no longer AlreadySignaled, which is what an arity change on an undocumented API looks like from here. This patch makes the reader report a fabricated flag instead of the drift.",
-      "whyNotTheRangeCheck": "The sibling guard -- rejecting a slot that cannot be a user-mode address -- is deliberately NOT swept here. Removing it makes the test dereference address 1 and the process dies with STATUS_ACCESS_VIOLATION, so the harness would score it caught by a crash rather than by a test noticing, and this repository treats a crash-caught result as uncovered. The crash is the defect manifesting, not a guard working. It is verified by hand instead, and recorded in M-T11.7.",
-      "find": [
-        "        0 => Signalled::Flag(false),",
-        "        1 => Signalled::Flag(true),",
-        "        _ => Signalled::Implausible,"
-      ],
-      "replace": [
-        "        0 => Signalled::Flag(false),",
-        "        _ => Signalled::Flag(true),"
-      ]
-    },
-    {
-      "name": "the quiesce stops believing a thread it never suspended is a stranger",
-      "file": "src/trace/hook.rs",
-      "expect": "caught",
-      "why": "The snapshot is taken while the process runs and the suspend loop runs with its targets still running, so a listed thread can create another before it is itself suspended. That newcomer is in neither the snapshot nor the held set, so it is running while fourteen bytes of live code are written, and the instruction-pointer check never sees it because that walks only suspended threads. The sweep refuses on any thread it did not suspend. This patch makes every thread look known, which is the sweep present but blind -- the shape the defect would really take, since deleting the block outright is the easier thing to notice in review.",
-      "find": [
-        "                    let known = id == self_thread || ids.contains(&id);"
-      ],
-      "replace": [
-        "                    let known = true;"
       ]
     },
     {
@@ -454,6 +266,18 @@
       ],
       "replace": [
         "            let _ = crate::obligation::DROP_OBLIGATION_OWED;"
+      ]
+    },
+    {
+      "name": "CONTROL: the retirement predicate reads its refcount with a stronger ordering",
+      "file": "src/heal.rs",
+      "expect": "survives",
+      "why": "The manifest's two controls both lived in the hook facility and went with it, and a sweep with no control can only say the tests are sensitive -- never that they are sensitive to the right things. This replaces them. Strengthening Relaxed to SeqCst on a load cannot change observable behaviour: it only forbids reorderings that were already permitted, so every execution of the patched program is one the original could also produce. A suite that reports this as CAUGHT is failing for a reason other than the edit, and the sweep's other results cannot be trusted until that is explained.",
+      "find": [
+        "        entry.objects.load(Ordering::Relaxed) == 0 && !entry.unhealed() && !entry.repair_in_flight()"
+      ],
+      "replace": [
+        "        entry.objects.load(Ordering::SeqCst) == 0 && !entry.unhealed() && !entry.repair_in_flight()"
       ]
     }
   ]

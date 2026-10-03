@@ -1112,9 +1112,9 @@ mod on {
                 // **What a second submit is worth is not established.** The
                 // recovery this feature rests on is measured for *a* submit;
                 // whether a factory re-evaluates its create decision on a later
-                // arrival is exactly the question `poke_completion_ports`
-                // exists to ask, and the answer recorded there is that an
-                // ordinary arrival has never been seen to recover this stall.
+                // arrival is unanswered, and the captures under `measurements/`
+                // record that an ordinary completion-port arrival has never
+                // been seen to recover this stall.
                 // So the reattempt is a cheap thing tried in a state that
                 // should not arise, not a mechanism with evidence behind it.
                 let overdue = entry.note_repair_overdue();

@@ -126,31 +126,21 @@ impl Buffer {
     }
 }
 
-#[cfg(feature = "trace")]
-mod hook;
-
-/// Arm the trace, and install any requested hooks, **before `main`**.
+/// Arm the trace **before `main`**.
 ///
 /// `.CRT$XCU` is the C runtime's static-initialiser table; a function pointer
 /// placed in it is called during CRT startup, which for a Rust binary is
 /// before `main` and therefore before the test harness has created a single
 /// thread.
 ///
-/// This exists because lazy installation was measured to be too late. Hooks
-/// were previously installed on the first traced call, which is already inside
-/// the first test: in the `M26.13` reproducer they landed between 0.15 s and
-/// 0.58 s, while the fault under investigation is established in the first
-/// 15.7 ms. An instrument that arrives after the event cannot observe it.
-///
-/// Installing here is also **cheaper and safer**, not merely earlier. Patching
-/// live code requires every other thread to be stopped, and at this point
-/// there are none to stop -- so the suspend-and-resume pass finds nothing, the
-/// perturbation it would otherwise cause does not happen, and the whole
-/// question of suspending a thread that holds a lock does not arise.
+/// This exists because lazy arming was measured to be too late. The trace was
+/// previously armed on the first traced call, which is already inside the first
+/// test: in the `M26.13` reproducer that landed between 0.15 s and 0.58 s,
+/// while the fault under investigation is established in the first 15.7 ms. An
+/// instrument that arrives after the event cannot observe it.
 ///
 /// It does nothing unless the environment asks for it: no
-/// `WINDOWS_THREADPOOL_TRACE`, no arming, and no
-/// `WINDOWS_THREADPOOL_TRACE_HOOKS`, no patching.
+/// `WINDOWS_THREADPOOL_TRACE`, no arming.
 #[cfg(feature = "trace")]
 #[used]
 #[unsafe(link_section = ".CRT$XCU")]
@@ -162,21 +152,6 @@ static ARM_BEFORE_MAIN: extern "C" fn() = {
         // those directly keeps one order of operations rather than two that
         // have to be kept in step.
         let _ = imp::enabled();
-        // Hook installation is deliberately NOT part of that path. It answers
-        // to its own environment variable, so it must happen whether or not
-        // the trace is armed -- and it happens here, as early as this process
-        // runs any of its own code. This call is also what closes the window,
-        // so there is no later path that can patch a live process.
-        //
-        // Running here is not what makes the patch safe, and this comment used
-        // to say it was ("where this process still has exactly one thread").
-        // It is not something placement can establish: an initialiser ordered
-        // before this one may have started threads, and in a DLL this runs at
-        // attach, inside a process that is already running. The installer
-        // checks the condition itself -- see the patch-window section in
-        // `hook` -- and refuses when it does not hold. Being early simply means
-        // the check usually has nothing to object to.
-        imp::install_hooks_before_main();
     }
     arm
 };
@@ -251,40 +226,6 @@ pub(crate) fn in_a_trace_armed_child(name: &str, filter: &str, body: impl FnOnce
          above",
         status.code()
     );
-}
-
-/// What one worker factory reports about itself.
-///
-/// Named fields rather than a tuple, and that is the whole reason this type
-/// exists. The counts were returned as `(usize, u32, u32, u32)` and the doc
-/// comment describing them drifted by one position -- it promised
-/// `(handle, total, waiting, pending)` against a function returning the
-/// maximum, the total and the waiting count. A caller who believed the comment
-/// read the *configured maximum* as the number of workers that exist, so a cold
-/// or stalled pool looked fully staffed: the precise inverse of the reading
-/// this data is gathered for.
-///
-/// Nothing caught it, because nothing could: both halves type-check, the tests
-/// happened to destructure positionally and correctly, and a tuple carries no
-/// statement about which field is which for anybody to check against. A field
-/// name is checked by the compiler on every use.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct WorkerFactorySnapshot {
-    /// The factory's handle, as an opaque identity for matching rows.
-    pub handle: usize,
-    /// The thread count this factory is configured never to exceed.
-    ///
-    /// Large for the default process pool -- derived from the processor count
-    /// -- and small for the other factory a process carries, which is what
-    /// makes it usable for telling them apart.
-    pub thread_maximum: u32,
-    /// How many worker threads exist right now.
-    ///
-    /// **Zero on a pool that has never dispatched**, which is the observation
-    /// the stall investigation turned on.
-    pub total_workers: u32,
-    /// How many of those workers are parked waiting for work.
-    pub waiting_workers: u32,
 }
 
 #[cfg(feature = "trace")]
@@ -579,109 +520,6 @@ mod imp {
             )
         };
     }
-
-    /// Install any requested `ntdll` hooks, and close the window for doing so.
-    ///
-    /// Called only from the pre-`main` initialiser, and the only caller there
-    /// ever is. Hook installation used to sit at the end of
-    /// [`observe_exceptions`], which was wrong in a way that was invisible
-    /// until someone read the two together: `enabled` calls that function only
-    /// when the trace is armed, so a process with
-    /// `WINDOWS_THREADPOOL_TRACE_HOOKS` set and `WINDOWS_THREADPOOL_TRACE`
-    /// unset left the installer's once-flag unconsumed -- and
-    /// `observe_exceptions` is public, so a later call from a running process
-    /// would then patch `ntdll` with the pool's threads already alive. The
-    /// whole safety argument for this module is that it patches before any
-    /// other thread exists; that argument was being carried by a caller rather
-    /// than by the installer.
-    ///
-    /// So installation is unconditional here -- it depends on its own variable
-    /// and not on whether the trace is armed -- and `seal_installation_window`
-    /// makes any later attempt a recorded refusal rather than a live patch.
-    pub(super) fn install_hooks_before_main() {
-        super::hook::install_requested();
-        super::hook::seal_installation_window();
-    }
-
-    /// Record what the default pool's worker factory believes about itself.
-    ///
-    /// Answers the question every outside measurement leaves open: the pool
-    /// has parked workers and a queued packet, so does the *factory* think it
-    /// has an available worker? Returns whether anything was recorded; it
-    /// needs a handle, which only a hooked call can supply, so it reports
-    /// `false` when hooks were not installed or have not yet fired.
-    pub fn worker_factory_counts() -> bool {
-        super::hook::counts()
-    }
-
-    /// Record how much undelivered work sits on each completion port in this
-    /// process.
-    ///
-    /// The companion to [`worker_factory_counts`], and the one that says whether
-    /// a stalled factory was *entitled* to a worker: its create test approves
-    /// when the port has work outstanding. Reads the depth without dequeuing, so
-    /// observing cannot consume the packet whose presence is the question.
-    /// Returns whether any port was found.
-    pub fn completion_port_depths() -> bool {
-        super::hook::port_depths()
-    }
-
-    /// Every worker factory in the process.
-    ///
-    /// See [`WorkerFactorySnapshot`](super::WorkerFactorySnapshot) for the
-    /// fields, and for why they are named rather than positional.
-    ///
-    /// The counter this crate's stall investigation turned on: a pool that is
-    /// dispatching nothing reports **zero** total workers while still claiming
-    /// it may create one. Exposed so a caller can check the precondition that
-    /// [`prewarm_default_pool`](crate::pool::prewarm_default_pool) exists to
-    /// remove, rather than assuming it.
-    ///
-    /// **Returns all of them rather than "the default pool's", deliberately.** A
-    /// process holds more than one factory -- at least one this crate does not
-    /// create -- and there is no reliable way here to say which is the default
-    /// pool: handle ordering is not a guarantee. Naming one would be a guess
-    /// dressed as an answer, so the caller gets the population and decides.
-    ///
-    /// Empty when no factory could be read, which in a process that has used the
-    /// thread pool means the read failed rather than that there are none.
-    ///
-    /// The layout read is not published by Microsoft; it is the long-standing
-    /// community reconstruction, guarded by a test requiring self-consistency.
-    pub fn worker_factory_snapshot() -> Vec<super::WorkerFactorySnapshot> {
-        super::hook::probe_all_factories()
-    }
-
-    /// Post one packet to every completion port that already has work on it, and
-    /// report how many were poked.
-    ///
-    /// Asks whether an ordinary arrival wakes a stalled pool, which is the one
-    /// route to a factory's create decision that has never been seen to recover
-    /// this stall.
-    ///
-    /// # Safety
-    ///
-    /// **Destructive.** This posts a fabricated packet -- a zero completion key
-    /// and a null `OVERLAPPED` -- to every completion port in the process whose
-    /// depth is at least `min_depth`, including ports this crate did not create
-    /// and does not own. A worker that picks one up may dispatch it as garbage:
-    /// code that trusts its own completion key, or dereferences the
-    /// `OVERLAPPED`, reaches a null pointer by a path its author cannot see
-    /// from the call.
-    ///
-    /// The caller must ensure the process has already failed and is being
-    /// diagnosed rather than relied upon, and that nothing in it still depends
-    /// on a completion port delivering only packets its owner posted. Nothing
-    /// here can check either condition.
-    ///
-    /// This is not a memory-safety obligation of this function's own, and the
-    /// keyword is not claiming one. It is here for the reason
-    /// `try_cancel_pending_no_heal_tracking` carries it: the obligation is
-    /// statable and dischargeable by the caller and by nobody else, and a rule
-    /// that lives only in prose is enforced by whoever remembers it.
-    pub unsafe fn poke_completion_ports(min_depth: u32) -> u32 {
-        super::hook::poke_ports_with_work(min_depth)
-    }
 }
 
 #[cfg(not(feature = "trace"))]
@@ -709,39 +547,9 @@ mod imp {
     /// Does nothing in this build: there is no trace to attribute exceptions
     /// to, so no handler is installed.
     pub fn observe_exceptions() {}
-    /// Reports that this build cannot read the factory's counters, which is a
-    /// different finding from a build that read them and saw nothing.
-    pub fn worker_factory_counts() -> bool {
-        false
-    }
-    /// Reports that this build cannot read completion-port depths, which is a
-    /// different finding from a build that read them and saw nothing.
-    pub fn completion_port_depths() -> bool {
-        false
-    }
-    /// Reports that this build cannot read the factory's counters, which is a
-    /// different finding from a build that read them and saw nothing.
-    pub fn worker_factory_snapshot() -> Vec<super::WorkerFactorySnapshot> {
-        Vec::new()
-    }
-    /// Does nothing in this build: there is no scan to find ports with.
-    ///
-    /// # Safety
-    ///
-    /// Nothing is posted here, so this build imposes no obligation of its own.
-    /// It keeps the keyword so the two configurations present one signature:
-    /// dropping it would let a caller compile without `trace` and then fail to
-    /// compile with it, which is the configuration-dependent surface the
-    /// crate's shape assertion exists to prevent.
-    pub unsafe fn poke_completion_ports(_min_depth: u32) -> u32 {
-        0
-    }
 }
 
-pub use imp::{
-    clear, completion_port_depths, dump, enabled, observe_exceptions, poke_completion_ports,
-    record, wants, worker_factory_counts, worker_factory_snapshot,
-};
+pub use imp::{clear, dump, enabled, observe_exceptions, record, wants};
 
 /// How many records so far carry this target and this event.
 ///

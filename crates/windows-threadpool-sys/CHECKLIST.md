@@ -835,29 +835,10 @@ rules require is what found the third.
   queued as `M-T10.36` rather than left implied by a note that would read as though everything
   were covered.
 
-- [ ] **M-T10.36** -- **Assert the hook module's remaining records, which no test checks at all.**
-      Found by `M-T10.5`, which could only fix assertions that existed.
-
-  **The gap, and why it is not the one `M-T10.5` closed.** `M-T10.5` made two *existing* record
-  assertions reachable. These have none: `installed` / `refused` / `refused-after-seal` from the
-  install path, `factory-found` / `factories-seen` and the `counts-*` family from the
-  worker-factory probe, `port-depth` / `ports-seen` / `port-unavailable` / `port-poking` /
-  `port-poked` from the completion-port scan, and `associate-already-signalled` from the
-  wait-registration hook. Each has a test that runs the code emitting it, and every one of those
-  tests asserts the **value the function returns** rather than the record it writes. So a sabotage
-  deleting any of these would be scored SURVIVED, and correctly -- the guard is genuinely absent.
-  `sabotage.json`'s `notCoveredHere` states this precisely; that note is the inventory.
-
-  **Why it is worth doing rather than accepting.** This crate's own argument for the hooks is that
-  a silent instrument is worse than none: an investigation reading an empty capture concludes the
-  call never happened. `counts-*` and `port-depth` are the two the stall work actually turned on,
-  so they are the place to start if this is scoped down.
-
-  **Shape.** The three tests already build the state; what they lack is a trace-armed child and a
-  `counted(..) > before` pair, which is the same conversion `M-T10.5` performed once. Then one
-  `sabotage.json` entry per record, each verified to be caught by name before it is written down.
-  Watch for the vacuous direction: `associate-already-signalled` is emitted only on a *successful*
-  association, so a test asserting it must establish that the call succeeded, or it pins nothing.
+- [x] **M-T10.36** -- **Assert the hook module's remaining records, which no test checks at all.**
+      **Dissolved 2026-10-03 by [`M-T12.2`](#m-t122): the hook module was deleted.** The records
+      it names no longer exist, so there is nothing left to assert. Recorded as dissolved rather
+      than deleted because the gap it describes was real while the module was.
 
 - [x] **M-T10.37** -- **Gate the five heal tests that drive an entry with synthetic stamps.**
       Found 2026-10-02 by `M-T10.5`'s stress run, and a defect in `M-T9.2`'s own tests.
@@ -1102,6 +1083,57 @@ the one acted on so far.
 
   **Extracting `submit_repair` broke two existing sabotage anchors**, which the pre-sweep check
   caught before a run was wasted on them. That check is now the habit this branch was missing.
+
+- [x] **<a id="m-t122"></a>M-T12.2** -- **Delete the inline hooking facility: this crate ships no
+      undocumented APIs.** Decided and done 2026-10-03 by the engineer.
+
+  **The constraint.** No shipped code may call an undocumented entry point or depend on behaviour
+  Microsoft does not publish -- names *and* shape: instruction encodings, structure layouts, fixed
+  addresses, argument counts. Recorded as
+  [This crate ships no undocumented APIs](../../DESIGN-NOTES.md#no-undocumented-apis), which also
+  records what rebuilding the observations on documented ground would take.
+
+  **The surface was wholly confined to one module**, which is why the removal is surgical: all 61
+  undocumented references were in `trace/hook.rs` and 11 more in its tests. The threadpool
+  wrappers, the obligation model, the self-heal and the trace *record* layer contained none.
+
+  **What went:** `trace/hook.rs`; the hook tests; four public functions (`worker_factory_counts`,
+  `completion_port_depths`, `worker_factory_snapshot`, `poke_completion_ports`); the
+  `WorkerFactorySnapshot` type; fourteen `sabotage.json` entries; and two integration tests.
+
+  **A real reduction, stated rather than tidied away.** One of those tests,
+  `prewarming_makes_the_default_pool_create_a_worker`, was the only external evidence that
+  `prewarm_default_pool` causes a worker to be created. That claim now rests on the function's own
+  documented contract -- a callback having run is the proof, because it ran on a worker -- which is
+  self-evidencing. **I had told the engineer the hook layer's only consumers were its own tests;
+  that was wrong**, and the compiler found the two integration tests I had missed.
+
+  **The manifest lost both of its `expect: "survives"` controls**, since both lived in the deleted
+  module. A sweep with no control can only say the tests are sensitive, never that they are
+  sensitive to the right things, so one was added: strengthening a `Relaxed` load to `SeqCst`
+  cannot change observable behaviour, so a suite reporting it CAUGHT is failing for some other
+  reason and the sweep's other results cannot be trusted until that is explained.
+
+  **Two of the open review findings are dissolved with the code** -- the quiesce sweep's fail-open
+  and the recogniser's 16-byte validation. The third, the trace buffer's `Vec::remove(0)` eviction,
+  is in the record layer and survives; see `M-T12.3`.
+
+- [ ] **M-T12.3** -- **Make the trace buffer evict in constant time.** Found by the eleventh review
+      round; the one finding of that round that the hook removal does not dissolve.
+
+  **The defect.** `Buffer::push` calls `self.records.remove(0)` once the buffer is full, which
+  shifts every remaining record. `Record` is about 72 bytes and `CAPACITY` is 262,144, so each
+  push past the limit memmoves roughly 18 MB, under the trace mutex.
+
+  **Why it matters more here than the figure suggests.** This is an instrument for observing
+  timing-sensitive behaviour. A buffer that fills mid-capture starts perturbing -- and plausibly
+  manufacturing -- the very stall it is being used to study. The buffer is deliberately sized not
+  to fill in an ordinary capture, which is what has kept this invisible.
+
+  **Shape.** A ring: a head index and wraparound, so eviction and insertion are both constant
+  time. `dump` reads from the head rather than from index zero; `dropped` and the
+  overflow announcement are unaffected. Watch that the existing buffer tests pin *order* as well
+  as contents, since a ring is where that can silently invert.
 
 ## M-inf -- Diagnostic work with no gating deliverable
 
