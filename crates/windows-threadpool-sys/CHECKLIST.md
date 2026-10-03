@@ -276,12 +276,13 @@ second, and `M-T9.1` is the guard both of them want.
   is in flight, and **clears nothing**. The trampoline takes a `*const PoolEntry`, so all four
   values live on the entry, and `repair` is the entry's first field.
 
-  **Correction, made while implementing `M-T9.1`:** this entry first said that placement made the
+  **Correction, and then a fix, both from `M-T9.1`:** this entry first said that placement made the
   drain run "before anything it writes to is freed", and that is false. Every other field owns no
   heap, so dropping one frees nothing; the single allocation belongs to the `Arc` and is released
   only after all drop glue. The ordering was load-bearing for the `Box<AtomicU64>` design it
-  replaced and is merely defensive now. What protects the callback is the drain, which `M-T9.1`
-  measures.
+  replaced, and the justification was restated for a design where it no longer applied. The drain
+  has since moved onto `PoolEntry::drop`, so declaration order carries nothing and the question
+  cannot be got wrong a third time.
 
   **Verified by sabotage, not by reading.** Restoring the keep-earliest `compare_exchange` fails
   `a_cancellation_during_a_tick_is_not_lost` on the assertion that a later cancellation moves the
@@ -334,11 +335,12 @@ second, and `M-T9.1` is the guard both of them want.
   it is a few instructions wide and nothing lands there by timing. Added to `sabotage.json`, so the
   guard is re-checked rather than verified once and discarded.
 
-  > **DECISION TO RAISE: this invariant could be made unrepresentable rather than guarded.** Giving
-  > `PoolEntry` its own `Drop` that drains before any field is dropped would take the teardown order
-  > off declaration order entirely -- the build rung rather than the unit-test rung. Not done here
-  > because `M-T9.2` deliberately chose field order and no `Drop` impl, so changing it is a design
-  > decision rather than a test. Cheap if wanted.
+  **DECIDED 2026-10-02 and done: the invariant is unrepresentable rather than guarded.** `PoolEntry`
+  now drains in its own `Drop`, which runs to completion before any field is dropped, so the
+  teardown no longer depends on declaration order at all. Checked by moving `repair` to the **last**
+  field and re-running the guard: it still passes, where the arrangement it replaced would have had
+  exactly the hazard its own comment warned about. The drain stays guarded by the test above, which
+  still fails under sabotage at `exit 101`.
 
 Opened 2026-10-01 by a code review of this branch, which found a use-after-free in `RepairWork::drop`
 that the whole test suite and a full sabotage sweep had both missed.

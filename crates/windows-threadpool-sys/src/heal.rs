@@ -126,25 +126,12 @@ mod on {
     pub(crate) struct PoolEntry {
         /// The work item a repair submits.
         ///
-        /// Declared first so the drain in its `Drop` runs before the rest of
-        /// the entry is dropped. **That ordering is defensive, not
-        /// load-bearing, and an earlier version of this comment claimed
-        /// otherwise.** Every field below owns no heap: dropping an atomic is a
-        /// no-op, and the single allocation holding all of them belongs to the
-        /// `Arc`, which frees it only after every field has been dropped. So
-        /// the drain runs while the stamps are still mapped whatever order the
-        /// fields are declared in.
-        ///
-        /// The claim was true of the design this replaced, where the callback's
-        /// context was a `Box<AtomicU64>` -- dropping *that* field freed heap,
-        /// so a drain after it would have been draining into a freed block.
-        /// The box is gone and the reasoning did not follow it.
-        ///
-        /// What makes the callback safe is the drain itself, which
-        /// `retiring_an_entry_waits_for_a_repair_callback_already_running`
-        /// measures and `sabotage.json` re-checks. The order is kept because it
-        /// costs nothing and keeps the teardown reading in the order it
-        /// happens.
+        /// Declaration order carries nothing here: this entry's own
+        /// [`Drop`](PoolEntry::drop) drains the work object before any field is
+        /// dropped, so the teardown is correct whatever order the fields are
+        /// written in and whatever a later one comes to own. Two earlier
+        /// revisions did rest on this being first, and the second of them was
+        /// simply wrong about why.
         repair: RepairWork,
         key: PoolKey,
         /// How many live objects this crate has on the pool.
@@ -319,34 +306,41 @@ mod on {
     unsafe impl Send for RepairWork {}
     unsafe impl Sync for RepairWork {}
 
-    impl Drop for RepairWork {
+    impl Drop for PoolEntry {
+        /// Drain the repair object, then close it, before any of this entry is
+        /// dropped.
+        ///
+        /// **The ordering is enforced by the language rather than by a
+        /// convention.** `Drop::drop` runs to completion before any field is
+        /// dropped and long before the `Arc` releases the allocation, so the
+        /// drain below cannot be outrun by the teardown of anything the
+        /// callback writes to. That is why this lives here and not on
+        /// `RepairWork`.
+        ///
+        /// It was on `RepairWork`, with `repair` declared first so that field's
+        /// drop ran before the others. That worked, but it rested on a
+        /// declaration order nothing checks, and it had already been reasoned
+        /// about wrongly twice: once when the callback's context was a
+        /// `Box<AtomicU64>` -- where the order genuinely mattered, because
+        /// dropping that field freed heap -- and once after the box was removed,
+        /// when the same justification was restated for fields that free
+        /// nothing. Here there is no order to get wrong, and a later field that
+        /// *does* own heap cannot silently reintroduce the hazard.
+        ///
+        /// Draining before the close is still this body's own correctness.
+        /// `CloseThreadpoolWork` does not wait: it frees the work object
+        /// asynchronously once outstanding callbacks finish, so a repair
+        /// already running would go on to stamp an entry whose allocation the
+        /// `Arc` had released. The window is not theoretical -- `tick` submits
+        /// and then `retire_idle` can drop the last `Arc` microseconds later,
+        /// and the pool it submitted to is by construction the one suspected of
+        /// dispatching late. `retiring_an_entry_waits_for_a_repair_callback_already_running`
+        /// measures it and `sabotage.json` re-checks it.
         fn drop(&mut self) {
-            // Drained before the close, and the order is the whole of this
-            // impl's correctness.
-            //
-            // The callback's context is the address of the `PoolEntry` that
-            // owns this field, and that entry's remaining fields are dropped --
-            // and its allocation freed -- the moment this returns.
-            // `CloseThreadpoolWork` does not wait: it frees the work object
-            // asynchronously once outstanding callbacks finish, so a repair
-            // that has been submitted and not yet dispatched would run
-            // afterwards and stamp through freed memory. This field is declared
-            // first on the entry so this body runs before any of it goes.
-            //
-            // The window is not theoretical. `tick` submits, clears the mark,
-            // and then calls `retire_idle`, which can drop the last `Arc` to
-            // this entry microseconds later -- and the pool it just submitted
-            // to is by construction the one suspected of not dispatching
-            // promptly, so the callback is *most* likely to be late on exactly
-            // the path that frees its context.
-            //
-            // `ThreadpoolWork::drop` has always done this correctly; this one
-            // did not, and two comments here asserted otherwise.
-            //
-            // SAFETY: `work` was created by `CreateThreadpoolWork` here and is
-            // closed exactly once. Waiting without cancelling cannot orphan
-            // anything: the callback owns no storage.
-            let work = self.work.load(Ordering::SeqCst);
+            // SAFETY: `work` was created by `CreateThreadpoolWork` in
+            // `arm_repair` and is closed exactly once, here. Waiting without
+            // cancelling cannot orphan anything: the callback owns no storage.
+            let work = self.repair.work.load(Ordering::SeqCst);
             if work == 0 {
                 // Never armed: creating the work object failed, so there is
                 // nothing to drain and nothing to close.

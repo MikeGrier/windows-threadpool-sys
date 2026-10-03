@@ -1845,21 +1845,27 @@ count before, justified by its lifetime being easier to guarantee than the
 entry's. That was never true: the box was freed by the same drop as everything
 else, so while `Drop` did not drain, the box dangled too -- the indirection made
 the use-after-free smaller rather than absent, and small is what kept it hidden.
-`repair` is the entry's first field, so its drain runs before the rest of the
-entry is dropped.
+**The entry drains its own work object in its own `Drop`**, so the teardown
+order is enforced by the language: `Drop::drop` runs to completion before any
+field is dropped and long before the `Arc` releases the allocation.
 
-**That ordering is defensive rather than load-bearing, and this note first
-claimed otherwise.** Every other field owns no heap -- dropping an atomic is a
-no-op, and the one allocation holding them all belongs to the `Arc`, which frees
-it only after every field has been dropped. The drain therefore runs while the
-stamps are mapped whatever the declaration order. The claim was true of the
-`Box<AtomicU64>` design, where dropping that field freed heap; the box went and
-the reasoning did not follow it.
+It did not start there. The drain lived on the `RepairWork` field, with that
+field declared first so its drop ran before the others, and the reasoning about
+*why* that mattered was wrong twice. It was right for the `Box<AtomicU64>`
+design, where dropping that field freed heap. Once the box was gone the same
+justification was restated for fields that free nothing -- every remaining field
+is a plain atomic, and the single allocation belongs to the `Arc`, which
+releases it only after all drop glue. Moving the drain onto the entry retires
+the question: there is no order to get wrong, and a field added later that
+*does* own heap cannot silently reintroduce the hazard.
 
-What makes the callback safe is the drain. `M-T9.1` guards it by measuring that
-retiring an entry whose callback is still running **blocks** -- asserted on the
-wait rather than on a fault, because a use-after-free detected by a crash is a
-crash-caught result, which this repository treats as uncovered.
+What makes the callback safe is the drain itself. `M-T9.1` guards it by
+measuring that retiring an entry whose callback is still running **blocks** --
+asserted on the wait rather than on a fault, because a use-after-free detected
+by a crash is a crash-caught result, which this repository treats as uncovered.
+That the order no longer matters was checked the same way: with `repair` moved
+to the last field the guard still passes, where the arrangement it replaced
+would have had exactly the hazard its comment warned about.
 
 **Still open:** a pool that never dispatches is submitted one repair and never
 retried, because `repair_in_flight` stays true. That is unchanged from the
