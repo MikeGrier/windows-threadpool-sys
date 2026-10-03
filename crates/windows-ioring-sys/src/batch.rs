@@ -1418,7 +1418,7 @@ impl<'ring, T, X> Batch<'ring, T, X> {
     /// The shared tail of every inventory push: stow on success, release the
     /// reservation and hand the payload back on failure.
     ///
-    /// The failure path is the mirror image of [`Batch::finish_push`]'s, and
+    /// The failure path is the mirror image of the borrowed push's, and
     /// for the same reason. A `Build*` that fails queued no SQE, so nothing
     /// will ever complete to reclaim what it holds -- which makes dropping
     /// normally correct here, where leaking is correct once the kernel has
