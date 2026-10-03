@@ -864,20 +864,33 @@ fn disarming_cancels_a_queued_tick_which_a_waits_disarm_does_not() {
         let mut env = CallbackEnviron::new();
         env.set_pool(&pool);
 
-        let gate = Arc::new((Mutex::new(false), Condvar::new()));
+        // `(entered, open)` -- see the periodic twin of this test for why the
+        // first half exists: a submit does not prove the pool's only worker has
+        // taken the occupier, and until it has, that worker is free to take the
+        // timer's callback instead and falsify the precondition below.
+        let gate = Arc::new((Mutex::new((false, false)), Condvar::new()));
         let gate_for_work = Arc::clone(&gate);
         let occupier = crate::work::ThreadpoolWork::new(
             move || {
                 let (lock, cvar) = &*gate_for_work;
-                let mut open = lock.lock().unwrap_or_else(|p| p.into_inner());
-                while !*open {
-                    open = cvar.wait(open).unwrap_or_else(|p| p.into_inner());
+                let mut state = lock.lock().unwrap_or_else(|p| p.into_inner());
+                state.0 = true;
+                cvar.notify_all();
+                while !state.1 {
+                    state = cvar.wait(state).unwrap_or_else(|p| p.into_inner());
                 }
             },
             Some(&mut env),
         )
         .expect("create the occupying work item");
         occupier.submit();
+        {
+            let (lock, cvar) = &*gate;
+            let mut state = lock.lock().unwrap_or_else(|p| p.into_inner());
+            while !state.0 {
+                state = cvar.wait(state).unwrap_or_else(|p| p.into_inner());
+            }
+        }
 
         let ran = Arc::new(AtomicUsize::new(0));
         let ran_for_callback = Arc::clone(&ran);
@@ -900,8 +913,8 @@ fn disarming_cancels_a_queued_tick_which_a_waits_disarm_does_not() {
             timer.disarm();
         }
         {
-            let (lock, cvar) = &gate.clone() as &(Mutex<bool>, Condvar);
-            *lock.lock().unwrap_or_else(|p| p.into_inner()) = true;
+            let (lock, cvar) = &*gate;
+            lock.lock().unwrap_or_else(|p| p.into_inner()).1 = true;
             cvar.notify_all();
         }
         timer.wait();

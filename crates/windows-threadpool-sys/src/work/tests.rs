@@ -273,3 +273,51 @@ fn work_with_runs_long_env_callback_runs() {
     work.wait();
     assert_eq!(count.load(Ordering::SeqCst), 1);
 }
+
+/// A cancel settles the drain obligation, as a wait does.
+///
+/// `cancel_pending` returns only once nothing is queued and nothing is
+/// executing, which is the state the obligation tracks -- so leaving it owed
+/// told a caller who had drained correctly that it had not, and under
+/// `fail-fast` turned that false report into a panic from `Drop`.
+///
+/// Both directions, because a test that only checks the cancel would pass on an
+/// implementation that never arms the obligation at all: the submit must arm
+/// it, and the cancel must clear it.
+#[test]
+fn a_cancel_settles_the_drain_obligation_the_way_a_wait_does() {
+    let work = ThreadpoolWork::new(|| {}, None).expect("create work");
+    assert!(
+        !work.obligation_owed(),
+        "a work object that was never submitted owes no drain"
+    );
+    work.submit();
+    assert!(
+        work.obligation_owed(),
+        "a submit is what makes the drain owed -- without this the next \
+         assertion would hold for the wrong reason"
+    );
+    work.cancel_pending();
+    assert!(
+        !work.obligation_owed(),
+        "cancel_pending returns with nothing queued and nothing executing, so \
+         the obligation it leaves behind is a false one"
+    );
+}
+
+/// The same object, submitted again after a cancel, owes the drain again.
+///
+/// The settle above must not be a one-way latch: `cancel_pending` leaves the
+/// object reusable, and a later submit is a fresh obligation.
+#[test]
+fn a_submit_after_a_cancel_owes_the_drain_again() {
+    let work = ThreadpoolWork::new(|| {}, None).expect("create work");
+    work.submit();
+    work.cancel_pending();
+    work.submit();
+    assert!(
+        work.obligation_owed(),
+        "the settle must clear the obligation, not disable the tracking"
+    );
+    work.stop_and_drain();
+}

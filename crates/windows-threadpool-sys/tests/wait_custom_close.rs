@@ -19,7 +19,9 @@ use std::time::Duration;
 use windows_sys::Win32::Foundation::{CloseHandle, HANDLE};
 use windows_sys::Win32::System::Threading::{CreateEventW, SetEvent};
 
+use windows_threadpool_sys::callback_env::CallbackEnviron;
 use windows_threadpool_sys::cleanup_group::CleanupGroup;
+use windows_threadpool_sys::pool::ThreadpoolPool;
 use windows_threadpool_sys::wait::{ThreadpoolWait, WaitCloseFn, WaitableHandle};
 
 /// Release a group's members, cancelling queued callbacks, in either feature
@@ -34,12 +36,24 @@ fn close_cancelling(group: &mut CleanupGroup) {
     #[cfg(feature = "self-heal")]
     group.close_members_cancelling();
     #[cfg(not(feature = "self-heal"))]
-    // SAFETY: the obligation is to repair each member's pool. These tests use
-    // private pools that are torn down immediately afterwards, so no later work
-    // depends on one dispatching again; nothing outside the test can reach them.
+    // SAFETY: the obligation is to repair each member's pool. Every caller binds
+    // its members to a pool it created itself and drops with the test, so no
+    // later work depends on one dispatching again and nothing outside the test
+    // can reach them.
     unsafe {
         group.close_members_cancelling_no_heal_tracking()
     };
+}
+
+/// A pool owned by the calling test, for members it intends to cancel.
+///
+/// Passing `None` as a member's environment puts it on the process-default
+/// pool, which every other test in this binary shares and which outlives all of
+/// them. That is the one pool a test must never leave owing a repair: with
+/// `self-heal` off nothing will ever repair it, and a wedged default pool stops
+/// unrelated tests rather than failing this one.
+fn private_pool() -> ThreadpoolPool {
+    ThreadpoolPool::new().expect("create a private pool for a cancelling test")
 }
 
 /// How many waits each scenario builds.
@@ -295,6 +309,9 @@ fn releasing_a_group_closes_every_custom_target_exactly_once() {
 fn releasing_a_group_with_cancel_pending_closes_every_custom_target_exactly_once() {
     let (probe, close, closed, violations, started) = probe!();
 
+    let pool = private_pool();
+    let mut env = CallbackEnviron::new();
+    env.set_pool(&pool);
     let mut group = CleanupGroup::new().expect("create group");
     for _ in 0..WAITS {
         let raw = raw_event();
@@ -305,7 +322,7 @@ fn releasing_a_group_with_cancel_pending_closes_every_custom_target_exactly_once
             .create_wait(
                 handle,
                 move |_| observe(key, closed, violations, started),
-                None,
+                Some(&env),
             )
             .expect("create wait");
         member.arm(None);

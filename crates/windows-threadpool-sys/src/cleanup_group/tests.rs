@@ -21,16 +21,89 @@ use windows_sys::Win32::System::Threading::SetEvent;
 /// cancelling release without the feature, so this picks the safe method where
 /// it exists and takes the obligation explicitly where it does not. One site
 /// per test target rather than a `cfg` at each call.
+///
+/// **Every caller must bind its members to [`private_pool`].** The safety
+/// argument below is about which pool is at risk, and it was once written as
+/// though it were true by default. It was not: six callers created their
+/// members with `None`, which is the *process-default* pool, so in a
+/// `--no-default-features` run this took the repair obligation on the pool
+/// every other test in the binary shares.
 fn close_cancelling(group: &mut CleanupGroup) {
     #[cfg(feature = "self-heal")]
     group.close_members_cancelling();
     #[cfg(not(feature = "self-heal"))]
-    // SAFETY: the obligation is to repair each member's pool. These tests use
-    // private pools that are torn down immediately afterwards, so no later work
-    // depends on one dispatching again; nothing outside the test can reach them.
+    // SAFETY: the obligation is to repair each member's pool. Every caller binds
+    // its members to a pool it created itself and drops with the test, so no
+    // later work depends on one dispatching again and nothing outside the test
+    // can reach them.
     unsafe {
         group.close_members_cancelling_no_heal_tracking()
     };
+    // Checked on every cancelling release rather than once somewhere, because
+    // the thing it guards against is a single call site binding its members to
+    // the wrong pool.
+    #[cfg(not(feature = "self-heal"))]
+    assert_the_default_pool_still_dispatches("a cancelling release");
+}
+
+/// A pool owned by the calling test, for members it intends to cancel.
+///
+/// Passing `None` as a member's environment puts it on the process-default
+/// pool, which is shared by every other test in the binary and outlives all of
+/// them. That is the one pool a test must never leave owing a repair: with
+/// `self-heal` off nothing will ever repair it, and a wedged default pool stops
+/// unrelated tests rather than failing this one.
+fn private_pool() -> ThreadpoolPool {
+    ThreadpoolPool::new().expect("create a private pool for a cancelling test")
+}
+
+/// Assert the process-default pool still dispatches.
+///
+/// The comment on `close_cancelling` is an argument, and an argument is only as
+/// good as the next person to edit a call site. This is the observation: it
+/// submits one work item to the default pool and fails if it does not run.
+///
+/// **Bounded rather than blocking, because the failure being checked for is a
+/// pool that never dispatches again.** `ThreadpoolWork::wait` would park
+/// forever on exactly the state this exists to report, turning a wedged pool
+/// into a hung suite with no message -- which is how this class of bug stays
+/// expensive. A condvar with a deadline turns it into a named failure.
+///
+/// Gated to match its only caller: with `self-heal` on, the release tracks the
+/// repair itself and there is no untracked obligation to leave behind.
+#[cfg(not(feature = "self-heal"))]
+fn assert_the_default_pool_still_dispatches(after: &str) {
+    let fired = Arc::new((Mutex::new(false), Condvar::new()));
+    let signal = Arc::clone(&fired);
+    let work = crate::work::ThreadpoolWork::new(
+        move || {
+            let (lock, cvar) = &*signal;
+            *lock.lock().unwrap_or_else(|p| p.into_inner()) = true;
+            cvar.notify_all();
+        },
+        None,
+    )
+    .expect("create a probe on the default pool");
+    work.submit();
+
+    let (lock, cvar) = &*fired;
+    let mut ran = lock.lock().unwrap_or_else(|p| p.into_inner());
+    let deadline = Instant::now() + CALLBACK_TIMEOUT;
+    while !*ran {
+        let left = deadline.saturating_duration_since(Instant::now());
+        assert!(
+            !left.is_zero(),
+            "the process-default pool stopped dispatching after {after} -- a \
+             cancelling release took a repair obligation on a pool it does not \
+             own, which with `self-heal` off nothing will ever discharge"
+        );
+        let (guard, _) = cvar
+            .wait_timeout(ran, left)
+            .unwrap_or_else(|p| p.into_inner());
+        ran = guard;
+    }
+    drop(ran);
+    work.stop_and_drain();
 }
 
 use crate::callback_env::CallbackEnviron;
@@ -410,23 +483,26 @@ fn close_members_releases_every_kind_at_once() {
     let periodic_ran = Arc::clone(&ran);
     let wait_ran = Arc::clone(&ran);
 
+    let pool = private_pool();
+    let mut env = CallbackEnviron::new();
+    env.set_pool(&pool);
     let mut group = CleanupGroup::new().expect("create group");
     {
         let work = group
-            .create_work(move || work_ran.record(), None)
+            .create_work(move || work_ran.record(), Some(&env))
             .expect("create work");
         let timer = group
-            .create_timer(move |_| timer_ran.record(), None)
+            .create_timer(move |_| timer_ran.record(), Some(&env))
             .expect("create timer");
         let periodic = group
             .create_periodic_timer(
                 Duration::from_millis(2),
                 move |_| periodic_ran.record(),
-                None,
+                Some(&env),
             )
             .expect("create periodic timer");
         let wait = group
-            .create_wait(event(), move |_| wait_ran.record(), None)
+            .create_wait(event(), move |_| wait_ran.record(), Some(&env))
             .expect("create wait");
 
         // Five resources: one context per member, plus the wait's handle.
@@ -451,9 +527,12 @@ fn close_members_releases_every_kind_at_once() {
 
 #[test]
 fn close_members_is_idempotent() {
+    let pool = private_pool();
+    let mut env = CallbackEnviron::new();
+    env.set_pool(&pool);
     let mut group = CleanupGroup::new().expect("create group");
     {
-        let work = group.create_work(|| {}, None).expect("create work");
+        let work = group.create_work(|| {}, Some(&env)).expect("create work");
         work.submit();
         work.wait();
     }
@@ -508,10 +587,13 @@ fn members_created_after_a_release_are_still_released() {
 #[test]
 fn a_reused_group_releases_its_second_batch_on_drop() {
     let ran = Ran::new();
+    let pool = private_pool();
+    let mut env = CallbackEnviron::new();
+    env.set_pool(&pool);
     {
         let mut group = CleanupGroup::new().expect("create group");
         {
-            let work = group.create_work(|| {}, None).expect("create work");
+            let work = group.create_work(|| {}, Some(&env)).expect("create work");
             work.submit();
             work.wait();
         }
@@ -520,15 +602,15 @@ fn a_reused_group_releases_its_second_batch_on_drop() {
         {
             let counter = Arc::clone(&ran);
             let timer = group
-                .create_timer(move |_| counter.record(), None)
+                .create_timer(move |_| counter.record(), Some(&env))
                 .expect("create timer member");
             timer.set_after(Duration::from_millis(1));
             let periodic = group
-                .create_periodic_timer(Duration::from_millis(1), |_| {}, None)
+                .create_periodic_timer(Duration::from_millis(1), |_| {}, Some(&env))
                 .expect("create periodic member");
             periodic.start_after(Duration::from_millis(1));
             let wait = group
-                .create_wait(event(), |_| {}, None)
+                .create_wait(event(), |_| {}, Some(&env))
                 .expect("create wait member");
             wait.arm(None);
         }
@@ -550,6 +632,9 @@ fn close_members_waits_for_an_executing_callback() {
     let started = Ran::new();
     let entered = Arc::clone(&started);
 
+    let pool = private_pool();
+    let mut env = CallbackEnviron::new();
+    env.set_pool(&pool);
     let mut group = CleanupGroup::new().expect("create group");
     {
         let work = group
@@ -559,7 +644,7 @@ fn close_members_waits_for_an_executing_callback() {
                     std::thread::sleep(Duration::from_millis(30));
                     flag.fetch_add(1, Ordering::SeqCst);
                 },
-                None,
+                Some(&env),
             )
             .expect("create work");
         work.submit();
@@ -582,10 +667,13 @@ fn close_members_can_run_or_cancel_queued_callbacks() {
     for cancel in [false, true] {
         let ran = Ran::new();
         let recorder = Arc::clone(&ran);
+        let pool = private_pool();
+        let mut env = CallbackEnviron::new();
+        env.set_pool(&pool);
         let mut group = CleanupGroup::new().expect("create group");
         {
             let work = group
-                .create_work(move || recorder.record(), None)
+                .create_work(move || recorder.record(), Some(&env))
                 .expect("create work");
             for _ in 0..8 {
                 work.submit();
@@ -983,12 +1071,15 @@ fn group_release_runs_a_custom_closer_exactly_once() {
         unsafe { windows_sys::Win32::Foundation::CloseHandle(handle) }
     }
 
+    let pool = private_pool();
+    let mut env = CallbackEnviron::new();
+    env.set_pool(&pool);
     let mut group = CleanupGroup::new().expect("create group");
 
     // SAFETY: a fresh event is a supported wait target, exclusively owned here.
     let handle = unsafe { custom_event(close) };
     let member = group
-        .create_wait(handle, |_| {}, None)
+        .create_wait(handle, |_| {}, Some(&env))
         .expect("create wait");
     member.arm(None);
     assert_eq!(
@@ -1117,12 +1208,15 @@ fn cancelling_pending_still_runs_a_custom_closer_exactly_once() {
         unsafe { windows_sys::Win32::Foundation::CloseHandle(handle) }
     }
 
+    let pool = private_pool();
+    let mut env = CallbackEnviron::new();
+    env.set_pool(&pool);
     let mut group = CleanupGroup::new().expect("create group");
 
     // SAFETY: a fresh event is a supported wait target, exclusively owned here.
     let handle = unsafe { custom_event(close) };
     let member = group
-        .create_wait(handle, |_| {}, None)
+        .create_wait(handle, |_| {}, Some(&env))
         .expect("create wait");
     member.arm(None);
     // Signal it, then cancel: whether the callback runs or is dropped, the

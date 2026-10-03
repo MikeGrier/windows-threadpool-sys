@@ -524,20 +524,40 @@ fn stopping_a_periodic_timer_discards_a_tick_that_is_already_queued() {
         let mut env = CallbackEnviron::new();
         env.set_pool(&pool);
 
-        let gate = Arc::new((std::sync::Mutex::new(false), std::sync::Condvar::new()));
+        // `(entered, open)`. The first half is the handshake: submitting the
+        // occupier does not prove the pool's only worker has picked it up, and
+        // until it has, the thread is free to take the tick instead -- which
+        // would run the tick, make the `ran == 0` precondition below false, and
+        // fail this test for a reason that has nothing to do with what it
+        // measures. Waiting for the occupier to report that it is *inside* its
+        // callback establishes the single-worker occupancy rather than
+        // inferring it from the order of two calls.
+        let gate = Arc::new((
+            std::sync::Mutex::new((false, false)),
+            std::sync::Condvar::new(),
+        ));
         let gate_for_work = Arc::clone(&gate);
         let occupier = crate::work::ThreadpoolWork::new(
             move || {
                 let (lock, cvar) = &*gate_for_work;
-                let mut open = lock.lock().unwrap_or_else(|p| p.into_inner());
-                while !*open {
-                    open = cvar.wait(open).unwrap_or_else(|p| p.into_inner());
+                let mut state = lock.lock().unwrap_or_else(|p| p.into_inner());
+                state.0 = true;
+                cvar.notify_all();
+                while !state.1 {
+                    state = cvar.wait(state).unwrap_or_else(|p| p.into_inner());
                 }
             },
             Some(&mut env),
         )
         .expect("create the occupying work item");
         occupier.submit();
+        {
+            let (lock, cvar) = &*gate;
+            let mut state = lock.lock().unwrap_or_else(|p| p.into_inner());
+            while !state.0 {
+                state = cvar.wait(state).unwrap_or_else(|p| p.into_inner());
+            }
+        }
 
         let ran = Arc::new(AtomicUsize::new(0));
         let ran_for_callback = Arc::clone(&ran);
@@ -562,7 +582,7 @@ fn stopping_a_periodic_timer_discards_a_tick_that_is_already_queued() {
         }
         {
             let (lock, cvar) = &*gate;
-            *lock.lock().unwrap_or_else(|p| p.into_inner()) = true;
+            lock.lock().unwrap_or_else(|p| p.into_inner()).1 = true;
             cvar.notify_all();
         }
         timer.wait();

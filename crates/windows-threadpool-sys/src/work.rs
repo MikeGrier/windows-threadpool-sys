@@ -199,11 +199,31 @@ impl ThreadpoolWork {
 
     /// Cancels callbacks that have not yet started, then waits for any
     /// currently-executing invocations to finish.
+    ///
+    /// Settles the drain obligation, exactly as [`wait`](Self::wait) does and
+    /// for the same reason: on return nothing is queued and nothing is
+    /// executing, which is what the obligation tracks. It used not to, so a
+    /// caller who submitted, cancelled, and dropped was told at drop that it
+    /// still owed a drain -- and under `fail-fast` that report is a panic, on a
+    /// caller that had done nothing wrong.
+    ///
+    /// **Sound here, and deliberately not done on the wait or the timer.**
+    /// Those two can be re-armed from inside their own callbacks
+    /// ([`crate::wait::WaitActivation::rearm`],
+    /// [`crate::timer::TimerFiring::rearm_after`]), so a callback running
+    /// during the cancel can leave the object live again before this returns --
+    /// which is why their `stop_and_drain` suppresses re-arms before draining
+    /// and only then settles. A work callback is a bare `Fn()` with no handle
+    /// to its object, so nothing can re-queue it except an explicit
+    /// [`submit`](Self::submit), and that arms the obligation again itself.
     pub fn cancel_pending(&self) {
         crate::trace_call!("WaitForThreadpoolWorkCallbacks(cancel)", self.handle, 1, {
             // SAFETY: handle is valid for the lifetime of self.
             unsafe { WaitForThreadpoolWorkCallbacks(self.handle, TRUE) };
         });
+        // SAFETY: the context outlives every callback and is freed only by Drop,
+        // which cannot run while this borrow of self is alive.
+        unsafe { &*self.ctx }.obligation.record_settled();
     }
 
     /// Give up ownership, returning the raw object and its callback context.

@@ -52,7 +52,9 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard};
 use std::time::{Duration, Instant, SystemTime};
 
+use windows_threadpool_sys::callback_env::CallbackEnviron;
 use windows_threadpool_sys::cleanup_group::CleanupGroup;
+use windows_threadpool_sys::pool::ThreadpoolPool;
 use windows_threadpool_sys::timer::{ThreadpoolPeriodicTimer, ThreadpoolTimer};
 
 /// Release a group's members, cancelling queued callbacks, in either feature
@@ -67,12 +69,24 @@ fn close_cancelling(group: &mut CleanupGroup) {
     #[cfg(feature = "self-heal")]
     group.close_members_cancelling();
     #[cfg(not(feature = "self-heal"))]
-    // SAFETY: the obligation is to repair each member's pool. These tests use
-    // private pools that are torn down immediately afterwards, so no later work
-    // depends on one dispatching again; nothing outside the test can reach them.
+    // SAFETY: the obligation is to repair each member's pool. Every caller binds
+    // its members to a pool it created itself and drops with the scenario, so no
+    // later work depends on one dispatching again and nothing outside the test
+    // can reach them.
     unsafe {
         group.close_members_cancelling_no_heal_tracking()
     };
+}
+
+/// A pool owned by the calling scenario, for members it intends to cancel.
+///
+/// Passing `None` as a member's environment puts it on the process-default
+/// pool, which every other test in this binary shares and which outlives all of
+/// them. That is the one pool a scenario must never leave owing a repair: with
+/// `self-heal` off nothing will ever repair it, and these scenarios cancel in a
+/// loop, from several threads at once.
+fn private_pool() -> ThreadpoolPool {
+    ThreadpoolPool::new().expect("create a private pool for a cancelling scenario")
 }
 
 // --- gating ---
@@ -1206,6 +1220,9 @@ stress! {
         let mut released = 0usize;
 
         for round in 0..rounds {
+            let pool = private_pool();
+            let mut env = CallbackEnviron::new();
+            env.set_pool(&pool);
             let mut group = CleanupGroup::new().expect("create cleanup group");
 
             {
@@ -1215,7 +1232,7 @@ stress! {
                         group
                             .create_timer(move |_firing| {
                                 counter.record();
-                            }, None)
+                            }, Some(&env))
                             .expect("create timer member")
                     })
                     .collect();
@@ -1228,7 +1245,7 @@ stress! {
                                 move |_tick| {
                                     counter.record();
                                 },
-                                None,
+                                Some(&env),
                             )
                             .expect("create periodic member")
                     })
@@ -1298,13 +1315,16 @@ stress! {
                 let tally = Arc::clone(&tally);
                 std::thread::spawn(move || {
                     for i in 0..per_thread {
+                        let pool = private_pool();
+                        let mut env = CallbackEnviron::new();
+                        env.set_pool(&pool);
                         let mut group = CleanupGroup::new().expect("create cleanup group");
                         {
                             let counter = Arc::clone(&tally);
                             let one_shot = group
                                 .create_timer(move |_firing| {
                                     counter.record();
-                                }, None)
+                                }, Some(&env))
                                 .expect("create timer member");
                             let counter = Arc::clone(&tally);
                             let periodic = group
@@ -1313,7 +1333,7 @@ stress! {
                                     move |_tick| {
                                         counter.record();
                                     },
-                                    None,
+                                    Some(&env),
                                 )
                                 .expect("create periodic member");
 
