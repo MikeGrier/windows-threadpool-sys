@@ -734,6 +734,83 @@ fn a_hooked_stub_records_both_ends_and_still_performs_its_syscall_body() {
     );
 }
 
+/// The `AlreadySignaled` reader believes a flag and refuses anything else.
+///
+/// **The arity guard for the one hook that interprets a high-numbered
+/// argument.** `associate` reads its eighth parameter as a `PBOOLEAN`; every
+/// other hook forwards its arguments without looking at them. If
+/// `NtAssociateWaitCompletionPacket` ever gains or loses a parameter, that slot
+/// becomes some *other* argument, and dereferencing it raises an access
+/// violation inside the instrument -- which this module holds to be the one
+/// thing a diagnostic must never do to the program it observes.
+///
+/// Arity is a property of the running operating system, so no build-time check
+/// can establish it and no test can make Windows change it. What this pins is
+/// the detector: the shapes a shifted argument actually takes.
+///
+/// **Both directions, because each is useless alone.** A reader that called
+/// everything implausible would never raise a false alarm and would also never
+/// report the flag the hook exists to capture; one that believed everything is
+/// the defect. The accepting cases are asserted first for exactly that reason.
+#[cfg(feature = "trace")]
+#[test]
+fn the_already_signalled_reader_rejects_what_cannot_be_a_flag() {
+    use super::hook::{Signalled, already_signalled};
+
+    // Accepting: a real out-parameter holding each of the two values the kernel
+    // can write.
+    for (written, expected) in [(0_u8, false), (1_u8, true)] {
+        let cell = written;
+        let slot = std::ptr::from_ref(&cell) as usize;
+        assert_eq!(
+            // SAFETY: `cell` is a live, initialised byte for this call.
+            unsafe { already_signalled(slot) },
+            Signalled::Flag(expected),
+            "a live BOOLEAN holding {written} is the answer this hook exists to record"
+        );
+    }
+
+    // A null out-parameter is a caller that asked for nothing, not a fault.
+    assert_eq!(
+        // SAFETY: null is checked before any dereference.
+        unsafe { already_signalled(0) },
+        Signalled::Absent,
+        "a caller that passed no out-parameter has nothing to report"
+    );
+
+    // Rejecting: what a *shifted* argument looks like. The other parameters of
+    // this call are a status, a handle-ish value and a count, so a small integer
+    // is the overwhelmingly likely shape -- and the one that must never be
+    // dereferenced.
+    for small in [1_usize, 2, 0x4000, 0xFFFF] {
+        assert_eq!(
+            // SAFETY: rejected on the range check, never dereferenced.
+            unsafe { already_signalled(small) },
+            Signalled::Implausible,
+            "{small:#x} is below the first mapped page, so it is an argument rather than a \
+             pointer and must not be read"
+        );
+    }
+
+    // A kernel-space or non-canonical address is equally not ours to read.
+    assert_eq!(
+        // SAFETY: rejected on the range check, never dereferenced.
+        unsafe { already_signalled(0xFFFF_8000_0000_0000) },
+        Signalled::Implausible,
+        "an address above user space cannot be an out-parameter this process passed"
+    );
+
+    // Plausible address, but what it holds is not a BOOLEAN: the pointer-shaped
+    // case the range check cannot catch, which is why the value is checked too.
+    let not_a_bool = 7_u8;
+    assert_eq!(
+        // SAFETY: `not_a_bool` is a live, initialised byte for this call.
+        unsafe { already_signalled(std::ptr::from_ref(&not_a_bool) as usize) },
+        Signalled::Implausible,
+        "the kernel writes 0 or 1; anything else means the eighth argument is not the flag"
+    );
+}
+
 /// A thread the snapshot did not list refuses the install.
 ///
 /// `M-T11.6`. The enumeration runs while the process runs, and the suspend loop

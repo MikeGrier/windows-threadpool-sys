@@ -997,7 +997,42 @@ comment that the code next to it does not keep.
 
   > **DECISION TO RAISE: narrowing the remaining five needs an arity source good on every supported
   > Windows version.** That is a different kind of work from this item -- acquiring and validating
-  > an external contract, not editing a table -- and is not queued. Say if it is wanted. Every replacement
+  > an external contract, not editing a table -- and is not queued. Say if it is wanted.
+
+- [x] **M-T11.7** -- **Make an arity change break something, rather than being discovered by a
+      crash.** Asked 2026-10-03, done the same day.
+
+  **The build rung is not available here, and that is the finding rather than a limitation to work
+  around.** Arity is a property of the *running* operating system. A build script could read the
+  build machine's Windows version, but the binary may run on a different one, so a build-time check
+  would be a proxy that cannot establish the fact -- the "cheaper rung that looks like enforcement"
+  the house rules name. Runtime is the honest rung.
+
+  **Two guards already existed without being labelled.** `call_selftest` invokes its stub through a
+  *three*-argument pointer and the test asserts all three out-parameters are written and ordered,
+  so a changed arity fails CI; that is now stated at the call, with a note not to relax those
+  assertions into "the call returned", which is the half that would still pass. And the five wide
+  hooks are immune to arity *changes* by construction, since twelve is an upper bound -- if
+  `NtWaitForWorkViaWorkerFactory` were mis-forwarded the pool would stop dispatching, which is the
+  stall this crate's whole suite detects.
+
+  **The real gap was `associate`**, the only hook that interprets a high-numbered argument rather
+  than forwarding it. A shifted arity makes its eighth slot some other parameter, and dereferencing
+  that raises an access violation *inside the instrument*. `already_signalled` now returns a
+  three-way `Signalled` and checks twice before believing the value: the slot must be a possible
+  user-mode address, and what it points at must be a `BOOLEAN`. A failure records
+  `associate-flag-implausible` carrying the raw argument, because the finding is what the slot held
+  instead.
+
+  **Stated limit:** a plausible-looking address may still be unmapped, and no check affordable on
+  every wait registration proves otherwise. What the range rejects is the likely shape of a shifted
+  argument -- a small integer, which is what this call's other parameters hold.
+
+  **Only one half is swept, deliberately.** The value check fails by assertion and is in
+  `sabotage.json`. Removing the *range* check makes the test dereference address 1 and the process
+  dies with `STATUS_ACCESS_VIOLATION` -- caught by a crash rather than by a test noticing, which
+  this repository treats as uncovered, so it is verified by hand and recorded here rather than
+  written down as a guard it is not. Every replacement
       is a twelve-argument `extern "system"` fn, but the stubs take fewer. Forwarding twelve
   arguments *to* a smaller callee is fine; *receiving* twelve from a caller that passed three is
   not -- the hook reads incoming stack slots the caller never had to supply. On x64 those slots

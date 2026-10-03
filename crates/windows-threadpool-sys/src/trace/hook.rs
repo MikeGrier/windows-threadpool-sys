@@ -477,8 +477,33 @@ macro_rules! hooks {
                     // actually takes this branch is asserted below, at compile
                     // time, so the fallback cannot quietly swallow a mistake.
                     if let (Some(&signalled), Some(&packet)) = (args.get(7), args.get(2)) {
-                        let flag = unsafe { already_signalled(signalled) };
-                        record(TARGET, "associate-already-signalled", flag, packet as u64);
+                        // SAFETY: the call returned success, so the kernel has
+                        // written through the out-parameter and finished with
+                        // it; the reader refuses anything that cannot be one.
+                        match unsafe { already_signalled(signalled) } {
+                            Signalled::Flag(set) => record(
+                                TARGET,
+                                "associate-already-signalled",
+                                u64::from(set),
+                                packet as u64,
+                            ),
+                            Signalled::Absent => record(
+                                TARGET,
+                                "associate-already-signalled",
+                                NO_FLAG,
+                                packet as u64,
+                            ),
+                            // The arity-drift signal. Carries the raw argument
+                            // rather than a flag, because the finding is what
+                            // the eighth slot held instead -- a small integer
+                            // says it is now some other parameter.
+                            Signalled::Implausible => record(
+                                TARGET,
+                                "associate-flag-implausible",
+                                signalled as u64,
+                                packet as u64,
+                            ),
+                        }
                     }
                 }
                 status
@@ -623,14 +648,69 @@ const _ARITY_RATIONALE: () = ();
 ///
 /// SAFETY: `slot` is the pointer the caller passed and the call has returned,
 /// so the kernel has finished writing through it. A null pointer reads as
-/// absent rather than being dereferenced.
-unsafe fn already_signalled(slot: usize) -> u64 {
+/// absent rather than being dereferenced, and a value that cannot be a user
+/// address is reported rather than dereferenced -- see [`Signalled`].
+pub(super) unsafe fn already_signalled(slot: usize) -> Signalled {
     if slot == 0 {
-        return u64::MAX;
+        return Signalled::Absent;
+    }
+    if !(LOWEST_USER_ADDRESS..=HIGHEST_USER_ADDRESS).contains(&slot) {
+        return Signalled::Implausible;
     }
     // SAFETY: as above -- a live `BOOLEAN` the callee has just written.
-    u64::from(unsafe { std::ptr::read_volatile(slot as *const u8) })
+    match unsafe { std::ptr::read_volatile(slot as *const u8) } {
+        0 => Signalled::Flag(false),
+        1 => Signalled::Flag(true),
+        _ => Signalled::Implausible,
+    }
 }
+
+/// What this hook's eighth argument turned out to be.
+///
+/// **Three outcomes rather than a flag, and the third one is the point.** This
+/// is the only hook that *interprets* a high-numbered argument rather than
+/// forwarding it, so it is the only one whose correctness depends on the stub's
+/// arity being what the table says. If `NtAssociateWaitCompletionPacket` ever
+/// gains or loses a parameter, the eighth slot stops being `AlreadySignaled`
+/// and becomes some other argument -- and dereferencing *that* raises an access
+/// violation inside the instrument, which this module holds to be the one thing
+/// a diagnostic must never do to the program it observes.
+///
+/// So the value is checked twice before it is believed: the slot must be a
+/// possible user-mode address, and what it points at must be a `BOOLEAN`.
+/// Neither check can produce a false alarm -- the kernel writes 0 or 1 through
+/// a pointer it has just validated -- so an `Implausible` answer means the
+/// argument is not the one this hook thinks it is.
+///
+/// **What this does not establish.** A plausible-looking address may still be
+/// unmapped, and no cheap check run on every wait registration can prove
+/// otherwise. What the range rejects is the overwhelmingly likely shape of a
+/// shifted argument: a small integer -- a status, a count, a flag -- which is
+/// what the other parameters of this call actually hold.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(super) enum Signalled {
+    /// The caller passed no out-parameter. Nothing was read.
+    Absent,
+    /// The kernel's answer: whether the object was already signalled.
+    Flag(bool),
+    /// Not an `AlreadySignaled` pointer. Treat the stub's arity as suspect.
+    Implausible,
+}
+
+/// The lowest address a user-mode pointer can have: the first 64 KiB of the
+/// address space is permanently unmapped, which is what makes a small integer
+/// distinguishable from a pointer.
+const LOWEST_USER_ADDRESS: usize = 0x1_0000;
+
+/// The highest user-mode address on x64 Windows; above this is kernel space or
+/// non-canonical.
+const HIGHEST_USER_ADDRESS: usize = 0x7FFF_FFFF_FFFF;
+
+/// Reported in place of the flag when the caller passed no out-parameter.
+///
+/// Named rather than written at the record site: it shares a field with a real
+/// `0`/`1` answer, so a reader needs the two to be distinguishable.
+const NO_FLAG: u64 = u64::MAX;
 
 /// Resolve an `ntdll` export, or `None`.
 ///
@@ -1499,6 +1579,19 @@ pub(crate) fn unhookable_stub_entry() -> Option<*const u8> {
 /// import thunk and miss the patch entirely.
 #[cfg(test)]
 pub(crate) fn call_selftest() -> (i32, u32, u32, u32) {
+    // **This three-argument pointer is the `selftest` entry's arity guard**, and
+    // is load-bearing rather than a convenience. Arity is a property of the
+    // running operating system, so nothing in the build can establish it; what
+    // can is calling the stub with the shape the table claims and requiring the
+    // kernel's own answer to be consistent. If `NtQueryTimerResolution` ever
+    // took a different number of parameters, this call would be malformed and
+    // the companion assertions in
+    // `a_hooked_stub_records_both_ends_and_still_performs_its_syscall` -- three
+    // out-parameters written, ordered finest to coarsest -- would fail on the
+    // next CI run.
+    //
+    // So do not relax those assertions into "the call returned": that is the
+    // half that would still pass with the arity wrong.
     type QueryTimerResolution = unsafe extern "system" fn(*mut u32, *mut u32, *mut u32) -> i32;
 
     let Some(raw) = stub_entry("selftest") else {

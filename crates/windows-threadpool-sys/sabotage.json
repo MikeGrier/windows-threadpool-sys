@@ -281,6 +281,22 @@
       ]
     },
     {
+      "name": "the AlreadySignaled reader believes any byte is a flag",
+      "file": "src/trace/hook.rs",
+      "expect": "caught",
+      "why": "`associate` is the only hook that interprets a high-numbered argument instead of forwarding it, so it is the only one whose correctness depends on the stub's arity being what the table says. The kernel writes 0 or 1 through that pointer; anything else means the eighth slot is no longer AlreadySignaled, which is what an arity change on an undocumented API looks like from here. This patch makes the reader report a fabricated flag instead of the drift.",
+      "whyNotTheRangeCheck": "The sibling guard -- rejecting a slot that cannot be a user-mode address -- is deliberately NOT swept here. Removing it makes the test dereference address 1 and the process dies with STATUS_ACCESS_VIOLATION, so the harness would score it caught by a crash rather than by a test noticing, and this repository treats a crash-caught result as uncovered. The crash is the defect manifesting, not a guard working. It is verified by hand instead, and recorded in M-T11.7.",
+      "find": [
+        "        0 => Signalled::Flag(false),",
+        "        1 => Signalled::Flag(true),",
+        "        _ => Signalled::Implausible,"
+      ],
+      "replace": [
+        "        0 => Signalled::Flag(false),",
+        "        _ => Signalled::Flag(true),"
+      ]
+    },
+    {
       "name": "the quiesce stops believing a thread it never suspended is a stranger",
       "file": "src/trace/hook.rs",
       "expect": "caught",
