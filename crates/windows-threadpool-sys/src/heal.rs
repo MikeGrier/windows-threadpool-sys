@@ -53,7 +53,7 @@ pub(crate) use on::{PoolEntry, Registration, entries, now, register, retire_idle
 #[cfg(all(test, feature = "self-heal"))]
 pub(crate) use on::{
     FORCE_REPAIR_FAILURE_FOR, HOLD_REPAIR_CALLBACK_FOR, HOLD_REPAIR_CALLBACK_MS,
-    REPAIR_CALLBACK_INSIDE, TICK_GATE, tick_inner,
+    REPAIR_CALLBACK_INSIDE, TICK_GATE, is_retirable, tick_inner,
 };
 
 #[cfg(not(feature = "self-heal"))]
@@ -93,8 +93,16 @@ mod off {
             Registration
         }
 
+        /// Nothing is tracked, so nothing can be untracked, and the caller's
+        /// fail-fast has nothing to report.
+        ///
+        /// The feature-on twin has a second form, `owe_repair`, for the path
+        /// that may retry its registration. There is deliberately no mirror of
+        /// it here: with the feature off, `try_cancel_pending` does not exist
+        /// and the group's marking pass is the only caller left, so a second
+        /// method would be an unused shape kept only for symmetry.
         #[must_use]
-        pub(crate) const fn owe_repair(&self) -> bool {
+        pub(crate) const fn owe_repair_claimed(&self) -> bool {
             true
         }
     }
@@ -138,17 +146,23 @@ mod on {
         objects: AtomicUsize,
         /// When a cancellation last left this pool possibly severed.
         ///
-        /// One of three monotonic stamps that between them replace a stored
-        /// "repair owed" flag. Each is written by an **unconditional** store,
-        /// which is the whole point: the flag was set with a compare-exchange
-        /// that deliberately kept the earliest cancellation, and cleared with
-        /// an unconditional store. The two did not pair, so a cancellation
-        /// landing between `tick`'s read and its clear was recorded nowhere --
-        /// the CAS failed against the old stamp and the clear then erased both.
-        /// A store cannot fail that way.
+        /// One of two stamps that between them replace a stored "repair owed"
+        /// flag, which was set with a compare-exchange deliberately keeping the
+        /// earliest cancellation and cleared with an unconditional store. The
+        /// two did not pair, so a cancellation landing between `tick`'s read
+        /// and its clear was recorded nowhere -- the CAS failed against the old
+        /// stamp and the clear then erased both.
         ///
-        /// Health is derived rather than stored: see
-        /// [`unhealed`](Self::unhealed).
+        /// **Published with `fetch_max`, not a store, and that is load-bearing
+        /// rather than tidiness.** Any thread may cancel, so there are
+        /// concurrent writers, and reading a monotonic clock does not make the
+        /// *publication* monotonic: a thread that reads 10 and is preempted
+        /// past a dispatch at 20 and another cancellation at 30 would, with a
+        /// plain store, write 10 last and leave [`unhealed`](Self::unhealed)
+        /// reading healthy with a cancellation unanswered. That is the same
+        /// lost cancellation the flag suffered, re-entering through the
+        /// publication instead of through the compare-exchange. `fetch_max`
+        /// keeps the newest, which is the direction that keeps a pool repaired.
         last_cancelled: AtomicU64,
         /// When this entry's own repair callback last ran.
         ///
@@ -157,12 +171,44 @@ mod on {
         /// than the dispatch stamp it replaces, which depended on a user
         /// object's trampoline firing: a pool with no other activity was
         /// indistinguishable from a wedged one.
+        ///
+        /// Also `fetch_max`: a retry can leave two repairs outstanding, so two
+        /// trampolines can run at once and publish out of order. Here the stale
+        /// write would cost only a redundant repair rather than a missed one,
+        /// but the two stamps are read against each other and a rule that holds
+        /// for one of them is not a rule.
         last_started: AtomicU64,
         /// When a repair was last handed to the pool.
         ///
-        /// Compared against `last_started` to tell a repair the pool still
-        /// holds from one it has given back.
+        /// Timing only -- how long the most recent attempt has been waiting,
+        /// for [`repair_overdue`](Self::repair_overdue). Whether anything is
+        /// outstanding is `outstanding`'s question, not this one.
+        ///
+        /// A plain store, deliberately, where the other two are `fetch_max`.
+        /// Submissions come only from a tick, ticks are serialised (the healer
+        /// has one thread, and the tests hold a gate), so there are no
+        /// concurrent writers to lose a write to. It must also be able to move
+        /// *backwards*: the tests backdate it to reach the overdue state
+        /// without waiting out the real threshold, which `fetch_max` would
+        /// silently refuse while still passing.
         last_submitted: AtomicU64,
+        /// Repairs handed to the pool that have not yet begun running.
+        ///
+        /// **The predicate `last_submitted > last_started` used to answer this,
+        /// and it was sound only while at most one repair could be
+        /// outstanding.** The overdue retry submits a second before the first
+        /// has started, and then the first starting makes that comparison false
+        /// while the second is still queued -- so an entry with a repair
+        /// outstanding looked idle, [`is_retirable`] permitted retirement, and
+        /// [`PoolEntry::drop`]'s drain waited for a callback on a pool
+        /// suspected of not dispatching, on the healer's only thread. That
+        /// stops self-heal for every pool in the process.
+        ///
+        /// A count cannot be fooled that way: it is raised when a repair is
+        /// handed over and lowered when one begins, so it is zero exactly when
+        /// nothing is queued. The drain then only ever waits for callbacks that
+        /// have already started, which complete.
+        outstanding: AtomicU32,
         /// Re-submissions made because a repair sat with the pool unstarted.
         ///
         /// Reset the moment a repair callback runs, because that is the
@@ -202,12 +248,13 @@ mod on {
 
         /// Note that a cancellation may have severed this pool.
         ///
-        /// An unconditional store, where the flag this replaces used a
-        /// compare-exchange that silently did nothing while an earlier mark
-        /// stood. A later cancellation can only move the stamp forward, and
-        /// forward is the direction that keeps it unrepaired.
+        /// `fetch_max`, so the stamp keeps the newest cancellation whatever
+        /// order concurrent cancellers publish in -- see the field, where the
+        /// interleaving that a plain store loses is written out. Unlike the
+        /// compare-exchange the flag used, this never silently does nothing
+        /// when it matters: it declines only a value already superseded.
         pub(crate) fn stamp_cancelled(&self, at: u64) {
-            self.last_cancelled.store(at, Ordering::SeqCst);
+            self.last_cancelled.fetch_max(at, Ordering::SeqCst);
         }
 
         /// Note when a repair dispatch was observed.
@@ -220,16 +267,32 @@ mod on {
         /// ordering directly must be able to do so without claiming a repair
         /// ran.
         pub(crate) fn stamp_started(&self, at: u64) {
-            self.last_started.store(at, Ordering::SeqCst);
+            self.last_started.fetch_max(at, Ordering::SeqCst);
+        }
+
+        /// Note that a repair has begun running, so one fewer is queued.
+        ///
+        /// Separate from the stamp because the stamp is `fetch_max` and may
+        /// decline a value, where this must lower the count exactly once per
+        /// dispatch. Saturating rather than a bare `fetch_sub`: a wrap would
+        /// turn "nothing queued" into "four billion queued" and pin the entry
+        /// in the registry forever, which is a worse failure than the
+        /// double-decrement it would be covering for.
+        pub(crate) fn note_repair_started(&self) {
+            let _ = self
+                .outstanding
+                .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |n| {
+                    Some(n.saturating_sub(1))
+                });
         }
 
         /// Count a dispatch of this entry's own repair item.
         ///
-        /// Separate from the stamp because a test needs to stop *between* them:
-        /// the stamp is what makes `repair_in_flight` false, so the instant
-        /// after it is the instant the entry becomes retirable while its
-        /// callback is still running. That is the window `RepairWork::drop`'s
-        /// drain exists to cover.
+        /// Separate from the stamp and the count because a test needs to stop
+        /// *between* them: those two are what make `repair_in_flight` false, so
+        /// the instant after them is the instant the entry becomes retirable
+        /// while its callback is still running. That is the window
+        /// `RepairWork::drop`'s drain exists to cover.
         fn count_repair_run(&self) {
             self.runs.fetch_add(1, Ordering::SeqCst);
             // The pool dispatched, which is the only direct evidence it is not
@@ -238,8 +301,14 @@ mod on {
         }
 
         /// Note that a repair has been handed to the pool.
+        ///
+        /// Raises `outstanding` as well as stamping the time, because the two
+        /// must not be able to disagree about whether a submission happened.
+        /// Called immediately before `SubmitThreadpoolWork`, which cannot fail,
+        /// so the count matches the dispatches one for one.
         pub(crate) fn stamp_submitted(&self, at: u64) {
             self.last_submitted.store(at, Ordering::SeqCst);
+            self.outstanding.fetch_add(1, Ordering::SeqCst);
         }
 
         /// Whether a cancellation stands unanswered by a repair dispatch.
@@ -277,13 +346,16 @@ mod on {
             self.stuck_reattempts.fetch_add(1, Ordering::SeqCst) + 1
         }
 
-        /// Whether a submitted repair has not yet been given back.
+        /// Whether a submitted repair has not yet begun running.
         ///
-        /// This is also the retirement guard: dropping the last `Arc` runs
+        /// This is also the retirement guard, and that is why it counts rather
+        /// than comparing stamps: dropping the last `Arc` runs
         /// `RepairWork::drop`, whose drain cannot return until the pool
-        /// dispatches, and `tick` runs on a healer with one thread.
+        /// dispatches, and `tick` runs on a healer with one thread. A predicate
+        /// that reads false with a repair still queued therefore parks
+        /// self-heal for the whole process -- see the `outstanding` field.
         pub(crate) fn repair_in_flight(&self) -> bool {
-            self.last_submitted.load(Ordering::SeqCst) > self.last_started.load(Ordering::SeqCst)
+            self.outstanding.load(Ordering::SeqCst) > 0
         }
 
         /// When a cancellation last left this pool unrepaired; zero if never.
@@ -416,9 +488,16 @@ mod on {
         // field drains this object in its `Drop`, before any of the entry is
         // freed.
         let entry = unsafe { &*context.cast::<PoolEntry>() };
-        // The stamp first: it is what makes `repair_in_flight` false, so from
-        // here the entry can be retired while this callback is still running.
+        // The stamp and the count first: together they are what make
+        // `repair_in_flight` false, so from here the entry can be retired while
+        // this callback is still running -- which is the window the drain in
+        // `PoolEntry::drop` exists to cover. The count is lowered here rather
+        // than when the callback returns for exactly that reason: a repair that
+        // has *started* no longer needs the entry held for it, and holding one
+        // until its callback returned would mean a retirement could never
+        // overlap a running repair, which is the case the drain is written for.
         entry.stamp_started(now());
+        entry.note_repair_started();
         #[cfg(test)]
         if entry.key != 0 && HOLD_REPAIR_CALLBACK_FOR.load(Ordering::SeqCst) == entry.key {
             REPAIR_CALLBACK_INSIDE.store(entry.key, Ordering::SeqCst);
@@ -496,6 +575,41 @@ mod on {
             true
         }
 
+        /// Mark a cancellation on a claim taken *before* a release, where
+        /// retrying the registration would be unsound.
+        ///
+        /// Same as [`owe_repair`](Self::owe_repair) except that it does not
+        /// retry. The difference is a memory-safety one and is the whole reason
+        /// this exists.
+        ///
+        /// `CleanupGroup` recovers a claim for each member before releasing
+        /// them, because a member whose pool was never registered holds nothing
+        /// that keeps that pool alive and the release frees the last bound
+        /// object. A claim that **holds an entry** keeps the pool alive across
+        /// the release -- the entry's repair work object is a bound object, and
+        /// `CloseThreadpool` defers the free until every one is gone -- so
+        /// marking it afterwards is safe.
+        ///
+        /// A claim that holds **no** entry pins nothing, which is exactly the
+        /// case `owe_repair`'s retry must not be reached in: by the time the
+        /// marking pass runs the pool may already have been freed, and
+        /// `register` would call `CreateThreadpoolWork` with an environment
+        /// naming it. So this reports the cancellation as untracked rather than
+        /// trying again, and the caller's fail-fast says so.
+        ///
+        /// Reachable only when an allocation failed, which is why it is stated
+        /// here rather than assumed away.
+        #[must_use]
+        pub(crate) fn owe_repair_claimed(&self) -> bool {
+            let Some(entry) = &self.entry else {
+                crate::trace_record!("heal", "cancel-untracked", self.key);
+                return false;
+            };
+            entry.stamp_cancelled(now());
+            ensure_running();
+            true
+        }
+
         /// The cancellation path for an object that never got an entry.
         ///
         /// Registration is attempted **again, here**, which is the one place in
@@ -549,10 +663,17 @@ mod on {
     /// stamps. [`PoolEntry::unhealed`] treats that as unhealed, so a repair is
     /// submitted rather than skipped. That is the
     /// direction the error has to fall: a redundant repair costs one work
-    /// submission, where a suppressed one leaves a pool stalled. The opposite
-    /// mistake cannot happen at any resolution, because the counter never goes
-    /// backwards, so a dispatch stamp can never exceed a cancellation that
-    /// followed it.
+    /// submission, where a suppressed one leaves a pool stalled.
+    ///
+    /// **The counter never goes backwards; publishing it can.** An earlier
+    /// revision of this comment concluded from the first fact that "a dispatch
+    /// stamp can never exceed a cancellation that followed it", and that does
+    /// not follow: reading the clock and storing the value are two steps, so a
+    /// thread preempted between them can publish a stale reading after a newer
+    /// one has landed. The stamps are therefore written with `fetch_max` rather
+    /// than a store, which is what makes the conclusion true -- see
+    /// [`PoolEntry::stamp_cancelled`]. Resolution was never the risk; ordering
+    /// was.
     pub(crate) fn now() -> u64 {
         let mut ticks = 0_u64;
         // SAFETY: the out-parameter is a live local for the duration of the call.
@@ -634,6 +755,7 @@ mod on {
             last_cancelled: AtomicU64::new(0),
             last_started: AtomicU64::new(0),
             last_submitted: AtomicU64::new(0),
+            outstanding: AtomicU32::new(0),
             stuck_reattempts: AtomicU32::new(0),
             runs: AtomicU64::new(0),
         });
@@ -665,7 +787,7 @@ mod on {
     /// dispatched, on the healer's only thread -- was still reachable through
     /// the other. Two copies of a rule that must agree is the shape this
     /// repository treats as a defect; this is the shape that cannot have it.
-    fn is_retirable(entry: &PoolEntry) -> bool {
+    pub(crate) fn is_retirable(entry: &PoolEntry) -> bool {
         entry.objects.load(Ordering::Relaxed) == 0 && !entry.unhealed() && !entry.repair_in_flight()
     }
 
@@ -941,12 +1063,13 @@ mod on {
             // nothing and makes one call -- which matters because the pool it is
             // aimed at may already be wedged.
             crate::trace_record!("heal", "repair-submitted", entry.key(), entry.repair_work());
-            // Stamped *before* the submit, never after: the repair can be
-            // dispatched on a pool thread the instant it is handed over, so a
-            // stamp taken afterwards can be overtaken by the run it is meant to
-            // precede -- leaving `last_submitted` behind `last_started` and
-            // `repair_in_flight` reading false with one outstanding, which is
-            // the one answer it must never give.
+            // Counted and stamped *before* the submit, never after: the repair
+            // can be dispatched on a pool thread the instant it is handed over,
+            // so a trampoline that lowered the count before this raised it
+            // would leave `repair_in_flight` reading false with one
+            // outstanding, which is the one answer it must never give. The
+            // saturating decrement means such an inversion could not even be
+            // recovered by the arithmetic.
             entry.stamp_submitted(now());
             // SAFETY: the work object was created by `arm_repair` for this
             // entry and is alive while the entry is, which this `Arc` ensures.

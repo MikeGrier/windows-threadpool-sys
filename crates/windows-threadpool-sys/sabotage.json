@@ -281,6 +281,43 @@
       ]
     },
     {
+      "name": "a claim that pinned nothing registers the pool again after the release",
+      "file": "src/heal.rs",
+      "expect": "caught",
+      "why": "The pre-release claim exists so the pool survives the release: a claim holding an entry holds that entry's repair work object, which is a bound object, and CloseThreadpool defers the free until every bound object is gone. A claim holding none pins nothing, so by the time the marking pass runs the pool may be freed -- and this patch is the retry that would then call CreateThreadpoolWork with an environment naming it. The guard drives the difference rather than the symptom: it lifts the forced allocation failure in the before-release hook, so the removed retry would succeed and the release would report tracked, where the correct behaviour reports untracked and fail-fast says so.",
+      "find": [
+        "                crate::trace_record!(\"heal\", \"cancel-untracked\", self.key);",
+        "                return false;"
+      ],
+      "replace": [
+        "                return self.owe_repair_untracked();"
+      ]
+    },
+    {
+      "name": "the outstanding-repair predicate goes back to comparing stamps",
+      "file": "src/heal.rs",
+      "expect": "caught",
+      "why": "This is the retirement guard. `last_submitted > last_started` answered it correctly only while at most one repair could be outstanding; the overdue retry hands over a second before the first has started, and the first starting then makes the comparison false with the second still queued. The entry is retired, `PoolEntry::drop` drains, and that drain cannot return until a pool suspected of not dispatching dispatches -- on the healer's only thread, which stops self-heal for every pool in the process. The patch restores the exact predicate the counter replaced, so a future simplification back to it is caught.",
+      "find": [
+        "            self.outstanding.load(Ordering::SeqCst) > 0"
+      ],
+      "replace": [
+        "            self.last_submitted.load(Ordering::SeqCst) > self.last_started.load(Ordering::SeqCst)"
+      ]
+    },
+    {
+      "name": "a cancellation is published with a store instead of fetch_max",
+      "file": "src/heal.rs",
+      "expect": "caught",
+      "why": "Any thread may cancel, so there are concurrent writers, and reading a monotonic clock does not make the publication monotonic: a thread preempted between its read and its store writes a stale value last. With a plain store that stale value wins and `unhealed` reports healthy with a cancellation nothing has answered -- the same lost cancellation the replaced flag suffered, arriving through the publication rather than the compare-exchange. The patch is the plain store, which is what the code said for one day and what its comment claimed was safe.",
+      "find": [
+        "            self.last_cancelled.fetch_max(at, Ordering::SeqCst);"
+      ],
+      "replace": [
+        "            self.last_cancelled.store(at, Ordering::SeqCst);"
+      ]
+    },
+    {
       "name": "a repair the pool never takes is waited on forever",
       "file": "src/heal.rs",
       "expect": "caught",

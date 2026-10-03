@@ -83,6 +83,20 @@ mod on {
             .unwrap_or_else(|poison| poison.into_inner())
     }
 
+    /// Model a repair beginning to run, the way the trampoline does.
+    ///
+    /// Both halves, because a dispatch is both: the stamp orders it against a
+    /// cancellation, and the count says one fewer repair is queued. Two tests
+    /// used to call `stamp_started` alone and assert the entry was no longer in
+    /// flight, which passed only because `repair_in_flight` was then a
+    /// comparison of those stamps -- the very equivalence `M-T11.2` removed,
+    /// because it reads false with a second repair still queued. One helper, so
+    /// a test cannot model half a dispatch again.
+    fn dispatch_repair(entry: &Arc<PoolEntry>, at: u64) {
+        entry.stamp_started(at);
+        entry.note_repair_started();
+    }
+
     /// The entry for a freshly created private pool, with one object on it.
     fn entry_for(pool: &ThreadpoolPool) -> (ThreadpoolWork, Arc<PoolEntry>) {
         let mut env = CallbackEnviron::new();
@@ -209,7 +223,7 @@ mod on {
 
         // The repair submitted at 11 now runs. It answers the cancellation at
         // 10 and cannot answer the one at 20, because it was handed over first.
-        entry.stamp_started(12);
+        dispatch_repair(&entry, 12);
         assert_eq!(entry.last_started(), 12);
         assert!(
             entry.unhealed(),
@@ -223,7 +237,7 @@ mod on {
 
         // And a repair that does follow it settles the matter.
         entry.stamp_submitted(21);
-        entry.stamp_started(22);
+        dispatch_repair(&entry, 22);
         assert!(
             !entry.unhealed(),
             "a dispatch after the last cancellation heals it"
@@ -276,10 +290,92 @@ mod on {
         entry.stamp_cancelled(10);
         entry.stamp_submitted(11);
         assert!(entry.repair_in_flight());
-        entry.stamp_started(12);
+        dispatch_repair(&entry, 12);
         assert!(
             !entry.repair_in_flight(),
             "the pool gave the repair back, so nothing is outstanding"
+        );
+        drop(work);
+    }
+
+    /// Two repairs outstanding: the first starting does not clear the second.
+    ///
+    /// The defect `M-T11.2` fixed, stated as the sequence that produced it. The
+    /// overdue retry hands over a second repair before the first has started,
+    /// and `repair_in_flight` used to be `last_submitted > last_started` -- so
+    /// the first starting, at a time later than the second submission, made the
+    /// predicate false while the second was still queued. `is_retirable` then
+    /// permitted retirement, and the drain in `PoolEntry::drop` would wait for
+    /// a callback on a pool suspected of not dispatching, on the healer's only
+    /// thread, stopping self-heal for every pool in the process.
+    ///
+    /// The timestamps here are the ones that make the old predicate wrong:
+    /// submitted at 11 and 12, started at 13, which is greater than both.
+    #[test]
+    fn a_retry_leaves_two_repairs_outstanding_until_both_have_started() {
+        let _gate = gate();
+        let pool = ThreadpoolPool::new().expect("create pool");
+        let (work, entry) = entry_for(&pool);
+
+        entry.stamp_cancelled(10);
+        entry.stamp_submitted(11);
+        entry.stamp_submitted(12);
+
+        dispatch_repair(&entry, 13);
+        assert!(
+            entry.repair_in_flight(),
+            "one of two repairs has started; the other is still queued, so the pool still holds \
+             one. The stamp comparison this replaces read false here, because 12 is not greater \
+             than 13"
+        );
+        assert!(
+            !crate::heal::is_retirable(&entry),
+            "and an entry with a repair still queued must not be retirable: dropping it drains, \
+             and that drain cannot return until a pool we suspect of not dispatching dispatches"
+        );
+
+        dispatch_repair(&entry, 14);
+        assert!(
+            !entry.repair_in_flight(),
+            "both repairs have now started, so nothing is outstanding"
+        );
+        drop(work);
+    }
+
+    /// A cancellation published late cannot undo a newer one.
+    ///
+    /// The other half of `M-T11.2`. Reading a monotonic clock does not make the
+    /// *publication* monotonic: any thread may cancel, so a thread that reads
+    /// its timestamp and is then preempted can store it after a later
+    /// cancellation has already stored a greater one. With a plain store the
+    /// older value won and `unhealed` read healthy with a cancellation
+    /// unanswered -- the same loss the replaced flag suffered, re-entering
+    /// through the publication rather than the compare-exchange.
+    ///
+    /// Asserted through `unhealed` as well as through the stamp, because the
+    /// stamp is only the mechanism; the consequence is the pool being called
+    /// healthy.
+    #[test]
+    fn a_cancellation_published_out_of_order_does_not_lower_the_stamp() {
+        let _gate = gate();
+        let pool = ThreadpoolPool::new().expect("create pool");
+        let (work, entry) = entry_for(&pool);
+
+        // The interleaving: a repair dispatches at 20, a cancellation at 30 is
+        // published, and only then does a cancellation that read 10 land.
+        dispatch_repair(&entry, 20);
+        entry.stamp_cancelled(30);
+        entry.stamp_cancelled(10);
+
+        assert_eq!(
+            entry.last_cancelled(),
+            30,
+            "the newest cancellation must stand; a plain store would leave 10 here"
+        );
+        assert!(
+            entry.unhealed(),
+            "and the pool must still read unhealed -- with 10 stored, 10 >= 20 is false and a \
+             cancellation nothing has answered would be reported as healthy"
         );
         drop(work);
     }
@@ -592,17 +688,17 @@ mod on {
     /// A pool that cannot dispatch anything, because its one thread is busy.
     ///
     /// **The difference between this and holding the repair callback is the
-    /// reason it exists.** `repair_trampoline` stamps `last_started` as its
-    /// very first act, *before* the test hold -- deliberately, so an entry can
-    /// be retired while its callback is still running. A held callback has
-    /// therefore already made `repair_in_flight` false, and an entry whose
-    /// repair has run can never be made overdue again without waiting out the
-    /// real threshold: to be in flight `last_submitted` must exceed
-    /// `last_started`, and to be overdue it must lag the clock by five seconds,
-    /// which cannot both hold once `last_started` is a recent stamp.
+    /// reason it exists.** `repair_trampoline` stamps `last_started` and lowers
+    /// the outstanding count as its very first acts, *before* the test hold --
+    /// deliberately, so an entry can be retired while its callback is still
+    /// running. A held callback has therefore already made `repair_in_flight`
+    /// false, and an entry whose repair has run cannot be put back into the
+    /// overdue state by hand: that needs something outstanding *and* the most
+    /// recent submission lagging the clock by five seconds, so re-entering it
+    /// means waiting out the real threshold or submitting afresh.
     ///
     /// Occupying the pool's only thread keeps the repair from ever starting, so
-    /// `last_started` stays at zero and the state stays reachable. It is also
+    /// nothing is ever taken off the count and the state stays reachable. It is also
     /// the state the feature is about rather than a simulation of it: a pool
     /// that is not dispatching.
     struct StalledPool {

@@ -1796,18 +1796,44 @@ alive long enough to *receive* that repair. Retiring it would close the repair
 object, let the pool go, and discard an owed repair at the one moment it
 matters. The retention is bounded by a single self-heal period.
 
-### Health is derived from three stamps, not stored in a flag
+### Health is derived from stamps, not stored in a flag
 
-Decided 2026-10-02 implementing `M-T9.2`. An entry carries `last_cancelled`,
-`last_started` and `last_submitted`, each written by an unconditional store, and
-nothing records "a repair is owed":
+Decided 2026-10-02 implementing `M-T9.2`, and corrected 2026-10-03 by `M-T11.2`.
+An entry carries `last_cancelled` and `last_started`, published with `fetch_max`,
+a `last_submitted` for timing, and a count of repairs handed over but not yet
+started. Nothing records "a repair is owed":
 
 ```text
 unhealed()         <=>  last_cancelled != 0 && last_cancelled >= last_started
-repair_in_flight() <=>  last_submitted  >  last_started
-tick:                   if unhealed() && !repair_in_flight() { submit; stamp last_submitted }
-trampoline:             stamp last_started
+repair_in_flight() <=>  outstanding > 0
+repair_overdue()   <=>  repair_in_flight() && now - last_submitted >= OVERDUE_AFTER
+tick:                   if unhealed() && !repair_in_flight() { submit }
+submit:                 stamp last_submitted; outstanding += 1; SubmitThreadpoolWork
+trampoline:             stamp last_started; outstanding -= 1
 ```
+
+**`repair_in_flight` counted stamps for one day, and that was wrong.** It was
+`last_submitted > last_started`, which answers "is a repair outstanding" only
+while at most one can be. The overdue retry below hands over a second before the
+first has started, and the first starting -- at a time later than the second
+submission -- then makes the comparison false with a repair still queued. The
+consequence is not a missed repair but a stopped healer: `is_retirable` permits
+retirement, `PoolEntry::drop` drains, and that drain cannot return until a pool
+this feature only touches *because it is suspected of not dispatching*
+dispatches. The healer has one thread, so self-heal stops for every pool in the
+process. A count cannot be fooled that way, and it is the retirement guard, so
+it is the thing that must be exact.
+
+**The stamps are published with `fetch_max`, not stored.** Reading a monotonic
+clock does not make the publication monotonic: any thread may cancel, so a
+thread that reads its timestamp and is preempted can store a stale value after a
+newer cancellation has landed, and `unhealed` then reports healthy with a
+cancellation unanswered. That is the same loss the flag suffered, re-entering
+through the publication instead of through the compare-exchange -- which is why
+it is worth naming twice. `last_submitted` is the exception and is a plain
+store: only a tick writes it, ticks are serialised, and it must be able to move
+backwards so a test can reach the overdue state without waiting out the real
+threshold.
 
 **The flag this replaces could lose a cancellation outright.** It was set with
 `compare_exchange(0, at)` -- deliberately keeping the earliest unrepaired
@@ -1918,11 +1944,14 @@ occupies a one-thread pool's only thread, so a submitted repair genuinely never
 dispatches. The alternative -- holding the repair callback, which this module
 already has a hook for -- does not work here, and the reason is worth recording
 because it is not obvious: `repair_trampoline` stamps `last_started` as its very
-first act, deliberately, so that an entry can be retired while its callback is
+first act -- and, since `M-T11.2`, lowers the outstanding count in the same
+breath -- deliberately, so that an entry can be retired while its callback is
 still running. A held callback has therefore *already* made `repair_in_flight`
-false. Once `last_started` is a recent stamp the state is unreachable at all: to
-be in flight `last_submitted` must exceed it, and to be overdue it must lag the
-clock by the threshold, and both cannot hold. The `fail-fast` case runs in a
+false, and the hold happens after both. Nor can the state be re-entered by hand
+once a repair has run: `repair_overdue` requires something outstanding *and* the
+most recent submission to lag the clock by the threshold, so reaching it again
+means either waiting out that threshold for real or submitting afresh. The
+`fail-fast` case runs in a
 child process and asserts on how it died, since an in-process abort would take
 the test runner with it.
 

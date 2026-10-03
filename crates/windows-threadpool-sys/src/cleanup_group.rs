@@ -73,7 +73,6 @@ struct OwnedResource {
     /// a cancelling one. A no-op for every kind but a wait: the removal that
     /// can sever a pool's arrival notification operates on a wait completion
     /// packet, and only a wait owns one.
-    owe_repair: unsafe fn(*mut c_void) -> bool,
     /// Take a repair claim on this member's pool while it is still live.
     ///
     /// Returns the claim, which the caller holds across the native release so
@@ -84,17 +83,14 @@ struct OwnedResource {
 
 /// A repair hook for a member whose release cannot wedge a pool.
 ///
+/// Returning `None` is what keeps such a member out of the marking pass
+/// entirely: the claims are now what that pass iterates, so a kind that cannot
+/// owe a repair simply produces no claim. There used to be a second hook
+/// reporting the same fact a different way, and the two could disagree.
+///
 /// SAFETY: takes a pointer it never dereferences.
-/// For resource kinds that never owe a repair: nothing to claim.
 unsafe fn no_repair_recovery(_ptr: *mut c_void) -> Option<crate::heal::Registration> {
     None
-}
-
-unsafe fn no_repair_owed(_ptr: *mut c_void) -> bool {
-    // Nothing was cancelled on a pool this crate tracks, so there is nothing
-    // left untracked. Reporting `true` keeps the untracked fail-fast measuring
-    // only the members that can actually owe a repair.
-    true
 }
 
 // SAFETY: each pointer is a `Box` the group exclusively owns and frees exactly
@@ -278,7 +274,6 @@ impl CleanupGroup {
         self.adopt(OwnedResource {
             ptr: context,
             prepare_shutdown: prepare_shutdown_noop,
-            owe_repair: no_repair_owed,
             recover_repair: no_repair_recovery,
             free: ThreadpoolWork::drop_context,
         });
@@ -309,7 +304,6 @@ impl CleanupGroup {
         self.adopt(OwnedResource {
             ptr: context,
             prepare_shutdown: ThreadpoolTimer::prepare_shutdown,
-            owe_repair: no_repair_owed,
             recover_repair: no_repair_recovery,
             free: ThreadpoolTimer::drop_context,
         });
@@ -346,7 +340,6 @@ impl CleanupGroup {
         self.adopt(OwnedResource {
             ptr: context,
             prepare_shutdown: prepare_shutdown_noop,
-            owe_repair: no_repair_owed,
             recover_repair: no_repair_recovery,
             free: ThreadpoolPeriodicTimer::drop_context,
         });
@@ -384,7 +377,6 @@ impl CleanupGroup {
         self.adopt(OwnedResource {
             ptr: context,
             prepare_shutdown: ThreadpoolWait::prepare_shutdown,
-            owe_repair: ThreadpoolWait::owe_repair,
             recover_repair: ThreadpoolWait::recover_repair,
             free: ThreadpoolWait::drop_context,
         });
@@ -396,7 +388,6 @@ impl CleanupGroup {
         self.adopt(OwnedResource {
             ptr: target.cast(),
             prepare_shutdown: prepare_shutdown_noop,
-            owe_repair: no_repair_owed,
             recover_repair: no_repair_recovery,
             free: free_boxed::<WaitTarget>,
         });
@@ -598,7 +589,7 @@ impl CleanupGroup {
         );
         let mut tracked = true;
         if cancel_pending && track_repairs {
-            for resource in resources.iter() {
+            for claim in recovered.iter() {
                 // A cancelling release passes the cancel through to every
                 // member, so each wait among them reaches the same removal
                 // `ThreadpoolWait::try_cancel_pending` does and owes its pool
@@ -619,14 +610,25 @@ impl CleanupGroup {
                 // cancellation, where the race this crate already documents
                 // needs two.
                 //
-                // SAFETY: the contexts are still alive -- nothing is freed
-                // until the loop below -- and each hook matches the context
-                // kind this resource holds.
+                // Marked through the **claims** rather than through the members'
+                // contexts, and that is a safety requirement rather than a
+                // tidier spelling. The context's own registration may be empty,
+                // because registering its pool failed when it was created; the
+                // hook that used to be called here would then retry the
+                // registration, and `CreateThreadpoolWork` would name a pool
+                // whose last bound object the release above has just freed. A
+                // claim that holds an entry is precisely a claim that kept the
+                // pool alive across that release, so marking it is sound; a
+                // claim that holds none reports the cancellation as untracked,
+                // which is what the fail-fast below is for.
+                //
+                // Needs no `unsafe`: a claim owns what it refers to, where the
+                // hook reached through a raw context pointer.
                 //
                 // Accumulated rather than acted on here: the fail-fast this
                 // feeds panics, and a panic raised in this loop would unwind
                 // past the free loop below and leak every member's context.
-                tracked &= unsafe { (resource.owe_repair)(resource.ptr) };
+                tracked &= claim.owe_repair_claimed();
             }
         }
         // After the marking pass, never before: a claim dropped earlier could

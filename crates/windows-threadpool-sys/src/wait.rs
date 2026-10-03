@@ -979,6 +979,14 @@ impl ThreadpoolWait {
         Some(ctx.registration.reclaim())
     }
 
+    /// Mark this wait's pool as owing a repair, retrying the registration.
+    ///
+    /// Gated because its only caller is `WaitMember::try_cancel_pending`, which
+    /// the feature gates too. It was reachable in every configuration until
+    /// `M-T11.4` removed the `OwnedResource` hook that named it: the group's
+    /// marking pass now goes through the claims, which is what the retry here
+    /// must not be reached from.
+    #[cfg(feature = "self-heal")]
     #[must_use]
     pub(crate) unsafe fn owe_repair(context: *mut core::ffi::c_void) -> bool {
         // SAFETY: forwarded; the context outlives the member until the group

@@ -117,6 +117,96 @@ fn a_group_is_send_and_sync() {
 
 // --- members run normally ---
 
+/// A claim that pinned nothing reports untracked instead of registering again.
+///
+/// `M-T11.4`. The pre-release pass recovers a claim per member precisely so the
+/// pool survives the release: a claim holding an entry holds that entry's repair
+/// work object, which is a bound object, and `CloseThreadpool` defers the free
+/// until every bound object is gone. When the claim could not be made -- an
+/// allocation failure -- it pins nothing, and the marking pass used to retry the
+/// registration anyway, which would call `CreateThreadpoolWork` naming a pool
+/// whose last bound object the release had just freed.
+///
+/// **Driving the difference, not the symptom.** Forcing the failure throughout
+/// would leave old and new behaviour indistinguishable: both report untracked,
+/// one of them after a use-after-free nothing observes. So the failure is lifted
+/// in the `before_release` hook -- after the claim has already failed, before the
+/// release -- which is the exact window where a post-release retry would have
+/// succeeded. Old behaviour: the retry registers, `tracked` stays true, no
+/// panic. New behaviour: no retry, untracked, and `fail-fast` says so.
+///
+/// Losing that retry costs little, which is why this is the right trade: the
+/// claim *is* the retry, taken at the only moment it is safe to take, with the
+/// members still live.
+///
+/// Gated on `fail-fast` because the report is only observable as a panic; the
+/// feature-off build records `cancel-untracked` through a trace nothing here
+/// reads. Gated on `self-heal` because the claim pass exists only with it.
+#[cfg(all(feature = "self-heal", feature = "fail-fast"))]
+#[test]
+fn a_release_whose_claim_pinned_nothing_reports_untracked_rather_than_re_registering() {
+    let pool = ThreadpoolPool::new().expect("create pool");
+    let mut env = CallbackEnviron::new();
+    env.set_pool(&pool);
+    let key = pool.as_raw() as usize;
+
+    // Registration fails while the member is created, so its registration --
+    // and the claim recovered from it -- holds no entry.
+    crate::heal::FORCE_REPAIR_FAILURE_FOR.store(key, Ordering::SeqCst);
+
+    let mut group = CleanupGroup::new().expect("create group");
+    {
+        let wait = group
+            .create_wait(event(), |_| {}, Some(&env))
+            .expect("create wait member");
+        wait.arm(None);
+    }
+    assert!(
+        !crate::heal::entries().iter().any(|e| e.key() == key),
+        "the forced failure must leave the pool unregistered, or this test is driving the \
+         ordinary path and proves nothing"
+    );
+
+    // Lifted after the claim, before the release: the window in which the
+    // removed retry would have succeeded.
+    let lifted = Arc::new(AtomicBool::new(false));
+    let in_hook = Arc::clone(&lifted);
+    group.on_before_release(move || {
+        crate::heal::FORCE_REPAIR_FAILURE_FOR.store(0, Ordering::SeqCst);
+        in_hook.store(true, Ordering::SeqCst);
+    });
+
+    let panicked = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        close_cancelling(&mut group);
+    }));
+
+    assert!(
+        lifted.load(Ordering::SeqCst),
+        "the hook never ran, so the failure was never lifted and this proved nothing"
+    );
+    crate::heal::FORCE_REPAIR_FAILURE_FOR.store(0, Ordering::SeqCst);
+
+    let payload = panicked.expect_err(
+        "a cancellation whose claim pinned nothing is untracked, and `fail-fast` must say so. \
+         Passing here means the marking pass registered the pool again after the release -- the \
+         retry this item removed, which names a pool whose last bound object has just been freed",
+    );
+    let message = payload
+        .downcast_ref::<String>()
+        .map(String::as_str)
+        .or_else(|| payload.downcast_ref::<&'static str>().copied())
+        .unwrap_or_default()
+        .to_owned();
+    assert!(
+        message.contains("CleanupGroup"),
+        "the panic must be the untracked-cancellation fail-fast, got: {message}"
+    );
+
+    if let Some(entry) = crate::heal::entries().into_iter().find(|e| e.key() == key) {
+        entry.force_healed();
+    }
+}
+
 /// A cancelling release marks its pools **after** the cancellation, not before.
 ///
 /// Both orderings leave a mark outstanding once `close_members` has returned,

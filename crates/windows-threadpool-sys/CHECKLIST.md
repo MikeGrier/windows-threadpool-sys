@@ -917,8 +917,14 @@ comment that the code next to it does not keep.
   Assert the accepting direction too, so a bound that is accidentally removed from every type is
   not reported as success.
 
-- [ ] **M-T11.2** -- **Make the repair predicates say what their doc comments claim.** Two defects
-      in `M-T9.2`, found together because they are the same block of accessors.
+- [x] **M-T11.2** -- **Make the repair predicates say what their doc comments claim.** Two defects
+      in `M-T9.2`, found together because they are the same block of accessors. Done 2026-10-03:
+      `outstanding: AtomicU32` answers "is a repair queued", and `last_cancelled` / `last_started`
+      are published with `fetch_max`. Each has a test that traverses the defect
+      (`a_retry_leaves_two_repairs_outstanding_until_both_have_started`,
+      `a_cancellation_published_out_of_order_does_not_lower_the_stamp`), each verified to fail by
+      name when its fix is reverted, and both are in `sabotage.json`. `last_submitted` stays a
+      plain store and says why: single-writer, and the tests must be able to move it backwards.
 
   **A plain store cannot publish a monotonic clock.** `stamp_cancelled` is an unconditional store
   whose doc says "a later cancellation can only move the stamp forward", and `now`'s doc goes
@@ -948,7 +954,15 @@ comment that the code next to it does not keep.
   evidenced only by the crate's own repair dispatching, and that store was removed from every
   callback. This is the public-facing document and nothing swept it.
 
-- [ ] **M-T11.4** -- **Stop a failed pre-release recovery claiming to pin a pool it does not.**
+- [x] **M-T11.4** -- **Stop a failed pre-release recovery claiming to pin a pool it does not.**
+      Done 2026-10-03. The marking pass now iterates the **claims** rather than the members'
+      contexts, and `Registration::owe_repair_claimed` reports untracked instead of re-registering.
+      Losing that retry costs little: the claim *is* a retry, taken at the only moment it is safe,
+      with the members still live. The `OwnedResource::owe_repair` hook is gone, since the claim
+      now carries the same fact and two mechanisms could disagree -- which orphaned
+      `ThreadpoolWait::owe_repair` in the feature-off build and it is gated to match its one
+      caller. Guarded by a test that drives the *difference*, not the symptom: it lifts the forced
+      allocation failure in the `before_release` hook, so the removed retry would have succeeded.
       `recover_repair` returns `Some(reclaim())` unconditionally, and `reclaim` re-attempts
   registration. When that attempt fails the `Registration` holds no entry and therefore no `Arc`,
   so it keeps nothing alive -- yet the field's doc says the caller "holds [it] across the native
