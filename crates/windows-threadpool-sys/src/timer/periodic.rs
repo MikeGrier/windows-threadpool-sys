@@ -62,10 +62,14 @@ impl PeriodicTick<'_> {
     /// This is how a periodic timer ends itself -- "tick until some condition
     /// holds" needs no external coordination.
     ///
-    /// It stops *future* ticks being queued. It does not retract ticks already
-    /// queued, and it does not affect ticks already running, including other
-    /// concurrent runs of this same callback. Expect the callback to run again
-    /// after calling this, and make it idempotent accordingly.
+    /// It stops *future* ticks being queued, and discards a tick already queued
+    /// -- the behaviour
+    /// `stopping_a_periodic_timer_discards_a_tick_that_is_already_queued`
+    /// measures for [`ThreadpoolPeriodicTimer::stop`], which this calls. What
+    /// it does not affect is a tick already *running*, including another
+    /// concurrent run of this same callback on another thread. Expect the
+    /// callback to run again after calling this, and make it idempotent
+    /// accordingly.
     pub fn stop(&self) {
         let timer = self.ctx.timer.load(Ordering::Acquire);
         debug_assert_ne!(timer, 0, "the timer must be published before callbacks");
@@ -161,7 +165,8 @@ unsafe extern "system" fn periodic_trampoline(
 /// ```
 ///
 /// Stopping from inside the callback, for "tick until done". Note the counter
-/// may pass the threshold, because a tick already queued still runs:
+/// may pass the threshold: the stop discards a queued tick, but a tick already
+/// running on another thread is unaffected and will finish its increment:
 ///
 /// ```
 /// use std::sync::Arc;
@@ -391,9 +396,12 @@ impl ThreadpoolPeriodicTimer {
 
     /// Stop the timer.
     ///
-    /// Future ticks stop being queued, but a tick already queued still runs and
-    /// ticks already executing are unaffected. Use
-    /// [`ThreadpoolPeriodicTimer::stop_and_drain`] to also wait for those.
+    /// Future ticks stop being queued, and a tick already queued is discarded
+    /// -- measured on this type by
+    /// `stopping_a_periodic_timer_discards_a_tick_that_is_already_queued`,
+    /// which holds the pool's only thread busy so a tick is provably queued,
+    /// then stops. Ticks already *executing* are unaffected; use
+    /// [`ThreadpoolPeriodicTimer::stop_and_drain`] to wait for those.
     pub fn stop(&self) {
         // SAFETY: timer is valid for the lifetime of self.
         unsafe { disarm_raw(self.timer) };
@@ -431,11 +439,14 @@ impl ThreadpoolPeriodicTimer {
     /// what [`Drop`] performs.
     ///
     /// The drain no longer cancels: it waits for a queued tick to run. On this
-    /// type that is **unobservable**, because `stop` discards a queued tick the
-    /// way a one-shot timer's disarm does -- pinned by
-    /// `disarming_cancels_a_queued_tick_which_a_waits_disarm_does_not` in the
-    /// one-shot timer's tests. It is the form the rest of the crate uses, and
-    /// the one that stays correct if that ever changes.
+    /// type that is **unobservable**, because `stop` discards a queued tick --
+    /// measured by
+    /// `stopping_a_periodic_timer_discards_a_tick_that_is_already_queued`. That
+    /// test exists because this paragraph used to cite the *one-shot* timer's
+    /// `disarming_cancels_a_queued_tick_which_a_waits_disarm_does_not`
+    /// instead, which measures `SetThreadpoolTimer` with no period at all. The
+    /// drain is the form the rest of the crate uses, and the one that stays
+    /// correct if the discard behaviour ever changes.
     ///
     /// The result holds provided no other thread starts the timer during the
     /// call. `ThreadpoolPeriodicTimer` is `Sync` and the `start*` methods take

@@ -1247,7 +1247,7 @@ finding is of a different and worse kind: a rule nothing tests.
   type changed underneath that reasoning, so it now risks exactly the outcome it was written to
   avoid, plus heap damage that other tests in the same process would see.
 
-- [ ] **M-T13.4** -- **Correct the disarm documentation, which says the opposite of what the crate
+- [x] **M-T13.4** -- **Correct the disarm documentation, which says the opposite of what the crate
   measures.** `ThreadpoolTimer::disarm` says "a callback already queued still runs; use
   `cancel_pending` to drop those as well", and `ThreadpoolPeriodicTimer::stop` says "a tick already
   queued still runs". `disarming_cancels_a_queued_tick_which_a_waits_disarm_does_not` pins the

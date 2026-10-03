@@ -501,3 +501,84 @@ fn a_timer_can_be_started_from_another_thread() {
     fires.wait_for(3);
     timer.stop_and_drain();
 }
+
+/// Whether a periodic `stop` discards a tick that is already queued.
+///
+/// **Measured on this type rather than inferred from the one-shot timer.**
+/// `disarming_cancels_a_queued_tick_which_a_waits_disarm_does_not` pins the
+/// answer for `ThreadpoolTimer`, and this type's documentation used to claim
+/// the same behaviour by citing that test -- a claim about `SetThreadpoolTimer`
+/// with a non-zero period, resting on a measurement of one with no period at
+/// all. `M-T13.4` is that extrapolation being replaced by an observation.
+///
+/// The period is long enough that exactly one tick comes due inside the window:
+/// the pool's only thread is held by a blocking work item, so the tick is
+/// queued and cannot run, and no second tick is scheduled for ten seconds.
+#[test]
+fn stopping_a_periodic_timer_discards_a_tick_that_is_already_queued() {
+    let mut outcomes = Vec::new();
+    for stop_first in [false, true] {
+        let pool = ThreadpoolPool::new().expect("create the private pool");
+        pool.set_min_threads(1).expect("one thread minimum");
+        pool.set_max_threads(1).expect("one thread maximum");
+        let mut env = CallbackEnviron::new();
+        env.set_pool(&pool);
+
+        let gate = Arc::new((std::sync::Mutex::new(false), std::sync::Condvar::new()));
+        let gate_for_work = Arc::clone(&gate);
+        let occupier = crate::work::ThreadpoolWork::new(
+            move || {
+                let (lock, cvar) = &*gate_for_work;
+                let mut open = lock.lock().unwrap_or_else(|p| p.into_inner());
+                while !*open {
+                    open = cvar.wait(open).unwrap_or_else(|p| p.into_inner());
+                }
+            },
+            Some(&mut env),
+        )
+        .expect("create the occupying work item");
+        occupier.submit();
+
+        let ran = Arc::new(AtomicUsize::new(0));
+        let ran_for_callback = Arc::clone(&ran);
+        let timer = ThreadpoolPeriodicTimer::new(
+            Duration::from_secs(10),
+            move |_tick| {
+                ran_for_callback.fetch_add(1, Ordering::SeqCst);
+            },
+            Some(&mut env),
+        )
+        .expect("create the periodic timer");
+        timer.start_after(Duration::from_millis(1));
+        std::thread::sleep(Duration::from_millis(60));
+        assert_eq!(
+            ran.load(Ordering::SeqCst),
+            0,
+            "the pool's only thread is occupied, so the tick must still be queued"
+        );
+
+        if stop_first {
+            timer.stop();
+        }
+        {
+            let (lock, cvar) = &*gate;
+            *lock.lock().unwrap_or_else(|p| p.into_inner()) = true;
+            cvar.notify_all();
+        }
+        timer.wait();
+        std::thread::sleep(Duration::from_millis(100));
+        outcomes.push(ran.load(Ordering::SeqCst));
+        timer.stop_and_drain();
+        occupier.stop_and_drain();
+    }
+    assert_eq!(
+        outcomes[0], 1,
+        "without a stop the queued tick runs, so the setup really does queue one"
+    );
+    assert_eq!(
+        outcomes[1], 0,
+        "with a stop the queued tick is discarded -- the same asymmetry with \
+         waits that the one-shot timer shows, now measured on this type rather \
+         than assumed from it"
+    );
+}

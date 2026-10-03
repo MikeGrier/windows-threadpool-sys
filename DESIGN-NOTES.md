@@ -394,8 +394,12 @@ The SDK contracts impose several requirements that the safe API must represent:
 	cancel the underlying I/O request or make its `OVERLAPPED` storage safe to free.
 - A waitable handle must remain valid while its wait is pending. A wait must be explicitly rearmed for each
 	activation, and passing a mutex handle is unsupported.
-- Disarming a timer or wait prevents new callbacks from being queued but does not retract callbacks already
-	queued. Relative times exclude sleep and hibernation; absolute times include them.
+- Disarming prevents new callbacks from being queued. Whether it retracts one already queued differs by object
+	type, and this crate groups the two together at its peril: a timer's disarm **discards** a queued callback,
+	a wait's does **not**. Both halves are measured --
+	`disarming_cancels_a_queued_tick_which_a_waits_disarm_does_not` for the one-shot timer against the wait, and
+	`stopping_a_periodic_timer_discards_a_tick_that_is_already_queued` for the periodic timer. Relative times
+	exclude sleep and hibernation; absolute times include them.
 - `StartThreadpoolIo` must precede every overlapped operation. A failed operation, or an immediate success on
 	a handle using `FILE_SKIP_COMPLETION_PORT_ON_SUCCESS`, must be balanced with `CancelThreadpoolIo`.
 - Callback code runs on shared, process-managed threads. It must restore thread-local state before returning,

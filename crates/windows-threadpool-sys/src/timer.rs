@@ -599,9 +599,16 @@ impl ThreadpoolTimer {
 
     /// Stop the timer.
     ///
-    /// New callbacks stop being queued, but a callback already queued still
-    /// runs; use [`ThreadpoolTimer::cancel_pending`] to drop those as well. Disarming an
-    /// idle timer is a no-op.
+    /// New callbacks stop being queued, and a callback already queued is
+    /// discarded -- measured by
+    /// `disarming_cancels_a_queued_tick_which_a_waits_disarm_does_not`, which
+    /// holds the pool's only thread busy so a tick is provably queued, then
+    /// disarms. This is the asymmetry with a wait, whose disarm leaves a queued
+    /// callback to run. Disarming an idle timer is a no-op.
+    ///
+    /// A callback already *executing* is unaffected; use
+    /// [`wait`](Self::wait) or [`stop_and_drain`](Self::stop_and_drain) to
+    /// block until it finishes.
     pub fn disarm(&self) {
         // SAFETY: timer is valid for the lifetime of self.
         unsafe { disarm_raw(self.timer) };
