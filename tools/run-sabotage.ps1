@@ -137,11 +137,14 @@
 .PARAMETER ShardCount
     How many shards the manifest is divided into, defaulting to 1 (no
     sharding). A sweep's cost is one rebuild and one full suite run PER ENTRY,
-    so it scales with the manifest rather than with the change under review --
-    53 entries against a 12-second suite is tens of minutes, and no amount of
-    care inside one process makes that shorter. Sharding is the only lever:
-    each shard is an independent process, so N workers take roughly 1/N of the
-    wall clock.
+    so it scales with the manifest rather than with the change under review, and
+    the large manifests are tens of minutes. No amount of care inside one
+    process makes that shorter. Sharding is the only lever: each shard is an
+    independent process, so N workers take roughly 1/N of the wall clock.
+
+    No entry count appears here. An earlier draft of this very paragraph quoted
+    one while the text below told the reader not to duplicate counts, and it was
+    stale within the same branch. The manifests say how many entries they have.
 
     Entries are ordered BY FILE and that order is then cut into equal
     contiguous blocks, one per shard. The two things being asked for look

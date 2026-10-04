@@ -33,8 +33,14 @@ name: sabotage sweeps
 on:
   push:
     branches: [main]
-    # Only when something a sweep could actually be affected by moves. A docs-only
-    # merge cannot change whether a suite notices a defect.
+    # Only when something a sweep could actually be affected by moves.
+    #
+    # Note that a crate's DOCUMENTATION is such a thing, and an earlier version
+    # of this comment claimed the opposite. Every crate here splices its README
+    # into the library under `cfg(doctest)`, and a sweep runs the crate's whole
+    # `cargo test` -- doctests included -- once per entry. So a README-only
+    # change really can move whether a sabotage is caught. `crates/**` below
+    # already covers it; what was wrong was the explanation, not the filter.
     paths:
       - 'crates/**'
       # A glob rather than a list of script names. The list form is exactly what
