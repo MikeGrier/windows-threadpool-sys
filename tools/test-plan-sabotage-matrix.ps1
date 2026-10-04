@@ -53,6 +53,28 @@ function Assert-Equal {
     if ($Expected -ne $Actual) { throw "$Message (expected '$Expected', got '$Actual')" }
 }
 
+# Every fixture directory this suite creates, so the runner can remove them all
+# after each case -- INCLUDING when the case threw, which is when a leftover is
+# least likely to be noticed and most likely to confuse the next run. The
+# sibling `test-run-sabotage.ps1` does this with a per-case `finally`; recording
+# them in one place here means a case added later cannot forget to.
+$script:fixtureRoots = New-Object System.Collections.Generic.List[string]
+
+# A fresh temp directory path, registered for cleanup. Nothing in this suite may
+# mint a fixture path any other way, or it will be the one that leaks.
+function New-FixtureRootPath {
+    $root = Join-Path ([System.IO.Path]::GetTempPath()) ("plan-matrix-" + [guid]::NewGuid().ToString('N'))
+    $script:fixtureRoots.Add($root) | Out-Null
+    return $root
+}
+
+function Remove-Fixtures {
+    foreach ($root in $script:fixtureRoots) {
+        Remove-Item -LiteralPath $root -Recurse -Force -ErrorAction SilentlyContinue
+    }
+    $script:fixtureRoots.Clear()
+}
+
 <#
 Build a throwaway repository root holding one `crates/<name>/sabotage.json` per
 entry of $Layout, whose value is how many sabotages that manifest declares.
@@ -61,7 +83,7 @@ Only the count matters to the planner, so the entries carry nothing else.
 function New-FixtureRoot {
     param([hashtable] $Layout)
 
-    $root = Join-Path ([System.IO.Path]::GetTempPath()) ("plan-matrix-" + [guid]::NewGuid().ToString('N'))
+    $root = New-FixtureRootPath
     foreach ($crate in $Layout.Keys) {
         $dir = Join-Path (Join-Path $root 'crates') $crate
         New-Item -ItemType Directory -Path $dir -Force | Out-Null
@@ -201,7 +223,7 @@ $cases = @(
     @{
         Name = 'a-root-with-no-manifests-is-refused'
         Run  = {
-            $root = Join-Path ([System.IO.Path]::GetTempPath()) ("plan-matrix-" + [guid]::NewGuid().ToString('N'))
+            $root = New-FixtureRootPath
             New-Item -ItemType Directory -Path (Join-Path $root 'crates') -Force | Out-Null
             $failed = $false
             try { Invoke-Planner -Root $root } catch { $failed = $true }
@@ -256,6 +278,9 @@ foreach ($case in $selected) {
         $failures++
         Write-Host "  FAIL  $($case.Name)" -ForegroundColor Red
         Write-Host "        $($_.Exception.Message)" -ForegroundColor Red
+    }
+    finally {
+        Remove-Fixtures
     }
 }
 

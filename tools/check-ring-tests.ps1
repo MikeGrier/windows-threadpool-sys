@@ -63,6 +63,22 @@ if (-not (Test-Path $sourceRoot)) {
     exit 2
 }
 
+# Every constructor that opens a ring, spelled ONCE.
+#
+# This used to be two identical copies of the expression -- one for the helper
+# census, one for the test bodies -- and that is exactly how
+# `with_version_and_inventory` came to be missing from a list already naming its
+# three siblings: the constructor was added, and only the site someone happened
+# to be looking at got updated. A helper opening a ring through it was then
+# classified as not opening one, so every test calling that helper bypassed this
+# guard silently.
+#
+# The longest alternative is first so a match never depends on the engine
+# backtracking out of `::with_version` when the text is
+# `::with_version_and_inventory`.
+$script:RingConstructorPattern =
+    '(IoRing::new|::with_version_and_inventory|::with_inventory|::with_version)\s*\('
+
 # One entry per `#[test]` in `src/**/tests.rs` whose body reaches a ring, either
 # directly or through a helper in the same file that does.
 function Get-RingOpeningTests {
@@ -83,7 +99,7 @@ function Get-RingOpeningTests {
             $stop = $text.IndexOf("`n}", $start)
             if ($stop -lt 0) { $stop = $text.Length }
             $body = $text.Substring($start, [Math]::Min(4000, $stop - $start))
-            if ($body -match '(IoRing::new|::with_inventory|::with_version)\s*\(') { $helpers.Add($match.Groups[1].Value) | Out-Null }
+            if ($body -match $script:RingConstructorPattern) { $helpers.Add($match.Groups[1].Value) | Out-Null }
         }
 
         $blocks = $text -split '#\[test\]'
@@ -103,7 +119,7 @@ function Get-RingOpeningTests {
             $end = $block.IndexOf("`n}")
             $body = if ($end -gt 0) { $block.Substring(0, $end) } else { $block }
 
-            $opensRing = $body -match '(IoRing::new|::with_inventory|::with_version)\s*\('
+            $opensRing = $body -match $script:RingConstructorPattern
             if (-not $opensRing) {
                 foreach ($helper in $helpers) {
                     if ($helper -eq $name) { continue }

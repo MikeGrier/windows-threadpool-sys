@@ -37,7 +37,16 @@ on:
     # merge cannot change whether a suite notices a defect.
     paths:
       - 'crates/**'
-      - 'tools/run-sabotage.ps1'
+      # A glob rather than a list of script names. The list form is exactly what
+      # let the matrix planner be added without this filter learning about it,
+      # so a planner-only fix would have skipped the sweep it changes the shape
+      # of. Anything in `tools/` named for sabotage can move which jobs run or
+      # whether a defect is caught.
+      - 'tools/*sabotage*.ps1'
+      # A sweep builds the crates, so the workspace manifest and lockfile change
+      # what it compiles even when no crate source moves.
+      - 'Cargo.toml'
+      - 'Cargo.lock'
       - '.github/workflows/sabotage-sweep.yml'
   workflow_dispatch:
     inputs:
@@ -78,9 +87,16 @@ jobs:
       matrix: ${{ steps.plan.outputs.matrix }}
     steps:
       - uses: actions/checkout@v7
+      # The dispatch input reaches PowerShell through the ENVIRONMENT, never by
+      # `${{ }}` interpolation into the script body. An expression substituted
+      # into `run:` is spliced in as source before PowerShell parses it, so a
+      # value carrying a quote and a statement separator runs as a command on
+      # the runner. Read back as `${env:...}` it can only ever be data.
       - id: plan
         shell: pwsh
-        run: ./tools/plan-sabotage-matrix.ps1 -Manifest "${{ inputs.manifest }}" -GitHubOutput $env:GITHUB_OUTPUT
+        env:
+          SWEEP_MANIFEST: ${{ inputs.manifest }}
+        run: ./tools/plan-sabotage-matrix.ps1 -Manifest "${env:SWEEP_MANIFEST}" -GitHubOutput "${env:GITHUB_OUTPUT}"
 
   sweep:
     name: sweep ${{ matrix.crate }} ${{ matrix.shard }}/${{ matrix.shards }}
@@ -124,8 +140,15 @@ jobs:
       - uses: dtolnay/rust-toolchain@1.98.0
       - uses: Swatinem/rust-cache@v2
         with:
-          # The sweep builds into its own target directory under .scratch, and
-          # every shard is a separate job, so they must not share a key.
+          # `run-sabotage.ps1` forces every cargo invocation into
+          # `.scratch/sabotage/target` with an absolute `--target-dir`, so the
+          # action has to be TOLD that. Its default of `. -> target` caches a
+          # directory the sweep never writes: every shard would start from a
+          # cold build while the per-shard key below made it look cached, which
+          # is the failure that hides rather than fails.
+          workspaces: '. -> .scratch/sabotage/target'
+          # Every shard is a separate job building a different slice, so they
+          # must not share a key.
           key: sabotage-${{ matrix.crate }}-${{ matrix.shard }}
       # Unconditional. A dispatch that named one manifest has already been
       # resolved by `plan`, which emitted jobs for that manifest alone, so there
@@ -136,7 +159,15 @@ jobs:
       # nothing.
       - name: Sweep ${{ matrix.crate }}
         shell: pwsh
-        run: ./tools/run-sabotage.ps1 -Manifest crates/${{ matrix.crate }}/sabotage.json -Shard ${{ matrix.shard }} -ShardCount ${{ matrix.shards }} -Name "${{ inputs.name || '*' }}"
+        env:
+          # Same rule as the planner step above. `inputs.name` is the value an
+          # attacker chooses, and the matrix values travel the same way rather
+          # than asking a reader to work out which of them is safe to splice.
+          SWEEP_CRATE: ${{ matrix.crate }}
+          SWEEP_SHARD: ${{ matrix.shard }}
+          SWEEP_SHARDS: ${{ matrix.shards }}
+          SWEEP_NAME: ${{ inputs.name || '*' }}
+        run: ./tools/run-sabotage.ps1 -Manifest "crates/${env:SWEEP_CRATE}/sabotage.json" -Shard ${env:SWEEP_SHARD} -ShardCount ${env:SWEEP_SHARDS} -Name "${env:SWEEP_NAME}"
       # The transcripts are the whole diagnostic value of a failed sweep: they
       # name which entry survived and carry the suite output that let it.
       - name: Upload transcripts
