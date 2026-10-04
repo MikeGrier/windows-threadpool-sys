@@ -242,6 +242,39 @@ fn run_arrangement(
     let domain_count = plans.len() as u64;
     let per_domain = source_len.div_ceil(domain_count.max(1));
 
+    // Remote placement is resolved and validated HERE, over this arrangement's
+    // own plans, before anything is timed.
+    //
+    // `main` validates remoteness only for the single policy `--policy` named,
+    // and `--compare` runs every policy. A plan that could not name a remote
+    // node used to fall back to local placement inside the spawn below, while
+    // its row was still reported as a remote arm -- a measurement labelled as
+    // something it was not, which is worse than no measurement. Refusing is the
+    // honest answer, and refusing here covers both callers rather than only the
+    // one that happened to check.
+    let placement: Vec<_> = if remote_placement {
+        let mut resolved = Vec::with_capacity(plans.len());
+        for domain_plan in &plans {
+            match plan::remote_numa_node(topology, domain_plan.local_numa_node) {
+                plan::RemoteNode::Other(node) => resolved.push(Some(node)),
+                refused => {
+                    return Err(io::Error::new(
+                        io::ErrorKind::Unsupported,
+                        format!(
+                            "{policy:?}: remote placement was requested, but domain {} cannot \
+                             name a node to be remote from ({refused:?}). Refusing rather than \
+                             running it locally and reporting the row as remote.",
+                            domain_plan.label
+                        ),
+                    ));
+                }
+            }
+        }
+        resolved
+    } else {
+        plans.iter().map(|plan| plan.local_numa_node).collect()
+    };
+
     let started = Instant::now();
     let reports: Vec<io::Result<engine::DomainReport>> = std::thread::scope(|scope| {
         let handles: Vec<_> = plans
@@ -250,16 +283,7 @@ fn run_arrangement(
             .map(|(index, domain_plan)| {
                 let start = per_domain * index as u64;
                 let end = (start + per_domain).min(source_len);
-                let numa_node = if remote_placement {
-                    match plan::remote_numa_node(topology, domain_plan.local_numa_node) {
-                        plan::RemoteNode::Other(node) => Some(node),
-                        plan::RemoteNode::SameAsLocal
-                        | plan::RemoteNode::Unnamed
-                        | plan::RemoteNode::LocalUnknown => domain_plan.local_numa_node,
-                    }
-                } else {
-                    domain_plan.local_numa_node
-                };
+                let numa_node = placement[index];
                 scope.spawn(move || {
                     let source = source;
                     let destination = destination;
@@ -393,7 +417,15 @@ fn compare_arrangements(
             .map(|run| throughput_mib_s(run.bytes, run.wall))
             .collect();
         rates.sort_by(f64::total_cmp);
-        let median = rates[rates.len() / 2];
+        // `rates.len() / 2` alone is the median only for an odd count, and
+        // `--rounds` takes any positive value -- a balanced ten-round run is
+        // even. The upper middle sample is not the median of an even set.
+        let median = if rates.len().is_multiple_of(2) {
+            let upper = rates.len() / 2;
+            (rates[upper - 1] + rates[upper]) / 2.0
+        } else {
+            rates[rates.len() / 2]
+        };
         let first = &per_policy[0];
 
         // Named from the run rather than from a parallel array, so a row cannot
