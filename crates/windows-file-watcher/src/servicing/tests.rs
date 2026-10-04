@@ -450,12 +450,10 @@ fn teardown_from_a_thread_other_than_the_creator_is_safe() {
 /// returned -- contradicting its own documented guarantee that no drain can
 /// start afterwards.
 ///
-/// Asserted on the state that has to hold when `shut_down` returns, not on a
-/// symptom: the servicer must be closed with nothing outstanding and nothing
-/// still owed. Removing the wait from `shut_down` hangs this test rather than
-/// failing it, which is the honest shape -- the producer is parked, so a
-/// `shut_down` that does not wait for it simply proceeds, and what the test
-/// then observes is the publication arriving late.
+/// Asserted by handshake rather than by elapsed time: shutdown runs on its own
+/// thread and must not report itself finished while the producer is parked. A
+/// correct implementation is blocked on exactly that producer, so no amount of
+/// looking can manufacture a failure, and an incorrect one finishes at once.
 #[test]
 fn shutting_down_waits_for_a_producer_that_has_not_published_yet() {
     let ran = Arc::new(AtomicUsize::new(0));
@@ -474,45 +472,50 @@ fn shutting_down_waits_for_a_producer_that_has_not_published_yet() {
     };
     servicer.pause_gate().await_parked();
 
-    // The producer is past the `closed` gate and has not published. Release it
-    // from another thread, after a delay, so `shut_down` has something to wait
-    // for rather than deadlocking the test if it does wait.
+    // Shutdown runs on its own thread, so the test can observe that it has NOT
+    // returned while the producer is still parked.
     //
-    // `released` is set *before* the release, so it is a happens-before marker
-    // rather than a duration: the parked producer cannot publish until after
-    // this store, so a `shut_down` that genuinely waited for the publication
-    // cannot return while it still reads false.
-    let released = Arc::new(AtomicBool::new(false));
-    let releaser = {
-        let released = Arc::clone(&released);
+    // **No elapsed-time assertion, and the first version of this had one.**
+    // Measuring that `shut_down` took at least 40ms both failed to prove what it
+    // claimed -- elapsed time does not say what a call was blocked *on* -- and
+    // could fail on correct code: if this thread were descheduled past the
+    // releaser, shutdown would start after the publication was already unblocked
+    // and return at once. The handshake below has no such direction. A correct
+    // `shut_down` *cannot* set `finished` while the producer is parked, because
+    // it is blocked on exactly that producer, so waiting longer can never
+    // manufacture a failure; an incorrect one sets it immediately.
+    let finished = Arc::new(AtomicBool::new(false));
+    let shutdown = {
         let servicer = Arc::clone(&servicer);
+        let finished = Arc::clone(&finished);
         std::thread::spawn(move || {
-            std::thread::sleep(Duration::from_millis(50));
-            released.store(true, Ordering::SeqCst);
-            servicer.pause_gate().release();
+            servicer.shut_down();
+            finished.store(true, Ordering::SeqCst);
         })
     };
 
-    let started = Instant::now();
-    servicer.shut_down();
-    let waited = started.elapsed();
+    // Give a shutdown that does not wait every chance to finish. This bound is
+    // generous because it only costs time on a *passing* run of broken code; a
+    // correct implementation is parked here regardless of how long we look.
+    let deadline = Instant::now() + Duration::from_millis(250);
+    while Instant::now() < deadline {
+        assert!(
+            !finished.load(Ordering::SeqCst),
+            "shut_down returned while a producer was still parked before its \
+             publication, so a drain could start after it had returned and \
+             promised that none could"
+        );
+        std::thread::sleep(Duration::from_millis(5));
+    }
 
-    // The assertion this test exists for. Everything below it is true whether
-    // or not `shut_down` waits -- the ring is counted under the lock before the
-    // pause, the queue is cleared by the close, and the handler never runs
-    // either way. An earlier version asserted only those, and deleting the wait
-    // from `shut_down` left it passing six times out of six.
+    // Now let the publication happen; shutdown must then complete.
+    servicer.pause_gate().release();
+    shutdown.join().expect("shutdown thread");
     assert!(
-        released.load(Ordering::SeqCst),
-        "shut_down returned while a producer was still parked before its \
-         publication, so a drain could start after it had returned and promised \
-         that none could"
+        finished.load(Ordering::SeqCst),
+        "shut_down must return once the parked producer has published"
     );
-    assert!(
-        waited >= Duration::from_millis(40),
-        "shut_down must have blocked for the parked producer; it returned after \
-         {waited:?}"
-    );
+
     assert_eq!(
         servicer.rings(),
         1,
@@ -520,7 +523,6 @@ fn shutting_down_waits_for_a_producer_that_has_not_published_yet() {
     );
     assert!(!servicer.is_open(), "shut_down closed the servicing path");
 
-    releaser.join().expect("releaser");
     producer.join().expect("producer").expect("submit accepted");
 
     // Nothing may run after shut_down returned: the queue was cleared under the

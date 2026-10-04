@@ -187,9 +187,20 @@ fn cancel_pending_does_not_panic() {
     work.cancel_pending();
     // Count is in [0, 10] — we don't assert a specific value since cancellation is racy.
     assert!(count.load(Ordering::SeqCst) <= 10);
-    // A dispatch never settles a work item's obligation -- it can be submitted
-    // again -- so the drain is owed however many callbacks have run.
-    work.stop_and_drain();
+    // No drain here, and there used to be one. Its comment said the obligation
+    // is owed "however many callbacks have run", which is true of a *dispatch*
+    // and irrelevant to what happened above: `cancel_pending` returns with
+    // nothing queued and nothing executing, and settles on that basis, so the
+    // drain was a second native synchronisation waiting for a state already
+    // reached. The claim is asserted directly by
+    // `a_cancel_settles_the_drain_obligation_the_way_a_wait_does`; arriving at
+    // the end of this test without a `fail-fast` panic from `Drop` is the same
+    // fact observed from the other side.
+    assert!(
+        !work.obligation_owed(),
+        "the cancel above settles the drain obligation, so this object owes \
+         nothing by the time it is dropped"
+    );
 }
 
 /// After cancel_pending, resubmit and wait — must run exactly once.
