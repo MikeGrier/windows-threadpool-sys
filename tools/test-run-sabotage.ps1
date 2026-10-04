@@ -914,6 +914,226 @@ Test-Case 'ignores a per-sabotage bound that would lower the sweep-wide one' {
     finally { Remove-Fixture $root }
 }
 
+# --- sharding ---
+
+<#
+.SYNOPSIS
+    A manifest of `Count` entries, each patching its own line of the fixture.
+#>
+function New-ShardedFixture {
+    param(
+        [int] $Count,
+        # Where the `$Count` entries live. Defaults to the fixture's only file.
+        [string] $File = 'src/lib.rs',
+        # Extra entries, one per additional file, so a fixture can be given a
+        # dominant file and a tail of small ones -- the shape every manifest in
+        # this repository actually has.
+        [int] $Extra = 0
+    )
+
+    $lines = @(0..($Count - 1) | ForEach-Object { "// line $_" })
+    $entries = @(0..($Count - 1) | ForEach-Object {
+            [ordered]@{
+                name    = "entry $_"
+                file    = $File
+                expect  = 'caught'
+                why     = 'Each entry patches a line of its own.'
+                find    = @("// line $_")
+                replace = @('')
+            }
+        })
+    $source = ($lines -join "`n") + "`nfn main() {}`n"
+    $root = New-Fixture -Manifest ([ordered]@{ package = 'fixture'; sabotages = $entries }) -Source $source
+
+    if ($File -ne 'src/lib.rs') {
+        [System.IO.File]::WriteAllText((Join-Path $root ($File -replace '/', '\')), $source)
+    }
+    if ($Extra -gt 0) {
+        foreach ($i in 0..($Extra - 1)) {
+            $extraFile = "src/extra$i.rs"
+            [System.IO.File]::WriteAllText((Join-Path $root ($extraFile -replace '/', '\')),
+                "// only line`nfn main() {}`n")
+            $entries += [ordered]@{
+                name    = "extra $i"
+                file    = $extraFile
+                expect  = 'caught'
+                why     = 'One entry in a file of its own.'
+                find    = @('// only line')
+                replace = @('')
+            }
+        }
+        Set-Manifest -Root $root -Spec ([ordered]@{ package = 'fixture'; sabotages = $entries })
+    }
+    Invoke-Native { git -C $root add -A } | Out-Null
+    return $root
+}
+
+<#
+.SYNOPSIS
+    The entry names a `-List` run reported, in order.
+#>
+function Get-ListedNames {
+    param([string] $Root, [string[]] $Arguments)
+    $result = Invoke-Harness -Root $Root -Arguments $Arguments
+    Assert-Equal 0 $result.ExitCode $result.Output
+    return @($result.Output -split "`r?`n" |
+            Where-Object { $_ -match '^(caught|survives)\s+\S' } |
+            ForEach-Object { ($_ -split '\s+', 2)[1].Trim() })
+}
+
+Test-Case 'shards partition the manifest exactly, at every shard count' {
+    # The property that makes sharding safe to run in parallel, and it has two
+    # halves that fail differently: a missed entry means a sweep silently stops
+    # checking something, and a duplicated one means two workers patch and
+    # rebuild the same source. Asserted together, because a split that drops an
+    # entry and a split that repeats one are both "the counts look plausible".
+    $root = New-ShardedFixture -Count 11
+    try {
+        $all = Get-ListedNames -Root $root -Arguments @('-Manifest', 'sabotage.json', '-List')
+        Assert-Equal 11 $all.Count 'the fixture should list every entry'
+
+        foreach ($count in 1, 2, 3, 4, 11, 16) {
+            $union = @()
+            for ($shard = 0; $shard -lt $count; $shard++) {
+                $union += Get-ListedNames -Root $root -Arguments @(
+                    '-Manifest', 'sabotage.json', '-List', '-Shard', $shard, '-ShardCount', $count)
+            }
+            Assert-Equal $all.Count $union.Count "shard count ${count}: every entry exactly once"
+            $duplicated = @($union | Group-Object | Where-Object { $_.Count -gt 1 })
+            Assert-Equal 0 $duplicated.Count "shard count ${count}: no entry on two shards"
+            $missing = @($all | Where-Object { $union -notcontains $_ })
+            Assert-Equal 0 $missing.Count "shard count ${count}: no entry missed"
+        }
+    }
+    finally { Remove-Fixture $root }
+}
+
+Test-Case 'shards are evenly sized even when one file dominates the manifest' {
+    # The regression this exists for had both halves looking reasonable. An
+    # earlier split dealt WHOLE files to the lightest shard, which kept a
+    # shard's rebuilds in one compilation unit but refused to split anything --
+    # so a manifest whose entries cluster in one file (and all of this
+    # repository's do) pinned that file to one worker and the rest idled. The
+    # real `windows-threadpool-sys` manifest split 13,4,4,4 over four shards.
+    #
+    # Asserted as a property rather than against fixed numbers: no two shards
+    # may differ by more than one entry, whatever the shard count.
+    $root = New-ShardedFixture -Count 12 -File 'src/hot.rs' -Extra 6
+    try {
+        foreach ($count in 2, 3, 4, 6) {
+            $sizes = @()
+            for ($shard = 0; $shard -lt $count; $shard++) {
+                $sizes += (Get-ListedNames -Root $root -Arguments @(
+                        '-Manifest', 'sabotage.json', '-List', '-Shard', $shard, '-ShardCount', $count)).Count
+            }
+            $spread = ($sizes | Measure-Object -Maximum).Maximum - ($sizes | Measure-Object -Minimum).Minimum
+            Assert-True ($spread -le 1) `
+            ("shard count ${count}: sizes [$($sizes -join ',')] differ by $spread, but a dominant " +
+                'file must not pin one shard')
+        }
+    }
+    finally { Remove-Fixture $root }
+}
+
+Test-Case 'a shard keeps a dominant file contiguous rather than interleaving it' {
+    # The other half of the same design, and the one a fairness fix would
+    # silently undo: evening the sizes must not be done by dealing entries
+    # round-robin, which would alternate files on purpose and dirty two
+    # compilation units per iteration instead of one.
+    #
+    # Asserted as "a file's entries are never split into two runs", NOT as a
+    # count of file changes. The first version of this counted changes and
+    # failed the implementation wrongly: a shard made entirely of single-entry
+    # files changes file on every step and cannot do otherwise, so a count
+    # punishes a split for the manifest's shape rather than for its own
+    # behaviour. What is actually required is that a file, once started within a
+    # shard, is finished before another begins.
+    $root = New-ShardedFixture -Count 12 -File 'src/hot.rs' -Extra 6
+    try {
+        $spec = Get-Content (Join-Path $root 'sabotage.json') -Raw | ConvertFrom-Json
+        for ($shard = 0; $shard -lt 3; $shard++) {
+            $names = Get-ListedNames -Root $root -Arguments @(
+                '-Manifest', 'sabotage.json', '-List', '-Shard', $shard, '-ShardCount', 3)
+            $files = @($names | ForEach-Object {
+                    $n = $_; ($spec.sabotages | Where-Object { $_.name -eq $n }).file
+                })
+            # One run per file at most: collapse consecutive duplicates, then a
+            # file appearing twice in what is left is a file that was resumed.
+            $runs = @()
+            for ($i = 0; $i -lt $files.Count; $i++) {
+                if ($i -eq 0 -or $files[$i] -ne $files[$i - 1]) { $runs += $files[$i] }
+            }
+            $resumed = @($runs | Group-Object | Where-Object { $_.Count -gt 1 } | ForEach-Object { $_.Name })
+            Assert-Equal 0 $resumed.Count `
+            ("shard ${shard}: [$($files -join ',')] returns to $($resumed -join ',') after leaving it; " +
+                'a file must be finished before another begins')
+        }
+    }
+    finally { Remove-Fixture $root }
+}
+
+Test-Case 'an empty shard is a success, not a failure' {
+    # A fixed CI matrix over manifests of different sizes leaves small ones with
+    # shards that have nothing to do. A red job there would be noise that trains
+    # people to ignore the workflow, so this is the accepting direction of the
+    # shard split and is asserted on a real sweep, not a listing.
+    $root = New-ShardedFixture -Count 1
+    try {
+        # No cargo stub needed: the empty-shard exit happens before the
+        # baseline, which is the point -- an empty shard must not pay for a
+        # cold build of a crate it will not touch.
+        $result = Invoke-Harness -Root $root -Arguments @(
+            '-Manifest', 'sabotage.json', '-Shard', 3, '-ShardCount', 4)
+        Assert-Equal 0 $result.ExitCode $result.Output
+        Assert-Match 'no entries' $result.Output
+    }
+    finally { Remove-Fixture $root }
+}
+
+Test-Case 'rejects a shard index outside its shard count' {
+    $root = New-ShardedFixture -Count 4
+    try {
+        foreach ($args in @(
+                @('-Shard', 4, '-ShardCount', 4),
+                @('-Shard', -1, '-ShardCount', 4),
+                @('-ShardCount', 0))) {
+            $result = Invoke-Harness -Root $root `
+                -Arguments (@('-Manifest', 'sabotage.json', '-List') + $args)
+            Assert-Equal 2 $result.ExitCode $result.Output
+        }
+    }
+    finally { Remove-Fixture $root }
+}
+
+Test-Case 'a stem collision is rejected even when the two entries are on different shards' {
+    # The reason the collision check reads the WHOLE manifest rather than the
+    # shard. Two names that sanitise to one stem share a transcript and a backup
+    # path; that is a defect in the manifest whether or not one process happens
+    # to run both. A shard that validated only its own slice would report green
+    # on a manifest the unsharded sweep rejects, which is the worst shape a
+    # parallel mode can have: it disagrees with the serial one.
+    #
+    # The two entries are adjacent, so `index % 2` puts them on different
+    # shards, and shard 0 alone would otherwise see only the first.
+    $spec = [ordered]@{
+        package   = 'fixture'
+        sabotages = @(
+            [ordered]@{ name = 'a: b'; file = 'src/lib.rs'; expect = 'caught'; why = 'w'
+                find = @('// marker line'); replace = @('') },
+            [ordered]@{ name = 'a - b'; file = 'src/lib.rs'; expect = 'caught'; why = 'w'
+                find = @('fn main() {}'); replace = @('') })
+    }
+    $root = New-Fixture -Manifest $spec
+    try {
+        $stub = New-Stub -Behaviour 'fail' -Root $root
+        $result = Invoke-Harness -Root $root -Arguments @(
+            '-Manifest', 'sabotage.json', '-CargoCommand', $stub, '-Shard', 0, '-ShardCount', 2)
+        Assert-Equal 2 $result.ExitCode $result.Output
+        Assert-Match 'same file name stem' $result.Output
+    }
+    finally { Remove-Fixture $root }
+}
+
 # --- report -----------------------------------------------------------------
 
 Write-Line ''

@@ -1,0 +1,142 @@
+# Copyright (c) Mike Grier.
+#
+# Sabotage sweeps, which CI deliberately does not gate on.
+#
+# A sweep rebuilds a crate and runs its whole suite once per manifest entry, so
+# its cost scales with the crate's suite rather than with the change under
+# review. Measured on this repository: the nine-entry `windows-placement-probe`
+# manifest sweeps in about a minute, while the two large manifests
+# (`windows-ioring-sys` at 53 entries, `windows-waitable-queues` at 39) are tens
+# of minutes. That is the wrong shape for a per-push gate and the right shape for
+# something that runs once per integration.
+#
+# **This is not the `sabotage harness tests` job in ci.yml.** That job runs the
+# harness's own unit tests with cargo stubbed out, finishes in well under two
+# minutes, and stays on every push. This workflow is the thing it is often
+# mistaken for: the real sweeps, against the real manifests.
+#
+# WHY POST-MERGE RATHER THAN NIGHTLY. A sweep that fails needs to name the change
+# that broke it. On `push: main` the run is attributable to one merge; on a
+# schedule it is attributable to a day's worth, and the person who has to read it
+# is whoever happens to look. The repository already pays for this shape in
+# `release-please.yml`.
+#
+# WHY IT DOES NOT GATE ANYTHING. By the time this runs the merge has happened, so
+# a failure is a report rather than a block. That is the deliberate trade: the
+# alternative is adding tens of minutes to every pull request to re-check
+# guarantees that change far more slowly than the code does.
+name: sabotage sweeps
+
+on:
+  push:
+    branches: [main]
+    # Only when something a sweep could actually be affected by moves. A docs-only
+    # merge cannot change whether a suite notices a defect.
+    paths:
+      - 'crates/**'
+      - 'tools/run-sabotage.ps1'
+      - '.github/workflows/sabotage-sweep.yml'
+  workflow_dispatch:
+    inputs:
+      manifest:
+        description: 'One manifest path, or blank for every manifest'
+        required: false
+        default: ''
+      name:
+        description: 'Wildcard over sabotage names, for re-running one entry'
+        required: false
+        default: '*'
+
+permissions:
+  contents: read
+
+# One sweep of `main` at a time. Later merges supersede earlier ones rather than
+# queueing behind them, because what matters is that the tip is swept.
+concurrency:
+  group: sabotage-sweep-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  sweep:
+    name: sweep ${{ matrix.crate }} ${{ matrix.shard }}/${{ matrix.shards }}
+    runs-on: windows-latest
+    # Sharded by crate AND within each crate, so the wall clock is the longest
+    # *shard* rather than the longest manifest. Sharding by crate alone leaves
+    # one worker sweeping 53 entries while five sit idle.
+    #
+    # Shard counts are sized to the entry count, which is possible because the
+    # harness's split is even: it orders entries by file and cuts that order
+    # into equal contiguous blocks, so sizes differ by at most one AND each
+    # shard still runs long same-file runs. Measured:
+    #
+    #   ioring            53 entries -> 6 shards: 9,9,9,9,9,8
+    #   waitable-queues   39 entries -> 4 shards: 10,10,10,9
+    #   threadpool        25 entries -> 4 shards: 7,6,6,6
+    #
+    # Roughly nine entries a shard, which on these suites is a few minutes.
+    # There is no manifest-shaped floor to respect -- an earlier revision of the
+    # harness refused to split a file and threadpool could not go below 13 on
+    # one worker whatever the shard count -- so these can be raised or lowered
+    # for the machines available. An over-provisioned shard is not an error: the
+    # harness treats an empty shard as a success and exits before the baseline,
+    # so it costs nothing but a checkout.
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { crate: windows-ioring-sys, shard: 0, shards: 6 }
+          - { crate: windows-ioring-sys, shard: 1, shards: 6 }
+          - { crate: windows-ioring-sys, shard: 2, shards: 6 }
+          - { crate: windows-ioring-sys, shard: 3, shards: 6 }
+          - { crate: windows-ioring-sys, shard: 4, shards: 6 }
+          - { crate: windows-ioring-sys, shard: 5, shards: 6 }
+          - { crate: windows-waitable-queues, shard: 0, shards: 4 }
+          - { crate: windows-waitable-queues, shard: 1, shards: 4 }
+          - { crate: windows-waitable-queues, shard: 2, shards: 4 }
+          - { crate: windows-waitable-queues, shard: 3, shards: 4 }
+          - { crate: windows-threadpool-sys, shard: 0, shards: 3 }
+          - { crate: windows-threadpool-sys, shard: 1, shards: 3 }
+          - { crate: windows-threadpool-sys, shard: 2, shards: 3 }
+          - { crate: windows-placement-probe, shard: 0, shards: 1 }
+          - { crate: windows-platform-probes, shard: 0, shards: 1 }
+          - { crate: windows-file-watcher, shard: 0, shards: 1 }
+    # Generous against the measured cost, because the failure this bound is for
+    # is a sweep that hangs rather than one that is merely large. The harness
+    # applies its own per-entry bound inside this one.
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v7
+      # The repository's pinned toolchain, not the floating stable the lint jobs
+      # force: a sweep is asking whether *this* crate's suite notices a defect,
+      # so it must build the crate the way the crate is specified to build.
+      - uses: dtolnay/rust-toolchain@1.98.0
+      - uses: Swatinem/rust-cache@v2
+        with:
+          # The sweep builds into its own target directory under .scratch, and
+          # every shard is a separate job, so they must not share a key.
+          key: sabotage-${{ matrix.crate }}-${{ matrix.shard }}
+      - name: Sweep ${{ matrix.crate }}
+        if: ${{ github.event_name != 'workflow_dispatch' || inputs.manifest == '' }}
+        shell: pwsh
+        run: ./tools/run-sabotage.ps1 -Manifest crates/${{ matrix.crate }}/sabotage.json -Shard ${{ matrix.shard }} -ShardCount ${{ matrix.shards }} -Name "${{ inputs.name || '*' }}"
+      # A dispatch that named one manifest runs it in whichever shard matches,
+      # and the other five shards do nothing rather than sweeping everything.
+      - name: Sweep the requested manifest
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.manifest != '' && endsWith(inputs.manifest, format('{0}/sabotage.json', matrix.crate)) }}
+        shell: pwsh
+        run: ./tools/run-sabotage.ps1 -Manifest "${{ inputs.manifest }}" -Shard ${{ matrix.shard }} -ShardCount ${{ matrix.shards }} -Name "${{ inputs.name || '*' }}"
+      # The transcripts are the whole diagnostic value of a failed sweep: they
+      # name which entry survived and carry the suite output that let it.
+      - name: Upload transcripts
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: sabotage-${{ matrix.crate }}-${{ matrix.shard }}
+          # The working copy and its target directory live here too and are far
+          # too large to upload; only the transcripts are wanted. They are
+          # `<name>.txt` plus `.build`, `.err` and `.build.err` siblings, so the
+          # glob has to be `*.txt*` -- `*.log` matches none of them, which is how
+          # an artifact step silently uploads nothing.
+          path: .scratch/sabotage/*.txt*
+          if-no-files-found: ignore
+          retention-days: 14

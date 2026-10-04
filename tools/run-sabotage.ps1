@@ -131,6 +131,56 @@
     transcripts are cleared at startup; the `tree/` and `target/` subdirectories
     persist between runs so builds stay warm.
 
+.PARAMETER Shard
+    Which shard this invocation runs, from 0. Requires -ShardCount.
+
+.PARAMETER ShardCount
+    How many shards the manifest is divided into, defaulting to 1 (no
+    sharding). A sweep's cost is one rebuild and one full suite run PER ENTRY,
+    so it scales with the manifest rather than with the change under review --
+    53 entries against a 12-second suite is tens of minutes, and no amount of
+    care inside one process makes that shorter. Sharding is the only lever:
+    each shard is an independent process, so N workers take roughly 1/N of the
+    wall clock.
+
+    Entries are ordered BY FILE and that order is then cut into equal
+    contiguous blocks, one per shard. The two things being asked for look
+    opposed and are not.
+
+    Adjacency is what buys the build cache. Each entry patches a file, runs the
+    suite, and restores it, so two consecutive entries in the SAME file dirty
+    one compilation unit per iteration -- the restore and the next patch land
+    on the same file -- while two in DIFFERENT files dirty two. It matters
+    because the manifests cluster hard: `windows-threadpool-sys` puts 13 of its
+    25 entries in `heal.rs`, `windows-ioring-sys` 11 of 53 in `resolver.rs`,
+    `windows-waitable-queues` 11 of 39 in `slotwise_mpsc.rs`.
+
+    Equal blocks are what stop a hot file pinning one shard. The two coexist
+    because splitting a file across a block boundary leaves each PIECE
+    contiguous: a shard holding seven consecutive `heal.rs` entries gets seven
+    same-file rebuilds in a row whoever holds the other six. The cost of a split
+    is one cache transition, not the file's clustering.
+
+    Measured on this repository, shard sizes and the number of file changes
+    within each shard:
+
+        threadpool      4 shards: 7,6,6,6         switches 0,0,1,4
+        threadpool      6 shards: 5,4,4,4,4,4     switches 0,0,0,0,1,3
+        waitable-queues 6 shards: 7,7,7,6,6,6     switches 0,1,1,1,1,3
+        ioring          6 shards: 9,9,9,9,9,8     switches 0,2,1,2,4,6
+
+    An earlier revision dealt whole files to the lightest shard and refused to
+    split any of them. That is where the floor came from -- threadpool split
+    13,4,4,4 over four shards, and the three small shards bought nothing -- and
+    it was the reason to think a static plan could not be fair. It can.
+
+    Sizes differ by at most one, so a shard count can be chosen for the machines
+    available rather than for the shape of the manifest.
+
+    An empty shard is a SUCCESS, not an error: a manifest with one entry and
+    four shards leaves three with nothing to do, and that is the normal state
+    of a fixed matrix over manifests of different sizes.
+
 .PARAMETER List
     Print the manifest's sabotages and exit without running anything.
 
@@ -165,7 +215,11 @@ param(
 
     [switch] $List,
 
-    [string] $CargoCommand = 'cargo'
+    [string] $CargoCommand = 'cargo',
+
+    [int] $Shard = 0,
+
+    [int] $ShardCount = 1
 )
 
 Set-StrictMode -Version Latest
@@ -753,12 +807,85 @@ if ($spec.PSObject.Properties.Name -contains 'testArgs' -and $spec.testArgs) {
     $testArgs = @('test') + $supplied
 }
 
-$selected = @($spec.sabotages | Where-Object { $_.name -like $Name })
+# Validated before anything is built, like every other argument here: a sweep
+# that discovers a bad shard index after the baseline has run has wasted the
+# most expensive part of the job.
+if ($ShardCount -lt 1) {
+    Exit-WithMessage "-ShardCount must be at least 1; got $ShardCount." 2
+}
+if ($Shard -lt 0 -or $Shard -ge $ShardCount) {
+    Exit-WithMessage "-Shard must be in 0..$($ShardCount - 1) for -ShardCount $ShardCount; got $Shard." 2
+}
+
+# Two sets from here on, and the distinction is load-bearing.
+#
+# `$manifestSelected` is everything the name filter matched. The checks below --
+# stem collisions, output-directory writability -- are properties of the
+# MANIFEST, so they must see all of it: a collision between two entries that
+# land on different shards is still a defect in the manifest, and a shard that
+# validated only its own slice would pass it through.
+#
+# `$selected` is this shard's share, and is what actually gets swept.
+$manifestSelected = @($spec.sabotages | Where-Object { $_.name -like $Name })
+
+if ($manifestSelected.Count -eq 0) {
+    Exit-WithMessage "No sabotage in $manifestPath matches name filter '$Name'." 2
+}
+
+# Grouped by FILE, then whole groups dealt to the lightest shard: see the
+# -ShardCount documentation for why this beats dealing entries round-robin.
+#
+# The `@(...)` wraps the WHOLE `if`, not just the work inside it. PowerShell
+# unrolls a collection returned from a statement, so an empty shard assigned
+# through the inner form arrives as `$null` rather than an empty array, and the
+# `.Count` read below then fails with "property 'Count' cannot be found". That
+# is the empty-shard case this script documents as a success, so the defect
+# would have appeared exactly where the handling for it is.
+$selected = @(
+    if ($ShardCount -gt 1) {
+        # Order by file, then cut that order into equal contiguous blocks.
+        #
+        # The two goals look opposed and are not. Keeping a file's entries
+        # ADJACENT is what gets the build-cache reuse; keeping the blocks EQUAL
+        # is what stops a hot file pinning one shard while the others idle. A
+        # contiguous cut of a file-ordered list does both, because splitting a
+        # file across a block boundary leaves each piece still contiguous -- a
+        # shard that receives seven consecutive `heal.rs` entries gets seven
+        # same-file rebuilds in a row regardless of who has the other six.
+        #
+        # An earlier revision dealt whole files to the lightest shard and
+        # refused to split any of them. That is where the floor came from:
+        # `windows-threadpool-sys` puts 13 of its 25 entries in `heal.rs`, so
+        # four shards split 13,4,4,4 and the extra workers bought nothing. The
+        # same manifest cuts 7,6,6,6 here, and the only thing given up is one
+        # cache transition at each boundary.
+        #
+        # Deterministic: group size descending, file name breaking ties. An
+        # entry lands on the same shard every run, so a failing shard can be
+        # re-run by number.
+        $ordered = @($manifestSelected |
+                Group-Object -Property file |
+                Sort-Object -Property @{ Expression = 'Count'; Descending = $true }, @{ Expression = 'Name'; Descending = $false } |
+                ForEach-Object { $_.Group })
+
+        # The first `$remainder` shards take one extra, so the sizes differ by
+        # at most one and every entry is placed exactly once.
+        $block = [Math]::Floor($ordered.Count / $ShardCount)
+        $remainder = $ordered.Count % $ShardCount
+        $start = ($Shard * $block) + [Math]::Min($Shard, $remainder)
+        $take = $block + $(if ($Shard -lt $remainder) { 1 } else { 0 })
+        if ($take -gt 0) { $ordered[$start..($start + $take - 1)] }
+    }
+    else { $manifestSelected }
+)
 
 if ($List) {
     Write-Report "Manifest : $manifestPath"
     Write-Report "Package  : $package"
     Write-Report "Command  : cargo $($testArgs -join ' ')"
+    if ($ShardCount -gt 1) {
+        Write-Report "Shard    : $Shard of $ShardCount ($($selected.Count) of $($manifestSelected.Count) entries)"
+    }
     Write-Report ''
     $selected | ForEach-Object {
         Write-Report ("{0,-10} {1}" -f $_.expect, $_.name)
@@ -767,7 +894,13 @@ if ($List) {
 }
 
 if ($selected.Count -eq 0) {
-    Exit-WithMessage "No sabotage in $manifestPath matches name filter '$Name'." 2
+    # Success, not failure, and taken BEFORE the baseline. A fixed CI matrix
+    # over manifests of different sizes leaves small ones with shards that have
+    # nothing to do; a red job there would be noise that trains people to
+    # ignore the workflow. Exiting here rather than after the baseline also
+    # saves each empty shard a full cold build of a crate it will not touch.
+    Write-Report "Shard $Shard of ${ShardCount} has no entries in $manifestPath; nothing to sweep." -Level good
+    exit 0
 }
 
 # Transcript and backup file names are derived from the sabotage's name, and
@@ -793,7 +926,7 @@ $stemOwners = @{}
 # `baseline` are one file here.
 $reservedStems = @('baseline')
 
-foreach ($sabotage in $selected) {
+foreach ($sabotage in $manifestSelected) {
     $stem = $sabotage.name -replace '[^A-Za-z0-9]+', '-'
     if ($reservedStems -contains $stem.ToLowerInvariant()) {
         Exit-WithMessage (@(
@@ -990,12 +1123,27 @@ else {
     $timeoutSource = "${TimeoutMultiplier}x the ${baselineSeconds}s baseline, floor ${TimeoutFloorSeconds}s"
 }
 Write-Report "Baseline is green in ${baselineSeconds}s. Hang bound: ${defaultTimeout}s ($timeoutSource)." -Level note
-Write-Report 'Sweeping.' -Level note
+
+if ($ShardCount -gt 1) {
+    Write-Report "Shard $Shard of ${ShardCount}: $($selected.Count) of $($manifestSelected.Count) entries." -Level note
+}
+
+$sweepTotal = $selected.Count
+Write-Report "Sweeping $sweepTotal entr$(if ($sweepTotal -eq 1) { 'y' } else { 'ies' })." -Level note
 Write-Report ''
 
 $results = @()
+$sweepClock = [System.Diagnostics.Stopwatch]::StartNew()
+$entryIndex = 0
 
 foreach ($sabotage in $selected) {
+    $entryIndex++
+    # Announced BEFORE the work, not only after it. A sweep is tens of minutes
+    # of near-silence otherwise, and the entry that matters most is the one
+    # running when a job is killed at its timeout -- which a completion-only
+    # log never names, because it never completed.
+    Write-Report ("[{0,3}/{1}] {2}" -f $entryIndex, $sweepTotal, $sabotage.name) -Level note
+    $entryClock = [System.Diagnostics.Stopwatch]::StartNew()
     # The file to patch is the COPY's, reached by the real target's path
     # relative to the repository root. The manifest keeps meaning what it always
     # meant -- `root` and `file` still resolve against the real tree -- and only
@@ -1115,7 +1263,19 @@ foreach ($sabotage in $selected) {
     }
 
     $level = if ($ok) { 'good' } else { 'bad' }
-    Write-Report ("{0,-58} {1}" -f $sabotage.name, $actual) -Level $level
+    # The completion line carries what the start line could not: how long this
+    # entry took, and -- from the mean so far -- roughly how much sweep is left.
+    # Both are for a reader watching a live CI log decide whether a job is
+    # progressing or stuck, which a bare name and verdict cannot answer.
+    $entrySeconds = [int]$entryClock.Elapsed.TotalSeconds
+    $remaining = $sweepTotal - $entryIndex
+    $left = if ($remaining -gt 0) {
+        $meanSeconds = $sweepClock.Elapsed.TotalSeconds / $entryIndex
+        ', ~{0}m left' -f [Math]::Max(1, [int][Math]::Round(($meanSeconds * $remaining) / 60))
+    }
+    else { '' }
+    Write-Report ("[{0,3}/{1}] {2,-52} {3} ({4}s{5})" -f `
+            $entryIndex, $sweepTotal, $sabotage.name, $actual, $entrySeconds, $left) -Level $level
 }
 
 Write-Report ''
