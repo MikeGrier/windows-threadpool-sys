@@ -258,6 +258,52 @@ jobs:
           RUST_LIB_BACKTRACE: 1
         run: cargo test -p windows-file-watcher --locked --no-fail-fast
 
+  # A `compile_fail` doctest passes on ANY compile error, so one that breaks for
+  # the wrong reason -- a typo, a method since renamed -- reports green while
+  # testing nothing. That happened: windows-ioring-sys guarded a borrow hazard
+  # with an example calling a method M28 had removed, and it went on passing for
+  # "no such method". Every fence therefore pins its expected error code
+  # (```compile_fail,E0502), and the first step refuses one that does not.
+  #
+  # rustdoc enforces a pinned code only on a nightly toolchain, which is what
+  # RUSTC_BOOTSTRAP=1 tells it this is. It changes nothing else these doctests
+  # rely on: no crate uses `#![feature]`, and if one started to, every other
+  # job here -- which runs without it -- would refuse to build it.
+  #
+  # Three configurations, because a fence can sit behind a feature: all
+  # features, default features, and windows-threadpool-sys without its default
+  # `self-heal`, whose heal.rs example exists only in that build.
+  doctest-error-codes:
+    name: compile_fail doctests fail for the stated reason
+    runs-on: windows-latest
+    env:
+      RUSTUP_TOOLCHAIN: stable
+    steps:
+      - uses: actions/checkout@v7
+      - name: Run test-check-compile-fail-codes.ps1
+        shell: pwsh
+        run: ./tools/test-check-compile-fail-codes.ps1
+      - name: Run test-check-compile-fail-codes.ps1 (Windows PowerShell 5.1)
+        shell: powershell
+        run: ./tools/test-check-compile-fail-codes.ps1
+      - name: Every compile_fail doctest pins its error code
+        shell: pwsh
+        run: ./tools/check-compile-fail-codes.ps1
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: cargo test --doc (all features), error codes enforced
+        env:
+          RUSTC_BOOTSTRAP: 1
+        run: cargo test --workspace --doc --all-features --locked
+      - name: cargo test --doc (default features), error codes enforced
+        env:
+          RUSTC_BOOTSTRAP: 1
+        run: cargo test --workspace --doc --locked
+      - name: cargo test --doc (windows-threadpool-sys, no default features), error codes enforced
+        env:
+          RUSTC_BOOTSTRAP: 1
+        run: cargo test -p windows-threadpool-sys --doc --no-default-features --locked
+
   platform-probes:
     # The asserted probe tier already runs on x64 here, because
     # windows-platform-probes is a workspace member and `cargo test --workspace`
