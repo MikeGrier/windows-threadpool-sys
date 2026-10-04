@@ -24,13 +24,26 @@ use std::path::{Path, PathBuf};
 /// comment is a second copy that drifts from the capture with nothing to
 /// notice, which is the whole reason the capture is committed.
 ///
-/// # Deleting a file whose handle is still open fails
+/// # Deleting a file whose handle is still open depends on how it was opened
 ///
-/// These tests open their files with `FILE_SHARE_READ | FILE_SHARE_WRITE` and
-/// no `FILE_SHARE_DELETE`, so a removal attempted while a handle is open cannot
-/// succeed. Struct fields and locals drop *after* the enclosing `Drop` body, and
-/// locals drop in reverse declaration order, so a guard declared **before** the
-/// handle it shadows is removed after that handle closes.
+/// Two kinds of open are in use here, and they behave oppositely.
+///
+/// - **`std::fs::OpenOptions`** shares delete by default on Windows -- its
+///   default share mode includes `FILE_SHARE_DELETE` -- so removing the file
+///   while such a handle is open succeeds. Fixtures such as
+///   `completion_event::fixture` and `handover::fixture` rely on exactly that:
+///   their guard drops before they return the still-open `File`. Drop order is
+///   not what makes their cleanup work.
+/// - **Direct `CreateFileW` calls** -- the unbuffered, overlapped handles in
+///   `bounded_pop`, `flush_barrier`, `flush_barrier_stress` and `handover` --
+///   pass `FILE_SHARE_READ | FILE_SHARE_WRITE` and no `FILE_SHARE_DELETE`, so
+///   a removal attempted while one is open fails. For these, ordering matters:
+///   struct fields and locals drop *after* the enclosing `Drop` body, and locals
+///   drop in reverse declaration order, so a guard declared **before** the
+///   handle it shadows is removed after that handle closes.
+///
+/// A change to how a fixture opens its file can therefore move it from one
+/// group to the other, and with it the mechanism its cleanup depends on.
 ///
 /// That ordering is why an explicit `remove_file` placed after the test closes
 /// its own handle is kept where it already exists rather than deleted as

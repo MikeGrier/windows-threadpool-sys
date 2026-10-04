@@ -51,7 +51,7 @@
 //! buffer and the classic ring use-after-free -- the kernel writing through a
 //! pointer whose owner has dropped -- cannot occur here at all. What the guard
 //! allocator still sees is every lifetime decision the crate itself makes
-//! around tokens, buffers and guards. The kernel-side half is
+//! around the inventory, buffers and guards. The kernel-side half is
 //! [generated_sequences.rs](generated_sequences.rs)'s job, against a real
 //! ring, and stays there.
 //!

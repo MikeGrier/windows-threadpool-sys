@@ -114,7 +114,7 @@ fn registered_arena<T, X>(
         .expect("a completion arrives within the bound");
     let mut registered = pending
         .claim_if(&completion)
-        .expect("the registration token claims its own completion")
+        .expect("the pending registration claims its own completion")
         .expect("buffer registration succeeded");
 
     for slot in 0..count {
@@ -519,7 +519,7 @@ fn a_mixed_workload_leaves_every_unaccounted_byte_poisoned() {
     }
 
     // Conservation at teardown: every operation completed exactly once, every
-    // token was claimed, and every registered buffer is quiet.
+    // inventory entry was retired, and every registered buffer is quiet.
     for slot in 0..SLOTS {
         contract.observe_buffer(
             slot,

@@ -216,7 +216,8 @@ impl Accounting {
     /// operations -- and the repository's rule is that an error edge no test
     /// can traverse is written rather than implemented. The alternative to
     /// erroring there is silently handing out a duplicate identity, which is
-    /// exactly what a `Token` cannot survive.
+    /// exactly what identity-keyed tracking cannot survive
+    /// ([D-78](../DESIGN-NOTES.md#d-78)).
     #[cfg(test)]
     pub(crate) fn set_next_user_data_for_test(&mut self, next: usize) {
         self.next_user_data = next;

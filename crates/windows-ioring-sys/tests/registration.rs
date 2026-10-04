@@ -394,7 +394,8 @@ fn a_zero_length_registration_does_not_spend_the_ring_s_one_registration() {
 fn dropping_a_registration_with_an_operation_in_flight_leaks_rather_than_frees() {
     /// A buffer that records whether its destructor ran, so the test can
     /// distinguish "leaked (forgotten)" from "dropped (freed)" -- the exact
-    /// distinction M5.3 exists to get right, mirroring `Token`'s own test.
+    /// distinction M5.3 exists to get right, mirroring the test `Token` had
+    /// before the token API retired.
     struct DropTracking {
         data: Vec<u8>,
         dropped: Arc<AtomicBool>,
@@ -953,8 +954,8 @@ fn get_mut_refuses_a_buffer_with_an_operation_outstanding_but_allows_its_neighbo
         len: 2048,
     };
     let mut batch = Batch::new(&mut ring);
-    // SAFETY: `handle` stays open for the whole test, and the token below is
-    // held until its completion is claimed.
+    // SAFETY: `handle` stays open for the whole test, and the ring holds the
+    // operation below until its completion is popped.
     unsafe {
         batch.write_registered_raw_owned(
             handle,
@@ -1162,8 +1163,8 @@ fn get_refuses_a_buffer_a_read_is_landing_into_but_allows_one_a_write_is_reading
     // A read into buffer 0: the kernel *writes* through it, so reading it now
     // would be a race.
     let mut batch = Batch::new(&mut ring);
-    // SAFETY: `handle` stays open for the whole test, and both tokens below
-    // are held until their completions are claimed.
+    // SAFETY: `handle` stays open for the whole test, and the ring holds both
+    // operations below until their completions are popped.
     unsafe {
         batch.read_registered_raw_owned(handle, &buffers, span(0), (), 0, PushOptions::new())
     }

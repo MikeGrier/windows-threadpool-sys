@@ -57,7 +57,7 @@ const SIGNAL_TIMEOUT_MS: u32 = 5_000;
 /// suite without making the assertion any safer.
 const LOST_WAKEUP_MS: u32 = 500;
 
-/// Completions this crate mints all belong to reads whose tokens the test
+/// Completions this crate mints all belong to reads whose buffers the ring
 /// still holds, so a drain that never reaches the expected count is a real
 /// failure rather than a slow machine. Bounded so it fails instead of hangs.
 const MAX_DRAIN_ATTEMPTS: usize = 512;
@@ -172,7 +172,7 @@ fn submit_reads(ring: &mut EventRing, file: &File, count: usize, wait_operations
         .expect("submit");
 }
 
-/// Rule 2's drain: `try_pop` until it yields `None`, claiming each token so
+/// Rule 2's drain: `try_pop` until it yields `None`, retiring each entry so
 /// nothing is leaked, and report how many completions this pass observed.
 fn drain_to_empty(ring: &mut EventRing) -> usize {
     let mut popped = 0;

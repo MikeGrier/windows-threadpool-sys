@@ -391,7 +391,7 @@ fn completions_are_delivered_on_pool_threads_without_the_submitting_thread_waiti
     )
     .expect("wire event delivery");
 
-    // Buffers are held by the token map in `windows-ioring-sys`'s own
+    // Buffers are held by the ring's inventory in `windows-ioring-sys`'s own
     // submission API; here it is enough to know each op's byte count and
     // offset without keeping the buffer, since Model A hands the buffer back
     // through the completion path this test does not need to exercise
@@ -551,7 +551,7 @@ fn completions_queued_before_handover_are_still_delivered() {
     .expect("wire event delivery to a ring that already has completions queued");
 
     // Claim on this thread rather than in the callback, so a delivered
-    // completion is checked against the token that minted it -- a delivery
+    // completion is checked against the operation that minted it -- a delivery
     // that reported the wrong `UserData` would fail here rather than pass.
     //
     // Note what a stall means *here* specifically, and why the report says

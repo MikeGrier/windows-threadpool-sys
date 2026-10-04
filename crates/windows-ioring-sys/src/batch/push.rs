@@ -560,10 +560,10 @@ impl<'ring, T, X> Batch<'ring, T, X> {
     /// Every handle in `handles` must be valid, and must remain valid for
     /// as long as the resulting registration is used -- for the ring's
     /// remaining life, since Win32 has no unregister call (M8, PR #20
-    /// review response). There is no safe counterpart: a single-push
-    /// `Token` cannot express a lifetime spanning arbitrarily many later
-    /// reads and writes against every registered index, unlike a `Token`
-    /// tied to one push's own completion.
+    /// review response). There is no safe counterpart: the ring's inventory
+    /// ties what it holds to one push's own completion, and that cannot
+    /// express a lifetime spanning arbitrarily many later reads and writes
+    /// against every registered index.
     ///
     /// # Errors
     ///

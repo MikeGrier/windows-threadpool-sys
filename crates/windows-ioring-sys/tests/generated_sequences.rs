@@ -20,8 +20,8 @@
 //! [RESPONSE-SPACE.md](../RESPONSE-SPACE.md)'s conservation constraints are
 //! checked against **Windows** rather than against a resolver: every submitted
 //! operation completes exactly once (by the oracle's duplicate and outstanding
-//! violations), a completion identifies its operation (by every token claiming
-//! its own completion), and nothing completes before it is submitted (by the
+//! violations), a completion identifies its operation (by every pop handing
+//! back its own operation's payload), and nothing completes before it is submitted (by the
 //! oracle's unexpected-completion violation).
 //!
 //! The drain-ordering constraint is [flush_barrier.rs](flush_barrier.rs)'s,
@@ -402,7 +402,7 @@ fn run_plan(
             .expect("a registration completion arrives within the bound");
         pending
             .claim_if(&completion)
-            .expect("registration token claims its own completion")
+            .expect("the pending registration claims its own completion")
             .expect("file registration succeeded")
     };
     let registered_file = registered_file.get(0).expect("index 0 exists");
@@ -423,7 +423,7 @@ fn run_plan(
             .expect("a registration completion arrives within the bound");
         pending
             .claim_if(&completion)
-            .expect("registration token claims its own completion")
+            .expect("the pending registration claims its own completion")
             .expect("buffer registration succeeded")
     };
 

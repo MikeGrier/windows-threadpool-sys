@@ -32,9 +32,9 @@ fn identities_start_at_zero_and_increase_by_one() {
 
 #[test]
 fn an_identity_is_never_handed_out_twice() {
-    // The property a `Token` depends on to validate a completion (D-4): if two
-    // live operations shared a `UserData`, either could claim the other's
-    // completion.
+    // The property the ring's inventory depends on to match a completion to
+    // its operation (D-4): if two live operations shared a `UserData`, either
+    // could be handed the other's payload.
     let mut a = Accounting::new();
     let mut seen = std::collections::HashSet::new();
     for _ in 0..4096 {
@@ -311,8 +311,8 @@ fn registrations_and_operations_do_not_interfere() {
 
 #[test]
 fn every_ledger_gets_its_own_identity() {
-    // What stops a token minted by one ring from claiming another's
-    // completion. Built without any ring at all, which is the extraction
+    // What stops an identity minted by one ring from being mistaken for
+    // another's. Built without any ring at all, which is the extraction
     // paying for itself: this used to need two live kernel objects.
     let ids: Vec<RingId> = (0..256).map(|_| Accounting::new().ring_id()).collect();
     let unique: std::collections::HashSet<RingId> = ids.iter().copied().collect();
@@ -332,8 +332,8 @@ fn a_ledgers_identity_does_not_change_over_its_life() {
 #[test]
 fn identities_from_separate_ledgers_do_not_collide_even_though_both_start_at_zero() {
     // `UserData` restarts at 0 per ring, so the *pair* is what identifies an
-    // operation -- which is the reason `RingId` exists and why `Token`
-    // compares both.
+    // operation -- which is the reason `RingId` exists and why `OperationId`
+    // carries both.
     let mut a = Accounting::new();
     let mut b = Accounting::new();
     assert_eq!(a.reserve_user_data().expect("space"), 0);

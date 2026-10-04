@@ -343,8 +343,9 @@ fn dropping_a_registration_with_work_outstanding_is_refused() {
         .expect("registration succeeded");
 
     let mut batch = Batch::new(&mut ring);
-    // SAFETY: `file` outlives this operation; the token is leaked below so the
-    // buffer stays alive for as long as the kernel may write into it.
+    // SAFETY: `file` outlives this operation; the operation is deliberately
+    // never popped below, so the ring keeps the buffer's lease for as long as
+    // the kernel may write into it.
     unsafe {
         batch.read_registered_raw_owned(
             handle,

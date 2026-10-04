@@ -521,9 +521,9 @@ impl Lane {
         let (completion, _held) = ring.pop_within(WAIT)?.ok_or_else(|| {
             io::Error::other("buffer registration produced no completion within the wait")
         })?;
-        let arena = pending
-            .claim_if(&completion)
-            .map_err(|_| io::Error::other("registration token refused its own completion"))??;
+        let arena = pending.claim_if(&completion).map_err(|_| {
+            io::Error::other("the pending registration refused its own completion")
+        })??;
         Ok(Self {
             ring,
             arena,

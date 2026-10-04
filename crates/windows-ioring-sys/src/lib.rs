@@ -3,9 +3,13 @@
 //!
 //! Windows 11 and Server 2022 added `IoRing`, a submission/completion ring for
 //! file I/O closer in shape to `io_uring` than to anything else Windows offers.
-//! This crate raises those primitives into safe Rust with the minimum additional
-//! CPU and memory cost: a completion hands the caller's buffer back without the
-//! crate having allocated anything to track it.
+//! This crate raises those primitives into safe Rust. The ring holds each
+//! in-flight operation's buffer on the caller's behalf and hands it back at the
+//! pop that observes its completion, so no buffer the kernel may still be using
+//! is reachable from safe code. The tracking that makes this possible has a
+//! cost, which may allocate: an entry in a hash set for every operation in
+//! flight, and for an owned push an entry in a hash map holding its payload
+//! ([D-78](../DESIGN-NOTES.md#d-78)).
 //!
 //! # Scope: a file data plane, not a general completion backend
 //!

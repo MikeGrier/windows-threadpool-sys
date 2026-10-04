@@ -514,13 +514,14 @@ impl<T, X> IoRing<T, X> {
 
     /// Block until every outstanding operation has completed, so
     /// `CloseIoRing` never runs while the kernel might still be touching a
-    /// token's buffer.
+    /// buffer the ring holds for an in-flight operation.
     ///
     /// Waits in short, rechecked steps via `SubmitIoRing`'s own wait -- with
     /// zero new entries queued, its only effect is to block for up to
     /// `RUN_DOWN_POLL_MS` and reap whatever is already outstanding -- rather
-    /// than one unbounded call. This does not interpret what it pops; M3/M4
-    /// add the typed completion path `Token` consumes. Idempotent: calling it
+    /// than one unbounded call. This does not interpret what it pops: each
+    /// popped entry's payload is dropped, which is sound because its
+    /// completion is the proof the kernel has finished with it. Idempotent: calling it
     /// again once `outstanding() == 0` is a no-op.
     ///
     /// # A poll that expires is not a failure
@@ -531,7 +532,7 @@ impl<T, X> IoRing<T, X> {
     /// an error -- which this did until M21.6 -- made `run_down` return `Err`
     /// with the operation still outstanding, so `Drop` asserted and then
     /// called `CloseIoRing` anyway: exactly the "the kernel may still be
-    /// writing through a token's buffer" hazard this function exists to
+    /// writing through a buffer the ring holds" hazard this function exists to
     /// prevent.
     ///
     /// This loop therefore has no overall bound, and that is deliberate.

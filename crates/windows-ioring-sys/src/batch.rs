@@ -1075,8 +1075,9 @@ impl<B: IoBufMut> Drop for RegisteredBuffers<B> {
             // Refused, not silently permitted (M5.3): freeing now would
             // leave an outstanding `IORING_BUFFER_REF` pointing at freed
             // memory. Loud in debug builds; in release, leaking is the safe
-            // failure mode -- the same choice `Token` already makes
-            // ("leak is safe, use-after-free is not"), so `buffers` is
+            // failure mode -- the same choice the ring makes for its inventory
+            // when rundown cannot prove quiescence (D-73): "leak is safe,
+            // use-after-free is not". So `buffers` is
             // simply never reclaimed rather than freed out from under a
             // still-outstanding op. Any one buffer still in use holds the
             // whole registration, because they are freed together.
@@ -1125,7 +1126,8 @@ pub struct RegisteredSpan {
 /// proof the kernel is done deciding whether to retain these addresses.
 /// Freeing them here anyway would risk handing memory the kernel still
 /// references back to the allocator; leaking is the safe failure mode, the
-/// same choice `Token` and [`RegisteredBuffers`] both already make.
+/// same choice the ring's inventory (D-73) and [`RegisteredBuffers`] both
+/// already make.
 pub struct PendingBufferRegistration<B: IoBufMut> {
     user_data: usize,
     base_index: u32,

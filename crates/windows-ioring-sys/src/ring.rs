@@ -368,8 +368,8 @@ impl Completion {
     ///
     /// `Completion::synthetic` is the opposite, and is why it is not
     /// reachable from here. A fabricated completion can name an operation that
-    /// is **still in flight**, and claiming a token against one hands a buffer
-    /// back to the caller while the kernel is still writing through it -- the
+    /// is **still in flight**, and reclaiming a payload against one hands a
+    /// buffer back to the caller while the kernel is still writing through it -- the
     /// precise use-after-free this crate exists to prevent. That is a
     /// test-only, crate-only tool and stays one.
     ///
@@ -1177,8 +1177,9 @@ impl<T, X> Drop for IoRing<T, X> {
         DROP_RUNS.with(|runs| runs.set(runs.get() + 1));
 
         // Best-effort rundown: a ring with an operation still outstanding at
-        // drop time is a use bug (M3's Batch/Token are the sanctioned way to
-        // avoid it), but Drop cannot propagate the error, so this asserts in
+        // drop time is a use bug (popping every completion, or calling
+        // `run_down`, before the drop is the sanctioned way to avoid it), but
+        // Drop cannot propagate the error, so this asserts in
         // debug builds rather than silently closing a ring the kernel may
         // still be writing through.
         //
@@ -1223,8 +1224,9 @@ impl<T, X> Drop for IoRing<T, X> {
         // the close below runs with operations possibly still outstanding, so
         // freeing what they point at would hand the kernel a dangling write.
         //
-        // Leaking is the correct answer there, exactly as it is for a `Token`
-        // dropped unclaimed: memory is lost, which is finite and visible,
+        // Leaking is the correct answer there, exactly as it was for a `Token`
+        // dropped unclaimed before the token API retired: memory is lost, which
+        // is finite and visible,
         // rather than reused, which is neither.
         //
         // `is_quiescent` is rechecked rather than trusting `quiesced` alone so

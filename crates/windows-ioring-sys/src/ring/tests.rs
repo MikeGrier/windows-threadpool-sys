@@ -266,7 +266,7 @@ fn an_injected_failure_preserves_the_identity_a_token_claims_against() {
     // claiming against the original -- and must still work, or the seam could
     // not test the claim paths that failure handling lives on.
     //
-    // A real, token-carrying read throughout: nothing here is fabricated.
+    // A real, payload-carrying read throughout: nothing here is fabricated.
     use crate::{Batch, PushOptions};
     use std::os::windows::io::AsRawHandle;
 
@@ -309,7 +309,7 @@ fn an_injected_failure_preserves_the_identity_a_token_claims_against() {
 
     let buffer = held
         .map(|(payload, ())| payload.expect("a read carries a buffer"))
-        .expect("a failed completion still claims its own token");
+        .expect("a failed completion still hands back its own payload");
     assert_eq!(
         buffer, b"hello",
         "claiming a failed operation must still hand the buffer back -- that is \
