@@ -161,7 +161,7 @@ impl OperationId {
     /// `p` were stamped with that generation, cancel an operation it never
     /// submitted. That is why this is not a safe constructor:
     ///
-    /// ```compile_fail
+    /// ```compile_fail,E0133
     /// # use windows_overlapped_io_sys::OperationId;
     /// fn forge_the_next_one(observed: OperationId) -> OperationId {
     ///     OperationId::forge(observed.as_ptr(), observed.generation() + 1)

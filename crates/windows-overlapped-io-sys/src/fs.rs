@@ -61,7 +61,7 @@ impl BlockingEndpoint {
     /// compile time rather than corrupting a result at run time, because `read`
     /// takes `&mut self` while an `Arc` can only hand out `&BlockingEndpoint`:
     ///
-    /// ```compile_fail
+    /// ```compile_fail,E0596
     /// use std::sync::Arc;
     /// use windows_overlapped_io_sys::BlockingEndpoint;
     ///

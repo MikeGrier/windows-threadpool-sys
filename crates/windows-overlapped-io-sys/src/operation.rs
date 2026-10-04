@@ -224,7 +224,7 @@ impl<P> Operation<P> {
     /// A payload borrowing from the caller's frame is rejected, rather than
     /// having its `Drop` run later against an expired borrow:
     ///
-    /// ```compile_fail
+    /// ```compile_fail,E0521
     /// use windows_overlapped_io_sys::Operation;
     ///
     /// fn leak_a_borrow(bytes: &[u8]) -> *mut std::ffi::c_void {
