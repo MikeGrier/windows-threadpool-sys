@@ -27,10 +27,17 @@ const DEFAULT_CHUNK_LEN: usize = 1024 * 1024;
 
 /// Rounds `--compare` runs when `--rounds` is not given.
 ///
-/// Three, so a policy has a fastest, a slowest and a middle -- one run cannot
-/// show a spread, and a spread is the only handle this sample offers on whether
-/// two arrangements were distinguished at all.
-const DEFAULT_ROUNDS: usize = 3;
+/// One complete rotation over the policies: the smallest count that gives every
+/// policy each position in the running order exactly once. A partial cycle
+/// leaves the order unbalanced -- at three rounds over five policies, two of
+/// them never run first -- and position is not free even after the warm-up
+/// pass, because a machine that drifts during the run drifts against whoever
+/// holds the later slots.
+///
+/// It is also comfortably more than one, so a policy has a fastest, a slowest
+/// and a middle: one run cannot show a spread, and a spread is the only handle
+/// this sample offers on whether two arrangements were distinguished at all.
+const DEFAULT_ROUNDS: usize = Policy::ALL.len();
 
 /// The single sink every line of this sample's output goes through
 /// (repository "Architectural pre-steps" rule: never call `println!`/
@@ -317,13 +324,48 @@ fn compare_arrangements(
         args.rounds
     ));
 
+    if !args.rounds.is_multiple_of(policies.len()) {
+        report.line(format_args!(
+            "  note: {} rounds is not a whole number of rotations over {} policies, so each \
+             policy does not get every position in the running order; pass --rounds as a \
+             multiple of {} for a complete rotation",
+            args.rounds,
+            policies.len(),
+            policies.len()
+        ));
+    }
+
+    // An untimed pass over every policy, before anything is recorded.
+    //
+    // Rotating the order does NOT distribute the cold-cache effect, which is
+    // what this comment used to claim. Nothing resets the cache between runs,
+    // so across the whole comparison there is exactly ONE cold run -- the very
+    // first -- and it lands on whichever policy happens to go first. Rotation
+    // changes which policy that is from round to round, but round 0 still has a
+    // uniquely cold sample, and it surfaces in exactly one policy's `slowest`
+    // figure and nowhere else.
+    //
+    // Discarding a full pass fixes that at the source rather than redistributing
+    // it: every recorded sample is then taken against a warm cache. The cost is
+    // one extra pass per policy.
+    for policy in policies {
+        let _ = run_arrangement(
+            policy,
+            topology,
+            args.remote_placement,
+            source,
+            destination,
+            source_len,
+            args.chunk_len,
+        )?;
+    }
+
     for round in 0..args.rounds {
-        // The order rotates each round. Back-to-back runs of the same file are
-        // not independent -- the first pass warms the filesystem cache and
-        // every later one benefits -- so a fixed order would hand that
-        // advantage to the same policy every time and bake it into the result.
-        // Rotating does not remove the effect; it stops it being *attributed*
-        // to one arm.
+        // The order still rotates, for an effect the warm-up does not cover: a
+        // machine that drifts during the run -- thermal, or another tenant
+        // arriving -- would otherwise hand that drift to whichever policy holds
+        // a fixed slot. Rotating does not remove drift; it stops it being
+        // *attributed* to one arm.
         for offset in 0..policies.len() {
             let index = (offset + round) % policies.len();
             let run = run_arrangement(
