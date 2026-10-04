@@ -420,9 +420,9 @@ impl Completion {
     /// // and that same pop is what retired the inventory entry and handed the
     /// // payload back -- there is no second pop that could return it again.
     /// let (completion, payload) = ring
-    ///     .try_pop()
-    ///     .expect("try_pop")
-    ///     .expect("a completion is ready");
+    ///     .pop_within(WAIT)
+    ///     .expect("pop_within")
+    ///     .expect("a completion arrives within the wait");
     ///
     /// // The payload comes back whatever the result says: the operation did
     /// // complete, and a failed completion is still the proof that frees the

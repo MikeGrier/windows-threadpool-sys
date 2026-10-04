@@ -814,6 +814,56 @@
       ]
     },
     {
+      "name": "PR #113: a sample goes back to asserting a registration is already poppable",
+      "file": "examples/ring_copy/engine.rs",
+      "expect": "caught",
+      "why": "The PR #113 review found this shape three times in the samples: try_pop()?.ok_or_else(..) straight after a submit, which turns RS-P-5's 'not yet' into an error. The census used to read tests/ only and recognise only the two-unwrap spelling, so it could not see any of them. This re-injects one of the three as it was written; no_kernel_code_asserts_a_completion_is_already_poppable must name the file.",
+      "find": [
+        "    let (completion, _held) = ring.pop_within(OP_TIMEOUT)?.ok_or_else(|| {"
+      ],
+      "replace": [
+        "    let (completion, _held) = ring.try_pop()?.ok_or_else(|| {"
+      ]
+    },
+    {
+      "name": "PR #113: the already-poppable scanner stops recognising the ? spelling",
+      "file": "tests/response_space_census.rs",
+      "expect": "caught",
+      "why": "Sabotaging the instrument, as the M26.7 scanner case does for the two-unwrap spelling. With the ? branch matching nothing the census goes silently green over every try_pop()?.ok_or_else(..) in the tree; the scanner's own assertions for the ? spelling are what must object.",
+      "find": [
+        "                if [\"ok_or(\", \"ok_or_else(\", \"expect(\", \"unwrap()\"]",
+        "                    .iter()",
+        "                    .any(|refusal| call.starts_with(refusal))"
+      ],
+      "replace": [
+        "                if [\"<recognises nothing>\"]",
+        "                    .iter()",
+        "                    .any(|refusal| call.starts_with(refusal))"
+      ]
+    },
+    {
+      "name": "CONTROL: reordering Policy::ALL changes nothing",
+      "file": "examples/ring_copy/policy.rs",
+      "expect": "survives",
+      "why": "The guard is about membership, not order: ALL's order is the order --compare prints, which is a presentation choice. A guard that also pinned the order would refuse an edit nobody should have to justify, which is the over-constraining the bidirectional rule warns about. The guard's positive halves -- ALL omitting a policy, or listing one twice -- are not entries here: they fail the BUILD, and this harness classifies any build failure as MANIFEST DOES NOT COMPILE, because it cannot tell a guard firing from a malformed patch. Both were injected by hand when the guard was written and failed to compile with the guard's own messages ('missing from Policy::ALL', 'listed in Policy::ALL twice').",
+      "find": [
+        "        Policy::ByCache,",
+        "        Policy::ByNode,",
+        "        Policy::ByPackage,",
+        "        Policy::ByCore,",
+        "        Policy::Single,",
+        "    ];"
+      ],
+      "replace": [
+        "        Policy::Single,",
+        "        Policy::ByCore,",
+        "        Policy::ByPackage,",
+        "        Policy::ByNode,",
+        "        Policy::ByCache,",
+        "    ];"
+      ]
+    },
+    {
       "name": "M26.8: a timed-out wait is reported as a failed submit again",
       "file": "src/ring.rs",
       "expect": "caught",

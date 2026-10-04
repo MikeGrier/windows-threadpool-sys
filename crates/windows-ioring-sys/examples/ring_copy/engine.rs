@@ -19,9 +19,9 @@ use windows_sys::Win32::System::Threading::{GetCurrentThread, SetThreadGroupAffi
 
 use crate::plan::DomainPlan;
 
-/// How long a single push-and-wait may block before this sample gives up on
-/// it, rather than hanging forever on a stuck device.
-const OP_TIMEOUT_MS: u32 = 30_000;
+/// How long waiting for a single operation's completion may block before this
+/// sample gives up on it, rather than hanging forever on a stuck device.
+const OP_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// What one domain's copy pass accomplished.
 pub struct DomainReport {
@@ -144,10 +144,13 @@ fn register_buffer(
     let pending = {
         let mut batch = Batch::new(ring);
         let pending = batch.register_buffers(vec![buffer])?;
-        batch.submit_and_wait(1, OP_TIMEOUT_MS)?;
+        batch.submit()?;
         pending
     };
-    let (completion, _held) = ring.try_pop()?.ok_or_else(|| {
+    // One bounded wait, owned by the pop. A submit that waited would promise
+    // nothing about poppability once its own timeout expired (RS-P-5), so
+    // an immediate `try_pop` after it could call a slow registration missing.
+    let (completion, _held) = ring.pop_within(OP_TIMEOUT)?.ok_or_else(|| {
         io::Error::new(
             io::ErrorKind::TimedOut,
             "no completion for buffer registration",
@@ -161,8 +164,8 @@ fn register_buffer(
     }
 }
 
-/// Push one op via `push`, submit and wait for it, then claim its completion,
-/// returning the transferred byte count.
+/// Push one op via `push`, submit it, then wait a bounded time for its
+/// completion and claim it, returning the transferred byte count.
 fn submit_one<F>(ring: &mut IoRing, push: F) -> io::Result<u32>
 where
     F: FnOnce(&mut Batch<'_>) -> io::Result<OperationId>,
@@ -170,16 +173,16 @@ where
     {
         let mut batch = Batch::new(ring);
         push(&mut batch)?;
-        batch.submit_and_wait(1, OP_TIMEOUT_MS)?;
+        batch.submit()?;
     }
     // The pop is not optional bookkeeping: this operation holds a registration
     // lease, and popping its completion is what releases that lease back to the
     // registered buffer's outstanding count. Skipping it would leave the
     // registration pinned for the rest of the run.
-    let (completion, held) = ring.try_pop()?.ok_or_else(|| {
+    let (completion, held) = ring.pop_within(OP_TIMEOUT)?.ok_or_else(|| {
         io::Error::new(
             io::ErrorKind::TimedOut,
-            "no completion after submit_and_wait",
+            "no completion within the operation timeout",
         )
     })?;
     if held.is_none() {

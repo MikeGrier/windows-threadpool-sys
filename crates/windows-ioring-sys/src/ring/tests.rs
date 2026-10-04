@@ -1066,8 +1066,11 @@ fn a_completion_this_ring_minted_does_not_panic() {
         user_data: Some(op),
     }));
 
+    // `pop_within` rather than `try_pop`: the forged kernel answers on the
+    // first pop, but the crate's contract for "wait for this completion" is
+    // the bounded pop, and the already-poppable census holds tests to it.
     let (completion, held) = ring
-        .try_pop()
+        .pop_within(std::time::Duration::from_secs(5))
         .expect("the forged pop succeeds")
         .expect("one completion was queued");
     assert_eq!(completion.user_data(), op);

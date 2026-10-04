@@ -515,10 +515,12 @@ impl Lane {
             .collect::<io::Result<Vec<_>>>()?;
         let mut batch = Batch::new(&mut ring);
         let pending = batch.register_buffers(buffers)?;
-        batch.submit_and_wait(1, WAIT_MS)?;
-        let (completion, _held) = ring
-            .try_pop()?
-            .ok_or_else(|| io::Error::other("buffer registration produced no completion"))?;
+        batch.submit()?;
+        // One bounded wait, owned by the pop: a waiting submit promises nothing
+        // about poppability once its timeout expires (RS-P-5).
+        let (completion, _held) = ring.pop_within(WAIT)?.ok_or_else(|| {
+            io::Error::other("buffer registration produced no completion within the wait")
+        })?;
         let arena = pending
             .claim_if(&completion)
             .map_err(|_| io::Error::other("registration token refused its own completion"))??;
