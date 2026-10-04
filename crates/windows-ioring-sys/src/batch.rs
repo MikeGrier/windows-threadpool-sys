@@ -1708,8 +1708,10 @@ impl<'ring, T, X> Batch<'ring, T, X> {
     /// `target` is an [`OperationId`] rather than a bare `UserData`, and this
     /// checks that **this** ring minted it. Every ring hands out `UserData`
     /// from its own counter starting at the same value, so one integer
-    /// legitimately names a different operation on each ring -- which is what
-    /// [`OperationId::ring_id`] exists to tell apart. Accepting the integer
+    /// legitimately names a different operation on each ring -- which is why an
+    /// [`OperationId`] carries the ring that minted it alongside the
+    /// `UserData`, and why that half must not be discarded. Accepting the bare
+    /// integer
     /// would therefore let an identity from one ring cancel an unrelated
     /// operation on another, silently, and most readily when both address the
     /// same file. This is the same check [`Batch`] already applies to a
