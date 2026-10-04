@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.5.1](https://github.com/MikeGrier/windows-threadpool-sys/compare/windows-ioring-sys-v0.5.0...windows-ioring-sys-v0.5.1) (2026-10-04)
+
+
+### Bug Fixes
+
+* **ioring:** drain the delivery's wait at teardown ([b93f9bd](https://github.com/MikeGrier/windows-threadpool-sys/commit/b93f9bd50219adbe17471e56f9df6f30ad0ae082))
+
+
+### Dependencies
+
+* The following workspace dependencies were updated
+  * dependencies
+    * windows-threadpool-sys bumped from 0.1.4 to 0.2.0
+
 ## [0.5.0](https://github.com/MikeGrier/windows-threadpool-sys/compare/windows-ioring-sys-v0.4.0...windows-ioring-sys-v0.5.0) (2026-09-25)
 
 

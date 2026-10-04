@@ -1,5 +1,21 @@
 # Changelog
 
+## [0.2.2](https://github.com/MikeGrier/windows-threadpool-sys/compare/windows-file-watcher-v0.2.1...windows-file-watcher-v0.2.2) (2026-10-04)
+
+
+### Bug Fixes
+
+* **file-watcher:** drain the servicer, retry timers and endpoints at teardown ([4bcc55c](https://github.com/MikeGrier/windows-threadpool-sys/commit/4bcc55c715c5f132210b8b571aea696791e640ee))
+* **file-watcher:** drop the servicer rundown whose obligation no longer exists ([17db340](https://github.com/MikeGrier/windows-threadpool-sys/commit/17db340dff1d532c4b399307c61afa133c3bacd6))
+* **file-watcher:** order the servicer's work publication against its shutdown ([8cf44f6](https://github.com/MikeGrier/windows-threadpool-sys/commit/8cf44f6288fa8c9540905e723139db4da2de1513))
+
+
+### Dependencies
+
+* The following workspace dependencies were updated
+  * dependencies
+    * windows-threadpool-sys bumped from 0.1.4 to 0.2.0
+
 ## [0.2.1](https://github.com/MikeGrier/windows-threadpool-sys/compare/windows-file-watcher-v0.2.0...windows-file-watcher-v0.2.1) (2026-09-25)
 
 

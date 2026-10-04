@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.1.3](https://github.com/MikeGrier/windows-threadpool-sys/compare/windows-file-enumeration-sys-v0.1.2...windows-file-enumeration-sys-v0.1.3) (2026-10-04)
+
+
+### Bug Fixes
+
+* **file-enumeration:** drain the session's servicer and engine at teardown ([60281fe](https://github.com/MikeGrier/windows-threadpool-sys/commit/60281fe936a06d542fc64a435f3b0b1259a6f0e7))
+
+
+### Dependencies
+
+* The following workspace dependencies were updated
+  * dependencies
+    * windows-threadpool-sys bumped from 0.1.4 to 0.2.0
+
 ## [0.1.2](https://github.com/MikeGrier/windows-threadpool-sys/compare/windows-file-enumeration-sys-v0.1.1...windows-file-enumeration-sys-v0.1.2) (2026-09-25)
 
 
