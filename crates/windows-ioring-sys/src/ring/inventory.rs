@@ -135,9 +135,13 @@ impl<T, X> IoRing<T, X> {
 
     /// How many operations this ring is currently holding something for.
     ///
-    /// Distinct from [`IoRing::outstanding`], which counts what the *kernel*
-    /// still owes a completion for. They agree in the steady state and part
-    /// company exactly where a bug lives, which is why both exist.
+    /// Distinct from [`IoRing::outstanding`], which counts every operation the
+    /// *kernel* still owes a completion for. The two are **not** expected to
+    /// be equal: every operation held here is also outstanding, but a `_raw`
+    /// flush or cancel and [`IoRing::push_raw`] are outstanding while holding
+    /// nothing, by design. So `held() <= outstanding()` always, and the
+    /// difference is the number of raw operations in flight -- not a sign of
+    /// corruption ([D-78](../DESIGN-NOTES.md#d-78)).
     #[must_use]
     pub fn held(&self) -> usize {
         self.inventory.len()

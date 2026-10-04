@@ -169,12 +169,16 @@ fn a_guarded_push_keeps_the_file_alive_after_the_caller_drops_its_handle() {
 /// and a test showing only one side would pass against a ring that answered
 /// the same way every time.
 ///
-/// This is what `M28.5` settled. The outer `None` from a pop has two causes
-/// the ring cannot separate -- a push that created no entry, and a completion
-/// for an identity never stowed, which is a contract violation. The ring does
-/// not try: the caller can always tell, because it is the same caller that
-/// chose the push. That is a real contract with a real consequence, so it is
-/// asserted rather than only documented.
+/// This is what `M28.5` settled: a raw push creates no entry, so its pop hands
+/// back an outer `None`, and the caller can tell why because it is the same
+/// caller that chose the push. (A completion for an identity never minted no
+/// longer reaches a caller as a quiet `None` at all -- the pop panics on it,
+/// D-79.) That is a real contract with a real consequence, so it is asserted
+/// rather than only documented.
+///
+/// It is also where `held` and `outstanding` are seen to differ in valid use:
+/// both operations are outstanding, only one is held, and the gap is the raw
+/// flush. `held() <= outstanding()` is the invariant, never equality.
 #[test]
 fn a_raw_push_holds_nothing_and_an_owned_push_holds_its_payload() {
     use std::os::windows::io::AsRawHandle;
@@ -206,6 +210,11 @@ fn a_raw_push_holds_nothing_and_an_owned_push_holds_its_payload() {
         1,
         "the ring holds the read's buffer and nothing for the raw flush"
     );
+    assert_eq!(
+        ring.outstanding(),
+        2,
+        "both operations are owed a completion, the raw flush included"
+    );
 
     let mut saw_read = false;
     let mut saw_flush = false;
@@ -231,9 +240,16 @@ fn a_raw_push_holds_nothing_and_an_owned_push_holds_its_payload() {
         } else {
             panic!("a completion arrived for an operation this test never pushed");
         }
+        assert!(
+            ring.held() <= ring.outstanding(),
+            "everything held is outstanding: held {} > outstanding {}",
+            ring.held(),
+            ring.outstanding()
+        );
     }
     assert!(saw_read && saw_flush, "both completions must be observed");
     assert_eq!(ring.held(), 0, "nothing is left held");
+    assert_eq!(ring.outstanding(), 0, "and nothing is owed");
 
     drop(file);
     let _ = std::fs::remove_file(&path);

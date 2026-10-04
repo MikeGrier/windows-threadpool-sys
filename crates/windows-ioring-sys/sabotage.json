@@ -1068,6 +1068,22 @@
       ]
     },
     {
+      "name": "PR #113: outstanding is reported as what the ring holds",
+      "file": "src/ring/bookkeeping.rs",
+      "expect": "caught",
+      "why": "The documentation once said held() and outstanding() 'agree in the steady state', which is false: a raw flush or cancel, and push_raw, are outstanding while holding nothing. This makes outstanding() return the held count -- the equality that wording described -- so a consumer sizing a wait would believe a ring with only raw work in flight is idle. a_raw_push_holds_nothing_and_an_owned_push_holds_its_payload pins the real relationship: two outstanding, one held.",
+      "find": [
+        "    pub fn outstanding(&self) -> usize {",
+        "        self.accounting.outstanding()",
+        "    }"
+      ],
+      "replace": [
+        "    pub fn outstanding(&self) -> usize {",
+        "        self.inventory.len()",
+        "    }"
+      ]
+    },
+    {
       "name": "M28.8: the contract misreports how much is in flight",
       "file": "src/contract.rs",
       "expect": "caught",

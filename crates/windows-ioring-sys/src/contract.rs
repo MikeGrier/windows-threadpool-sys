@@ -55,9 +55,9 @@
 //! The owned-push invariant is narrower: **every push that stows an entry
 //! retires exactly that entry at the pop which observes its completion**, so
 //! what remains in the inventory is precisely the set of owned pushes whose
-//! completions have not yet been seen. [`IoRing::held`] counts that set, and
-//! its own documentation gives the honest relationship to `outstanding` -- they
-//! agree in the steady state and part company exactly where a bug lives.
+//! completions have not yet been seen. [`IoRing::held`] counts that set, which
+//! is a subset of what [`IoRing::outstanding`] counts: `held() <= outstanding()`,
+//! and the gap is the raw operations in flight.
 //! Teardown checks the matching property rather than the equality: that rundown
 //! succeeded **and** no identity the ring minted is still in flight, which
 //! covers the inventory as well ([D-78](../DESIGN-NOTES.md#d-78)).
