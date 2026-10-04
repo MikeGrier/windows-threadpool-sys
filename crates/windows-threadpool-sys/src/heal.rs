@@ -1337,7 +1337,7 @@ mod on {
 /// the method does.
 #[cfg_attr(
     not(feature = "self-heal"),
-    doc = "```compile_fail",
+    doc = "```compile_fail,E0599",
     doc = "use windows_threadpool_sys::wait::{ThreadpoolWait, WaitableHandle};",
     doc = "let wait = ThreadpoolWait::new(",
     doc = "    WaitableHandle::event(true, false).unwrap(),",

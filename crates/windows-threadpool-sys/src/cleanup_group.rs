@@ -17,7 +17,7 @@
 //! [`CleanupGroup::close_members`] takes `&mut self`, so the borrow checker
 //! rejects any use of a member after the group has released it:
 //!
-//! ```compile_fail
+//! ```compile_fail,E0502
 //! # use windows_threadpool_sys::cleanup_group::CleanupGroup;
 //! let mut group = CleanupGroup::new().expect("create group");
 //! let work = group.create_work(|| {}, None).expect("create work");
