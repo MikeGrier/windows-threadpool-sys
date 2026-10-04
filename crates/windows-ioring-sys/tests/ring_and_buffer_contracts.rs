@@ -14,25 +14,73 @@
 use win_numa_sys::{NumaBuffer, NumaNode};
 use windows_ioring_sys::{IoBufMut, IoRing};
 
-/// A ring carries back exactly the queue depths it was asked for.
+/// A ring's queue depths SATISFY what was asked for; they do not echo it.
 ///
-/// The nearest existing assertion is `info.submission_queue_size > 0`, which a
-/// constructor that ignored both arguments would satisfy. Equality is available
-/// -- measured at 8/16, 32/64 and 512/1024 on this host, each returned
-/// unchanged -- so it is what gets asserted.
+/// An earlier version of this test asserted equality, and could not have caught
+/// a kernel that ignored the request. Its three cases -- 8/16, 32/64, 512/1024
+/// -- were already powers of two with the completion queue already twice the
+/// submission queue, which is exactly the shape `CreateIoRing` normalises
+/// towards, so every one came back untouched and the equality looked like a
+/// contract. It was a property of the inputs.
+///
+/// Measured here by asking for shapes that are NOT already normalised: a
+/// request of 9 submission entries comes back as 16, and 1 or 3 come back as 8.
+/// The completion queue arrives at twice whatever the submission queue actually
+/// became, not twice what was asked for -- so 9/9 yields 16/32, and a caller
+/// who believed the old assertion would have sized a buffer against a number
+/// the ring does not have.
+///
+/// What is asserted is therefore the relationship, not the values:
+///
+/// - the submission queue is a power of two and is **at least** what was asked
+///   for, so a request is never silently under-served;
+/// - the completion queue is at least what was asked for, and at least twice
+///   the submission queue the ring actually built.
+///
+/// The discriminating cases live in the table below rather than in this
+/// comment, because the table is executable and a comment is not. Removing the
+/// non-power-of-two rows is what makes this test vacuous again.
 #[test]
-fn a_ring_reports_back_the_queue_depths_it_was_asked_for() {
-    for (submission, completion) in [(8_u32, 16_u32), (32, 64), (512, 1024)] {
+fn a_ring_satisfies_the_queue_depths_it_was_asked_for() {
+    // Deliberately a mix: already-normalised shapes, which must pass through
+    // unchanged, and shapes that cannot pass through unchanged. A table of only
+    // the first kind is the defect this test was rewritten to remove.
+    for (submission, completion) in [
+        (8_u32, 16_u32),
+        (32, 64),
+        (512, 1024),
+        (9, 9),
+        (9, 17),
+        (1, 1),
+        (3, 5),
+        (100, 100),
+    ] {
         let ring = IoRing::new(submission, completion).expect("create ring");
         let info = ring.info().expect("the ring reports its info");
 
-        assert_eq!(
-            info.submission_queue_size, submission,
-            "a ring must carry the submission depth it was created with"
+        assert!(
+            info.submission_queue_size >= submission,
+            "a ring must not under-serve the submission depth it was asked for: \
+             asked {submission}, got {}",
+            info.submission_queue_size
         );
-        assert_eq!(
-            info.completion_queue_size, completion,
-            "a ring must carry the completion depth it was created with"
+        assert!(
+            info.submission_queue_size.is_power_of_two(),
+            "the submission queue is rounded to a power of two: asked {submission}, got {}",
+            info.submission_queue_size
+        );
+        assert!(
+            info.completion_queue_size >= completion,
+            "a ring must not under-serve the completion depth it was asked for: \
+             asked {completion}, got {}",
+            info.completion_queue_size
+        );
+        assert!(
+            info.completion_queue_size >= 2 * info.submission_queue_size,
+            "the completion queue holds at least two entries per submission slot the ring \
+             actually built: submission {}, completion {}",
+            info.submission_queue_size,
+            info.completion_queue_size
         );
     }
 }
