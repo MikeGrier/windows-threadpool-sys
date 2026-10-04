@@ -183,7 +183,6 @@ mod numa_buffer_io;
 // only way to validate whether one type fits the twelve hand-rolled shapes.
 // Whether it stays public is the decision M23.3 has not yet taken.
 #[cfg(windows)]
-#[cfg(windows)]
 mod ring;
 /// The seam the kernel-response resolver sits under (M26.2).
 ///
@@ -211,11 +210,6 @@ pub use capability::{Capabilities, RingVersion, capabilities};
 pub use error::{IoRingError, IoRingErrorExt, RingCondition};
 #[cfg(all(windows, feature = "threadpool"))]
 pub use event_delivery::{EventDelivery, RingScope};
-// Re-exported rather than defined here: the allocator moved to `win-numa-sys`,
-// and re-exporting keeps `windows_ioring_sys::NumaBuffer` resolving for anyone
-// who already bound to it. The `IoBuf`/`IoBufMut` impls live in
-// `numa_buffer_io`, which explains there why they are separated from the type.
-#[cfg(windows)]
 /// The fault-injection seam (M16.3), for exercising failure paths a healthy
 /// machine will not produce on demand. See
 /// [`Completion::with_injected_failure`] for why transforming a real
@@ -226,7 +220,12 @@ pub use ring::InjectedFailure;
 pub use ring::{
     Completion, CompletionWait, HeldCompletion, IoRing, Op, RingInfo, RingWait, SubmitWait,
 };
+#[cfg(windows)]
 pub use token::OperationId;
+// Re-exported rather than defined here: the allocator moved to `win-numa-sys`,
+// and re-exporting keeps `windows_ioring_sys::NumaBuffer` resolving for anyone
+// who already bound to it. The `IoBuf`/`IoBufMut` impls live in
+// `numa_buffer_io`, which explains there why they are separated from the type.
 #[cfg(windows)]
 pub use win_numa_sys::NumaBuffer;
 
