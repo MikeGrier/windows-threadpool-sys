@@ -842,6 +842,18 @@
       ]
     },
     {
+      "name": "PR #113: the already-poppable scanner stops recognising the let-else spelling",
+      "file": "tests/response_space_census.rs",
+      "expect": "caught",
+      "why": "The PR #113 review pointed out that let Some(..) = ring.try_pop()? else { .. } refuses None exactly as ok_or does, while the scanner's own doc admitted it was not recognised. With refused_by_let_else answering false the census goes silent on that spelling again; the scanner's let-else assertions -- with and without the ?, and split across lines -- are what must object.",
+      "find": [
+        "    after.trim_start().strip_prefix(\"else\").is_some_and(|rest| {"
+      ],
+      "replace": [
+        "    false && after.trim_start().strip_prefix(\"else\").is_some_and(|rest| {"
+      ]
+    },
+    {
       "name": "PR #113: Policy::ALL omits a policy",
       "file": "examples/ring_copy/policy.rs",
       "expect": "refused-by-build",

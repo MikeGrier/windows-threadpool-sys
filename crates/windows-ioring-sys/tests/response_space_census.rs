@@ -332,11 +332,21 @@ fn no_kernel_code_asserts_a_completion_is_already_poppable() {
 /// Count `try_pop()` occurrences whose `Option` is unwrapped, which is the
 /// "already poppable" assertion.
 ///
-/// Two spellings: `try_pop()` followed by two unwraps (`expect`/`unwrap`), and
-/// `try_pop()?` whose `Option` is immediately turned into a value or an error
-/// (`ok_or`, `ok_or_else`, `expect`, `unwrap`). Both refuse the `None` that
-/// means "empty at this instant". A `let Some(..) = ring.try_pop()? else`
-/// would say the same and is not recognised; nothing in the crate writes it.
+/// Three spellings, all of which refuse the `None` that means "empty at this
+/// instant":
+///
+/// - `try_pop()` followed by two unwraps (`expect`/`unwrap`);
+/// - `try_pop()?` whose `Option` is immediately turned into a value or an
+///   error (`ok_or`, `ok_or_else`, `expect`, `unwrap`);
+/// - a `let`-`else` binding the pop directly -- `let Some(..) =
+///   ring.try_pop()? else { .. }`, or `let Ok(Some(..)) = ring.try_pop()
+///   else { .. }` -- whose `else` can only diverge.
+///
+/// **Not recognised, deliberately:** an `if let .. else` or a `match` that
+/// handles `None` in a branch. Whether that branch refuses `None` or handles it
+/// is a question about what the branch *does*, which a text scan cannot
+/// answer; a drain loop is the common honest case. The scanner's own test pins
+/// that it stays silent on them, so the boundary cannot move unnoticed.
 ///
 /// Hand-rolled rather than pulled in as a dependency: the shape is two method
 /// calls in sequence, and a scanner for it is shorter than the argument for
@@ -351,6 +361,10 @@ fn regex_lite_matches(text: &str) -> usize {
         // chained directly onto the `?` counts: a later, unrelated `.expect(`
         // inside a `while let` body is not this shape.
         if let Some(after) = rest.trim_start().strip_prefix('?') {
+            if refused_by_let_else(after) {
+                count += 1;
+                continue;
+            }
             if let Some(call) = after.trim_start().strip_prefix('.') {
                 let call = call.trim_start();
                 if ["ok_or(", "ok_or_else(", "expect(", "unwrap()"]
@@ -360,6 +374,10 @@ fn regex_lite_matches(text: &str) -> usize {
                     count += 1;
                 }
             }
+            continue;
+        }
+        if refused_by_let_else(rest) {
+            count += 1;
             continue;
         }
         // Look at the next two chained calls, skipping whitespace and dots.
@@ -377,6 +395,20 @@ fn regex_lite_matches(text: &str) -> usize {
         }
     }
     count
+}
+
+/// Whether `after` -- the text straight after `try_pop()` or `try_pop()?` --
+/// begins the `else` of a `let`-`else`. That `else` must diverge, so the pattern
+/// on the left refuses whatever it does not match, `None` included.
+///
+/// The keyword must stand alone: `elsewhere` is an identifier, not `else`.
+fn refused_by_let_else(after: &str) -> bool {
+    after.trim_start().strip_prefix("else").is_some_and(|rest| {
+        !rest
+            .chars()
+            .next()
+            .is_some_and(|c| c.is_alphanumeric() || c == '_')
+    })
 }
 
 #[test]
@@ -438,6 +470,41 @@ fn the_already_poppable_scanner_recognises_the_shape_and_nothing_else() {
         regex_lite_matches("let c = ring.pop_within(WAIT)?.ok_or_else(|| err())?;"),
         0,
         "a bounded pop may refuse None, because None there means the bound expired"
+    );
+
+    // The let-else spelling (PR #113 review), in each form it can take.
+    assert_eq!(
+        regex_lite_matches("let Some(c) = ring.try_pop()? else { return Err(e); };"),
+        1,
+        "a let-else binding the pop refuses None as surely as ok_or does"
+    );
+    assert_eq!(
+        regex_lite_matches(
+            "let Some(c) = ring\n    .try_pop()?\n    else {\n        panic!()\n    };"
+        ),
+        1,
+        "split across lines it is still the refusal"
+    );
+    assert_eq!(
+        regex_lite_matches("let Ok(Some(c)) = ring.try_pop() else { panic!() };"),
+        1,
+        "without the ? the pattern refuses Err and None together"
+    );
+    // And what it must stay silent on: a branch that handles None is a
+    // question about the branch, which this scanner does not answer.
+    assert_eq!(
+        regex_lite_matches("if let Some(c) = ring.try_pop()? { use_it(c) } else { idle() }"),
+        0,
+        "an if-let's else belongs to the block, not to the pop"
+    );
+    assert_eq!(
+        regex_lite_matches("match ring.try_pop()? { Some(c) => c, None => return Ok(()) }"),
+        0,
+        "a match that handles None is not the refused shape"
+    );
+    assert!(
+        !refused_by_let_else(" elsewhere()"),
+        "an identifier beginning with else is not the keyword"
     );
 }
 #[test]
