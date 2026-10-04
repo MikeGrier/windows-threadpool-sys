@@ -19,8 +19,8 @@ Three files -- `completion_event.rs`, `event_delivery.rs` and
 ## Measured
 
 An all-passing run of this crate's suite was leaking, which is a smaller claim
-than the investigation's 307,383 files but a checkable one. The temp directory
-was cleared, the suite run, and the files matching this crate's prefix counted.
+than the investigation's own total but a checkable one. The temp directory was
+cleared, the suite run, and the files matching this crate's prefix counted.
 
 An all-passing run left temp files behind before the fix, and left none after
 it. The counts are in [arms.csv](arms.csv), which is the authoritative capture
@@ -33,11 +33,13 @@ were cleared rather than counted.
 
 ## The panicking path, which is the one that mattered
 
-A zero on a passing run does not establish the property the fix exists for.
+A clean run on the passing path does not establish the property the fix exists
+for.
 `completions_are_delivered_on_pool_threads_without_the_submitting_thread_waiting`
 was given a deliberate `panic!` placed **after its file handle is open**, which
 is the state in which a removal can fail outright. The run panicked at that
-line, exited 101, and left **0 files**.
+line, exited 101, and left nothing behind. [arms.csv](arms.csv) carries that arm
+and its count, for the reason given above.
 
 That site previously had no removal on any path, so the same panic leaked before
 the change.

@@ -13,10 +13,16 @@ use std::path::{Path, PathBuf};
 ///
 /// Exists because the explicit `remove_file` at the end of a test body does
 /// **not** run when the test panics, and a panicking test is exactly the case
-/// that was leaking: the `M26.13` stall investigation left **307,383 files and
-/// 1.2 GB** behind over roughly thirty thousand runs. Even an all-passing run
-/// of this crate's suite left 25 files, because several paths had no removal at
-/// all.
+/// that was leaking: the `M26.13` stall investigation ran a reproducer whose
+/// failing arm panics, and filled the temp directory doing it. Even an
+/// all-passing run of this crate's suite left files behind, because several
+/// paths had no removal at all.
+///
+/// The counts live in the committed capture rather than here -- see
+/// [the measurement record](../../measurements/2026-10-01-the-tests-stop-leaking-temp-files/README.md)
+/// and the `arms.csv` beside it. A measured figure transcribed into a doc
+/// comment is a second copy that drifts from the capture with nothing to
+/// notice, which is the whole reason the capture is committed.
 ///
 /// # Deleting a file whose handle is still open fails
 ///
