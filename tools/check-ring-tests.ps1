@@ -45,18 +45,26 @@
 #
 #   ./tools/check-ring-tests.ps1            # verify (CI)
 #   ./tools/check-ring-tests.ps1 -Update    # regenerate after answering
+#
+# -SourceRoot and -InventoryPath exist for tools/test-check-ring-tests.ps1,
+# which drives this script against fixture trees; both default to the crate's
+# own paths.
 
 [CmdletBinding()]
 param(
-    [switch]$Update
+    [switch]$Update,
+    [string]$SourceRoot,
+    [string]$InventoryPath
 )
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
 $repoRoot = Split-Path -Parent $PSScriptRoot
-$sourceRoot = Join-Path $repoRoot 'crates\windows-ioring-sys\src'
-$inventoryPath = Join-Path $repoRoot 'crates\windows-ioring-sys\RING-OPENING-LIB-TESTS.txt'
+$sourceRoot = if ($SourceRoot) { $SourceRoot } else { Join-Path $repoRoot 'crates\windows-ioring-sys\src' }
+$inventoryPath = if ($InventoryPath) { $InventoryPath } else {
+    Join-Path $repoRoot 'crates\windows-ioring-sys\RING-OPENING-LIB-TESTS.txt'
+}
 
 if (-not (Test-Path $sourceRoot)) {
     Write-Host "CONFIG ERROR: source root not found: $sourceRoot" -ForegroundColor Red
@@ -76,6 +84,13 @@ if (-not (Test-Path $sourceRoot)) {
 # The longest alternative is first so a match never depends on the engine
 # backtracking out of `::with_version` when the text is
 # `::with_version_and_inventory`.
+#
+# The `::with_*` forms are matched on ANY type, deliberately. A ring can be
+# built through a type alias or a turbofish, and this script cannot resolve
+# types, so anchoring to `IoRing` would miss those silently. Over-inclusion is
+# the safe direction: an unrelated `Other::with_version(` produces an ADDED
+# entry, which fails loudly and is answered by a human, where a missed ring
+# would pass. tools/test-check-ring-tests.ps1 pins both behaviours.
 $script:RingConstructorPattern =
     '(IoRing::new|::with_version_and_inventory|::with_inventory|::with_version)\s*\('
 
@@ -134,7 +149,11 @@ function Get-RingOpeningTests {
     return @($entries | Sort-Object)
 }
 
-$current = Get-RingOpeningTests -Root $sourceRoot
+# `@(...)`: a function's returned array is unrolled, so zero or one entry would
+# arrive as `$null` or a bare string, neither of which has `.Count` under
+# StrictMode. The live tree never has so few, which is why only
+# test-check-ring-tests.ps1's fixtures found it.
+$current = @(Get-RingOpeningTests -Root $sourceRoot)
 
 if ($Update) {
     $header = @(

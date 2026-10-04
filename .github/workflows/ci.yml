@@ -184,6 +184,18 @@ jobs:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v7
+      # The census's own suite first: a census that has stopped recognising a
+      # constructor reports green over the very tests it exists to count, so
+      # its verdict below is only worth reading once this has passed. Both
+      # hosts, as for the planner's suite -- it is an ordinary script a
+      # developer may run under either, and its fixtures found a StrictMode
+      # defect that only zero- or one-entry trees reach.
+      - name: Run test-check-ring-tests.ps1
+        shell: pwsh
+        run: ./tools/test-check-ring-tests.ps1
+      - name: Run test-check-ring-tests.ps1 (Windows PowerShell 5.1)
+        shell: powershell
+        run: ./tools/test-check-ring-tests.ps1
       - name: Run check-ring-tests.ps1
         shell: pwsh
         run: ./tools/check-ring-tests.ps1
