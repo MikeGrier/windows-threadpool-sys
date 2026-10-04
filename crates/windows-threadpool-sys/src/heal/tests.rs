@@ -39,6 +39,7 @@ mod on {
     use super::*;
     use crate::heal::PoolEntry;
     use std::sync::Arc;
+    use std::sync::atomic::AtomicBool;
 
     /// Hold off every tick for the duration of a test's critical section.
     ///
@@ -929,7 +930,11 @@ mod on {
     /// site, because the two must agree for the entry to be in flight at all.
     fn backdate_an_overdue_repair(entry: &Arc<PoolEntry>) {
         entry.stamp_cancelled(1);
-        entry.stamp_submitted(1);
+        // `backdate_submitted`, not `stamp_submitted`: the production stamp is
+        // a `fetch_max` and would refuse this value on any entry that has
+        // already had a real repair handed over -- silently, leaving the test
+        // green and measuring nothing.
+        entry.backdate_submitted(1);
         assert!(
             entry.repair_in_flight(),
             "the backdated stamps must leave a repair in flight, or the tick \
@@ -1286,5 +1291,76 @@ mod on {
             .find(|e| e.key() == key)
             .expect("the registration created an entry");
         entry.force_healed();
+    }
+
+    /// A later, smaller submission must not displace an earlier, larger one.
+    ///
+    /// **This is the state `mark_and_arrange_repair`'s inline fallback creates.**
+    /// When the healer cannot be started, every cancelling thread submits the
+    /// repair itself, and cancellation is public API callable from anywhere --
+    /// so the "submissions come only from a serialised tick" argument that made
+    /// this stamp a plain store stopped holding the moment that fallback
+    /// landed. Two threads can read the clock and store out of order, leaving
+    /// an older value behind a newer one. `repair_overdue` measures
+    /// `now - last_submitted`, so that makes an entry look overdue before it
+    /// is: it retries early, and on a `fail-fast` build enough early retries
+    /// end the process.
+    ///
+    /// **Ordered deliberately rather than left to chance.** A test that simply
+    /// hammers the stamp from several threads only fails when the thread
+    /// holding the maximum happens to finish first, which was measured at
+    /// roughly four runs in ten -- a guard that reports the defect less than
+    /// half the time. Here the largest value is published first and every
+    /// other thread writes a smaller one afterwards, so a plain store is
+    /// guaranteed to lose it and `fetch_max` is guaranteed not to.
+    #[test]
+    fn a_later_smaller_submission_does_not_displace_a_larger_one() {
+        let _gate = gate();
+        let pool = ThreadpoolPool::new().expect("create pool");
+        let (work, entry) = entry_for(&pool);
+
+        const THREADS: u64 = 8;
+        const WRITES: u64 = 500;
+        /// Published once, before any of the small values.
+        const NEWEST: u64 = 1_000_000;
+
+        let published = AtomicBool::new(false);
+        std::thread::scope(|scope| {
+            scope.spawn(|| {
+                entry.stamp_submitted(NEWEST);
+                published.store(true, Ordering::SeqCst);
+            });
+            for thread in 0..THREADS {
+                let entry = &entry;
+                let published = &published;
+                scope.spawn(move || {
+                    while !published.load(Ordering::SeqCst) {
+                        std::hint::spin_loop();
+                    }
+                    // Every one of these is older than NEWEST, which is the
+                    // whole point: each is a submission whose clock read lost
+                    // the race, and not one may be what the stamp ends up
+                    // holding.
+                    for write in 0..WRITES {
+                        entry.stamp_submitted(thread * WRITES + write + 1);
+                    }
+                });
+            }
+        });
+
+        assert_eq!(
+            entry.last_submitted(),
+            NEWEST,
+            "the stamp must hold the newest submission any thread published, \
+             not whichever thread happened to store last"
+        );
+        assert_eq!(
+            u64::from(entry.outstanding_for_test()),
+            THREADS * WRITES + 1,
+            "every submission must still be counted, including the ones whose \
+             timestamp lost the race -- the count is what `repair_in_flight` \
+             reads, and it must not be affected by the stamp's ordering"
+        );
+        drop(work);
     }
 }

@@ -379,14 +379,26 @@ pub fn prewarm_default_pool() -> bool {
         // already executing, and only on this object: the warm-up callback does
         // nothing but send on a channel, so it cannot block, and another
         // object's stuck callback is not this call's to wait for.
+        // This also discharges the obligation: `cancel_pending` returns with
+        // nothing queued and nothing executing, and settles on that basis. The
+        // drain below would therefore be a second native synchronisation that
+        // waits for a state already reached.
         work.cancel_pending();
+    } else {
+        // Discharged here rather than left to the drop below. The drop would
+        // drain anyway, so this adds no blocking -- but this function is the
+        // crate's own use of its own protocol, and leaving the obligation
+        // undischarged makes it a reported violation like any other.
+        //
+        // Needed only on this path, and that asymmetry is deliberate rather
+        // than an oversight: a dispatch does not settle a work object's
+        // obligation, because a work object can be submitted again and the
+        // drain stays the caller's regardless of what has already run. So the
+        // confirmed path has a live obligation even though its callback
+        // demonstrably ran, while the timeout path above has already cleared
+        // one.
+        work.stop_and_drain();
     }
-    // Discharged here rather than left to the drop below. The drop would drain
-    // anyway, so this adds no blocking -- but this function is the crate's own
-    // use of its own protocol, and leaving the obligation undischarged makes it
-    // a reported violation like any other. `cancel_pending` does not settle it;
-    // only the drain does, which is why this runs on both paths.
-    work.stop_and_drain();
     confirmed
 }
 

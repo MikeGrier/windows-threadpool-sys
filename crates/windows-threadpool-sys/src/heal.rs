@@ -185,13 +185,31 @@ mod on {
         /// for [`repair_overdue`](Self::repair_overdue). Whether anything is
         /// outstanding is `outstanding`'s question, not this one.
         ///
-        /// A plain store, deliberately, where the other two are `fetch_max`.
-        /// Submissions come only from a tick, ticks are serialised (the healer
-        /// has one thread, and the tests hold a gate), so there are no
-        /// concurrent writers to lose a write to. It must also be able to move
-        /// *backwards*: the tests backdate it to reach the overdue state
-        /// without waiting out the real threshold, which `fetch_max` would
-        /// silently refuse while still passing.
+        /// Published with `fetch_max`, as the other two stamps are.
+        ///
+        /// **This was a plain store, on the argument that submissions come only
+        /// from a tick and ticks are serialised on the healer's single thread.**
+        /// That stopped being true when `mark_and_arrange_repair` gained its
+        /// inline fallback: if the healer cannot be started, *every cancelling
+        /// thread* submits the repair itself, and cancellation is public API
+        /// callable from anywhere. Two such threads can read the clock, be
+        /// preempted, and store out of order, leaving an older value behind a
+        /// newer one.
+        ///
+        /// The loss is not a lost repair but a lost *deadline*:
+        /// [`repair_overdue`](Self::repair_overdue) measures `now -
+        /// last_submitted`, so a stale-but-earlier value makes the entry look
+        /// overdue sooner than it is. That retries early, and on a
+        /// `fail-fast` build enough early retries end the process. A stamp read
+        /// against a clock has to be published monotonically for the same
+        /// reason the other two are.
+        ///
+        /// Moving it *backwards* is a test need, not a production one, so it
+        /// has its own hook, `backdate_submitted` -- named rather than linked,
+        /// because it is `cfg(test)` and a link to it does not resolve in a
+        /// documentation build. A `fetch_max` would refuse a backdate silently
+        /// while the test still passed, which is the trap that kept this a
+        /// plain store.
         last_submitted: AtomicU64,
         /// Repairs handed to the pool that have not yet begun running.
         ///
@@ -314,7 +332,29 @@ mod on {
         /// must not be able to disagree about whether a submission happened.
         /// Called immediately before `SubmitThreadpoolWork`, which cannot fail,
         /// so the count matches the dispatches one for one.
+        ///
+        /// The stamp is a `fetch_max` because callers are not serialised: see
+        /// the field's own documentation. The count is a plain `fetch_add`
+        /// regardless, since every submission must be counted even when its
+        /// timestamp loses the race.
         pub(crate) fn stamp_submitted(&self, at: u64) {
+            self.last_submitted.fetch_max(at, Ordering::SeqCst);
+            self.outstanding.fetch_add(1, Ordering::SeqCst);
+        }
+
+        /// Move the submission stamp *backwards*, for tests only.
+        ///
+        /// Reaching the overdue state honestly would mean waiting out the real
+        /// threshold on every test that needs it. A plain store is what makes
+        /// that possible, and is exactly what production must not do -- so the
+        /// two are separate functions rather than one with a comment, and only
+        /// this one is compiled into a test build.
+        ///
+        /// Raises `outstanding` like its production twin, because a backdated
+        /// stamp with nothing outstanding is not a state the tick can reach and
+        /// would send the test down the submit path instead of the overdue one.
+        #[cfg(test)]
+        pub(crate) fn backdate_submitted(&self, at: u64) {
             self.last_submitted.store(at, Ordering::SeqCst);
             self.outstanding.fetch_add(1, Ordering::SeqCst);
         }
@@ -364,6 +404,17 @@ mod on {
         /// self-heal for the whole process -- see the `outstanding` field.
         pub(crate) fn repair_in_flight(&self) -> bool {
             self.outstanding.load(Ordering::SeqCst) > 0
+        }
+
+        /// How many repairs are outstanding, for tests only.
+        ///
+        /// [`repair_in_flight`](Self::repair_in_flight) is the production
+        /// question and is deliberately a boolean. A test asserting that every
+        /// concurrent submission was counted needs the number, and reading it
+        /// through the boolean would pass with one.
+        #[cfg(test)]
+        pub(crate) fn outstanding_for_test(&self) -> u32 {
+            self.outstanding.load(Ordering::SeqCst)
         }
 
         /// When a cancellation last left this pool unrepaired; zero if never.

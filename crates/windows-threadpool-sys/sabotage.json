@@ -101,6 +101,18 @@
       ]
     },
     {
+      "name": "the submission stamp is published with a store instead of fetch_max",
+      "file": "src/heal.rs",
+      "expect": "caught",
+      "why": "`last_submitted` was a plain store on the argument that submissions come only from a tick and ticks are serialised on the healer's single thread. `mark_and_arrange_repair`'s inline fallback ended that: when the healer cannot be started, every cancelling thread submits the repair itself, and cancellation is public API callable from anywhere. Two threads can read the clock and store out of order, leaving an older value behind a newer one -- and `repair_overdue` measures `now - last_submitted`, so the entry looks overdue before it is, retries early, and on a fail-fast build enough early retries end the process. The guard is ordered rather than racy: the largest value is published first and every other thread writes a smaller one afterwards, so a plain store is guaranteed to lose it. Measured 15 of 15 with this patch and 0 of 15 false failures without it; an earlier, unordered version of the same test caught it 4 times in 10.",
+      "find": [
+        "            self.last_submitted.fetch_max(at, Ordering::SeqCst);"
+      ],
+      "replace": [
+        "            self.last_submitted.store(at, Ordering::SeqCst);"
+      ]
+    },
+    {
       "name": "the TP_IO fail-fast panics before the rundown instead of after it",
       "file": "src/io.rs",
       "expect": "caught",
