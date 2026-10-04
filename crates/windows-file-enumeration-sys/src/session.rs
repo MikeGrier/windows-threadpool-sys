@@ -121,9 +121,21 @@ impl Drop for SessionWork {
         // `windows-threadpool-sys` reports and, under its `fail-fast` feature,
         // panics on. Naming the point also says where this session blocks.
         //
-        // The servicer goes first: the engine's callback can ring the
-        // servicer's doorbell, so draining the engine first could leave a
-        // freshly submitted servicer callback behind it.
+        // **The order of the two drains is not load-bearing, and the reason is
+        // the slot rather than the sequence.** `release_handle` *takes*
+        // `SessionWork` out of `self.work` before dropping it, and both
+        // `schedule` and `ring_servicer` submit only through
+        // `if let Some(work) = self.work().as_ref()`. By the time this runs the
+        // slot is empty, so an engine callback still executing finds `None` and
+        // submits nothing -- neither object can gain work during either drain,
+        // whichever goes first.
+        //
+        // This used to claim the opposite: that the servicer had to go first
+        // because the engine's callback can ring its doorbell. That dependency
+        // cannot arise on the real path, and the rule it argued for would not
+        // have helped if it could -- draining the servicer *before* the engine
+        // is the order that leaves a late doorbell ring unserviced, so the
+        // stated hazard and the stated remedy pointed opposite ways.
         self.servicer.stop_and_drain();
         self.engine.stop_and_drain();
     }
