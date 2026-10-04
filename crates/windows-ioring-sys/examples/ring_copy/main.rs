@@ -426,18 +426,27 @@ fn compare_arrangements(
          they value, and that is theirs to decide against their own workload."
     ));
 
-    let degraded: Vec<&ArrangementRun> = runs
+    // `Policy::Single` is excluded deliberately. One domain is what that policy
+    // IS, by definition, so counting it here made the note below report that the
+    // host could not express the one arrangement it had expressed exactly --
+    // every run, on every machine. What remains is worth saying, but it is
+    // "collapsed to the same shape as `single`", not "could not be expressed":
+    // a one-node, one-package or one-core host resolves another policy to a
+    // single domain legitimately, and that is the machine's topology showing
+    // through rather than a failure.
+    let collapsed: Vec<&ArrangementRun> = runs
         .iter()
         .filter_map(|per_policy| per_policy.first())
-        .filter(|run| run.degraded || run.domains == 1)
+        .filter(|run| run.policy != Policy::Single && (run.degraded || run.domains == 1))
         .collect();
-    if !degraded.is_empty() {
+    if !collapsed.is_empty() {
         report.line(format_args!(""));
         report.line(format_args!(
-            "note: {} of these arrangements produced a single domain or fell back to one. Those \
-             rows are this machine reporting that it cannot express that arrangement, which is \
-             information about the host rather than about the policy.",
-            degraded.len()
+            "note: {} of these policies fell back to, or resolved to, a single domain on this \
+             host -- the same shape `single` has by definition. That is this machine's topology \
+             showing through rather than a property of the policy, and it means those rows are \
+             not independent measurements of different arrangements.",
+            collapsed.len()
         ));
     }
 
