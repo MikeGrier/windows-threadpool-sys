@@ -1,5 +1,5 @@
 // Copyright (c) 2026 Mike Grier
-//! Two contracts this crate states and nothing else asserted.
+//! Two contracts this crate states, which no other test asserted.
 //!
 //! Both were found while answering a question that has since been retired --
 //! whether a topology realizer could build what it needs from this crate. That
