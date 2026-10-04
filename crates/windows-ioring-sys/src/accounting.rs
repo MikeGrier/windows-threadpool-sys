@@ -121,8 +121,13 @@ impl Accounting {
     }
 
     /// Record that one outstanding operation's completion has been observed
-    /// (a real `IORING_CQE` was popped for it), whether or not a live
-    /// the ring was still holding something for it.
+    /// (a real `IORING_CQE` was popped for it), whether or not the ring was
+    /// still holding something for it.
+    ///
+    /// The decrement SATURATES, so this cannot wrap on a CQE the ring never
+    /// minted. That also means the counter alone is not proof of quiescence:
+    /// an unmatched completion lowers it without retiring any inventory entry,
+    /// which is why `IoRing`'s teardown consults the inventory as well.
     pub(crate) fn record_completion(&mut self) {
         self.outstanding = self.outstanding.saturating_sub(1);
     }

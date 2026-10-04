@@ -22,13 +22,14 @@ An all-passing run of this crate's suite was leaking, which is a smaller claim
 than the investigation's 307,383 files but a checkable one. The temp directory
 was cleared, the suite run, and the files matching this crate's prefix counted.
 
-| | leftovers from one all-passing suite run |
-|---|---|
-| before | **25** |
-| after | **0** |
+An all-passing run left temp files behind before the fix, and left none after
+it. The counts are in [arms.csv](arms.csv), which is the authoritative capture
+for this measurement and is where they stay: a figure typed into prose beside
+the data it came from is a second copy somebody has to keep true by hand, and
+nothing checks that they still agree.
 
-The 33,180 files already present when this started are the residue of earlier
-work, and were cleared rather than counted.
+The files already present when this started are the residue of earlier work, and
+were cleared rather than counted.
 
 ## The panicking path, which is the one that mattered
 

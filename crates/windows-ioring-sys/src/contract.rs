@@ -43,8 +43,23 @@
 //! leaked" -- and it retired with the token API: a push now hands back only an
 //! `OperationId`, which owns nothing, so there is nothing a caller could fail
 //! to claim. [D-74](../DESIGN-NOTES.md#d-74) records why that is a retirement
-//! rather than a narrowing, and the conservation it approximated is now
-//! `held() == outstanding()`, which the ring checks about itself.
+//! rather than a narrowing.
+//!
+//! What replaced it is **not** `held() == outstanding()`. Those two are not
+//! equal in general and the ring does not compare them: a `_raw` flush or
+//! cancel increments `outstanding` while deliberately stowing no inventory
+//! entry, so a perfectly valid push makes them differ. Reading equality as an
+//! invariant would report that valid push as a conservation failure, which is
+//! the over-constraining this oracle's next section exists to avoid.
+//!
+//! The owned-push invariant is narrower: **every push that stows an entry
+//! retires exactly that entry at the pop which observes its completion**, so
+//! what remains in the inventory is precisely the set of owned pushes whose
+//! completions have not yet been seen. [`IoRing::held`] counts that set, and
+//! its own documentation gives the honest relationship to `outstanding` -- they
+//! agree in the steady state and part company exactly where a bug lives.
+//! Teardown checks the matching property rather than the equality: that rundown
+//! succeeded **and** the inventory is empty.
 //!
 //! # What it deliberately does **not** check
 //!

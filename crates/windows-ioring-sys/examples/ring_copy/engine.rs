@@ -172,9 +172,10 @@ where
         push(&mut batch)?;
         batch.submit_and_wait(1, OP_TIMEOUT_MS)?;
     }
-    // `try_pop` rather than `try_pop`: this operation holds a
-    // registration lease, and the pop is what releases it back to the
-    // registered buffer's outstanding count.
+    // The pop is not optional bookkeeping: this operation holds a registration
+    // lease, and popping its completion is what releases that lease back to the
+    // registered buffer's outstanding count. Skipping it would leave the
+    // registration pinned for the rest of the run.
     let (completion, held) = ring.try_pop()?.ok_or_else(|| {
         io::Error::new(
             io::ErrorKind::TimedOut,
