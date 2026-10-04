@@ -49,6 +49,13 @@ on:
       # of. Anything in `tools/` named for sabotage can move which jobs run or
       # whether a defect is caught.
       - 'tools/*sabotage*.ps1'
+      # And the shared helper those scripts dot-source. The glob above cannot
+      # reach it, because `common.ps1` is named for what it IS rather than for
+      # what uses it -- `run-sabotage.ps1` sources it for the native-command
+      # wrappers every sweep runs through, so a change that breaks the helper
+      # breaks the sweep. That is a DEPENDENCY, and no glob over names can
+      # express one; the glob fixed "somebody added a script", not this.
+      - 'tools/common.ps1'
       # A sweep builds the crates, so the workspace manifest and lockfile change
       # what it compiles even when no crate source moves.
       - 'Cargo.toml'

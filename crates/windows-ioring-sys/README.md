@@ -33,7 +33,13 @@ let mut ring = IoRing::<Vec<u8>>::with_inventory(8, 8)?;
 // The pop hands the buffer back. There is nothing to hold onto in between,
 // and nothing to match against: the ring already knows which operation this
 // completion belongs to.
-let (completion, held) = ring.try_pop()?.expect("a completion is ready");
+// `pop_within` rather than `try_pop`: `submit_and_wait` returning does not
+// promise a completion is already poppable. RS-P-5 leaves the kernel free to
+// post it later, so unwrapping `try_pop` here would assert a guarantee this
+// crate does not make -- the same shape its own tests refuse at the source.
+let (completion, held) = ring
+    .pop_within(std::time::Duration::from_secs(5))?
+    .expect("a completion arrives within the bound");
 completion.result()?;
 let (buffer, ()) = held.expect("the ring was holding this read's buffer");
 println!("read {} bytes", buffer.expect("a read carries a buffer").len());
