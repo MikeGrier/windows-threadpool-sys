@@ -56,6 +56,10 @@ on:
       # breaks the sweep. That is a DEPENDENCY, and no glob over names can
       # express one; the glob fixed "somebody added a script", not this.
       - 'tools/common.ps1'
+      # The toolchain the sweep compiles with. Changing the pin changes what
+      # every sweep builds, so it belongs here for the same reason the lockfile
+      # does.
+      - 'rust-toolchain.toml'
       # A sweep builds the crates, so the workspace manifest and lockfile change
       # what it compiles even when no crate source moves.
       - 'Cargo.toml'
@@ -150,7 +154,19 @@ jobs:
       # The repository's pinned toolchain, not the floating stable the lint jobs
       # force: a sweep is asking whether *this* crate's suite notices a defect,
       # so it must build the crate the way the crate is specified to build.
-      - uses: dtolnay/rust-toolchain@1.98.0
+      # `@stable` installs a toolchain; `rust-toolchain.toml` then decides which
+      # one cargo actually runs, because rustup resolves that directory override
+      # ahead of the installed default. The version is therefore DERIVED here
+      # rather than copied -- an earlier revision pinned `@1.98.0` inline, which
+      # is a second home for a fact the workspace already owns, and the comment
+      # beside it claimed to use "the repository's pinned toolchain" while in
+      # fact restating it. This is the pattern every other workflow here uses.
+      #
+      # Deliberately NOT setting `RUSTUP_TOOLCHAIN`: the lint jobs set it to
+      # `stable` and that is exactly what overrides the directory pin. A sweep
+      # asks whether *this* crate's suite notices a defect, so it must build the
+      # crate the way the crate is specified to build.
+      - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
         with:
           # `run-sabotage.ps1` forces every cargo invocation into
