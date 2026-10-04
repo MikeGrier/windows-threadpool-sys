@@ -842,10 +842,50 @@
       ]
     },
     {
+      "name": "PR #113: Policy::ALL omits a policy",
+      "file": "examples/ring_copy/policy.rs",
+      "expect": "refused-by-build",
+      "buildError": "a policy is missing from Policy::ALL",
+      "why": "--compare promises to price every policy, and ALL is the list it walks. An omitted variant must fail the BUILD, not a run: listed_exactly_once's arm for Single holds an inline const block that is evaluated whether or not anything calls it, and it panics at compile time when Single is absent from ALL. The named message is what distinguishes the guard firing from the patch merely being malformed.",
+      "find": [
+        "    pub const ALL: [Policy; 5] = [",
+        "        Policy::ByCache,",
+        "        Policy::ByNode,",
+        "        Policy::ByPackage,",
+        "        Policy::ByCore,",
+        "        Policy::Single,",
+        "    ];"
+      ],
+      "replace": [
+        "    pub const ALL: [Policy; 4] = [",
+        "        Policy::ByCache,",
+        "        Policy::ByNode,",
+        "        Policy::ByPackage,",
+        "        Policy::ByCore,",
+        "    ];"
+      ]
+    },
+    {
+      "name": "PR #113: Policy::ALL lists a policy twice",
+      "file": "examples/ring_copy/policy.rs",
+      "expect": "refused-by-build",
+      "buildError": "a policy is listed in Policy::ALL twice",
+      "why": "The other direction: a duplicate would make --compare price one policy twice. Every variant stays present here, so what fires is the second-occurrence check in position_in_all -- not the missing-variant one, which the entry above covers and whose message differs.",
+      "find": [
+        "    pub const ALL: [Policy; 5] = [",
+        "        Policy::ByCache,"
+      ],
+      "replace": [
+        "    pub const ALL: [Policy; 6] = [",
+        "        Policy::ByCache,",
+        "        Policy::ByCache,"
+      ]
+    },
+    {
       "name": "CONTROL: reordering Policy::ALL changes nothing",
       "file": "examples/ring_copy/policy.rs",
       "expect": "survives",
-      "why": "The guard is about membership, not order: ALL's order is the order --compare prints, which is a presentation choice. A guard that also pinned the order would refuse an edit nobody should have to justify, which is the over-constraining the bidirectional rule warns about. The guard's positive halves -- ALL omitting a policy, or listing one twice -- are not entries here: they fail the BUILD, and this harness classifies any build failure as MANIFEST DOES NOT COMPILE, because it cannot tell a guard firing from a malformed patch. Both were injected by hand when the guard was written and failed to compile with the guard's own messages ('missing from Policy::ALL', 'listed in Policy::ALL twice').",
+      "why": "The guard is about membership, not order: ALL's order is the order --compare prints, which is a presentation choice. A guard that also pinned the order would refuse an edit nobody should have to justify, which is the over-constraining the bidirectional rule warns about. The two refused-by-build entries above are the guard's positive halves.",
       "find": [
         "        Policy::ByCache,",
         "        Policy::ByNode,",
