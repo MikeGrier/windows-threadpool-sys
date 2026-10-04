@@ -238,9 +238,12 @@ impl<T: Send + 'static, X: Send + 'static> EventDelivery<T, X> {
     /// `*scope = ...` works through `DerefMut` just as well; nor would handing
     /// a `&mut IoRing` to a closure.
     ///
-    /// Replacing the ring is therefore refused at compile time:
+    /// Replacing the ring is therefore refused at compile time. The expected
+    /// error is pinned, though rustdoc enforces a pinned code only on a
+    /// nightly toolchain; on stable, the compiling twin below is what keeps
+    /// this example honest:
     ///
-    /// ```compile_fail
+    /// ```compile_fail,E0614
     /// # use windows_ioring_sys::{EventDelivery, IoRing};
     /// let delivery =
     ///     EventDelivery::new(IoRing::new(8, 8).unwrap(), |_, _| {}, None).unwrap();

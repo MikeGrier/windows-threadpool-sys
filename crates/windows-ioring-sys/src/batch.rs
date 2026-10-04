@@ -737,7 +737,7 @@ impl<B: IoBufMut> RegisteredBuffers<B> {
     /// anywhere and reads memory the kernel is concurrently writing:
     ///
     /// ```ignore
-    /// batch.read_registered(&file, &arena, span, 0, PushOptions::new())?;
+    /// batch.read_registered_owned(&file, &arena, span, (), 0, PushOptions::new())?;
     /// batch.submit()?;                 // kernel now filling that buffer
     /// let bytes = arena.get(span.buffer_index)?;
     /// ```
@@ -747,7 +747,7 @@ impl<B: IoBufMut> RegisteredBuffers<B> {
     ///
     /// ```ignore
     /// let bytes = arena.get(0)?;       // quiet here, so the check passes
-    /// batch.read_registered(&file, &arena, span, 0, PushOptions::new())?;
+    /// batch.read_registered_owned(&file, &arena, span, (), 0, PushOptions::new())?;
     /// batch.submit()?;                 // kernel now filling that same buffer
     /// let stale = bytes[0];            // ... read through the live borrow
     /// ```
@@ -804,9 +804,16 @@ impl<B: IoBufMut> RegisteredBuffers<B> {
     ///
     /// This is the regression guard for the hazard described above. Taking the
     /// borrow while the buffer is quiet and *then* submitting a read into it
-    /// must not compile:
+    /// must not compile, and the failure it exists for is the borrow conflict,
+    /// `E0502`. That code is pinned below, with a limit worth knowing: rustdoc
+    /// checks a pinned code only on a nightly toolchain (or under
+    /// `RUSTC_BOOTSTRAP=1`), and on stable a `compile_fail` example passes on
+    /// any error. This one went on "passing" after `read_registered` was
+    /// removed, because calling a method that does not exist fails to compile
+    /// too; the `no_run` twin below, which must compile, is what catches a
+    /// rename that reaches both:
     ///
-    /// ```compile_fail
+    /// ```compile_fail,E0502
     /// # use windows_ioring_sys::{Batch, IoRing, PushOptions, RegisteredBuffers, RegisteredSpan, SharedFile};
     /// # fn hazard<B: windows_ioring_sys::IoBufMut>(
     /// #     ring: &mut IoRing,
@@ -816,7 +823,7 @@ impl<B: IoBufMut> RegisteredBuffers<B> {
     /// # ) -> std::io::Result<u8> {
     /// let bytes: &[u8] = arena.get(0)?;      // quiet here, so the check passes
     /// let mut batch = Batch::new(ring);
-    /// let _token = batch.read_registered(file, arena, span, 0, PushOptions::new())?;
+    /// batch.read_registered_owned(file, arena, span, (), 0, PushOptions::new())?;
     /// batch.submit()?;                       // kernel now filling that buffer
     /// Ok(bytes[0])                           // ... read through the live borrow
     /// # }

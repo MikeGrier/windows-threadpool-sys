@@ -854,6 +854,20 @@
       ]
     },
     {
+      "name": "DECLARED BLIND SPOT: the borrow-across-push guard fails for the wrong reason",
+      "file": "src/batch.rs",
+      "expect": "survives",
+      "why": "RegisteredBuffers::get's compile_fail doctest guards against holding a borrow of a registered buffer across a push into it. It kept 'passing' for months after read_registered was removed, because calling a method that does not exist fails to compile too. Its fence now pins E0502, but rustdoc enforces a pinned code only on a nightly toolchain or under RUSTC_BOOTSTRAP=1 -- measured: this exact patch passes on the pinned stable toolchain and fails under RUSTC_BOOTSTRAP=1. So on the toolchain CI uses, a compile_fail example that fails for the wrong reason is invisible, and this entry records that rather than pretending otherwise. If CI ever runs doctests with error codes enforced, this flips to caught and the sweep will say so.",
+      "find": [
+        "    /// batch.read_registered_owned(file, arena, span, (), 0, PushOptions::new())?;",
+        "    /// batch.submit()?;                       // kernel now filling that buffer"
+      ],
+      "replace": [
+        "    /// let _token = batch.read_registered(file, arena, span, 0, PushOptions::new())?;",
+        "    /// batch.submit()?;                       // kernel now filling that buffer"
+      ]
+    },
+    {
       "name": "PR #113: Policy::ALL omits a policy",
       "file": "examples/ring_copy/policy.rs",
       "expect": "refused-by-build",
