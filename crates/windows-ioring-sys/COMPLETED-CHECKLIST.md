@@ -6198,3 +6198,25 @@ crate carries on behalf of a consumer nobody has written.
 
 - [x] **M27.3** -- `ring_copy --compare` prices every policy on the machine in hand and reports
   what each cost, with no verdict. -> [completed 2026-10-01](COMPLETED-CHECKLIST.md#m273)
+
+## Moved 2026-10-04 15:27:15 -04:00 -- M-R2, the identity-keyed ledger and the unminted-completion panic
+
+### M-R2 -- The outstanding-operation ledger, after the PR #113 review
+
+Opened 2026-10-04. The review found that a raw push could still reach a false quiesce; the fix is
+[D-78](DESIGN-NOTES.md#d-78).
+
+- [x] **M-R2.1** -- **Track outstanding operations by identity rather than by count.** Done
+      2026-10-04. `Accounting` keeps the set of minted, unretired `user_data`; `record_completion`
+      and `cancel_reservation` take the identity; quiescence is that set being empty, for owned
+      and raw pushes alike. Pinned by `a_completion_that_retires_nothing_is_not_quiescence`
+      (both push kinds, both directions) and by the `PR #113` case in
+      [sabotage.json](sabotage.json), which restores count semantics and is caught.
+
+- [x] **M-R2.2** -- **Decide whether the ring should now answer `UnexpectedCompletion`.** Done
+      2026-10-04, decided by the engineer and recorded as [D-79](DESIGN-NOTES.md#d-79): a
+      completion for an identity not in flight is a defect, traced always and raised as a panic
+      from `pop_raw` except during an unwind. `RingContract` stays external. Pinned by four
+      `kernel-seam` tests in `ring::tests` that forge the kernel's answer -- never minted,
+      duplicate, the minted control, and the unwind case -- and by the two `D-79` cases in
+      [sabotage.json](sabotage.json).

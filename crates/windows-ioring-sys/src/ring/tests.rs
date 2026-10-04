@@ -991,3 +991,148 @@ fn a_completion_that_retires_nothing_is_not_quiescence() {
         std::mem::forget(ring);
     }
 }
+
+/// A kernel that answers one pop with a completion for `user_data`, then
+/// reports the queue empty. Forwards nothing, so it is sound over the null
+/// handle `IoRing::refused_by_the_kernel` builds.
+#[cfg(feature = "kernel-seam")]
+struct ForgedCompletion {
+    user_data: Option<usize>,
+}
+
+#[cfg(feature = "kernel-seam")]
+impl crate::sys::Responses for ForgedCompletion {
+    unsafe fn pop(
+        &mut self,
+        _ring: *mut std::ffi::c_void,
+        cqe: *mut windows_sys::Win32::Storage::FileSystem::IORING_CQE,
+    ) -> windows_sys::core::HRESULT {
+        let Some(user_data) = self.user_data.take() else {
+            return windows_sys::Win32::Foundation::S_FALSE;
+        };
+        // SAFETY: the ring passes a valid out-pointer, as the Win32 call
+        // requires.
+        unsafe {
+            cqe.write(windows_sys::Win32::Storage::FileSystem::IORING_CQE {
+                UserData: user_data,
+                ResultCode: 0,
+                Information: 0,
+            });
+        }
+        windows_sys::Win32::Foundation::S_OK
+    }
+}
+
+/// A completion for an identity this ring never minted is a defect, and the
+/// pop panics on it (D-79).
+///
+/// Driven through the real `pop_raw` by forging the kernel's answer, so what
+/// is under test is the pop path every public pop shares, not the helper in
+/// isolation. Covers the two causes the ring can see: an identity never minted
+/// here, and a duplicate of one already retired.
+#[cfg(feature = "kernel-seam")]
+#[test]
+#[should_panic(expected = "which is not in flight on this ring")]
+fn a_completion_this_ring_never_minted_panics() {
+    let _kernel = crate::sys::install(Box::new(ForgedCompletion {
+        user_data: Some(0xDEAD),
+    }));
+    let mut ring = IoRing::refused_by_the_kernel();
+    let _ = ring.try_pop();
+}
+
+#[cfg(feature = "kernel-seam")]
+#[test]
+#[should_panic(expected = "which is not in flight on this ring")]
+fn a_duplicate_of_a_retired_completion_panics() {
+    let mut ring = IoRing::refused_by_the_kernel();
+    let op = ring.reserve_user_data().expect("mint one identity");
+    assert!(ring.record_completion(op), "its one real completion");
+
+    let _kernel = crate::sys::install(Box::new(ForgedCompletion {
+        user_data: Some(op),
+    }));
+    let _ = ring.try_pop();
+}
+
+/// The other direction: a completion this ring *did* mint pops normally, so
+/// the panic is about identity rather than about forged completions as such.
+#[cfg(feature = "kernel-seam")]
+#[test]
+fn a_completion_this_ring_minted_does_not_panic() {
+    let mut ring = IoRing::refused_by_the_kernel();
+    let op = ring.reserve_user_data().expect("mint one identity");
+    let kernel = crate::sys::install(Box::new(ForgedCompletion {
+        user_data: Some(op),
+    }));
+
+    let (completion, held) = ring
+        .try_pop()
+        .expect("the forged pop succeeds")
+        .expect("one completion was queued");
+    assert_eq!(completion.user_data(), op);
+    assert!(held.is_none(), "nothing was stowed for it");
+    assert_eq!(ring.outstanding(), 0, "it retired the identity it carried");
+
+    drop(kernel);
+    std::mem::forget(ring);
+}
+
+/// During an unwind the defect is traced but not raised: a second panic there
+/// would abort the process, so the panic already in flight carries the
+/// failure.
+///
+/// Rundown inside `Drop` is how this is reached for real. If the guard were
+/// missing, this test would not fail -- the process would abort, which is the
+/// behaviour the guard exists to exclude.
+///
+/// The `Drop` below records what it saw rather than asserting: any panic it
+/// raised would itself be a second panic during the unwind, so a broken
+/// precondition -- the seam not answering, say -- would abort the process and
+/// hide which test failed. The assertions run after the unwind instead.
+#[cfg(feature = "kernel-seam")]
+#[test]
+fn an_unminted_completion_during_an_unwind_does_not_panic_again() {
+    type Seen = std::cell::RefCell<Option<(bool, Result<Option<usize>, String>)>>;
+
+    struct PopsWhileUnwinding<'a> {
+        ring: IoRing,
+        seen: &'a Seen,
+    }
+    impl Drop for PopsWhileUnwinding<'_> {
+        fn drop(&mut self) {
+            let popped = self
+                .ring
+                .try_pop()
+                .map(|popped| popped.map(|(completion, _)| completion.user_data()))
+                .map_err(|error| error.to_string());
+            *self.seen.borrow_mut() = Some((std::thread::panicking(), popped));
+        }
+    }
+
+    let seen = Seen::default();
+    let _kernel = crate::sys::install(Box::new(ForgedCompletion {
+        user_data: Some(0xBEEF),
+    }));
+    let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let _pops = PopsWhileUnwinding {
+            ring: IoRing::refused_by_the_kernel(),
+            seen: &seen,
+        };
+        panic!("the original failure");
+    }));
+
+    let payload = outcome.expect_err("the original panic propagates");
+    assert_eq!(
+        payload.downcast_ref::<&str>().copied(),
+        Some("the original failure"),
+        "the panic that surfaces is the original one, not the defect report"
+    );
+    let (unwinding, popped) = seen.take().expect("the drop ran");
+    assert!(unwinding, "the pop happened during the unwind");
+    assert_eq!(
+        popped,
+        Ok(Some(0xBEEF)),
+        "the forged completion is still handed back"
+    );
+}

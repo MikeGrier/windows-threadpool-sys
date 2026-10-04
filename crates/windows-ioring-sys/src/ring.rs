@@ -809,6 +809,42 @@ impl<T, X> IoRing<T, X> {
         Ok(())
     }
 
+    /// A completion was popped for an identity that is not in flight on this
+    /// ring ([D-79](../DESIGN-NOTES.md#d-79)).
+    ///
+    /// It was never minted here, has already completed, or belongs to a
+    /// reservation released because its `Build*` call failed. Every queued SQE
+    /// produces exactly one completion carrying the identity it was built
+    /// with (M10.2), so each of those is a defect -- in a [`IoRing::push_raw`]
+    /// closure that built with some other `user_data`, in a `kernel-seam`
+    /// responder that broke `RS-C-2`, or in the kernel.
+    ///
+    /// Traced always, so the event survives in a trace dump whatever happens
+    /// next, and then a panic -- **except during an unwind**. Rundown runs in
+    /// `Drop`, so this can be reached while the thread is already panicking,
+    /// and a second panic there would abort the process; the panic already in
+    /// flight is left to carry the failure. The completion has retired
+    /// nothing either way, so quiescence is unaffected ([D-78](../DESIGN-NOTES.md#d-78)).
+    #[cold]
+    fn unminted_completion(&self, user_data: usize) {
+        #[cfg(feature = "threadpool")]
+        windows_threadpool_sys::trace_record!(
+            "ring",
+            "unminted-completion",
+            user_data,
+            self.accounting.outstanding()
+        );
+        if !std::thread::panicking() {
+            panic!(
+                "IoRing popped a completion for user_data {user_data:#x}, which is not in flight \
+                 on this ring: it was never minted here, has already completed, or its build \
+                 failed. Every queued SQE completes exactly once with the identity it was built \
+                 with, so this is a defect in a push_raw closure, a kernel-seam responder, or \
+                 the kernel (D-79)"
+            );
+        }
+    }
+
     /// Pop a completion without touching the inventory.
     ///
     /// The shared body of every pop. It is deliberately private: a pop that
@@ -828,10 +864,9 @@ impl<T, X> IoRing<T, X> {
             return Ok(None);
         }
         check(hr)?;
-        // Whether this ring minted the identity is deliberately not acted on:
-        // an unminted completion is a contract violation `RingContract`
-        // reports, and here it simply retires nothing.
-        self.record_completion(cqe.UserData);
+        if !self.record_completion(cqe.UserData) {
+            self.unminted_completion(cqe.UserData);
+        }
         Ok(Some(Completion {
             user_data: cqe.UserData,
             result_code: cqe.ResultCode,
@@ -869,6 +904,10 @@ impl<T, X> IoRing<T, X> {
     /// # Errors
     ///
     /// Any error from `SubmitIoRing` or `PopIoRingCompletion`.
+    ///
+    /// # Panics
+    ///
+    /// As [`IoRing::try_pop`], on a completion for an identity not in flight.
     pub fn pop_within(&mut self, timeout: Duration) -> io::Result<Option<HeldCompletion<T, X>>> {
         self.pop_within_with(&mut SubmitWait, timeout)
     }
@@ -885,6 +924,10 @@ impl<T, X> IoRing<T, X> {
     /// # Errors
     ///
     /// Any error from the wait or from `PopIoRingCompletion`.
+    ///
+    /// # Panics
+    ///
+    /// As [`IoRing::try_pop`], on a completion for an identity not in flight.
     pub fn pop_within_with<W: CompletionWait + ?Sized>(
         &mut self,
         wait: &mut W,

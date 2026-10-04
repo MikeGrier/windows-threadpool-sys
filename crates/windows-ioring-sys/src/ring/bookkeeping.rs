@@ -494,6 +494,11 @@ impl<T, X> IoRing<T, X> {
     /// (`device.rs`): the mechanics of building an SQE need nothing unsafe,
     /// but this crate cannot audit an arbitrary `Build*` call, so the seam
     /// itself is unsafe.
+    ///
+    /// `build` must also queue its SQE with **exactly the `user_data` it was
+    /// handed**, and queue only one. A completion carrying any other identity
+    /// is one this ring never minted, and the pop that receives it panics
+    /// ([D-79](../DESIGN-NOTES.md#d-79)).
     pub unsafe fn push_raw(
         &mut self,
         build: impl FnOnce(*mut c_void, usize) -> windows_sys::core::HRESULT,
@@ -555,6 +560,10 @@ impl<T, X> IoRing<T, X> {
     /// from `PopIoRingCompletion`. **An error leaves the ring resumable**: see
     /// [`IoRing::run_down_within`] for what is guaranteed about the operations
     /// still queued.
+    ///
+    /// # Panics
+    ///
+    /// As [`IoRing::try_pop`], on a completion for an identity not in flight.
     pub fn run_down(&mut self) -> io::Result<()> {
         while !self.run_down_within(Duration::MAX)? {}
         Ok(())
@@ -593,6 +602,10 @@ impl<T, X> IoRing<T, X> {
     ///
     /// Returns any error from `SubmitIoRing` other than an expired wait, or
     /// from `PopIoRingCompletion`.
+    ///
+    /// # Panics
+    ///
+    /// As [`IoRing::try_pop`], on a completion for an identity not in flight.
     pub fn run_down_within(&mut self, bound: Duration) -> io::Result<bool> {
         let deadline = Instant::now().checked_add(bound);
         loop {

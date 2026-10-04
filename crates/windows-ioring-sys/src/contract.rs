@@ -109,6 +109,12 @@ pub enum Violation {
     /// Either the ring completed something twice, or the caller's own
     /// bookkeeping lost a push -- and distinguishing those is why the message
     /// says which is possible rather than asserting one.
+    ///
+    /// When the completions reported here come from an [`crate::IoRing`]'s own
+    /// pops, the ring has already checked the identity against what it minted
+    /// and panics on one that is not in flight
+    /// ([D-79](../DESIGN-NOTES.md#d-79)), so from such a ring this points at
+    /// the caller's reporting rather than at the kernel.
     UnexpectedCompletion {
         /// The identity the unrecognised completion carried.
         user_data: usize,
@@ -118,7 +124,9 @@ pub enum Violation {
     /// The "exactly" half of "exactly one completion". Counted separately from
     /// [`Violation::UnexpectedCompletion`] because a duplicate is a much
     /// stronger signal than an unrecognised identity: it cannot be explained
-    /// by a caller forgetting to report a push.
+    /// by a caller forgetting to report a push. A ring's own pop panics on a
+    /// duplicate first ([D-79](../DESIGN-NOTES.md#d-79)), so from a real ring
+    /// this means the caller reported one completion twice.
     DuplicateCompletion {
         /// The identity that completed more than once.
         user_data: usize,

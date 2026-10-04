@@ -61,6 +61,11 @@ pub trait Responses {
 
     /// `PopIoRingCompletion`.
     ///
+    /// A completion this writes must carry an identity the ring minted and has
+    /// not yet seen complete (`RS-C-2`). Any other `UserData` is reported by
+    /// the ring as a defect, and the pop that receives it panics
+    /// ([D-79](../DESIGN-NOTES.md#d-79)).
+    ///
     /// # Safety
     ///
     /// As `PopIoRingCompletion`.

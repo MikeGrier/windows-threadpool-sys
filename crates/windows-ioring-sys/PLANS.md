@@ -8,4 +8,4 @@ Add a row below, and a milestone in [CHECKLIST.md](CHECKLIST.md), when new work 
 
 | Path to CHECKLIST.md | Status | Brief description | Design Notes |
 |---|---|---|---|
-| [CHECKLIST.md](CHECKLIST.md) | in progress | `M-R1` stall post-mortem after the hooking facility's removal; `M-R2` the identity-keyed outstanding ledger | [DESIGN-NOTES.md](DESIGN-NOTES.md) |
+| [CHECKLIST.md](CHECKLIST.md) | in progress | `M-R1` stall post-mortem after the hooking facility's removal | [DESIGN-NOTES.md](DESIGN-NOTES.md) |

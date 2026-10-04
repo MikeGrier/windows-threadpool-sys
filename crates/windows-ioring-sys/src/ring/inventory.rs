@@ -67,21 +67,15 @@ impl<T, X> IoRing<T, X> {
     /// Take back what an operation was holding, if this ring was holding
     /// anything for it.
     ///
-    /// `None` covers two situations, which the inventory cannot tell apart: a
-    /// push that created no entry at all -- the `_raw` flush and
-    /// cancel forms, which take a borrowed handle and return a bare
-    /// `user_data` -- and a completion for an identity this ring never
-    /// stowed, which is a contract violation
-    /// [`crate::contract::RingContract`] is the thing that reports.
+    /// `None` means a push that created no entry at all -- the `_raw` flush
+    /// and cancel forms and `push_raw`, which return a bare `user_data`.
     ///
-    /// The ring's identity ledger can tell them apart -- `record_completion`
-    /// reports whether the identity was minted -- but the pop does not
-    /// surface that; whether it should is `M-R2.2`
-    /// ([D-78](../DESIGN-NOTES.md#d-78)). `M28.5` settled that the inventory
-    /// is the right place to stop. The *caller* can tell them apart, because
-    /// the distinction is which push they chose, and pushing that knowledge
-    /// into the inventory would mean an entry for every raw push -- which
-    /// needs an `X` the caller never supplied.
+    /// A completion for an identity this ring never minted cannot reach here
+    /// as a quiet `None` any more: the identity ledger notices it first, and
+    /// the pop panics ([D-79](../DESIGN-NOTES.md#d-79)) -- except during an
+    /// unwind, where it is traced and this returns `None` for it. `M28.5`
+    /// settled that the inventory is the right place to stop: an entry for
+    /// every raw push would need an `X` the caller never supplied.
     pub(crate) fn reclaim(&mut self, user_data: usize) -> Option<Entry<T, X>> {
         self.inventory.remove(&user_data)
     }
@@ -105,25 +99,25 @@ impl<T, X> IoRing<T, X> {
     /// group of writes it belonged to.
     ///
     /// The **outer** `None` means this ring is holding nothing for that
-    /// identity, and it has two legitimate-and-not causes that this return
-    /// value does not separate:
-    ///
-    /// - The completion belongs to a `_raw` flush or cancel. Those take a
-    ///   borrowed handle, return a bare `user_data`, and deliberately create
-    ///   no entry -- choosing one *is* choosing not to have the ring hold
-    ///   anything. Nothing is wrong.
-    /// - The completion carries an identity this ring never stowed, which is
-    ///   a contract violation. [`crate::contract::RingContract`] reports it;
-    ///   this method does not, because it cannot.
-    ///
-    /// A caller can always tell which, because it is the same caller that
-    /// chose the push. `M28.5` decided not to close the gap by giving every
-    /// raw push an entry: that would need an `X` the caller never supplied,
-    /// and the `_owned` forms already exist for a caller who wants one.
+    /// identity because the push that produced it created no entry: a `_raw`
+    /// flush or cancel, or [`IoRing::push_raw`]. Those return a bare
+    /// `user_data` and deliberately create no entry -- choosing one *is*
+    /// choosing not to have the ring hold anything. Nothing is wrong. `M28.5`
+    /// decided not to give every raw push an entry: that would need an `X` the
+    /// caller never supplied, and the `_owned` forms already exist for a
+    /// caller who wants one.
     ///
     /// # Errors
     ///
     /// As [`IoRing::try_pop`].
+    ///
+    /// # Panics
+    ///
+    /// If the completion carries an identity that is not in flight on this
+    /// ring -- never minted here, already completed, or released after its
+    /// build failed. That is a defect, not an outcome
+    /// ([D-79](../DESIGN-NOTES.md#d-79)); during an unwind it is traced
+    /// instead, and the completion is returned with an outer `None`.
     pub fn try_pop(&mut self) -> io::Result<Option<HeldCompletion<T, X>>> {
         let Some(completion) = self.pop_raw()? else {
             return Ok(None);

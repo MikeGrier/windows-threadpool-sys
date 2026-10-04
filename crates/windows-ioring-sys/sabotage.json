@@ -539,6 +539,36 @@
       ]
     },
     {
+      "name": "D-79: the pop path stops raising an unminted completion",
+      "file": "src/ring.rs",
+      "expect": "caught",
+      "why": "D-79 says every pop treats a completion for an identity that is not in flight as a defect. The claim is about the POP PATH, so the sabotage cuts the binding there rather than in the helper: pop_raw still retires what it can but discards the answer, which is exactly what it did before D-79. The kernel-seam tests a_completion_this_ring_never_minted_panics and a_duplicate_of_a_retired_completion_panics forge the kernel's answer and drive it through the real try_pop, so they go red by their should_panic expectation.",
+      "find": [
+        "        if !self.record_completion(cqe.UserData) {",
+        "            self.unminted_completion(cqe.UserData);",
+        "        }"
+      ],
+      "replace": [
+        "        self.record_completion(cqe.UserData);"
+      ]
+    },
+    {
+      "name": "D-79: an unminted completion panics again during an unwind",
+      "file": "src/ring.rs",
+      "expect": "caught",
+      "why": "The other half of D-79: during an unwind the defect is traced but not raised, because rundown runs in Drop and a second panic there aborts the process. With the guard removed, an_unminted_completion_during_an_unwind_does_not_panic_again pops a forged completion inside a Drop that runs during a panic, and the process aborts. That is a crash-caught case, and deliberately so: the abort IS the behaviour the guard excludes, and no in-process assertion can observe it, so the suite dying is the only honest signal.",
+      "find": [
+        "        if !std::thread::panicking() {",
+        "            panic!(",
+        "                \"IoRing popped a completion for user_data"
+      ],
+      "replace": [
+        "        if true {",
+        "            panic!(",
+        "                \"IoRing popped a completion for user_data"
+      ]
+    },
+    {
       "name": "M26.4: operation identities stop being unique",
       "file": "src/accounting.rs",
       "expect": "caught",
