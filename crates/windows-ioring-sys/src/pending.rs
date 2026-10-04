@@ -61,11 +61,13 @@
 //! failed write returns early with the token still held -- still compiles. When
 //! first measured it also still *passed*, because nothing produced a failed
 //! write. That gap is now closed: `append/tests.rs` drives the failure through
-//! [`Completion::with_injected_failure`], and the sabotage is caught by an
+//! `Completion::with_injected_failure`, and the sabotage is caught by an
 //! assertion naming the leak. The type makes the leak visible; a test is what
 //! makes it visible *in CI* rather than in production.
 //!
-//! [`Completion::with_injected_failure`]: crate::Completion::with_injected_failure
+//! Named rather than linked: that method is gated on `fault-injection` (or a
+//! test build), so a link would dangle in a `--no-default-features`
+//! documentation build -- which is one of the configurations CI documents.
 //!
 //! **Owning the oracle creates a decoy hazard.** [`Pending::checked`] mints its
 //! own [`RingContract`], so a consumer that already had one keeps a field that

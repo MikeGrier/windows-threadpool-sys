@@ -7,7 +7,7 @@
 //! properties of the path, not of what travels it.
 
 use std::sync::Arc;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::time::{Duration, Instant};
 
 use super::Servicer;
@@ -437,4 +437,100 @@ fn teardown_from_a_thread_other_than_the_creator_is_safe() {
     std::thread::spawn(move || drop(servicer))
         .join()
         .expect("teardown thread");
+}
+
+/// `shut_down` waits for a producer that passed the gate but has not published.
+///
+/// **The window is between two locks, so nothing in the queue state can see
+/// it.** `submit` releases the lock after deciding to ring and only then calls
+/// `ThreadpoolWork::submit`; a producer preempted in between has committed to
+/// publishing and is invisible to anyone holding the lock. Without the
+/// `publishing` count, `shut_down` could close the queue and run its whole
+/// cancellation inside that window, and the publication would land after it
+/// returned -- contradicting its own documented guarantee that no drain can
+/// start afterwards.
+///
+/// Asserted by handshake rather than by elapsed time: shutdown runs on its own
+/// thread and must not report itself finished while the producer is parked. A
+/// correct implementation is blocked on exactly that producer, so no amount of
+/// looking can manufacture a failure, and an incorrect one finishes at once.
+#[test]
+fn shutting_down_waits_for_a_producer_that_has_not_published_yet() {
+    let ran = Arc::new(AtomicUsize::new(0));
+    let seen = Arc::clone(&ran);
+    let servicer = Arc::new(
+        Servicer::<u32>::new(move |_| {
+            seen.fetch_add(1, Ordering::SeqCst);
+        })
+        .expect("create the servicer"),
+    );
+
+    servicer.pause_gate().arm();
+    let producer = {
+        let servicer = Arc::clone(&servicer);
+        std::thread::spawn(move || servicer.submit(1))
+    };
+    servicer.pause_gate().await_parked();
+
+    // Shutdown runs on its own thread, so the test can observe that it has NOT
+    // returned while the producer is still parked.
+    //
+    // **No elapsed-time assertion, and the first version of this had one.**
+    // Measuring that `shut_down` took at least 40ms both failed to prove what it
+    // claimed -- elapsed time does not say what a call was blocked *on* -- and
+    // could fail on correct code: if this thread were descheduled past the
+    // releaser, shutdown would start after the publication was already unblocked
+    // and return at once. The handshake below has no such direction. A correct
+    // `shut_down` *cannot* set `finished` while the producer is parked, because
+    // it is blocked on exactly that producer, so waiting longer can never
+    // manufacture a failure; an incorrect one sets it immediately.
+    let finished = Arc::new(AtomicBool::new(false));
+    let shutdown = {
+        let servicer = Arc::clone(&servicer);
+        let finished = Arc::clone(&finished);
+        std::thread::spawn(move || {
+            servicer.shut_down();
+            finished.store(true, Ordering::SeqCst);
+        })
+    };
+
+    // Give a shutdown that does not wait every chance to finish. This bound is
+    // generous because it only costs time on a *passing* run of broken code; a
+    // correct implementation is parked here regardless of how long we look.
+    let deadline = Instant::now() + Duration::from_millis(250);
+    while Instant::now() < deadline {
+        assert!(
+            !finished.load(Ordering::SeqCst),
+            "shut_down returned while a producer was still parked before its \
+             publication, so a drain could start after it had returned and \
+             promised that none could"
+        );
+        std::thread::sleep(Duration::from_millis(5));
+    }
+
+    // Now let the publication happen; shutdown must then complete.
+    servicer.pause_gate().release();
+    shutdown.join().expect("shutdown thread");
+    assert!(
+        finished.load(Ordering::SeqCst),
+        "shut_down must return once the parked producer has published"
+    );
+
+    assert_eq!(
+        servicer.rings(),
+        1,
+        "the producer decided to ring before the close, so the ring is counted"
+    );
+    assert!(!servicer.is_open(), "shut_down closed the servicing path");
+
+    producer.join().expect("producer").expect("submit accepted");
+
+    // Nothing may run after shut_down returned: the queue was cleared under the
+    // lock, so the late callback finds it empty and the handler never fires.
+    assert_eq!(
+        ran.load(Ordering::SeqCst),
+        0,
+        "the request was discarded by the close, so no handler may run"
+    );
+    assert_eq!(servicer.discarded(), 1, "and it is counted as discarded");
 }

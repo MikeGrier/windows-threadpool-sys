@@ -34,10 +34,52 @@ targets = ["x86_64-pc-windows-msvc"]
 windows-overlapped-io-sys = { version = "0.1.3", path = "../windows-overlapped-io-sys", default-features = false }
 
 [features]
+default = ["self-heal"]
+
+# Turns the undischarged-obligation report at `Drop` into a panic, making these
+# types linear rather than affine: a caller who leaves the blocking drain to
+# `Drop` fails instead of being told about it.
+#
+# OFF by default, and enabling it arms the fail-fast directly. Cargo features
+# are additive and unified, so any crate in a build that enables this changes
+# teardown behaviour for EVERY crate in that build -- including code that never
+# called this API, and whose author cannot see the manifest that enabled it. A
+# consumer cannot decline it either: `default-features = false` governs one
+# dependency edge, not the union. Enabling it is therefore a decision for a
+# top-level binary configuring its own test or CI build; a library enabling it
+# is the misuse. See DESIGN-NOTES.md.
+fail-fast = []
+
+# Repairs a pool that a cancellation may have left unable to make its first
+# worker, by submitting a work item to it -- the one action measured to release
+# that stall every time. On by default, and the reason `try_cancel_pending` can
+# be a safe method at all: see README-FEATURE-self-heal.md for what it costs and
+# what to watch for if you turn it off.
+#
+# Turning it off removes `try_cancel_pending` rather than changing what it
+# means, so a consumer who relied on it gets a compile error naming the
+# `unsafe` sibling to reach for instead.
+# `Win32_System_WindowsProgramming` is for `QueryInterruptTime`, which stamps a
+# cancellation and the repair lifecycle so the self-heal can tell a pool whose
+# repair has dispatched from one whose has not. Ordinary callbacks do not touch
+# it: see the cost table in README-FEATURE-self-heal.md. Pulled in only with
+# this feature, so a consumer who turns self-heal off never compiles it.
+self-heal = ["windows-sys/Win32_System_WindowsProgramming"]
+
 # A trace for defects that only appear under concurrency. Off by default and
 # absent from the compiled output when off, because the instrument for that
 # class of problem must not change the schedule it is measuring.
-trace = []
+#
+# It pulls two extra `windows-sys` features in with it, for the vectored
+# exception handler the trace installs when it is switched on at run time.
+# `AddVectoredExceptionHandler` and `EXCEPTION_POINTERS` are both gated on
+# `Win32_System_Kernel` as well as on the `Debug` module they live in. Both are
+# enabled only with this feature, so a consumer who never traces never
+# compiles them.
+trace = [
+	"windows-sys/Win32_System_Diagnostics_Debug",
+	"windows-sys/Win32_System_Kernel",
+]
 [dependencies.windows-sys]
 version = "0.61.2"
 default-features = false

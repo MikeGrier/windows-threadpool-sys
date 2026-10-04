@@ -1,0 +1,6 @@
+"arm","cancel","runs","ran","latency_us_min","latency_us_p50","latency_us_max"
+"hand-cancel-spin","true","120","0","","",""
+"hand-control","true","120","0","","",""
+"hand-nocancel","false","120","0","","",""
+"hand-probe-latency","false","120","120","197","254","461"
+"hand-spinpause","false","120","119","205","259","447"

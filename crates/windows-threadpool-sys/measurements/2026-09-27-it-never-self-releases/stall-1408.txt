@@ -1,0 +1,250 @@
+
+running 3 tests
+test dropping_with_nothing_outstanding_does_not_hang ... ok
+M26.9 delivery stalled: completions_queued_before_handover_are_still_delivered (every completion was already queued before the handover, so the kernel had nothing left to do -- a stall here is in the signal or the pool, never in the device)
+  delivered      : 0 of 8
+  callbacks run  : 0 -- times the pool invoked the callback. Equal to delivered means everything the callback received reached this thread; greater means the gap is between the callback and the channel.
+  outstanding    : 8 -- the ring's own count, which decrements on pop, and the pop happens inside the callback. So it cannot on its own separate 'the kernel has not finished' from 'the callback never ran'.
+  arrival times  : []
+  inter-arrival  : []
+  waited         : 5s before giving up
+  post-mortem    : waiting a further 60s to see whether it is late rather than lost; the line below is the answer
+  trace (oldest first):
+      0.000017s t1461784 delivery               event-attached                          240      0
+      0.000027s t1461784 syscall-enter          CreateThreadpoolWait                      0      0
+      0.000030s t1461784 syscall-leave          CreateThreadpoolWait                      0      0
+      0.000033s t1461784 wait                   created                              1581918089184    240
+      0.000035s t1461784 syscall-enter          SetThreadpoolWait                    1581918089184    240
+      0.000036s t1461784 syscall-leave          SetThreadpoolWait                    1581918089184    240
+      0.000037s t1461784 wait                   armed                                1581918089184    240
+      0.000037s t1461784 delivery               armed                                     0      0
+      0.000054s t1461784 delivery               setup-signalled                         236      0
+      0.000060s t1461784 wait                   drop-begin                           1581918089184    240
+      0.000060s t1461784 wait                   suppress-and-disarm                  1581918089184      1
+      0.000061s t1461784 syscall-enter          SetThreadpoolWait(disarm)            1581918089184      0
+      0.000062s t1461784 syscall-leave          SetThreadpoolWait(disarm)            1581918089184      0
+      0.000062s t1461784 wait                   disarmed                             1581918089184      0
+      0.000063s t1461784 syscall-enter          WaitForThreadpoolWaitCallbacks(cancel) 1581918089184      1
+      0.000064s t1461784 syscall-leave          WaitForThreadpoolWaitCallbacks(cancel) 1581918089184      1
+      0.000065s t1461784 wait                   drop-drained                         1581918089184      0
+      0.000065s t1461784 syscall-enter          CloseThreadpoolWait                  1581918089184      0
+      0.000068s t1461784 syscall-leave          CloseThreadpoolWait                  1581918089184      0
+      0.000071s t1461784 wait                   drop-closed                          1581918089184    240
+      0.002857s t1461792 delivery               event-attached                          244      0
+      0.002860s t1461792 syscall-enter          CreateThreadpoolWait                      0      0
+      0.002862s t1461792 syscall-leave          CreateThreadpoolWait                      0      0
+      0.002863s t1461792 wait                   created                              1581918104960    244
+      0.002863s t1461792 syscall-enter          SetThreadpoolWait                    1581918104960    244
+      0.002865s t1461792 syscall-leave          SetThreadpoolWait                    1581918104960    244
+      0.002865s t1461792 wait                   armed                                1581918104960    244
+      0.002865s t1461792 delivery               armed                                     0      0
+      0.002867s t1461792 delivery               setup-signalled                         240      0
+      0.002973s t1461788 delivery               event-attached                          252      0
+      0.002975s t1461788 syscall-enter          CreateThreadpoolWait                      0      0
+      0.002977s t1461788 syscall-leave          CreateThreadpoolWait                      0      0
+      0.002981s t1461788 wait                   created                              1581918111520    252
+      0.002981s t1461788 syscall-enter          SetThreadpoolWait                    1581918111520    252
+      0.002982s t1461788 syscall-leave          SetThreadpoolWait                    1581918111520    252
+      0.002983s t1461788 wait                   armed                                1581918111520    252
+      0.002983s t1461788 delivery               armed                                     0      0
+      0.002984s t1461788 delivery               setup-signalled                         188      8
+      5.004395s t1461788 postmortem             delivery-wait-expired                     0      0
+      5.004395s t1461792 postmortem             delivery-wait-expired                     0      0
+      5.004397s t1461788 postmortem             outstanding-begin                         0      0
+      5.004398s t1461792 postmortem             outstanding-begin                         0      0
+      5.004399s t1461788 postmortem             outstanding-read                          8      0
+      5.004399s t1461792 postmortem             outstanding-read                          8      0
+
+  pool liveness  : probe disabled for this experiment
+M26.9 delivery stalled: completions_are_delivered_on_pool_threads_without_the_submitting_thread_waiting
+  delivered      : 0 of 8
+  callbacks run  : 0 -- times the pool invoked the callback. Equal to delivered means everything the callback received reached this thread; greater means the gap is between the callback and the channel.
+  outstanding    : 8 -- the ring's own count, which decrements on pop, and the pop happens inside the callback. So it cannot on its own separate 'the kernel has not finished' from 'the callback never ran'.
+  arrival times  : []
+  inter-arrival  : []
+  waited         : 5s before giving up
+  post-mortem    : waiting a further 60s to see whether it is late rather than lost; the line below is the answer
+  trace (oldest first):
+      0.000017s t1461784 delivery               event-attached                          240      0
+      0.000027s t1461784 syscall-enter          CreateThreadpoolWait                      0      0
+      0.000030s t1461784 syscall-leave          CreateThreadpoolWait                      0      0
+      0.000033s t1461784 wait                   created                              1581918089184    240
+      0.000035s t1461784 syscall-enter          SetThreadpoolWait                    1581918089184    240
+      0.000036s t1461784 syscall-leave          SetThreadpoolWait                    1581918089184    240
+      0.000037s t1461784 wait                   armed                                1581918089184    240
+      0.000037s t1461784 delivery               armed                                     0      0
+      0.000054s t1461784 delivery               setup-signalled                         236      0
+      0.000060s t1461784 wait                   drop-begin                           1581918089184    240
+      0.000060s t1461784 wait                   suppress-and-disarm                  1581918089184      1
+      0.000061s t1461784 syscall-enter          SetThreadpoolWait(disarm)            1581918089184      0
+      0.000062s t1461784 syscall-leave          SetThreadpoolWait(disarm)            1581918089184      0
+      0.000062s t1461784 wait                   disarmed                             1581918089184      0
+      0.000063s t1461784 syscall-enter          WaitForThreadpoolWaitCallbacks(cancel) 1581918089184      1
+      0.000064s t1461784 syscall-leave          WaitForThreadpoolWaitCallbacks(cancel) 1581918089184      1
+      0.000065s t1461784 wait                   drop-drained                         1581918089184      0
+      0.000065s t1461784 syscall-enter          CloseThreadpoolWait                  1581918089184      0
+      0.000068s t1461784 syscall-leave          CloseThreadpoolWait                  1581918089184      0
+      0.000071s t1461784 wait                   drop-closed                          1581918089184    240
+      0.002857s t1461792 delivery               event-attached                          244      0
+      0.002860s t1461792 syscall-enter          CreateThreadpoolWait                      0      0
+      0.002862s t1461792 syscall-leave          CreateThreadpoolWait                      0      0
+      0.002863s t1461792 wait                   created                              1581918104960    244
+      0.002863s t1461792 syscall-enter          SetThreadpoolWait                    1581918104960    244
+      0.002865s t1461792 syscall-leave          SetThreadpoolWait                    1581918104960    244
+      0.002865s t1461792 wait                   armed                                1581918104960    244
+      0.002865s t1461792 delivery               armed                                     0      0
+      0.002867s t1461792 delivery               setup-signalled                         240      0
+      0.002973s t1461788 delivery               event-attached                          252      0
+      0.002975s t1461788 syscall-enter          CreateThreadpoolWait                      0      0
+      0.002977s t1461788 syscall-leave          CreateThreadpoolWait                      0      0
+      0.002981s t1461788 wait                   created                              1581918111520    252
+      0.002981s t1461788 syscall-enter          SetThreadpoolWait                    1581918111520    252
+      0.002982s t1461788 syscall-leave          SetThreadpoolWait                    1581918111520    252
+      0.002983s t1461788 wait                   armed                                1581918111520    252
+      0.002983s t1461788 delivery               armed                                     0      0
+      0.002984s t1461788 delivery               setup-signalled                         188      8
+      5.004395s t1461788 postmortem             delivery-wait-expired                     0      0
+      5.004395s t1461792 postmortem             delivery-wait-expired                     0      0
+      5.004397s t1461788 postmortem             outstanding-begin                         0      0
+      5.004398s t1461792 postmortem             outstanding-begin                         0      0
+      5.004399s t1461788 postmortem             outstanding-read                          8      0
+      5.004399s t1461792 postmortem             outstanding-read                          8      0
+
+  pool liveness  : probe disabled for this experiment
+test completions_are_delivered_on_pool_threads_without_the_submitting_thread_waiting has been running for over 60 seconds
+test completions_queued_before_handover_are_still_delivered has been running for over 60 seconds
+
+thread 'completions_queued_before_handover_are_still_delivered' (1461788) panicked at crates\windows-ioring-sys\tests\event_delivery.rs:346:13:
+M26.9 delivery stalled: completions_queued_before_handover_are_still_delivered (every completion was already queued before the handover, so the kernel had nothing left to do -- a stall here is in the signal or the pool, never in the device)
+  delivered      : 0 of 8
+  callbacks run  : 0 -- times the pool invoked the callback. Equal to delivered means everything the callback received reached this thread; greater means the gap is between the callback and the channel.
+  outstanding    : 8 -- the ring's own count, which decrements on pop, and the pop happens inside the callback. So it cannot on its own separate 'the kernel has not finished' from 'the callback never ran'.
+  arrival times  : []
+  inter-arrival  : []
+  waited         : 5s before giving up
+  post-mortem    : still nothing after a further 60s
+  trace (oldest first):
+      0.000017s t1461784 delivery               event-attached                          240      0
+      0.000027s t1461784 syscall-enter          CreateThreadpoolWait                      0      0
+      0.000030s t1461784 syscall-leave          CreateThreadpoolWait                      0      0
+      0.000033s t1461784 wait                   created                              1581918089184    240
+      0.000035s t1461784 syscall-enter          SetThreadpoolWait                    1581918089184    240
+      0.000036s t1461784 syscall-leave          SetThreadpoolWait                    1581918089184    240
+      0.000037s t1461784 wait                   armed                                1581918089184    240
+      0.000037s t1461784 delivery               armed                                     0      0
+      0.000054s t1461784 delivery               setup-signalled                         236      0
+      0.000060s t1461784 wait                   drop-begin                           1581918089184    240
+      0.000060s t1461784 wait                   suppress-and-disarm                  1581918089184      1
+      0.000061s t1461784 syscall-enter          SetThreadpoolWait(disarm)            1581918089184      0
+      0.000062s t1461784 syscall-leave          SetThreadpoolWait(disarm)            1581918089184      0
+      0.000062s t1461784 wait                   disarmed                             1581918089184      0
+      0.000063s t1461784 syscall-enter          WaitForThreadpoolWaitCallbacks(cancel) 1581918089184      1
+      0.000064s t1461784 syscall-leave          WaitForThreadpoolWaitCallbacks(cancel) 1581918089184      1
+      0.000065s t1461784 wait                   drop-drained                         1581918089184      0
+      0.000065s t1461784 syscall-enter          CloseThreadpoolWait                  1581918089184      0
+      0.000068s t1461784 syscall-leave          CloseThreadpoolWait                  1581918089184      0
+      0.000071s t1461784 wait                   drop-closed                          1581918089184    240
+      0.002857s t1461792 delivery               event-attached                          244      0
+      0.002860s t1461792 syscall-enter          CreateThreadpoolWait                      0      0
+      0.002862s t1461792 syscall-leave          CreateThreadpoolWait                      0      0
+      0.002863s t1461792 wait                   created                              1581918104960    244
+      0.002863s t1461792 syscall-enter          SetThreadpoolWait                    1581918104960    244
+      0.002865s t1461792 syscall-leave          SetThreadpoolWait                    1581918104960    244
+      0.002865s t1461792 wait                   armed                                1581918104960    244
+      0.002865s t1461792 delivery               armed                                     0      0
+      0.002867s t1461792 delivery               setup-signalled                         240      0
+      0.002973s t1461788 delivery               event-attached                          252      0
+      0.002975s t1461788 syscall-enter          CreateThreadpoolWait                      0      0
+      0.002977s t1461788 syscall-leave          CreateThreadpoolWait                      0      0
+      0.002981s t1461788 wait                   created                              1581918111520    252
+      0.002981s t1461788 syscall-enter          SetThreadpoolWait                    1581918111520    252
+      0.002982s t1461788 syscall-leave          SetThreadpoolWait                    1581918111520    252
+      0.002983s t1461788 wait                   armed                                1581918111520    252
+      0.002983s t1461788 delivery               armed                                     0      0
+      0.002984s t1461788 delivery               setup-signalled                         188      8
+      5.004395s t1461788 postmortem             delivery-wait-expired                     0      0
+      5.004395s t1461792 postmortem             delivery-wait-expired                     0      0
+      5.004397s t1461788 postmortem             outstanding-begin                         0      0
+      5.004398s t1461792 postmortem             outstanding-begin                         0      0
+      5.004399s t1461788 postmortem             outstanding-read                          8      0
+      5.004399s t1461792 postmortem             outstanding-read                          8      0
+      5.004770s t1461788 postmortem             second-wait-begin                         0      0
+      5.004900s t1461792 postmortem             second-wait-begin                         0      0
+     65.019955s t1461792 postmortem             second-wait-ended                    60015054      0
+     65.019958s t1461788 postmortem             second-wait-ended                    60015188      0
+
+  pool liveness  : probe disabled for this experiment
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+thread 'completions_are_delivered_on_pool_threads_without_the_submitting_thread_waiting' (1461792) panicked at crates\windows-ioring-sys\tests\event_delivery.rs:346:13:
+M26.9 delivery stalled: completions_are_delivered_on_pool_threads_without_the_submitting_thread_waiting
+  delivered      : 0 of 8
+  callbacks run  : 0 -- times the pool invoked the callback. Equal to delivered means everything the callback received reached this thread; greater means the gap is between the callback and the channel.
+  outstanding    : 8 -- the ring's own count, which decrements on pop, and the pop happens inside the callback. So it cannot on its own separate 'the kernel has not finished' from 'the callback never ran'.
+  arrival times  : []
+  inter-arrival  : []
+  waited         : 5s before giving up
+  post-mortem    : still nothing after a further 60s
+  trace (oldest first):
+      0.000017s t1461784 delivery               event-attached                          240      0
+      0.000027s t1461784 syscall-enter          CreateThreadpoolWait                      0      0
+      0.000030s t1461784 syscall-leave          CreateThreadpoolWait                      0      0
+      0.000033s t1461784 wait                   created                              1581918089184    240
+      0.000035s t1461784 syscall-enter          SetThreadpoolWait                    1581918089184    240
+      0.000036s t1461784 syscall-leave          SetThreadpoolWait                    1581918089184    240
+      0.000037s t1461784 wait                   armed                                1581918089184    240
+      0.000037s t1461784 delivery               armed                                     0      0
+      0.000054s t1461784 delivery               setup-signalled                         236      0
+      0.000060s t1461784 wait                   drop-begin                           1581918089184    240
+      0.000060s t1461784 wait                   suppress-and-disarm                  1581918089184      1
+      0.000061s t1461784 syscall-enter          SetThreadpoolWait(disarm)            1581918089184      0
+      0.000062s t1461784 syscall-leave          SetThreadpoolWait(disarm)            1581918089184      0
+      0.000062s t1461784 wait                   disarmed                             1581918089184      0
+      0.000063s t1461784 syscall-enter          WaitForThreadpoolWaitCallbacks(cancel) 1581918089184      1
+      0.000064s t1461784 syscall-leave          WaitForThreadpoolWaitCallbacks(cancel) 1581918089184      1
+      0.000065s t1461784 wait                   drop-drained                         1581918089184      0
+      0.000065s t1461784 syscall-enter          CloseThreadpoolWait                  1581918089184      0
+      0.000068s t1461784 syscall-leave          CloseThreadpoolWait                  1581918089184      0
+      0.000071s t1461784 wait                   drop-closed                          1581918089184    240
+      0.002857s t1461792 delivery               event-attached                          244      0
+      0.002860s t1461792 syscall-enter          CreateThreadpoolWait                      0      0
+      0.002862s t1461792 syscall-leave          CreateThreadpoolWait                      0      0
+      0.002863s t1461792 wait                   created                              1581918104960    244
+      0.002863s t1461792 syscall-enter          SetThreadpoolWait                    1581918104960    244
+      0.002865s t1461792 syscall-leave          SetThreadpoolWait                    1581918104960    244
+      0.002865s t1461792 wait                   armed                                1581918104960    244
+      0.002865s t1461792 delivery               armed                                     0      0
+      0.002867s t1461792 delivery               setup-signalled                         240      0
+      0.002973s t1461788 delivery               event-attached                          252      0
+      0.002975s t1461788 syscall-enter          CreateThreadpoolWait                      0      0
+      0.002977s t1461788 syscall-leave          CreateThreadpoolWait                      0      0
+      0.002981s t1461788 wait                   created                              1581918111520    252
+      0.002981s t1461788 syscall-enter          SetThreadpoolWait                    1581918111520    252
+      0.002982s t1461788 syscall-leave          SetThreadpoolWait                    1581918111520    252
+      0.002983s t1461788 wait                   armed                                1581918111520    252
+      0.002983s t1461788 delivery               armed                                     0      0
+      0.002984s t1461788 delivery               setup-signalled                         188      8
+      5.004395s t1461788 postmortem             delivery-wait-expired                     0      0
+      5.004395s t1461792 postmortem             delivery-wait-expired                     0      0
+      5.004397s t1461788 postmortem             outstanding-begin                         0      0
+      5.004398s t1461792 postmortem             outstanding-begin                         0      0
+      5.004399s t1461788 postmortem             outstanding-read                          8      0
+      5.004399s t1461792 postmortem             outstanding-read                          8      0
+      5.004770s t1461788 postmortem             second-wait-begin                         0      0
+      5.004900s t1461792 postmortem             second-wait-begin                         0      0
+     65.019955s t1461792 postmortem             second-wait-ended                    60015054      0
+     65.019958s t1461788 postmortem             second-wait-ended                    60015188      0
+
+  pool liveness  : probe disabled for this experiment
+test completions_queued_before_handover_are_still_delivered ... FAILED
+test completions_are_delivered_on_pool_threads_without_the_submitting_thread_waiting ... FAILED
+
+failures:
+
+failures:
+    completions_are_delivered_on_pool_threads_without_the_submitting_thread_waiting
+    completions_queued_before_handover_are_still_delivered
+
+test result: FAILED. 1 passed; 2 failed; 0 ignored; 0 measured; 4 filtered out; finished in 65.02s
+
+

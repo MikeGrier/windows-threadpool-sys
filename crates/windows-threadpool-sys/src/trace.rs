@@ -34,8 +34,243 @@
 //! $env:WINDOWS_THREADPOOL_TRACE = '*'               # everything
 //! ```
 //!
+//! The targets this crate records under are `wait`, `work`, `io`, `timer` and
+//! `timer-periodic` -- one per pool object -- plus `heal` for the self-heal
+//! registry, `syscall-enter` and `syscall-leave` for the bracketed Win32 calls
+//! themselves, and `exception` when exception observation is switched on.
+//! Targets are matched by substring, so `timer` selects the periodic timer as
+//! well. Dependent crates add their own; `windows-ioring-sys` records under
+//! `delivery` and, from its own tests, `postmortem`.
+//!
 //! Unset, empty, or matching nothing means no record is kept and the cost is
 //! one relaxed atomic load per call site.
+
+/// One observation. Deliberately `Copy` and free of owned data, so recording
+/// is a push and never an allocation.
+///
+/// Lives outside the feature gate so that [`Buffer`]'s eviction policy is
+/// built and tested in every build, not only in one nobody's `cargo test`
+/// selects. Without the feature the formatting that reads these fields is
+/// compiled out, which is what the `dead_code` allowance is for.
+#[cfg(any(feature = "trace", test))]
+#[cfg_attr(not(feature = "trace"), allow(dead_code))]
+#[derive(Clone, Copy)]
+struct Record {
+    at: std::time::Duration,
+    thread: u32,
+    target: &'static str,
+    event: &'static str,
+    a: u64,
+    b: u64,
+}
+
+/// The bounded record store and, with it, the whole of what happens when a
+/// trace outgrows the room it was given.
+///
+/// Separated from the global it backs so that the policy can be exercised at a
+/// capacity of four rather than of eight thousand. Filling the real buffer in a
+/// test would evict every record every other test had just recorded, which is
+/// the one thing a shared trace cannot tolerate.
+#[cfg(any(feature = "trace", test))]
+struct Buffer {
+    /// The records, as a ring once the buffer is full.
+    ///
+    /// Not in logical order after the first wrap -- read it through
+    /// [`iter`](Self::iter), which is the only thing that knows where the
+    /// oldest one is.
+    records: Vec<Record>,
+    /// Where the oldest record sits, and so where the next one overwrites.
+    ///
+    /// Zero until the buffer first fills, which is why a buffer that never
+    /// overflows needs nothing to know about the ring.
+    head: usize,
+    /// How many records were evicted to make room for later ones.
+    dropped: usize,
+    /// Whether the first eviction has already been reported.
+    announced: bool,
+}
+
+#[cfg(any(feature = "trace", test))]
+impl Buffer {
+    fn with_capacity(capacity: usize) -> Self {
+        Self {
+            records: Vec::with_capacity(capacity),
+            head: 0,
+            dropped: 0,
+            announced: false,
+        }
+    }
+
+    /// Append `record`, evicting the oldest first if the buffer is already at
+    /// `capacity`.
+    ///
+    /// Returns whether this call was the **first** eviction, so a caller can
+    /// report the loss once rather than on every subsequent push. The report
+    /// matters because the alternative is silence: a run that never dumps
+    /// never reads [`dump`]'s dropped-record line, so an overflow that
+    /// truncated the start of a capture would be discovered only by whoever
+    /// later wondered why the trace began in the middle.
+    ///
+    /// A `capacity` of zero stores nothing and counts every record as dropped.
+    /// Degenerate, and defined rather than left to fall out of the arithmetic.
+    ///
+    /// **Eviction overwrites in place; it does not shift.** This used to be
+    /// `Vec::remove(0)`, which moves every remaining record down one. At the
+    /// real capacity that is about 18 MB memmoved per record, under the trace
+    /// mutex, for every record after the buffer fills -- in an instrument whose
+    /// whole purpose is observing behaviour sensitive to timing. A buffer that
+    /// filled mid-capture would start perturbing, and plausibly manufacturing,
+    /// the stall it was being used to study. The buffer is sized not to fill in
+    /// an ordinary capture, which is what kept this invisible.
+    fn push(&mut self, record: Record, capacity: usize) -> bool {
+        if capacity == 0 {
+            self.dropped += 1;
+            let first = !self.announced;
+            self.announced = true;
+            return first;
+        }
+        if self.records.len() < capacity {
+            // Still filling. `with_capacity` reserved the room, so this does
+            // not reallocate and the ring has not started turning yet.
+            self.records.push(record);
+            return false;
+        }
+        // Full: the oldest record is at `head`, and is what this replaces.
+        //
+        // Indexed modulo the vector's own length rather than `capacity`,
+        // because the two can differ -- a buffer that reached a larger capacity
+        // keeps that length if a later push passes a smaller one, exactly as
+        // the remove-and-push it replaces did. Taking the modulus of
+        // `capacity` would index outside the vector.
+        let size = self.records.len();
+        self.records[self.head] = record;
+        self.head = (self.head + 1) % size;
+        self.dropped += 1;
+        let first = !self.announced;
+        self.announced = true;
+        first
+    }
+
+    /// The records in the order they were recorded, oldest first.
+    ///
+    /// The ring's logical order, which is the only order any reader wants: a
+    /// capture that reported its own records out of sequence would be worse
+    /// than one that reported nothing, because nothing about it looks wrong.
+    /// Before the first wrap `head` is zero and this is simply the vector.
+    fn iter(&self) -> impl Iterator<Item = &Record> {
+        let (wrapped, oldest_first) = self.records.split_at(self.head);
+        oldest_first.iter().chain(wrapped.iter())
+    }
+
+    fn clear(&mut self) {
+        self.records.clear();
+        self.head = 0;
+        self.dropped = 0;
+        self.announced = false;
+    }
+}
+
+/// Arm the trace **before `main`**.
+///
+/// `.CRT$XCU` is the C runtime's static-initialiser table; a function pointer
+/// placed in it is called during CRT startup, which for a Rust binary is
+/// before `main` and therefore before the test harness has created a single
+/// thread.
+///
+/// This exists because lazy arming was measured to be too late. The trace was
+/// previously armed on the first traced call, which is already inside the first
+/// test: in the `M26.13` reproducer that landed between 0.15 s and 0.58 s,
+/// while the fault under investigation is established in the first 15.7 ms. An
+/// instrument that arrives after the event cannot observe it.
+///
+/// It does nothing unless the environment asks for it: no
+/// `WINDOWS_THREADPOOL_TRACE`, no arming.
+#[cfg(feature = "trace")]
+#[used]
+#[unsafe(link_section = ".CRT$XCU")]
+static ARM_BEFORE_MAIN: extern "C" fn() = {
+    extern "C" fn arm() {
+        ARMED_BEFORE_MAIN.store(true, std::sync::atomic::Ordering::Relaxed);
+        // `enabled` is the single path that arms the trace, starts its clock
+        // and installs the exception observer. Calling it rather than any of
+        // those directly keeps one order of operations rather than two that
+        // have to be kept in step.
+        let _ = imp::enabled();
+    }
+    arm
+};
+
+/// Whether [`ARM_BEFORE_MAIN`] ran.
+///
+/// Set only from inside the static initialiser and never anywhere else, so it
+/// distinguishes "ran before `main`" from "was arranged and silently dropped".
+/// That is the failure this needs a guard for: a static nothing references is
+/// exactly what a linker is entitled to discard, `#[used]` is what asks it not
+/// to, and the symptom of getting that wrong is not a build error but an
+/// instrument that quietly reverts to installing too late.
+#[cfg(feature = "trace")]
+static ARMED_BEFORE_MAIN: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// Whether the trace's static initialiser ran before `main`.
+#[cfg(all(test, feature = "trace"))]
+pub(crate) fn armed_before_main() -> bool {
+    ARMED_BEFORE_MAIN.load(std::sync::atomic::Ordering::Relaxed)
+}
+
+/// Run `body` in a child process launched with the trace armed for `filter`.
+///
+/// The filter is fixed by a pre-`main` initialiser, so a test cannot narrow it
+/// for itself: the process has to be *launched* with `WINDOWS_THREADPOOL_TRACE`
+/// already set. A test whose assertions read the trace therefore has three
+/// options, and two of them are traps. Asking `wants(..)` and skipping when it
+/// is unset makes the test inert on every ordinary run and in CI -- which is
+/// what `tests/obligation_report.rs`, the pool-object lifecycle test, and both
+/// of `io::tests`' trace blocks each did, independently. Running in a shared
+/// armed process is no better: `dump` returns one process-wide buffer and
+/// `counted` only asks for a non-zero count, so a sibling test can supply the
+/// records and the assertion passes without exercising anything.
+///
+/// This is the third option, and it is one site rather than a protocol each
+/// caller re-implements -- the first two copies disagreed about how to tell a
+/// child that ran from a child that matched nothing.
+///
+/// `name` is the libtest path of the calling test, used both to select the
+/// single test the child runs and to mark which body the child should execute.
+/// The child exits with a code that means "the body reached its end", so a
+/// `--exact` that matched nothing -- a rename -- fails loudly instead of
+/// exiting 0 and reading as a pass.
+#[cfg(all(test, feature = "trace"))]
+pub(crate) fn in_a_trace_armed_child(name: &str, filter: &str, body: impl FnOnce()) {
+    /// Names the body the child should run; absent in the parent.
+    const CHILD_VAR: &str = "WTPS_TRACE_ARMED_CHILD";
+    /// The child's exit code once the body has run to the end.
+    const BODY_RAN: i32 = 7;
+
+    if std::env::var(CHILD_VAR).as_deref() == Ok(name) {
+        body();
+        std::process::exit(BODY_RAN);
+    }
+
+    let exe = std::env::current_exe().expect("locate the test binary");
+    let status = std::process::Command::new(exe)
+        .env(CHILD_VAR, name)
+        .env("WINDOWS_THREADPOOL_TRACE", filter)
+        // One test, one thread: the child's trace buffer must carry this
+        // body's records and nothing else, or the assertions can be satisfied
+        // by a sibling.
+        .args(["--exact", name, "--test-threads", "1"])
+        .status()
+        .expect("run the trace-armed child");
+    assert_eq!(
+        status.code(),
+        Some(BODY_RAN),
+        "the trace-armed child did not reach the end of `{name}` (exit {:?}). Exit 0 means \
+         `--exact {name}` matched nothing -- the test was renamed and the string passed here \
+         was not -- and any other code means the body's own assertions failed; its output is \
+         above",
+        status.code()
+    );
+}
 
 #[cfg(feature = "trace")]
 mod imp {
@@ -43,55 +278,56 @@ mod imp {
     use std::sync::atomic::{AtomicU8, Ordering};
     use std::time::Instant;
 
+    use super::{Buffer, Record};
+
     /// How many records are retained. Fixed and pre-allocated: growing a
     /// buffer mid-trace would allocate on the path being measured, which is
-    /// the one thing this module exists to avoid.
+    /// the one thing this module exists to avoid. Nothing is allocated until
+    /// something is actually recorded, so a build carrying the feature with
+    /// the environment unset pays nothing for this.
     ///
     /// Oldest records are dropped first. The failures this was built for show
     /// up in the first moments of a run, so keeping the most recent entries is
     /// the wrong bias -- but keeping a bounded window is what stops a long run
-    /// consuming the machine, and a dump reports how many were lost.
-    const CAPACITY: usize = 8192;
-
-    /// One observation. Deliberately `Copy` and free of owned data, so
-    /// recording is a push and never an allocation.
-    #[derive(Clone, Copy)]
-    pub struct Record {
-        pub at: std::time::Duration,
-        pub thread: u32,
-        pub target: &'static str,
-        pub event: &'static str,
-        pub a: u64,
-        pub b: u64,
-    }
-
-    struct State {
-        records: Vec<Record>,
-        dropped: usize,
-    }
+    /// consuming the machine, and an overflow now reports itself twice over:
+    /// once to stderr as it happens, and again at the head of every dump.
+    ///
+    /// **Set from measurement, and re-measured when the trace grows.** The
+    /// buffer is per-process and each test binary is its own process, so the
+    /// population that can fill it is one binary's own run. Two measurements,
+    /// both under `WINDOWS_THREADPOOL_TRACE` set to everything:
+    ///
+    /// | | records |
+    /// |---|---|
+    /// | `windows-ioring-sys`' `event_delivery`, the only binary that captures | 89 |
+    /// | this crate's own lib tests, 2026-09-26 | 14061 |
+    /// | this crate's own lib tests, after the call-boundary and exception targets | 47997 |
+    ///
+    /// The third figure is why this is not 65536 any more: adding
+    /// `syscall-enter`/`syscall-leave` and `exception` tripled the volume and
+    /// left only a third of a buffer spare. The figures, and what the smallest
+    /// value cost, are in [the archive entry for
+    /// M26.13.2](../../windows-ioring-sys/COMPLETED-CHECKLIST.md#m26132).
+    const CAPACITY: usize = 262_144;
 
     static ARMED: AtomicU8 = AtomicU8::new(ARMED_UNKNOWN);
     const ARMED_UNKNOWN: u8 = 0;
     const ARMED_OFF: u8 = 1;
     const ARMED_ON: u8 = 2;
 
-    fn state() -> &'static Mutex<State> {
-        static STATE: std::sync::OnceLock<Mutex<State>> = std::sync::OnceLock::new();
-        STATE.get_or_init(|| {
-            Mutex::new(State {
-                records: Vec::with_capacity(CAPACITY),
-                dropped: 0,
-            })
-        })
+    static STATE: std::sync::OnceLock<Mutex<Buffer>> = std::sync::OnceLock::new();
+    static STARTED: std::sync::OnceLock<Instant> = std::sync::OnceLock::new();
+    static FILTERS: std::sync::OnceLock<Vec<String>> = std::sync::OnceLock::new();
+
+    fn state() -> &'static Mutex<Buffer> {
+        STATE.get_or_init(|| Mutex::new(Buffer::with_capacity(CAPACITY)))
     }
 
     fn started() -> Instant {
-        static STARTED: std::sync::OnceLock<Instant> = std::sync::OnceLock::new();
         *STARTED.get_or_init(Instant::now)
     }
 
     fn filters() -> &'static Vec<String> {
-        static FILTERS: std::sync::OnceLock<Vec<String>> = std::sync::OnceLock::new();
         FILTERS.get_or_init(|| {
             std::env::var("WINDOWS_THREADPOOL_TRACE")
                 .unwrap_or_default()
@@ -116,6 +352,9 @@ mod imp {
             _ => {
                 let on = !filters().is_empty();
                 ARMED.store(if on { ARMED_ON } else { ARMED_OFF }, Ordering::Relaxed);
+                if on {
+                    observe_exceptions();
+                }
                 on
             }
         }
@@ -140,21 +379,34 @@ mod imp {
         let at = started().elapsed();
         // SAFETY: no preconditions; returns the calling thread's id.
         let thread = unsafe { windows_sys::Win32::System::Threading::GetCurrentThreadId() };
-        let Ok(mut state) = state().lock() else {
-            return;
+        let first_eviction = {
+            let Ok(mut state) = state().lock() else {
+                return;
+            };
+            state.push(
+                Record {
+                    at,
+                    thread,
+                    target,
+                    event,
+                    a,
+                    b,
+                },
+                CAPACITY,
+            )
         };
-        if state.records.len() == CAPACITY {
-            state.records.remove(0);
-            state.dropped += 1;
+        // Outside the lock, and only ever once: a capture that has begun
+        // discarding its start is a different artifact from one that has not,
+        // and a run that never dumps would otherwise never be told. This is
+        // the one place the module formats on the traced path, and it is
+        // reached only after `CAPACITY` records have already been taken.
+        if first_eviction {
+            eprintln!(
+                "windows-threadpool-sys trace: the {CAPACITY}-record buffer is full and is now \
+                 evicting the oldest records, so this capture no longer reaches back to the \
+                 start of the run. Narrow WINDOWS_THREADPOOL_TRACE, or raise CAPACITY."
+            );
         }
-        state.records.push(Record {
-            at,
-            thread,
-            target,
-            event,
-            a,
-            b,
-        });
     }
 
     /// Every record so far, oldest first, formatted for reading.
@@ -169,9 +421,9 @@ mod imp {
                 state.dropped
             ));
         }
-        for record in &state.records {
+        for record in state.iter() {
             out.push_str(&format!(
-                "  {:>12.6}s t{:<6} {:<22} {:<28} {:>6} {:>6}\n",
+                "  {:>12.6}s t{:<6} {:<22} {:<36} {:>6} {:>6}\n",
                 record.at.as_secs_f64(),
                 record.thread,
                 record.target,
@@ -186,9 +438,131 @@ mod imp {
     /// Discard everything recorded so far.
     pub fn clear() {
         if let Ok(mut state) = state().lock() {
-            state.records.clear();
-            state.dropped = 0;
+            state.clear();
         }
+    }
+
+    /// The target every exception observation is recorded under.
+    const EXCEPTION_TARGET: &str = "exception";
+
+    /// Tell the OS this handler did not handle the exception, so the search
+    /// continues exactly as it would have without us. Named rather than
+    /// written as a bare literal: this value is the whole of the promise that
+    /// installing the observer changes no behaviour.
+    const EXCEPTION_CONTINUE_SEARCH: i32 = 0;
+
+    /// Ask to be called *before* any previously installed handler, which is
+    /// what makes the timestamp the moment of the raise rather than the moment
+    /// some other handler declined it.
+    const CALL_FIRST: u32 = 1;
+
+    /// Record one observation from a context that must neither block nor
+    /// initialise anything.
+    ///
+    /// A vectored exception handler runs on whatever thread raised, at
+    /// whatever point it raised -- including, in principle, a thread that is
+    /// inside [`record`] holding the buffer lock. So this takes none of the
+    /// paths that could deadlock or allocate:
+    ///
+    /// - every `OnceLock` is read with `get`, never `get_or_init`, so a first
+    ///   exception arriving before the trace has initialised is dropped rather
+    ///   than initialising the trace from inside an exception handler;
+    /// - the buffer lock is taken with `try_lock`, so an exception raised by a
+    ///   thread already holding it drops the record instead of deadlocking;
+    /// - the eviction announcement is deliberately ignored, because writing to
+    ///   stderr from an exception handler is not something this facility
+    ///   should do uninvited.
+    ///
+    /// The cost of all three is the same: a lost record, which is the right
+    /// trade for an observer whose entire purpose is to change nothing.
+    fn record_without_blocking(event: &'static str, a: u64, b: u64) {
+        if ARMED.load(Ordering::Relaxed) != ARMED_ON {
+            return;
+        }
+        let Some(filters) = FILTERS.get() else {
+            return;
+        };
+        if !filters
+            .iter()
+            .any(|filter| filter == "*" || EXCEPTION_TARGET.contains(filter.as_str()))
+        {
+            return;
+        }
+        let (Some(started), Some(state)) = (STARTED.get(), STATE.get()) else {
+            return;
+        };
+        let at = started.elapsed();
+        // SAFETY: no preconditions; returns the calling thread's id.
+        let thread = unsafe { windows_sys::Win32::System::Threading::GetCurrentThreadId() };
+        let Ok(mut state) = state.try_lock() else {
+            return;
+        };
+        let _ = state.push(
+            Record {
+                at,
+                thread,
+                target: EXCEPTION_TARGET,
+                event,
+                a,
+                b,
+            },
+            CAPACITY,
+        );
+    }
+
+    /// Note that an exception was raised, and decline to handle it.
+    ///
+    /// SAFETY: this is the `PVECTORED_EXCEPTION_HANDLER` ABI. `info` is
+    /// supplied by the OS and is valid for the duration of the call.
+    unsafe extern "system" fn exception_observer(
+        info: *mut windows_sys::Win32::System::Diagnostics::Debug::EXCEPTION_POINTERS,
+    ) -> i32 {
+        if !info.is_null() {
+            // SAFETY: non-null and OS-supplied for this call.
+            let record = unsafe { (*info).ExceptionRecord };
+            if !record.is_null() {
+                // SAFETY: as above; the record outlives this call.
+                let (code, address) =
+                    unsafe { ((*record).ExceptionCode, (*record).ExceptionAddress) };
+                record_without_blocking("raised", code as u32 as u64, address as u64);
+            }
+        }
+        EXCEPTION_CONTINUE_SEARCH
+    }
+
+    /// Start noting every exception raised in this process, once.
+    ///
+    /// Installed when the trace turns on rather than on demand, so that no
+    /// caller has to remember: the window an investigation cares about has
+    /// usually opened before anyone would think to ask for this.
+    ///
+    /// **It observes and does nothing else.** The handler returns
+    /// `EXCEPTION_CONTINUE_SEARCH`, so every exception is dispatched exactly
+    /// as it would have been -- including first-chance exceptions a later
+    /// handler goes on to swallow, which is precisely the population a normal
+    /// debugger view hides and an investigation may want.
+    pub fn observe_exceptions() {
+        use std::sync::atomic::AtomicBool;
+        static INSTALLED: AtomicBool = AtomicBool::new(false);
+        if INSTALLED.swap(true, Ordering::SeqCst) {
+            return;
+        }
+        // Force the clock and the buffer into existence *here*, in an ordinary
+        // context, because the handler deliberately refuses to initialise
+        // either. Without this an exception raised before the first ordinary
+        // record would be dropped -- which is the window an investigation is
+        // most likely to care about, since it is the one before anything has
+        // happened yet.
+        let _ = started();
+        let _ = state();
+        // SAFETY: the handler matches the documented ABI, has static lifetime,
+        // and is never removed.
+        unsafe {
+            windows_sys::Win32::System::Diagnostics::Debug::AddVectoredExceptionHandler(
+                CALL_FIRST,
+                Some(exception_observer),
+            )
+        };
     }
 }
 
@@ -214,9 +588,35 @@ mod imp {
     }
     /// Does nothing in this build.
     pub fn clear() {}
+    /// Does nothing in this build: there is no trace to attribute exceptions
+    /// to, so no handler is installed.
+    pub fn observe_exceptions() {}
 }
 
-pub use imp::{clear, dump, enabled, record, wants};
+pub use imp::{clear, dump, enabled, observe_exceptions, record, wants};
+
+/// How many records so far carry this target and this event.
+///
+/// Reads [`dump`] rather than the buffer behind it, so it sees exactly what a
+/// reader of a capture sees: a call site that records under a target other
+/// than the one it means to would be invisible to a check that went behind the
+/// formatting, and is the kind of mistake this is used to catch.
+// Carries the feature condition of its callers: every one of them is a
+// trace-gated test, so without 	race this is dead code in a build CI
+// compiles with `-D warnings`.
+#[cfg(all(test, feature = "trace"))]
+pub(crate) fn counted(target: &str, event: &str) -> usize {
+    dump()
+        .lines()
+        .filter(|line| {
+            let mut fields = line.split_whitespace();
+            // Elapsed time, then thread id, then the two labels.
+            fields.next();
+            fields.next();
+            fields.next() == Some(target) && fields.next() == Some(event)
+        })
+        .count()
+}
 
 /// Record one observation, evaluating its arguments only when the target is
 /// being traced.
@@ -239,6 +639,43 @@ macro_rules! trace_record {
             $crate::trace::record($target, $event, $a as u64, $b as u64);
         }
     };
+}
+
+/// Bracket a Win32 call that blocks, or that takes a lock inside the pool.
+///
+/// Records the call's name under `syscall-enter` before it and `syscall-leave`
+/// after, so a call that blocked shows up as an *interval* rather than as a
+/// record with a later timestamp than you expected. The difference matters:
+/// a single record stamped after the call returns cannot distinguish "this was
+/// issued late" from "this took four seconds to return".
+///
+/// Every thread-pool API touches the pool's own synchronisation, and several
+/// block outright -- the `WaitForThreadpool*Callbacks` family,
+/// `CloseThreadpoolCleanupGroupMembers`, `CloseThreadpool`, and
+/// `SetThreadpoolThreadMinimum`, which creates threads. Which of the rest can
+/// contend is not documented, so they are bracketed too rather than assumed
+/// cheap: the whole point is to catch synchronisation nobody expected.
+///
+/// **It is its own target**, so it can be switched on without it. A capture
+/// narrowed to `wait,delivery` is unchanged by this existing; one narrowed to
+/// `syscall` sees only the call boundaries. Argument expressions are evaluated
+/// only when the target is being traced, and the whole thing compiles to the
+/// call alone without the `trace` feature.
+///
+/// ```ignore
+/// crate::trace_call!("SetThreadpoolWait", wait, handle as usize, {
+///     // SAFETY: ...
+///     unsafe { SetThreadpoolWait(wait, handle, ptr::null()) }
+/// })
+/// ```
+#[macro_export]
+macro_rules! trace_call {
+    ($name:literal, $a:expr, $b:expr, $call:block) => {{
+        $crate::trace_record!("syscall-enter", $name, $a, $b);
+        let result = $call;
+        $crate::trace_record!("syscall-leave", $name, $a, $b);
+        result
+    }};
 }
 
 #[cfg(test)]

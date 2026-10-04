@@ -1,0 +1,24 @@
+{
+  "package": "windows-file-watcher",
+  "description": "Sabotages for windows-file-watcher. Run with tools/run-sabotage.ps1; see tools/README-sabotage.md for the format and for why the results are read the way they are.",
+  "notCoveredHere": "This manifest was created for one guard and is deliberately not a survey of the crate. The servicing path's shutdown ordering is here because its window is a few instructions wide, cannot be reached by timing, and the guard for it was wrong on the first attempt -- which is exactly the shape that needs something re-running it rather than a command somebody ran once. The rest of the crate's teardown is covered by windows-threadpool-sys' manifest, since the obligations it rests on are that crate's.",
+  "testArgs": [
+    "--features",
+    "windows-threadpool-sys/fail-fast"
+  ],
+  "whyTestArgs": "The drain obligation is only enforced with `fail-fast`, and this crate does not expose that feature itself -- it arrives through `windows-threadpool-sys`. Without it a sabotage to a teardown path is reported rather than failed, and the sweep records SURVIVED for a guard that is present and working.",
+  "sabotages": [
+    {
+      "name": "shutdown stops waiting for a producer that has not published yet",
+      "file": "src/servicing.rs",
+      "expect": "caught",
+      "why": "`submit` releases the queue lock after deciding to ring and only then calls `ThreadpoolWork::submit`, so a producer preempted between the two has committed to publishing and is invisible to anyone holding the lock. Without this wait, `shut_down` can close the queue and run its whole cancellation inside that window, and the publication lands after it has returned -- contradicting its own documented guarantee that no drain can start afterwards. The guard drives the interleaving through a test-only gate rather than hoping to hit it, and asserts the happens-before (a marker the releasing thread sets before it releases) rather than any state the queue carries. That distinction is the reason this entry exists: the first version of the guard asserted only the ring count, the closed flag and the handler count, every one of which is true whether or not the wait is there, and it passed six times out of six with the wait deleted. The current one is caught 8 of 8.",
+      "find": [
+        "            while queue.publishing > 0 {"
+      ],
+      "replace": [
+        "            while false {"
+      ]
+    }
+  ]
+}

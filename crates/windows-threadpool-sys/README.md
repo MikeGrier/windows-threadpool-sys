@@ -112,6 +112,59 @@ the caller to remember:
 - **Teardown is ordered.** Every object disarms or cancels before draining
   callbacks, then releases its callback context last, so a callback can never
   outlive the state it captured.
+- **Teardown never asks the kernel to discard.** `Drop` and `stop_and_drain`
+  pass `FALSE` to the `WaitFor*Callbacks` rundown, so they wait for what is
+  queued rather than requesting its removal. That is partly because discarding
+  work the caller asked for is not finalisation, and partly because the removal
+  primitive can sever a completion port's notification to its worker factory --
+  after which that pool dispatches nothing at all. What is structural is that
+  no teardown path reaches that primitive.
+
+  **That is narrower than "every queued callback runs", and the difference is
+  the timers.** A timer teardown disarms before it drains, and a disarm
+  discards a tick that is already queued -- measured for the one-shot by
+  `disarming_cancels_a_queued_tick_which_a_waits_disarm_does_not` and for the
+  periodic by `stopping_a_periodic_timer_discards_a_tick_that_is_already_queued`.
+  A wait's disarm does not, which is the asymmetry those test names carry. So
+  do not rely on a queued *tick* running during teardown; the guarantee here is
+  about which primitive the rundown invokes.
+
+## Features
+
+| feature | default | what it does |
+|---|---|---|
+| `self-heal` | **on** | Repairs a thread pool that an explicitly-requested cancellation may have wedged, and provides the safe `try_cancel_pending`. See [README-FEATURE-self-heal.md](README-FEATURE-self-heal.md) before turning it off -- the hazard it covers is silent, intermittent, and lands on components that never called the API. |
+| `trace` | off | In-process tracing of this crate's own operations: object creation, callback entry and exit, teardown, and the obligations each type carries. Diagnostic, and observe-only -- it records what this crate does and reaches no further. |
+| `fail-fast` | off | Turns a teardown that found a drain still owed into a panic rather than a report. Arms the check directly -- see the warning below before enabling it anywhere but a leaf binary. |
+
+### `fail-fast` cannot be declined by the crates it affects
+
+Cargo unifies features across a build, so **any** crate enabling `fail-fast`
+turns it on for every crate in that build. A library that depends on this one
+cannot opt out of another dependency's choice, and `default-features = false`
+does not help: the feature is off by default, so declining the defaults declines
+nothing here.
+
+What changes is teardown behaviour process-wide -- a `Drop` that previously
+reported an outstanding drain now panics. That is a reasonable thing for an
+application to ask for about its own code, and an unreasonable thing to impose
+on an unrelated component that happens to share the build.
+
+So enable it from a binary, a test, or a development profile, and not from a
+published library's default feature set.
+
+### No undocumented APIs
+
+The `trace` feature records what this crate itself does: object creation,
+callback entry and exit, teardown, and the obligations each type carries. It
+reaches no further than that.
+
+An earlier version of this crate also carried an inline hooking facility that
+patched `ntdll` syscall stubs to observe the worker factory. **It has been
+removed**, and with it every undocumented entry point and every assumption about
+an unpublished structure layout. The reasoning, and what rebuilding the same
+observations on documented ground would take, is in
+[DESIGN-NOTES.md](../../DESIGN-NOTES.md#no-undocumented-apis).
 
 ## Relationship to `windows-overlapped-io-sys`
 

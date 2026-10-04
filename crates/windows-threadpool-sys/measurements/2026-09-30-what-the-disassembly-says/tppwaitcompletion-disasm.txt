@@ -1,0 +1,228 @@
+
+== TppWaitCompletion @ 0x7ffdf6701cc0  (896 bytes)
+[3361 thread-pool/nt symbols enumerated]
+  00007ffdf6701cc0  mov     [rsp+10h],rbx
+  00007ffdf6701cc5  mov     [rsp+18h],rbp
+  00007ffdf6701cca  mov     [rsp+20h],rsi
+  00007ffdf6701ccf  push    rdi
+  00007ffdf6701cd0  push    r12
+  00007ffdf6701cd2  push    r14
+  00007ffdf6701cd4  sub     rsp,30h
+  00007ffdf6701cd8  mov     rax,[gs:30h]
+  00007ffdf6701ce1  lea     rsi,[r8+0F0h]
+  00007ffdf6701ce8  mov     rbx,r8
+  00007ffdf6701ceb  xor     r12d,r12d
+  00007ffdf6701cee  mov     r14,rcx
+  00007ffdf6701cf1  mov     r8,[rax+1850h]
+  00007ffdf6701cf8  test    r8,r8
+  00007ffdf6701cfb  je      short 00007FFDF6701D1Dh           ; TppWaitCompletion+0x5d
+  00007ffdf6701cfd  mov     edx,r12d
+  00007ffdf6701d00  cmp     edx,8
+  00007ffdf6701d03  jae     short 00007FFDF6701D1Dh           ; TppWaitCompletion+0x5d
+  00007ffdf6701d05  mov     eax,edx
+  00007ffdf6701d07  cmp     [r8+rax*8],r12
+  00007ffdf6701d0b  lea     rcx,[r8+rax*8]
+  00007ffdf6701d0f  jne     near 00007FFDF6701E1Ch            ; TppWaitCompletion+0x15c
+  00007ffdf6701d15  test    rcx,rcx
+  00007ffdf6701d18  je      short 00007FFDF6701D1Dh           ; TppWaitCompletion+0x5d
+  00007ffdf6701d1a  mov     [rcx],rsi
+  00007ffdf6701d1d  lock bts qword [rsi],0
+  00007ffdf6701d23  jb      near 00007FFDF6701EAFh            ; TppWaitCompletion+0x1ef
+  00007ffdf6701d29  movzx   eax,byte [rbx+162h]
+  00007ffdf6701d30  mov     rbp,[rbx+90h]
+  00007ffdf6701d37  movzx   edi,al
+  00007ffdf6701d3a  shr     dil,1
+  00007ffdf6701d3d  add     rbp,70h
+  00007ffdf6701d41  and     dil,1
+  00007ffdf6701d45  mov     [rsp+50h],r15
+  00007ffdf6701d4a  test    al,1
+  00007ffdf6701d4c  jne     near 00007FFDF6701E23h            ; TppWaitCompletion+0x163
+  00007ffdf6701d52  mov     [rbx+148h],r12
+  00007ffdf6701d59  mov     edi,1
+  00007ffdf6701d5e  dec     edi
+  00007ffdf6701d60  test    byte [rbx+1D0h],4
+  00007ffdf6701d67  jne     short 00007FFDF6701D79h           ; TppWaitCompletion+0xb9
+  00007ffdf6701d69  xor     r8d,r8d
+  00007ffdf6701d6c  lea     rcx,[rbx+38h]
+  00007ffdf6701d70  lea     edx,[r8+1]
+  00007ffdf6701d74  call    00007FFDF6702040h                 ; TppBarrierAdjust
+  00007ffdf6701d79  movzx   eax,byte [rbx+1D0h]
+  00007ffdf6701d80  mov     [rbx+168h],r12
+  00007ffdf6701d87  test    al,1
+  00007ffdf6701d89  jne     near 00007FFDF6701F8Dh            ; TppWaitCompletion+0x2cd
+  00007ffdf6701d8f  mov     [rbx+1D0h],r12b
+  00007ffdf6701d96  mov     rcx,rsi
+  00007ffdf6701d99  test    edi,edi
+  00007ffdf6701d9b  jg      short 00007FFDF6701DF8h           ; TppWaitCompletion+0x138
+  00007ffdf6701d9d  call    00007FFDF66BA130h                 ; RtlReleaseSRWLockExclusive
+  00007ffdf6701da2  test    edi,edi
+  00007ffdf6701da4  jns     short 00007FFDF6701DCDh           ; TppWaitCompletion+0x10d
+  00007ffdf6701da6  mov     eax,edi
+  00007ffdf6701da8  lock xadd [rbx],eax
+  00007ffdf6701dac  neg     edi
+  00007ffdf6701dae  cmp     eax,edi
+  00007ffdf6701db0  jne     short 00007FFDF6701DCDh           ; TppWaitCompletion+0x10d
+  00007ffdf6701db2  mov     rax,[rbx+8]
+  00007ffdf6701db6  lea     rcx,[rel 7FFDF67029A0h]
+  00007ffdf6701dbd  mov     rax,[rax]
+  00007ffdf6701dc0  cmp     rax,rcx
+  00007ffdf6701dc3  jne     short 00007FFDF6701E02h           ; TppWaitCompletion+0x142
+  00007ffdf6701dc5  mov     rcx,rbx
+  00007ffdf6701dc8  call    00007FFDF67029A0h                 ; TppFreeWait
+  00007ffdf6701dcd  xor     r8d,r8d
+  00007ffdf6701dd0  mov     rdx,rbx
+  00007ffdf6701dd3  mov     rcx,r14
+  00007ffdf6701dd6  mov     r15,[rsp+50h]
+  00007ffdf6701ddb  mov     rbx,[rsp+58h]
+  00007ffdf6701de0  mov     rbp,[rsp+60h]
+  00007ffdf6701de5  mov     rsi,[rsp+68h]
+  00007ffdf6701dea  add     rsp,30h
+  00007ffdf6701dee  pop     r14
+  00007ffdf6701df0  pop     r12
+  00007ffdf6701df2  pop     rdi
+  00007ffdf6701df3  jmp     00007FFDF6701250h                 ; TppExecuteWaitCallback
+  00007ffdf6701df8  lock add [rbx],edi
+  00007ffdf6701dfb  call    00007FFDF66BA130h                 ; RtlReleaseSRWLockExclusive
+  00007ffdf6701e00  jmp     short 00007FFDF6701DCDh
+  00007ffdf6701e02  lea     rcx,[rel 7FFDF67029F0h]
+  00007ffdf6701e09  cmp     rax,rcx
+  00007ffdf6701e0c  mov     rcx,rbx
+  00007ffdf6701e0f  jne     near 00007FFDF6701F83h            ; TppWaitCompletion+0x2c3
+  00007ffdf6701e15  call    00007FFDF67029F0h                 ; TppTimerpFree
+  00007ffdf6701e1a  jmp     short 00007FFDF6701DCDh
+  00007ffdf6701e1c  inc     edx
+  00007ffdf6701e1e  jmp     00007FFDF6701D00h                 ; TppWaitCompletion+0x40
+  00007ffdf6701e23  mov     ecx,80h
+  00007ffdf6701e28  test    dil,dil
+  00007ffdf6701e2b  mov     r15d,8
+  00007ffdf6701e31  cmove   r15d,ecx
+  00007ffdf6701e35  add     r15,rbp
+  00007ffdf6701e38  call    00007FFDF66B8FC0h                 ; RtlGetCurrentServiceSessionId
+  00007ffdf6701e3d  test    eax,eax
+  00007ffdf6701e3f  jne     near 00007FFDF670201Dh            ; TppWaitCompletion+0x35d
+  00007ffdf6701e45  mov     ecx,7FFE0386h
+  00007ffdf6701e4a  cmp     [rcx],r12b
+  00007ffdf6701e4d  jne     short 00007FFDF6701EBCh           ; TppWaitCompletion+0x1fc
+  00007ffdf6701e4f  mov     rcx,rbp
+  00007ffdf6701e52  call    00007FFDF66B93D0h                 ; RtlAcquireSRWLockExclusive
+  00007ffdf6701e57  cmp     [rbx+160h],r12b
+  00007ffdf6701e5e  je      near 00007FFDF6701FB0h            ; TppWaitCompletion+0x2f0
+  00007ffdf6701e64  mov     rdx,[r15+10h]
+  00007ffdf6701e68  lea     rcx,[r15+10h]
+  00007ffdf6701e6c  lea     rax,[rbx+0F8h]
+  00007ffdf6701e73  cmp     rax,rdx
+  00007ffdf6701e76  je      short 00007FFDF6701EDDh           ; TppWaitCompletion+0x21d
+  00007ffdf6701e78  mov     rdx,[rax]
+  00007ffdf6701e7b  cmp     [rdx+8],rax
+  00007ffdf6701e7f  jne     short 00007FFDF6701EA8h           ; TppWaitCompletion+0x1e8
+  00007ffdf6701e81  mov     r8,[rax+8]
+  00007ffdf6701e85  cmp     [r8],rax
+  00007ffdf6701e88  jne     short 00007FFDF6701EA8h           ; TppWaitCompletion+0x1e8
+  00007ffdf6701e8a  mov     [r8],rdx
+  00007ffdf6701e8d  mov     [rdx+8],r8
+  00007ffdf6701e91  lea     rdx,[rax+10h]
+  00007ffdf6701e95  mov     [rax+8],rax
+  00007ffdf6701e99  mov     [rax],rax
+  00007ffdf6701e9c  mov     r8,[rdx]
+  00007ffdf6701e9f  mov     r9,[rcx]
+  00007ffdf6701ea2  cmp     [r8+8],rdx
+  00007ffdf6701ea6  je      short 00007FFDF6701EC9h           ; TppWaitCompletion+0x209
+  00007ffdf6701ea8  mov     ecx,3
+  00007ffdf6701ead  int     29h
+  00007ffdf6701eaf  mov     rcx,rsi
+  00007ffdf6701eb2  call    00007FFDF6722D80h                 ; RtlpAcquireSRWLockExclusiveContended
+  00007ffdf6701eb7  jmp     00007FFDF6701D29h                 ; TppWaitCompletion+0x69
+  00007ffdf6701ebc  mov     rdx,rbx
+  00007ffdf6701ebf  mov     rcx,r15
+  00007ffdf6701ec2  call    00007FFDF6790BFCh                 ; TppETWTimerCancelled
+  00007ffdf6701ec7  jmp     short 00007FFDF6701E4Fh
+  00007ffdf6701ec9  mov     [r9+8],rdx
+  00007ffdf6701ecd  mov     [r9],r8
+  00007ffdf6701ed0  mov     [r8+8],r9
+  00007ffdf6701ed4  mov     [rdx],r9
+  00007ffdf6701ed7  mov     rdx,rax
+  00007ffdf6701eda  mov     [rcx],rax
+  00007ffdf6701edd  mov     [rdx+20h],r12
+  00007ffdf6701ee1  call    00007FFDF67002E0h                 ; TppPHExtractMin
+  00007ffdf6701ee6  mov     rax,[r15+8]
+  00007ffdf6701eea  lea     rcx,[r15+8]
+  00007ffdf6701eee  lea     r11,[rbx+120h]
+  00007ffdf6701ef5  cmp     r11,rax
+  00007ffdf6701ef8  je      short 00007FFDF6701F42h           ; TppWaitCompletion+0x282
+  00007ffdf6701efa  mov     rax,[r11]
+  00007ffdf6701efd  cmp     [rax+8],r11
+  00007ffdf6701f01  jne     short 00007FFDF6701EA8h           ; TppWaitCompletion+0x1e8
+  00007ffdf6701f03  mov     rdx,[r11+8]
+  00007ffdf6701f07  cmp     [rdx],r11
+  00007ffdf6701f0a  jne     short 00007FFDF6701EA8h           ; TppWaitCompletion+0x1e8
+  00007ffdf6701f0c  mov     [rdx],rax
+  00007ffdf6701f0f  mov     [rax+8],rdx
+  00007ffdf6701f13  lea     rax,[r11+10h]
+  00007ffdf6701f17  mov     [r11+8],r11
+  00007ffdf6701f1b  mov     [r11],r11
+  00007ffdf6701f1e  mov     rdx,[rax]
+  00007ffdf6701f21  mov     r8,[rcx]
+  00007ffdf6701f24  cmp     [rdx+8],rax
+  00007ffdf6701f28  jne     near 00007FFDF6701EA8h            ; TppWaitCompletion+0x1e8
+  00007ffdf6701f2e  mov     [r8+8],rax
+  00007ffdf6701f32  mov     [r8],rdx
+  00007ffdf6701f35  mov     [rdx+8],r8
+  00007ffdf6701f39  mov     [rax],r8
+  00007ffdf6701f3c  mov     rax,r11
+  00007ffdf6701f3f  mov     [rcx],r11
+  00007ffdf6701f42  mov     [rax+20h],r12
+  00007ffdf6701f46  call    00007FFDF67002E0h                 ; TppPHExtractMin
+  00007ffdf6701f4b  movzx   edx,dil
+  00007ffdf6701f4f  mov     rcx,r15
+  00007ffdf6701f52  call    00007FFDF67000B0h                 ; TppUpdateSubQueueTimer
+  00007ffdf6701f57  mov     rcx,rbp
+  00007ffdf6701f5a  mov     [rbx+160h],r12b
+  00007ffdf6701f61  call    00007FFDF66BA130h                 ; RtlReleaseSRWLockExclusive
+  00007ffdf6701f66  mov     [rbx+15Ch],r12d
+  00007ffdf6701f6d  mov     edi,r12d
+  00007ffdf6701f70  mov     [rbx+148h],r12
+  00007ffdf6701f77  mov     [rbx+162h],r12b
+  00007ffdf6701f7e  jmp     00007FFDF6701D5Eh                 ; TppWaitCompletion+0x9e
+  00007ffdf6701f83  call    00007FFDF67F2020h                 ; RtlpFcQueryAllFeatureUsageSubscriptionNotificationsFromBufferSet+0x738
+  00007ffdf6701f88  jmp     00007FFDF6701DCDh                 ; TppWaitCompletion+0x10d
+  00007ffdf6701f8d  mov     rdx,[rbx+178h]
+  00007ffdf6701f94  lea     r8,[rbx+180h]
+  00007ffdf6701f9b  test    al,2
+  00007ffdf6701f9d  mov     rcx,rbx
+  00007ffdf6701fa0  cmove   r8,r12
+  00007ffdf6701fa4  call    00007FFDF6748600h                 ; TppSetupNextWait
+  00007ffdf6701fa9  add     edi,eax
+  00007ffdf6701fab  jmp     00007FFDF6701D8Fh                 ; TppWaitCompletion+0xcf
+  00007ffdf6701fb0  mov     rcx,rbp
+  00007ffdf6701fb3  call    00007FFDF66BA130h                 ; RtlReleaseSRWLockExclusive
+  00007ffdf6701fb8  or      byte [rbx+162h],4
+  00007ffdf6701fbf  mov     rax,[gs:30h]
+  00007ffdf6701fc8  mov     rcx,[rax+48h]
+  00007ffdf6701fcc  mov     [rsp+28h],rcx
+  00007ffdf6701fd1  prefetchw [rbx+150h]
+  00007ffdf6701fd8  mov     rax,[rbx+150h]
+  00007ffdf6701fdf  mov     rdx,rax
+  00007ffdf6701fe2  mov     [rsp+20h],rax
+  00007ffdf6701fe7  lea     rcx,[rsp+20h]
+  00007ffdf6701fec  lock cmpxchg [rbx+150h],rcx
+  00007ffdf6701ff5  cmp     rax,rdx
+  00007ffdf6701ff8  jne     short 00007FFDF6701FDFh           ; TppWaitCompletion+0x31f
+  00007ffdf6701ffa  mov     rcx,rsi
+  00007ffdf6701ffd  call    00007FFDF66BA130h                 ; RtlReleaseSRWLockExclusive
+  00007ffdf6702002  xor     edx,edx
+  00007ffdf6702004  lea     rcx,[rbx+150h]
+  00007ffdf670200b  call    00007FFDF67E4A00h                 ; NtWaitForAlertByThreadId
+  00007ffdf6702010  mov     rcx,rsi
+  00007ffdf6702013  call    00007FFDF66B93D0h                 ; RtlAcquireSRWLockExclusive
+  00007ffdf6702018  jmp     00007FFDF6701D59h                 ; TppWaitCompletion+0x99
+  00007ffdf670201d  mov     rax,[gs:60h]
+  00007ffdf6702026  mov     rcx,[rax+90h]
+  00007ffdf670202d  add     rcx,22Ch
+  00007ffdf6702034  jmp     00007FFDF6701E4Ah                 ; TppWaitCompletion+0x18a
+  00007ffdf6702039  int3
+  00007ffdf670203a  int3
+  00007ffdf670203b  int3
+  00007ffdf670203c  int3
+  00007ffdf670203d  int3
+  00007ffdf670203e  int3
+  00007ffdf670203f  int3

@@ -69,7 +69,9 @@ struct Limits {
 ///
 /// let timer = ThreadpoolTimer::new(|_firing| {}, Some(&mut env))?;
 /// timer.set_after(Duration::from_millis(1));
-/// timer.wait();
+/// // Discharges the drain this timer owes, at a point you choose rather than
+/// // leaving the blocking teardown to `Drop`.
+/// timer.stop_and_drain();
 /// # Ok::<(), std::io::Error>(())
 /// ```
 ///
@@ -94,7 +96,10 @@ impl ThreadpoolPool {
     /// cannot allocate the pool.
     pub fn new() -> io::Result<Self> {
         // SAFETY: the reserved parameter must be null; no other input is read.
-        let pool = unsafe { CreateThreadpool(ptr::null()) };
+        let pool = crate::trace_call!("CreateThreadpool", 0, 0, {
+            // SAFETY: a null reserved argument is the documented call.
+            unsafe { CreateThreadpool(ptr::null()) }
+        });
         if pool == 0 {
             return Err(io::Error::last_os_error());
         }
@@ -171,7 +176,10 @@ impl ThreadpoolPool {
             ));
         }
         // SAFETY: pool is valid for the lifetime of self.
-        unsafe { SetThreadpoolThreadMaximum(self.pool, maximum) };
+        crate::trace_call!("SetThreadpoolThreadMaximum", self.pool, maximum, {
+            // SAFETY: pool is valid for the lifetime of self.
+            unsafe { SetThreadpoolThreadMaximum(self.pool, maximum) };
+        });
         limits.maximum = Some(maximum);
         Ok(())
     }
@@ -218,7 +226,12 @@ impl ThreadpoolPool {
             ));
         }
         // SAFETY: pool is valid for the lifetime of self.
-        let ok = unsafe { SetThreadpoolThreadMinimum(self.pool, minimum) };
+        // This one really does block: it creates threads, and is documented to
+        // fail when it cannot.
+        let ok = crate::trace_call!("SetThreadpoolThreadMinimum", self.pool, minimum, {
+            // SAFETY: pool is valid for the lifetime of self.
+            unsafe { SetThreadpoolThreadMinimum(self.pool, minimum) }
+        });
         if ok == 0 {
             return Err(io::Error::last_os_error());
         }
@@ -236,8 +249,157 @@ impl Drop for ThreadpoolPool {
     fn drop(&mut self) {
         // SAFETY: pool is valid and owned; the OS releases it once its last
         // member object is released.
-        unsafe { CloseThreadpool(self.pool) };
+        crate::trace_call!("CloseThreadpool", self.pool, 0, {
+            // SAFETY: pool is valid and closed exactly once, here.
+            unsafe { CloseThreadpool(self.pool) };
+        });
     }
+}
+
+/// Make the default process pool create its first worker, and block until one
+/// exists.
+///
+/// # Why this exists
+///
+/// A measured fault in the Windows thread pool needs a pool holding **zero**
+/// threads. A teardown that removes an already-delivered completion packet a few
+/// microseconds after it was queued can sever that port's notification to its
+/// worker factory, after which the pool dispatches nothing -- no wait, no timer,
+/// no I/O completion -- until something submits a work item. The factory reads as
+/// perfectly idle throughout: not paused, not shut down, permitted to create,
+/// nothing failed.
+///
+/// Warming the pool first was measured to prevent it: **0 occurrences in 24000
+/// runs warm, against 66 in 24000 cold**, with a delay-matched cold control still
+/// failing at the cold rate, so it is the worker and not the elapsed time.
+///
+/// # What it does not buy
+///
+/// **This is not a fix and does not make a bad teardown safe.** It removes one
+/// of the fault's preconditions for as long as the pool stays warm, and the pool
+/// stops being warm once it has been idle for its timeout -- 67 seconds on the
+/// machine this was measured on. A long-lived process that goes quiet becomes
+/// cold again, and this function would have to be called again to matter.
+///
+/// It does nothing about teardowns in this crate, which already drain and so
+/// never remove a delivered packet. Its value is against code you do not
+/// control: another library, or a dependency, tearing a wait down badly during
+/// your process's startup.
+///
+/// # It is opt-in, and this crate never calls it for you
+///
+/// Nothing in this crate warms the pool on your behalf -- not `ThreadpoolWait::new`,
+/// not any other constructor. Three reasons, in order of weight:
+///
+/// 1. **It is a process-wide side effect.** A thread created here belongs to the
+///    default pool, which is shared with every other component in the process. A
+///    library that silently adds a resident thread to a pool it does not own has
+///    made a decision that was not its to make.
+/// 2. **This crate's own teardowns do not need it.** They drain, so they never
+///    remove a delivered packet. Calling this automatically would protect against
+///    *other* code while implying that this crate's paths required it.
+/// 3. **It would be a surprising cost in the common case.** Most callers create a
+///    wait and never tear it down badly; charging all of them a thread for a
+///    hazard they do not have is the wrong default.
+///
+/// Whether the protection is worth one resident thread is a judgement about the
+/// process as a whole, which the caller is in a position to make and this crate
+/// is not.
+///
+/// # What was ruled out
+///
+/// Holding the pool warm *permanently* would be better, and is not available:
+/// `SetThreadpoolThreadMinimum` does not accept a null pool, and calling it that
+/// way does not fail -- it **raises `STATUS_INVALID_PARAMETER` and terminates the
+/// process**. The default pool's minimum cannot be set. A private
+/// [`ThreadpoolPool`] can have [`set_min_threads`](ThreadpoolPool::set_min_threads)
+/// applied to it, but that is a different pool.
+///
+/// # It always submits, and does not check first
+///
+/// The obvious optimisation is to read the worker count and skip the work item
+/// when the pool is already warm. It is not done, for two reasons, and the first
+/// is simply that it is slower. Measured on the development machine: prewarming
+/// an already-warm pool costs about 27us, while the query needed to decide to
+/// skip it costs about 204us, because there is no way to ask "how many workers
+/// does the default pool have" without scanning the handle space. The skip would
+/// cost roughly seven times what it saves.
+///
+/// The second reason outlasts the first, and has since become the whole of it.
+/// That query reads a layout Microsoft does not publish, through an undocumented
+/// entry point. A misread returning a plausible non-zero would make this function
+/// skip the warm-up and report success, leaving the caller believing they are
+/// protected when they are not -- the exact failure this exists to prevent. An
+/// unconditional submit cannot be wrong that way.
+///
+/// **This crate no longer contains any way to make that query.** The facility
+/// that did was removed rather than kept behind a feature; see the decision in
+/// the workspace `DESIGN-NOTES.md`. A caller who wants worker counts needs a
+/// mechanism built on documented ground, such as an ETW kernel trace.
+///
+/// # Returns
+///
+/// Whether a worker is confirmed to exist. A callback having run is the proof,
+/// because it ran on one. `false` means the work item could not be created or did
+/// not run within the bound, and the pool should be assumed cold.
+pub fn prewarm_default_pool() -> bool {
+    use std::sync::mpsc;
+    use std::time::Duration;
+
+    /// How long to wait for the warm-up callback. Generous: a healthy pool
+    /// creates its first worker in well under a millisecond, so reaching this
+    /// means something is already wrong.
+    const BOUND: Duration = Duration::from_secs(2);
+
+    let (tx, rx) = mpsc::channel();
+    let tx = std::sync::Mutex::new(tx);
+    let Ok(work) = crate::work::ThreadpoolWork::new(
+        move || {
+            if let Ok(tx) = tx.lock() {
+                let _ = tx.send(());
+            }
+        },
+        None,
+    ) else {
+        return false;
+    };
+    work.submit();
+    let confirmed = rx.recv_timeout(BOUND).is_ok();
+    if !confirmed {
+        // Cancel before draining, on this path only.
+        //
+        // Reaching the timeout means the callback was never dispatched, which
+        // is the condition this function exists to report. Draining then waits
+        // for that same undispatched callback **with no deadline at all**, so
+        // the bounded check above would be followed by an unbounded one and the
+        // `false` this is supposed to return would never arrive. The bound
+        // would be decoration.
+        //
+        // Cancelling discards the queued invocation and waits only for one
+        // already executing, and only on this object: the warm-up callback does
+        // nothing but send on a channel, so it cannot block, and another
+        // object's stuck callback is not this call's to wait for.
+        // This also discharges the obligation: `cancel_pending` returns with
+        // nothing queued and nothing executing, and settles on that basis. The
+        // drain below would therefore be a second native synchronisation that
+        // waits for a state already reached.
+        work.cancel_pending();
+    } else {
+        // Discharged here rather than left to the drop below. The drop would
+        // drain anyway, so this adds no blocking -- but this function is the
+        // crate's own use of its own protocol, and leaving the obligation
+        // undischarged makes it a reported violation like any other.
+        //
+        // Needed only on this path, and that asymmetry is deliberate rather
+        // than an oversight: a dispatch does not settle a work object's
+        // obligation, because a work object can be submitted again and the
+        // drain stays the caller's regardless of what has already run. So the
+        // confirmed path has a live obligation even though its callback
+        // demonstrably ran, while the timeout path above has already cleared
+        // one.
+        work.stop_and_drain();
+    }
+    confirmed
 }
 
 #[cfg(test)]

@@ -18,6 +18,25 @@ use crate::callback_env::CallbackEnviron;
 /// Heap-allocated callback state kept alive for the lifetime of the work object.
 struct WorkContext {
     f: Box<dyn Fn() + Send + Sync + 'static>,
+    /// Whether a submission is outstanding that the caller has not waited for.
+    ///
+    /// Unlike the wait and the one-shot timer, a dispatch does not settle this:
+    /// `submit` may be called any number of times, so a trampoline entry would
+    /// have to decrement a count rather than clear a flag. The count is not
+    /// worth keeping, because a caller who never called `wait` could not have
+    /// known the work had finished -- leaving the drain to `Drop` is what they
+    /// did regardless of how the race turned out.
+    obligation: crate::obligation::CloseObligation,
+    /// This pool's entry in the self-heal registry.
+    ///
+    /// Held for its `Drop`, not read. The claim keeps the entry alive while
+    /// this object exists, which is what makes the entry's pre-created repair
+    /// work object available -- and bound to the pool, deferring its free --
+    /// if a wait on the same pool is later cancelled. Only a wait reads a
+    /// registration, because only a wait reaches the removal primitive that
+    /// owes a repair.
+    #[allow(dead_code)]
+    registration: crate::heal::Registration,
 }
 
 /// Trampoline from the raw Windows callback ABI into the boxed closure.
@@ -31,9 +50,14 @@ unsafe extern "system" fn work_trampoline(
 ) {
     // SAFETY: context is a valid *mut WorkContext for the full callback duration (see Drop).
     let ctx = unsafe { &*(context as *const WorkContext) };
+    crate::trace_record!("work", "trampoline-entered", _work);
+    // Stamped before the callback, not after: a dispatch that is still running
+    // is evidence the pool is live, and a long callback must not look like
+    // silence to the self-heal.
     // Not contained: the callback contract requires that it not unwind, and a
     // callback that breaks it aborts here rather than being silently forgiven.
     (ctx.f)();
+    crate::trace_record!("work", "trampoline-left", _work);
 }
 
 /// An owned thread-pool work object.
@@ -88,23 +112,40 @@ impl ThreadpoolWork {
     where
         F: Fn() + Send + Sync + 'static,
     {
+        // Read before `env` is consumed below, and registered before the object
+        // exists: the entry must be able to repair this pool from the moment
+        // anything of ours can dispatch on it.
+        let registration = crate::heal::register(crate::heal::key_of(env.as_deref()));
         let ctx = Box::into_raw(Box::new(WorkContext {
             f: Box::new(callback),
+            obligation: crate::obligation::CloseObligation::new(),
+            registration,
         }));
 
         let env_ptr = env.map_or(ptr::null_mut(), |e| e.as_mut_ptr());
 
         // SAFETY: ctx is a valid heap pointer; env_ptr is valid (or null) for this call.
-        let handle = unsafe {
-            CreateThreadpoolWork(Some(work_trampoline), ctx.cast(), env_ptr.cast_const())
-        };
+        let handle = crate::trace_call!("CreateThreadpoolWork", 0, 0, {
+            // SAFETY: ctx is a valid heap pointer; env_ptr is valid (or null) for this call.
+            unsafe { CreateThreadpoolWork(Some(work_trampoline), ctx.cast(), env_ptr.cast_const()) }
+        });
 
         if handle == 0 {
+            // Read before the free, as the other three constructors do. `ctx`
+            // owns a `Registration`, whose drop can reach `PoolEntry::drop` and
+            // from there `WaitForThreadpoolWorkCallbacks` and
+            // `CloseThreadpoolWork`. Whether either of those disturbs the
+            // thread's last error on success is not documented, so this is not
+            // a demonstrated clobber -- but the ordering that cannot be wrong
+            // costs a line, and this was the only one of the four doing it the
+            // other way round.
+            let error = io::Error::last_os_error();
             // SAFETY: the pool never saw ctx; reclaim it immediately.
             unsafe { drop(Box::from_raw(ctx)) };
-            return Err(io::Error::last_os_error());
+            return Err(error);
         }
 
+        crate::trace_record!("work", "created", handle);
         Ok(Self { handle, ctx })
     }
 
@@ -113,21 +154,76 @@ impl ThreadpoolWork {
     /// May be called repeatedly; each call queues an independent invocation.
     /// Multiple queued invocations may execute concurrently.
     pub fn submit(&self) {
-        // SAFETY: handle is valid for the lifetime of self.
-        unsafe { SubmitThreadpoolWork(self.handle) };
+        // SAFETY: the context outlives every callback and is freed only by Drop,
+        // which cannot run while this borrow of self is alive.
+        unsafe { &*self.ctx }.obligation.record_live_before(|| {
+            crate::trace_call!("SubmitThreadpoolWork", self.handle, 0, {
+                // SAFETY: handle is valid for the lifetime of self.
+                unsafe { SubmitThreadpoolWork(self.handle) };
+            });
+            // The submit is the start of the interval a stalled dispatch is
+            // measured over; without it, a `trampoline-entered` has nothing to be
+            // late relative to.
+            crate::trace_record!("work", "submitted", self.handle);
+        });
     }
 
     /// Blocks until all queued and in-progress invocations have completed.
+    ///
+    /// This type has no separately-named synchronous close: this *is* the drain
+    /// that [`Drop`] would otherwise perform, so calling it discharges the
+    /// obligation `Drop` reports.
     pub fn wait(&self) {
-        // SAFETY: handle is valid for the lifetime of self.
-        unsafe { WaitForThreadpoolWorkCallbacks(self.handle, FALSE) };
+        crate::trace_call!("WaitForThreadpoolWorkCallbacks", self.handle, 0, {
+            // SAFETY: handle is valid for the lifetime of self.
+            unsafe { WaitForThreadpoolWorkCallbacks(self.handle, FALSE) };
+        });
+        // SAFETY: the context outlives every callback and is freed only by Drop,
+        // which cannot run while this borrow of self is alive.
+        unsafe { &*self.ctx }.obligation.record_settled();
+    }
+
+    /// Stop accepting work and block until none is queued or executing.
+    ///
+    /// The drain every type in this crate offers under this name, so a caller
+    /// tearing down a mixed set of objects can reach for one method.
+    ///
+    /// There is nothing to *stop* on a work object -- a submission cannot be
+    /// withdrawn, only waited for -- so this is exactly [`wait`](Self::wait),
+    /// which is why that method is documented as this type's drain. The name
+    /// exists because a caller should not have to know which of this crate's
+    /// types has something to stop.
+    pub fn stop_and_drain(&self) {
+        self.wait();
     }
 
     /// Cancels callbacks that have not yet started, then waits for any
     /// currently-executing invocations to finish.
+    ///
+    /// Settles the drain obligation, exactly as [`wait`](Self::wait) does and
+    /// for the same reason: on return nothing is queued and nothing is
+    /// executing, which is what the obligation tracks. It used not to, so a
+    /// caller who submitted, cancelled, and dropped was told at drop that it
+    /// still owed a drain -- and under `fail-fast` that report is a panic, on a
+    /// caller that had done nothing wrong.
+    ///
+    /// **Sound here, and deliberately not done on the wait or the timer.**
+    /// Those two can be re-armed from inside their own callbacks
+    /// ([`crate::wait::WaitActivation::rearm`],
+    /// [`crate::timer::TimerFiring::rearm_after`]), so a callback running
+    /// during the cancel can leave the object live again before this returns --
+    /// which is why their `stop_and_drain` suppresses re-arms before draining
+    /// and only then settles. A work callback is a bare `Fn()` with no handle
+    /// to its object, so nothing can re-queue it except an explicit
+    /// [`submit`](Self::submit), and that arms the obligation again itself.
     pub fn cancel_pending(&self) {
-        // SAFETY: handle is valid for the lifetime of self.
-        unsafe { WaitForThreadpoolWorkCallbacks(self.handle, TRUE) };
+        crate::trace_call!("WaitForThreadpoolWorkCallbacks(cancel)", self.handle, 1, {
+            // SAFETY: handle is valid for the lifetime of self.
+            unsafe { WaitForThreadpoolWorkCallbacks(self.handle, TRUE) };
+        });
+        // SAFETY: the context outlives every callback and is freed only by Drop,
+        // which cannot run while this borrow of self is alive.
+        unsafe { &*self.ctx }.obligation.record_settled();
     }
 
     /// Give up ownership, returning the raw object and its callback context.
@@ -150,16 +246,48 @@ impl ThreadpoolWork {
         // SAFETY: forwarded from this function's own contract.
         drop(unsafe { Box::from_raw(context.cast::<WorkContext>()) });
     }
+
+    /// Whether `Drop` would report an undischarged drain obligation right now.
+    ///
+    /// Exists so the obligation's wiring can be asserted without depending on
+    /// the trace, whose filter is fixed before `main` and so cannot be narrowed
+    /// from inside a test.
+    #[cfg(test)]
+    pub(crate) fn obligation_owed(&self) -> bool {
+        // SAFETY: the context outlives every callback and is freed only by Drop.
+        unsafe { &*self.ctx }.obligation.is_owed()
+    }
 }
 
 impl Drop for ThreadpoolWork {
     fn drop(&mut self) {
-        unsafe {
-            // Let all in-flight callbacks run to completion before freeing the context.
-            WaitForThreadpoolWorkCallbacks(self.handle, FALSE);
-            CloseThreadpoolWork(self.handle);
-            drop(Box::from_raw(self.ctx));
+        crate::trace_record!("work", "drop-begin", self.handle);
+        // Read before the drain, and emitted before it: the record marks the
+        // start of the blocking interval it is reporting, so a reader sees what
+        // the following gap is for rather than learning it afterwards.
+        // SAFETY: the context is still live; it is freed at the end of this body.
+        // Captured, not re-read later: the context is freed before the
+        // fail-fast, so this must be a value rather than a borrow.
+        let owed = unsafe { &*self.ctx }.obligation.is_owed();
+        if owed {
+            crate::trace_record!("work", crate::obligation::DROP_OBLIGATION_OWED, self.handle);
         }
+        crate::trace_call!("WaitForThreadpoolWorkCallbacks", self.handle, 0, {
+            // Let all in-flight callbacks run to completion before freeing the context.
+            // SAFETY: handle is valid until it is closed just below.
+            unsafe { WaitForThreadpoolWorkCallbacks(self.handle, FALSE) };
+        });
+        crate::trace_record!("work", "drop-drained", self.handle);
+        crate::trace_call!("CloseThreadpoolWork", self.handle, 0, {
+            // SAFETY: no callback remains, so the object can be closed once.
+            unsafe { CloseThreadpoolWork(self.handle) };
+        });
+        // SAFETY: nothing can reach the context again; free it exactly once.
+        unsafe { drop(Box::from_raw(self.ctx)) };
+        crate::trace_record!("work", "drop-closed", self.handle);
+        // Last, after the drain, the close and the context free: a panic
+        // unwinds, so anything after it would be skipped.
+        crate::obligation::fail_fast_if_owed(owed, "ThreadpoolWork", "stop_and_drain");
     }
 }
 

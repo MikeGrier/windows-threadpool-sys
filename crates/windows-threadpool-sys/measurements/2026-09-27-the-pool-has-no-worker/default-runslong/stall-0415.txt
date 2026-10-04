@@ -1,0 +1,453 @@
+
+running 3 tests
+test dropping_with_nothing_outstanding_does_not_hang ... ok
+M26.9 delivery stalled: completions_are_delivered_on_pool_threads_without_the_submitting_thread_waiting
+  delivered      : 0 of 8
+  callbacks run  : 8 -- times the pool invoked the callback. Equal to delivered means everything the callback received reached this thread; greater means the gap is between the callback and the channel.
+  outstanding    : 8 -- the ring's own count, which decrements on pop, and the pop happens inside the callback. So it cannot on its own separate 'the kernel has not finished' from 'the callback never ran'.
+  arrival times  : []
+  inter-arrival  : []
+  waited         : 5s before giving up
+  post-mortem    : waiting a further 10s to see whether it is late rather than lost; the line below is the answer
+  trace (oldest first):
+      0.000000s t1168676 experiment             env-built                         0      1
+      0.000029s t1168676 delivery               event-attached                  228      0
+      0.000044s t1168676 wait                   created                      2060396224464    228
+      0.000046s t1168676 wait                   armed                        2060396224464    228
+      0.000046s t1168676 delivery               armed                             0      0
+      0.000064s t1168676 delivery               setup-signalled                 224      0
+      0.000068s t1168676 wait                   drop-begin                   2060396224464    228
+      0.000068s t1168676 wait                   suppress-and-disarm          2060396224464      1
+      0.000070s t1168676 wait                   disarmed                     2060396224464      0
+      0.000072s t1168676 wait                   drop-drained                 2060396224464      0
+      0.000077s t1168676 wait                   drop-closed                  2060396224464    228
+      0.002397s t1168668 experiment             env-built                         0      1
+      0.002404s t1168668 delivery               event-attached                  240      0
+      0.002408s t1168668 wait                   created                      2060396235216    240
+      0.002410s t1168668 wait                   armed                        2060396235216    240
+      0.002410s t1168668 delivery               armed                             0      0
+      0.002411s t1168668 delivery               setup-signalled                 236      0
+      0.002495s t1168672 experiment             env-built                         0      1
+      0.002501s t1168672 delivery               event-attached                  252      0
+      0.002504s t1168672 wait                   created                      2060396246800    252
+      0.002506s t1168672 wait                   armed                        2060396246800    252
+      0.002511s t1168672 delivery               armed                             0      0
+      0.002512s t1168672 delivery               setup-signalled                 248      8
+      5.010519s t1168668 postmortem             delivery-wait-expired             0      0
+      5.010520s t1168672 postmortem             delivery-wait-expired             0      0
+      5.269661s t1168668 experiment             threads-at-stall                  6      0
+      5.269664s t1168668 postmortem             outstanding-begin                 0      0
+      5.269667s t1168668 postmortem             outstanding-read                  8      0
+      5.269667s t1168668 postmortem             probe-begin                       0      0
+      5.269699s t1168668 work                   created                      2060396218112      0
+      5.269800s t1168668 work                   submitted                    2060396218112      0
+      5.270078s t1168944 wait                   trampoline-entered           2060396246800      0
+      5.270079s t1168944 delivery               callback-entered                  0      0
+      5.270112s t1168944 wait                   rearm-entered                2060396246800      0
+      5.270115s t1168944 wait                   armed                        2060396246800    252
+      5.270117s t1168944 wait                   rearm-left                   2060396246800    252
+      5.270117s t1168944 delivery               callback-left                     0      0
+      5.270118s t1168944 wait                   trampoline-left              2060396246800      0
+      5.270119s t1168944 work                   trampoline-entered           2060396218112      0
+      5.270142s t1168944 work                   trampoline-left              2060396218112      0
+      5.270144s t1168944 wait                   trampoline-entered           2060396235216      0
+      5.270144s t1168944 delivery               callback-entered                  0      0
+      5.270149s t1168668 postmortem             work-probe-answered               1      0
+      5.270150s t1168668 work                   drop-begin                   2060396218112      0
+      5.270151s t1168668 work                   drop-drained                 2060396218112      0
+      5.270157s t1168668 work                   drop-closed                  2060396218112      0
+      5.270164s t1168944 wait                   rearm-entered                2060396235216      0
+      5.270166s t1168944 wait                   armed                        2060396235216    240
+      5.270166s t1168944 wait                   rearm-left                   2060396235216    240
+      5.270167s t1168944 delivery               callback-left                     0      0
+      5.270167s t1168944 wait                   trampoline-left              2060396235216      0
+      5.270170s t1168944 wait                   trampoline-entered           2060396235216      0
+      5.270170s t1168944 delivery               callback-entered                  0      0
+      5.270170s t1168944 wait                   rearm-entered                2060396235216      0
+      5.270171s t1168944 wait                   armed                        2060396235216    240
+      5.270171s t1168944 wait                   rearm-left                   2060396235216    240
+      5.270172s t1168944 delivery               callback-left                     0      0
+      5.270182s t1168944 wait                   trampoline-left              2060396235216      0
+      5.270193s t1168668 wait                   created                      2060396265488    268
+      5.270195s t1168668 wait                   armed                        2060396265488    268
+      5.270212s t1168668 postmortem             wait-probe-signalled            268      0
+      5.270220s t1168944 wait                   trampoline-entered           2060396265488      0
+      5.270250s t1168944 wait                   trampoline-left              2060396265488      0
+      5.270259s t1168668 postmortem             wait-probe-answered               1      0
+      5.270260s t1168668 wait                   drop-begin                   2060396265488    268
+      5.270261s t1168668 wait                   suppress-and-disarm          2060396265488      1
+      5.270261s t1168668 wait                   disarmed                     2060396265488      0
+      5.270262s t1168668 wait                   drop-drained                 2060396265488      0
+      5.270270s t1168668 wait                   drop-closed                  2060396265488    268
+      5.270276s t1168668 postmortem             probe-left                        1      1
+      5.270716s t1168672 experiment             threads-at-stall                  6      0
+      5.270717s t1168672 postmortem             outstanding-begin                 0      0
+      5.270718s t1168672 postmortem             outstanding-read                  0      0
+      5.270718s t1168672 postmortem             probe-begin                       0      0
+      5.270722s t1168672 work                   created                      2060396218112      0
+      5.270733s t1168672 work                   submitted                    2060396218112      0
+      5.270739s t1168944 work                   trampoline-entered           2060396218112      0
+      5.270753s t1168944 work                   trampoline-left              2060396218112      0
+      5.270763s t1168672 postmortem             work-probe-answered               1      0
+      5.270764s t1168672 work                   drop-begin                   2060396218112      0
+      5.270764s t1168672 work                   drop-drained                 2060396218112      0
+      5.270767s t1168672 work                   drop-closed                  2060396218112      0
+      5.270774s t1168672 wait                   created                      2060396265488    276
+      5.270775s t1168672 wait                   armed                        2060396265488    276
+      5.270786s t1168672 postmortem             wait-probe-signalled            276      0
+      5.270792s t1168944 wait                   trampoline-entered           2060396265488      0
+      5.270802s t1168944 wait                   trampoline-left              2060396265488      0
+      5.270807s t1168672 postmortem             wait-probe-answered               1      0
+      5.270807s t1168672 wait                   drop-begin                   2060396265488    276
+      5.270808s t1168672 wait                   suppress-and-disarm          2060396265488      1
+      5.270808s t1168672 wait                   disarmed                     2060396265488      0
+      5.270809s t1168672 wait                   drop-drained                 2060396265488      0
+      5.270813s t1168672 wait                   drop-closed                  2060396265488    276
+      5.270817s t1168672 postmortem             probe-left                        1      1
+      5.530075s t1168668 experiment             threads-after-poke                8      0
+
+  pool liveness  : work item ran: true; a fresh wait ran: true (both within 2s)
+M26.9 delivery stalled: completions_queued_before_handover_are_still_delivered (every completion was already queued before the handover, so the kernel had nothing left to do -- a stall here is in the signal or the pool, never in the device)
+  delivered      : 0 of 8
+  callbacks run  : 8 -- times the pool invoked the callback. Equal to delivered means everything the callback received reached this thread; greater means the gap is between the callback and the channel.
+  outstanding    : 0 -- the ring's own count, which decrements on pop, and the pop happens inside the callback. So it cannot on its own separate 'the kernel has not finished' from 'the callback never ran'.
+  arrival times  : []
+  inter-arrival  : []
+  waited         : 5s before giving up
+  post-mortem    : waiting a further 10s to see whether it is late rather than lost; the line below is the answer
+  trace (oldest first):
+      0.000000s t1168676 experiment             env-built                         0      1
+      0.000029s t1168676 delivery               event-attached                  228      0
+      0.000044s t1168676 wait                   created                      2060396224464    228
+      0.000046s t1168676 wait                   armed                        2060396224464    228
+      0.000046s t1168676 delivery               armed                             0      0
+      0.000064s t1168676 delivery               setup-signalled                 224      0
+      0.000068s t1168676 wait                   drop-begin                   2060396224464    228
+      0.000068s t1168676 wait                   suppress-and-disarm          2060396224464      1
+      0.000070s t1168676 wait                   disarmed                     2060396224464      0
+      0.000072s t1168676 wait                   drop-drained                 2060396224464      0
+      0.000077s t1168676 wait                   drop-closed                  2060396224464    228
+      0.002397s t1168668 experiment             env-built                         0      1
+      0.002404s t1168668 delivery               event-attached                  240      0
+      0.002408s t1168668 wait                   created                      2060396235216    240
+      0.002410s t1168668 wait                   armed                        2060396235216    240
+      0.002410s t1168668 delivery               armed                             0      0
+      0.002411s t1168668 delivery               setup-signalled                 236      0
+      0.002495s t1168672 experiment             env-built                         0      1
+      0.002501s t1168672 delivery               event-attached                  252      0
+      0.002504s t1168672 wait                   created                      2060396246800    252
+      0.002506s t1168672 wait                   armed                        2060396246800    252
+      0.002511s t1168672 delivery               armed                             0      0
+      0.002512s t1168672 delivery               setup-signalled                 248      8
+      5.010519s t1168668 postmortem             delivery-wait-expired             0      0
+      5.010520s t1168672 postmortem             delivery-wait-expired             0      0
+      5.269661s t1168668 experiment             threads-at-stall                  6      0
+      5.269664s t1168668 postmortem             outstanding-begin                 0      0
+      5.269667s t1168668 postmortem             outstanding-read                  8      0
+      5.269667s t1168668 postmortem             probe-begin                       0      0
+      5.269699s t1168668 work                   created                      2060396218112      0
+      5.269800s t1168668 work                   submitted                    2060396218112      0
+      5.270078s t1168944 wait                   trampoline-entered           2060396246800      0
+      5.270079s t1168944 delivery               callback-entered                  0      0
+      5.270112s t1168944 wait                   rearm-entered                2060396246800      0
+      5.270115s t1168944 wait                   armed                        2060396246800    252
+      5.270117s t1168944 wait                   rearm-left                   2060396246800    252
+      5.270117s t1168944 delivery               callback-left                     0      0
+      5.270118s t1168944 wait                   trampoline-left              2060396246800      0
+      5.270119s t1168944 work                   trampoline-entered           2060396218112      0
+      5.270142s t1168944 work                   trampoline-left              2060396218112      0
+      5.270144s t1168944 wait                   trampoline-entered           2060396235216      0
+      5.270144s t1168944 delivery               callback-entered                  0      0
+      5.270149s t1168668 postmortem             work-probe-answered               1      0
+      5.270150s t1168668 work                   drop-begin                   2060396218112      0
+      5.270151s t1168668 work                   drop-drained                 2060396218112      0
+      5.270157s t1168668 work                   drop-closed                  2060396218112      0
+      5.270164s t1168944 wait                   rearm-entered                2060396235216      0
+      5.270166s t1168944 wait                   armed                        2060396235216    240
+      5.270166s t1168944 wait                   rearm-left                   2060396235216    240
+      5.270167s t1168944 delivery               callback-left                     0      0
+      5.270167s t1168944 wait                   trampoline-left              2060396235216      0
+      5.270170s t1168944 wait                   trampoline-entered           2060396235216      0
+      5.270170s t1168944 delivery               callback-entered                  0      0
+      5.270170s t1168944 wait                   rearm-entered                2060396235216      0
+      5.270171s t1168944 wait                   armed                        2060396235216    240
+      5.270171s t1168944 wait                   rearm-left                   2060396235216    240
+      5.270172s t1168944 delivery               callback-left                     0      0
+      5.270182s t1168944 wait                   trampoline-left              2060396235216      0
+      5.270193s t1168668 wait                   created                      2060396265488    268
+      5.270195s t1168668 wait                   armed                        2060396265488    268
+      5.270212s t1168668 postmortem             wait-probe-signalled            268      0
+      5.270220s t1168944 wait                   trampoline-entered           2060396265488      0
+      5.270250s t1168944 wait                   trampoline-left              2060396265488      0
+      5.270259s t1168668 postmortem             wait-probe-answered               1      0
+      5.270260s t1168668 wait                   drop-begin                   2060396265488    268
+      5.270261s t1168668 wait                   suppress-and-disarm          2060396265488      1
+      5.270261s t1168668 wait                   disarmed                     2060396265488      0
+      5.270262s t1168668 wait                   drop-drained                 2060396265488      0
+      5.270270s t1168668 wait                   drop-closed                  2060396265488    268
+      5.270276s t1168668 postmortem             probe-left                        1      1
+      5.270716s t1168672 experiment             threads-at-stall                  6      0
+      5.270717s t1168672 postmortem             outstanding-begin                 0      0
+      5.270718s t1168672 postmortem             outstanding-read                  0      0
+      5.270718s t1168672 postmortem             probe-begin                       0      0
+      5.270722s t1168672 work                   created                      2060396218112      0
+      5.270733s t1168672 work                   submitted                    2060396218112      0
+      5.270739s t1168944 work                   trampoline-entered           2060396218112      0
+      5.270753s t1168944 work                   trampoline-left              2060396218112      0
+      5.270763s t1168672 postmortem             work-probe-answered               1      0
+      5.270764s t1168672 work                   drop-begin                   2060396218112      0
+      5.270764s t1168672 work                   drop-drained                 2060396218112      0
+      5.270767s t1168672 work                   drop-closed                  2060396218112      0
+      5.270774s t1168672 wait                   created                      2060396265488    276
+      5.270775s t1168672 wait                   armed                        2060396265488    276
+      5.270786s t1168672 postmortem             wait-probe-signalled            276      0
+      5.270792s t1168944 wait                   trampoline-entered           2060396265488      0
+      5.270802s t1168944 wait                   trampoline-left              2060396265488      0
+      5.270807s t1168672 postmortem             wait-probe-answered               1      0
+      5.270807s t1168672 wait                   drop-begin                   2060396265488    276
+      5.270808s t1168672 wait                   suppress-and-disarm          2060396265488      1
+      5.270808s t1168672 wait                   disarmed                     2060396265488      0
+      5.270809s t1168672 wait                   drop-drained                 2060396265488      0
+      5.270813s t1168672 wait                   drop-closed                  2060396265488    276
+      5.270817s t1168672 postmortem             probe-left                        1      1
+      5.530075s t1168668 experiment             threads-after-poke                8      0
+      5.530209s t1168672 experiment             threads-after-poke                8      0
+
+thread '
+  pool liveness  : work item ran: true; a fresh wait ran: true (both within 2s)
+completions_are_delivered_on_pool_threads_without_the_submitting_thread_waiting' (1168668) panicked at crates\windows-ioring-sys\tests\event_delivery.rs:345:13:
+M26.9 delivery stalled: completions_are_delivered_on_pool_threads_without_the_submitting_thread_waiting
+  delivered      : 0 of 8
+  callbacks run  : 8 -- times the pool invoked the callback. Equal to delivered means everything the callback received reached this thread; greater means the gap is between the callback and the channel.
+  outstanding    : 8 -- the ring's own count, which decrements on pop, and the pop happens inside the callback. So it cannot on its own separate 'the kernel has not finished' from 'the callback never ran'.
+  arrival times  : []
+  inter-arrival  : []
+  waited         : 5s before giving up
+  post-mortem    : it arrived, 4.2µs past the bound
+  trace (oldest first):
+      0.000000s t1168676 experiment             env-built                         0      1
+      0.000029s t1168676 delivery               event-attached                  228      0
+      0.000044s t1168676 wait                   created                      2060396224464    228
+      0.000046s t1168676 wait                   armed                        2060396224464    228
+      0.000046s t1168676 delivery               armed                             0      0
+      0.000064s t1168676 delivery               setup-signalled                 224      0
+      0.000068s t1168676 wait                   drop-begin                   2060396224464    228
+      0.000068s t1168676 wait                   suppress-and-disarm          2060396224464      1
+      0.000070s t1168676 wait                   disarmed                     2060396224464      0
+      0.000072s t1168676 wait                   drop-drained                 2060396224464      0
+      0.000077s t1168676 wait                   drop-closed                  2060396224464    228
+      0.002397s t1168668 experiment             env-built                         0      1
+      0.002404s t1168668 delivery               event-attached                  240      0
+      0.002408s t1168668 wait                   created                      2060396235216    240
+      0.002410s t1168668 wait                   armed                        2060396235216    240
+      0.002410s t1168668 delivery               armed                             0      0
+      0.002411s t1168668 delivery               setup-signalled                 236      0
+      0.002495s t1168672 experiment             env-built                         0      1
+      0.002501s t1168672 delivery               event-attached                  252      0
+      0.002504s t1168672 wait                   created                      2060396246800    252
+      0.002506s t1168672 wait                   armed                        2060396246800    252
+      0.002511s t1168672 delivery               armed                             0      0
+      0.002512s t1168672 delivery               setup-signalled                 248      8
+      5.010519s t1168668 postmortem             delivery-wait-expired             0      0
+      5.010520s t1168672 postmortem             delivery-wait-expired             0      0
+      5.269661s t1168668 experiment             threads-at-stall                  6      0
+      5.269664s t1168668 postmortem             outstanding-begin                 0      0
+      5.269667s t1168668 postmortem             outstanding-read                  8      0
+      5.269667s t1168668 postmortem             probe-begin                       0      0
+      5.269699s t1168668 work                   created                      2060396218112      0
+      5.269800s t1168668 work                   submitted                    2060396218112      0
+      5.270078s t1168944 wait                   trampoline-entered           2060396246800      0
+      5.270079s t1168944 delivery               callback-entered                  0      0
+      5.270112s t1168944 wait                   rearm-entered                2060396246800      0
+      5.270115s t1168944 wait                   armed                        2060396246800    252
+      5.270117s t1168944 wait                   rearm-left                   2060396246800    252
+      5.270117s t1168944 delivery               callback-left                     0      0
+      5.270118s t1168944 wait                   trampoline-left              2060396246800      0
+      5.270119s t1168944 work                   trampoline-entered           2060396218112      0
+      5.270142s t1168944 work                   trampoline-left              2060396218112      0
+      5.270144s t1168944 wait                   trampoline-entered           2060396235216      0
+      5.270144s t1168944 delivery               callback-entered                  0      0
+      5.270149s t1168668 postmortem             work-probe-answered               1      0
+      5.270150s t1168668 work                   drop-begin                   2060396218112      0
+      5.270151s t1168668 work                   drop-drained                 2060396218112      0
+      5.270157s t1168668 work                   drop-closed                  2060396218112      0
+      5.270164s t1168944 wait                   rearm-entered                2060396235216      0
+      5.270166s t1168944 wait                   armed                        2060396235216    240
+      5.270166s t1168944 wait                   rearm-left                   2060396235216    240
+      5.270167s t1168944 delivery               callback-left                     0      0
+      5.270167s t1168944 wait                   trampoline-left              2060396235216      0
+      5.270170s t1168944 wait                   trampoline-entered           2060396235216      0
+      5.270170s t1168944 delivery               callback-entered                  0      0
+      5.270170s t1168944 wait                   rearm-entered                2060396235216      0
+      5.270171s t1168944 wait                   armed                        2060396235216    240
+      5.270171s t1168944 wait                   rearm-left                   2060396235216    240
+      5.270172s t1168944 delivery               callback-left                     0      0
+      5.270182s t1168944 wait                   trampoline-left              2060396235216      0
+      5.270193s t1168668 wait                   created                      2060396265488    268
+      5.270195s t1168668 wait                   armed                        2060396265488    268
+      5.270212s t1168668 postmortem             wait-probe-signalled            268      0
+      5.270220s t1168944 wait                   trampoline-entered           2060396265488      0
+      5.270250s t1168944 wait                   trampoline-left              2060396265488      0
+      5.270259s t1168668 postmortem             wait-probe-answered               1      0
+      5.270260s t1168668 wait                   drop-begin                   2060396265488    268
+      5.270261s t1168668 wait                   suppress-and-disarm          2060396265488      1
+      5.270261s t1168668 wait                   disarmed                     2060396265488      0
+      5.270262s t1168668 wait                   drop-drained                 2060396265488      0
+      5.270270s t1168668 wait                   drop-closed                  2060396265488    268
+      5.270276s t1168668 postmortem             probe-left                        1      1
+      5.270716s t1168672 experiment             threads-at-stall                  6      0
+      5.270717s t1168672 postmortem             outstanding-begin                 0      0
+      5.270718s t1168672 postmortem             outstanding-read                  0      0
+      5.270718s t1168672 postmortem             probe-begin                       0      0
+      5.270722s t1168672 work                   created                      2060396218112      0
+      5.270733s t1168672 work                   submitted                    2060396218112      0
+      5.270739s t1168944 work                   trampoline-entered           2060396218112      0
+      5.270753s t1168944 work                   trampoline-left              2060396218112      0
+      5.270763s t1168672 postmortem             work-probe-answered               1      0
+      5.270764s t1168672 work                   drop-begin                   2060396218112      0
+      5.270764s t1168672 work                   drop-drained                 2060396218112      0
+      5.270767s t1168672 work                   drop-closed                  2060396218112      0
+      5.270774s t1168672 wait                   created                      2060396265488    276
+      5.270775s t1168672 wait                   armed                        2060396265488    276
+      5.270786s t1168672 postmortem             wait-probe-signalled            276      0
+      5.270792s t1168944 wait                   trampoline-entered           2060396265488      0
+      5.270802s t1168944 wait                   trampoline-left              2060396265488      0
+      5.270807s t1168672 postmortem             wait-probe-answered               1      0
+      5.270807s t1168672 wait                   drop-begin                   2060396265488    276
+      5.270808s t1168672 wait                   suppress-and-disarm          2060396265488      1
+      5.270808s t1168672 wait                   disarmed                     2060396265488      0
+      5.270809s t1168672 wait                   drop-drained                 2060396265488      0
+      5.270813s t1168672 wait                   drop-closed                  2060396265488    276
+      5.270817s t1168672 postmortem             probe-left                        1      1
+      5.530075s t1168668 experiment             threads-after-poke                8      0
+      5.530209s t1168672 experiment             threads-after-poke                8      0
+      5.530602s t1168668 postmortem             second-wait-begin                 0      0
+      5.530609s t1168668 postmortem             second-wait-ended                 7      0
+
+  pool liveness  : work item ran: true; a fresh wait ran: true (both within 2s)
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+thread 'completions_queued_before_handover_are_still_delivered' (1168672) panicked at crates\windows-ioring-sys\tests\event_delivery.rs:345:13:
+M26.9 delivery stalled: completions_queued_before_handover_are_still_delivered (every completion was already queued before the handover, so the kernel had nothing left to do -- a stall here is in the signal or the pool, never in the device)
+  delivered      : 0 of 8
+  callbacks run  : 8 -- times the pool invoked the callback. Equal to delivered means everything the callback received reached this thread; greater means the gap is between the callback and the channel.
+  outstanding    : 0 -- the ring's own count, which decrements on pop, and the pop happens inside the callback. So it cannot on its own separate 'the kernel has not finished' from 'the callback never ran'.
+  arrival times  : []
+  inter-arrival  : []
+  waited         : 5s before giving up
+  post-mortem    : it arrived, 3.4µs past the bound
+  trace (oldest first):
+      0.000000s t1168676 experiment             env-built                         0      1
+      0.000029s t1168676 delivery               event-attached                  228      0
+      0.000044s t1168676 wait                   created                      2060396224464    228
+      0.000046s t1168676 wait                   armed                        2060396224464    228
+      0.000046s t1168676 delivery               armed                             0      0
+      0.000064s t1168676 delivery               setup-signalled                 224      0
+      0.000068s t1168676 wait                   drop-begin                   2060396224464    228
+      0.000068s t1168676 wait                   suppress-and-disarm          2060396224464      1
+      0.000070s t1168676 wait                   disarmed                     2060396224464      0
+      0.000072s t1168676 wait                   drop-drained                 2060396224464      0
+      0.000077s t1168676 wait                   drop-closed                  2060396224464    228
+      0.002397s t1168668 experiment             env-built                         0      1
+      0.002404s t1168668 delivery               event-attached                  240      0
+      0.002408s t1168668 wait                   created                      2060396235216    240
+      0.002410s t1168668 wait                   armed                        2060396235216    240
+      0.002410s t1168668 delivery               armed                             0      0
+      0.002411s t1168668 delivery               setup-signalled                 236      0
+      0.002495s t1168672 experiment             env-built                         0      1
+      0.002501s t1168672 delivery               event-attached                  252      0
+      0.002504s t1168672 wait                   created                      2060396246800    252
+      0.002506s t1168672 wait                   armed                        2060396246800    252
+      0.002511s t1168672 delivery               armed                             0      0
+      0.002512s t1168672 delivery               setup-signalled                 248      8
+      5.010519s t1168668 postmortem             delivery-wait-expired             0      0
+      5.010520s t1168672 postmortem             delivery-wait-expired             0      0
+      5.269661s t1168668 experiment             threads-at-stall                  6      0
+      5.269664s t1168668 postmortem             outstanding-begin                 0      0
+      5.269667s t1168668 postmortem             outstanding-read                  8      0
+      5.269667s t1168668 postmortem             probe-begin                       0      0
+      5.269699s t1168668 work                   created                      2060396218112      0
+      5.269800s t1168668 work                   submitted                    2060396218112      0
+      5.270078s t1168944 wait                   trampoline-entered           2060396246800      0
+      5.270079s t1168944 delivery               callback-entered                  0      0
+      5.270112s t1168944 wait                   rearm-entered                2060396246800      0
+      5.270115s t1168944 wait                   armed                        2060396246800    252
+      5.270117s t1168944 wait                   rearm-left                   2060396246800    252
+      5.270117s t1168944 delivery               callback-left                     0      0
+      5.270118s t1168944 wait                   trampoline-left              2060396246800      0
+      5.270119s t1168944 work                   trampoline-entered           2060396218112      0
+      5.270142s t1168944 work                   trampoline-left              2060396218112      0
+      5.270144s t1168944 wait                   trampoline-entered           2060396235216      0
+      5.270144s t1168944 delivery               callback-entered                  0      0
+      5.270149s t1168668 postmortem             work-probe-answered               1      0
+      5.270150s t1168668 work                   drop-begin                   2060396218112      0
+      5.270151s t1168668 work                   drop-drained                 2060396218112      0
+      5.270157s t1168668 work                   drop-closed                  2060396218112      0
+      5.270164s t1168944 wait                   rearm-entered                2060396235216      0
+      5.270166s t1168944 wait                   armed                        2060396235216    240
+      5.270166s t1168944 wait                   rearm-left                   2060396235216    240
+      5.270167s t1168944 delivery               callback-left                     0      0
+      5.270167s t1168944 wait                   trampoline-left              2060396235216      0
+      5.270170s t1168944 wait                   trampoline-entered           2060396235216      0
+      5.270170s t1168944 delivery               callback-entered                  0      0
+      5.270170s t1168944 wait                   rearm-entered                2060396235216      0
+      5.270171s t1168944 wait                   armed                        2060396235216    240
+      5.270171s t1168944 wait                   rearm-left                   2060396235216    240
+      5.270172s t1168944 delivery               callback-left                     0      0
+      5.270182s t1168944 wait                   trampoline-left              2060396235216      0
+      5.270193s t1168668 wait                   created                      2060396265488    268
+      5.270195s t1168668 wait                   armed                        2060396265488    268
+      5.270212s t1168668 postmortem             wait-probe-signalled            268      0
+      5.270220s t1168944 wait                   trampoline-entered           2060396265488      0
+      5.270250s t1168944 wait                   trampoline-left              2060396265488      0
+      5.270259s t1168668 postmortem             wait-probe-answered               1      0
+      5.270260s t1168668 wait                   drop-begin                   2060396265488    268
+      5.270261s t1168668 wait                   suppress-and-disarm          2060396265488      1
+      5.270261s t1168668 wait                   disarmed                     2060396265488      0
+      5.270262s t1168668 wait                   drop-drained                 2060396265488      0
+      5.270270s t1168668 wait                   drop-closed                  2060396265488    268
+      5.270276s t1168668 postmortem             probe-left                        1      1
+      5.270716s t1168672 experiment             threads-at-stall                  6      0
+      5.270717s t1168672 postmortem             outstanding-begin                 0      0
+      5.270718s t1168672 postmortem             outstanding-read                  0      0
+      5.270718s t1168672 postmortem             probe-begin                       0      0
+      5.270722s t1168672 work                   created                      2060396218112      0
+      5.270733s t1168672 work                   submitted                    2060396218112      0
+      5.270739s t1168944 work                   trampoline-entered           2060396218112      0
+      5.270753s t1168944 work                   trampoline-left              2060396218112      0
+      5.270763s t1168672 postmortem             work-probe-answered               1      0
+      5.270764s t1168672 work                   drop-begin                   2060396218112      0
+      5.270764s t1168672 work                   drop-drained                 2060396218112      0
+      5.270767s t1168672 work                   drop-closed                  2060396218112      0
+      5.270774s t1168672 wait                   created                      2060396265488    276
+      5.270775s t1168672 wait                   armed                        2060396265488    276
+      5.270786s t1168672 postmortem             wait-probe-signalled            276      0
+      5.270792s t1168944 wait                   trampoline-entered           2060396265488      0
+      5.270802s t1168944 wait                   trampoline-left              2060396265488      0
+      5.270807s t1168672 postmortem             wait-probe-answered               1      0
+      5.270807s t1168672 wait                   drop-begin                   2060396265488    276
+      5.270808s t1168672 wait                   suppress-and-disarm          2060396265488      1
+      5.270808s t1168672 wait                   disarmed                     2060396265488      0
+      5.270809s t1168672 wait                   drop-drained                 2060396265488      0
+      5.270813s t1168672 wait                   drop-closed                  2060396265488    276
+      5.270817s t1168672 postmortem             probe-left                        1      1
+      5.530075s t1168668 experiment             threads-after-poke                8      0
+      5.530209s t1168672 experiment             threads-after-poke                8      0
+      5.530602s t1168668 postmortem             second-wait-begin                 0      0
+      5.530609s t1168668 postmortem             second-wait-ended                 7      0
+      5.530787s t1168672 postmortem             second-wait-begin                 0      0
+      5.530793s t1168672 postmortem             second-wait-ended                 6      0
+
+test completions_are_delivered_on_pool_threads_without_the_submitting_thread_waiting ... FAILED
+  pool liveness  : work item ran: true; a fresh wait ran: true (both within 2s)
+test completions_queued_before_handover_are_still_delivered ... FAILED
+
+failures:
+
+failures:
+    completions_are_delivered_on_pool_threads_without_the_submitting_thread_waiting
+    completions_queued_before_handover_are_still_delivered
+
+test result: FAILED. 1 passed; 2 failed; 0 ignored; 0 measured; 4 filtered out; finished in 5.53s
+
+

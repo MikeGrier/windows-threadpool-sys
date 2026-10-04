@@ -1,6 +1,9 @@
 // Copyright (c) 2026 Mike Grier
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+// The only user is gated off under `fail-fast` (dropping a submitted work item
+// is required to panic there), so the import is unused in that build alone.
+#[cfg_attr(feature = "fail-fast", allow(unused_imports))]
 use std::time::Duration;
 
 use crate::callback_env::CallbackEnviron;
@@ -96,6 +99,10 @@ fn submit_ten_times_counter_is_ten() {
 // --- callback ownership model ---
 
 /// Drop must wait for in-flight callbacks before freeing the captured context.
+// Dropping a submitted work item is this test's subject, so it must keep doing
+// exactly that. Under `fail-fast` that drop is *required* to panic, so the
+// armed behaviour is guarded by the child-process test instead.
+#[cfg(not(feature = "fail-fast"))]
 #[test]
 fn drop_waits_for_in_flight_callback() {
     let done = Arc::new(AtomicBool::new(false));
@@ -180,6 +187,20 @@ fn cancel_pending_does_not_panic() {
     work.cancel_pending();
     // Count is in [0, 10] — we don't assert a specific value since cancellation is racy.
     assert!(count.load(Ordering::SeqCst) <= 10);
+    // No drain here, and there used to be one. Its comment said the obligation
+    // is owed "however many callbacks have run", which is true of a *dispatch*
+    // and irrelevant to what happened above: `cancel_pending` returns with
+    // nothing queued and nothing executing, and settles on that basis, so the
+    // drain was a second native synchronisation waiting for a state already
+    // reached. The claim is asserted directly by
+    // `a_cancel_settles_the_drain_obligation_the_way_a_wait_does`; arriving at
+    // the end of this test without a `fail-fast` panic from `Drop` is the same
+    // fact observed from the other side.
+    assert!(
+        !work.obligation_owed(),
+        "the cancel above settles the drain obligation, so this object owes \
+         nothing by the time it is dropped"
+    );
 }
 
 /// After cancel_pending, resubmit and wait — must run exactly once.
@@ -262,4 +283,52 @@ fn work_with_runs_long_env_callback_runs() {
     work.submit();
     work.wait();
     assert_eq!(count.load(Ordering::SeqCst), 1);
+}
+
+/// A cancel settles the drain obligation, as a wait does.
+///
+/// `cancel_pending` returns only once nothing is queued and nothing is
+/// executing, which is the state the obligation tracks -- so leaving it owed
+/// told a caller who had drained correctly that it had not, and under
+/// `fail-fast` turned that false report into a panic from `Drop`.
+///
+/// Both directions, because a test that only checks the cancel would pass on an
+/// implementation that never arms the obligation at all: the submit must arm
+/// it, and the cancel must clear it.
+#[test]
+fn a_cancel_settles_the_drain_obligation_the_way_a_wait_does() {
+    let work = ThreadpoolWork::new(|| {}, None).expect("create work");
+    assert!(
+        !work.obligation_owed(),
+        "a work object that was never submitted owes no drain"
+    );
+    work.submit();
+    assert!(
+        work.obligation_owed(),
+        "a submit is what makes the drain owed -- without this the next \
+         assertion would hold for the wrong reason"
+    );
+    work.cancel_pending();
+    assert!(
+        !work.obligation_owed(),
+        "cancel_pending returns with nothing queued and nothing executing, so \
+         the obligation it leaves behind is a false one"
+    );
+}
+
+/// The same object, submitted again after a cancel, owes the drain again.
+///
+/// The settle above must not be a one-way latch: `cancel_pending` leaves the
+/// object reusable, and a later submit is a fresh obligation.
+#[test]
+fn a_submit_after_a_cancel_owes_the_drain_again() {
+    let work = ThreadpoolWork::new(|| {}, None).expect("create work");
+    work.submit();
+    work.cancel_pending();
+    work.submit();
+    assert!(
+        work.obligation_owed(),
+        "the settle must clear the obligation, not disable the tracking"
+    );
+    work.stop_and_drain();
 }

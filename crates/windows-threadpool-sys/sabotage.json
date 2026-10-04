@@ -1,0 +1,351 @@
+{
+  "package": "windows-threadpool-sys",
+  "description": "Sabotages for windows-threadpool-sys: the draining teardown and its per-object obligation, the self-heal registry and repair submission, and the trace record buffer. Run with tools/run-sabotage.ps1; see tools/README-sabotage.md for the format and for why the results are read the way they are.",
+  "notCoveredHere": "The hook facility this manifest was originally written for has been removed: it patched undocumented \ntdll syscall stubs, and this crate ships no undocumented entry points or assumptions about unpublished layouts. Fourteen entries went with it. What remains sweeps the teardown model, the drain obligations, and the self-heal -- all of which rest on documented Win32. The one trace entry below covers the record buffer's eviction, which is this crate's own data structure.",
+  "testArgs": [
+    "--all-features"
+  ],
+  "whyTestArgs": "--all-features, because this crate's two optional features each gate code these sabotages patch and tests that catch them: `self-heal` gates the whole repair registry, and `trace` gates the record buffer and every test that reads it -- including the one that catches the periodic member draining rather than cancelling, which is observable only in the trace. Without the features the patched code is not compiled, the sabotage lands in code that does not exist, and the sweep reports SURVIVED for guards that are present and working. (It formerly said this was about the hook module; that module was removed, and the reason the flag is still required is a different one.)",
+  "sabotages": [
+    {
+      "name": "the pre-main initialiser is dropped by the linker",
+      "file": "src/trace.rs",
+      "expect": "caught",
+      "why": "`#[used]` is what stops the linker discarding a static nothing references, and `.CRT$XCU` is what makes the CRT call it before main. Getting either wrong still builds: the instrument silently reverts to arming lazily, on the first traced call, which in the investigation this was built for lands 0.12s into the process, long after the fault is established. Renaming the section reproduces exactly that -- a working build whose initialiser never runs.",
+      "find": [
+        "#[unsafe(link_section = \".CRT$XCU\")]"
+      ],
+      "replace": [
+        "#[unsafe(link_section = \".CRT$XCZ_not_an_initialiser\")]"
+      ]
+    },
+    {
+      "name": "the wait's Drop cancels instead of draining",
+      "file": "src/wait.rs",
+      "expect": "caught",
+      "why": "The teardown-drains decision: Drop must run a queued callback, not discard it. This is the exact defect the M26.13 investigation measured -- the cancelling form leaves the default pool unable to make its first worker. Both forms leave the object quiescent, so only a guard asserting the callback RAN can tell them apart, which is why the tests that were already here could not.",
+      "find": [
+        "        // The lock is released before draining: a callback blocked on it would",
+        "        // otherwise never finish, and this wait would never return.",
+        "        self.wait();",
+        "        crate::trace_record!(\"wait\", \"drop-drained\", self.wait);"
+      ],
+      "replace": [
+        "        // The lock is released before draining: a callback blocked on it would",
+        "        // otherwise never finish, and this wait would never return.",
+        "        unsafe { self.try_cancel_pending_no_heal_tracking() };",
+        "        crate::trace_record!(\"wait\", \"drop-drained\", self.wait);"
+      ]
+    },
+    {
+      "name": "the wait's stop_and_drain cancels instead of draining",
+      "file": "src/wait.rs",
+      "expect": "caught",
+      "why": "The early-discharge method a caller uses to pay the teardown cost at a point they choose. Separate from Drop because they are separate call sites: fixing one and not the other would leave whichever the caller did not reach still discarding work. The method has been named `stop_and_drain` and implemented as a cancel since it was written.",
+      "find": [
+        "            unsafe { WaitForThreadpoolWaitCallbacks(wait, FALSE) };"
+      ],
+      "replace": [
+        "            unsafe { WaitForThreadpoolWaitCallbacks(wait, TRUE) };"
+      ]
+    },
+    {
+      "name": "the timer's disarm is taken to leave a queued tick alone",
+      "file": "src/timer/tests.rs",
+      "expect": "caught",
+      "why": "Pins the asymmetry that decides whether this crate's timer teardown can distinguish draining from cancelling: SetThreadpoolTimer(NULL) discards a queued tick where SetThreadpoolWait(NULL) does not. Inverting the expectation must fail, because the whole argument for leaving the timer's drain form unverified rests on this being measured rather than assumed.",
+      "find": [
+        "        outcomes[1], 0,"
+      ],
+      "replace": [
+        "        outcomes[1], 1,"
+      ]
+    },
+    {
+      "name": "the repair object is closed without draining it",
+      "file": "src/heal.rs",
+      "expect": "caught",
+      "why": "CloseThreadpoolWork does not wait -- it frees the work object asynchronously once outstanding callbacks finish. A repair callback stamps last_started on entry, which is exactly what makes its entry retirable, and then writes to the entry again. Without the drain, a retirement landing between those two writes drops the last Arc and the callback finishes into a released allocation. The guard asserts the retirement blocked rather than waiting for a fault, because a crash-caught result is treated as uncovered here.",
+      "find": [
+        "            crate::trace_call!(\"WaitForThreadpoolWorkCallbacks\", work, 0, {",
+        "                unsafe { WaitForThreadpoolWorkCallbacks(work, FALSE) };",
+        "            });"
+      ],
+      "replace": [
+        "            let _ = work;"
+      ]
+    },
+    {
+      "name": "a cancellation does not arm a repair",
+      "file": "src/heal.rs",
+      "expect": "caught",
+      "why": "The first of the three claims the self-heal rests on. `try_cancel_pending` is a safe method only because the crate repairs the pool the cancel may have wedged, and the repair begins with the mark. A cancel that does not mark leaves the pool to be fixed by whatever the application happens to submit next, which for a program built on waits, timers and I/O is nothing.",
+      "find": [
+        "    fn mark_and_arrange_repair(entry: &PoolEntry) -> bool {",
+        "        entry.stamp_cancelled(now());"
+      ],
+      "replace": [
+        "    fn mark_and_arrange_repair(entry: &PoolEntry) -> bool {"
+      ]
+    },
+    {
+      "name": "a dispatch never updates its pool's stamp",
+      "file": "src/heal.rs",
+      "expect": "caught",
+      "why": "The second claim. Health is derived, not stored: a pool is unhealed while its last cancellation is at or after the last time its own repair callback ran. This stamp is the only thing that ever heals an entry, so a trampoline that does not write it leaves every cancelled pool unhealed forever -- the entry is never retired, and every tick that finds no repair in flight submits another.",
+      "find": [
+        "        entry.stamp_started(now());"
+      ],
+      "replace": [
+        "        entry.stamp_started(0);"
+      ]
+    },
+    {
+      "name": "the submission stamp is published with a store instead of fetch_max",
+      "file": "src/heal.rs",
+      "expect": "caught",
+      "why": "`last_submitted` was a plain store on the argument that submissions come only from a tick and ticks are serialised on the healer's single thread. `mark_and_arrange_repair`'s inline fallback ended that: when the healer cannot be started, every cancelling thread submits the repair itself, and cancellation is public API callable from anywhere. Two threads can read the clock and store out of order, leaving an older value behind a newer one -- and `repair_overdue` measures `now - last_submitted`, so the entry looks overdue before it is, retries early, and on a fail-fast build enough early retries end the process. The guard is ordered rather than racy: the largest value is published first and every other thread writes a smaller one afterwards, so a plain store is guaranteed to lose it. Measured 15 of 15 with this patch and 0 of 15 false failures without it; an earlier, unordered version of the same test caught it 4 times in 10.",
+      "find": [
+        "            self.last_submitted.fetch_max(at, Ordering::SeqCst);"
+      ],
+      "replace": [
+        "            self.last_submitted.store(at, Ordering::SeqCst);"
+      ]
+    },
+    {
+      "name": "the TP_IO fail-fast panics before the rundown instead of after it",
+      "file": "src/io.rs",
+      "expect": "caught",
+      "why": "`ThreadpoolIo::drop` reports a skipped rundown through `fail_fast_if_owed`, and the report must come AFTER the cancel and the drain. Panicking first unwinds past both, leaving the kernel writing into storage the frame is about to release -- the abandonment the feature exists to prevent, reached through the mechanism meant to prevent it. The patch moves the report to the top of `drop`, which still panics, so a guard that only checked 'the drop panics' would score it caught while the ordering it protects was gone. `drop_with_operations_outstanding_panics_only_after_draining_them` asserts the drain instead: every outstanding operation must have called back, which cannot happen after an unwind. Recorded because this state had NO coverage in a fail-fast build at all until M-T13 -- the behavioural test is compiled out under the feature, and the comment naming its replacement named a file that does not mention `ThreadpoolIo`.",
+      "find": [
+        "        let count = self.outstanding();",
+        "        crate::trace_record!(\"io\", \"drop-begin\", self.tp_io, count);"
+      ],
+      "replace": [
+        "        let count = self.outstanding();",
+        "        crate::trace_record!(\"io\", \"drop-begin\", self.tp_io, count);",
+        "        crate::obligation::fail_fast_if_owed(count > 0, \"ThreadpoolIo\", \"run_down\");"
+      ]
+    },
+    {
+      "name": "the periodic member cancels its teardown instead of draining it",
+      "file": "src/cleanup_group.rs",
+      "expect": "caught",
+      "why": "The shape this crate's teardown rules keep drifting into: one rule, two sites, converted at one. `ThreadpoolPeriodicTimer::stop_and_drain` was changed from cancelling to draining and documented at length; the cleanup-group member went on passing TRUE, kept its `(cancel)` trace label, never settled the obligation, and all the while its own doc said it did 'as with `ThreadpoolPeriodicTimer::stop_and_drain`'. The one-shot timer and the wait did not drift, because both members delegate to a shared `*_parts` body -- the periodic timer had none, which is what made one-sided conversion possible. It has one now, and this patch is the drift being re-introduced by hand. Caught by a trace assertion rather than by behaviour, because the behaviour is genuinely unobservable: a periodic `stop` already discards a queued tick, so TRUE and FALSE produce the same callback outcome. The Win32 call differs, and that is what the guard reads.",
+      "find": [
+        "        unsafe { ThreadpoolPeriodicTimer::stop_and_drain_parts(self.context, self.handle) };"
+      ],
+      "replace": [
+        "        self.stop();",
+        "        crate::trace_call!(\"WaitForThreadpoolTimerCallbacks(cancel)\", self.handle, 1, {",
+        "            unsafe { WaitForThreadpoolTimerCallbacks(self.handle, TRUE) };",
+        "        });"
+      ]
+    },
+    {
+      "name": "the tick stops coalescing and repairs a pool that already answered",
+      "file": "src/heal.rs",
+      "expect": "caught",
+      "why": "The coalescing rule: a pool that dispatched *after* its cancellation is live, so it is owed nothing and a tick must hand it no repair. Deleting the skip is the whole-hog version of getting that wrong -- every entry is repaired on every tick, including healthy ones. This entry exists because the rule was previously untested: both tests named below asserted on `repairs_run`, which counts repairs that have *dispatched*, and on a fresh private pool with no thread started the count is still 0 on the next line whether or not a submission happened. Deleting the skip left all 286 lib tests passing. They now assert on `last_submitted` and `repair_in_flight`, which `stamp_submitted` writes synchronously before `SubmitThreadpoolWork`.",
+      "find": [
+        "            if !entry.unhealed() {"
+      ],
+      "replace": [
+        "            if false {"
+      ]
+    },
+    {
+      "name": "the heal creates a work object instead of submitting the pre-created one",
+      "file": "src/heal.rs",
+      "expect": "caught",
+      "why": "The third claim, and the one that is easiest to break while looking correct. Creating a work object was measured NOT to release a stalled pool; only submitting one is. So the repair object is made when the pool is registered, and the healing path must do nothing but submit it. The patch below still submits something, and on a real pool would still release the stall -- which is why the guard is tied to the entry's OWN repair object through its callback context, not to a count of repairs in general.",
+      "whyNotNullContext": "The fresh object is given the *entry's own address* as its context, not a null and not a fresh allocation. `repair_trampoline` casts its context to `&PoolEntry` and writes stamps and counters through it, so both alternatives are undefined behaviour: null faults, and a `Box<AtomicU64>` -- which this entry used until M-T13.3 -- is eight bytes being written as a much larger struct, corrupting the heap for every other test in the process. Either way the harness would score it caught by a crash rather than by a test noticing, and this repository treats a crash-caught mutant as an uncovered one. Passing the real entry keeps the patched build well-defined, so the guard that catches it is a test observing the wrong work object, which is the claim being made.",
+      "find": [
+        "        unsafe { SubmitThreadpoolWork(entry.repair_work()) };"
+      ],
+      "replace": [
+        "        unsafe {",
+        "            let ctx: *mut core::ffi::c_void = std::ptr::from_ref(entry) as *mut _;",
+        "            let fresh = CreateThreadpoolWork(Some(repair_trampoline), ctx, std::ptr::null());",
+        "            if fresh != 0 { SubmitThreadpoolWork(fresh); }",
+        "        }"
+      ]
+    },
+    {
+      "name": "a cancellation reports tracked without arranging any repair",
+      "file": "src/heal.rs",
+      "expect": "caught",
+      "why": "`try_cancel_pending` is safe to offer because this crate repairs the pool afterwards. When the healer cannot be started there is no tick to do that, so the repair is submitted on the spot instead -- the pre-created work object makes it one call. This patch restores the shape a review found: stamp the entry, ignore whether a healer exists, and report the cancellation as tracked regardless. The pool is then marked unhealed with nothing scheduled to visit it, and the untracked fail-fast does not fire either, because by its own account nothing went wrong.",
+      "whyNotTheStartItself": "Making `build` fail would be the other way in, but every test shares one process and some earlier test has almost certainly started the healer already -- a sabotage there would be inert. The patch is at the decision that consumes the answer, which is where the defect was.",
+      "find": [
+        "        if ensure_running() {",
+        "            return true;",
+        "        }",
+        "        crate::trace_record!(\"heal\", \"repair-submitted-inline\", entry.key());",
+        "        submit_repair(entry);",
+        "        true"
+      ],
+      "replace": [
+        "        let _ = ensure_running();",
+        "        true"
+      ]
+    },
+    {
+      "name": "a claim that pinned nothing registers the pool again after the release",
+      "file": "src/heal.rs",
+      "expect": "caught",
+      "why": "The pre-release claim exists so the pool survives the release: a claim holding an entry holds that entry's repair work object, which is a bound object, and CloseThreadpool defers the free until every bound object is gone. A claim holding none pins nothing, so by the time the marking pass runs the pool may be freed -- and this patch is the retry that would then call CreateThreadpoolWork with an environment naming it. The guard drives the difference rather than the symptom: it lifts the forced allocation failure in the before-release hook, so the removed retry would succeed and the release would report tracked, where the correct behaviour reports untracked and fail-fast says so.",
+      "find": [
+        "        pub(crate) fn owe_repair_claimed(&self) -> bool {",
+        "            let Some(entry) = &self.entry else {",
+        "                crate::trace_record!(\"heal\", \"cancel-untracked\", self.key);",
+        "                return false;"
+      ],
+      "whyThisAnchor": "Anchored on the function signature as well as the body, because `owe_repair_untracked` emits the same record and returns the same value two screens away -- the shorter pattern matched twice and the harness refused it. A sabotage that patches the wrong one of two near-identical sites inverts its own conclusion.",
+      "replace": [
+        "        pub(crate) fn owe_repair_claimed(&self) -> bool {",
+        "            let Some(entry) = &self.entry else {",
+        "                return self.owe_repair_untracked();"
+      ]
+    },
+    {
+      "name": "the outstanding-repair predicate goes back to comparing stamps",
+      "file": "src/heal.rs",
+      "expect": "caught",
+      "why": "This is the retirement guard. `last_submitted > last_started` answered it correctly only while at most one repair could be outstanding; the overdue retry hands over a second before the first has started, and the first starting then makes the comparison false with the second still queued. The entry is retired, `PoolEntry::drop` drains, and that drain cannot return until a pool suspected of not dispatching dispatches -- on the healer's only thread, which stops self-heal for every pool in the process. The patch restores the exact predicate the counter replaced, so a future simplification back to it is caught.",
+      "find": [
+        "            self.outstanding.load(Ordering::SeqCst) > 0"
+      ],
+      "replace": [
+        "            self.last_submitted.load(Ordering::SeqCst) > self.last_started.load(Ordering::SeqCst)"
+      ]
+    },
+    {
+      "name": "a cancellation is published with a store instead of fetch_max",
+      "file": "src/heal.rs",
+      "expect": "caught",
+      "why": "Any thread may cancel, so there are concurrent writers, and reading a monotonic clock does not make the publication monotonic: a thread preempted between its read and its store writes a stale value last. With a plain store that stale value wins and `unhealed` reports healthy with a cancellation nothing has answered -- the same lost cancellation the replaced flag suffered, arriving through the publication rather than the compare-exchange. The patch is the plain store, which is what the code said for one day and what its comment claimed was safe.",
+      "find": [
+        "            self.last_cancelled.fetch_max(at, Ordering::SeqCst);"
+      ],
+      "replace": [
+        "            self.last_cancelled.store(at, Ordering::SeqCst);"
+      ]
+    },
+    {
+      "name": "a repair the pool never takes is waited on forever",
+      "file": "src/heal.rs",
+      "expect": "caught",
+      "why": "The suppression that stops a repair being queued on every tick is also what could hide a pool that is never going to run one. Removing the overdue test restores the behaviour M-T9.2 decided against: an in-flight repair is skipped no matter how long it has sat there, so a wedged pool is retried no further and reported never. The patch keeps the skip and deletes only the threshold, which is the shape the defect would really take -- the guard has to notice the elapsed time, not merely that a repair exists.",
+      "find": [
+        "                if !entry.repair_overdue(now(), OVERDUE_AFTER) {"
+      ],
+      "replace": [
+        "                if true {"
+      ]
+    },
+    {
+      "name": "the heal never gives up on a pool that will not be repaired",
+      "file": "src/heal.rs",
+      "expect": "caught",
+      "why": "The second half of the same decision: after one reattempt the crate has submitted the only action measured to release the stall, twice, and has nothing further to try. Under `fail-fast` that is a stop condition. Removing the comparison leaves a build that re-submits forever in a configuration whose entire purpose is to end the process rather than continue past a state it cannot establish is recoverable -- and it fails silently, because the retry loop looks exactly the same from outside.",
+      "whyTheChildTest": "Caught by a test that drives the state in a CHILD process and asserts on how it died, because the panic escapes the healer's `extern \"system\"` trampoline and aborts rather than unwinding. An in-process assertion would take the test runner with it.",
+      "find": [
+        "                if overdue > REATTEMPTS_BEFORE_FAIL_FAST {"
+      ],
+      "replace": [
+        "                if false {"
+      ]
+    },
+    {
+      "name": "the teardown fail-fast panics before the drain instead of after it",
+      "file": "src/wait.rs",
+      "expect": "caught",
+      "why": "The ordering constraint the fail-fast is built around. Panicking before the drain unwinds past the disarm, the drain, `CloseThreadpoolWait` and the context free -- so the pool goes on watching a handle the unwinding field drop has already closed, and the queued callback is abandoned. That is the exact abandonment the feature exists to prevent, reached through the mechanism meant to prevent it, so a fail-fast placed here is worse than none at all.",
+      "whyNotTheLateCall": "This inserts an early call rather than moving the late one, so it is a single-site edit the harness can check for uniqueness. The early panic fires first, so the late call is never reached and the effect is the same as moving it.",
+      "whyAssertionNotCrash": "Caught by `the_drain_runs_before_the_panic` in tests/fail_fast_teardown.rs, which snapshots the callback count the instant the panic surfaces and asserts on it *before* joining the releasing thread. Both orderings end with the callback having run -- the leaked watch still fires it -- so only the timing separates them, and asserting after the join would let the crash from that leaked watch pre-empt the assertion and turn a precise failure into a bare abort.",
+      "find": [
+        "            crate::trace_record!(\"wait\", crate::obligation::DROP_OBLIGATION_OWED, self.wait);"
+      ],
+      "replace": [
+        "            crate::trace_record!(\"wait\", crate::obligation::DROP_OBLIGATION_OWED, self.wait);",
+        "            crate::obligation::fail_fast_if_owed(owed, \"ThreadpoolWait\", \"stop_and_drain\");"
+      ]
+    },
+    {
+      "name": "the teardown fail-fast never fires",
+      "file": "src/obligation.rs",
+      "expect": "caught",
+      "why": "The rejecting direction. A fail-fast that is compiled in but never panics leaves the whole feature inert while every build and every feature-shape assertion still passes, so nothing except a test that observes the panic can tell the difference.",
+      "find": [
+        "    if owed {"
+      ],
+      "replace": [
+        "    if false && owed {"
+      ]
+    },
+    {
+      "name": "the teardown fail-fast fires when nothing is owed",
+      "file": "src/obligation.rs",
+      "expect": "caught",
+      "why": "The accepting direction, which is the half that usually goes untested. A fail-fast that panics on every drop satisfies every assertion that it fires when a drain is owed, while making the feature unusable: a caller who discharged the obligation correctly would still be punished for it.",
+      "find": [
+        "    if owed {"
+      ],
+      "replace": [
+        "    if true || owed {"
+      ]
+    },
+    {
+      "name": "the obligation is recorded after the arming instead of before",
+      "file": "src/obligation.rs",
+      "expect": "caught",
+      "why": "The ordering every armed object depends on, and the one this crate got wrong at three of eight sites before the pair was moved into a single method. Publishing the arming first opens a window in which a dispatch settles the obligation on a pool thread and is then overwritten, so an object that ran to completion claims it owes a drain -- under fail-fast a panic on a correctly-drained object, and an abort if Drop was already unwinding. The guard is in obligation::tests rather than in a pool test, because the ordering now lives at one site and that is where it can be made deterministic.",
+      "find": [
+        "        self.record_live();",
+        "        publish();"
+      ],
+      "replace": [
+        "        publish();",
+        "        self.record_live();"
+      ]
+    },
+    {
+      "name": "Drop does not report the obligation it was left",
+      "file": "src/wait.rs",
+      "expect": "caught",
+      "why": "The report itself, as opposed to the fail-fast built on top of it. Removing the record leaves a Drop that still performs the blocking drain but tells nobody it had to, which is the condition the whole obligation mechanism exists to surface and is invisible to every test that only checks the program does not hang. This entry is also the control on tests/obligation_report.rs: that test spent its life early-returning when the trace filter was unset, so it passed while measuring nothing, and this sabotage is what demonstrates it now measures something.",
+      "find": [
+        "            crate::trace_record!(\"wait\", crate::obligation::DROP_OBLIGATION_OWED, self.wait);"
+      ],
+      "replace": [
+        "            let _ = crate::obligation::DROP_OBLIGATION_OWED;"
+      ]
+    },
+    {
+      "name": "CONTROL: the retirement predicate reads its refcount with a stronger ordering",
+      "file": "src/heal.rs",
+      "expect": "survives",
+      "why": "The manifest's two controls both lived in the hook facility and went with it, and a sweep with no control can only say the tests are sensitive -- never that they are sensitive to the right things. This replaces them. Strengthening Relaxed to SeqCst on a load cannot change observable behaviour: it only forbids reorderings that were already permitted, so every execution of the patched program is one the original could also produce. A suite that reports this as CAUGHT is failing for a reason other than the edit, and the sweep's other results cannot be trusted until that is explained.",
+      "find": [
+        "        entry.objects.load(Ordering::Relaxed) == 0 && !entry.unhealed() && !entry.repair_in_flight()"
+      ],
+      "replace": [
+        "        entry.objects.load(Ordering::SeqCst) == 0 && !entry.unhealed() && !entry.repair_in_flight()"
+      ]
+    },
+    {
+      "name": "the trace buffer reports its records rotated",
+      "file": "src/trace.rs",
+      "expect": "caught",
+      "why": "Eviction overwrites in place rather than shifting, so the vector is a ring and the oldest record moves around it. A reader that splits it the wrong way returns the right records, the right count, and an order no reader would question -- a capture of a sequence that never happened, which is worse than no capture because nothing about it looks wrong. This patch is that split, reversed.",
+      "whyNotTheShiftItself": "Restoring Vec::remove(0) would not be caught, and correctly so: it is slower, not wrong, and no test can assert the absence of a memmove without timing. The defect that version carried was a performance one in an instrument meant to observe timing-sensitive behaviour, which is argued from the code in M-T12.3 rather than measured. What is swept here is the correctness risk the fix introduced.",
+      "find": [
+        "        oldest_first.iter().chain(wrapped.iter())"
+      ],
+      "replace": [
+        "        wrapped.iter().chain(oldest_first.iter())"
+      ]
+    }
+  ]
+}

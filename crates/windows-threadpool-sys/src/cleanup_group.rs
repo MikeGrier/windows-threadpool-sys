@@ -21,7 +21,7 @@
 //! # use windows_threadpool_sys::cleanup_group::CleanupGroup;
 //! let mut group = CleanupGroup::new().expect("create group");
 //! let work = group.create_work(|| {}, None).expect("create work");
-//! group.close_members(false);
+//! group.close_members();
 //! work.submit(); // error: `group` is mutably borrowed above
 //! ```
 //!
@@ -69,7 +69,28 @@ struct OwnedResource {
     /// `CloseThreadpoolCleanupGroupMembers` runs. A no-op for kinds with no
     /// callback-driven re-arm (work, periodic timers, watched handles).
     prepare_shutdown: unsafe fn(*mut c_void),
+    /// Take a repair claim on this member's pool while it is still live.
+    ///
+    /// Yields nothing for every kind but a wait: the removal that can sever a
+    /// pool's arrival notification operates on a wait completion packet, and
+    /// only a wait owns one.
+    ///
+    /// Returns the claim, which the caller holds across the native release so
+    /// the pool cannot be freed under the marking pass that follows.
+    recover_repair: unsafe fn(*mut c_void) -> Option<crate::heal::Registration>,
     free: unsafe fn(*mut c_void),
+}
+
+/// A repair hook for a member whose release cannot wedge a pool.
+///
+/// Returning `None` is what keeps such a member out of the marking pass
+/// entirely: the claims are now what that pass iterates, so a kind that cannot
+/// owe a repair simply produces no claim. There used to be a second hook
+/// reporting the same fact a different way, and the two could disagree.
+///
+/// SAFETY: takes a pointer it never dereferences.
+unsafe fn no_repair_recovery(_ptr: *mut c_void) -> Option<crate::heal::Registration> {
+    None
 }
 
 // SAFETY: each pointer is a `Box` the group exclusively owns and frees exactly
@@ -134,7 +155,7 @@ fn prepare_shutdown_noop(_ptr: *mut c_void) {}
 /// }
 ///
 /// // One call tears down every member of the group.
-/// group.close_members(false);
+/// group.close_members();
 /// assert_eq!(count.load(Ordering::SeqCst), 2);
 /// # Ok::<(), std::io::Error>(())
 /// ```
@@ -148,6 +169,16 @@ pub struct CleanupGroup {
     /// release returns, and a latched release would then skip them -- leaking
     /// their contexts and closing the group with live members.
     resources: Mutex<Vec<OwnedResource>>,
+    /// Test-only: run between preparing the members and releasing them.
+    ///
+    /// Stands in for the self-heal's tick arriving in that interval, which is
+    /// the only way to observe *when* a cancelling release marks its pools.
+    /// Both orderings leave a mark outstanding once the release has returned,
+    /// so an end-state assertion cannot tell them apart; something has to act
+    /// inside the window. Per-group rather than a static, because `cargo test`
+    /// runs these as threads of one process.
+    #[cfg(test)]
+    before_release: Mutex<Option<Box<dyn Fn() + Send + Sync>>>,
 }
 
 // SAFETY: PTP_CLEANUP_GROUP is a kernel-managed object usable from any thread,
@@ -163,14 +194,37 @@ impl CleanupGroup {
     /// Returns the error from `CreateThreadpoolCleanupGroup`.
     pub fn new() -> io::Result<Self> {
         // SAFETY: the call takes no inputs.
-        let group = unsafe { CreateThreadpoolCleanupGroup() };
+        let group = crate::trace_call!("CreateThreadpoolCleanupGroup", 0, 0, {
+            // SAFETY: the call takes no inputs.
+            unsafe { CreateThreadpoolCleanupGroup() }
+        });
         if group == 0 {
             return Err(io::Error::last_os_error());
         }
         Ok(Self {
             group,
             resources: Mutex::new(Vec::new()),
+            #[cfg(test)]
+            before_release: Mutex::new(None),
         })
+    }
+
+    /// Install the test-only hook that runs just before the native release.
+    ///
+    /// See the field's documentation for why observing that instant is the
+    /// only way to pin the order in which a cancelling release marks its
+    /// pools.
+    ///
+    /// Carries the feature condition of its only caller, which is the test for
+    /// that marking order: without `self-heal` there is no mark to observe, so
+    /// an ungated hook here is dead code in a `--no-default-features` build --
+    /// which CI compiles with `-D warnings`.
+    #[cfg(all(test, feature = "self-heal"))]
+    pub(crate) fn on_before_release(&self, hook: impl Fn() + Send + Sync + 'static) {
+        *self
+            .before_release
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner()) = Some(Box::new(hook));
     }
 
     /// Build the environment a member is created with, layering this group on
@@ -220,6 +274,7 @@ impl CleanupGroup {
         self.adopt(OwnedResource {
             ptr: context,
             prepare_shutdown: prepare_shutdown_noop,
+            recover_repair: no_repair_recovery,
             free: ThreadpoolWork::drop_context,
         });
         Ok(WorkMember {
@@ -249,10 +304,12 @@ impl CleanupGroup {
         self.adopt(OwnedResource {
             ptr: context,
             prepare_shutdown: ThreadpoolTimer::prepare_shutdown,
+            recover_repair: no_repair_recovery,
             free: ThreadpoolTimer::drop_context,
         });
         Ok(TimerMember {
             handle,
+            context,
             _group: PhantomData,
         })
     }
@@ -283,11 +340,13 @@ impl CleanupGroup {
         self.adopt(OwnedResource {
             ptr: context,
             prepare_shutdown: prepare_shutdown_noop,
+            recover_repair: no_repair_recovery,
             free: ThreadpoolPeriodicTimer::drop_context,
         });
         Ok(PeriodicTimerMember {
             handle,
             period,
+            context,
             _group: PhantomData,
         })
     }
@@ -319,6 +378,7 @@ impl CleanupGroup {
         self.adopt(OwnedResource {
             ptr: context,
             prepare_shutdown: ThreadpoolWait::prepare_shutdown,
+            recover_repair: ThreadpoolWait::recover_repair,
             free: ThreadpoolWait::drop_context,
         });
         // The target outlives the member for the same reason the context does.
@@ -329,20 +389,21 @@ impl CleanupGroup {
         self.adopt(OwnedResource {
             ptr: target.cast(),
             prepare_shutdown: prepare_shutdown_noop,
+            recover_repair: no_repair_recovery,
             free: free_boxed::<WaitTarget>,
         });
         Ok(WaitMember {
             handle: raw,
             watched: target,
+            context,
             _group: PhantomData,
         })
     }
 
-    /// Release every member of this group.
+    /// Release every member of this group, letting queued callbacks run.
     ///
-    /// Waits for executing callbacks to finish. When `cancel_pending` is true,
-    /// callbacks that have not started are dropped instead of run; when false,
-    /// they run first.
+    /// Waits for executing callbacks to finish; callbacks that have not started
+    /// run before the release completes.
     ///
     /// Taking `&mut self` is what makes members unusable afterwards: they borrow
     /// the group, so the compiler rejects any later use of one. Calling this
@@ -351,8 +412,78 @@ impl CleanupGroup {
     /// The group remains usable afterwards. New members may be created on it,
     /// and they are released by the next call or by `Drop`, exactly as the first
     /// batch was.
-    pub fn close_members(&mut self, cancel_pending: bool) {
-        self.release_members(cancel_pending);
+    ///
+    /// To drop queued callbacks instead of running them, see
+    /// `close_members_cancelling` -- named without a link because it does not
+    /// exist in a build with `self-heal` off, while this method does, so a link
+    /// would dangle in that configuration.
+    pub fn close_members(&mut self) {
+        self.release_members(false, false);
+    }
+
+    /// Release every member of this group, dropping queued callbacks.
+    ///
+    /// As [`close_members`](Self::close_members), except that callbacks which
+    /// have not started are dropped rather than run.
+    ///
+    /// A cancelling release passes the cancel through to every member, so a wait
+    /// among them reaches the same removal primitive
+    /// [`ThreadpoolWait::try_cancel_pending`](crate::wait::ThreadpoolWait::try_cancel_pending)
+    /// does, and owes its pool the same repair. This crate marks that repair
+    /// here, which is what makes this safe to offer -- subject to the same
+    /// stated hole as the per-object method: a member whose pool could not be
+    /// registered for repair has that registration retried during this call,
+    /// and only if the retry also fails is it cancelled with nothing to repair
+    /// it, recording `cancel-untracked` and panicking under `fail-fast`.
+    ///
+    /// # Availability
+    ///
+    /// Requires the `self-heal` feature, which is on by default. Without it this
+    /// method does not exist and a call to it fails to compile, naming
+    /// [`close_members_cancelling_no_heal_tracking`](Self::close_members_cancelling_no_heal_tracking)
+    /// as what to reach for instead. That is the designed behaviour, not an
+    /// oversight: the repair this method performs is what the feature provides,
+    /// and a compile error is the only way a caller relying on it finds out it
+    /// is gone.
+    #[cfg(feature = "self-heal")]
+    pub fn close_members_cancelling(&mut self) {
+        // The obligation is discharged by `release_members`'s tracking pass,
+        // which marks every member's pool for repair after the native release
+        // and before the contexts are freed.
+        //
+        // This no longer delegates to the `_no_heal_tracking` sibling. It used
+        // to, which made that method's name false: the repair pass was
+        // unconditional, so the "without the repair" method marked pools,
+        // allocated repair objects, started the healer, and could panic under
+        // `fail-fast`. Tracking is now the flag this passes and that one does
+        // not.
+        self.release_members(true, true);
+    }
+
+    /// `close_members_cancelling` without the repair.
+    ///
+    /// Not a link, deliberately: the method it would name does not exist in a
+    /// build with `self-heal` off, and this one does, so the link would dangle
+    /// in exactly the configuration this method exists for.
+    ///
+    /// Always present, including in builds with `self-heal` off, which is the
+    /// point: it is the method that still exists when the gated one does not,
+    /// and its signature says what the caller takes on.
+    ///
+    /// # Safety
+    ///
+    /// The caller must ensure every member's pool is repaired. Submitting any
+    /// work item to a pool does so; so does knowing it is kept live by
+    /// something else. Leaving one unrepaired can stop that pool dispatching --
+    /// which, for the process-default pool, reaches every component in the
+    /// process, including code with no connection to this call.
+    ///
+    /// This is not a memory-safety obligation, and the keyword is not claiming
+    /// one. It is here because the obligation is statable and dischargeable by
+    /// the caller, which is what `unsafe` marks; see
+    /// [the self-heal decision](https://docs.rs/crate/windows-threadpool-sys/latest/source/DESIGN-NOTES.md).
+    pub unsafe fn close_members_cancelling_no_heal_tracking(&mut self) {
+        self.release_members(true, false);
     }
 
     /// The number of contexts and handles the group is holding for its members.
@@ -373,7 +504,7 @@ impl CleanupGroup {
     /// running unconditionally is what makes a group usable again afterwards:
     /// members created after an earlier release are released by the next one,
     /// instead of being skipped and leaked.
-    fn release_members(&mut self, cancel_pending: bool) {
+    fn release_members(&mut self, cancel_pending: bool, track_repairs: bool) {
         // Close the door on any deferred re-arm before the bulk release.
         // `CloseThreadpoolCleanupGroupMembers` waits for executing callbacks but
         // does not stop one from re-arming: a one-shot timer or wait whose
@@ -382,7 +513,21 @@ impl CleanupGroup {
         // and then free its context under a freshly queued callback. Suppressing
         // and disarming each member first mirrors what each object's own `Drop`
         // does. The lock is dropped before the release, which blocks.
-        {
+        //
+        // The repair claims are recovered here too, **before** the release, and
+        // that ordering is a memory-safety requirement rather than a
+        // preference. A member whose pool could not be registered when it was
+        // created holds nothing that keeps that pool alive: `CloseThreadpool`
+        // defers the free until every bound object is gone, and for such a
+        // member the repair work object -- which would be a bound object -- was
+        // never created. The release below frees the last bound object, so by
+        // the time the marking pass runs the pool may already be gone, and the
+        // retry inside `owe_repair` would call `CreateThreadpoolWork` against
+        // freed memory. Claiming here, while the members are still live, both
+        // creates that object and keeps the pool alive across the release.
+        //
+        // The claims are held until after the marking pass and dropped there.
+        let recovered: Vec<crate::heal::Registration> = {
             let resources = self
                 .resources
                 .lock()
@@ -393,17 +538,49 @@ impl CleanupGroup {
                 // suppresses/disarms that one object.
                 unsafe { (resource.prepare_shutdown)(resource.ptr) };
             }
+            if cancel_pending && track_repairs {
+                resources
+                    .iter()
+                    // SAFETY: as above -- the members are live, and each hook
+                    // reads only the registration of the context kind it
+                    // matches.
+                    .filter_map(|resource| unsafe { (resource.recover_repair)(resource.ptr) })
+                    .collect()
+            } else {
+                Vec::new()
+            }
+        };
+
+        #[cfg(test)]
+        {
+            let hook = self
+                .before_release
+                .lock()
+                .unwrap_or_else(|poison| poison.into_inner());
+            if let Some(hook) = hook.as_ref() {
+                hook();
+            }
         }
 
-        // SAFETY: the group is live. This waits for executing callbacks and
-        // releases every member, so afterwards nothing can reach the contexts.
-        unsafe {
-            CloseThreadpoolCleanupGroupMembers(
-                self.group,
-                if cancel_pending { TRUE } else { FALSE },
-                ptr::null_mut(),
-            );
-        }
+        // The longest-blocking call in this crate: it waits for every member's
+        // executing callback. Bracketed so a release that parks is visible as
+        // an interval rather than inferred from the gap after it.
+        crate::trace_call!(
+            "CloseThreadpoolCleanupGroupMembers",
+            self.group,
+            u32::from(cancel_pending),
+            {
+                // SAFETY: the group is live. This waits for executing callbacks and
+                // releases every member, so afterwards nothing can reach the contexts.
+                unsafe {
+                    CloseThreadpoolCleanupGroupMembers(
+                        self.group,
+                        if cancel_pending { TRUE } else { FALSE },
+                        ptr::null_mut(),
+                    );
+                }
+            }
+        );
 
         let resources = std::mem::take(
             &mut *self
@@ -411,20 +588,80 @@ impl CleanupGroup {
                 .lock()
                 .unwrap_or_else(|poison| poison.into_inner()),
         );
+        let mut tracked = true;
+        if cancel_pending && track_repairs {
+            for claim in recovered.iter() {
+                // A cancelling release passes the cancel through to every
+                // member, so each wait among them reaches the same removal
+                // `ThreadpoolWait::try_cancel_pending` does and owes its pool
+                // the same repair.
+                //
+                // Marked **after** the release returns, matching the standalone
+                // cancel path, and before the contexts are freed below -- which
+                // is why this loop sits between the two rather than beside
+                // either.
+                //
+                // An earlier version marked before the release, justified by
+                // the claim that the native call frees the contexts. It does
+                // not: this function frees them, in the loop immediately after
+                // this one. Marking first left a window in which the healer
+                // could see the mark, find the pool still dispatching, clear it
+                // as repaired, and then have the real cancellation happen with
+                // no mark outstanding -- an unrepaired wedge from a *single*
+                // cancellation, where the race this crate already documents
+                // needs two.
+                //
+                // Marked through the **claims** rather than through the members'
+                // contexts, and that is a safety requirement rather than a
+                // tidier spelling. The context's own registration may be empty,
+                // because registering its pool failed when it was created; the
+                // hook that used to be called here would then retry the
+                // registration, and `CreateThreadpoolWork` would name a pool
+                // whose last bound object the release above has just freed. A
+                // claim that holds an entry is precisely a claim that kept the
+                // pool alive across that release, so marking it is sound; a
+                // claim that holds none reports the cancellation as untracked,
+                // which is what the fail-fast below is for.
+                //
+                // Needs no `unsafe`: a claim owns what it refers to, where the
+                // hook reached through a raw context pointer.
+                //
+                // Accumulated rather than acted on here: the fail-fast this
+                // feeds panics, and a panic raised in this loop would unwind
+                // past the free loop below and leak every member's context.
+                tracked &= claim.owe_repair_claimed();
+            }
+        }
+        // After the marking pass, never before: a claim dropped earlier could
+        // retire the very entry the pass is about to mark. `release` keeps an
+        // entry whose repair is owed, so dropping here cannot.
+        drop(recovered);
         for resource in resources {
             // SAFETY: every member has been released, so no callback can still
             // reach this allocation; each is freed exactly once here.
             unsafe { (resource.free)(resource.ptr) };
+        }
+        // After the frees, never before: this panics under `fail-fast`, and an
+        // unwind from inside either loop above would skip the frees.
+        //
+        // Only when this release was tracking repairs. The untracked form makes
+        // the repair the caller's problem by contract, so reporting that it did
+        // not happen would be reporting the thing the caller asked for.
+        if track_repairs {
+            crate::obligation::fail_fast_if_untracked(tracked, "CleanupGroup");
         }
     }
 }
 
 impl Drop for CleanupGroup {
     fn drop(&mut self) {
-        // Let queued callbacks run, matching the default of `close_members`.
-        self.release_members(false);
+        // Let queued callbacks run, matching `close_members`.
+        self.release_members(false, false);
         // SAFETY: the members are released, so the group can be closed.
-        unsafe { CloseThreadpoolCleanupGroup(self.group) };
+        crate::trace_call!("CloseThreadpoolCleanupGroup", self.group, 0, {
+            // SAFETY: the group is live and closed exactly once, here.
+            unsafe { CloseThreadpoolCleanupGroup(self.group) };
+        });
     }
 }
 
@@ -451,19 +688,38 @@ impl WorkMember<'_> {
     pub fn submit(&self) {
         // SAFETY: the handle is live until the group releases its members,
         // which the borrow on `_group` prevents from happening first.
-        unsafe { SubmitThreadpoolWork(self.handle) };
+        crate::trace_call!("SubmitThreadpoolWork", self.handle, 0, {
+            // SAFETY: the handle is live until the group releases it.
+            unsafe { SubmitThreadpoolWork(self.handle) };
+        });
     }
 
     /// Block until all queued and in-progress invocations have completed.
     pub fn wait(&self) {
         // SAFETY: as above.
-        unsafe { WaitForThreadpoolWorkCallbacks(self.handle, FALSE) };
+        crate::trace_call!("WaitForThreadpoolWorkCallbacks", self.handle, 0, {
+            // SAFETY: the handle is live until the group releases it.
+            unsafe { WaitForThreadpoolWorkCallbacks(self.handle, FALSE) };
+        });
+    }
+
+    /// Stop accepting work and block until none is queued or executing.
+    ///
+    /// As on [`ThreadpoolWork`], there is nothing to *stop* -- a submission
+    /// cannot be withdrawn, only waited for -- so this is exactly
+    /// [`wait`](Self::wait). The name exists so a caller tearing down a mixed
+    /// set of objects can reach for one method.
+    pub fn stop_and_drain(&self) {
+        self.wait();
     }
 
     /// Cancel invocations that have not started, then wait for those that have.
     pub fn cancel_pending(&self) {
         // SAFETY: as above.
-        unsafe { WaitForThreadpoolWorkCallbacks(self.handle, TRUE) };
+        crate::trace_call!("WaitForThreadpoolWorkCallbacks(cancel)", self.handle, 1, {
+            // SAFETY: the handle is live until the group releases it.
+            unsafe { WaitForThreadpoolWorkCallbacks(self.handle, TRUE) };
+        });
     }
 }
 
@@ -474,8 +730,21 @@ impl WorkMember<'_> {
 #[derive(Debug)]
 pub struct TimerMember<'group> {
     handle: PTP_TIMER,
+    /// The callback context the group owns for this member.
+    ///
+    /// Held so the member can run the same `stop_and_drain` its standalone twin
+    /// does, suppression and all. The group owns and frees it; this is a borrow
+    /// for the member's lifetime.
+    context: *mut c_void,
     _group: PhantomData<&'group CleanupGroup>,
 }
+
+// SAFETY: the context refers to state the group owns and outlives this member;
+// the member only reads it and passes it to thread-safe pool APIs. The same
+// reasoning as `WaitMember`'s, which is the point -- this type was left without
+// these impls when it gained the pointer, and silently stopped being `Send`.
+unsafe impl Send for TimerMember<'_> {}
+unsafe impl Sync for TimerMember<'_> {}
 
 impl TimerMember<'_> {
     /// Fire once, `delay` from now.
@@ -503,19 +772,48 @@ impl TimerMember<'_> {
     #[must_use]
     pub fn is_set(&self) -> bool {
         // SAFETY: as above.
-        unsafe { IsThreadpoolTimerSet(self.handle) != 0 }
+        crate::trace_call!("IsThreadpoolTimerSet", self.handle, 0, {
+            // SAFETY: the handle is live until the group releases it.
+            unsafe { IsThreadpoolTimerSet(self.handle) != 0 }
+        })
     }
 
     /// Block until all queued and executing callbacks have completed.
     pub fn wait(&self) {
         // SAFETY: as above.
-        unsafe { WaitForThreadpoolTimerCallbacks(self.handle, FALSE) };
+        crate::trace_call!("WaitForThreadpoolTimerCallbacks", self.handle, 0, {
+            // SAFETY: the handle is live until the group releases it.
+            unsafe { WaitForThreadpoolTimerCallbacks(self.handle, FALSE) };
+        });
+    }
+
+    /// Stop the timer and block until no firing is queued or executing.
+    ///
+    /// The same drain [`ThreadpoolTimer::stop_and_drain`] performs, including
+    /// suppressing a re-arm a running callback asks for: without that the drain
+    /// could return with a due time installed, which is the whole reason the
+    /// standalone type has this method rather than only `disarm` and `wait`.
+    ///
+    /// Added because a member that lacked it was not the equivalent of its
+    /// standalone twin that [`CleanupGroup::create_timer`] says it is.
+    pub fn stop_and_drain(&self) {
+        // SAFETY: the group owns this context and does not free it while this
+        // member borrows the group, and `handle` is the object it belongs to.
+        unsafe { ThreadpoolTimer::stop_and_drain_parts(self.context, self.handle) };
     }
 
     /// Cancel callbacks that have not started, then wait for those that have.
+    ///
+    /// Unlike the wait member's method of the same name, this carries no
+    /// process-wide hazard. The primitive that can sever a pool's
+    /// arrival-to-factory notification operates on a *wait completion packet*,
+    /// which only a wait owns; a timer has none.
     pub fn cancel_pending(&self) {
         // SAFETY: as above.
-        unsafe { WaitForThreadpoolTimerCallbacks(self.handle, TRUE) };
+        crate::trace_call!("WaitForThreadpoolTimerCallbacks(cancel)", self.handle, 1, {
+            // SAFETY: the handle is live until the group releases it.
+            unsafe { WaitForThreadpoolTimerCallbacks(self.handle, TRUE) };
+        });
     }
 }
 
@@ -528,8 +826,21 @@ impl TimerMember<'_> {
 pub struct PeriodicTimerMember<'group> {
     handle: PTP_TIMER,
     period: Duration,
+    /// The callback context the group owns for this member.
+    ///
+    /// Held so the member can run the same `stop_and_drain` its standalone twin
+    /// does, obligation settlement and all. The group owns and frees it; this
+    /// is a borrow for the member's lifetime.
+    context: *mut c_void,
     _group: PhantomData<&'group CleanupGroup>,
 }
+
+// SAFETY: the context refers to state the group owns and outlives this member;
+// the member only reads it and passes it to thread-safe pool APIs. The same
+// argument as for `TimerMember`, which holds the same kind of borrow.
+unsafe impl Send for PeriodicTimerMember<'_> {}
+// SAFETY: as above.
+unsafe impl Sync for PeriodicTimerMember<'_> {}
 
 impl PeriodicTimerMember<'_> {
     /// The period this timer ticks on.
@@ -566,25 +877,32 @@ impl PeriodicTimerMember<'_> {
     #[must_use]
     pub fn is_running(&self) -> bool {
         // SAFETY: as above.
-        unsafe { IsThreadpoolTimerSet(self.handle) != 0 }
+        crate::trace_call!("IsThreadpoolTimerSet", self.handle, 0, {
+            // SAFETY: the handle is live until the group releases it.
+            unsafe { IsThreadpoolTimerSet(self.handle) != 0 }
+        })
     }
 
     /// Block until all queued and executing ticks have completed.
     pub fn wait(&self) {
         // SAFETY: as above.
-        unsafe { WaitForThreadpoolTimerCallbacks(self.handle, FALSE) };
+        crate::trace_call!("WaitForThreadpoolTimerCallbacks", self.handle, 0, {
+            // SAFETY: the handle is live until the group releases it.
+            unsafe { WaitForThreadpoolTimerCallbacks(self.handle, FALSE) };
+        });
     }
 
     /// Stop the timer and wait until no tick is queued or executing.
     ///
-    /// As with [`ThreadpoolPeriodicTimer::stop_and_drain`], this holds provided
-    /// no other thread starts the member during the call: the `start*` methods
-    /// take `&self`, so a start landing between the stop and the drain would
-    /// leave a schedule installed on return.
+    /// The same drain [`ThreadpoolPeriodicTimer::stop_and_drain`] performs,
+    /// including that it holds only provided no other thread starts the member
+    /// during the call: the `start*` methods take `&self`, so a start landing
+    /// between the stop and the drain would leave a schedule installed on
+    /// return.
     pub fn stop_and_drain(&self) {
-        self.stop();
-        // SAFETY: as above.
-        unsafe { WaitForThreadpoolTimerCallbacks(self.handle, TRUE) };
+        // SAFETY: the group owns the context and the object and releases both
+        // only when it is dropped, which cannot happen while this borrow lives.
+        unsafe { ThreadpoolPeriodicTimer::stop_and_drain_parts(self.context, self.handle) };
     }
 }
 
@@ -596,6 +914,11 @@ impl PeriodicTimerMember<'_> {
 pub struct WaitMember<'group> {
     handle: PTP_WAIT,
     watched: *mut WaitTarget,
+    /// The callback context the group owns for this member.
+    ///
+    /// Held so the member can mark its own pool as owing a repair. The group
+    /// owns and frees it; this is a borrow for the member's lifetime.
+    context: *mut c_void,
     _group: PhantomData<&'group CleanupGroup>,
 }
 
@@ -603,6 +926,43 @@ pub struct WaitMember<'group> {
 // the member only reads them and passes them to thread-safe pool APIs.
 unsafe impl Send for WaitMember<'_> {}
 unsafe impl Sync for WaitMember<'_> {}
+
+/// Every member type is `Send` and `Sync`, and the build is what says so.
+///
+/// A member is a borrow of state the group owns, so these bounds are a property
+/// of the group's ownership rather than of any one member's fields -- which is
+/// exactly why a field can take them away without anything noticing. It
+/// happened: `TimerMember` held only a handle and a `PhantomData` and was
+/// auto-`Send + Sync`; gaining a `*mut c_void` context made it neither, the
+/// `unsafe impl`s that `WaitMember` already carried for the identical reason
+/// were not added beside it, and a public type silently stopped being movable
+/// between threads. No lint, test or sabotage saw it.
+///
+/// So the rule lives here rather than in a test. These functions are never
+/// called; instantiating them is what type-checks the bounds, and a member that
+/// loses one fails the build at the definition rather than in a consumer's
+/// crate. Adding a type to this list is the cost of adding a member kind, and
+/// that is the point.
+///
+/// **Both directions.** A reader may wonder what stops this being vacuous: if
+/// the bounds were dropped from every type at once, would this still pass? No --
+/// `needs_send` and `needs_sync` name the bounds explicitly, so each call is a
+/// real obligation. The accepting direction is checked by the fact that this
+/// compiles at all, and the rejecting direction was checked by measurement: with
+/// `TimerMember`'s impls absent, the first two lines below are the `E0277` that
+/// found this.
+const _: () = {
+    const fn needs_send<T: Send>() {}
+    const fn needs_sync<T: Sync>() {}
+    needs_send::<TimerMember<'_>>();
+    needs_sync::<TimerMember<'_>>();
+    needs_send::<WorkMember<'_>>();
+    needs_sync::<WorkMember<'_>>();
+    needs_send::<PeriodicTimerMember<'_>>();
+    needs_sync::<PeriodicTimerMember<'_>>();
+    needs_send::<WaitMember<'_>>();
+    needs_sync::<WaitMember<'_>>();
+};
 
 impl WaitMember<'_> {
     /// Borrow the watched handle, for signalling or inspecting it.
@@ -628,13 +988,79 @@ impl WaitMember<'_> {
     /// Block until all queued and executing callbacks have completed.
     pub fn wait(&self) {
         // SAFETY: as above.
-        unsafe { WaitForThreadpoolWaitCallbacks(self.handle, FALSE) };
+        crate::trace_call!("WaitForThreadpoolWaitCallbacks", self.handle, 0, {
+            // SAFETY: the handle is live until the group releases it.
+            unsafe { WaitForThreadpoolWaitCallbacks(self.handle, FALSE) };
+        });
     }
 
-    /// Cancel callbacks that have not started, then wait for those that have.
-    pub fn cancel_pending(&self) {
+    /// Stop watching and block until no callback is queued or executing.
+    ///
+    /// The same drain [`ThreadpoolWait::stop_and_drain`] performs, including
+    /// suppressing a re-arm a running callback asks for: without that the drain
+    /// could return with the object armed again, which is the whole reason the
+    /// standalone type has this method rather than only `disarm` and `wait`.
+    ///
+    /// Added because a member that lacked it was not the equivalent of its
+    /// standalone twin that [`CleanupGroup::create_wait`] says it is.
+    pub fn stop_and_drain(&self) {
+        // SAFETY: the group owns this context and does not free it while this
+        // member borrows the group, and `handle` is the object it belongs to.
+        unsafe { ThreadpoolWait::stop_and_drain_parts(self.context, self.handle) };
+    }
+
+    /// Prefer [`wait`](Self::wait).
+    ///
+    /// This crate repairs the pool afterwards -- and on a pool whose repair
+    /// item could not be created, this call tries to create it rather than
+    /// giving up. Only if that fails too does the cancellation proceed with
+    /// nothing to repair it, recording `cancel-untracked` and panicking under
+    /// `fail-fast`. That is what makes this safe to offer. See
+    /// [README-FEATURE-self-heal.md](https://docs.rs/crate/windows-threadpool-sys/latest/source/README-FEATURE-self-heal.md).
+    ///
+    /// The registry itself is private, so this names it rather than linking it:
+    /// a public page linking a private item renders a reference the reader
+    /// cannot follow, which rustdoc warns about.
+    #[cfg(feature = "self-heal")]
+    pub fn try_cancel_pending(&self) {
+        // SAFETY: the obligation this transfers is discharged here, by marking
+        // the pool so the self-heal repairs it.
+        unsafe { self.try_cancel_pending_no_heal_tracking() };
+        // SAFETY: the group owns this context and does not free it while this
+        // member borrows the group.
+        let tracked = unsafe { ThreadpoolWait::owe_repair(self.context) };
+        // Last in the function. Unlike the group-wide release this does not
+        // free anything, so there is nothing here for an unwind to skip -- but
+        // the placement matches the other two call sites rather than relying on
+        // that staying true.
+        crate::obligation::fail_fast_if_untracked(tracked, "WaitMember");
+    }
+
+    /// `try_cancel_pending` without the repair.
+    ///
+    /// Not a link, deliberately: the method it would name does not exist in a
+    /// build with `self-heal` off, and this one does, so the link would dangle
+    /// in exactly the configuration this method exists for.
+    ///
+    /// **Owning the wait through a cleanup group does not change the hazard.**
+    /// The group's own `Drop` is safe because it releases with cancel-pending
+    /// false, not because the group protects its members; a cancelling release
+    /// passes the cancel through to each one. Named without a link for the
+    /// reason given above: `close_members_cancelling` does not exist in a build
+    /// with `self-heal` off, while this method does.
+    ///
+    /// # Safety
+    ///
+    /// The caller must ensure the pool is repaired, by submitting any work item
+    /// to it or by knowing something else keeps it live. See
+    /// [`ThreadpoolWait::try_cancel_pending_no_heal_tracking`], whose obligation
+    /// this is.
+    pub unsafe fn try_cancel_pending_no_heal_tracking(&self) {
         // SAFETY: as above.
-        unsafe { WaitForThreadpoolWaitCallbacks(self.handle, TRUE) };
+        crate::trace_call!("WaitForThreadpoolWaitCallbacks(cancel)", self.handle, 1, {
+            // SAFETY: the handle is live until the group releases it.
+            unsafe { WaitForThreadpoolWaitCallbacks(self.handle, TRUE) };
+        });
     }
 }
 

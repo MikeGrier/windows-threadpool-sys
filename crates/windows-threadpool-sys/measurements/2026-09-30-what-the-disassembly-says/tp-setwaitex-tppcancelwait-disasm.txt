@@ -1,0 +1,329 @@
+
+== TpSetWaitEx @ 0x7ffdf67025e0  (960 bytes)
+[3361 thread-pool/nt symbols enumerated]
+  00007ffdf67025e0  mov     r11,rsp
+  00007ffdf67025e3  mov     [r11+18h],r8
+  00007ffdf67025e7  push    rbx
+  00007ffdf67025e8  push    r13
+  00007ffdf67025ea  sub     rsp,68h
+  00007ffdf67025ee  mov     eax,[rcx+0A8h]
+  00007ffdf67025f4  mov     r13,rdx
+  00007ffdf67025f7  mov     rbx,rcx
+  00007ffdf67025fa  bt      eax,10h
+  00007ffdf67025fe  jb      near 00007FFDF670283Eh            ; TpSetWaitEx+0x25e
+  00007ffdf6702604  bt      eax,11h
+  00007ffdf6702608  jb      near 00007FFDF670283Eh            ; TpSetWaitEx+0x25e
+  00007ffdf670260e  lea     rax,[rel 7FFDF67F3D60h]
+  00007ffdf6702615  cmp     [rcx+8],rax
+  00007ffdf6702619  jne     near 00007FFDF670283Eh            ; TpSetWaitEx+0x25e
+  00007ffdf670261f  mov     rax,[gs:60h]
+  00007ffdf6702628  mov     rcx,[rax+18h]
+  00007ffdf670262c  cmp     byte [rcx+48h],0
+  00007ffdf6702630  jne     near 00007FFDF670283Eh            ; TpSetWaitEx+0x25e
+  00007ffdf6702636  test    r9,r9
+  00007ffdf6702639  jne     near 00007FFDF6702832h            ; TpSetWaitEx+0x252
+  00007ffdf670263f  mov     rax,[gs:30h]
+  00007ffdf6702648  mov     [r11+10h],rbp
+  00007ffdf670264c  xor     ebp,ebp
+  00007ffdf670264e  mov     [r11-18h],rsi
+  00007ffdf6702652  mov     [r11-20h],rdi
+  00007ffdf6702656  mov     r8,[rax+1850h]
+  00007ffdf670265d  mov     rdi,[rbx+90h]
+  00007ffdf6702664  mov     [r11-30h],r14
+  00007ffdf6702668  lea     r14,[rbx+0F0h]
+  00007ffdf670266f  mov     [r11-38h],r15
+  00007ffdf6702673  test    r8,r8
+  00007ffdf6702676  je      short 00007FFDF6702697h           ; TpSetWaitEx+0xb7
+  00007ffdf6702678  mov     edx,ebp
+  00007ffdf670267a  cmp     edx,8
+  00007ffdf670267d  jae     short 00007FFDF6702697h           ; TpSetWaitEx+0xb7
+  00007ffdf670267f  mov     eax,edx
+  00007ffdf6702681  cmp     [r8+rax*8],rbp
+  00007ffdf6702685  lea     rcx,[r8+rax*8]
+  00007ffdf6702689  jne     near 00007FFDF67027A8h            ; TpSetWaitEx+0x1c8
+  00007ffdf670268f  test    rcx,rcx
+  00007ffdf6702692  je      short 00007FFDF6702697h           ; TpSetWaitEx+0xb7
+  00007ffdf6702694  mov     [rcx],r14
+  00007ffdf6702697  lock bts qword [r14],0
+  00007ffdf670269d  jb      near 00007FFDF67028B8h            ; TpSetWaitEx+0x2d8
+  00007ffdf67026a3  mov     [rsp+50h],r12
+  00007ffdf67026a8  cmp     [rbx+168h],rbp
+  00007ffdf67026af  jne     near 00007FFDF6702858h            ; TpSetWaitEx+0x278
+  00007ffdf67026b5  mov     r12b,1
+  00007ffdf67026b8  lea     r15,[rbx+1D0h]
+  00007ffdf67026bf  mov     edi,ebp
+  00007ffdf67026c1  and     byte [r15],0FEh
+  00007ffdf67026c5  mov     esi,ebp
+  00007ffdf67026c7  movzx   eax,byte [r15]
+  00007ffdf67026cb  and     al,0FDh
+  00007ffdf67026cd  test    edi,edi
+  00007ffdf67026cf  mov     [r15],al
+  00007ffdf67026d2  setne   sil
+  00007ffdf67026d6  test    r13,r13
+  00007ffdf67026d9  je      near 00007FFDF67027AFh            ; TpSetWaitEx+0x1cf
+  00007ffdf67026df  cmp     [rbx+163h],bpl
+  00007ffdf67026e6  jne     near 00007FFDF67027AFh            ; TpSetWaitEx+0x1cf
+  00007ffdf67026ec  test    r12b,r12b
+  00007ffdf67026ef  je      near 00007FFDF6702801h            ; TpSetWaitEx+0x221
+  00007ffdf67026f5  cmp     [rbx+168h],rbp
+  00007ffdf67026fc  jne     near 00007FFDF67027AFh            ; TpSetWaitEx+0x1cf
+  00007ffdf6702702  mov     r15,[rbx+90h]
+  00007ffdf6702709  lea     rax,[rsp+80h]
+  00007ffdf6702711  mov     rcx,[rbx+170h]
+  00007ffdf6702718  lea     r9,[rbx+188h]
+  00007ffdf670271f  mov     [rsp+38h],rax
+  00007ffdf6702724  mov     r8,r13
+  00007ffdf6702727  mov     [rsp+80h],bpl
+  00007ffdf670272f  mov     [rbx+168h],r13
+  00007ffdf6702736  mov     rdx,[r15+40h]
+  00007ffdf670273a  mov     [rsp+30h],rbp
+  00007ffdf670273f  mov     [rsp+28h],ebp
+  00007ffdf6702743  mov     [rsp+20h],rbx
+  00007ffdf6702748  call    00007FFDF67E1FE0h                 ; NtAssociateWaitCompletionPacket
+  00007ffdf670274d  test    eax,eax
+  00007ffdf670274f  js      near 00007FFDF67028EDh            ; TpSetWaitEx+0x30d
+  00007ffdf6702755  mov     rcx,[rsp+90h]
+  00007ffdf670275d  test    rcx,rcx
+  00007ffdf6702760  jne     near 00007FFDF67028C5h            ; TpSetWaitEx+0x2e5
+  00007ffdf6702766  mov     ebp,1
+  00007ffdf670276b  add     edi,ebp
+  00007ffdf670276d  test    edi,edi
+  00007ffdf670276f  jle     short 00007FFDF67027AFh           ; TpSetWaitEx+0x1cf
+  00007ffdf6702771  lock add [rbx],edi
+  00007ffdf6702774  mov     rcx,r14
+  00007ffdf6702777  call    00007FFDF66BA130h                 ; RtlReleaseSRWLockExclusive
+  00007ffdf670277c  mov     r15,[rsp+40h]
+  00007ffdf6702781  mov     eax,esi
+  00007ffdf6702783  mov     rsi,[rsp+60h]
+  00007ffdf6702788  mov     r14,[rsp+48h]
+  00007ffdf670278d  mov     r12,[rsp+50h]
+  00007ffdf6702792  mov     rdi,[rsp+58h]
+  00007ffdf6702797  mov     rbp,[rsp+88h]
+  00007ffdf670279f  add     rsp,68h
+  00007ffdf67027a3  pop     r13
+  00007ffdf67027a5  pop     rbx
+  00007ffdf67027a6  ret
+  00007ffdf67027a7  int3
+  00007ffdf67027a8  inc     edx
+  00007ffdf67027aa  jmp     00007FFDF670267Ah                 ; TpSetWaitEx+0x9a
+  00007ffdf67027af  mov     rcx,r14
+  00007ffdf67027b2  call    00007FFDF66BA130h                 ; RtlReleaseSRWLockExclusive
+  00007ffdf67027b7  test    edi,edi
+  00007ffdf67027b9  jns     short 00007FFDF670277Ch           ; TpSetWaitEx+0x19c
+  00007ffdf67027bb  mov     eax,edi
+  00007ffdf67027bd  lock xadd [rbx],eax
+  00007ffdf67027c1  neg     edi
+  00007ffdf67027c3  cmp     eax,edi
+  00007ffdf67027c5  jne     short 00007FFDF670277Ch           ; TpSetWaitEx+0x19c
+  00007ffdf67027c7  mov     rax,[rbx+8]
+  00007ffdf67027cb  lea     rcx,[rel 7FFDF67029A0h]
+  00007ffdf67027d2  mov     rax,[rax]
+  00007ffdf67027d5  cmp     rax,rcx
+  00007ffdf67027d8  jne     short 00007FFDF67027E4h           ; TpSetWaitEx+0x204
+  00007ffdf67027da  mov     rcx,rbx
+  00007ffdf67027dd  call    00007FFDF67029A0h                 ; TppFreeWait
+  00007ffdf67027e2  jmp     short 00007FFDF670277Ch
+  00007ffdf67027e4  lea     rcx,[rel 7FFDF67029F0h]
+  00007ffdf67027eb  cmp     rax,rcx
+  00007ffdf67027ee  mov     rcx,rbx
+  00007ffdf67027f1  jne     near 00007FFDF6702941h            ; TpSetWaitEx+0x361
+  00007ffdf67027f7  call    00007FFDF67029F0h                 ; TppTimerpFree
+  00007ffdf67027fc  jmp     00007FFDF670277Ch                 ; TpSetWaitEx+0x19c
+  00007ffdf6702801  mov     rcx,[rsp+90h]
+  00007ffdf6702809  or      al,1
+  00007ffdf670280b  mov     [rbx+178h],r13
+  00007ffdf6702812  mov     [r15],al
+  00007ffdf6702815  test    rcx,rcx
+  00007ffdf6702818  je      near 00007FFDF670276Dh            ; TpSetWaitEx+0x18d
+  00007ffdf670281e  or      al,2
+  00007ffdf6702820  mov     [r15],al
+  00007ffdf6702823  mov     rax,[rcx]
+  00007ffdf6702826  mov     [rbx+180h],rax
+  00007ffdf670282d  jmp     00007FFDF670276Dh                 ; TpSetWaitEx+0x18d
+  00007ffdf6702832  call    00007FFDF66FE89Ch                 ; TppRaiseInvalidParameter
+  00007ffdf6702837  xor     eax,eax
+  00007ffdf6702839  jmp     00007FFDF670279Fh                 ; TpSetWaitEx+0x1bf
+  00007ffdf670283e  test    r13,r13
+  00007ffdf6702841  jne     short 00007FFDF6702832h           ; TpSetWaitEx+0x252
+  00007ffdf6702843  mov     rax,[gs:60h]
+  00007ffdf670284c  mov     rcx,[rax+18h]
+  00007ffdf6702850  cmp     [rcx+48h],r13b
+  00007ffdf6702854  jne     short 00007FFDF6702837h           ; TpSetWaitEx+0x257
+  00007ffdf6702856  jmp     short 00007FFDF6702832h
+  00007ffdf6702858  mov     rcx,[rbx+170h]
+  00007ffdf670285f  xor     edx,edx
+  00007ffdf6702861  call    00007FFDF67E2080h                 ; NtCancelWaitCompletionPacket
+  00007ffdf6702866  test    eax,eax
+  00007ffdf6702868  jne     near 00007FFDF670294Bh            ; TpSetWaitEx+0x36b
+  00007ffdf670286e  mov     r12b,1
+  00007ffdf6702871  mov     [rbx+168h],rbp
+  00007ffdf6702878  movzx   r8d,r12b
+  00007ffdf670287c  lea     rdx,[rdi+70h]
+  00007ffdf6702880  mov     rcx,rbx
+  00007ffdf6702883  call    00007FFDF6700390h                 ; TppCancelTimer
+  00007ffdf6702888  neg     al
+  00007ffdf670288a  lea     r15,[rbx+1D0h]
+  00007ffdf6702891  sbb     edi,edi
+  00007ffdf6702893  dec     edi
+  00007ffdf6702895  test    byte [r15],4
+  00007ffdf6702899  je      near 00007FFDF67026C1h            ; TpSetWaitEx+0xe1
+  00007ffdf670289f  xor     r8d,r8d
+  00007ffdf67028a2  lea     rcx,[rbx+38h]
+  00007ffdf67028a6  lea     edx,[r8-1]
+  00007ffdf67028aa  call    00007FFDF6702040h                 ; TppBarrierAdjust
+  00007ffdf67028af  and     byte [r15],0FBh
+  00007ffdf67028b3  jmp     00007FFDF67026C1h                 ; TpSetWaitEx+0xe1
+  00007ffdf67028b8  mov     rcx,r14
+  00007ffdf67028bb  call    00007FFDF6722D80h                 ; RtlpAcquireSRWLockExclusiveContended
+  00007ffdf67028c0  jmp     00007FFDF67026A3h                 ; TpSetWaitEx+0xc3
+  00007ffdf67028c5  cmp     [rsp+80h],bpl
+  00007ffdf67028cd  jne     near 00007FFDF6702766h            ; TpSetWaitEx+0x186
+  00007ffdf67028d3  mov     rax,[rcx]
+  00007ffdf67028d6  test    rax,rax
+  00007ffdf67028d9  js      short 00007FFDF670293Ch           ; TpSetWaitEx+0x35c
+  00007ffdf67028db  mov     edx,7FFE0014h
+  00007ffdf67028e0  mov     rdx,[rdx]
+  00007ffdf67028e3  cmp     rax,rdx
+  00007ffdf67028e6  jg      short 00007FFDF6702906h           ; TpSetWaitEx+0x326
+  00007ffdf67028e8  mov     rax,rbp
+  00007ffdf67028eb  jmp     short 00007FFDF6702918h
+  00007ffdf67028ed  mov     r8,rbx
+  00007ffdf67028f0  mov     [rbx+168h],rbp
+  00007ffdf67028f7  mov     rdx,r13
+  00007ffdf67028fa  mov     ecx,eax
+  00007ffdf67028fc  call    00007FFDF67486F8h                 ; TppRaiseHandleStatus
+  00007ffdf6702901  jmp     00007FFDF670276Bh                 ; TpSetWaitEx+0x18b
+  00007ffdf6702906  sub     rax,rdx
+  00007ffdf6702909  shr     rax,10h
+  00007ffdf670290d  mov     r8d,12Ch
+  00007ffdf6702913  cmp     rax,r8
+  00007ffdf6702916  ja      short 00007FFDF670291Bh           ; TpSetWaitEx+0x33b
+  00007ffdf6702918  mov     r8d,eax
+  00007ffdf670291b  mov     [rsp+20h],r8d
+  00007ffdf6702920  lea     rdx,[r15+70h]
+  00007ffdf6702924  mov     r8,rcx
+  00007ffdf6702927  xor     r9d,r9d
+  00007ffdf670292a  mov     rcx,rbx
+  00007ffdf670292d  call    00007FFDF66FEFF0h                 ; TppSetTimer
+  00007ffdf6702932  mov     ebp,2
+  00007ffdf6702937  jmp     00007FFDF670276Bh                 ; TpSetWaitEx+0x18b
+  00007ffdf670293c  neg     rax
+  00007ffdf670293f  jmp     short 00007FFDF6702909h
+  00007ffdf6702941  call    00007FFDF67F2020h                 ; RtlpFcQueryAllFeatureUsageSubscriptionNotificationsFromBufferSet+0x738
+  00007ffdf6702946  jmp     00007FFDF670277Ch                 ; TpSetWaitEx+0x19c
+  00007ffdf670294b  cmp     eax,103h
+  00007ffdf6702950  jne     short 00007FFDF6702982h           ; TpSetWaitEx+0x3a2
+  00007ffdf6702952  lea     r15,[rbx+1D0h]
+  00007ffdf6702959  xor     r12b,r12b
+  00007ffdf670295c  movzx   eax,byte [r15]
+  00007ffdf6702960  test    al,4
+  00007ffdf6702962  jne     near 00007FFDF67026BFh            ; TpSetWaitEx+0xdf
+  00007ffdf6702968  xor     r8d,r8d
+  00007ffdf670296b  lea     rcx,[rbx+38h]
+  00007ffdf670296f  or      al,4
+  00007ffdf6702971  mov     [r15],al
+  00007ffdf6702974  lea     edx,[r8+1]
+  00007ffdf6702978  call    00007FFDF6702040h                 ; TppBarrierAdjust
+  00007ffdf670297d  jmp     00007FFDF67026BFh                 ; TpSetWaitEx+0xdf
+  00007ffdf6702982  cmp     eax,0C0000120h
+  00007ffdf6702987  je      short 00007FFDF6702952h           ; TpSetWaitEx+0x372
+  00007ffdf6702989  call    00007FFDF66FE89Ch                 ; TppRaiseInvalidParameter
+  00007ffdf670298e  jmp     short 00007FFDF6702952h
+  00007ffdf6702990  int3
+  00007ffdf6702991  int3
+  00007ffdf6702992  int3
+  00007ffdf6702993  int3
+  00007ffdf6702994  int3
+  00007ffdf6702995  int3
+  00007ffdf6702996  int3
+  00007ffdf6702997  int3
+  00007ffdf6702998  int3
+  00007ffdf6702999  int3
+  00007ffdf670299a  int3
+  00007ffdf670299b  int3
+  00007ffdf670299c  int3
+  00007ffdf670299d  int3
+  00007ffdf670299e  int3
+  00007ffdf670299f  int3
+
+== TppCancelWait @ 0x7ffdf6762210  (272 bytes)
+  00007ffdf6762210  mov     [rsp+8],rbx
+  00007ffdf6762215  mov     [rsp+10h],rsi
+  00007ffdf676221a  mov     [rsp+18h],rdi
+  00007ffdf676221f  push    r14
+  00007ffdf6762221  sub     rsp,20h
+  00007ffdf6762225  and     r8d,2
+  00007ffdf6762229  mov     r14,r9
+  00007ffdf676222c  cmp     qword [rcx+168h],0
+  00007ffdf6762234  mov     rbx,rdx
+  00007ffdf6762237  mov     rsi,rcx
+  00007ffdf676223a  jne     short 00007FFDF676226Ch           ; TppCancelWait+0x5c
+  00007ffdf676223c  xor     eax,eax
+  00007ffdf676223e  lea     rbx,[rcx+1D0h]
+  00007ffdf6762245  mov     [r9],eax
+  00007ffdf6762248  mov     dil,1
+  00007ffdf676224b  and     byte [rbx],0FEh
+  00007ffdf676224e  movzx   eax,dil
+  00007ffdf6762252  and     byte [rbx],0FDh
+  00007ffdf6762255  mov     rbx,[rsp+30h]
+  00007ffdf676225a  mov     rsi,[rsp+38h]
+  00007ffdf676225f  mov     rdi,[rsp+40h]
+  00007ffdf6762264  add     rsp,20h
+  00007ffdf6762268  pop     r14
+  00007ffdf676226a  ret
+  00007ffdf676226b  int3
+  00007ffdf676226c  mov     rcx,[rcx+170h]
+  00007ffdf6762273  test    r8d,r8d
+  00007ffdf6762276  setne   dl
+  00007ffdf6762279  call    00007FFDF67E2080h                 ; NtCancelWaitCompletionPacket
+  00007ffdf676227e  test    eax,eax
+  00007ffdf6762280  jne     short 00007FFDF67622D3h           ; TppCancelWait+0xc3
+  00007ffdf6762282  xor     eax,eax
+  00007ffdf6762284  mov     dil,1
+  00007ffdf6762287  movzx   r8d,dil
+  00007ffdf676228b  mov     [rsi+168h],rax
+  00007ffdf6762292  mov     rdx,rbx
+  00007ffdf6762295  mov     rcx,rsi
+  00007ffdf6762298  call    00007FFDF6700390h                 ; TppCancelTimer
+  00007ffdf676229d  mov     dword [r14],0FFFFFFFFh
+  00007ffdf67622a4  test    al,al
+  00007ffdf67622a6  je      short 00007FFDF67622AFh           ; TppCancelWait+0x9f
+  00007ffdf67622a8  mov     dword [r14],0FFFFFFFEh
+  00007ffdf67622af  lea     rbx,[rsi+1D0h]
+  00007ffdf67622b6  test    byte [rbx],4
+  00007ffdf67622b9  je      short 00007FFDF676224Bh           ; TppCancelWait+0x3b
+  00007ffdf67622bb  xor     r8d,r8d
+  00007ffdf67622be  lea     rcx,[rsi+38h]
+  00007ffdf67622c2  lea     edx,[r8-1]
+  00007ffdf67622c6  call    00007FFDF6702040h                 ; TppBarrierAdjust
+  00007ffdf67622cb  and     byte [rbx],0FBh
+  00007ffdf67622ce  jmp     00007FFDF676224Bh                 ; TppCancelWait+0x3b
+  00007ffdf67622d3  cmp     eax,103h
+  00007ffdf67622d8  jne     short 00007FFDF6762309h           ; TppCancelWait+0xf9
+  00007ffdf67622da  lea     rbx,[rsi+1D0h]
+  00007ffdf67622e1  xor     dil,dil
+  00007ffdf67622e4  movzx   eax,byte [rbx]
+  00007ffdf67622e7  test    al,4
+  00007ffdf67622e9  jne     short 00007FFDF67622FFh           ; TppCancelWait+0xef
+  00007ffdf67622eb  xor     r8d,r8d
+  00007ffdf67622ee  lea     rcx,[rsi+38h]
+  00007ffdf67622f2  or      al,4
+  00007ffdf67622f4  mov     [rbx],al
+  00007ffdf67622f6  lea     edx,[r8+1]
+  00007ffdf67622fa  call    00007FFDF6702040h                 ; TppBarrierAdjust
+  00007ffdf67622ff  xor     eax,eax
+  00007ffdf6762301  mov     [r14],eax
+  00007ffdf6762304  jmp     00007FFDF676224Bh                 ; TppCancelWait+0x3b
+  00007ffdf6762309  cmp     eax,0C0000120h
+  00007ffdf676230e  je      short 00007FFDF67622DAh           ; TppCancelWait+0xca
+  00007ffdf6762310  call    00007FFDF66FE89Ch                 ; TppRaiseInvalidParameter
+  00007ffdf6762315  jmp     short 00007FFDF67622DAh
+  00007ffdf6762317  int3
+  00007ffdf6762318  int3
+  00007ffdf6762319  int3
+  00007ffdf676231a  int3
+  00007ffdf676231b  int3
+  00007ffdf676231c  int3
+  00007ffdf676231d  int3
+  00007ffdf676231e  int3
+  00007ffdf676231f  int3

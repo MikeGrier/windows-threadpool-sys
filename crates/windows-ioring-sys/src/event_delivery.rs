@@ -71,6 +71,21 @@ pub struct EventDelivery {
     ring: Arc<Mutex<IoRing>>,
 }
 
+impl Drop for EventDelivery {
+    fn drop(&mut self) {
+        // The wait is armed, so it owes a drain. Field drop would make that
+        // drain anyway -- this adds no blocking -- but leaving it to `Drop`
+        // leaves the obligation undischarged, which `windows-threadpool-sys`
+        // reports and, under its `fail-fast` feature, panics on.
+        //
+        // Draining here rather than relying on the field order *strengthens*
+        // the guarantee described above: this body runs before any field is
+        // dropped, so no callback can be touching the ring by the time `ring`
+        // is released, which is what `M4.3` requires.
+        self.wait.stop_and_drain();
+    }
+}
+
 impl EventDelivery {
     /// Wire `ring`'s completion event to a thread-pool wait, delivering every
     /// popped [`Completion`] to `on_completion` on a pool thread (M4.2).

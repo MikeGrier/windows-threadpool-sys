@@ -6,7 +6,7 @@ use std::ptr;
 use std::sync::atomic::{AtomicIsize, Ordering};
 use std::time::{Duration, SystemTime};
 
-use windows_sys::Win32::Foundation::{FALSE, TRUE};
+use windows_sys::Win32::Foundation::FALSE;
 use windows_sys::Win32::System::Threading::{
     CloseThreadpoolTimer, CreateThreadpoolTimer, IsThreadpoolTimerSet, PTP_CALLBACK_INSTANCE,
     PTP_TIMER, WaitForThreadpoolTimerCallbacks,
@@ -21,6 +21,24 @@ use crate::timer::{absolute_filetime, arm_raw, disarm_raw, millis_u32, relative_
 /// from inside a callback needs the object the callback belongs to.
 struct PeriodicContext {
     timer: AtomicIsize,
+    /// Whether the timer has a schedule that nothing has drained.
+    ///
+    /// A tick does **not** settle this, which is where this type parts company
+    /// with the one-shot timer and the wait. Those are armed for exactly one
+    /// activation, so a dispatch leaves nothing behind; here the pool re-arms
+    /// from the period, so the timer is just as live after a tick as before it.
+    /// Only stopping it settles this.
+    obligation: crate::obligation::CloseObligation,
+    /// This pool's entry in the self-heal registry.
+    ///
+    /// Held for its `Drop`, not read. The claim keeps the entry alive while
+    /// this object exists, which is what makes the entry's pre-created repair
+    /// work object available -- and bound to the pool, deferring its free --
+    /// if a wait on the same pool is later cancelled. Only a wait reads a
+    /// registration, because only a wait reaches the removal primitive that
+    /// owes a repair.
+    #[allow(dead_code)]
+    registration: crate::heal::Registration,
     callback: Box<dyn Fn(&PeriodicTick<'_>) + Send + Sync + 'static>,
 }
 
@@ -44,10 +62,14 @@ impl PeriodicTick<'_> {
     /// This is how a periodic timer ends itself -- "tick until some condition
     /// holds" needs no external coordination.
     ///
-    /// It stops *future* ticks being queued. It does not retract ticks already
-    /// queued, and it does not affect ticks already running, including other
-    /// concurrent runs of this same callback. Expect the callback to run again
-    /// after calling this, and make it idempotent accordingly.
+    /// It stops *future* ticks being queued, and discards a tick already queued
+    /// -- the behaviour
+    /// `stopping_a_periodic_timer_discards_a_tick_that_is_already_queued`
+    /// measures for [`ThreadpoolPeriodicTimer::stop`], which this calls. What
+    /// it does not affect is a tick already *running*, including another
+    /// concurrent run of this same callback on another thread. Expect the
+    /// callback to run again after calling this, and make it idempotent
+    /// accordingly.
     pub fn stop(&self) {
         let timer = self.ctx.timer.load(Ordering::Acquire);
         debug_assert_ne!(timer, 0, "the timer must be published before callbacks");
@@ -69,9 +91,17 @@ unsafe extern "system" fn periodic_trampoline(
 ) {
     // SAFETY: context is a valid *mut PeriodicContext for the full callback duration.
     let ctx = unsafe { &*(context as *const PeriodicContext) };
+    // The target begins with `timer` so that narrowing to `timer` catches both
+    // kinds, and continues so that narrowing to `timer-periodic` catches only
+    // this one.
+    crate::trace_record!("timer-periodic", "trampoline-entered", _timer);
+    // Stamped before the callback, not after: a dispatch that is still running
+    // is evidence the pool is live, and a long callback must not look like
+    // silence to the self-heal.
     let tick = PeriodicTick { ctx };
     // Not contained: see the callback contract in the crate docs.
     (ctx.callback)(&tick);
+    crate::trace_record!("timer-periodic", "trampoline-left", _timer);
 }
 
 /// An owned repeating thread-pool timer.
@@ -135,7 +165,8 @@ unsafe extern "system" fn periodic_trampoline(
 /// ```
 ///
 /// Stopping from inside the callback, for "tick until done". Note the counter
-/// may pass the threshold, because a tick already queued still runs:
+/// may pass the threshold: the stop discards a queued tick, but a tick already
+/// running on another thread is unaffected and will finish its increment:
 ///
 /// ```
 /// use std::sync::Arc;
@@ -253,21 +284,29 @@ impl ThreadpoolPeriodicTimer {
             ));
         }
 
+        // Read before `env` is consumed below, and registered before the object
+        // exists: the entry must be able to repair this pool from the moment
+        // anything of ours can dispatch on it.
+        let registration = crate::heal::register(crate::heal::key_of(env.as_deref()));
         let context = Box::into_raw(Box::new(PeriodicContext {
             timer: AtomicIsize::new(0),
+            obligation: crate::obligation::CloseObligation::new(),
+            registration,
             callback: Box::new(callback),
         }));
         let env_ptr = env.map_or(ptr::null_mut(), |e| e.as_mut_ptr());
 
-        // SAFETY: context is a valid heap pointer that outlives every callback,
-        // and env_ptr is valid (or null) for the duration of this call.
-        let timer = unsafe {
-            CreateThreadpoolTimer(
-                Some(periodic_trampoline),
-                context.cast(),
-                env_ptr.cast_const(),
-            )
-        };
+        let timer = crate::trace_call!("CreateThreadpoolTimer", 0, millis_u32(period), {
+            // SAFETY: context is a valid heap pointer that outlives every callback,
+            // and env_ptr is valid (or null) for the duration of this call.
+            unsafe {
+                CreateThreadpoolTimer(
+                    Some(periodic_trampoline),
+                    context.cast(),
+                    env_ptr.cast_const(),
+                )
+            }
+        });
 
         if timer == 0 {
             let error = io::Error::last_os_error();
@@ -280,6 +319,7 @@ impl ThreadpoolPeriodicTimer {
         // started yet, so no callback can observe the unpublished value.
         // SAFETY: context is live and exclusively ours until the first start.
         unsafe { (*context).timer.store(timer, Ordering::Release) };
+        crate::trace_record!("timer-periodic", "created", timer, millis_u32(period));
 
         Ok(Self {
             timer,
@@ -304,15 +344,17 @@ impl ThreadpoolPeriodicTimer {
     /// Subsequent ticks follow every [`ThreadpoolPeriodicTimer::period`]. A zero
     /// `first_delay` makes the first tick due immediately.
     pub fn start_after(&self, first_delay: Duration) {
-        // SAFETY: timer is valid for the lifetime of self.
-        unsafe {
-            arm_raw(
-                self.timer,
-                relative_filetime(first_delay),
-                millis_u32(self.period),
-                0,
-            );
-        }
+        self.record_live_before(|| {
+            // SAFETY: timer is valid for the lifetime of self.
+            unsafe {
+                arm_raw(
+                    self.timer,
+                    relative_filetime(first_delay),
+                    millis_u32(self.period),
+                    0,
+                );
+            }
+        });
     }
 
     /// Start ticking, with the first tick at the wall-clock instant `when`.
@@ -320,15 +362,17 @@ impl ThreadpoolPeriodicTimer {
     /// Unlike a relative first delay, an absolute one passes through sleep and
     /// hibernation.
     pub fn start_at(&self, when: SystemTime) {
-        // SAFETY: timer is valid for the lifetime of self.
-        unsafe {
-            arm_raw(
-                self.timer,
-                absolute_filetime(when),
-                millis_u32(self.period),
-                0,
-            );
-        }
+        self.record_live_before(|| {
+            // SAFETY: timer is valid for the lifetime of self.
+            unsafe {
+                arm_raw(
+                    self.timer,
+                    absolute_filetime(when),
+                    millis_u32(self.period),
+                    0,
+                );
+            }
+        });
     }
 
     /// Start ticking, allowing the system a coalescing `window` on each tick.
@@ -337,22 +381,27 @@ impl ThreadpoolPeriodicTimer {
     /// with other expirations and wake the processor less often, trading timing
     /// precision for power.
     pub fn start_with_window(&self, first_delay: Duration, window: Duration) {
-        // SAFETY: timer is valid for the lifetime of self.
-        unsafe {
-            arm_raw(
-                self.timer,
-                relative_filetime(first_delay),
-                millis_u32(self.period),
-                millis_u32(window),
-            );
-        }
+        self.record_live_before(|| {
+            // SAFETY: timer is valid for the lifetime of self.
+            unsafe {
+                arm_raw(
+                    self.timer,
+                    relative_filetime(first_delay),
+                    millis_u32(self.period),
+                    millis_u32(window),
+                );
+            }
+        });
     }
 
     /// Stop the timer.
     ///
-    /// Future ticks stop being queued, but a tick already queued still runs and
-    /// ticks already executing are unaffected. Use
-    /// [`ThreadpoolPeriodicTimer::stop_and_drain`] to also wait for those.
+    /// Future ticks stop being queued, and a tick already queued is discarded
+    /// -- measured on this type by
+    /// `stopping_a_periodic_timer_discards_a_tick_that_is_already_queued`,
+    /// which holds the pool's only thread busy so a tick is provably queued,
+    /// then stops. Ticks already *executing* are unaffected; use
+    /// [`ThreadpoolPeriodicTimer::stop_and_drain`] to wait for those.
     pub fn stop(&self) {
         // SAFETY: timer is valid for the lifetime of self.
         unsafe { disarm_raw(self.timer) };
@@ -366,7 +415,10 @@ impl ThreadpoolPeriodicTimer {
     #[must_use]
     pub fn is_running(&self) -> bool {
         // SAFETY: timer is valid for the lifetime of self.
-        unsafe { IsThreadpoolTimerSet(self.timer) != 0 }
+        crate::trace_call!("IsThreadpoolTimerSet", self.timer, 0, {
+            // SAFETY: timer is valid for the lifetime of self.
+            unsafe { IsThreadpoolTimerSet(self.timer) != 0 }
+        })
     }
 
     /// Block until all queued and executing ticks have completed.
@@ -375,14 +427,26 @@ impl ThreadpoolPeriodicTimer {
     /// new ticks. [`ThreadpoolPeriodicTimer::stop_and_drain`] does both in the right order.
     pub fn wait(&self) {
         // SAFETY: timer is valid for the lifetime of self.
-        unsafe { WaitForThreadpoolTimerCallbacks(self.timer, FALSE) };
+        crate::trace_call!("WaitForThreadpoolTimerCallbacks", self.timer, 0, {
+            // SAFETY: timer is valid for the lifetime of self.
+            unsafe { WaitForThreadpoolTimerCallbacks(self.timer, FALSE) };
+        });
     }
 
     /// Stop the timer and wait until no tick is queued or executing.
     ///
     /// This is the correct teardown order -- stop first, drain second -- and is
-    /// what [`Drop`] performs. Ticks that have not started are dropped rather
-    /// than run.
+    /// what [`Drop`] performs.
+    ///
+    /// The drain no longer cancels: it waits for a queued tick to run. On this
+    /// type that is **unobservable**, because `stop` discards a queued tick --
+    /// measured by
+    /// `stopping_a_periodic_timer_discards_a_tick_that_is_already_queued`. That
+    /// test exists because this paragraph used to cite the *one-shot* timer's
+    /// `disarming_cancels_a_queued_tick_which_a_waits_disarm_does_not`
+    /// instead, which measures `SetThreadpoolTimer` with no period at all. The
+    /// drain is the form the rest of the crate uses, and the one that stays
+    /// correct if the discard behaviour ever changes.
     ///
     /// The result holds provided no other thread starts the timer during the
     /// call. `ThreadpoolPeriodicTimer` is `Sync` and the `start*` methods take
@@ -392,10 +456,55 @@ impl ThreadpoolPeriodicTimer {
     /// exclusively or serialize access to it. Unlike the one-shot timer there is
     /// no re-arm to suppress: [`PeriodicTick::stop`] only ever stops.
     pub fn stop_and_drain(&self) {
-        self.stop();
-        // SAFETY: timer is valid for the lifetime of self. A cancelled timer
-        // callback owns no storage, so dropping queued ticks orphans nothing.
-        unsafe { WaitForThreadpoolTimerCallbacks(self.timer, TRUE) };
+        // SAFETY: the context outlives every tick and is freed only by Drop,
+        // which cannot run while this borrow of self is alive.
+        unsafe { Self::stop_and_drain_parts(self.context.cast(), self.timer) };
+    }
+
+    /// [`stop_and_drain`](Self::stop_and_drain) against a detached context.
+    ///
+    /// One body rather than two, for the reason the one-shot timer's twin of
+    /// this function gives -- and this type is the evidence that the reason is
+    /// real rather than tidiness. It had no shared body, and the two copies
+    /// drifted: the drain here was converted from cancelling to waiting while
+    /// the cleanup-group member went on passing `TRUE`, kept its `(cancel)`
+    /// trace label, and never settled the obligation at all, all while its own
+    /// documentation said it did "as with `ThreadpoolPeriodicTimer`".
+    ///
+    /// # Safety
+    ///
+    /// `context` must come from [`into_parts`](Self::into_parts) on this type
+    /// and name a still-live object whose context the caller has not yet freed,
+    /// and `timer` must be that object.
+    pub(crate) unsafe fn stop_and_drain_parts(context: *mut core::ffi::c_void, timer: PTP_TIMER) {
+        // SAFETY: forwarded from this function's own contract.
+        let ctx = unsafe { &*context.cast::<PeriodicContext>() };
+        // SAFETY: `timer` is live for this call by the same contract.
+        unsafe { disarm_raw(timer) };
+        // The disarm above is what makes this terminate: with no period left to
+        // re-queue from, the drain has a finite backlog to run out.
+        crate::trace_call!("WaitForThreadpoolTimerCallbacks", timer, 0, {
+            // SAFETY: `timer` is live, and waiting without cancelling cannot
+            // orphan any storage.
+            unsafe { WaitForThreadpoolTimerCallbacks(timer, FALSE) };
+        });
+        // Settled after the drain. `PeriodicTick::stop` only ever stops, so
+        // unlike the one-shot timer there is no re-arm that could have landed
+        // during the drain and nothing to suppress.
+        ctx.obligation.record_settled();
+    }
+
+    /// Note that a start has made this timer live, so `Drop` owes a drain.
+    ///
+    /// One site for the `start*` methods, which differ only in how they compute
+    /// the first due time. `start` is not among them: it delegates to
+    /// `start_after`.
+    fn record_live_before(&self, publish: impl FnOnce()) {
+        // SAFETY: the context outlives every tick and is freed only by Drop,
+        // which cannot run while this borrow of self is alive.
+        unsafe { &*self.context }
+            .obligation
+            .record_live_before(publish);
     }
 
     /// Give up ownership, returning the raw object, its callback context, and
@@ -420,20 +529,55 @@ impl ThreadpoolPeriodicTimer {
         // SAFETY: forwarded from this function's own contract.
         drop(unsafe { Box::from_raw(context.cast::<PeriodicContext>()) });
     }
+
+    /// Whether `Drop` would report an undischarged drain obligation right now.
+    ///
+    /// Exists so the obligation's wiring can be asserted without depending on
+    /// the trace, whose filter is fixed before `main` and so cannot be narrowed
+    /// from inside a test.
+    #[cfg(test)]
+    pub(crate) fn obligation_owed(&self) -> bool {
+        // SAFETY: the context outlives every tick and is freed only by Drop.
+        unsafe { &*self.context }.obligation.is_owed()
+    }
 }
 
 impl Drop for ThreadpoolPeriodicTimer {
     fn drop(&mut self) {
         // Stop before draining, or the timer would queue a fresh tick while the
         // drain is in progress and never settle.
+        crate::trace_record!("timer-periodic", "drop-begin", self.timer);
+        // Read before the stop and drain, and necessarily so: `stop_and_drain`
+        // below settles the obligation, so asking afterwards would always find
+        // nothing owed.
+        // SAFETY: the context is still live; it is freed at the end of this body.
+        // Captured, not re-read later: `stop_and_drain` below settles the
+        // obligation by itself, and the context is freed before the fail-fast,
+        // so this must be a value rather than a borrow.
+        // SAFETY: the context is still live; it is freed at the end of this body.
+        let owed = unsafe { &*self.context }.obligation.is_owed();
+        if owed {
+            crate::trace_record!(
+                "timer-periodic",
+                crate::obligation::DROP_OBLIGATION_OWED,
+                self.timer
+            );
+        }
         self.stop_and_drain();
+        crate::trace_record!("timer-periodic", "drop-drained", self.timer);
 
         // SAFETY: no tick can be queued or executing, so the object can be
         // closed and the context freed exactly once.
-        unsafe {
-            CloseThreadpoolTimer(self.timer);
-            drop(Box::from_raw(self.context));
-        }
+        crate::trace_call!("CloseThreadpoolTimer", self.timer, 0, {
+            // SAFETY: no tick remains, so the object can be closed once.
+            unsafe { CloseThreadpoolTimer(self.timer) };
+        });
+        // SAFETY: nothing can reach the context again; free it exactly once.
+        unsafe { drop(Box::from_raw(self.context)) };
+        crate::trace_record!("timer-periodic", "drop-closed", self.timer);
+        // Last, after the drain, the close and the context free: a panic
+        // unwinds, so anything after it would be skipped.
+        crate::obligation::fail_fast_if_owed(owed, "ThreadpoolPeriodicTimer", "stop_and_drain");
     }
 }
 

@@ -239,6 +239,9 @@ fn a_self_rearming_callback_never_overlaps() {
         1,
         "a self-rearming one-shot must never run concurrently with itself"
     );
+    // `disarm` plus `wait` stops the ticks but does not settle the obligation;
+    // the close is still owed.
+    timer.stop_and_drain();
 }
 
 /// Re-arming at the *start* of a slow callback must still not overlap, because
@@ -278,6 +281,7 @@ fn rearming_early_in_a_slow_callback_still_does_not_overlap() {
         1,
         "re-arming early must not let the next firing start before this one ends"
     );
+    timer.stop_and_drain();
 }
 
 /// The last request in a firing wins, rather than each one arming separately.
@@ -368,7 +372,10 @@ fn set_at_a_far_future_instant_does_not_fire() {
     assert!(timer.is_set());
     std::thread::sleep(Duration::from_millis(50));
     assert_eq!(fires.count(), 0, "a far-future timer must not fire yet");
-    timer.disarm();
+    // `disarm` is not a drain -- it stops the next tick without settling the
+    // obligation -- so the close is still owed, and under `fail-fast` the
+    // crate is held to the protocol it publishes.
+    timer.stop_and_drain();
 }
 
 // --- disarming ---
@@ -382,6 +389,7 @@ fn disarming_before_firing_prevents_the_callback() {
     assert!(!timer.is_set(), "disarm must clear the armed state");
     std::thread::sleep(Duration::from_millis(50));
     assert_eq!(fires.count(), 0);
+    timer.stop_and_drain();
 }
 
 #[test]
@@ -595,6 +603,55 @@ fn rearming_outside_teardown_is_applied() {
     assert_eq!(*outcomes.lock().unwrap(), vec![true]);
 }
 
+/// `stop_and_drain` lifts its own suppression before returning, so a deferred
+/// re-arm requested afterwards is applied again.
+///
+/// This is the only test that covers the lifting. The obvious candidate,
+/// [`a_timer_is_reusable_after_stop_and_drain`], re-arms through
+/// [`ThreadpoolTimer::set_after`] -- which does *not* consult the suppression --
+/// so it passes whether or not the count was ever lowered. And
+/// [`rearming_outside_teardown_is_applied`] never drains first, so its count is
+/// zero throughout.
+#[test]
+fn a_deferred_rearm_is_applied_again_after_stop_and_drain() {
+    let outcomes = Arc::new(Mutex::new(Vec::new()));
+    let fires = Fires::new();
+    let counter = Arc::clone(&fires);
+
+    let timer = ThreadpoolTimer::new(
+        move |firing| {
+            // Re-arm only on the firing after the drain, so the recorded
+            // outcome names that one and no other.
+            if counter.count() == 1 {
+                firing.rearm_after(Duration::from_millis(1));
+            }
+            counter.record();
+        },
+        None,
+    )
+    .expect("create timer");
+    timer.observe_rearms(&outcomes);
+
+    // First firing: does not re-arm, so the timer is idle when this returns.
+    timer.set_after(Duration::from_millis(1));
+    fires.wait_for(1);
+    timer.stop_and_drain();
+
+    // Second firing, after the drain. Its deferred re-arm is discarded if the
+    // suppression `stop_and_drain` raised was never lowered -- and the third
+    // firing it schedules would then never happen.
+    timer.set_after(Duration::from_millis(1));
+    fires.wait_for(3);
+    timer.stop_and_drain();
+
+    assert_eq!(
+        *outcomes.lock().unwrap(),
+        vec![true],
+        "stop_and_drain must lift its own suppression, or every later deferred \
+         re-arm is silently discarded"
+    );
+}
+
 /// A callback that asks to re-arm while `Drop` is tearing down must not leave a
 /// due time installed behind it. Deferring the re-arm to after the callback
 /// returns -- which is what makes the delay run from the end of the firing --
@@ -671,6 +728,10 @@ fn drop_waits_for_an_executing_callback() {
 }
 
 /// Dropping a timer whose callback re-arms must terminate: Drop disarms first.
+// Dropping an armed timer is this test's subject, so it must keep doing exactly
+// that. Under `fail-fast` that drop is *required* to panic, so the armed
+// behaviour is guarded by the child-process test instead.
+#[cfg(not(feature = "fail-fast"))]
 #[test]
 fn drop_of_a_self_rearming_timer_terminates() {
     let started = Instant::now();
@@ -695,6 +756,8 @@ fn drop_of_a_self_rearming_timer_terminates() {
     );
 }
 
+// Dropping an armed timer is this test's subject -- see the note above.
+#[cfg(not(feature = "fail-fast"))]
 #[test]
 fn drop_while_armed_but_not_yet_fired_is_clean() {
     let (timer, fires) = counting_timer();
@@ -776,4 +839,100 @@ fn a_coalescing_window_still_fires() {
     fires.wait_for(1);
     timer.wait();
     assert_eq!(fires.count(), 1);
+}
+
+/// Disarming a one-shot timer **cancels a tick that is already queued**, which
+/// a wait's disarm does not.
+///
+/// Pinned because it decides whether this type's teardown can distinguish
+/// draining from cancelling, and the answer is that it cannot. `Drop` and
+/// `stop_and_drain` both disarm before they drain; if the disarm has already
+/// discarded the queued callback, no drain can run it. So the drain form is
+/// unobservable here -- see the note at those call sites -- and the reason is
+/// this asymmetry rather than anything about the drain.
+///
+/// A private pool capped at one occupied thread is what makes "queued but not
+/// started" deterministic; without it the tick would simply run and neither
+/// arm would mean anything.
+#[test]
+fn disarming_cancels_a_queued_tick_which_a_waits_disarm_does_not() {
+    let mut outcomes = Vec::new();
+    for disarm_first in [false, true] {
+        let pool = ThreadpoolPool::new().expect("create the private pool");
+        pool.set_min_threads(1).expect("one thread minimum");
+        pool.set_max_threads(1).expect("one thread maximum");
+        let mut env = CallbackEnviron::new();
+        env.set_pool(&pool);
+
+        // `(entered, open)` -- see the periodic twin of this test for why the
+        // first half exists: a submit does not prove the pool's only worker has
+        // taken the occupier, and until it has, that worker is free to take the
+        // timer's callback instead and falsify the precondition below.
+        let gate = Arc::new((Mutex::new((false, false)), Condvar::new()));
+        let gate_for_work = Arc::clone(&gate);
+        let occupier = crate::work::ThreadpoolWork::new(
+            move || {
+                let (lock, cvar) = &*gate_for_work;
+                let mut state = lock.lock().unwrap_or_else(|p| p.into_inner());
+                state.0 = true;
+                cvar.notify_all();
+                while !state.1 {
+                    state = cvar.wait(state).unwrap_or_else(|p| p.into_inner());
+                }
+            },
+            Some(&mut env),
+        )
+        .expect("create the occupying work item");
+        occupier.submit();
+        {
+            let (lock, cvar) = &*gate;
+            let mut state = lock.lock().unwrap_or_else(|p| p.into_inner());
+            while !state.0 {
+                state = cvar.wait(state).unwrap_or_else(|p| p.into_inner());
+            }
+        }
+
+        let ran = Arc::new(AtomicUsize::new(0));
+        let ran_for_callback = Arc::clone(&ran);
+        let timer = ThreadpoolTimer::new(
+            move |_| {
+                ran_for_callback.fetch_add(1, Ordering::SeqCst);
+            },
+            Some(&mut env),
+        )
+        .expect("create the timer");
+        timer.set_after(Duration::from_millis(1));
+        std::thread::sleep(Duration::from_millis(60));
+        assert_eq!(
+            ran.load(Ordering::SeqCst),
+            0,
+            "the pool's only thread is occupied, so the tick must still be queued"
+        );
+
+        if disarm_first {
+            timer.disarm();
+        }
+        {
+            let (lock, cvar) = &*gate;
+            lock.lock().unwrap_or_else(|p| p.into_inner()).1 = true;
+            cvar.notify_all();
+        }
+        timer.wait();
+        std::thread::sleep(Duration::from_millis(100));
+        outcomes.push(ran.load(Ordering::SeqCst));
+        timer.stop_and_drain();
+        // A dispatch settles the obligation for a wait and a one-shot timer,
+        // but never for work: a work object can be submitted again, so the
+        // drain stays the caller's regardless of what has already run.
+        occupier.stop_and_drain();
+    }
+    assert_eq!(
+        outcomes[0], 1,
+        "without a disarm the queued tick runs, so the setup really does queue one"
+    );
+    assert_eq!(
+        outcomes[1], 0,
+        "with a disarm the queued tick is discarded -- this is the asymmetry with waits, and it \
+         is why draining rather than cancelling cannot be observed on this type"
+    );
 }

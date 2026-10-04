@@ -39,7 +39,7 @@
 
 use std::collections::VecDeque;
 use std::io;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Condvar, Mutex};
 
 use windows_threadpool_sys::work::ThreadpoolWork;
 
@@ -77,10 +77,83 @@ struct Queue<T> {
     rings: u64,
     /// How many requests shutdown discarded.
     discarded: u64,
+    /// Producers that have decided to ring but have not yet published.
+    ///
+    /// `submit` releases the lock before calling `ThreadpoolWork::submit`, so
+    /// between those two points a producer is committed to publishing and is
+    /// invisible to anyone holding the lock. Without this count, `shut_down`
+    /// could take the lock, close the queue, and run its cancellation entirely
+    /// inside that window -- and the producer would then publish afterwards,
+    /// making a callback start after `shut_down` had returned and promised
+    /// that none could.
+    ///
+    /// Raised under the lock by the producer that decided to ring, and lowered
+    /// once the publication has actually happened.
+    publishing: usize,
 }
 
 struct Shared<T> {
     queue: Mutex<Queue<T>>,
+    /// Signalled when `publishing` reaches zero, for `shut_down` to wait on.
+    published: Condvar,
+    /// Stops one producer between the queue decision and the publication.
+    ///
+    /// Per-servicer rather than a global, because the suite runs tests in
+    /// parallel threads: a single static gate is armed by one test and then
+    /// consumed by whichever producer reaches it first, anywhere in the
+    /// process. That makes the test pass in isolation and fail in the suite,
+    /// which is how it was found.
+    #[cfg(test)]
+    pause_before_publish: PauseBeforePublish,
+}
+
+/// A gate that parks one producer between the queue decision and the
+/// publication, so a test can drive that interleaving instead of hoping for it.
+///
+/// The window is a few instructions wide and cannot be reached by timing.
+#[cfg(test)]
+#[derive(Default)]
+pub(crate) struct PauseBeforePublish {
+    armed: std::sync::atomic::AtomicBool,
+    /// `(parked, released)`.
+    state: Mutex<(bool, bool)>,
+    changed: Condvar,
+}
+
+#[cfg(test)]
+impl PauseBeforePublish {
+    /// Park the next producer of *this* servicer that reaches the publication.
+    pub(crate) fn arm(&self) {
+        *self.state.lock().unwrap_or_else(|p| p.into_inner()) = (false, false);
+        self.armed.store(true, std::sync::atomic::Ordering::SeqCst);
+    }
+
+    /// Called from `submit`; disarms itself, so only one producer is held.
+    fn wait(&self) {
+        if !self.armed.swap(false, std::sync::atomic::Ordering::SeqCst) {
+            return;
+        }
+        let mut state = self.state.lock().unwrap_or_else(|p| p.into_inner());
+        state.0 = true;
+        self.changed.notify_all();
+        while !state.1 {
+            state = self.changed.wait(state).unwrap_or_else(|p| p.into_inner());
+        }
+    }
+
+    /// Block until a producer is parked at the publication point.
+    pub(crate) fn await_parked(&self) {
+        let mut state = self.state.lock().unwrap_or_else(|p| p.into_inner());
+        while !state.0 {
+            state = self.changed.wait(state).unwrap_or_else(|p| p.into_inner());
+        }
+    }
+
+    /// Let the parked producer publish.
+    pub(crate) fn release(&self) {
+        self.state.lock().unwrap_or_else(|p| p.into_inner()).1 = true;
+        self.changed.notify_all();
+    }
 }
 
 /// A request queue with exactly one servicing authority.
@@ -115,7 +188,11 @@ impl<T: Send + 'static> Servicer<T> {
                 closed: false,
                 rings: 0,
                 discarded: 0,
+                publishing: 0,
             }),
+            published: Condvar::new(),
+            #[cfg(test)]
+            pause_before_publish: PauseBeforePublish::default(),
         });
 
         // The callback holds a strong reference, not a `Weak`: unlike the
@@ -148,12 +225,26 @@ impl<T: Send + 'static> Servicer<T> {
             if ring {
                 queue.drain = Drain::Scheduled;
                 queue.rings += 1;
+                // Counted while still holding the lock, so a `shut_down` that
+                // takes it next cannot miss this publication.
+                queue.publishing += 1;
             }
             ring
         };
 
         if ring {
+            // The window this type's shutdown ordering is about: the lock is
+            // released and the publication has not happened. A test needs to
+            // stop here to drive that interleaving, because it is far too
+            // narrow to hit by timing.
+            #[cfg(test)]
+            self.shared.pause_before_publish.wait();
             self.work.submit();
+            let mut queue = lock(&self.shared.queue);
+            queue.publishing -= 1;
+            if queue.publishing == 0 {
+                self.shared.published.notify_all();
+            }
         }
         Ok(())
     }
@@ -164,6 +255,13 @@ impl<T: Send + 'static> Servicer<T> {
     /// (the teardown shape of D-34). After it returns, no handler is executing or
     /// can start.
     ///
+    /// **That holds against a producer mid-`submit`, which took a second piece
+    /// of ordering to achieve.** Closing the queue only stops producers that
+    /// have not yet reached the gate; one that passed it and has not yet called
+    /// `ThreadpoolWork::submit` holds no lock and cannot be seen from here. The
+    /// `publishing` count makes that producer visible and this function waits
+    /// for it, so the cancellation below cannot run entirely inside its window.
+    ///
     /// Must not be called from inside a handler: it waits for that handler to
     /// finish, so it would wait on itself.
     pub(crate) fn shut_down(&self) {
@@ -172,6 +270,24 @@ impl<T: Send + 'static> Servicer<T> {
             queue.closed = true;
             queue.discarded += queue.items.len() as u64;
             queue.items.clear();
+            // Closing the queue stops producers that have not reached the gate.
+            // It does nothing about one that passed it and has not yet reached
+            // `ThreadpoolWork::submit`, because that producer holds no lock and
+            // is invisible here -- so without this wait the cancellation below
+            // could run entirely inside its window and the publication would
+            // land afterwards. Waiting costs nothing in the ordinary case, where
+            // the count is already zero.
+            //
+            // Not a deadlock against the drain callback: `wait` releases the
+            // lock, and a publisher's remaining work is a `SubmitThreadpoolWork`
+            // that takes no lock of ours.
+            while queue.publishing > 0 {
+                queue = self
+                    .shared
+                    .published
+                    .wait(queue)
+                    .unwrap_or_else(|poison| poison.into_inner());
+            }
         }
 
         // This is what actually delivers the "wait for the drain" guarantee
@@ -219,6 +335,12 @@ impl<T: Send + 'static> Servicer<T> {
         lock(&self.shared.queue).rings
     }
 
+    /// The gate that parks a producer before it publishes. Test-only.
+    #[cfg(test)]
+    pub(crate) fn pause_gate(&self) -> &PauseBeforePublish {
+        &self.shared.pause_before_publish
+    }
+
     /// How many requests shutdown discarded unserviced. Test-only.
     #[cfg(test)]
     pub(crate) fn discarded(&self) -> u64 {
@@ -230,6 +352,18 @@ impl<T: Send + 'static> Drop for Servicer<T> {
     fn drop(&mut self) {
         // One teardown implementation with two triggers; `shut_down` is
         // idempotent, so an explicit call beforehand costs nothing.
+        //
+        // No drain is needed after it, and one used to be here. `shut_down`
+        // ends with `ThreadpoolWork::cancel_pending`, which returns only once
+        // nothing is queued and nothing is executing -- and which now settles
+        // the drain obligation for exactly that reason, so the doorbell owes
+        // nothing by the time this returns. The second `stop_and_drain` added
+        // with the draining teardown was justified by an obligation that is no
+        // longer left behind; it bought a second native pool synchronisation on
+        // every drop and nothing else. Measured rather than assumed: with
+        // `cancel_pending`'s settle removed, this crate's suite panics on the
+        // obligation across many tests under `fail-fast`; with it, the suite is
+        // green without any drain here.
         self.shut_down();
     }
 }

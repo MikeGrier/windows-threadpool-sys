@@ -6,6 +6,4 @@ Completed checklists are recorded in
 
 | Path to CHECKLIST.md | Status | Brief description | Design Notes |
 |---|---|---|---|
-
-No active checklist. [CHECKLIST.md](CHECKLIST.md) is in its closed state; add a row here when new work is
-planned against it.
+| [CHECKLIST.md](CHECKLIST.md) | in progress | Teardown, self-heal, and the pool stall. Which milestones are open, and what each covers, is what [CHECKLIST.md](CHECKLIST.md) says; the stall's evidence is in [STALL-TIMELINE.md](STALL-TIMELINE.md). | [DESIGN-NOTES.md](../../DESIGN-NOTES.md#teardown-drains), [STALL-TIMELINE.md](STALL-TIMELINE.md) |

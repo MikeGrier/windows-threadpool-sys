@@ -343,3 +343,32 @@ fn a_pool_is_send_and_sync() {
     assert_send::<ThreadpoolPool>();
     assert_sync::<ThreadpoolPool>();
 }
+
+/// Prewarming the default pool confirms a worker, and owes nothing afterwards.
+///
+/// **This public function had no test at all.** Its only coverage was
+/// `prewarming_makes_the_default_pool_create_a_worker`, which read worker counts
+/// through the inline hooking facility and went with it when that was deleted
+/// for using undocumented APIs. The loss was recorded at the time; this is the
+/// part that can be rebuilt on documented ground.
+///
+/// What it can still assert is the function's own contract -- a `true` means a
+/// callback ran, and a callback cannot run without a worker to run it on -- and,
+/// under `fail-fast`, that neither of its two paths leaves the warm-up work
+/// object owing a drain. That second half is why this test exists in this
+/// position: `cancel_pending` settles the obligation on the timeout path and a
+/// dispatch deliberately does not settle it on the confirmed path, so the two
+/// paths discharge it differently and a change to either is silent without a
+/// caller.
+#[test]
+fn prewarming_the_default_pool_confirms_a_worker_and_discharges_its_obligation() {
+    assert!(
+        crate::pool::prewarm_default_pool(),
+        "the default pool must dispatch a trivial callback within the two-second \
+         bound; reaching the bound means the pool is already in the stalled state \
+         this crate's self-heal exists for, not that the test is flaky"
+    );
+    // The obligation is the other half, and it is asserted by arriving here: in
+    // a `fail-fast` build an undischarged drain panics from `Drop` inside the
+    // call above, so this line is unreachable if either path stops settling.
+}

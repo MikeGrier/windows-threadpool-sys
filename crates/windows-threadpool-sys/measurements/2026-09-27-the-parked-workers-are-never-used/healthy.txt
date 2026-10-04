@@ -1,0 +1,42 @@
+
+running 1 test
+test completions_are_delivered_on_pool_threads_without_the_submitting_thread_waiting ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 6 filtered out; finished in 0.21s
+
+  trace (oldest first):
+      0.000026s t2060996 delivery               event-attached                          216      0
+      0.000039s t2060996 syscall-enter          CreateThreadpoolWait                      0      0
+      0.000044s t2060996 syscall-leave          CreateThreadpoolWait                      0      0
+      0.000049s t2060996 wait                   created                              2137118156064    216
+      0.000052s t2060996 syscall-enter          SetThreadpoolWait                    2137118156064    216
+      0.000054s t2060996 syscall-leave          SetThreadpoolWait                    2137118156064    216
+      0.000055s t2060996 wait                   armed                                2137118156064    216
+      0.000055s t2060996 delivery               armed                                     0      0
+      0.000079s t2060996 delivery               setup-signalled                         212      0
+      0.000390s t2061000 wait                   trampoline-entered                   2137118156064      0
+      0.000392s t2061000 delivery               callback-entered                          0      0
+      0.000410s t2061000 wait                   rearm-entered                        2137118156064      0
+      0.000410s t2061000 syscall-enter          SetThreadpoolWait                    2137118156064    216
+      0.000412s t2061000 syscall-leave          SetThreadpoolWait                    2137118156064    216
+      0.000412s t2061000 wait                   armed                                2137118156064    216
+      0.000412s t2061000 wait                   rearm-left                           2137118156064    216
+      0.000413s t2061000 delivery               callback-left                             0      0
+      0.000414s t2061000 wait                   trampoline-left                      2137118156064      0
+      0.206420s t2060996 postmortem             thread-present                       2060964      0
+      0.206435s t2060996 postmortem             thread-present                       2060984      0
+      0.206449s t2060996 postmortem             thread-present                       2060988      0
+      0.206461s t2060996 postmortem             thread-present                       2060992      0
+      0.206473s t2060996 postmortem             thread-present                       2060996      0
+      0.206484s t2060996 postmortem             thread-present                       2061000      0
+      0.206555s t2060996 postmortem             thread-snapshot-done                      6      0
+      0.206734s t2061000 wait                   trampoline-entered                   2137118156064      0
+      0.206736s t2061000 delivery               callback-entered                          0      0
+      0.206868s t2061000 wait                   rearm-entered                        2137118156064      0
+      0.206869s t2061000 syscall-enter          SetThreadpoolWait                    2137118156064    216
+      0.206871s t2061000 syscall-leave          SetThreadpoolWait                    2137118156064    216
+      0.206872s t2061000 wait                   armed                                2137118156064    216
+      0.206872s t2061000 wait                   rearm-left                           2137118156064    216
+      0.206873s t2061000 delivery               callback-left                             0      0
+      0.206873s t2061000 wait                   trampoline-left                      2137118156064      0
+
