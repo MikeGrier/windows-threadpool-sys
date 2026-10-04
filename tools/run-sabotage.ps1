@@ -29,6 +29,15 @@
     greps for that string will report a hole in the tests where there is none,
     and the hours then spent looking for it are pure loss.
 
+    Three exceptions read output, each because an exit code cannot carry the
+    distinction. Two only ever WITHHOLD credit: a doctest that would not
+    compile, and a test binary cargo never executed (an antivirus refusal, say)
+    both exit 101 exactly like a real catch. The third GRANTS it, narrowly: an
+    entry declared `refused-by-build` names the compile error its guard raises
+    in `buildError`, and only a build failure carrying that literal text counts.
+    Any other build failure is still a malformed patch -- the exit code alone
+    cannot tell a guard firing from a typo, and the named message can.
+
     A TIMEOUT COUNTS AS CAUGHT. A missing wakeup does not fail a test, it hangs
     it -- so a harness with no timeout hangs too, and a lost-wakeup defect that
     hangs the suite has been detected exactly as intended.
@@ -467,6 +476,17 @@ function Invoke-Sabotaged {
     # the exit code is 101 either way and carries no way to tell them apart.
     # The marker is libtest's own fixed string, verified on this toolchain to
     # land on stdout (the transcript, not `.err`).
+    # A test binary cargo could not start -- Defender refusing it as "potentially
+    # unwanted software" is the case that was measured -- also exits 101, and
+    # would otherwise score as `caught` for a suite that never ran. cargo's
+    # wording is fixed: "could not execute process `...` (never executed)", on
+    # stderr. Withholds credit only; never grants it.
+    if ($run.Outcome -eq 'failed' -and (Test-Path -LiteralPath "$TranscriptPath.err")) {
+        if (Select-String -LiteralPath "$TranscriptPath.err" -Pattern '(never executed)' -SimpleMatch -Quiet) {
+            return [pscustomobject]@{ Outcome = 'not-executed'; Code = $run.Code; Seconds = $run.Seconds }
+        }
+    }
+
     if ($run.Outcome -eq 'failed' -and (Test-Path -LiteralPath $TranscriptPath)) {
         if (Select-String -LiteralPath $TranscriptPath -Pattern "Couldn't compile the test." -SimpleMatch -Quiet) {
             return [pscustomobject]@{ Outcome = 'doc-compile-failed'; Code = $run.Code; Seconds = $run.Seconds }
@@ -585,6 +605,7 @@ function Get-EvidencePath {
     switch ($Outcome) {
         'build-failed' { return "$TranscriptPath.build.err" }
         'build-hung' { return "$TranscriptPath.build.err" }
+        'not-executed' { return "$TranscriptPath.err" }
         default { return $TranscriptPath }
     }
 }
@@ -762,14 +783,35 @@ foreach ($entry in @($spec.sabotages)) {
                 ) -join "`n") 2
         }
     }
-    if (@('caught', 'survives') -notcontains $entry.expect) {
+    if (@('caught', 'survives', 'refused-by-build') -notcontains $entry.expect) {
         # Checked because an unrecognised value is not inert: `expect` is
         # compared for equality when scoring, so anything else can never match
         # and the entry would be reported as misbehaving on every run, whatever
         # the suite actually did.
         Exit-WithMessage (@(
                 "The sabotage '$($entry.name)' declares expect = '$($entry.expect)'."
-                "It must be 'caught' or 'survives'."
+                "It must be 'caught', 'survives' or 'refused-by-build'."
+            ) -join "`n") 2
+    }
+    # `buildError` is what makes a build failure count, so it is required
+    # exactly where it is read and refused everywhere else: an entry carrying
+    # one under `caught` would have it silently ignored, which reads as a guard
+    # being checked when it is not.
+    $hasBuildError = ($entry.PSObject.Properties.Name -contains 'buildError')
+    if ($entry.expect -eq 'refused-by-build') {
+        if (-not $hasBuildError -or -not ($entry.buildError -is [string]) -or
+            [string]::IsNullOrWhiteSpace($entry.buildError)) {
+            Exit-WithMessage (@(
+                    "The sabotage '$($entry.name)' expects refused-by-build but names no buildError."
+                    "Give the literal text of the compile error its guard raises; without it"
+                    "any build failure -- a typo in the patch included -- would count."
+                ) -join "`n") 2
+        }
+    }
+    elseif ($hasBuildError) {
+        Exit-WithMessage (@(
+                "The sabotage '$($entry.name)' sets buildError but expects '$($entry.expect)'."
+                "buildError is read only for refused-by-build; anywhere else it would be ignored."
             ) -join "`n") 2
     }
 }
@@ -900,7 +942,7 @@ if ($List) {
     }
     Write-Report ''
     $selected | ForEach-Object {
-        Write-Report ("{0,-10} {1}" -f $_.expect, $_.name)
+        Write-Report ("{0,-16} {1}" -f $_.expect, $_.name)
     }
     exit 0
 }
@@ -1248,24 +1290,49 @@ foreach ($sabotage in $selected) {
         [System.IO.File]::WriteAllBytes($target, [System.IO.File]::ReadAllBytes($realTarget))
     }
 
+    # A refused-by-build entry is judged on the build alone. Read here, once,
+    # rather than inside the switch, so the verdict and the message below agree.
+    $refusedAsNamed = $false
+    if ($sabotage.expect -eq 'refused-by-build' -and $run.Outcome -eq 'build-failed') {
+        $buildLog = "$transcript.build.err"
+        if (Test-Path -LiteralPath $buildLog) {
+            $refusedAsNamed = ([System.IO.File]::ReadAllText($buildLog)).Contains($sabotage.buildError)
+        }
+    }
+
     $actual = switch ($run.Outcome) {
         'passed' { 'survived (NOT caught)' }
         'failed' { "caught (suite failed, exit $($run.Code))" }
         'hung' { "caught (tests HUNG past ${entryTimeout}s)" }
         # Not "caught": the tests never ran, so this says nothing about them.
         # It means the patch is not valid Rust -- a manifest problem to fix,
-        # not a result to record.
-        'build-failed' { 'MANIFEST DOES NOT COMPILE (tests never ran)' }
+        # not a result to record -- unless the entry declared exactly this, and
+        # the build said what the entry said it would.
+        'build-failed' {
+            if ($refusedAsNamed) { "refused by the build ('$($sabotage.buildError)')" }
+            elseif ($sabotage.expect -eq 'refused-by-build') {
+                "MANIFEST DOES NOT COMPILE (the build failed, but not with '$($sabotage.buildError)')"
+            }
+            else { 'MANIFEST DOES NOT COMPILE (tests never ran)' }
+        }
         'build-hung' { "BUILD HUNG past ${BuildTimeoutSeconds}s (tests never ran)" }
         # Same category as build-failed, reached one phase later because
         # doctests cannot be built by the build phase. The tests did run, but
         # the one that "failed" failed to compile, so it detected nothing.
         'doc-compile-failed' { 'MANIFEST DOES NOT COMPILE (a doctest would not build)' }
+        'not-executed' { 'INFRASTRUCTURE: a test binary was never executed (tests never ran)' }
+    }
+    # A refused-by-build entry whose patch BUILT has a guard that did not fire,
+    # whatever the tests then did; say so first, so the run's own outcome is not
+    # mistaken for the verdict.
+    if ($sabotage.expect -eq 'refused-by-build' -and @('passed', 'failed', 'hung') -contains $run.Outcome) {
+        $actual = "BUILT CLEANLY: the guard did not fire; then $actual"
     }
     $ok = switch ($run.Outcome) {
         'passed' { $sabotage.expect -eq 'survives' }
         'failed' { $sabotage.expect -eq 'caught' }
         'hung' { $sabotage.expect -eq 'caught' }
+        'build-failed' { $refusedAsNamed }
         default { $false }
     }
 

@@ -203,7 +203,8 @@ function New-Spec {
 # sabotage has, and the one the phase split exists to tell apart.
 function New-Stub {
     param(
-        [ValidateSet('pass', 'fail', 'hang', 'doc-fail', 'build-fail')] [string] $Behaviour,
+        [ValidateSet('pass', 'fail', 'hang', 'doc-fail', 'build-fail', 'build-guard', 'build-other',
+            'not-executed')] [string] $Behaviour,
         [string] $Root
     )
 
@@ -220,6 +221,8 @@ function New-Stub {
     # unconditionally would only ever prove that a red baseline aborts.
     $skipBuild = "echo %* | findstr /C:`"--no-run`" >nul && exit /b 0"
     $intact = "findstr /C:`"// marker line`" src\lib.rs >nul && exit /b 0"
+    # The inverse of $skipBuild: the RUN phase passes, so only the build decides.
+    $runPhasePasses = "echo %* | findstr /C:`"--no-run`" >nul || exit /b 0"
     $body = switch ($Behaviour) {
         'pass' { "@echo off`r`necho ok`r`nexit /b 0`r`n" }
         'build-fail' { "@echo off`r`necho broken`r`nexit /b 101`r`n" }
@@ -229,6 +232,25 @@ function New-Stub {
             "echo Couldn't compile the test.`r`nexit /b 101`r`n"
         }
         'hang' { "@echo off`r`n$skipBuild`r`n$intact`r`nping -n 900 127.0.0.1 >nul`r`n" }
+        # The BUILD fails, and only once the marker is gone -- the shape of a
+        # compile-time guard firing on a sabotage. The run phase always passes,
+        # so a result can only come from how the build failure is judged.
+        # `build-other` fails the same way with a different message: a typo in
+        # a patch, as far as the harness can tell.
+        'build-guard' {
+            "@echo off`r`n$runPhasePasses`r`n$intact`r`n" +
+            "echo error[E0080]: evaluation panicked: GUARD FIRED 1>&2`r`nexit /b 101`r`n"
+        }
+        'build-other' {
+            "@echo off`r`n$runPhasePasses`r`n$intact`r`n" +
+            "echo error[E0425]: cannot find value in this scope 1>&2`r`nexit /b 101`r`n"
+        }
+        # cargo's own wording when it cannot start a test binary, as an
+        # antivirus refusal produced it.
+        'not-executed' {
+            "@echo off`r`n$skipBuild`r`n$intact`r`n" +
+            "echo could not execute process ``x.exe`` (never executed) 1>&2`r`nexit /b 101`r`n"
+        }
     }
     $path = Join-Path $Root "stubs\$Behaviour.cmd"
     [System.IO.File]::WriteAllText($path, $body)
@@ -573,6 +595,113 @@ Test-Case 'does not count a patch that only breaks a doctest as caught' {
             -Arguments @('-Manifest', 'sabotage.json', '-CargoCommand', $stub)
         Assert-Equal 1 $result.ExitCode $result.Output
         Assert-Match 'MANIFEST DOES NOT COMPILE \(a doctest would not build\)' $result.Output
+    }
+    finally { Remove-Fixture $root }
+}
+
+Test-Case 'credits a compile-time guard that fails the build with its named message' {
+    $root = New-Fixture -Manifest (New-Spec -EntryExtra @{
+            expect = 'refused-by-build'; buildError = 'GUARD FIRED' })
+    try {
+        $stub = New-Stub -Behaviour 'build-guard' -Root $root
+        $result = Invoke-Harness -Root $root `
+            -Arguments @('-Manifest', 'sabotage.json', '-CargoCommand', $stub)
+        Assert-Equal 0 $result.ExitCode $result.Output
+        Assert-Match "refused by the build \('GUARD FIRED'\)" $result.Output
+    }
+    finally { Remove-Fixture $root }
+}
+
+Test-Case 'does not credit a build that fails with some other message' {
+    # The named message is the whole difference between a guard firing and a
+    # typo in the patch; a build failure without it must stay a manifest
+    # problem even under refused-by-build.
+    $root = New-Fixture -Manifest (New-Spec -EntryExtra @{
+            expect = 'refused-by-build'; buildError = 'GUARD FIRED' })
+    try {
+        $stub = New-Stub -Behaviour 'build-other' -Root $root
+        $result = Invoke-Harness -Root $root `
+            -Arguments @('-Manifest', 'sabotage.json', '-CargoCommand', $stub)
+        Assert-Equal 1 $result.ExitCode $result.Output
+        Assert-Match "the build failed, but not with 'GUARD FIRED'" $result.Output
+    }
+    finally { Remove-Fixture $root }
+}
+
+Test-Case 'reports a refused-by-build patch that builds as a guard that did not fire' {
+    # The tests then fail, which would read as a catch; the verdict is the
+    # build's, and the build let the defect through.
+    $root = New-Fixture -Manifest (New-Spec -EntryExtra @{
+            expect = 'refused-by-build'; buildError = 'GUARD FIRED' })
+    try {
+        $stub = New-Stub -Behaviour 'fail' -Root $root
+        $result = Invoke-Harness -Root $root `
+            -Arguments @('-Manifest', 'sabotage.json', '-CargoCommand', $stub)
+        Assert-Equal 1 $result.ExitCode $result.Output
+        Assert-Match 'BUILT CLEANLY: the guard did not fire' $result.Output
+    }
+    finally { Remove-Fixture $root }
+}
+
+Test-Case 'still reports a build failure under caught as a manifest problem' {
+    # The other direction: the new expectation must not make build failures
+    # count for entries that did not declare one.
+    $root = New-Fixture -Manifest (New-Spec)
+    try {
+        $stub = New-Stub -Behaviour 'build-guard' -Root $root
+        $result = Invoke-Harness -Root $root `
+            -Arguments @('-Manifest', 'sabotage.json', '-CargoCommand', $stub)
+        Assert-Equal 1 $result.ExitCode $result.Output
+        Assert-Match 'MANIFEST DOES NOT COMPILE \(tests never ran\)' $result.Output
+    }
+    finally { Remove-Fixture $root }
+}
+
+Test-Case 'does not count a test binary that never executed as caught' {
+    $root = New-Fixture -Manifest (New-Spec)
+    try {
+        $stub = New-Stub -Behaviour 'not-executed' -Root $root
+        $result = Invoke-Harness -Root $root `
+            -Arguments @('-Manifest', 'sabotage.json', '-CargoCommand', $stub)
+        Assert-Equal 1 $result.ExitCode $result.Output
+        Assert-Match 'INFRASTRUCTURE: a test binary was never executed' $result.Output
+    }
+    finally { Remove-Fixture $root }
+}
+
+Test-Case 'rejects refused-by-build without a buildError' {
+    $root = New-Fixture -Manifest (New-Spec -EntryExtra @{ expect = 'refused-by-build' })
+    try {
+        $stub = New-Stub -Behaviour 'build-guard' -Root $root
+        $result = Invoke-Harness -Root $root `
+            -Arguments @('-Manifest', 'sabotage.json', '-CargoCommand', $stub)
+        Assert-Equal 2 $result.ExitCode $result.Output
+        Assert-Match 'names no buildError' $result.Output
+    }
+    finally { Remove-Fixture $root }
+}
+
+Test-Case 'rejects a blank buildError' {
+    $root = New-Fixture -Manifest (New-Spec -EntryExtra @{
+            expect = 'refused-by-build'; buildError = '  ' })
+    try {
+        $stub = New-Stub -Behaviour 'build-guard' -Root $root
+        $result = Invoke-Harness -Root $root `
+            -Arguments @('-Manifest', 'sabotage.json', '-CargoCommand', $stub)
+        Assert-Equal 2 $result.ExitCode $result.Output
+        Assert-Match 'names no buildError' $result.Output
+    }
+    finally { Remove-Fixture $root }
+}
+
+Test-Case 'rejects a buildError on an entry that would ignore it' {
+    $root = New-Fixture -Manifest (New-Spec -EntryExtra @{ buildError = 'GUARD FIRED' })
+    try {
+        $stub = New-Stub -Behaviour 'fail' -Root $root
+        $result = Invoke-Harness -Root $root `
+            -Arguments @('-Manifest', 'sabotage.json', '-CargoCommand', $stub)
+        Assert-Equal 2 $result.ExitCode $result.Output
+        Assert-Match 'buildError is read only for refused-by-build' $result.Output
     }
     finally { Remove-Fixture $root }
 }
