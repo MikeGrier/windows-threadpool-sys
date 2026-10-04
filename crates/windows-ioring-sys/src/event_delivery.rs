@@ -240,8 +240,9 @@ impl<T: Send + 'static, X: Send + 'static> EventDelivery<T, X> {
     ///
     /// Replacing the ring is therefore refused at compile time. The expected
     /// error is pinned, though rustdoc enforces a pinned code only on a
-    /// nightly toolchain; on stable, the compiling twin below is what keeps
-    /// this example honest:
+    /// nightly toolchain or under `RUSTC_BOOTSTRAP=1`, which CI's
+    /// `doctest-error-codes` job sets; on plain stable, the compiling twin
+    /// below is what keeps this example honest:
     ///
     /// ```compile_fail,E0614
     /// # use windows_ioring_sys::{EventDelivery, IoRing};

@@ -807,8 +807,8 @@ impl<B: IoBufMut> RegisteredBuffers<B> {
     /// must not compile, and the failure it exists for is the borrow conflict,
     /// `E0502`. That code is pinned below, with a limit worth knowing: rustdoc
     /// checks a pinned code only on a nightly toolchain (or under
-    /// `RUSTC_BOOTSTRAP=1`), and on stable a `compile_fail` example passes on
-    /// any error. This one went on "passing" after `read_registered` was
+    /// `RUSTC_BOOTSTRAP=1`, which CI's `doctest-error-codes` job sets), and on
+    /// stable a `compile_fail` example passes on any error. This one went on "passing" after `read_registered` was
     /// removed, because calling a method that does not exist fails to compile
     /// too; the `no_run` twin below, which must compile, is what catches a
     /// rename that reaches both:
