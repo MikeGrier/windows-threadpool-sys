@@ -1882,7 +1882,25 @@ impl<T, X> Drop for IoRing<T, X> {
         // Leaking is the correct answer there, exactly as it is for a `Token`
         // dropped unclaimed: memory is lost, which is finite and visible,
         // rather than reused, which is neither.
-        if quiesced {
+        //
+        // `outstanding == 0` is not that proof on its own, which is why the
+        // inventory is consulted beside it. `Accounting::record_completion`
+        // decrements SATURATINGLY, so a CQE the ring never minted -- a
+        // duplicate, or one carrying foreign user data -- drives the counter
+        // down without retiring any inventory entry: retirement is keyed by
+        // `user_data`, and that key matches nothing. The counter can therefore
+        // read zero while a real operation is still in flight, and rundown
+        // would report a quiesce that has not happened.
+        //
+        // The inventory is what still knows. An entry leaves it only through
+        // the pop that observed *that entry's own* completion, so anything
+        // still in it is a payload no completion has been seen for. A nonempty
+        // inventory under a successful rundown is a false quiesce, and takes
+        // the same leak path as a failed one, for the same reason: freeing it
+        // would hand the kernel a dangling write, which is the exact hazard
+        // moving the inventory inside the ring was meant to make
+        // unrepresentable.
+        if quiesced && self.inventory.is_empty() {
             // SAFETY: nothing is outstanding, so no kernel write can still be
             // aimed at anything this holds, and `self.inventory` is not used
             // again -- this is `Drop`, and the field is `ManuallyDrop` so

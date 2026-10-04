@@ -89,6 +89,15 @@ const SHORT_BOUND: Duration = Duration::from_millis(5);
 /// deterministic.
 const LONGER_THAN_A_RUNDOWN_POLL: Duration = Duration::from_millis(200);
 
+/// How long [`settle`] waits for a completion it has already caused.
+///
+/// Far longer than the wait can legitimately take, because its job is not to
+/// time anything -- it is to turn a stalled completion into a FAILED test
+/// rather than a hung one. `cargo test` runs these as threads in one process,
+/// so an unbounded wait here would take every other test in the binary down
+/// with it and spin a core while doing so.
+const SETTLE_BOUND: Duration = Duration::from_secs(30);
+
 fn wide(value: &str) -> Vec<u16> {
     value.encode_utf16().chain(std::iter::once(0)).collect()
 }
@@ -196,11 +205,14 @@ fn settle(ring: &mut PipeRing, pipe: &mut Pipe) {
     pipe.release();
     // No token to hand in: the pop that observes the completion is what
     // returns the buffer, so there is no map to keep and nothing to match.
-    let (completion, held) = loop {
-        if let Some(popped) = ring.try_pop().expect("try_pop") {
-            break popped;
-        }
-    };
+    //
+    // Bounded rather than spun on: see `SETTLE_BOUND`. The byte has already
+    // been written by `release` above, so reaching the bound means delivery
+    // stalled, and that is a result worth reporting rather than waiting out.
+    let (completion, held) = ring
+        .pop_within(SETTLE_BOUND)
+        .expect("pop_within")
+        .expect("the read completes once the pipe has a byte in it");
     let bytes = completion.result().expect("the read succeeded");
     assert_eq!(bytes, 1, "exactly the byte that was written");
     let (buffer, ()) = held.expect("the ring held this read's buffer");

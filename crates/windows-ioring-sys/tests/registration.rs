@@ -1076,13 +1076,21 @@ fn get_mut_yields_only_the_registered_bytes_and_cannot_move_the_allocation() {
     // And a span may not exceed the registered length, which is the second
     // face of the same property: validated against what the kernel was told.
     let mut batch = Batch::new(&mut ring);
+    // BOUND, not passed as a temporary. A temporary `TempPath` drops at the end
+    // of the statement that built it -- while the handle it exists to outlive
+    // is still open inside `span_file` -- so its removal would run at the one
+    // moment it cannot succeed, and a panic below would leak the file. Bound
+    // before the handle it protects, it drops after that handle, because locals
+    // drop in reverse declaration order. Same ordering as the three helpers in
+    // `tests/common/mod.rs`, which return `(TempPath, handle)` for this reason.
+    let span_path = temp_file("registered-span-bound");
     let span_file = SharedFile::new(
         std::fs::OpenOptions::new()
             .read(true)
             .write(true)
             .create(true)
             .truncate(true)
-            .open(temp_file("registered-span-bound"))
+            .open(&span_path)
             .expect("open")
             .into(),
     );
@@ -1103,8 +1111,8 @@ fn get_mut_yields_only_the_registered_bytes_and_cannot_move_the_allocation() {
         .expect_err("a span longer than the registered buffer must be refused");
     assert_eq!(too_long.kind(), std::io::ErrorKind::InvalidInput);
 
+    // Closes the handle; `span_path` then removes the file as it drops below.
     drop(span_file);
-    let _ = std::fs::remove_file(temp_file("registered-span-bound"));
 }
 
 #[test]
