@@ -3,12 +3,15 @@
 # Sabotage sweeps, which CI deliberately does not gate on.
 #
 # A sweep rebuilds a crate and runs its whole suite once per manifest entry, so
-# its cost scales with the crate's suite rather than with the change under
-# review. Measured on this repository: the nine-entry `windows-placement-probe`
-# manifest sweeps in about a minute, while the two large manifests
-# (`windows-ioring-sys` at 53 entries, `windows-waitable-queues` at 39) are tens
-# of minutes. That is the wrong shape for a per-push gate and the right shape for
-# something that runs once per integration.
+# its cost scales with the crate's build and suite rather than with the change
+# under review. Measured on this repository, per-entry cost spans more than an
+# order of magnitude between crates: `windows-placement-probe` sweeps its whole
+# manifest in about a minute, while `windows-threadpool-sys` measured about
+# eighty seconds for a single entry -- nearly all of it rebuild rather than
+# test, which is why the split below is built to keep the build cache warm. The
+# large manifests are therefore tens of minutes. That is the wrong shape for a
+# per-push gate and the right shape for something that runs once per
+# integration.
 #
 # **This is not the `sabotage harness tests` job in ci.yml.** That job runs the
 # harness's own unit tests with cargo stubbed out, finishes in well under two
@@ -62,21 +65,23 @@ jobs:
     runs-on: windows-latest
     # Sharded by crate AND within each crate, so the wall clock is the longest
     # *shard* rather than the longest manifest. Sharding by crate alone leaves
-    # one worker sweeping 53 entries while five sit idle.
+    # one worker sweeping a whole large manifest while the rest sit idle.
     #
-    # Shard counts are sized to the entry count, which is possible because the
-    # harness's split is even: it orders entries by file and cuts that order
-    # into equal contiguous blocks, so sizes differ by at most one AND each
-    # shard still runs long same-file runs. Measured:
+    # Shard counts are sized to each manifest's entry count, which is possible
+    # because the harness's split is even: it orders entries by file and cuts
+    # that order into equal contiguous blocks, so shard sizes differ by at most
+    # one AND each shard still runs long same-file runs, which is what keeps
+    # the build cache warm. `tools/test-run-sabotage.ps1` asserts both
+    # properties over a range of shard counts, and the manifests themselves say
+    # how many entries there are. Neither is restated here: an entry count
+    # pasted into this comment is a copy that goes stale the next time someone
+    # adds a sabotage -- which is exactly what happened to the table that used
+    # to sit here, inside the very branch that wrote it.
     #
-    #   ioring            53 entries -> 6 shards: 9,9,9,9,9,8
-    #   waitable-queues   39 entries -> 4 shards: 10,10,10,9
-    #   threadpool        25 entries -> 4 shards: 7,6,6,6
-    #
-    # Roughly nine entries a shard, which on these suites is a few minutes.
     # There is no manifest-shaped floor to respect -- an earlier revision of the
-    # harness refused to split a file and threadpool could not go below 13 on
-    # one worker whatever the shard count -- so these can be raised or lowered
+    # harness refused to split a file, so a manifest whose entries cluster in
+    # one source file could not go below that cluster's size on a single worker
+    # whatever the shard count -- so these can be raised or lowered
     # for the machines available. An over-provisioned shard is not an error: the
     # harness treats an empty shard as a success and exits before the baseline,
     # so it costs nothing but a checkout.
