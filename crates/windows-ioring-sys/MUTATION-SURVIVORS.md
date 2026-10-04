@@ -1,8 +1,8 @@
 # Mutation survivors: windows-ioring-sys (M18.3, resolved in M18.4)
 
-> **Superseded in part by `M28` (2026-09-26).** This is a dated capture and its
+> **Superseded in part by [`M28`](COMPLETED-CHECKLIST.md#moved-2026-10-01-m26-and-m28) (2026-09-26).** This is a dated capture and its
 > figures are not edited to match later code. Read it knowing that
-> `M28.4.1d.3` retired `Token` and `Token::claim_if` entirely, so the
+> [`M28.4.1d.3`](COMPLETED-CHECKLIST.md#m2841d3) retired `Token` and `Token::claim_if` entirely, so the
 > "Claim identity" section below and the `token.rs` entries describe items that
 > no longer exist -- the two `claim_if` impls it names are
 > `PendingFileRegistration` and `PendingBufferRegistration`, which are a
