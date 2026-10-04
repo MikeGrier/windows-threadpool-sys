@@ -50,7 +50,7 @@ fn completing_an_operation_does_not_recycle_its_identity() {
     // duplication, arriving later.
     let mut a = Accounting::new();
     let first = a.reserve_user_data().expect("space remains");
-    a.record_completion();
+    assert!(a.record_completion(first));
     assert_eq!(a.outstanding(), 0);
     let second = a.reserve_user_data().expect("space remains");
     assert_ne!(
@@ -71,13 +71,35 @@ fn reserving_raises_the_outstanding_count() {
 #[test]
 fn a_recorded_completion_lowers_it() {
     let mut a = Accounting::new();
-    for _ in 0..32 {
-        a.reserve_user_data().expect("space remains");
+    let ids: Vec<usize> = (0..32)
+        .map(|_| a.reserve_user_data().expect("space remains"))
+        .collect();
+    for (done, id) in ids.iter().enumerate() {
+        assert!(a.record_completion(*id), "{id} was minted and in flight");
+        assert_eq!(a.outstanding(), ids.len() - done - 1);
     }
-    for expected in (0..32usize).rev() {
-        a.record_completion();
-        assert_eq!(a.outstanding(), expected);
-    }
+    assert!(a.is_quiescent());
+}
+
+#[test]
+fn completions_retire_their_own_identity_in_any_order() {
+    // The kernel completes out of submission order, so retirement must be by
+    // identity: retiring B first leaves exactly A outstanding.
+    let mut a = Accounting::new();
+    let first = a.reserve_user_data().expect("space remains");
+    let second = a.reserve_user_data().expect("space remains");
+    assert!(a.record_completion(second));
+    assert!(!a.is_quiescent(), "the first operation is still owed");
+    assert!(
+        !a.record_completion(second),
+        "the second is already retired"
+    );
+    assert!(
+        !a.is_quiescent(),
+        "a repeat of the second retired the first"
+    );
+    assert!(a.record_completion(first));
+    assert!(a.is_quiescent());
 }
 
 #[test]
@@ -85,29 +107,82 @@ fn a_cancelled_reservation_lowers_it_too() {
     // The `Build*`-failed path. It must not count against run-down, because
     // the operation never entered the queue and no completion will arrive.
     let mut a = Accounting::new();
-    a.reserve_user_data().expect("space remains");
-    a.reserve_user_data().expect("space remains");
-    a.cancel_reservation();
+    let kept = a.reserve_user_data().expect("space remains");
+    let failed = a.reserve_user_data().expect("space remains");
+    a.cancel_reservation(failed);
     assert_eq!(a.outstanding(), 1);
+    assert!(
+        !a.record_completion(failed),
+        "a cancelled reservation can never be retired again"
+    );
+    assert!(a.record_completion(kept), "the surviving one is still owed");
+    assert!(a.is_quiescent());
 }
 
 #[test]
-fn the_outstanding_count_saturates_rather_than_wrapping() {
-    // Both release paths, in both directions of the same rule. A wrap here
-    // would make `run_down` wait on `usize::MAX` operations that do not exist
-    // -- a hang, not a miscount.
+fn a_completion_against_an_empty_ledger_retires_nothing() {
+    // The case a counter had to SATURATE to survive: a wrap would make
+    // `run_down` wait on `usize::MAX` operations that do not exist. An
+    // identity set has nothing to wrap.
     let mut a = Accounting::new();
-    a.record_completion();
-    assert_eq!(a.outstanding(), 0, "recording against an empty ledger");
-    a.cancel_reservation();
-    assert_eq!(a.outstanding(), 0, "cancelling against an empty ledger");
+    assert!(!a.record_completion(0), "identity 0 was never minted");
+    assert_eq!(a.outstanding(), 0);
+    assert!(a.is_quiescent());
+}
 
-    let mut b = Accounting::new();
-    b.reserve_user_data().expect("space remains");
-    b.record_completion();
-    b.record_completion();
-    b.cancel_reservation();
-    assert_eq!(b.outstanding(), 0, "over-releasing a single reservation");
+#[test]
+fn a_foreign_or_duplicate_completion_cannot_fake_quiescence() {
+    // PR #113 review: two operations in flight, a foreign CQE and the first
+    // real one arrive. A saturating counter reached zero there while the
+    // second operation was still owed, and for a raw push -- which stows
+    // nothing -- no inventory entry was left to contradict it, so rundown
+    // closed a ring the kernel could still write through.
+    let mut a = Accounting::new();
+    let first = a.reserve_user_data().expect("space remains");
+    let second = a.reserve_user_data().expect("space remains");
+
+    assert!(
+        !a.record_completion(usize::MAX),
+        "a foreign identity was never minted"
+    );
+    assert!(a.record_completion(first));
+    assert!(
+        !a.record_completion(first),
+        "a duplicate of a retired identity"
+    );
+    assert_eq!(a.outstanding(), 1, "only the second is still owed");
+    assert!(!a.is_quiescent(), "the second operation is still in flight");
+
+    // And the other direction: the real completion is what quiesces it.
+    assert!(a.record_completion(second));
+    assert!(a.is_quiescent());
+}
+
+#[test]
+fn an_identity_still_in_flight_is_refused_rather_than_aliased() {
+    // Unreachable through a real ring, since the counter never repeats. The
+    // test hook moves it back by hand to reach the one state the identity set
+    // cannot survive: two operations under one key, where the first completion
+    // would retire both and rundown would report a quiesce that has not
+    // happened.
+    let mut a = Accounting::new();
+    let live = a.reserve_user_data().expect("space remains");
+    a.set_next_user_data_for_test(live);
+    let error = a
+        .reserve_user_data()
+        .expect_err("the identity is still in flight");
+    assert!(
+        error.to_string().contains("already in flight"),
+        "unexpected error: {error}"
+    );
+    assert_eq!(a.outstanding(), 1, "the refusal minted nothing");
+
+    // The other direction: once retired, the guard does not refuse it. The
+    // counter never offers it again on a real ring, but the refusal is about
+    // aliasing, not about history.
+    assert!(a.record_completion(live));
+    a.set_next_user_data_for_test(live);
+    assert_eq!(a.reserve_user_data().expect("not in flight"), live);
 }
 
 #[test]
@@ -220,12 +295,12 @@ fn reserving_zero_registrations_changes_nothing() {
 #[test]
 fn registrations_and_operations_do_not_interfere() {
     let mut a = Accounting::new();
-    a.reserve_user_data().expect("space remains");
+    let op = a.reserve_user_data().expect("space remains");
     a.reserve_registered_files(2);
     a.reserve_registered_buffers(2);
     assert_eq!(a.outstanding(), 1, "registering does not mint an operation");
 
-    a.record_completion();
+    a.record_completion(op);
     assert_eq!(
         a.registered_file_count(),
         2,
@@ -248,8 +323,8 @@ fn every_ledger_gets_its_own_identity() {
 fn a_ledgers_identity_does_not_change_over_its_life() {
     let mut a = Accounting::new();
     let id = a.ring_id();
-    a.reserve_user_data().expect("space remains");
-    a.record_completion();
+    let op = a.reserve_user_data().expect("space remains");
+    a.record_completion(op);
     a.reserve_registered_files(4);
     assert_eq!(a.ring_id(), id, "identity is fixed for the ledger's life");
 }

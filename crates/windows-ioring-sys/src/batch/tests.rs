@@ -199,7 +199,7 @@ fn a_pending_buffer_registration_claims_only_its_own_completion() {
             burned, expected,
             "a fresh ring hands out UserData from zero, in order"
         );
-        ring.record_completion();
+        ring.record_completion(burned);
     }
 
     let mut batch = Batch::new(&mut ring);

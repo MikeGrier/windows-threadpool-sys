@@ -67,17 +67,21 @@ impl<T, X> IoRing<T, X> {
     /// Take back what an operation was holding, if this ring was holding
     /// anything for it.
     ///
-    /// `None` covers two situations, and the ring genuinely cannot tell them
-    /// apart: a push that created no entry at all -- the `_raw` flush and
+    /// `None` covers two situations, which the inventory cannot tell apart: a
+    /// push that created no entry at all -- the `_raw` flush and
     /// cancel forms, which take a borrowed handle and return a bare
     /// `user_data` -- and a completion for an identity this ring never
     /// stowed, which is a contract violation
     /// [`crate::contract::RingContract`] is the thing that reports.
     ///
-    /// `M28.5` settled that this is the right place to stop. The *caller*
-    /// can tell them apart, because the distinction is which push they chose,
-    /// and pushing that knowledge into the ring would mean an entry for every
-    /// raw push -- which needs an `X` the caller never supplied.
+    /// The ring's identity ledger can tell them apart -- `record_completion`
+    /// reports whether the identity was minted -- but the pop does not
+    /// surface that; whether it should is `M-R2.2`
+    /// ([D-78](../DESIGN-NOTES.md#d-78)). `M28.5` settled that the inventory
+    /// is the right place to stop. The *caller* can tell them apart, because
+    /// the distinction is which push they chose, and pushing that knowledge
+    /// into the inventory would mean an entry for every raw push -- which
+    /// needs an `X` the caller never supplied.
     pub(crate) fn reclaim(&mut self, user_data: usize) -> Option<Entry<T, X>> {
         self.inventory.remove(&user_data)
     }
@@ -101,8 +105,8 @@ impl<T, X> IoRing<T, X> {
     /// group of writes it belonged to.
     ///
     /// The **outer** `None` means this ring is holding nothing for that
-    /// identity, and it has two legitimate-and-not causes that the ring
-    /// cannot separate:
+    /// identity, and it has two legitimate-and-not causes that this return
+    /// value does not separate:
     ///
     /// - The completion belongs to a `_raw` flush or cancel. Those take a
     ///   borrowed handle, return a bare `user_data`, and deliberately create

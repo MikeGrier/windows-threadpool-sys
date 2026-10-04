@@ -313,7 +313,7 @@ impl<'ring, T, X> Batch<'ring, T, X> {
             )
         };
         if let Err(error) = check(hr) {
-            self.ring.cancel_reservation();
+            self.ring.cancel_reservation(user_data);
             return Err(error);
         }
         Ok(user_data)
@@ -517,7 +517,7 @@ impl<'ring, T, X> Batch<'ring, T, X> {
         let hr =
             unsafe { crate::sys::build_cancel(self.ring.raw_handle(), handle, target, user_data) };
         if let Err(error) = check(hr) {
-            self.ring.cancel_reservation();
+            self.ring.cancel_reservation(user_data);
             return Err(error);
         }
         Ok(user_data)
@@ -604,7 +604,7 @@ impl<'ring, T, X> Batch<'ring, T, X> {
             )
         };
         if let Err(error) = check(hr) {
-            self.ring.cancel_reservation();
+            self.ring.cancel_reservation(user_data);
             return Err(error);
         }
         self.ring.reserve_registered_files(count);
@@ -688,7 +688,7 @@ impl<'ring, T, X> Batch<'ring, T, X> {
             crate::sys::build_register_buffers(self.ring.raw_handle(), count, infos_ptr, user_data)
         };
         if let Err(error) = check(hr) {
-            self.ring.cancel_reservation();
+            self.ring.cancel_reservation(user_data);
             return Err(error);
         }
         self.ring.reserve_registered_buffers(count);

@@ -1282,7 +1282,7 @@ impl<'ring, T, X> Batch<'ring, T, X> {
                 Ok(id)
             }
             Err(error) => {
-                self.ring.cancel_reservation();
+                self.ring.cancel_reservation(id.user_data());
                 drop((payload, held));
                 Err(error)
             }

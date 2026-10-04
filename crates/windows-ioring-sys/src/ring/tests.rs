@@ -92,13 +92,13 @@ fn nop_read_and_write_are_supported_on_any_real_ring() {
 #[test]
 fn run_down_returns_once_a_recorded_completion_zeroes_the_count() {
     let mut ring = IoRing::new(64, 128).expect("create ring");
-    ring.reserve_user_data().expect("reserve");
+    let op = ring.reserve_user_data().expect("reserve");
     assert_eq!(ring.outstanding(), 1);
     // Recording the completion up front proves run_down rechecks the count
     // rather than always performing at least one wait: it must return
     // without ever calling SubmitIoRing, or this test would hang for
     // RUN_DOWN_POLL_MS waiting on a completion that was never real.
-    ring.record_completion();
+    ring.record_completion(op);
     ring.run_down()
         .expect("run_down with the count already settled");
     assert_eq!(ring.outstanding(), 0);
@@ -747,13 +747,13 @@ fn a_supplied_wait_is_consulted_when_the_queue_is_not_ready() {
     let mut ring = IoRing::new(16, 16).expect("create ring");
     // A reservation with no real SQE behind it: outstanding, and no
     // completion will ever arrive for it.
-    ring.reserve_user_data().expect("reserve");
+    let op = ring.reserve_user_data().expect("reserve");
     let mut wait = RecordingWait::default();
     let popped = ring.pop_within_with(&mut wait, std::time::Duration::from_millis(40));
     // Settled before any assertion: a panic here would otherwise unwind into
     // `Drop`, whose rundown cannot settle a reservation the kernel never saw,
     // and the second panic would abort the whole harness.
-    ring.record_completion();
+    ring.record_completion(op);
 
     assert!(popped.expect("pop_within_with").is_none());
     assert!(
@@ -769,11 +769,11 @@ fn the_deadline_is_honoured_when_an_operation_never_completes() {
     // *stopped* is proved by this test returning at all. A busy machine
     // changes how long that takes and changes neither assertion.
     let mut ring = IoRing::new(16, 16).expect("create ring");
-    ring.reserve_user_data().expect("reserve");
+    let op = ring.reserve_user_data().expect("reserve");
 
     let mut wait = RecordingWait::default();
     let popped = ring.pop_within_with(&mut wait, std::time::Duration::from_millis(40));
-    ring.record_completion();
+    ring.record_completion(op);
 
     assert!(
         popped.expect("pop_within_with").is_none(),
@@ -788,10 +788,10 @@ fn the_deadline_is_honoured_when_an_operation_never_completes() {
 #[test]
 fn a_zero_bound_does_not_block() {
     let mut ring = IoRing::new(16, 16).expect("create ring");
-    ring.reserve_user_data().expect("reserve");
+    let op = ring.reserve_user_data().expect("reserve");
     let mut wait = RecordingWait::default();
     let popped = ring.pop_within_with(&mut wait, std::time::Duration::ZERO);
-    ring.record_completion();
+    ring.record_completion(op);
 
     assert!(popped.expect("pop_within_with").is_none());
     // The causal statement of "did not block": the wait is what blocks, and it
@@ -808,10 +808,10 @@ fn the_wait_is_never_handed_a_zero_timeout() {
     // `SubmitIoRing` reads as "poll and return" -- turning the tail of every
     // bound into a spin. The loop clamps it up to one.
     let mut ring = IoRing::new(16, 16).expect("create ring");
-    ring.reserve_user_data().expect("reserve");
+    let op = ring.reserve_user_data().expect("reserve");
     let mut wait = RecordingWait::default();
     let popped = ring.pop_within_with(&mut wait, std::time::Duration::from_micros(600));
-    ring.record_completion();
+    ring.record_completion(op);
 
     assert!(popped.expect("pop_within_with").is_none());
     assert!(wait.calls >= 1, "the wait must have been reached at all");
@@ -824,12 +824,12 @@ fn the_wait_is_never_handed_a_zero_timeout() {
 #[test]
 fn ring_wait_reports_the_rings_outstanding_count() {
     let mut ring = IoRing::new(16, 16).expect("create ring");
-    ring.reserve_user_data().expect("reserve a");
-    ring.reserve_user_data().expect("reserve b");
+    let a = ring.reserve_user_data().expect("reserve a");
+    let b = ring.reserve_user_data().expect("reserve b");
     let mut wait = RecordingWait::default();
     let popped = ring.pop_within_with(&mut wait, std::time::Duration::from_millis(20));
-    ring.record_completion();
-    ring.record_completion();
+    ring.record_completion(a);
+    ring.record_completion(b);
 
     assert!(popped.expect("pop_within_with").is_none());
     assert_eq!(
@@ -841,9 +841,9 @@ fn ring_wait_reports_the_rings_outstanding_count() {
 #[test]
 fn a_wait_that_fails_ends_the_pop_with_its_error() {
     let mut ring = IoRing::new(16, 16).expect("create ring");
-    ring.reserve_user_data().expect("reserve");
+    let op = ring.reserve_user_data().expect("reserve");
     let outcome = ring.pop_within_with(&mut FailingWait, std::time::Duration::from_secs(30));
-    ring.record_completion();
+    ring.record_completion(op);
 
     let error = outcome.expect_err("the wait's failure must reach the caller");
     assert_eq!(error.to_string(), "the wait refused");
@@ -863,9 +863,9 @@ fn a_wait_that_never_blocks_is_permitted_and_still_terminates() {
     // terminate hangs the harness, which is what a hang looks like in every
     // other test here too.
     let mut ring = IoRing::new(16, 16).expect("create ring");
-    ring.reserve_user_data().expect("reserve");
+    let op = ring.reserve_user_data().expect("reserve");
     let popped = ring.pop_within_with(&mut ImmediateWait, std::time::Duration::from_millis(30));
-    ring.record_completion();
+    ring.record_completion(op);
 
     assert!(
         popped.expect("pop_within_with").is_none(),
@@ -880,9 +880,9 @@ fn a_bound_the_clock_cannot_represent_reaches_the_wait_rather_than_panicking() {
     // be represented. A failing wait is how the test escapes a bound that by
     // construction never arrives.
     let mut ring = IoRing::new(16, 16).expect("create ring");
-    ring.reserve_user_data().expect("reserve");
+    let op = ring.reserve_user_data().expect("reserve");
     let outcome = ring.pop_within_with(&mut FailingWait, std::time::Duration::MAX);
-    ring.record_completion();
+    ring.record_completion(op);
 
     let error = outcome.expect_err("the wait refuses, which is how this returns at all");
     assert_eq!(error.to_string(), "the wait refused");
@@ -893,77 +893,101 @@ fn the_wait_can_be_supplied_as_a_trait_object() {
     // `?Sized` on the bound is what makes this compile, and a consumer
     // choosing a wait at run time is the reason to keep it.
     let mut ring = IoRing::new(16, 16).expect("create ring");
-    ring.reserve_user_data().expect("reserve");
+    let op = ring.reserve_user_data().expect("reserve");
     let wait: &mut dyn CompletionWait = &mut FailingWait;
     let outcome = ring.pop_within_with(wait, std::time::Duration::from_secs(30));
-    ring.record_completion();
+    ring.record_completion(op);
 
     let error = outcome.expect_err("a trait-object wait still refuses");
     assert_eq!(error.to_string(), "the wait refused");
 }
 
-/// A completion that retires no inventory entry is not quiescence, and
-/// `run_down_within` must not report it as such.
+/// A completion that retires no identity this ring is still owed is not
+/// quiescence, and `run_down_within` must not report it as such -- for a raw
+/// push exactly as for an owned one.
 ///
-/// `Accounting::record_completion` saturates, so a CQE this ring never minted
-/// lowers the counter without removing anything from the inventory. The first
-/// version of this guard lived inline in `Drop` and nowhere else, so the
-/// counter reaching zero still made `run_down_within` answer `Ok(true)` --
-/// "safe to drop" -- while an owned operation's payload was still held and, for
-/// all the ring knows, still being written into by the kernel.
+/// The first version of this guard lived inline in `Drop` and nowhere else, so
+/// a saturating counter reaching zero still made `run_down_within` answer
+/// `Ok(true)` -- "safe to drop". The second consulted the inventory as the
+/// witness, which only owned pushes populate: with two RAW operations in
+/// flight, a foreign CQE and the first real one drove the counter to zero over
+/// an inventory that was empty by design, and rundown closed a ring the kernel
+/// could still write through (PR #113 review). The ledger is now keyed by
+/// identity, so neither case can reach `true`.
 ///
 /// Reported as `Ok(false)` -- "not finished, call again" -- and NOT as an
-/// error. An earlier version of this guard returned an error here, reasoning
-/// that a completion already accounted for could never come back to retire its
-/// entry. That conflated the count with the identity: `record_completion` is
-/// not keyed by `user_data`, so the unmatched CQE consumed a unit of count and
-/// not any particular operation's future completion. A ring one drain away from
-/// quiescing was refused, and refused again on every retry.
-///
-/// So this test pins the half that matters and nothing more: whatever rundown
-/// reports, it must not report `true`.
+/// error, because the operation still owed will complete (M10.2). Both
+/// directions are pinned: once the real completions arrive, rundown does
+/// report `true`, so a predicate that never quiesces would fail here too.
 #[test]
 fn a_completion_that_retires_nothing_is_not_quiescence() {
     use super::{Entry, Held};
+    use crate::OperationId;
     use std::time::Duration;
 
-    let mut ring = IoRing::refused_by_the_kernel();
+    for owned in [false, true] {
+        let mut ring = IoRing::refused_by_the_kernel();
 
-    // One owned push's worth of state: an inventory entry, and the outstanding
-    // count that a push would have minted alongside it.
-    ring.inventory.insert(
-        1,
-        Entry {
-            payload: None,
-            extra: (),
-            held: Held::default(),
-        },
-    );
-    let _ = ring
-        .accounting
-        .reserve_user_data()
-        .expect("mint one identity");
+        let first = ring.reserve_user_data().expect("mint the first");
+        let second = ring.reserve_user_data().expect("mint the second");
+        if owned {
+            for user_data in [first, second] {
+                ring.stow(
+                    OperationId::new(user_data, ring.ring_id()),
+                    Entry {
+                        payload: None,
+                        extra: (),
+                        held: Held::default(),
+                    },
+                );
+            }
+        }
 
-    // Then a completion for an identity this ring never minted, which is the
-    // condition under test: the counter falls without matching that entry.
-    ring.accounting.record_completion();
+        // A completion for an identity this ring never minted, then the first
+        // operation's real one, then a duplicate of it.
+        assert!(
+            !ring.record_completion(usize::MAX),
+            "foreign (owned={owned})"
+        );
+        assert!(ring.record_completion(first), "real (owned={owned})");
+        if owned {
+            assert!(ring.reclaim(first).is_some(), "the first entry is retired");
+        }
+        assert!(!ring.record_completion(first), "duplicate (owned={owned})");
 
-    assert_eq!(
-        ring.accounting.outstanding(),
-        0,
-        "the counter now claims nothing is outstanding"
-    );
-    assert_eq!(ring.held(), 1, "while the inventory still holds a payload");
+        assert_eq!(
+            ring.outstanding(),
+            1,
+            "the second operation is still owed (owned={owned})"
+        );
+        let quiesced = ring
+            .run_down_within(Duration::from_millis(0))
+            .expect("a bound that expires is not an error");
+        assert!(
+            !quiesced,
+            "rundown must not report quiescence while an operation is in flight (owned={owned})"
+        );
 
-    let quiesced = ring
-        .run_down_within(Duration::from_millis(0))
-        .expect("a bound that expires is not an error");
-    assert!(
-        !quiesced,
-        "rundown must not report quiescence while the inventory still holds a payload"
-    );
+        assert!(
+            ring.record_completion(second),
+            "the second's real completion"
+        );
+        if owned {
+            assert!(
+                ring.reclaim(second).is_some(),
+                "the second entry is retired"
+            );
+        }
+        let quiesced = ring
+            .run_down_within(Duration::from_millis(0))
+            .expect("nothing is outstanding, so nothing is submitted");
+        assert!(
+            quiesced,
+            "with every identity retired, rundown must report quiescence (owned={owned})"
+        );
 
-    // Dropping this ring would assert on the null handle's close, which is a
-    // sibling test's subject rather than this one's.
-    std::mem::forget(ring);
+        // Dropping this ring would assert on the null handle's close, which is
+        // a sibling test's subject rather than this one's.
+        std::mem::forget(ring);
+    }
 }

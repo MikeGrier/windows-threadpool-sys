@@ -47,7 +47,7 @@
 //!
 //! What replaced it is **not** `held() == outstanding()`. Those two are not
 //! equal in general and the ring does not compare them: a `_raw` flush or
-//! cancel increments `outstanding` while deliberately stowing no inventory
+//! cancel is outstanding while deliberately stowing no inventory
 //! entry, so a perfectly valid push makes them differ. Reading equality as an
 //! invariant would report that valid push as a conservation failure, which is
 //! the over-constraining this oracle's next section exists to avoid.
@@ -59,7 +59,8 @@
 //! its own documentation gives the honest relationship to `outstanding` -- they
 //! agree in the steady state and part company exactly where a bug lives.
 //! Teardown checks the matching property rather than the equality: that rundown
-//! succeeded **and** the inventory is empty.
+//! succeeded **and** no identity the ring minted is still in flight, which
+//! covers the inventory as well ([D-78](../DESIGN-NOTES.md#d-78)).
 //!
 //! # What it deliberately does **not** check
 //!

@@ -4,8 +4,8 @@ Completed checklists are recorded in [COMPLETED-PLANS.md](COMPLETED-PLANS.md), a
 contained are archived in [COMPLETED-CHECKLIST.md](COMPLETED-CHECKLIST.md). Design decisions are in
 [DESIGN-NOTES.md](DESIGN-NOTES.md).
 
-No checklist is open against this crate. Add a row below, and a milestone in
-[CHECKLIST.md](CHECKLIST.md), when new work is planned.
+Add a row below, and a milestone in [CHECKLIST.md](CHECKLIST.md), when new work is planned.
 
 | Path to CHECKLIST.md | Status | Brief description | Design Notes |
 |---|---|---|---|
+| [CHECKLIST.md](CHECKLIST.md) | in progress | `M-R1` stall post-mortem after the hooking facility's removal; `M-R2` the identity-keyed outstanding ledger | [DESIGN-NOTES.md](DESIGN-NOTES.md) |

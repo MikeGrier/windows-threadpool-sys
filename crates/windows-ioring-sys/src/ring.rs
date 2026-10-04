@@ -763,16 +763,20 @@ impl<T, X> IoRing<T, X> {
 impl<T, X> IoRing<T, X> {
     /// Whether this ring can be believed when it says nothing is outstanding.
     ///
-    /// **The counter alone is not sufficient, and this is the one place that
-    /// says so.** [`Accounting::record_completion`] decrements SATURATINGLY, so
-    /// a CQE this ring never minted -- a duplicate, or one carrying foreign
-    /// user data -- lowers the counter without retiring any inventory entry,
-    /// because retirement is keyed by `user_data` and that key matches nothing.
-    /// The counter can therefore read zero while an owned operation is still in
-    /// flight and the kernel still holds the address of its payload.
+    /// Asks the ledger, which tracks outstanding operations by **identity**:
+    /// [`Accounting::record_completion`] retires only a `user_data` it minted
+    /// and has not yet retired, so a CQE this ring never minted -- a duplicate,
+    /// or one carrying foreign user data -- retires nothing. That holds for
+    /// every push alike. An earlier revision kept a saturating counter and
+    /// consulted the inventory beside it as the witness the counter had been
+    /// corrupted, but only owned pushes stow, so for `push_raw` and the raw
+    /// flush and cancel forms the inventory was empty whether or not anything
+    /// was outstanding, and the false quiesce survived on exactly the seam
+    /// whose caller-managed memory it endangers.
     ///
-    /// The inventory is what still knows, since an entry leaves it only through
-    /// the pop that observed *that entry's own* completion.
+    /// Every owned entry's identity is still in flight until the pop that
+    /// retires it also reclaims it, so the inventory is a subset of what this
+    /// checks; the `debug_assert` records that rather than relying on it.
     ///
     /// Every quiescence decision asks here rather than re-deriving it. The
     /// first version of this check was written inline in `Drop` and nowhere
@@ -780,7 +784,15 @@ impl<T, X> IoRing<T, X> {
     /// as `Ok(true)` and `pop_within_raw_with` as "nothing can arrive": one
     /// rule at three sites, corrected at one.
     fn is_quiescent(&self) -> bool {
-        self.accounting.outstanding() == 0 && self.inventory.is_empty()
+        let quiescent = self.accounting.is_quiescent();
+        // Not asserted during an unwind: this runs inside `Drop`'s rundown,
+        // and a second panic there aborts the process instead of failing the
+        // test that is already unwinding.
+        debug_assert!(
+            !quiescent || self.inventory.is_empty() || std::thread::panicking(),
+            "an owned entry outlived its identity's retirement"
+        );
+        quiescent
     }
 
     /// Pop every currently available completion, recording each -- without
@@ -816,7 +828,10 @@ impl<T, X> IoRing<T, X> {
             return Ok(None);
         }
         check(hr)?;
-        self.record_completion();
+        // Whether this ring minted the identity is deliberately not acted on:
+        // an unminted completion is a contract violation `RingContract`
+        // reports, and here it simply retires nothing.
+        self.record_completion(cqe.UserData);
         Ok(Some(Completion {
             user_data: cqe.UserData,
             result_code: cqe.ResultCode,
@@ -902,12 +917,9 @@ impl<T, X> IoRing<T, X> {
             // during `try_pop`, so reading it first would race the very
             // completion being drained.
             //
-            // `is_quiescent` rather than the bare counter, so a false quiesce
-            // cannot cut the wait short by claiming nothing can arrive. Under
-            // that state this simply waits out the caller's bound and reports
-            // that nothing arrived within it, which is true. No error is raised
-            // on this path: it is the hot one, and the bound already makes the
-            // answer honest.
+            // `is_quiescent`, which is keyed by identity, so a foreign or
+            // duplicate completion cannot cut the wait short by claiming
+            // nothing can arrive.
             if self.is_quiescent() {
                 return Ok(None);
             }
@@ -1172,23 +1184,11 @@ impl<T, X> Drop for IoRing<T, X> {
         // dropped unclaimed: memory is lost, which is finite and visible,
         // rather than reused, which is neither.
         //
-        // `outstanding == 0` is not that proof on its own, which is why the
-        // inventory is consulted beside it. `Accounting::record_completion`
-        // decrements SATURATINGLY, so a CQE the ring never minted -- a
-        // duplicate, or one carrying foreign user data -- drives the counter
-        // down without retiring any inventory entry: retirement is keyed by
-        // `user_data`, and that key matches nothing. The counter can therefore
-        // read zero while a real operation is still in flight, and rundown
-        // would report a quiesce that has not happened.
-        //
-        // The inventory is what still knows. An entry leaves it only through
-        // the pop that observed *that entry's own* completion, so anything
-        // still in it is a payload no completion has been seen for. A nonempty
-        // inventory under a successful rundown is a false quiesce, and takes
-        // the same leak path as a failed one, for the same reason: freeing it
-        // would hand the kernel a dangling write, which is the exact hazard
-        // moving the inventory inside the ring was meant to make
-        // unrepresentable.
+        // `is_quiescent` is rechecked rather than trusting `quiesced` alone so
+        // that the free below and rundown's answer rest on the one predicate.
+        // It is keyed by identity, so a CQE the ring never minted -- a
+        // duplicate, or one carrying foreign user data -- cannot make it read
+        // true while any operation, owned or raw, is still in flight.
         if quiesced && self.is_quiescent() {
             // SAFETY: nothing is outstanding, so no kernel write can still be
             // aimed at anything this holds, and `self.inventory` is not used

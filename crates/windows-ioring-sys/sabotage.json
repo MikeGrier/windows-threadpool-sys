@@ -515,18 +515,34 @@
         "properties_under_every_resolution"
       ],
       "find": [
-        "    pub(crate) fn record_completion(&mut self) {",
-        "        self.outstanding = self.outstanding.saturating_sub(1);"
+        "    pub(crate) fn record_completion(&mut self, user_data: usize) -> bool {",
+        "        self.in_flight.remove(&user_data)"
       ],
       "replace": [
-        "    pub(crate) fn record_completion(&mut self) {"
+        "    pub(crate) fn record_completion(&mut self, user_data: usize) -> bool {",
+        "        self.in_flight.contains(&user_data)"
+      ]
+    },
+    {
+      "name": "PR #113: a completion the ring never minted retires some other operation",
+      "file": "src/accounting.rs",
+      "expect": "caught",
+      "why": "The claim under test is that outstanding operations are tracked by IDENTITY, so a foreign or duplicate CQE cannot make the ring quiesce while any operation -- owned or raw -- is still in flight. This mutation restores COUNT semantics exactly: an unmatched completion retires an arbitrary outstanding identity, which is what a saturating counter's decrement amounted to. Under it, two raw pushes plus a foreign CQE and the first real one leave the ledger empty while the second is owed, and run_down_within answers Ok(true) -- the use-after-free the PR #113 review reported. The previous fix used the inventory as the witness and so could not see the raw case; this sabotage is what would have shown that. Measured: four lib tests go red by assertion -- ring::tests::a_completion_that_retires_nothing_is_not_quiescence (raw and owned pushes, through run_down_within) and three accounting ledger tests, including a_foreign_or_duplicate_completion_cannot_fake_quiescence.",
+      "find": [
+        "    pub(crate) fn record_completion(&mut self, user_data: usize) -> bool {",
+        "        self.in_flight.remove(&user_data)"
+      ],
+      "replace": [
+        "    pub(crate) fn record_completion(&mut self, user_data: usize) -> bool {",
+        "        let any = self.in_flight.iter().next().copied();",
+        "        self.in_flight.remove(&user_data) || any.is_some_and(|id| self.in_flight.remove(&id))"
       ]
     },
     {
       "name": "M26.4: operation identities stop being unique",
       "file": "src/accounting.rs",
       "expect": "caught",
-      "why": "D-4 rests this crate's whole accounting model on a completion identifying its operation. An identity that repeats makes two operations indistinguishable, which is exactly the conservation failure RingContract reports as a duplicate completion. THIS IS ALSO THE EVIDENCE THAT P-1'S VERDICT IS READ rather than merely computed: measured, the suite fails with the oracle's own wording -- 'completed more than once, but every queued SQE produces exactly one completion' -- so the path from the crate through RingContract to a red test is traversed end to end. A separate case patching the verdict check was tried and removed as unsound: disabling an assertion that does not fire on a green baseline cannot fail, so it measured nothing. Scoped to the property suite on purpose, because this mutation is caught by a great many tests in this crate and 'something went red' would not show that THESE properties are watching it.",
+      "why": "D-4 rests this crate's whole accounting model on a completion identifying its operation. An identity that repeats makes two operations indistinguishable, which is exactly the conservation failure RingContract reports as a duplicate completion. THIS IS ALSO THE EVIDENCE THAT P-1'S VERDICT IS READ rather than merely computed: measured, the suite fails with the oracle's own wording -- 'completed more than once, but every queued SQE produces exactly one completion' -- so the path from the crate through RingContract to a red test is traversed end to end. A separate case patching the verdict check was tried and removed as unsound: disabling an assertion that does not fire on a green baseline cannot fail, so it measured nothing. Scoped to the property suite on purpose, because this mutation is caught by a great many tests in this crate and 'something went red' would not show that THESE properties are watching it. SINCE D-78 the first thing to fail is no longer the oracle: the ledger keys outstanding operations by identity, so reserve_user_data refuses an identity still in flight ('already in flight'), and without that refusal this mutation collapsed two operations into one entry, quiesced early, and crashed the lib suite with STATUS_ACCESS_VIOLATION -- measured both ways. Note also that the harness reads testArgs only at manifest level, so the per-entry scoping below is not applied and the sweep stops at the lib suite.",
       "testArgs": [
         "test",
         "-p",
@@ -790,7 +806,7 @@
     },
     {
       "name": "M26.8: run_down_within reports finished without checking",
-      "file": "src/ring.rs",
+      "file": "src/ring/bookkeeping.rs",
       "expect": "caught",
       "why": "The bounded rundown's entire value is that its answer is trustworthy: Ok(true) is what tells a caller the ring is safe to drop. A version that says so without looking would let every caller close a ring the kernel may still be writing through -- the exact hazard rundown exists to prevent, reintroduced while every call site still reads correctly. Note this also covers the unbounded run_down, which is now implemented over this one, so a single wrong answer here would propagate to both spellings.",
       "testArgs": [
@@ -803,7 +819,7 @@
         "resolver_over_a_real_ring"
       ],
       "find": [
-        "            if self.accounting.outstanding() == 0 {",
+        "            if self.is_quiescent() {",
         "                return Ok(true);",
         "            }"
       ],
@@ -873,7 +889,7 @@
     },
     {
       "name": "M28.4.2: a pop does not retire its entry",
-      "file": "src/ring.rs",
+      "file": "src/ring/inventory.rs",
       "expect": "caught",
       "why": "The other half, and this is a re-injection rather than a hypothetical: `M28.4.1d.2` shipped exactly this defect and measured it. A pop that records the completion but leaves the entry behind strands whatever the ring was holding -- for a registered operation that means the buffer's use count never returns to zero, so the registration can never be dropped and the arena runs dry. Five `registration.rs` tests went red when it was re-injected and all eighteen passed once it was restored; this case is that measurement, kept where something re-runs it instead of in a terminal that was closed.",
       "find": [
@@ -921,7 +937,7 @@
     },
     {
       "name": "M28.5: the ring miscounts what it is holding",
-      "file": "src/ring.rs",
+      "file": "src/ring/inventory.rs",
       "expect": "caught",
       "why": "D-75 says a `_raw` push creates no entry, so a ring given one owned push and one raw push holds exactly one thing. `held()` is how that is observable, and off-by-one is the shape that makes it wrong while still looking like a count: the ring claims to be holding something for the raw push, and the quiescence check at the end of every inventory test stops meaning anything.\n\nThe patch is deliberately arithmetic rather than a manufactured payload. Making the pop return a `Some` it did not have requires an `X` out of thin air, and `std::mem::zeroed()` is not that: on a ring whose sidecar is `&'static str` it produces a null reference, and the suite dies with STATUS_STACK_BUFFER_OVERRUN (0xC0000409) -- measured. That scores `caught` because the process died, which is a weaker claim than an assertion and depends on which rings the suite happens to build. This version fails by assertion on every ring.",
       "find": [
@@ -957,7 +973,7 @@
     },
     {
       "name": "M26.12: the setup signal is owed only to the call that attached the event",
-      "file": "src/ring.rs",
+      "file": "src/ring/bookkeeping.rs",
       "expect": "caught",
       "why": "This is the defect itself, restored exactly. The setup signal exists to make an already-present backlog reachable, which is a property of the waiter about to arm rather than of whoever attached the event first. Tying it to the attachment strands the backlog of any caller that attached earlier and consumed that signal -- permanently, because D-19's edge cannot re-arm without the queue first returning to empty. Guarded by a_repeat_call_signals_again_once_the_earlier_signal_has_been_consumed, which is the only test that consumes both earlier signals and so the only one that can observe this at all.",
       "find": [

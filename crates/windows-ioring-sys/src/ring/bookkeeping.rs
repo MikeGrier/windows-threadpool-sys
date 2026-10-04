@@ -396,14 +396,15 @@ impl<T, X> IoRing<T, X> {
 
     /// How many operations this ring believes are still outstanding: minted
     /// (via `reserve_user_data`) but not yet observed to have completed (via
-    /// `record_completion`).
+    /// `record_completion`, which retires only an identity this ring minted).
     #[must_use]
     pub fn outstanding(&self) -> usize {
         self.accounting.outstanding()
     }
 
     /// Mint a fresh `UserData` identity for a new operation, and account for
-    /// it as outstanding until `record_completion` is called for it.
+    /// it as outstanding until `record_completion` or `cancel_reservation` is
+    /// called with it.
     ///
     /// The identity is the whole of what the inventory needs to validate
     /// a completion (D-4): unlike `windows-overlapped-io-sys`'s
@@ -420,11 +421,12 @@ impl<T, X> IoRing<T, X> {
         self.accounting.reserve_user_data()
     }
 
-    /// Record that one outstanding operation's completion has been observed
-    /// (a real `IORING_CQE` was popped for it), whether or not a live
-    /// the ring was still holding something for it.
-    pub(crate) fn record_completion(&mut self) {
-        self.accounting.record_completion();
+    /// Record that a completion carrying `user_data` has been observed (a real
+    /// `IORING_CQE` was popped), whether or not the ring was still holding
+    /// something for it. Returns whether `user_data` was outstanding; a
+    /// foreign or duplicate completion retires nothing.
+    pub(crate) fn record_completion(&mut self, user_data: usize) -> bool {
+        self.accounting.record_completion(user_data)
     }
 
     /// Release a reservation for an operation that was never actually
@@ -435,8 +437,8 @@ impl<T, X> IoRing<T, X> {
     /// `IORING_CQE` observed; this marks one that will never arrive because
     /// the op never entered the queue, so it must not count against
     /// [`IoRing::run_down`] either.
-    pub(crate) fn cancel_reservation(&mut self) {
-        self.accounting.cancel_reservation();
+    pub(crate) fn cancel_reservation(&mut self, user_data: usize) {
+        self.accounting.cancel_reservation(user_data);
     }
 
     /// This ring's ledger, for the crate's own minting paths (M24.2).
@@ -499,7 +501,7 @@ impl<T, X> IoRing<T, X> {
         let user_data = self.reserve_user_data()?;
         let hr = build(self.handle, user_data);
         if let Err(error) = check(hr) {
-            self.cancel_reservation();
+            self.cancel_reservation(user_data);
             return Err(error);
         }
         Ok(user_data)
@@ -597,26 +599,13 @@ impl<T, X> IoRing<T, X> {
             if self.is_quiescent() {
                 return Ok(true);
             }
-            // Note what is NOT here: a diagnosis of "the counter says zero but
-            // the inventory does not". An earlier revision returned an error on
-            // sight of that, reasoning that a completion already accounted for
-            // could never come back to retire its entry. That conflated the
-            // COUNT with the IDENTITY, and it is wrong.
-            //
-            // `Accounting::record_completion` is not keyed by `user_data`, so
-            // an unmatched CQE decrements the counter without consuming any
-            // particular operation's future completion. With A and B
-            // outstanding, a foreign CQE plus A's real one drives the counter to
-            // zero while B's is still owed -- and B's will arrive, because every
-            // SQE that queues produces exactly one completion (M10.2). Erroring
-            // there refused a ring that was one drain away from quiescing, and
-            // did it again on every retry, which contradicted the resumable
-            // contract stated above.
-            //
-            // So the INVENTORY is what rundown waits on and the counter is only
-            // an accelerator. Waiting on the inventory terminates under exactly
-            // the invariant that already justifies this loop having no overall
-            // bound.
+            // `is_quiescent` waits on IDENTITIES, not a count. With A and B
+            // outstanding, a foreign CQE plus A's real one retires only A, so
+            // this keeps waiting for B -- and B's will arrive, because every SQE
+            // that queues produces exactly one completion (M10.2). That is the
+            // invariant that already justifies this loop having no overall
+            // bound, and it holds for raw pushes, which stow nothing, exactly as
+            // for owned ones.
             // `checked_add` rather than `+`, for the reason `pop_within_with`
             // records: `Instant + Duration` panics on overflow, so
             // `Duration::MAX` -- the honest spelling of "no deadline" -- would

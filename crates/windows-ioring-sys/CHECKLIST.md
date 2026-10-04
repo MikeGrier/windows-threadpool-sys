@@ -16,9 +16,8 @@ M19 is archived [here](COMPLETED-CHECKLIST.md#m19). `M20` through `M24`, and the
 [here](COMPLETED-CHECKLIST.md#moved-2026-10-01-m26-and-m28); and `M27`
 [here](COMPLETED-CHECKLIST.md#moved-2026-10-01-m27).
 
-**No milestone is open.** The plan these belonged to is recorded in
-[COMPLETED-PLANS.md](COMPLETED-PLANS.md); reopen this file by adding a milestone here and a row in
-[PLANS.md](PLANS.md) when new work is planned.
+The plan these belonged to is recorded in [COMPLETED-PLANS.md](COMPLETED-PLANS.md); add a milestone
+here and a row in [PLANS.md](PLANS.md) when new work is planned.
 
 **`M26.13`, the pool stall, is not archived -- it was transferred.** The fault was never this
 crate's, so the question, its timeline and its 33 measurement captures now live in
@@ -71,3 +70,27 @@ from an absence.
   stalled factory ever made a worker, and the same session spans the poke, so the before/after
   contrast survives the move. Whether it is worth building depends on whether `M-T7.1` is resumed,
   which is a decision for the engineer rather than something this item should assume.
+
+## M-R2 -- The outstanding-operation ledger, after the PR #113 review
+
+Opened 2026-10-04. The review found that a raw push could still reach a false quiesce; the fix is
+[D-78](DESIGN-NOTES.md#d-78).
+
+- [x] **M-R2.1** -- **Track outstanding operations by identity rather than by count.** Done
+      2026-10-04. `Accounting` keeps the set of minted, unretired `user_data`; `record_completion`
+      and `cancel_reservation` take the identity; quiescence is that set being empty, for owned
+      and raw pushes alike. Pinned by `a_completion_that_retires_nothing_is_not_quiescence`
+      (both push kinds, both directions) and by the `PR #113` case in
+      [sabotage.json](sabotage.json), which restores count semantics and is caught.
+
+- [ ] **M-R2.2** -- **Decide whether the ring should now answer `UnexpectedCompletion`.** Not
+      started, and a decision for the engineer rather than something to take in passing.
+
+  [D-76](DESIGN-NOTES.md#d-76) kept conservation checking external partly because the ring
+  *could not* tell a `_raw` push's completion from one it never minted, and named "`_raw` pushes
+  gain entries" as what reopens it. `M-R2.1` gave every push a ledger identity, so the ring now
+  knows: `record_completion` returns whether the identity was minted, and the pop discards that
+  answer. D-76's other limbs -- `DuplicateCompletion` needs a finished-identity history, and
+  `BufferStillInUse` reads a count the caller owns -- are unchanged. Options include surfacing
+  the bit on `Completion`, reporting it to a `RingContract`, or leaving it internal; leaving it
+  coarse until a consumer's need is visible is also an answer.
