@@ -12,13 +12,13 @@
 //!
 //! A kernel trait with `IoRing` generic over it is the shape this would
 //! normally take, and it is ruled out by a collision rather than by taste:
-//! [D-55](../DESIGN-NOTES.md#d-55) already spends `IoRing`'s type parameter on
-//! the ring-owned inventory (`M28.3`). Taking a second one would publish
-//! `IoRing<T, K>` -- two parameters on a type whose users write `IoRing`
-//! today, compounding a break `M28` accepts deliberately with one nobody asked
-//! for. Module indirection costs the published API nothing: the signature of
-//! every public item is unchanged, and so is the generic slot `M28` is going
-//! to need.
+//! [D-55](../DESIGN-NOTES.md#d-55) spends `IoRing`'s type parameters on the
+//! ring-owned inventory -- `IoRing<T, X>`, the payload and its sidecar
+//! (`M28.3`, [D-73](../DESIGN-NOTES.md#d-73)). A kernel parameter would publish
+//! `IoRing<T, X, K>`: a third public parameter on every ring a consumer names,
+//! whose only purpose is letting the crate test itself. Module indirection
+//! costs the published API nothing: the signature of every public item is
+//! unchanged.
 //!
 //! # What is behind the seam, and what deliberately is not
 //!

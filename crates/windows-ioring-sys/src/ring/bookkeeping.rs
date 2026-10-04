@@ -476,7 +476,7 @@ impl<T, X> IoRing<T, X> {
     /// no inventory entry -- it cannot, since it does not know what the
     /// caller's `build` closure queued or what it needs held -- so a pop for
     /// this operation reports `None` for what the ring was holding. That is
-    /// the legitimate half of [D-75](../DESIGN-NOTES.md#d-75)'s two causes,
+    /// the legitimate half of [D-75](../../DESIGN-NOTES.md#d-75)'s two causes,
     /// and choosing this seam is what makes it legitimate. Every other push
     /// hands its payload to the ring and gets it back from the pop.
     ///
@@ -498,7 +498,7 @@ impl<T, X> IoRing<T, X> {
     /// `build` must also queue its SQE with **exactly the `user_data` it was
     /// handed**, and queue only one. A completion carrying any other identity
     /// is one this ring never minted, and the pop that receives it panics
-    /// ([D-79](../DESIGN-NOTES.md#d-79)).
+    /// ([D-79](../../DESIGN-NOTES.md#d-79)).
     pub unsafe fn push_raw(
         &mut self,
         build: impl FnOnce(*mut c_void, usize) -> windows_sys::core::HRESULT,
@@ -591,7 +591,7 @@ impl<T, X> IoRing<T, X> {
     /// `SubmitIoRing` documents that *"If this function returns an error other
     /// than IORING_E_WAIT_TIMEOUT, then all entries remain in the submission
     /// queue."* So a failure here has **not** lost the operations and has not
-    /// rewound them ([D-5](../DESIGN-NOTES.md#d-5)); they are still ring state,
+    /// rewound them ([D-5](../../DESIGN-NOTES.md#d-5)); they are still ring state,
     /// a later submit is what runs them, and their buffers must stay alive
     /// until they complete.
     ///

@@ -40,8 +40,8 @@
 //!
 //! # Why a registered arena rather than an owned `Vec` per record
 //!
-//! `Batch::write` would take an owned buffer per append and hand it back on
-//! completion, which is simpler. This sample deliberately does not use it: a
+//! `Batch::write_owned` would take an owned buffer per append, and the ring would
+//! hand it back at the pop that observes its completion, which is simpler. This sample deliberately does not use it: a
 //! real consumer of a log has a buffer arena it manages itself -- sized once,
 //! reused, often placed deliberately -- and registering it once means the
 //! kernel resolves an index instead of an address on every push. Using the

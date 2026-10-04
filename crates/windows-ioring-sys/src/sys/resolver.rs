@@ -1,13 +1,13 @@
 // Copyright (c) Mike Grier
 //! A seeded resolver over the permitted kernel response space (M26.3).
 //!
-//! This is the thing [RESPONSE-SPACE.md](../RESPONSE-SPACE.md) was written
+//! This is the thing [RESPONSE-SPACE.md](../../RESPONSE-SPACE.md) was written
 //! for. It implements [`Responses`] by answering the submission-path calls
 //! itself, choosing a point in that space from a seed.
 //!
 //! # It asserts nothing about Windows
 //!
-//! The distinction [D-52](../DESIGN-NOTES.md#d-52) turns on, restated here
+//! The distinction [D-52](../../DESIGN-NOTES.md#d-52) turns on, restated here
 //! because it is what makes this defensible where a mock was refused twice: a
 //! mock encodes a belief about what the platform *does*, and can be wrong
 //! about it. This encodes a specification of what this crate will *tolerate*,
@@ -83,7 +83,7 @@ use super::installed::{Installed, Responses};
 /// **A third axis, kept separate on purpose.**
 /// [generated_sequences.rs](../../tests/generated_sequences.rs) already
 /// carries two -- its own sequence seed and the guard allocator's -- and
-/// [D-41](../DESIGN-NOTES.md#d-41)'s discipline is that one number replays one
+/// [D-41](../../DESIGN-NOTES.md#d-41)'s discipline is that one number replays one
 /// thing. Folding the resolution choices into either of those would produce a
 /// replay that reproduced part of a run and not the rest, which is worse than
 /// no replay at all because it looks like one.
@@ -143,7 +143,7 @@ pub struct ResolverConfig {
     /// `RS-P-2`: completion order is unconstrained.
     ///
     /// With this off completions are posted in submission order. That is not
-    /// a promise Windows makes -- [D-47](../DESIGN-NOTES.md#d-47) measured it
+    /// a promise Windows makes -- [D-47](../../DESIGN-NOTES.md#d-47) measured it
     /// broken -- so a test turning this off is narrowing to isolate, never
     /// asserting FIFO.
     pub may_reorder: bool,
@@ -157,7 +157,7 @@ pub struct ResolverConfig {
     /// need produce no signal.
     ///
     /// With this off every post signals. That is *wider* than the platform --
-    /// [D-19](../DESIGN-NOTES.md#d-19) measured the event as edge triggered --
+    /// [D-19](../../DESIGN-NOTES.md#d-19) measured the event as edge triggered --
     /// so it exists to show the edge behaviour is load-bearing, not as a
     /// configuration any consumer should rely on.
     pub edge_triggered_signal: bool,
@@ -285,7 +285,7 @@ struct Op {
     requested: Option<u32>,
 }
 
-/// A resolver over [RESPONSE-SPACE.md](../RESPONSE-SPACE.md).
+/// A resolver over [RESPONSE-SPACE.md](../../RESPONSE-SPACE.md).
 ///
 /// See the module documentation for what drives resolution and for the two
 /// ordering requirements installing one imposes.
@@ -419,7 +419,7 @@ impl Resolver {
     }
 
     /// SplitMix64, matching the generator this crate already uses
-    /// ([D-41](../DESIGN-NOTES.md#d-41)): one number replays a whole run.
+    /// ([D-41](../../DESIGN-NOTES.md#d-41)): one number replays a whole run.
     fn next(&mut self) -> u64 {
         self.state = self.state.wrapping_add(0x9E37_79B9_7F4A_7C15);
         let mut z = self.state;
@@ -431,7 +431,7 @@ impl Resolver {
     /// True with probability `percent`.
     ///
     /// The weighting is a property of this resolver, never of the space --
-    /// [RESPONSE-SPACE.md](../RESPONSE-SPACE.md) carries no rates, deliberately,
+    /// [RESPONSE-SPACE.md](../../RESPONSE-SPACE.md) carries no rates, deliberately,
     /// because a space with observed probabilities in it is a recording.
     fn chance(&mut self, percent: u64) -> bool {
         self.next() % 100 < percent

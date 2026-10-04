@@ -151,7 +151,7 @@ first-class; neither is a degraded form of the other.
 ## Durability
 
 Three facts, all measured rather than documented by Win32, and all of them
-things a consumer gets wrong by default. `Batch::flush`, `FlushCoverage`,
+things a consumer gets wrong by default. `Batch::flush_owned`, `FlushCoverage`,
 `WriteCaching` and `FlushMode` state them in full; this is the summary that
 stops a reader from never looking.
 
@@ -167,7 +167,7 @@ stops a reader from never looking.
 3. **A flush without the barrier covers nothing.** An unflagged flush is an
    ordinary operation competing with the writes before it, and it frequently
    wins, so its completion proves nothing about them. This is why
-   `Batch::flush` requires a `FlushCoverage` rather than defaulting: the
+   `Batch::flush_owned` requires a `FlushCoverage` rather than defaulting: the
    obvious spelling was a silent data-loss bug, invisible until power is lost.
    Note that seeing your flush land last on your hardware is not evidence you
    can omit the barrier -- which direction the reordering shows in is

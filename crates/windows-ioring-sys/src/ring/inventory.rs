@@ -34,7 +34,7 @@ impl<T, X> IoRing<T, X> {
     ///   for an enum means the bytes must not live inline in the variant.
     ///
     /// Erasing `T` is not among them -- see
-    /// [D-4](../DESIGN-NOTES.md#d-4).
+    /// [D-4](../../DESIGN-NOTES.md#d-4).
     ///
     /// # Errors
     ///
@@ -72,7 +72,7 @@ impl<T, X> IoRing<T, X> {
     ///
     /// A completion for an identity this ring never minted cannot reach here
     /// as a quiet `None` any more: the identity ledger notices it first, and
-    /// the pop panics ([D-79](../DESIGN-NOTES.md#d-79)) -- except during an
+    /// the pop panics ([D-79](../../DESIGN-NOTES.md#d-79)) -- except during an
     /// unwind, where it is traced and this returns `None` for it. `M28.5`
     /// settled that the inventory is the right place to stop: an entry for
     /// every raw push would need an `X` the caller never supplied.
@@ -116,7 +116,7 @@ impl<T, X> IoRing<T, X> {
     /// If the completion carries an identity that is not in flight on this
     /// ring -- never minted here, already completed, or released after its
     /// build failed. That is a defect, not an outcome
-    /// ([D-79](../DESIGN-NOTES.md#d-79)); during an unwind it is traced
+    /// ([D-79](../../DESIGN-NOTES.md#d-79)); during an unwind it is traced
     /// instead, and the completion is returned with an outer `None`.
     pub fn try_pop(&mut self) -> io::Result<Option<HeldCompletion<T, X>>> {
         let Some(completion) = self.pop_raw()? else {
@@ -141,7 +141,7 @@ impl<T, X> IoRing<T, X> {
     /// flush or cancel and [`IoRing::push_raw`] are outstanding while holding
     /// nothing, by design. So `held() <= outstanding()` always, and the
     /// difference is the number of raw operations in flight -- not a sign of
-    /// corruption ([D-78](../DESIGN-NOTES.md#d-78)).
+    /// corruption ([D-78](../../DESIGN-NOTES.md#d-78)).
     #[must_use]
     pub fn held(&self) -> usize {
         self.inventory.len()

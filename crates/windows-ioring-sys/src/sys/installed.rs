@@ -64,7 +64,7 @@ pub trait Responses {
     /// A completion this writes must carry an identity the ring minted and has
     /// not yet seen complete (`RS-C-2`). Any other `UserData` is reported by
     /// the ring as a defect, and the pop that receives it panics
-    /// ([D-79](../DESIGN-NOTES.md#d-79)).
+    /// ([D-79](../../DESIGN-NOTES.md#d-79)).
     ///
     /// # Safety
     ///
@@ -187,7 +187,7 @@ pub trait Responses {
     /// `SetIoRingCompletionEvent`.
     ///
     /// Behind the seam because it is how a completion becomes *observable*,
-    /// which is what [RS-P-6](../RESPONSE-SPACE.md) is a clause about -- not
+    /// which is what [RS-P-6](../../RESPONSE-SPACE.md) is a clause about -- not
     /// because it is lifecycle. An implementation that answers this call
     /// takes on the obligation to signal, since a ring whose completions are
     /// answered here and whose event is never set leaves every waiter parked.
