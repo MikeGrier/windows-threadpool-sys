@@ -1253,8 +1253,11 @@ impl<'ring, T, X> Batch<'ring, T, X> {
         Ok((user_data, OperationId::new(user_data, self.ring.ring_id())))
     }
 
-    /// The shared tail of every inventory push: stow on success, release the
-    /// reservation and hand the payload back on failure.
+    /// The shared tail of every inventory push: stow on success; on failure,
+    /// release the reservation and **drop** the payload and its registration
+    /// lease, returning only the error. The caller does not get the payload
+    /// back -- the public pushes document the same -- so nothing may be built
+    /// on recovering it from a failed push.
     ///
     /// The failure path is the mirror image of the borrowed push's, and
     /// for the same reason. A `Build*` that fails queued no SQE, so nothing
