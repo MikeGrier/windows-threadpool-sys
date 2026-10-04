@@ -189,7 +189,6 @@ impl Observed {
     }
 }
 
-/// Push phase A, then one flush with `coverage`, then phase B; submit as one
 /// The ring this test drives.
 ///
 /// It holds each write's buffer, and carries the length that write asked for
@@ -198,6 +197,7 @@ impl Observed {
 /// what lets the drain below tell a write from a flush without a second map.
 type BarrierRing = IoRing<Aligned, Option<usize>>;
 
+/// Push phase A, then one flush with `coverage`, then phase B; submit as one
 /// batch and report the order in which the completions arrived.
 fn run_case(ring: &mut BarrierRing, file: RawHandle, coverage: FlushCoverage) -> Observed {
     // Both maps this used to keep are gone. The ring holds the buffer, and the
@@ -211,8 +211,11 @@ fn run_case(ring: &mut BarrierRing, file: RawHandle, coverage: FlushCoverage) ->
         for index in 0..PHASE_OPS {
             let buffer = Aligned::new(BIG_LEN, index as u8);
             let offset = (index * BIG_LEN) as u64;
-            // SAFETY: `file` stays open for the whole test, and every token is
-            // held in `pending` until its completion has been popped.
+            // SAFETY: `file` stays open for the whole test, and the buffer is
+            // no longer this test's to keep alive -- `write_raw_owned` moves it
+            // into the ring's inventory, which holds it until the pop that
+            // observes its completion hands it back. There is no token to keep
+            // and no map to keep it in.
             let id = unsafe {
                 batch.write_raw_owned(
                     file,
@@ -228,8 +231,14 @@ fn run_case(ring: &mut BarrierRing, file: RawHandle, coverage: FlushCoverage) ->
         }
 
         // SAFETY: as above.
-        flush_id =
-            unsafe { batch.flush_raw(file, coverage, FlushMode::Default) }.expect("queue flush");
+        //
+        // `flush_raw_owned` rather than `flush_raw`, and the difference is the
+        // point: the owned form stows an inventory entry, which is what lets
+        // the drain below demand one from EVERY completion. The sidecar is
+        // `None` because a flush transfers nothing.
+        flush_id = unsafe { batch.flush_raw_owned(file, None, coverage, FlushMode::Default) }
+            .expect("queue flush")
+            .user_data();
 
         for index in 0..PHASE_OPS {
             let buffer = Aligned::new(SMALL_LEN, index as u8);
@@ -271,10 +280,18 @@ fn run_case(ring: &mut BarrierRing, file: RawHandle, coverage: FlushCoverage) ->
             // unbuffered write with a misaligned length or offset is exactly
             // how that happens. Check rather than assume the I/O was real.
             //
-            // The flush carries no buffer and no expected length, so `held` is
-            // `None` for it -- which is the same shape that used to be a miss
-            // in two separate maps.
-            if let Some((_buffer, Some(len))) = held {
+            // EVERY completion this test queued carries an inventory entry,
+            // the flush included. A `None` here is therefore a completion this
+            // test did not queue, and accepting it silently is the hazard: the
+            // loop stops after a fixed count, so a foreign CQE could stand in
+            // for a missing write and the ordering counted afterwards would be
+            // taken over the wrong set without anything failing.
+            let (_buffer, expected) =
+                held.expect("a completion with no inventory entry was not queued by this test");
+            // A flush transfers nothing and carries no expected length, which is
+            // exactly what `Option<usize>` says in the sidecar; a write carries
+            // one, and a short write would make every count below meaningless.
+            if let Some(len) = expected {
                 assert_eq!(
                     transferred, len,
                     "an unbuffered write transferred {transferred} of {len} bytes"

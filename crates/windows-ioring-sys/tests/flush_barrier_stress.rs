@@ -535,8 +535,11 @@ fn run_trial(
         for index in 0..PHASE_OPS {
             let buffer = Aligned::new(BIG_LEN, index as u8);
             let offset = (index * BIG_LEN) as u64;
-            // SAFETY: `file` stays open for the whole trial, and every token is
-            // held in `pending` until its completion has been popped.
+            // SAFETY: `file` stays open for the whole trial, and the buffer is
+            // no longer this trial's to keep alive -- `write_raw_owned` moves it
+            // into the ring's inventory, which holds it until the pop that
+            // observes its completion hands it back. There is no token to keep
+            // and no map to keep it in, which is what the comment above means.
             let id = unsafe {
                 batch.write_raw_owned(
                     file,
