@@ -147,35 +147,42 @@
     contiguous blocks, one per shard. The two things being asked for look
     opposed and are not.
 
-    Adjacency is what buys the build cache. Each entry patches a file, runs the
-    suite, and restores it, so two consecutive entries in the SAME file dirty
-    one compilation unit per iteration -- the restore and the next patch land
-    on the same file -- while two in DIFFERENT files dirty two. It matters
-    because the manifests cluster hard: `windows-threadpool-sys` puts 13 of its
-    25 entries in `heal.rs`, `windows-ioring-sys` 11 of 53 in `resolver.rs`,
-    `windows-waitable-queues` 11 of 39 in `slotwise_mpsc.rs`.
+    Adjacency is MEANT to buy the build cache, by this argument: each entry
+    patches a file, runs the suite, and restores it, so two consecutive entries
+    in the SAME file dirty one compilation unit per iteration -- the restore and
+    the next patch land on the same file -- while two in DIFFERENT files dirty
+    two. It should matter most where a manifest clusters, and they do cluster;
+    over half of `windows-threadpool-sys`' entries sit in a single file. Ask the
+    manifests for the current shape rather than trusting a count written here.
 
-    Equal blocks are what stop a hot file pinning one shard. The two coexist
-    because splitting a file across a block boundary leaves each PIECE
-    contiguous: a shard holding seven consecutive `heal.rs` entries gets seven
-    same-file rebuilds in a row whoever holds the other six. The cost of a split
-    is one cache transition, not the file's clustering.
+    That argument is structural and is NOT confirmed by measurement. The one
+    comparison taken so far -- `windows-threadpool-sys` cut in two, shard 0
+    entirely one file and shard 1 spread over the rest -- came out 79.4s per
+    entry on the clumped shard against 69.6s on the mixed one, which is the
+    wrong direction for the hypothesis. That does not refute it: the two shards
+    patch DIFFERENT files, so the comparison is confounded by how expensive each
+    file is to rebuild, and the clumped shard's file is a core module. Isolating
+    the effect needs ONE entry set run in two ORDERS, which has not been done.
+    Until it is, treat adjacency as a reason this split is no worse than the
+    alternatives, not as a measured win.
 
-    Measured on this repository, shard sizes and the number of file changes
-    within each shard:
-
-        threadpool      4 shards: 7,6,6,6         switches 0,0,1,4
-        threadpool      6 shards: 5,4,4,4,4,4     switches 0,0,0,0,1,3
-        waitable-queues 6 shards: 7,7,7,6,6,6     switches 0,1,1,1,1,3
-        ioring          6 shards: 9,9,9,9,9,8     switches 0,2,1,2,4,6
+    Equal blocks are what stop a hot file pinning one shard, and that half is
+    not in doubt. The two goals coexist because splitting a file across a block
+    boundary leaves each PIECE contiguous: a shard holding seven consecutive
+    entries from one file gets seven same-file rebuilds in a row whoever holds
+    the rest.
 
     An earlier revision dealt whole files to the lightest shard and refused to
-    split any of them. That is where the floor came from -- threadpool split
-    13,4,4,4 over four shards, and the three small shards bought nothing -- and
-    it was the reason to think a static plan could not be fair. It can.
+    split any of them. That is where the floor came from -- a manifest's biggest
+    file took an entire shard to itself however many shards were asked for, so
+    the extra workers bought nothing -- and it was the reason to think a static
+    plan could not be fair. It can.
 
     Sizes differ by at most one, so a shard count can be chosen for the machines
-    available rather than for the shape of the manifest.
+    available rather than for the shape of the manifest. `test-run-sabotage.ps1`
+    asserts that evenness and the file-contiguity across a range of shard
+    counts. No worked split is reproduced here: the table that used to be went
+    stale the first time a manifest grew.
 
     An empty shard is a SUCCESS, not an error: a manifest with one entry and
     four shards leaves three with nothing to do, and that is the normal state
@@ -832,8 +839,10 @@ if ($manifestSelected.Count -eq 0) {
     Exit-WithMessage "No sabotage in $manifestPath matches name filter '$Name'." 2
 }
 
-# Grouped by FILE, then whole groups dealt to the lightest shard: see the
-# -ShardCount documentation for why this beats dealing entries round-robin.
+# Ordered by FILE, then cut into equal contiguous blocks. NOT whole groups
+# dealt to the lightest shard -- that is the earlier revision described further
+# down, and this comment went on describing it after the code had stopped. See
+# the -ShardCount documentation for why the two goals are not opposed.
 #
 # The `@(...)` wraps the WHOLE `if`, not just the work inside it. PowerShell
 # unrolls a collection returned from a statement, so an empty shard assigned
@@ -854,11 +863,11 @@ $selected = @(
         # same-file rebuilds in a row regardless of who has the other six.
         #
         # An earlier revision dealt whole files to the lightest shard and
-        # refused to split any of them. That is where the floor came from:
-        # `windows-threadpool-sys` puts 13 of its 25 entries in `heal.rs`, so
-        # four shards split 13,4,4,4 and the extra workers bought nothing. The
-        # same manifest cuts 7,6,6,6 here, and the only thing given up is one
-        # cache transition at each boundary.
+        # refused to split any of them. That is where the floor came from: over
+        # half of `windows-threadpool-sys`' entries sit in one file, so that
+        # file took an entire shard to itself however many shards were asked
+        # for, and the extra workers bought nothing. A contiguous cut splits it
+        # evenly instead, giving up one cache transition at each boundary.
         #
         # Deterministic: group size descending, file name breaking ties. An
         # entry lands on the same shard every run, so a failing shard can be

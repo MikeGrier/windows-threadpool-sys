@@ -60,51 +60,58 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  # The matrix is DERIVED from the manifests, not listed here. A list stores two
+  # facts the repository already owns -- which crates have a manifest, and how
+  # many entries each has -- and both drift silently. Both already did: within
+  # the branch that added this workflow, one manifest grew and left four stale
+  # numbers behind, including a worked shard table describing no real split.
+  #
+  # This job also resolves the `manifest` dispatch input. Selecting jobs for a
+  # named manifest used to be an `endsWith` test on each matrix entry, so a typo
+  # matched NOTHING: every sweep step skipped, every job green, nothing swept --
+  # a result indistinguishable from a clean run. The planner fails loudly on an
+  # unknown name instead, once, before any sweep starts.
+  plan:
+    name: plan the shard matrix
+    runs-on: windows-latest
+    outputs:
+      matrix: ${{ steps.plan.outputs.matrix }}
+    steps:
+      - uses: actions/checkout@v7
+      - id: plan
+        shell: pwsh
+        run: ./tools/plan-sabotage-matrix.ps1 -Manifest "${{ inputs.manifest }}" -GitHubOutput $env:GITHUB_OUTPUT
+
   sweep:
     name: sweep ${{ matrix.crate }} ${{ matrix.shard }}/${{ matrix.shards }}
+    needs: plan
     runs-on: windows-latest
     # Sharded by crate AND within each crate, so the wall clock is the longest
     # *shard* rather than the longest manifest. Sharding by crate alone leaves
     # one worker sweeping a whole large manifest while the rest sit idle.
     #
-    # Shard counts are sized to each manifest's entry count, which is possible
-    # because the harness's split is even: it orders entries by file and cuts
-    # that order into equal contiguous blocks, so shard sizes differ by at most
-    # one AND each shard still runs long same-file runs, which is what keeps
-    # the build cache warm. `tools/test-run-sabotage.ps1` asserts both
-    # properties over a range of shard counts, and the manifests themselves say
-    # how many entries there are. Neither is restated here: an entry count
-    # pasted into this comment is a copy that goes stale the next time someone
-    # adds a sabotage -- which is exactly what happened to the table that used
-    # to sit here, inside the very branch that wrote it.
+    # Shard counts come from each manifest's entry count (see the planner), which
+    # is possible because the harness's split is even at any shard count: it
+    # orders entries by file and cuts that order into equal contiguous blocks, so
+    # shard sizes differ by at most one AND each shard still runs long same-file
+    # runs. `tools/test-run-sabotage.ps1` asserts both properties.
+    #
+    # The same-file runs are INTENDED to keep the build cache warm, and that is
+    # an argument from how cargo rebuilds rather than a measured result -- the
+    # one comparison taken so far ran against it and was confounded. See the
+    # -ShardCount help in `tools/run-sabotage.ps1`. The evenness half is not in
+    # doubt; the cache half is why this split is no worse than the alternatives,
+    # not a claim that it is faster.
     #
     # There is no manifest-shaped floor to respect -- an earlier revision of the
     # harness refused to split a file, so a manifest whose entries cluster in
     # one source file could not go below that cluster's size on a single worker
-    # whatever the shard count -- so these can be raised or lowered
-    # for the machines available. An over-provisioned shard is not an error: the
+    # whatever the shard count. An over-provisioned shard is not an error: the
     # harness treats an empty shard as a success and exits before the baseline,
     # so it costs nothing but a checkout.
     strategy:
       fail-fast: false
-      matrix:
-        include:
-          - { crate: windows-ioring-sys, shard: 0, shards: 6 }
-          - { crate: windows-ioring-sys, shard: 1, shards: 6 }
-          - { crate: windows-ioring-sys, shard: 2, shards: 6 }
-          - { crate: windows-ioring-sys, shard: 3, shards: 6 }
-          - { crate: windows-ioring-sys, shard: 4, shards: 6 }
-          - { crate: windows-ioring-sys, shard: 5, shards: 6 }
-          - { crate: windows-waitable-queues, shard: 0, shards: 4 }
-          - { crate: windows-waitable-queues, shard: 1, shards: 4 }
-          - { crate: windows-waitable-queues, shard: 2, shards: 4 }
-          - { crate: windows-waitable-queues, shard: 3, shards: 4 }
-          - { crate: windows-threadpool-sys, shard: 0, shards: 3 }
-          - { crate: windows-threadpool-sys, shard: 1, shards: 3 }
-          - { crate: windows-threadpool-sys, shard: 2, shards: 3 }
-          - { crate: windows-placement-probe, shard: 0, shards: 1 }
-          - { crate: windows-platform-probes, shard: 0, shards: 1 }
-          - { crate: windows-file-watcher, shard: 0, shards: 1 }
+      matrix: ${{ fromJSON(needs.plan.outputs.matrix) }}
     # Generous against the measured cost, because the failure this bound is for
     # is a sweep that hangs rather than one that is merely large. The harness
     # applies its own per-entry bound inside this one.
@@ -120,16 +127,16 @@ jobs:
           # The sweep builds into its own target directory under .scratch, and
           # every shard is a separate job, so they must not share a key.
           key: sabotage-${{ matrix.crate }}-${{ matrix.shard }}
+      # Unconditional. A dispatch that named one manifest has already been
+      # resolved by `plan`, which emitted jobs for that manifest alone, so there
+      # is nothing left for a step-level `if` to decide. The pair of conditional
+      # steps this replaces could BOTH evaluate false -- on any manifest name
+      # the `endsWith` test did not match -- and a job whose every step is
+      # skipped is a job that succeeds, so the run went green having swept
+      # nothing.
       - name: Sweep ${{ matrix.crate }}
-        if: ${{ github.event_name != 'workflow_dispatch' || inputs.manifest == '' }}
         shell: pwsh
         run: ./tools/run-sabotage.ps1 -Manifest crates/${{ matrix.crate }}/sabotage.json -Shard ${{ matrix.shard }} -ShardCount ${{ matrix.shards }} -Name "${{ inputs.name || '*' }}"
-      # A dispatch that named one manifest runs it in whichever shard matches,
-      # and the other five shards do nothing rather than sweeping everything.
-      - name: Sweep the requested manifest
-        if: ${{ github.event_name == 'workflow_dispatch' && inputs.manifest != '' && endsWith(inputs.manifest, format('{0}/sabotage.json', matrix.crate)) }}
-        shell: pwsh
-        run: ./tools/run-sabotage.ps1 -Manifest "${{ inputs.manifest }}" -Shard ${{ matrix.shard }} -ShardCount ${{ matrix.shards }} -Name "${{ inputs.name || '*' }}"
       # The transcripts are the whole diagnostic value of a failed sweep: they
       # name which entry survived and carry the suite output that let it.
       - name: Upload transcripts

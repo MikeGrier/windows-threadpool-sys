@@ -120,6 +120,17 @@ jobs:
       - name: Run test-run-sabotage.ps1 (Windows PowerShell 5.1)
         shell: powershell
         run: ./tools/test-run-sabotage.ps1
+      # The sweep workflow's job matrix comes from this planner, so a defect in
+      # it makes `sabotage sweeps` run fewer jobs than it claims -- or none,
+      # while still reporting success. Both hosts for the same reason as the
+      # pair above: it is an ordinary script a developer may run locally under
+      # either, and its suite is a second away.
+      - name: Run test-plan-sabotage-matrix.ps1
+        shell: pwsh
+        run: ./tools/test-plan-sabotage-matrix.ps1
+      - name: Run test-plan-sabotage-matrix.ps1 (Windows PowerShell 5.1)
+        shell: powershell
+        run: ./tools/test-plan-sabotage-matrix.ps1
       # pwsh only, and deliberately not repeated under 5.1 like the step above:
       # check-encoding.ps1 carries curated mojibake with no BOM, so 5.1 decodes
       # it as ANSI and cannot parse it. The suite says so and refuses to run
