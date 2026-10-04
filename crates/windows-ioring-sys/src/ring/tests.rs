@@ -901,3 +901,63 @@ fn the_wait_can_be_supplied_as_a_trait_object() {
     let error = outcome.expect_err("a trait-object wait still refuses");
     assert_eq!(error.to_string(), "the wait refused");
 }
+
+/// A completion that retires no inventory entry is not quiescence, and
+/// `run_down_within` must not report it as such.
+///
+/// `Accounting::record_completion` saturates, so a CQE this ring never minted
+/// lowers the counter without removing anything from the inventory. The first
+/// version of this guard lived inline in `Drop` and nowhere else, so the
+/// counter reaching zero still made `run_down_within` answer `Ok(true)` --
+/// "safe to drop" -- while an owned operation's payload was still held and, for
+/// all the ring knows, still being written into by the kernel.
+///
+/// Reported as an **error** rather than `Ok(false)`: `Ok(false)` means "not
+/// finished, call again", and `run_down` does exactly that with no deadline, so
+/// answering that way would hang teardown rather than lie to it. Nothing about
+/// waiting can retire an entry whose completion has already been accounted for.
+#[test]
+fn a_completion_that_retires_nothing_is_not_quiescence() {
+    use super::{Entry, Held};
+    use std::time::Duration;
+
+    let mut ring = IoRing::refused_by_the_kernel();
+
+    // One owned push's worth of state: an inventory entry, and the outstanding
+    // count that a push would have minted alongside it.
+    ring.inventory.insert(
+        1,
+        Entry {
+            payload: None,
+            extra: (),
+            held: Held::default(),
+        },
+    );
+    let _ = ring
+        .accounting
+        .reserve_user_data()
+        .expect("mint one identity");
+
+    // Then a completion for an identity this ring never minted, which is the
+    // condition under test: the counter falls without matching that entry.
+    ring.accounting.record_completion();
+
+    assert_eq!(
+        ring.accounting.outstanding(),
+        0,
+        "the counter now claims nothing is outstanding"
+    );
+    assert_eq!(ring.held(), 1, "while the inventory still holds a payload");
+
+    let error = ring
+        .run_down_within(Duration::from_millis(0))
+        .expect_err("a counter the inventory contradicts is not quiescence");
+    assert!(
+        error.to_string().contains("inventory is not empty"),
+        "the error must name what it found, not merely fail: {error}"
+    );
+
+    // Dropping this ring would assert on the null handle's close, which is a
+    // sibling test's subject rather than this one's.
+    std::mem::forget(ring);
+}

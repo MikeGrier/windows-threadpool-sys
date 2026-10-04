@@ -416,13 +416,21 @@ impl Completion {
     /// # Example
     ///
     /// ```ignore
+    /// // ONE pop. The completion being injected into has already been popped,
+    /// // and that same pop is what retired the inventory entry and handed the
+    /// // payload back -- there is no second pop that could return it again.
+    /// let (completion, payload) = ring
+    ///     .try_pop()
+    ///     .expect("try_pop")
+    ///     .expect("a completion is ready");
+    ///
+    /// // The payload comes back whatever the result says: the operation did
+    /// // complete, and a failed completion is still the proof that frees the
+    /// // buffer.
     /// let completion = completion.with_injected_failure(
     ///     InjectedFailure::Win32(ERROR_ACCESS_DENIED),
     /// );
     /// assert!(completion.result().is_err());
-    /// // The ring still returns the payload: the operation did complete, and
-    /// // a failed completion is still the proof that frees the buffer.
-    /// let (completion, payload) = ring.try_pop().expect("a completion");
     /// ```
     #[cfg(any(test, feature = "fault-injection"))]
     #[must_use]
@@ -885,6 +893,39 @@ impl<T, X> IoRing<T, X> {
     #[must_use]
     pub fn held(&self) -> usize {
         self.inventory.len()
+    }
+
+    /// Whether this ring can be believed when it says nothing is outstanding.
+    ///
+    /// **The counter alone is not sufficient, and this is the one place that
+    /// says so.** [`Accounting::record_completion`] decrements SATURATINGLY, so
+    /// a CQE this ring never minted -- a duplicate, or one carrying foreign
+    /// user data -- lowers the counter without retiring any inventory entry,
+    /// because retirement is keyed by `user_data` and that key matches nothing.
+    /// The counter can therefore read zero while an owned operation is still in
+    /// flight and the kernel still holds the address of its payload.
+    ///
+    /// The inventory is what still knows, since an entry leaves it only through
+    /// the pop that observed *that entry's own* completion.
+    ///
+    /// Every quiescence decision asks here rather than re-deriving it. The
+    /// first version of this check was written inline in `Drop` and nowhere
+    /// else, so [`IoRing::run_down_within`] went on reporting the false quiesce
+    /// as `Ok(true)` and `pop_within_raw_with` as "nothing can arrive": one
+    /// rule at three sites, corrected at one.
+    fn is_quiescent(&self) -> bool {
+        self.accounting.outstanding() == 0 && self.inventory.is_empty()
+    }
+
+    /// The counter claims quiescence that the inventory contradicts.
+    ///
+    /// Distinct from "not quiescent yet", and the distinction decides what a
+    /// caller should do: no amount of waiting clears this, because whatever
+    /// completion would have retired the entry has already been accounted for
+    /// by the unmatched CQE. Nothing further is owed, so nothing further will
+    /// arrive.
+    fn counter_contradicts_inventory(&self) -> bool {
+        self.accounting.outstanding() == 0 && !self.inventory.is_empty()
     }
 
     /// The version this ring was created at.
@@ -1471,8 +1512,22 @@ impl<T, X> IoRing<T, X> {
     pub fn run_down_within(&mut self, bound: Duration) -> io::Result<bool> {
         let deadline = Instant::now().checked_add(bound);
         loop {
-            if self.accounting.outstanding() == 0 {
+            if self.is_quiescent() {
                 return Ok(true);
+            }
+            if self.counter_contradicts_inventory() {
+                // Deliberately an error rather than `Ok(false)`. `Ok(false)`
+                // means "not finished, call again", and `run_down` does exactly
+                // that with no deadline -- so reporting a state that waiting
+                // cannot clear as `Ok(false)` would hang teardown instead of
+                // lying to it, which trades one defect for a worse one. The
+                // caller is told, and `Drop`'s error path leaks the payloads
+                // rather than freeing them.
+                return Err(io::Error::other(
+                    "IoRing rundown: nothing is outstanding but the inventory is not empty, so a \
+                     completion was accounted for that retired no operation; the payloads it \
+                     holds are not safe to free",
+                ));
             }
             // `checked_add` rather than `+`, for the reason `pop_within_with`
             // records: `Instant + Duration` panics on overflow, so
@@ -1619,7 +1674,14 @@ impl<T, X> IoRing<T, X> {
             // Checked *after* the pop, never before: `record_completion` runs
             // during `try_pop`, so reading it first would race the very
             // completion being drained.
-            if self.outstanding() == 0 {
+            //
+            // `is_quiescent` rather than the bare counter, so a false quiesce
+            // cannot cut the wait short by claiming nothing can arrive. Under
+            // that state this simply waits out the caller's bound and reports
+            // that nothing arrived within it, which is true. No error is raised
+            // on this path: it is the hot one, and the bound already makes the
+            // answer honest.
+            if self.is_quiescent() {
                 return Ok(None);
             }
             // `checked_add` rather than `+`: `Instant + Duration` panics on
@@ -1900,7 +1962,7 @@ impl<T, X> Drop for IoRing<T, X> {
         // would hand the kernel a dangling write, which is the exact hazard
         // moving the inventory inside the ring was meant to make
         // unrepresentable.
-        if quiesced && self.inventory.is_empty() {
+        if quiesced && self.is_quiescent() {
             // SAFETY: nothing is outstanding, so no kernel write can still be
             // aimed at anything this holds, and `self.inventory` is not used
             // again -- this is `Drop`, and the field is `ManuallyDrop` so
