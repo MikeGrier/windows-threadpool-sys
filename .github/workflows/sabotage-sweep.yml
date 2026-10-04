@@ -82,7 +82,15 @@ permissions:
 # One sweep of `main` at a time. Later merges supersede earlier ones rather than
 # queueing behind them, because what matters is that the tip is swept.
 concurrency:
-  group: sabotage-sweep-${{ github.ref }}
+  # Push runs group by ref, so a later merge supersedes an earlier one: what
+  # matters is that the tip is swept.
+  #
+  # A DISPATCH must not join that group. It carries the same `github.ref` as the
+  # push runs on `main`, so manually dispatching even a one-manifest diagnostic
+  # would cancel the post-merge sweep for the latest merge -- and the next merge
+  # would cancel the diagnostic right back. `github.run_id` is unique per run,
+  # so each dispatch becomes its own group and neither can cancel the other.
+  group: sabotage-sweep-${{ github.event_name == 'workflow_dispatch' && github.run_id || github.ref }}
   cancel-in-progress: true
 
 jobs:
