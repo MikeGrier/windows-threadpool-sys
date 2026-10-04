@@ -2107,22 +2107,14 @@ impl<'ring, T, X> Batch<'ring, T, X> {
     /// # Errors
     ///
     /// As [`Batch::read_registered_raw_owned`].
-    /// Queue a write from a registered buffer, with the **ring** holding the
-    /// registration's use count (`D-73`).
     ///
-    /// The inventory counterpart to [`Batch::write_registered_raw_owned`].
+    /// # Why the long parameter list
     ///
-    /// # Safety
-    ///
-    /// As [`Batch::write_registered_raw_owned`].
-    ///
-    /// # Errors
-    ///
-    /// As [`Batch::write_registered_raw_owned`].
-    /// `BuildIoRingWriteFile`'s own parameters, plus the sidecar the inventory
-    /// carries. Collapsing them into a struct would hide which are the
-    /// kernel's and which are this crate's, which is the distinction a reader
-    /// of a push most needs. `sys.rs` takes the same view for the same reason.
+    /// These are `BuildIoRingWriteFile`'s own parameters, plus the sidecar the
+    /// inventory carries. Collapsing them into a struct would hide which are
+    /// the kernel's and which are this crate's, which is the distinction a
+    /// reader of a push most needs. `sys.rs` takes the same view for the same
+    /// reason.
     #[allow(
         clippy::too_many_arguments,
         reason = "mirrors the Win32 call plus the inventory sidecar"
@@ -2165,15 +2157,19 @@ impl<'ring, T, X> Batch<'ring, T, X> {
     /// Queue a write from a registered buffer against a guarded file, with the
     /// **ring** holding both the use and the guard (`D-73`).
     ///
-    /// The inventory counterpart to [`Batch::write_registered_owned`].
+    /// The guarded counterpart to [`Batch::write_registered_raw_owned`].
     ///
     /// # Errors
     ///
-    /// As [`Batch::write_registered_owned`].
-    /// `BuildIoRingWriteFile`'s own parameters, plus the sidecar the inventory
-    /// carries. Collapsing them into a struct would hide which are the
-    /// kernel's and which are this crate's, which is the distinction a reader
-    /// of a push most needs. `sys.rs` takes the same view for the same reason.
+    /// As [`Batch::write_registered_raw_owned`].
+    ///
+    /// # Why the long parameter list
+    ///
+    /// These are `BuildIoRingWriteFile`'s own parameters, plus the sidecar the
+    /// inventory carries. Collapsing them into a struct would hide which are
+    /// the kernel's and which are this crate's, which is the distinction a
+    /// reader of a push most needs. `sys.rs` takes the same view for the same
+    /// reason.
     #[allow(
         clippy::too_many_arguments,
         reason = "mirrors the Win32 call plus the inventory sidecar"
