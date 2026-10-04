@@ -101,6 +101,21 @@
       ]
     },
     {
+      "name": "the TP_IO fail-fast panics before the rundown instead of after it",
+      "file": "src/io.rs",
+      "expect": "caught",
+      "why": "`ThreadpoolIo::drop` reports a skipped rundown through `fail_fast_if_owed`, and the report must come AFTER the cancel and the drain. Panicking first unwinds past both, leaving the kernel writing into storage the frame is about to release -- the abandonment the feature exists to prevent, reached through the mechanism meant to prevent it. The patch moves the report to the top of `drop`, which still panics, so a guard that only checked 'the drop panics' would score it caught while the ordering it protects was gone. `drop_with_operations_outstanding_panics_only_after_draining_them` asserts the drain instead: every outstanding operation must have called back, which cannot happen after an unwind. Recorded because this state had NO coverage in a fail-fast build at all until M-T13 -- the behavioural test is compiled out under the feature, and the comment naming its replacement named a file that does not mention `ThreadpoolIo`.",
+      "find": [
+        "        let count = self.outstanding();",
+        "        crate::trace_record!(\"io\", \"drop-begin\", self.tp_io, count);"
+      ],
+      "replace": [
+        "        let count = self.outstanding();",
+        "        crate::trace_record!(\"io\", \"drop-begin\", self.tp_io, count);",
+        "        crate::obligation::fail_fast_if_owed(count > 0, \"ThreadpoolIo\", \"run_down\");"
+      ]
+    },
+    {
       "name": "the periodic member cancels its teardown instead of draining it",
       "file": "src/cleanup_group.rs",
       "expect": "caught",

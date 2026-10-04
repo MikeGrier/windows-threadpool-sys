@@ -69,10 +69,13 @@ records `hand-nocancel` -- making no cancel call at all -- failing 22 times in
 measurable. What `cancel_pending` does is perform the removal *earlier*, which
 removes the chance for the callback to run first.
 
-**The practical consequence**: avoiding `cancel_pending` buys no safety, and
-removing it from the API would buy none either. Draining is not one fix among
-several -- it is the only available shape of fix, because it is the only thing
-that empties the call the teardown cannot avoid making.
+**What that leaves**: the arm without `cancel_pending` failed at a rate the arm
+with it does not distinguish itself from, so nothing here separates the two on
+safety, and a teardown that simply omits the call is not observed to be better.
+What `cancel_pending` is observed to change is *when* the removal happens, not
+whether it happens. A fix therefore has to act on the call the teardown makes
+regardless; draining is the one this crate adopted, and these runs do not
+survey what else might.
 
 ## M-T4.7: a cleanup-group consumer is NOT immune
 

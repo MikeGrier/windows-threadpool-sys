@@ -45,8 +45,12 @@ in [default/](default); the private arms produced nothing to capture.
 
 Two readings:
 
-- **The stall requires the default process pool.** Any private pool eliminates
-  it.
+- **Which pool is the variable that moved.** The three private arms differ from
+  the control only in that, and across 12000 private-pool runs none failed,
+  where the control's own rate predicts roughly 39. The arms cover no minimum,
+  a minimum of one, and a minimum of four, on one host. That is the reach of
+  the observation: it does not establish that no private pool can stall, and
+  the mechanism behind the difference is what `M-T7` is still open to find.
 - **The thread minimum is not the variable.** `private-min0` sets no minimum at
   all and is already clean, so the arm the experiment was written around --
   a minimum of one or four -- adds nothing that `private-min0` had not already

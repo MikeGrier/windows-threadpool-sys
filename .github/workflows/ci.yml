@@ -120,6 +120,13 @@ jobs:
       - name: Run test-run-sabotage.ps1 (Windows PowerShell 5.1)
         shell: powershell
         run: ./tools/test-run-sabotage.ps1
+      # pwsh only, and deliberately not repeated under 5.1 like the step above:
+      # check-encoding.ps1 carries curated mojibake with no BOM, so 5.1 decodes
+      # it as ANSI and cannot parse it. The suite says so and refuses to run
+      # there rather than passing on one host and calling it covered.
+      - name: Run test-check-encoding.ps1
+        shell: pwsh
+        run: ./tools/test-check-encoding.ps1
 
   # The edition, MSRV, and pinned channel are declared once in Cargo.toml and
   # rust-toolchain.toml, then restated a dozen times -- in this file's `msrv`

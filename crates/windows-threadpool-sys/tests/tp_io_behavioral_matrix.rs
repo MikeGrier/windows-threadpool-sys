@@ -1041,8 +1041,12 @@ fn cancel_all_with_nothing_outstanding_is_benign() {
 #[test]
 // Dropping an endpoint with operations outstanding is this test's subject, so
 // it must keep doing exactly that. Under `fail-fast` that drop is *required* to
-// panic, so the armed behaviour is guarded by tests/fail_fast_teardown.rs
-// instead.
+// panic, so the armed behaviour is guarded by the sibling below.
+//
+// It used to say that guard lived in tests/fail_fast_teardown.rs. It did not:
+// that file covers waits and work items and mentions `ThreadpoolIo` nowhere, so
+// for as long as the claim stood, this state had NO coverage in a `fail-fast`
+// build -- the test was excluded and the named replacement did not exist.
 #[cfg(not(feature = "fail-fast"))]
 fn drop_with_operations_outstanding_cancels_drains_and_terminates() {
     const OPERATIONS: usize = 16;
@@ -1116,6 +1120,87 @@ fn drop_with_operations_outstanding_cancels_drains_and_terminates() {
         OPERATIONS,
         "every claimed payload must have been dropped"
     );
+}
+
+/// The same state under `fail-fast`, where the drop is required to panic.
+///
+/// Matrix state 5's armed half. `ThreadpoolIo::drop` reports a skipped rundown
+/// through `fail_fast_if_owed`, so with the feature on this drop panics -- and
+/// the sibling above is compiled out precisely because it asserts the drop
+/// returns normally.
+///
+/// **Asserts the drain happened before the panic, not merely that it panicked.**
+/// A fail-fast that unwound first would skip the cancel and the wait, leaving
+/// the kernel writing into storage this frame is about to release: the
+/// abandonment the feature exists to prevent, reached through the mechanism
+/// meant to prevent it. Every operation having called back is what shows the
+/// drain ran, and it cannot have run after the unwind.
+#[test]
+#[cfg(feature = "fail-fast")]
+fn drop_with_operations_outstanding_panics_only_after_draining_them() {
+    const OPERATIONS: usize = 16;
+
+    let (endpoint, _client) = pending_pipe("drop-outstanding-fail-fast");
+    let recorder = Recorder::new();
+    let seen = Arc::clone(&recorder);
+
+    let mut landed = vec![0_u8; OPERATIONS];
+    let base = landed.as_mut_ptr();
+
+    let tp = ThreadpoolIo::new(
+        endpoint,
+        move |completion: &IoCompletion| {
+            // SAFETY: only Operation<usize> is submitted below, claimed once.
+            let operation = unsafe { completion.claim::<usize>() };
+            seen.push(Record {
+                identity: completion.overlapped_ptr() as usize,
+                io_result: completion.io_result(),
+                bytes: completion.bytes_transferred(),
+                payload: *operation.payload(),
+            });
+        },
+        None,
+    )
+    .expect("create TP_IO");
+
+    for slot in 0..OPERATIONS {
+        let operation = Operation::new(slot);
+        // SAFETY: one 1-byte overlapped ReadFile per slot on a pipe carrying no
+        // data, so each stays pending; `landed` outlives the drop below, which
+        // blocks until every callback has run before it panics.
+        let submitted = unsafe {
+            tp.submit(operation, |handle, ov| {
+                issue_read(handle, ov, base.add(slot), 1)
+            })
+        };
+        assert!(
+            matches!(submitted, Submitted::Pending(_)),
+            "slot {slot}: expected pending, got {submitted:?}"
+        );
+    }
+    assert_eq!(tp.outstanding(), OPERATIONS, "reads must be outstanding");
+
+    let panicked = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| drop(tp))).is_err();
+    assert!(
+        panicked,
+        "dropping a TP_IO with operations outstanding must fail fast under the \
+         `fail-fast` feature -- the drop reports a skipped rundown"
+    );
+
+    let records = recorder.records();
+    assert_eq!(
+        records.len(),
+        OPERATIONS,
+        "the drain must complete before the panic: every outstanding operation \
+         has to have called back, which cannot happen after an unwind"
+    );
+    for record in &records {
+        assert_eq!(
+            record.io_result, ERROR_OPERATION_ABORTED,
+            "slot {} should have been aborted by rundown",
+            record.payload
+        );
+    }
 }
 
 /// The voluntary path -- `cancel_all` then `run_down` -- reaches the same state
