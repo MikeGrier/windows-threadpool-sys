@@ -189,3 +189,33 @@ function Invoke-NativeSplit {
         ExitCode = $code
     }
 }
+
+# Read a whole text file that another handle may still have open for writing.
+#
+# `[IO.File]::ReadAllText` opens with `FileShare.Read`, which REFUSES the open
+# while any other handle holds write access -- it throws "The process cannot
+# access the file ... because it is being used by another process". A file a
+# native command's stdout or stderr was redirected into is exactly such a file,
+# and it stays one for a moment after the process reports `HasExited`.
+#
+# Measured, both hosts, with nothing but `cmd /c echo` as the child: reading the
+# redirect file immediately after `HasExited` turned true failed 7 times in 40
+# with `ReadAllText`, and 0 times in 40 with this, which also saw the child's
+# complete output every time. So the lingering handle is not a grandchild still
+# writing; but if one ever were, this returns what has been written so far
+# rather than throwing. The caller that motivated it searches the text for the
+# message a build was declared to fail with, so a short read can only turn a
+# match into a miss -- withholding credit, never granting it.
+#
+# Found by CI: run-sabotage.ps1 read a build's stderr this way, and the harness
+# suite went red under 5.1 on a case whose logic was correct.
+function Read-SharedText {
+    param([Parameter(Mandatory = $true)][string] $Path)
+    $share = [System.IO.FileShare]::ReadWrite -bor [System.IO.FileShare]::Delete
+    $stream = New-Object System.IO.FileStream($Path, [System.IO.FileMode]::Open, [System.IO.FileAccess]::Read, $share)
+    try {
+        $reader = New-Object System.IO.StreamReader($stream)
+        try { return $reader.ReadToEnd() } finally { $reader.Dispose() }
+    }
+    finally { $stream.Dispose() }
+}

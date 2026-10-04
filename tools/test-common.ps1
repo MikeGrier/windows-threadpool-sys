@@ -247,6 +247,44 @@ Test-Case 'the flip does not escape when the command throws' {
     Assert-Equal 'Stop' $ErrorActionPreference 'the caller''s ErrorActionPreference after a throw'
 }
 
+# --- Read-SharedText: a file another handle still has open for writing --------
+#
+# Deterministic stand-in for the race CI hit: a redirect file is briefly still
+# open for writing after its process exits. Holding a write handle open here
+# makes that window permanent, so both directions are asserted on every run --
+# the control proves the condition is real (ReadAllText refuses it), and the
+# helper must read through it anyway.
+
+Test-Case 'ReadAllText refuses a file still open for writing (the control)' {
+    $path = Join-Path ([IO.Path]::GetTempPath()) "rst-control-$PID.txt"
+    $writer = New-Object IO.FileStream($path, 'Create', 'Write', 'ReadWrite')
+    try {
+        $bytes = [Text.Encoding]::UTF8.GetBytes('held')
+        $writer.Write($bytes, 0, $bytes.Length); $writer.Flush()
+        $threw = $false
+        try { $null = [IO.File]::ReadAllText($path) } catch { $threw = $true }
+        if (-not $threw) { throw 'ReadAllText read a write-held file, so this case no longer reproduces the race' }
+    }
+    finally { $writer.Dispose(); Remove-Item -LiteralPath $path -ErrorAction SilentlyContinue }
+}
+
+Test-Case 'Read-SharedText reads a file still open for writing' {
+    $path = Join-Path ([IO.Path]::GetTempPath()) "rst-shared-$PID.txt"
+    $writer = New-Object IO.FileStream($path, 'Create', 'Write', 'ReadWrite')
+    try {
+        $bytes = [Text.Encoding]::UTF8.GetBytes("error: GUARD FIRED`n")
+        $writer.Write($bytes, 0, $bytes.Length); $writer.Flush()
+        Assert-Equal "error: GUARD FIRED`n" (Read-SharedText -Path $path) 'text read through a held write handle'
+    }
+    finally { $writer.Dispose(); Remove-Item -LiteralPath $path -ErrorAction SilentlyContinue }
+}
+
+Test-Case 'Read-SharedText still throws for a file that does not exist' {
+    $threw = $false
+    try { $null = Read-SharedText -Path (Join-Path ([IO.Path]::GetTempPath()) "rst-absent-$PID-none.txt") } catch { $threw = $true }
+    if (-not $threw) { throw 'a missing file must not read as empty text' }
+}
+
 if (-not $SingleHost) {
     # The other host, which is the claim this file exists to make.
     $isSeven = $PSVersionTable.PSVersion.Major -ge 6

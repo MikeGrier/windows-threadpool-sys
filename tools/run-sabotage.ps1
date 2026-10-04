@@ -1292,11 +1292,14 @@ foreach ($sabotage in $selected) {
 
     # A refused-by-build entry is judged on the build alone. Read here, once,
     # rather than inside the switch, so the verdict and the message below agree.
+    # Read-SharedText, not ReadAllText: cargo has exited, but its redirected
+    # stderr can still be held open for a moment, and ReadAllText throws on that
+    # (see common.ps1). Measured as a red CI run under 5.1.
     $refusedAsNamed = $false
     if ($sabotage.expect -eq 'refused-by-build' -and $run.Outcome -eq 'build-failed') {
         $buildLog = "$transcript.build.err"
         if (Test-Path -LiteralPath $buildLog) {
-            $refusedAsNamed = ([System.IO.File]::ReadAllText($buildLog)).Contains($sabotage.buildError)
+            $refusedAsNamed = (Read-SharedText -Path $buildLog).Contains($sabotage.buildError)
         }
     }
 
