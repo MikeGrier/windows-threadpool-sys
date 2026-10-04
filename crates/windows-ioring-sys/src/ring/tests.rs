@@ -912,10 +912,16 @@ fn the_wait_can_be_supplied_as_a_trait_object() {
 /// "safe to drop" -- while an owned operation's payload was still held and, for
 /// all the ring knows, still being written into by the kernel.
 ///
-/// Reported as an **error** rather than `Ok(false)`: `Ok(false)` means "not
-/// finished, call again", and `run_down` does exactly that with no deadline, so
-/// answering that way would hang teardown rather than lie to it. Nothing about
-/// waiting can retire an entry whose completion has already been accounted for.
+/// Reported as `Ok(false)` -- "not finished, call again" -- and NOT as an
+/// error. An earlier version of this guard returned an error here, reasoning
+/// that a completion already accounted for could never come back to retire its
+/// entry. That conflated the count with the identity: `record_completion` is
+/// not keyed by `user_data`, so the unmatched CQE consumed a unit of count and
+/// not any particular operation's future completion. A ring one drain away from
+/// quiescing was refused, and refused again on every retry.
+///
+/// So this test pins the half that matters and nothing more: whatever rundown
+/// reports, it must not report `true`.
 #[test]
 fn a_completion_that_retires_nothing_is_not_quiescence() {
     use super::{Entry, Held};
@@ -949,12 +955,12 @@ fn a_completion_that_retires_nothing_is_not_quiescence() {
     );
     assert_eq!(ring.held(), 1, "while the inventory still holds a payload");
 
-    let error = ring
+    let quiesced = ring
         .run_down_within(Duration::from_millis(0))
-        .expect_err("a counter the inventory contradicts is not quiescence");
+        .expect("a bound that expires is not an error");
     assert!(
-        error.to_string().contains("inventory is not empty"),
-        "the error must name what it found, not merely fail: {error}"
+        !quiesced,
+        "rundown must not report quiescence while the inventory still holds a payload"
     );
 
     // Dropping this ring would assert on the null handle's close, which is a

@@ -917,17 +917,6 @@ impl<T, X> IoRing<T, X> {
         self.accounting.outstanding() == 0 && self.inventory.is_empty()
     }
 
-    /// The counter claims quiescence that the inventory contradicts.
-    ///
-    /// Distinct from "not quiescent yet", and the distinction decides what a
-    /// caller should do: no amount of waiting clears this, because whatever
-    /// completion would have retired the entry has already been accounted for
-    /// by the unmatched CQE. Nothing further is owed, so nothing further will
-    /// arrive.
-    fn counter_contradicts_inventory(&self) -> bool {
-        self.accounting.outstanding() == 0 && !self.inventory.is_empty()
-    }
-
     /// The version this ring was created at.
     #[must_use]
     pub fn version(&self) -> RingVersion {
@@ -1515,20 +1504,26 @@ impl<T, X> IoRing<T, X> {
             if self.is_quiescent() {
                 return Ok(true);
             }
-            if self.counter_contradicts_inventory() {
-                // Deliberately an error rather than `Ok(false)`. `Ok(false)`
-                // means "not finished, call again", and `run_down` does exactly
-                // that with no deadline -- so reporting a state that waiting
-                // cannot clear as `Ok(false)` would hang teardown instead of
-                // lying to it, which trades one defect for a worse one. The
-                // caller is told, and `Drop`'s error path leaks the payloads
-                // rather than freeing them.
-                return Err(io::Error::other(
-                    "IoRing rundown: nothing is outstanding but the inventory is not empty, so a \
-                     completion was accounted for that retired no operation; the payloads it \
-                     holds are not safe to free",
-                ));
-            }
+            // Note what is NOT here: a diagnosis of "the counter says zero but
+            // the inventory does not". An earlier revision returned an error on
+            // sight of that, reasoning that a completion already accounted for
+            // could never come back to retire its entry. That conflated the
+            // COUNT with the IDENTITY, and it is wrong.
+            //
+            // `Accounting::record_completion` is not keyed by `user_data`, so
+            // an unmatched CQE decrements the counter without consuming any
+            // particular operation's future completion. With A and B
+            // outstanding, a foreign CQE plus A's real one drives the counter to
+            // zero while B's is still owed -- and B's will arrive, because every
+            // SQE that queues produces exactly one completion (M10.2). Erroring
+            // there refused a ring that was one drain away from quiescing, and
+            // did it again on every retry, which contradicted the resumable
+            // contract stated above.
+            //
+            // So the INVENTORY is what rundown waits on and the counter is only
+            // an accelerator. Waiting on the inventory terminates under exactly
+            // the invariant that already justifies this loop having no overall
+            // bound.
             // `checked_add` rather than `+`, for the reason `pop_within_with`
             // records: `Instant + Duration` panics on overflow, so
             // `Duration::MAX` -- the honest spelling of "no deadline" -- would
