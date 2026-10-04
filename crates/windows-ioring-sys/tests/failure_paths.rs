@@ -376,8 +376,13 @@ fn event_delivery_hands_a_failed_completion_to_the_callback() {
         let mut batch = scope.batch();
         // A cancel naming a `UserData` that is not outstanding: a real error,
         // reported through the completion rather than at push time.
+        //
+        // `cancel_owned_raw` rather than `cancel_owned`, because the whole
+        // point is a target no `OperationId` names -- `cancel_owned` takes an
+        // `OperationId` and checks it came from this ring, which a fabricated
+        // integer could not satisfy and should not be able to.
         batch
-            .cancel_owned(&file, 0xDEAD_BEEF, ())
+            .cancel_owned_raw(&file, 0xDEAD_BEEF, ())
             .expect("queue the cancel");
         batch.submit().expect("submit the cancel");
 

@@ -10,7 +10,7 @@
 
 use std::io::Write;
 
-use windows_ioring_sys::{Batch, FlushCoverage, FlushMode, IoRing, PushOptions};
+use windows_ioring_sys::{Batch, FlushCoverage, FlushMode, IoRing, PushOptions, SharedFile};
 
 const LEN: usize = 4096;
 
@@ -237,4 +237,91 @@ fn a_raw_push_holds_nothing_and_an_owned_push_holds_its_payload() {
 
     drop(file);
     let _ = std::fs::remove_file(&path);
+}
+
+#[test]
+fn a_cancel_refuses_an_operation_id_minted_by_a_different_ring() {
+    // Every ring hands out `UserData` from its own counter starting at the same
+    // value, so one integer legitimately names a different operation on each
+    // ring. While `cancel_owned` took the bare integer, an identity from one
+    // ring could cancel an unrelated operation on another -- silently, and most
+    // readily when both address the same file, which is why both rings here are
+    // given the same one.
+    //
+    // BOTH directions. A `cancel_owned` that refused every identity would
+    // satisfy the rejection on its own, so the acceptance below is what stops
+    // this test passing for the wrong reason.
+    let path = common::TempPath::new("inventory", "cross-ring-cancel");
+    std::fs::write(&path, b"x").expect("create fixture");
+    let file = SharedFile::new(
+        std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(&path)
+            .expect("open fixture")
+            .into(),
+    );
+
+    let mut home: IoRing<Vec<u8>, &'static str> =
+        IoRing::with_inventory(8, 8).expect("create the home ring");
+    let mut foreign: IoRing<Vec<u8>, &'static str> =
+        IoRing::with_inventory(8, 8).expect("create the foreign ring");
+
+    // An identity the *foreign* ring minted. It is submitted and drained rather
+    // than left pending, because what this test needs from it is which
+    // counter produced it, not that it is still live.
+    let foreign_id = {
+        let mut batch = Batch::new(&mut foreign);
+        let id = batch
+            .cancel_owned_raw(&file, 123_456, "foreign")
+            .expect("queue a cancel on the foreign ring");
+        batch.submit_and_wait(1, 5_000).expect("submit and wait");
+        id
+    };
+    // `pop_within`, not a `try_pop` straight after the submit: RS-P-5 leaves
+    // the kernel free to complete later than the submit returns, so unwrapping
+    // `try_pop`'s `Option` here would assert a guarantee this crate does not
+    // make. `response_space_census` refuses that shape at the source.
+    foreign
+        .pop_within(std::time::Duration::from_secs(30))
+        .expect("pop_within")
+        .expect("the foreign ring's cancel completes");
+
+    // The rejection. Nothing is queued by a refused push, so there is nothing
+    // to drain afterwards.
+    let refused = {
+        let mut batch = Batch::new(&mut home);
+        batch
+            .cancel_owned(&file, foreign_id, "home")
+            .expect_err("an OperationId from another ring must be refused")
+    };
+    assert_eq!(
+        refused.kind(),
+        std::io::ErrorKind::InvalidInput,
+        "a foreign identity is bad input, not a kernel failure"
+    );
+
+    // The acceptance.
+    let home_id = {
+        let mut batch = Batch::new(&mut home);
+        let id = batch
+            .cancel_owned_raw(&file, 654_321, "home")
+            .expect("queue a cancel on the home ring");
+        batch.submit_and_wait(1, 5_000).expect("submit and wait");
+        id
+    };
+    home.pop_within(std::time::Duration::from_secs(30))
+        .expect("pop_within")
+        .expect("the home ring's first cancel completes");
+
+    {
+        let mut batch = Batch::new(&mut home);
+        batch
+            .cancel_owned(&file, home_id, "home")
+            .expect("an OperationId this ring minted must be accepted");
+        batch.submit_and_wait(1, 5_000).expect("submit and wait");
+    }
+    home.pop_within(std::time::Duration::from_secs(30))
+        .expect("pop_within")
+        .expect("the accepted cancel completes");
 }

@@ -1243,40 +1243,30 @@ impl<'ring, T, X> Batch<'ring, T, X> {
         }
     }
 
-    /// Queue a read of `buffer.bytes_len()` bytes from `file` at `offset`.
+    /// Queue a write of `buffer.bytes_len()` bytes to `file` at `offset`,
+    /// whose buffer the **ring** holds (`D-71`, `D-73`).
     ///
-    /// Prefer [`Batch::read_owned`] unless `file` needs to address a raw
-    /// `FileRef` directly, without `SharedFile`'s `Arc` bookkeeping.
+    /// The raw counterpart to [`Batch::write_owned`]: prefer that unless `file`
+    /// needs to address a raw `FileRef` directly, without `SharedFile`'s `Arc`
+    /// bookkeeping.
     ///
     /// # Safety
     ///
     /// If `file` is [`FileRef::Raw`], the handle must be valid, opened with
-    /// read access, and must remain valid -- not closed, not reused for a
-    /// different object -- until this operation's completion is observed
-    /// (via a popped [`Completion`]) or until the
-    /// ring runs down (M8, PR #20 review response). A [`FileRef::Registered`]
-    /// target needs none of this.
+    /// write access, and must remain valid -- not closed, not reused for a
+    /// different object -- until this operation's completion is observed (via a
+    /// popped [`Completion`]) or until the ring runs down (M8, PR #20 review
+    /// response). A [`FileRef::Registered`] target needs none of this.
     ///
     /// # Errors
     ///
-    /// [`io::ErrorKind::Unsupported`] if the ring was not probed as
-    /// supporting [`Op::Read`]; [`io::ErrorKind::InvalidInput`] if the
-    /// buffer is longer than `u32::MAX`; an [`crate::IoRingError`] wrapping
+    /// [`io::ErrorKind::Unsupported`] if the ring was not probed as supporting
+    /// [`Op::Write`]; [`io::ErrorKind::InvalidInput`] if the buffer is longer
+    /// than `u32::MAX`; an [`crate::IoRingError`] wrapping
     /// `IORING_E_SUBMISSION_QUEUE_FULL` if the queue has no room (M3.3, not
     /// auto-flushed -- see [`Batch`]'s own docs); or any other error from
-    /// `BuildIoRingReadFile`. On any error the buffer is dropped normally,
+    /// `BuildIoRingWriteFile`. On any error the buffer is dropped normally,
     /// not leaked or handed back.
-    /// Queue a write whose buffer the **ring** holds (`D-71`, `D-73`).
-    ///
-    /// The inventory counterpart to [`Batch::write_raw_owned`].
-    ///
-    /// # Safety
-    ///
-    /// As [`Batch::write_raw_owned`].
-    ///
-    /// # Errors
-    ///
-    /// As [`Batch::write_raw_owned`].
     pub unsafe fn write_raw_owned(
         &mut self,
         file: impl Into<FileRef>,
@@ -1316,13 +1306,13 @@ impl<'ring, T, X> Batch<'ring, T, X> {
     /// Queue a read against a guarded file, with the **ring** holding both the
     /// buffer and the guard (`D-73`).
     ///
-    /// The inventory counterpart to [`Batch::read_owned`]. The guard goes into the
-    /// ring's own slot rather than into `T`, which is what keeps the caller's
-    /// parameters free of this crate's internals.
+    /// The guarded counterpart to [`Batch::read_raw_owned`]. The guard goes into
+    /// the ring's own slot rather than into `T`, which is what keeps the
+    /// caller's parameters free of this crate's internals.
     ///
     /// # Errors
     ///
-    /// As [`Batch::read_owned`].
+    /// As [`Batch::read_raw_owned`].
     pub fn read_owned<F: FileTarget>(
         &mut self,
         file: &F,
@@ -1363,11 +1353,11 @@ impl<'ring, T, X> Batch<'ring, T, X> {
     /// Queue a write against a guarded file, with the **ring** holding both
     /// the buffer and the guard (`D-73`).
     ///
-    /// The inventory counterpart to [`Batch::write_owned`].
+    /// The guarded counterpart to [`Batch::write_raw_owned`].
     ///
     /// # Errors
     ///
-    /// As [`Batch::write_owned`].
+    /// As [`Batch::write_raw_owned`].
     pub fn write_owned<F: FileTarget>(
         &mut self,
         file: &F,
@@ -1454,22 +1444,33 @@ impl<'ring, T, X> Batch<'ring, T, X> {
     /// Queue a read whose buffer the **ring** holds, returning the operation's
     /// name (`D-71`, `D-73`).
     ///
-    /// The inventory counterpart to [`Batch::read_raw_owned`]. The caller hands over
-    /// the buffer and its sidecar and receives an [`OperationId`], which names
-    /// the operation and grants nothing; the buffer comes back from
-    /// [`IoRing::try_pop`] and from nowhere else. A consumer that never
-    /// holds a token cannot lose one, which is the whole of `D-55`.
+    /// The raw counterpart to [`Batch::read_owned`]: prefer that unless `file`
+    /// needs to address a raw `FileRef` directly, without `SharedFile`'s `Arc`
+    /// bookkeeping. The caller hands over the buffer and its sidecar and
+    /// receives an [`OperationId`], which names the operation and grants
+    /// nothing; the buffer comes back from [`IoRing::try_pop`] and from nowhere
+    /// else. A consumer that never holds a token cannot lose one, which is the
+    /// whole of `D-55`.
     ///
     /// # Safety
     ///
-    /// As [`Batch::read_raw_owned`]: the caller keeps `file` valid until the
-    /// operation completes.
+    /// If `file` is [`FileRef::Raw`], the handle must be valid, opened with
+    /// read access, and must remain valid -- not closed, not reused for a
+    /// different object -- until this operation's completion is observed (via a
+    /// popped [`Completion`]) or until the ring runs down (M8, PR #20 review
+    /// response). A [`FileRef::Registered`] target needs none of this.
     ///
     /// # Errors
     ///
-    /// As [`Batch::read_raw_owned`]. On any error the buffer is returned to the
-    /// caller inside the error-free path's `Err`, rather than stowed -- the
-    /// SQE never queued, so nothing will ever complete to reclaim it.
+    /// [`io::ErrorKind::Unsupported`] if the ring was not probed as supporting
+    /// [`Op::Read`]; [`io::ErrorKind::InvalidInput`] if the buffer is longer
+    /// than `u32::MAX`; an [`crate::IoRingError`] wrapping
+    /// `IORING_E_SUBMISSION_QUEUE_FULL` if the queue has no room (M3.3, not
+    /// auto-flushed -- see [`Batch`]'s own docs); or any other error from
+    /// `BuildIoRingReadFile`. On any error the buffer is **dropped normally**,
+    /// not leaked and not handed back: the return carries only an
+    /// [`io::Error`], and a `Build*` that failed queued no SQE, so nothing will
+    /// ever complete to reclaim it.
     pub unsafe fn read_raw_owned(
         &mut self,
         file: impl Into<FileRef>,
@@ -1661,15 +1662,15 @@ impl<'ring, T, X> Batch<'ring, T, X> {
 
     /// Queue a flush, with the **ring** holding the file guard (`D-73`).
     ///
-    /// The inventory counterpart to [`Batch::flush_owned`]. There is no buffer, so
-    /// nothing comes back as a payload -- the pop yields `None` for it, which
-    /// is the shape `M28.5` will settle for the tokenless pushes generally.
-    /// The guard still has to outlive the operation, and the ring is what
-    /// holds it.
+    /// The guarded counterpart to [`Batch::flush_raw_owned`]. There is no
+    /// buffer, so nothing comes back as a payload -- the pop yields `None` for
+    /// it, which is the shape `M28.5` will settle for the tokenless pushes
+    /// generally. The guard still has to outlive the operation, and the ring is
+    /// what holds it.
     ///
     /// # Errors
     ///
-    /// As [`Batch::flush_owned`].
+    /// As [`Batch::flush_raw_owned`].
     pub fn flush_owned<F: FileTarget>(
         &mut self,
         file: &F,
@@ -1699,19 +1700,60 @@ impl<'ring, T, X> Batch<'ring, T, X> {
         self.finish_owned(hr, id, None, extra, held)
     }
 
-    /// Queue a cancellation, with the **ring** holding the file guard
-    /// (`D-73`).
+    /// Queue a cancellation of `target`, with the **ring** holding the file
+    /// guard (`D-73`).
     ///
-    /// The inventory counterpart to [`Batch::cancel_owned`]. `target` is the
-    /// `UserData` of the operation to cancel --
-    /// [`OperationId::user_data`](crate::OperationId::user_data) is where a
-    /// caller gets one, which is the whole reason a push returns a name at
-    /// all.
+    /// The inventory counterpart to [`Batch::cancel_raw`].
+    ///
+    /// `target` is an [`OperationId`] rather than a bare `UserData`, and this
+    /// checks that **this** ring minted it. Every ring hands out `UserData`
+    /// from its own counter starting at the same value, so one integer
+    /// legitimately names a different operation on each ring -- which is what
+    /// [`OperationId::ring_id`] exists to tell apart. Accepting the integer
+    /// would therefore let an identity from one ring cancel an unrelated
+    /// operation on another, silently, and most readily when both address the
+    /// same file. This is the same check [`Batch`] already applies to a
+    /// [`RegisteredFile`] belonging to the wrong ring.
+    ///
+    /// To cancel a `UserData` this ring never minted an [`OperationId`] for,
+    /// use [`Batch::cancel_owned_raw`], which says so at the call site.
     ///
     /// # Errors
     ///
-    /// As [`Batch::cancel_owned`].
+    /// [`io::ErrorKind::InvalidInput`] if `target` was minted by a different
+    /// ring; otherwise as [`Batch::cancel_raw`].
     pub fn cancel_owned<F: FileTarget>(
+        &mut self,
+        file: &F,
+        target: OperationId,
+        extra: X,
+    ) -> io::Result<OperationId> {
+        if target.ring_id() != self.ring.ring_id() {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "this OperationId was minted by a different IoRing",
+            ));
+        }
+        self.cancel_owned_raw(file, target.user_data(), extra)
+    }
+
+    /// [`Batch::cancel_owned`] against a raw `UserData`, with no ring check.
+    ///
+    /// For the targets an [`OperationId`] cannot express: a `UserData` observed
+    /// out of band, or -- as this crate's own tests use it -- one chosen
+    /// precisely *because* nothing is outstanding under it, to exercise the
+    /// `ERROR_NOT_FOUND` the kernel reports through the cancel's own
+    /// completion.
+    ///
+    /// Safe rather than `unsafe`, because a cancel returns no memory: naming
+    /// the wrong operation costs a wrong cancellation, not a use-after-free.
+    /// It is a separate method so that cost is visible at the call site instead
+    /// of hidden inside an integer conversion.
+    ///
+    /// # Errors
+    ///
+    /// As [`Batch::cancel_raw`].
+    pub fn cancel_owned_raw<F: FileTarget>(
         &mut self,
         file: &F,
         target: usize,
@@ -1724,7 +1766,7 @@ impl<'ring, T, X> Batch<'ring, T, X> {
             guard: Some(file.guard().into()),
             registration: None,
         };
-        // SAFETY: as `cancel`.
+        // SAFETY: as `cancel_raw`.
         let hr =
             unsafe { crate::sys::build_cancel(self.ring.raw_handle(), handle, target, user_data) };
         self.finish_owned(hr, id, None, extra, held)
@@ -1951,15 +1993,19 @@ impl<'ring, T, X> Batch<'ring, T, X> {
 
     /// Queue a read of `span.len` bytes from `file` at `file_offset`, into
     /// `span`'s byte offset of `registration`'s buffer at `span.buffer_index`,
-    /// instead of handing over a fresh owned buffer (M5.2).
+    /// instead of handing over a fresh owned buffer (M5.2), with the **ring**
+    /// holding the registration's use count (`D-73`).
     ///
-    /// The entry is retired once its completion is
-    /// observed, exactly like [`Batch::read_owned`]'s -- but claiming it recovers
-    /// no buffer, only releases this use against `registration`'s own drop
-    /// check (M5.3). Read the transferred bytes back from `registration`
-    /// itself afterward, for example via a caller-side accessor into the
-    /// buffer it was constructed from. Prefer [`Batch::read_registered_owned`]
+    /// The raw counterpart to [`Batch::read_registered_owned`]: prefer that
     /// unless `file` needs to address a raw `FileRef` directly.
+    ///
+    /// The buffer belongs to the registration rather than to the caller, so
+    /// there is no payload to give back -- what the ring holds is the *use*,
+    /// which keeps the registration from being torn down while the kernel is
+    /// writing into it. That is `Held.registration`, released at the pop that
+    /// completes this operation (M5.3). Read the transferred bytes back from
+    /// `registration` itself afterward, for example via a caller-side accessor
+    /// into the buffer it was constructed from.
     ///
     /// # Safety
     ///
@@ -1969,23 +2015,6 @@ impl<'ring, T, X> Batch<'ring, T, X> {
     ///
     /// As [`Batch::read_raw_owned`], plus [`io::ErrorKind::InvalidInput`] if
     /// `span.buffer_index` is out of range for `registration`.
-    /// Queue a read into a registered buffer, with the **ring** holding the
-    /// registration's use count (`D-73`).
-    ///
-    /// The inventory counterpart to [`Batch::read_registered_raw_owned`]. The buffer
-    /// belongs to the registration rather than to the caller, so there is no
-    /// payload to give back -- what the ring holds is the *use*, which keeps
-    /// the registration from being torn down while the kernel is writing into
-    /// it. That is `Held.registration`, released at the pop that completes
-    /// this operation.
-    ///
-    /// # Safety
-    ///
-    /// As [`Batch::read_registered_raw_owned`].
-    ///
-    /// # Errors
-    ///
-    /// As [`Batch::read_registered_raw_owned`].
     pub unsafe fn read_registered_raw_owned<B: IoBufMut>(
         &mut self,
         file: impl Into<FileRef>,
@@ -2022,12 +2051,12 @@ impl<'ring, T, X> Batch<'ring, T, X> {
     /// Queue a read into a registered buffer against a guarded file, with the
     /// **ring** holding both the use and the guard (`D-73`).
     ///
-    /// The inventory counterpart to [`Batch::read_registered_owned`], and the only
-    /// shape that fills both halves of `Held`.
+    /// The guarded counterpart to [`Batch::read_registered_raw_owned`], and the
+    /// only shape that fills both halves of `Held`.
     ///
     /// # Errors
     ///
-    /// As [`Batch::read_registered_owned`].
+    /// As [`Batch::read_registered_raw_owned`].
     pub fn read_registered_owned<B: IoBufMut, F: FileTarget>(
         &mut self,
         file: &F,
