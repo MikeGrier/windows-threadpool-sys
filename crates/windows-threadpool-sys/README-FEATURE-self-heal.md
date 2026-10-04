@@ -42,10 +42,17 @@ linked rather than restated so that the figures have one home.
 ## What this crate's normal paths do about it
 
 **Nothing, because they do not need to.** `Drop`, `stop_and_drain`, and the
-cleanup group's release all *drain* -- they let the queued callback run, which
-clears the association, so the close that follows has nothing to remove. That is
-structural, not probabilistic: the drain path cannot reach the removal primitive
-on any code path, whatever the timing.
+cleanup group's release all *drain*: they pass `FALSE` to the rundown, so they
+wait for what is queued instead of asking for its removal. That is structural,
+not probabilistic -- no teardown path reaches the removal primitive, whatever
+the timing, and it is the primitive that can sever the notification.
+
+The guarantee is about that primitive, not about every queued callback running.
+A timer teardown disarms before it drains, and a disarm discards a tick already
+queued (`disarming_cancels_a_queued_tick_which_a_waits_disarm_does_not` for the
+one-shot, `stopping_a_periodic_timer_discards_a_tick_that_is_already_queued` for
+the periodic). The discard a *disarm* performs is not the removal this hazard
+turns on.
 
 `self-heal` exists for the one case the drain does not cover: a caller who
 explicitly asks to cancel.

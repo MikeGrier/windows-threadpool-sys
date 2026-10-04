@@ -112,12 +112,22 @@ the caller to remember:
 - **Teardown is ordered.** Every object disarms or cancels before draining
   callbacks, then releases its callback context last, so a callback can never
   outlive the state it captured.
-- **Teardown drains rather than discarding.** `Drop` and `stop_and_drain` let a
-  queued callback run instead of asking the kernel to throw it away. That is
-  partly because discarding work the caller asked for is not finalisation, and
-  partly because the discard can sever a completion port's notification to its
-  worker factory -- after which that pool dispatches nothing at all. Draining
-  cannot reach the primitive responsible, on any path.
+- **Teardown never asks the kernel to discard.** `Drop` and `stop_and_drain`
+  pass `FALSE` to the `WaitFor*Callbacks` rundown, so they wait for what is
+  queued rather than requesting its removal. That is partly because discarding
+  work the caller asked for is not finalisation, and partly because the removal
+  primitive can sever a completion port's notification to its worker factory --
+  after which that pool dispatches nothing at all. What is structural is that
+  no teardown path reaches that primitive.
+
+  **That is narrower than "every queued callback runs", and the difference is
+  the timers.** A timer teardown disarms before it drains, and a disarm
+  discards a tick that is already queued -- measured for the one-shot by
+  `disarming_cancels_a_queued_tick_which_a_waits_disarm_does_not` and for the
+  periodic by `stopping_a_periodic_timer_discards_a_tick_that_is_already_queued`.
+  A wait's disarm does not, which is the asymmetry those test names carry. So
+  do not rely on a queued *tick* running during teardown; the guarantee here is
+  about which primitive the rundown invokes.
 
 ## Features
 

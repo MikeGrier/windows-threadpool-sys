@@ -928,6 +928,16 @@ which stands in every other respect.
 2. **Teardown drains rather than cancels**: `WaitForThreadpool*Callbacks` with
    `fCancelPendingCallbacks` **FALSE**, not TRUE. A queued callback is work the
    caller asked for, and discarding it is not "finalised".
+
+   This is a rule about which primitive the rundown invokes, and it is not the
+   same as "every queued callback runs". Both timer types disarm before they
+   drain, and a timer's disarm discards a tick that is already queued -- see
+   [Which clock the stamps are on](#which-clock-the-stamps-are-on-and-which-way-its-error-falls)'s
+   neighbours and the two measurements named in
+   [README.md](crates/windows-threadpool-sys/README.md). A wait's disarm does
+   not, which is the asymmetry the rundown rule has to be stated independently
+   of. What no teardown path does is ask for the *removal*, which is the
+   operation the hazard below turns on.
 3. **The caller can pay the cost earlier, at a point they choose.** `Drop` is
    the worst place to meet a blocking call, because its position in the
    caller's control flow is often accidental. Every object that blocks in
@@ -941,8 +951,17 @@ which stands in every other respect.
 
 This decision was taken on the semantic argument above -- discarding work the
 caller asked for is not finalisation -- and that argument stands on its own.
-Measurement since has found that draining is also the **only available fix** for
-a process-wide hazard, which was not known when the rule was written.
+Measurement since has found that the rule also avoids a process-wide hazard that
+was not known when it was written, and the structural argument below is why it
+is the shape of fix this crate took.
+
+It is not the *only* conceivable fix, and an earlier revision of this paragraph
+said it was. This crate ships a second mitigation for the same hazard --
+`self-heal`, which repairs a pool a cancellation may already have wedged -- so
+the claim was contradicted by the next feature along. What the argument below
+establishes is narrower and still decisive for the teardown path: no choice of
+*entry point* avoids the dangerous call, so a fix there has to empty it rather
+than dodge it.
 
 Cancelling asks the kernel to remove a completion packet that may already have
 been delivered (`IopCancelWaitCompletionPacket` with `RemoveSignaledPacket` set).
