@@ -230,12 +230,19 @@ impl<T: Send + 'static> Drop for Servicer<T> {
     fn drop(&mut self) {
         // One teardown implementation with two triggers; `shut_down` is
         // idempotent, so an explicit call beforehand costs nothing.
+        //
+        // No drain is needed after it, and one used to be here. `shut_down`
+        // ends with `ThreadpoolWork::cancel_pending`, which returns only once
+        // nothing is queued and nothing is executing -- and which now settles
+        // the drain obligation for exactly that reason, so the doorbell owes
+        // nothing by the time this returns. The second `stop_and_drain` added
+        // with the draining teardown was justified by an obligation that is no
+        // longer left behind; it bought a second native pool synchronisation on
+        // every drop and nothing else. Measured rather than assumed: with
+        // `cancel_pending`'s settle removed, this crate's suite panics on the
+        // obligation across many tests under `fail-fast`; with it, the suite is
+        // green without any drain here.
         self.shut_down();
-        // The doorbell is submitted, so it owes a drain. Field drop would make
-        // that drain anyway -- this adds no blocking -- but leaving it there
-        // leaves the obligation undischarged, which `windows-threadpool-sys`
-        // reports and, under its `fail-fast` feature, panics on.
-        self.work.stop_and_drain();
     }
 }
 
