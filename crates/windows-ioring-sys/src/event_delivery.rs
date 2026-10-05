@@ -12,19 +12,25 @@ use windows_threadpool_sys::wait::{ThreadpoolWait, WaitableHandle};
 use crate::batch::Batch;
 use crate::capability::RingVersion;
 use crate::ring::{Completion, IoRing, Op, RingInfo};
+/// What a delivery hands a caller for each completion: the completion, and
+/// whatever the ring was holding for it, exactly as [`IoRing::try_pop`]
+/// returns them.
+///
+/// The two `Option`s answer different questions, and a callback must not
+/// collapse them. The **outer** `None` means the push created no entry at all
+/// -- a `_raw` flush or cancel, or [`IoRing::push_raw`]. `Some((None, extra))`
+/// is an `_owned` push that never had a buffer, a flush or a cancellation, and
+/// its sidecar still arrives: discarding it on the inner `None` would lose
+/// which group of writes the flush belonged to. `try_pop`'s "What each `None`
+/// means" is the authoritative statement.
+type OnCompletion<T, X> = dyn Fn(Completion, Option<(Option<T>, X)>) + Send + Sync;
+
 /// Pop every completion currently available and hand each to `on_completion`.
 ///
 /// Each pop is its own short lock: `on_completion` always runs with the
 /// mutex released, so a slow callback does not block a submitter, and a
 /// callback that calls [`EventDelivery::ring`] and locks it itself cannot
 /// deadlock against this loop.
-/// What a delivery hands a caller for each completion.
-///
-/// The completion itself, plus whatever the ring was holding for it -- `None`
-/// when the push carried nothing to give back (`M28.5`), or when this ring was
-/// never holding anything for that identity.
-type OnCompletion<T, X> = dyn Fn(Completion, Option<(Option<T>, X)>) + Send + Sync;
-
 fn drain<T, X>(ring: &Mutex<IoRing<T, X>>, on_completion: &OnCompletion<T, X>) {
     loop {
         let popped = {

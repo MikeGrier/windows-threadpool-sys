@@ -23,12 +23,14 @@ use windows_ioring_sys::{IoBufMut, IoRing};
 /// towards, so every one came back untouched and the equality looked like a
 /// contract. It was a property of the inputs.
 ///
-/// Measured here by asking for shapes that are NOT already normalised: a
-/// request of 9 submission entries comes back as 16, and 1 or 3 come back as 8.
-/// The completion queue arrives at twice whatever the submission queue actually
-/// became, not twice what was asked for -- so 9/9 yields 16/32, and a caller
-/// who believed the old assertion would have sized a buffer against a number
-/// the ring does not have.
+/// What discriminates is asking for shapes that are NOT already normalised: a
+/// submission depth that is not a power of two, and a completion depth below
+/// twice the submission depth. Neither can come back unchanged, so an
+/// assertion of equality fails on them, and a caller who believed it would
+/// have sized a buffer against a number the ring does not have. The exact
+/// depths they come back as are the host's to choose, and deliberately not
+/// stated here: nothing below asserts them, so a sentence naming them could
+/// go false while the test stayed green.
 ///
 /// What is asserted is therefore the relationship, not the values:
 ///
