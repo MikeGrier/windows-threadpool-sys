@@ -198,3 +198,34 @@ pub fn remote_numa_node(topology: &MachineMemoryTopology, local: Option<NumaNode
         RemoteNode::Unnamed
     }
 }
+
+/// Where one domain's memory goes under `--placement remote`, or the outcome
+/// that refuses it.
+///
+/// One definition for both callers in `main` -- the single run and
+/// `--compare` -- because two copies of this decision is how they came to
+/// disagree. The single run honoured [`RemoteNode::SameAsLocal`]'s fallback
+/// and `--compare` refused it, so on an ordinary single-node machine
+/// `--compare --placement remote` failed straight after the preflight had said
+/// it would measure local placement (PR #113 review).
+///
+/// - [`RemoteNode::Other`] places on that node.
+/// - [`RemoteNode::SameAsLocal`] places locally. No other node exists, and the
+///   preflight has said so, so this is the honest answer rather than a silent
+///   substitution.
+/// - [`RemoteNode::Unnamed`] and [`RemoteNode::LocalUnknown`] are refused and
+///   handed back, because placing locally there would produce a remote row that
+///   measured a local one.
+pub fn remote_placement(
+    outcome: RemoteNode,
+    local: Option<NumaNode>,
+) -> Result<Option<NumaNode>, RemoteNode> {
+    match outcome {
+        RemoteNode::Other(node) => Ok(Some(node)),
+        RemoteNode::SameAsLocal => Ok(local),
+        RemoteNode::Unnamed | RemoteNode::LocalUnknown => Err(outcome),
+    }
+}
+
+#[cfg(test)]
+mod tests;

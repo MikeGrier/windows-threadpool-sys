@@ -252,12 +252,19 @@ fn run_arrangement(
     // something it was not, which is worse than no measurement. Refusing is the
     // honest answer, and refusing here covers both callers rather than only the
     // one that happened to check.
+    //
+    // Which outcomes refuse is `plan::remote_placement`'s to say, for both
+    // callers. A single-node machine (`SameAsLocal`) places locally: there is
+    // no other node, and the preflight has already said so. Refusing it here
+    // made `--compare --placement remote` fail on every single-node machine,
+    // straight after being told it would run (PR #113 review).
     let placement: Vec<_> = if remote_placement {
         let mut resolved = Vec::with_capacity(plans.len());
         for domain_plan in &plans {
-            match plan::remote_numa_node(topology, domain_plan.local_numa_node) {
-                plan::RemoteNode::Other(node) => resolved.push(Some(node)),
-                refused => {
+            let outcome = plan::remote_numa_node(topology, domain_plan.local_numa_node);
+            match plan::remote_placement(outcome, domain_plan.local_numa_node) {
+                Ok(node) => resolved.push(node),
+                Err(refused) => {
                     return Err(io::Error::new(
                         io::ErrorKind::Unsupported,
                         format!(
@@ -643,15 +650,13 @@ fn main() -> io::Result<()> {
                 let start = per_domain * index as u64;
                 let end = (start + per_domain).min(source_len);
                 let numa_node = if args.remote_placement {
-                    match plan::remote_numa_node(&topology, domain_plan.local_numa_node) {
-                        plan::RemoteNode::Other(node) => Some(node),
-                        // Both already reported above -- `Unnamed` exited, and
-                        // `SameAsLocal` said that local is the only node there
-                        // is. Neither may reach here as a silent substitution.
-                        plan::RemoteNode::SameAsLocal
-                        | plan::RemoteNode::Unnamed
-                        | plan::RemoteNode::LocalUnknown => domain_plan.local_numa_node,
-                    }
+                    let outcome = plan::remote_numa_node(&topology, domain_plan.local_numa_node);
+                    // The refusing outcomes cannot reach here: the preflight
+                    // above exited on `Unnamed` and `LocalUnknown`, and said
+                    // that `SameAsLocal` places locally, which is what
+                    // `remote_placement` returns for it.
+                    plan::remote_placement(outcome, domain_plan.local_numa_node)
+                        .unwrap_or(domain_plan.local_numa_node)
                 } else {
                     domain_plan.local_numa_node
                 };
