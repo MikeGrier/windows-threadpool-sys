@@ -370,11 +370,13 @@ impl<'ring, T, X> Batch<'ring, T, X> {
 
     /// Queue a flush, with the **ring** holding the file guard (`D-73`).
     ///
-    /// The guarded counterpart to [`Batch::flush_raw_owned`]. There is no
-    /// buffer, so nothing comes back as a payload -- the pop yields `None` for
-    /// it, which is the shape `M28.5` will settle for the tokenless pushes
-    /// generally. The guard still has to outlive the operation, and the ring is
-    /// what holds it.
+    /// The guarded counterpart to [`Batch::flush_raw_owned`]. This push stows an
+    /// inventory entry, so the pop that observes its completion returns that
+    /// entry -- [`IoRing::try_pop`] yields `Some((completion, Some((None, extra))))`.
+    /// Only the inner **payload** is `None`, because there is no buffer; the
+    /// sidecar still arrives. An outer `None` is what a `_raw` flush produces
+    /// instead -- see [`IoRing::try_pop`]'s "What each `None` means". The guard
+    /// still has to outlive the operation, and the ring is what holds it.
     ///
     /// # Errors
     ///

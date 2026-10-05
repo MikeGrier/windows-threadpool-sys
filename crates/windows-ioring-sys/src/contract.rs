@@ -7,18 +7,18 @@
 //! Some of what this crate promises is a property of a *sequence*, not of any
 //! single value or call, and a per-value type cannot carry it. "Every SQE that
 //! successfully queues produces exactly one completion" is only observable by
-//! counting pushes against completions across a whole run; so is "no token was
-//! dropped unclaimed", and so is "no registered buffer is still in use once
-//! everything has finished".
+//! counting pushes against completions across a whole run, and so is "no
+//! registered buffer is still in use once everything has finished".
 //!
-//! Those three are stated in `DESIGN-NOTES.md` and, before this module,
-//! checked nowhere. That is not a hypothetical gap: two real defects in this
+//! Those rules are stated in `DESIGN-NOTES.md` and, before this module, were
+//! checked nowhere. That was not a hypothetical gap: two real defects in this
 //! repository were conservation failures. `Appender::claim` returned early on
 //! a failed write and permanently leaked the arena slot its token held, and a
 //! strategy harness shared one deferred-commit slot between two lanes so half
 //! its commits were never awaited. Both were found by review and by
 //! measurement respectively, and both would have fallen out of a quiescence
-//! check automatically.
+//! check automatically. (The first was a token leak, and the rule that caught
+//! that kind of leak retired with the token API -- see below.)
 //!
 //! # Why it lives here
 //!
