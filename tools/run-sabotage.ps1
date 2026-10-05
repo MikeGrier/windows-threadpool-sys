@@ -610,6 +610,28 @@ function Get-EvidencePath {
     }
 }
 
+# The part of a build log that is rustc speaking, not rustc quoting.
+#
+# rustc renders a diagnostic with the source line it points at, behind a line
+# number and a gutter:
+#
+#     3 |     let x: u32 = "GUARD FIRED";
+#
+# so searching the whole log credits ANY failed build whose offending line
+# merely contains the declared message -- an unrelated type error on the
+# guard's own line, say, which is exactly a patch that broke the guard rather
+# than tripped it. Those numbered excerpt lines are dropped. Headers
+# (`error[E0080]: evaluation panicked: ...`), labels and notes are kept, and
+# they are where a guard's message appears when the guard actually fires.
+# PR #113 review.
+#
+# Line filtering rather than `--message-format=json`, so that the build
+# transcript a reader opens stays the compiler's ordinary rendering.
+function Remove-EchoedSource {
+    param([string] $Text)
+    return (($Text -split "\r?\n") | Where-Object { $_ -notmatch '^\s*\d+\s*\|' }) -join "`n"
+}
+
 # A bound at or below zero gets the answer wrong in the dangerous direction.
 # The wait is a deadline poll, so zero or negative means the deadline has
 # already passed: every phase is classified as a hang, and this tool scores a
@@ -1294,12 +1316,13 @@ foreach ($sabotage in $selected) {
     # rather than inside the switch, so the verdict and the message below agree.
     # Read-SharedText, not ReadAllText: cargo has exited, but its redirected
     # stderr can still be held open for a moment, and ReadAllText throws on that
-    # (see common.ps1). Measured as a red CI run under 5.1.
+    # (see common.ps1). Measured as a red CI run under 5.1. Searched only in what
+    # rustc said, never in the source it quoted -- see Remove-EchoedSource.
     $refusedAsNamed = $false
     if ($sabotage.expect -eq 'refused-by-build' -and $run.Outcome -eq 'build-failed') {
         $buildLog = "$transcript.build.err"
         if (Test-Path -LiteralPath $buildLog) {
-            $refusedAsNamed = (Read-SharedText -Path $buildLog).Contains($sabotage.buildError)
+            $refusedAsNamed = (Remove-EchoedSource (Read-SharedText -Path $buildLog)).Contains($sabotage.buildError)
         }
     }
 

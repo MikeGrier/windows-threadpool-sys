@@ -110,6 +110,12 @@ $unpinnedForms = [ordered]@{
     'a blockquote in a doc attribute' = "#[doc = ""> ``````compile_fail""]"
     'a tilde fence'                 = "/// ~~~compile_fail`n/// let x: u32 = ""no"";`n/// ~~~"
     'a blockquoted tilde fence'     = "/// > ~~~~rust,compile_fail`n/// > ~~~~"
+    # Block doc comments: rustdoc reads `/** */` and `/*! */` too, strips a
+    # leading ` * ` from their lines, and runs the fences inside. PR #113.
+    'an outer block doc comment'    = "/** ``````compile_fail`nlet x: u32 = ""no"";`n``````*/"
+    'an inner block doc comment'    = "/*! ``````compile_fail`n``````*/"
+    'a starred block doc line'      = "/**`n * ``````compile_fail`n * let x: u32 = ""no"";`n * ```````n */"
+    'a bare block doc line'         = "/*!`n``````compile_fail`n```````n*/"
 }
 foreach ($form in $unpinnedForms.Keys) {
     $text = $unpinnedForms[$form]
@@ -165,11 +171,13 @@ Test-Case 'every pinned spelling is accepted' {
         "//! > * ``````compile_fail,E0308`n#[doc = ""> ``````compile_fail,E0308""]`n/// ~~~compile_fail,E0308`n" +
         "/// > ~~~~rust,compile_fail,E0308`n"
         'b\README.md'  = "> ``````compile_fail,E0308`n+ ``````compile_fail,E0308`n~~~compile_fail,E0308`n"
+        'c\src\lib.rs' = "/** ``````compile_fail,E0308`n``````*/`n/*! ``````compile_fail,E0308`n``````*/`n" +
+        "/**`n * ``````compile_fail,E0308`n * ```````n */`n/*!`n``````compile_fail,E0308`n```````n*/`n"
     }
     try {
         $result = Invoke-Guard $root
         Assert-Equal 0 $result.ExitCode $result.Output
-        Assert-Match '\(16 found\)' $result.Output 'every pinned fence is counted'
+        Assert-Match '\(20 found\)' $result.Output 'every pinned fence is counted'
     }
     finally { Remove-Fixture $root }
 }

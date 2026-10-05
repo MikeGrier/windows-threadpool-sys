@@ -204,7 +204,7 @@ function New-Spec {
 function New-Stub {
     param(
         [ValidateSet('pass', 'fail', 'hang', 'doc-fail', 'build-fail', 'build-guard', 'build-other',
-            'not-executed')] [string] $Behaviour,
+            'build-echo', 'not-executed')] [string] $Behaviour,
         [string] $Root
     )
 
@@ -244,6 +244,18 @@ function New-Stub {
         'build-other' {
             "@echo off`r`n$runPhasePasses`r`n$intact`r`n" +
             "echo error[E0425]: cannot find value in this scope 1>&2`r`nexit /b 101`r`n"
+        }
+        # An unrelated error whose ECHOED SOURCE LINE carries the guard text,
+        # laid out as rustc renders it: the guard did not fire, but its message
+        # is on the line the diagnostic points at. PR #113 review.
+        'build-echo' {
+            "@echo off`r`n$runPhasePasses`r`n$intact`r`n" +
+            "echo error[E0308]: mismatched types 1>&2`r`n" +
+            "echo   --^> src\lib.rs:3:18 1>&2`r`n" +
+            "echo    ^| 1>&2`r`n" +
+            "echo 3  ^|     let x: u32 = `"GUARD FIRED`"; 1>&2`r`n" +
+            "echo    ^|            ---   ^^^^^^^^^^^^^ expected ``u32``, found ``^&str`` 1>&2`r`n" +
+            "exit /b 101`r`n"
         }
         # cargo's own wording when it cannot start a test binary, as an
         # antivirus refusal produced it.
@@ -620,6 +632,22 @@ Test-Case 'does not credit a build that fails with some other message' {
             expect = 'refused-by-build'; buildError = 'GUARD FIRED' })
     try {
         $stub = New-Stub -Behaviour 'build-other' -Root $root
+        $result = Invoke-Harness -Root $root `
+            -Arguments @('-Manifest', 'sabotage.json', '-CargoCommand', $stub)
+        Assert-Equal 1 $result.ExitCode $result.Output
+        Assert-Match "the build failed, but not with 'GUARD FIRED'" $result.Output
+    }
+    finally { Remove-Fixture $root }
+}
+
+Test-Case 'does not credit a guard message that appears only in an echoed source line' {
+    # rustc prints the source line a diagnostic points at, so an unrelated
+    # error on a line that merely CONTAINS the guard text would otherwise read
+    # as the guard firing. PR #113 review.
+    $root = New-Fixture -Manifest (New-Spec -EntryExtra @{
+            expect = 'refused-by-build'; buildError = 'GUARD FIRED' })
+    try {
+        $stub = New-Stub -Behaviour 'build-echo' -Root $root
         $result = Invoke-Harness -Root $root `
             -Arguments @('-Manifest', 'sabotage.json', '-CargoCommand', $stub)
         Assert-Equal 1 $result.ExitCode $result.Output
