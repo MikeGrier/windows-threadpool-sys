@@ -1,5 +1,37 @@
 # Changelog
 
+## [0.6.0](https://github.com/MikeGrier/windows-threadpool-sys/compare/windows-ioring-sys-v0.5.1...windows-ioring-sys-v0.6.0) (2026-10-05)
+
+
+### ⚠ BREAKING CHANGES
+
+* **ioring:** a completion for an identity not in flight is traced and panics
+* **ioring:** Batch::cancel_owned takes OperationId instead of usize. A caller passing `id.user_data()` passes `id` instead; a caller with only an integer uses Batch::cancel_owned_raw.
+* **ioring:** Token<T> and try_pop_held are removed. IoRing is now generic as IoRing<T, X>, so every consumer names the type. A push returns OperationId; try_pop and pop_within return the payload with the completion.
+
+### Features
+
+* **ioring:** a completion for an identity not in flight is traced and panics ([7837115](https://github.com/MikeGrier/windows-threadpool-sys/commit/7837115baba9018dbf1c8e33ac7086e449ee2206))
+* **ioring:** the ring owns the pending inventory; the token API is retired ([add3b37](https://github.com/MikeGrier/windows-threadpool-sys/commit/add3b37a48d61e3a4a8e556d6166ccbf925850d2))
+
+
+### Bug Fixes
+
+* a dependency the glob cannot see, a promise the README does not have ([63bec80](https://github.com/MikeGrier/windows-threadpool-sys/commit/63bec800ad150aa80f94ce445b6d01d9fe252720))
+* **ioring:** a checked cancel takes an OperationId, not a bare UserData ([b089933](https://github.com/MikeGrier/windows-threadpool-sys/commit/b0899330eafa71a40872861583e095c386b753a0))
+* **ioring:** do not free the inventory under a false quiesce ([a82ffd8](https://github.com/MikeGrier/windows-threadpool-sys/commit/a82ffd80556d088da64cad91cf51b57aca403d19))
+* **ioring:** hold the file-handle registration array until the op runs; D-32 had it backwards ([c327797](https://github.com/MikeGrier/windows-threadpool-sys/commit/c3277973f4f3b2946b6373756c0278660b8d7efe))
+* **ioring:** keep the non-Windows surface empty ([918cefe](https://github.com/MikeGrier/windows-threadpool-sys/commit/918cefe434d3ab8e514a103e45e01093c3c96b52))
+* **ioring:** keep the registered-buffer descriptor array when rundown cannot prove quiescence ([5cbb74c](https://github.com/MikeGrier/windows-threadpool-sys/commit/5cbb74cc0811ca1d5bde57a34d6365547421340c))
+* **ioring:** quiescence is the counter AND the inventory, at every site ([8b37312](https://github.com/MikeGrier/windows-threadpool-sys/commit/8b37312d61d0d7a00d3e93ca01bd9c46dedb2d77))
+* **ioring:** ring_copy --compare honours the single-node SameAsLocal fallback ([b236f84](https://github.com/MikeGrier/windows-threadpool-sys/commit/b236f8469992714d018f10b8f2b4d69c0603e5a8))
+* **ioring:** rundown must drain before diagnosing, not instead of it ([1048638](https://github.com/MikeGrier/windows-threadpool-sys/commit/10486385cb41cc96fe928d2d652ad447414e5f6b))
+* **ioring:** samples wait for a completion instead of asserting it is already poppable ([3019738](https://github.com/MikeGrier/windows-threadpool-sys/commit/30197383384c0d2af519579a37bee45ad73f68cb))
+* **ioring:** track outstanding operations by identity, so a raw push cannot fake quiescence ([d4a02bf](https://github.com/MikeGrier/windows-threadpool-sys/commit/d4a02bf747c380a4894d26137bc9c0b98130184b))
+* **ring_copy:** stop calling an intentional single-domain policy unexpressible ([3b15447](https://github.com/MikeGrier/windows-threadpool-sys/commit/3b154479eb4177f4f32f0447a7fae8baf6c67176))
+* **ring_copy:** validate remote placement per arrangement, and take a real median ([f6e92aa](https://github.com/MikeGrier/windows-threadpool-sys/commit/f6e92aa79f8198ae5a4298d67bc2065dd838db05))
+* **ring_copy:** warm the cache before sampling, instead of rotating and hoping ([caa8c5a](https://github.com/MikeGrier/windows-threadpool-sys/commit/caa8c5ad18edfe15f07a792070a81a8f0d4b0988))
+
 ## [0.5.1](https://github.com/MikeGrier/windows-threadpool-sys/compare/windows-ioring-sys-v0.5.0...windows-ioring-sys-v0.5.1) (2026-10-04)
 
 
