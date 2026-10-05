@@ -2793,6 +2793,25 @@ ignored. Measured on the pinned 1.98.0 toolchain: re-injecting the stale call pa
 - The `doctest-error-codes` job in [ci.yml](.github/workflows/ci.yml) runs the doctests with
   `RUSTC_BOOTSTRAP=1`, in each configuration that contains a fence -- all features, default features,
   and windows-threadpool-sys without `self-heal`.
+- [check-compile-fail-doctests.ps1](tools/check-compile-fail-doctests.ps1) checks the first script
+  against rustdoc, in that same job.
+
+**The scanner is a proxy for rustdoc's parser, and is checked against it.** Four PR #113 review rounds
+each found a spelling the scanner missed (container-nested fences, tilde fences, block doc comments,
+raw-string doc attributes), each an unpinned doctest CI would have passed. Fixing them one at a time
+cannot close the class. A doctest run already names every `compile_fail` doctest it runs, as
+`... (line N) - compile fail`, whatever spelling produced it. So the second check takes that set from
+the job's three runs, reads each doctest's fence from source at or after line N, and fails when the
+fence is unpinned, when the scanner does not recognise it, or when no fence can be read at all -- a doc
+assembled by `concat!` or a macro. "Recognised" and "pinned" are the scanner's own answers, asked
+through its `-ListFences` mode, so they are defined once. Line N is the fence line for `///` and
+markdown, but the attribute's first line for a `doc = "..."` attribute; both measured. Verified on the
+real tree: rewriting windows-threadpool-sys's attribute fence as `doc = concat!("```compile_fail,E0599")`
+still runs as a `compile_fail` doctest, the scanner reports every fence pinned, and this check names
+the blind spot.
+
+The scanner stays, as the check a developer can run without building anything. Whether it should
+remain once the rustdoc check has a record is a later decision, not one this records.
 
 **To find a code**, pin a placeholder such as `E9999` and run the doctests with `RUSTC_BOOTSTRAP=1`:
 rustdoc reports the code the compiler actually raised, and the message says whether the example fails

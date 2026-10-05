@@ -30,10 +30,23 @@
 #
 #   ./tools/check-compile-fail-codes.ps1            # scan crates/ (CI)
 #   ./tools/check-compile-fail-codes.ps1 -Root DIR  # scan a fixture tree
+#   ./tools/check-compile-fail-codes.ps1 -ListFences
+#       # one `path<TAB>line<TAB>pinned` record per recognised compile_fail
+#       # fence, on the output stream, for check-compile-fail-doctests.ps1
+#
+# THIS IS A PROXY FOR RUSTDOC'S PARSER, AND IS CHECKED AGAINST IT.
+# Four review rounds each found a spelling it missed. So CI also runs
+# check-compile-fail-doctests.ps1, which takes the set of compile_fail doctests
+# from rustdoc itself and fails on any this script does not recognise. A
+# missed spelling now turns CI red instead of waiting for a reviewer. This
+# script stays the fast check that needs no build, and -ListFences is how the
+# other one asks it what it recognises, so "recognised" and "pinned" are
+# defined here once.
 
 [CmdletBinding()]
 param(
-    [string]$Root
+    [string]$Root,
+    [switch]$ListFences
 )
 
 Set-StrictMode -Version Latest
@@ -88,7 +101,12 @@ foreach ($file in $files) {
         foreach ($match in $fence.Matches($line)) {
             $tokens = @($match.Groups['info'].Value.Split(',') | ForEach-Object { $_.Trim() })
             if ($tokens -notcontains 'compile_fail') { continue }
-            if (@($tokens | Where-Object { $_ -match '^E\d{4}$' }).Count -gt 0) {
+            $isPinned = @($tokens | Where-Object { $_ -match '^E\d{4}$' }).Count -gt 0
+            if ($ListFences) {
+                Write-Output ("{0}`t{1}`t{2}" -f $file.FullName, $lineNumber, $isPinned)
+                continue
+            }
+            if ($isPinned) {
                 $pinned++
                 continue
             }
@@ -97,6 +115,8 @@ foreach ($file in $files) {
         }
     }
 }
+
+if ($ListFences) { exit 0 }
 
 if ($unpinned.Count -eq 0) {
     Write-Host "Every compile_fail doctest pins its error code ($pinned found)." -ForegroundColor Green

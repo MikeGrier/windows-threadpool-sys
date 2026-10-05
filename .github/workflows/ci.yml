@@ -289,20 +289,40 @@ jobs:
       - name: Every compile_fail doctest pins its error code
         shell: pwsh
         run: ./tools/check-compile-fail-codes.ps1
+      - name: Run test-check-compile-fail-doctests.ps1
+        shell: pwsh
+        run: ./tools/test-check-compile-fail-doctests.ps1
+      - name: Run test-check-compile-fail-doctests.ps1 (Windows PowerShell 5.1)
+        shell: powershell
+        run: ./tools/test-check-compile-fail-doctests.ps1
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
+      # Each run's output is kept, because rustdoc names every compile_fail
+      # doctest it runs -- `... (line N) - compile fail ... ok` -- whatever
+      # spelling produced it, and the step after these checks that set against
+      # the regex guard above. The guard is a proxy for rustdoc's parser that four
+      # review rounds found blind spots in; this makes the next one fail here.
+      # Tee-Object leaves $LASTEXITCODE as cargo's, so a failing doctest still
+      # fails its step.
       - name: cargo test --doc (all features), error codes enforced
         env:
           RUSTC_BOOTSTRAP: 1
-        run: cargo test --workspace --doc --all-features --locked
+        run: cargo test --workspace --doc --all-features --locked | Tee-Object -FilePath "$env:RUNNER_TEMP/doctests-all-features.txt"
       - name: cargo test --doc (default features), error codes enforced
         env:
           RUSTC_BOOTSTRAP: 1
-        run: cargo test --workspace --doc --locked
+        run: cargo test --workspace --doc --locked | Tee-Object -FilePath "$env:RUNNER_TEMP/doctests-default.txt"
       - name: cargo test --doc (windows-threadpool-sys, no default features), error codes enforced
         env:
           RUSTC_BOOTSTRAP: 1
-        run: cargo test -p windows-threadpool-sys --doc --no-default-features --locked
+        run: cargo test -p windows-threadpool-sys --doc --no-default-features --locked | Tee-Object -FilePath "$env:RUNNER_TEMP/doctests-threadpool-no-default.txt"
+      - name: Every compile_fail doctest rustdoc ran is pinned and seen by the guard
+        shell: pwsh
+        run: >-
+          ./tools/check-compile-fail-doctests.ps1 -Transcript
+          "$env:RUNNER_TEMP/doctests-all-features.txt",
+          "$env:RUNNER_TEMP/doctests-default.txt",
+          "$env:RUNNER_TEMP/doctests-threadpool-no-default.txt"
 
   platform-probes:
     # The asserted probe tier already runs on x64 here, because

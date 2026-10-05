@@ -219,6 +219,25 @@ Test-Case 'build and scratch directories are not scanned' {
     finally { Remove-Fixture $root }
 }
 
+Test-Case '-ListFences emits one path, line and pinned record per recognised fence' {
+    # check-compile-fail-doctests.ps1 parses this, so its shape is a contract.
+    # Only fences are listed, not prose; a one-line cfg_attr lists twice.
+    $root = New-Fixture @{
+        'a\src\lib.rs' = "/// A ``compile_fail`` example.`n/// ``````compile_fail,E0308`n/// ```````n" +
+        "#[cfg_attr(x, doc = ""``````compile_fail"", doc = ""``````compile_fail,E0599"")]`n"
+    }
+    try {
+        $records = @(& $script:Script -Root $root -ListFences)
+        Assert-Equal 0 $LASTEXITCODE 'exit code'
+        Assert-Equal 3 $records.Count ($records -join ' | ')
+        $file = (Resolve-Path -LiteralPath (Join-Path $root 'a\src\lib.rs')).Path
+        Assert-Equal "$file`t2`tTrue" $records[0] 'the pinned fence'
+        Assert-Equal "$file`t4`tFalse" $records[1] 'the first fence on the one-line cfg_attr'
+        Assert-Equal "$file`t4`tTrue" $records[2] 'the second fence on the same line'
+    }
+    finally { Remove-Fixture $root }
+}
+
 Test-Case 'a root that does not exist is a configuration error, not a pass' {
     $result = Invoke-Guard (Join-Path ([System.IO.Path]::GetTempPath()) ('cfc-missing-' + [guid]::NewGuid().ToString('N')))
     Assert-Equal 2 $result.ExitCode 'exit code'
